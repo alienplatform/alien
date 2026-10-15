@@ -376,10 +376,26 @@ impl AzureRemoteStackManagementController {
             .service_provider
             .get_azure_authorization_client(azure_cfg)?;
 
+        // A controller saved mid-setup by an earlier version may already hold the single combined
+        // role, and assignments made with it. Remove both before creating the per-scope roles.
+        if let Some(legacy_role_id) = self.role_definition_id.clone() {
+            for assignment_id in std::mem::take(&mut self.role_assignment_ids) {
+                delete_management_role_assignment(&client, &assignment_id, &config.id).await?;
+            }
+            delete_management_role_definition(
+                &client,
+                &legacy_role_id,
+                &resource_group_name,
+                "replaced by per-scope roles",
+                &config.id,
+            )
+            .await?;
+            self.role_definition_id = None;
+        }
+
         if role_definitions.is_empty() {
             info!("No residual Azure management custom role required");
         }
-        self.role_definition_id = None;
         self.scoped_role_definition_ids.clear();
         for role in role_definitions {
             let role_definition = RoleDefinition {
@@ -445,6 +461,14 @@ impl AzureRemoteStackManagementController {
                 resource_id: Some(config.id.clone()),
             })
         })?;
+
+        // Saved by an earlier version between creating its combined role and assigning it.
+        if self.role_definition_id.is_some() {
+            return Ok(HandlerAction::Continue {
+                state: CreatingRoleDefinition,
+                suggested_delay: None,
+            });
+        }
 
         let grant_plan = self.generate_management_grant_plan(ctx)?;
         for binding in &grant_plan.bindings {
@@ -961,6 +985,14 @@ impl AzureRemoteStackManagementController {
     );
 
     fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        // The combined role earlier versions created is assigned at every binding scope, so it
+        // can reach the whole subscription. Replace it on the next direct setup even when the
+        // permissions themselves did not change.
+        if self.role_definition_id.is_some()
+            && ctx.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
+        {
+            return Ok(true);
+        }
         super::management_permissions_need_refresh(
             ctx,
             self.management_permissions_revision.as_deref(),
@@ -1057,6 +1089,83 @@ mod tests {
             ),
             "Azure rejects updating scope on an existing role assignment ID"
         );
+    }
+
+    /// A setup saved by an earlier version between creating its combined role and assigning it
+    /// resumes in `CreatingRoleAssignments` with only `role_definition_id`. It must not fail on
+    /// the missing per-scope role: it goes back to role creation, which deletes the assignments
+    /// made with the combined role and the role itself before creating the per-scope roles.
+    #[tokio::test]
+    async fn setup_saved_with_the_combined_role_moves_to_per_scope_roles() {
+        use crate::core::controller_test::SingleControllerExecutor;
+        use crate::core::{MockPlatformServiceProvider, PlatformServiceProvider};
+        use alien_azure_clients::authorization::{AuthorizationApi, MockAuthorizationApi};
+        use std::sync::Arc;
+
+        let legacy_role =
+            "/subscriptions/sub-1234/providers/Microsoft.Authorization/roleDefinitions/legacy-role";
+        let legacy_assignment = "/subscriptions/sub-1234/providers/Microsoft.Authorization/roleAssignments/legacy-assignment";
+        let mut authorization = MockAuthorizationApi::new();
+        authorization
+            .expect_delete_role_assignment_by_id()
+            .times(1)
+            .withf(move |id| id == legacy_assignment)
+            .returning(|_| Ok(None));
+        authorization
+            .expect_delete_role_definition()
+            .times(1)
+            .withf(|_, id| id == "legacy-role")
+            .returning(|_, _| Ok(None));
+        authorization
+            .expect_create_or_update_role_definition()
+            .returning(|_, id, definition| {
+                Ok(RoleDefinition {
+                    id: Some(format!(
+                        "/subscriptions/sub-1234/providers/Microsoft.Authorization/roleDefinitions/{id}"
+                    )),
+                    ..definition.clone()
+                })
+            });
+        let authorization: Arc<dyn AuthorizationApi> = Arc::new(authorization);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_azure_authorization_client()
+            .returning(move |_| Ok(authorization.clone()));
+        let provider: Arc<dyn PlatformServiceProvider> = Arc::new(provider);
+
+        let mut controller = AzureRemoteStackManagementController::mock_ready("test");
+        controller.state = AzureRemoteStackManagementState::CreatingRoleAssignments;
+        controller.role_definition_id = Some(legacy_role.to_string());
+        controller.scoped_role_definition_ids.clear();
+        controller.role_assignment_ids = vec![legacy_assignment.to_string()];
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(RemoteStackManagement::new("management".to_string()).build())
+            .controller(controller)
+            .platform(Platform::Azure)
+            .service_provider(provider)
+            .with_dependency(
+                alien_core::AzureResourceGroup::new("default-resource-group".to_string()).build(),
+                crate::infra_requirements::AzureResourceGroupController::mock_ready(
+                    "default-resource-group",
+                ),
+            )
+            .build()
+            .await
+            .expect("executor builds");
+
+        executor.step().await.expect("resuming the assignment step");
+        let state = executor
+            .internal_state::<AzureRemoteStackManagementController>()
+            .expect("controller");
+        assert_eq!(state.state, AzureRemoteStackManagementState::CreatingRoleDefinition);
+
+        executor.step().await.expect("role creation replaces the combined role");
+        let state = executor
+            .internal_state::<AzureRemoteStackManagementController>()
+            .expect("controller");
+        assert_eq!(state.role_definition_id, None);
+        assert!(state.role_assignment_ids.is_empty());
+        assert_eq!(state.state, AzureRemoteStackManagementState::CreatingRoleAssignments);
     }
 
     /// A custom role grants its actions on everything under the scope it is assigned at, so each
@@ -1545,6 +1654,35 @@ fn management_role_definitions(
         .collect())
 }
 
+async fn delete_management_role_assignment(
+    client: &std::sync::Arc<dyn alien_azure_clients::authorization::AuthorizationApi>,
+    assignment_id: &str,
+    config_id: &str,
+) -> Result<()> {
+    match client
+        .delete_role_assignment_by_id(assignment_id.to_string())
+        .await
+    {
+        Ok(_) => {
+            info!(assignment_id = %assignment_id, "Management role assignment deleted");
+            Ok(())
+        }
+        Err(e)
+            if matches!(
+                &e.error,
+                Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+            ) =>
+        {
+            info!(assignment_id = %assignment_id, "Management role assignment already absent");
+            Ok(())
+        }
+        Err(e) => Err(e.context(ErrorData::CloudPlatformError {
+            message: format!("Failed to delete management role assignment '{assignment_id}'"),
+            resource_id: Some(config_id.to_string()),
+        })),
+    }
+}
+
 async fn delete_management_role_definition(
     client: &std::sync::Arc<dyn alien_azure_clients::authorization::AuthorizationApi>,
     role_def_id: &str,
@@ -1810,11 +1948,14 @@ impl AzureRemoteStackManagementController {
             uami_principal_id: Some("87654321-4321-4321-4321-210987654321".to_string()),
             tenant_id: Some("tenant-1234".to_string()),
             fic_name: Some(format!("{}-management-fic", prefix)),
-            role_definition_id: Some(format!(
-                "/subscriptions/sub-1234/providers/Microsoft.Authorization/roleDefinitions/{}-mgmt-role",
-                prefix
-            )),
-            scoped_role_definition_ids: BTreeMap::new(),
+            role_definition_id: None,
+            scoped_role_definition_ids: BTreeMap::from([(
+                "/subscriptions/sub-1234/resourceGroups/test-rg".to_string(),
+                format!(
+                    "/subscriptions/sub-1234/providers/Microsoft.Authorization/roleDefinitions/{}-mgmt-role",
+                    prefix
+                ),
+            )]),
             role_assignment_ids: vec![],
             role_assignment_wait_until_epoch_secs: None,
             management_permissions_revision: None,
