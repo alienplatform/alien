@@ -1775,7 +1775,22 @@ fn an_execute_only_profile_cannot_start_sessions() {
 fn a_stack_wide_sandbox_grant_is_attached_once() {
     let stack_wide = format!("microvm-image:{PARITY_PREFIX}-*");
     let this_image = format!("microvm-image:{PARITY_PREFIX}-agents");
+    const MANAGEMENT: [&str; 4] = [
+        "lambda:RunMicrovm",
+        "lambda:TerminateMicrovm",
+        "lambda:SuspendMicrovm",
+        "lambda:ResumeMicrovm",
+    ];
+    const BOTH: [&str; 6] = [
+        "lambda:RunMicrovm",
+        "lambda:TerminateMicrovm",
+        "lambda:SuspendMicrovm",
+        "lambda:ResumeMicrovm",
+        "lambda:CreateMicrovmAuthToken",
+        "lambda:GetMicrovm",
+    ];
     let global = PermissionProfile::new().global(["sandbox/management", "sandbox/execute"]);
+    let management_only = PermissionProfile::new().global(["sandbox/management"]);
     let by_id =
         PermissionProfile::new().resource("agents", ["sandbox/management", "sandbox/execute"]);
     let attached = vec![
@@ -1783,14 +1798,22 @@ fn a_stack_wide_sandbox_grant_is_attached_once() {
         "execution_sa_agents_sandbox-execute",
     ];
     for lifecycle in [ResourceLifecycle::Frozen, ResourceLifecycle::Live] {
-        for (profile, account, expected_policies, granted_on) in [
-            (&global, &global, vec![], &stack_wide),
-            (&by_id, &by_id, attached.clone(), &this_image),
+        // The last column lists the actions the account's stack-wide policy grants; the
+        // sandbox's own policies grant the rest on its image.
+        for (profile, account, expected_policies, stack_level) in [
+            (&global, &global, vec![], &BOTH[..]),
+            (&by_id, &by_id, attached.clone(), &[][..]),
             (
                 &global,
                 &PermissionProfile::new(),
                 attached.clone(),
-                &this_image,
+                &[][..],
+            ),
+            (
+                &global,
+                &management_only,
+                vec!["execution_sa_agents_sandbox-execute"],
+                &MANAGEMENT[..],
             ),
         ] {
             let module = sandbox_module_with_account(lifecycle, profile.clone(), account);
@@ -1815,14 +1838,12 @@ fn a_stack_wide_sandbox_grant_is_attached_once() {
             );
 
             let granted = granted_actions(&module, "execution_sa");
-            for action in [
-                "lambda:RunMicrovm",
-                "lambda:TerminateMicrovm",
-                "lambda:SuspendMicrovm",
-                "lambda:ResumeMicrovm",
-                "lambda:CreateMicrovmAuthToken",
-                "lambda:GetMicrovm",
-            ] {
+            for action in BOTH {
+                let granted_on = if stack_level.contains(&action) {
+                    &stack_wide
+                } else {
+                    &this_image
+                };
                 let resources = granted.get(action).unwrap_or_else(|| {
                     panic!("{lifecycle:?} {profile:?} on {account:?}: the role lacks {action}")
                 });

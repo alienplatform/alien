@@ -2115,19 +2115,12 @@ fn a_stack_wide_sandbox_grant_is_attached_once() {
     let global = PermissionProfile::new().global(["sandbox/management", "sandbox/execute"]);
     let management_only = PermissionProfile::new().global(["sandbox/management"]);
     for lifecycle in [ResourceLifecycle::Frozen, ResourceLifecycle::Live] {
-        for (account, stack_level, attached, on_image, policies) in [
-            (&global, &BOTH[..], None, &[][..], vec![]),
-            (
-                &PermissionProfile::new(),
-                &[][..],
-                Some(vec![IMAGE.to_string()]),
-                &BOTH[..],
-                vec![],
-            ),
+        for (account, stack_level, on_image, policies) in [
+            (&global, &BOTH[..], &[][..], vec![]),
+            (&PermissionProfile::new(), &[][..], &BOTH[..], vec![]),
             (
                 &management_only,
                 &MANAGEMENT[..],
-                None,
                 &EXECUTE[..],
                 vec![EXECUTE_POLICY],
             ),
@@ -2171,11 +2164,16 @@ fn a_stack_wide_sandbox_grant_is_attached_once() {
                 granted_on_image, on_image,
                 "{lifecycle:?} on {account:?}: what the sandbox's own policies grant"
             );
-            assert_eq!(
-                granted.get("lambda:RunMicrovm"),
-                attached.as_ref(),
-                "{lifecycle:?} on {account:?}: the sandbox's own copy"
-            );
+            for action in BOTH {
+                assert_eq!(
+                    granted.get(action),
+                    on_image
+                        .contains(&action)
+                        .then(|| vec![IMAGE.to_string()])
+                        .as_ref(),
+                    "{lifecycle:?} on {account:?}: {action} in the sandbox's own policies"
+                );
+            }
             let role = serde_json::to_value(&template.resources["ExecutionSaRole"].properties)
                 .expect("serializes");
             // A role whose account holds no set has no `Policies` key at all.
