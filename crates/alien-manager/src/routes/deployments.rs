@@ -810,7 +810,44 @@ async fn get_deployment(
         return ErrorData::forbidden("Access denied").into_response();
     }
 
-    Json(record_to_response(&deployment, None)).into_response()
+    Json(deployment_response_for_client(
+        record_to_response(&deployment, None),
+        &headers,
+    ))
+    .into_response()
+}
+
+fn deployment_response_for_client(
+    mut response: DeploymentResponse,
+    headers: &HeaderMap,
+) -> DeploymentResponse {
+    // Released CLIs used a closed KeyOutputs type and an unversioned user agent.
+    // Adapt only the serialized response; reconciliation still needs availability.
+    if headers
+        .get("user-agent")
+        .and_then(|value| value.to_str().ok())
+        != Some("alien-cli")
+    {
+        return response;
+    }
+    if let Some(resources) = response
+        .stack_state
+        .as_mut()
+        .and_then(|stack| stack.get_mut("resources"))
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        for resource in resources.values_mut() {
+            if let Some(outputs) = resource
+                .get_mut("outputs")
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                if outputs.get("type").and_then(serde_json::Value::as_str) == Some("key") {
+                    outputs.remove("available");
+                }
+            }
+        }
+    }
+    response
 }
 
 #[cfg_attr(feature = "openapi", utoipa::path(
@@ -1258,6 +1295,60 @@ mod tests {
             created_at: Utc::now(),
             updated_at: None,
             error: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn deployment_read_keeps_legacy_cli_outputs_without_changing_stored_key_availability() {
+        let stack: StackState = serde_json::from_value(serde_json::json!({
+            "platform": "aws",
+            "resourcePrefix": "example",
+            "resources": {
+                "key": {
+                    "type": "key", "status": "running",
+                    "config": { "type": "key", "id": "key" },
+                    "outputs": {
+                        "type": "key", "available": false,
+                        "fingerprint": { "provider": "aws", "key_arn": "example-key" },
+                        "wrappingKeyId": "example-key"
+                    }
+                }
+            }
+        }))
+        .expect("stack");
+        for user_agent in ["alien-cli", "alien-cli/3.3.33", "alien-manager"] {
+            let mut deployment = deployment_record();
+            deployment.stack_state = Some(stack.clone());
+            let mut store = MockDeploymentStore::new();
+            store
+                .expect_get_deployment()
+                .withf(|_, id| id == "deployment-1")
+                .times(1)
+                .return_once(move |_, _| Ok(Some(deployment)));
+            let request = Request::builder()
+                .uri("/v1/deployments/deployment-1")
+                .header(http::header::AUTHORIZATION, "Bearer test-token")
+                .header(http::header::USER_AGENT, user_agent)
+                .body(Body::empty())
+                .expect("request");
+            let (status, body) = send(store, request).await;
+            assert_eq!(status, StatusCode::OK);
+            let outputs = &body["stackState"]["resources"]["key"]["outputs"];
+            assert_eq!(outputs["wrappingKeyId"], "example-key");
+            assert_eq!(
+                outputs.get("available"),
+                if user_agent == "alien-cli" {
+                    None
+                } else {
+                    Some(&serde_json::Value::Bool(false))
+                }
+            );
+            assert!(!stack.resources["key"]
+                .outputs
+                .as_ref()
+                .expect("stored outputs")
+                .as_resource_outputs()
+                .is_available());
         }
     }
 
