@@ -678,14 +678,7 @@ impl ExecutionMode {
                     }
 
                     if is_retryable {
-                        return Err(AlienError::new(ErrorData::ApiRequestFailed {
-                            message: format!(
-                                "Manager for {} platform did not become ready within {} seconds",
-                                platform,
-                                max_duration.as_secs()
-                            ),
-                            url: Some(resolve_url),
-                        }));
+                        return Err(manager_not_ready(platform, max_duration, &body));
                     } else {
                         return Err(AlienError::new(ErrorData::ApiRequestFailed {
                             message: format!(
@@ -899,6 +892,25 @@ struct ResolveResponse {
     #[serde(default)]
     manager_cloud: Option<String>,
     project_id: String,
+}
+
+/// The last 503 `/v1/resolve` answered once the CLI stops waiting. The API's message names the
+/// manager that is not ready, which the user needs to act on.
+#[cfg(feature = "platform")]
+fn manager_not_ready(
+    platform: &str,
+    waited: Duration,
+    body: &str,
+) -> alien_error::AlienError<ErrorData> {
+    let answer = serde_json::from_str::<ResolveErrorBody>(body).ok();
+    AlienError::new(ErrorData::ManagerNotReady {
+        platform: platform.to_string(),
+        seconds: waited.as_secs(),
+        message: answer
+            .as_ref()
+            .map_or_else(|| body.to_string(), |answer| answer.message.clone()),
+        request_id: answer.and_then(|answer| answer.request_id),
+    })
 }
 
 /// The API's JSON error body, as `/v1/resolve` sends it on failure.
@@ -1235,6 +1247,40 @@ mod tests {
             .unwrap();
         assert_eq!(ctx.name, "demo");
         assert_eq!(ctx.query, Some("demo".to_string()));
+    }
+
+    /// The user acts on the manager the API names, so its last 503 reaches the final error.
+    #[cfg(feature = "platform")]
+    #[test]
+    fn a_manager_that_stays_unready_names_itself_in_the_error() {
+        let error = super::manager_not_ready(
+            "gcp",
+            std::time::Duration::from_secs(60),
+            r#"{"code":"MANAGER_NOT_READY","message":"Manager for platform 'gcp' is not ready yet: the project's manager 'acme-gcp' has not sent a recent heartbeat","requestId":"req_503"}"#,
+        );
+        assert_eq!(error.code, "MANAGER_NOT_READY");
+        assert!(error.retryable);
+        assert_eq!(
+            error.message,
+            "The gcp manager did not become ready within 60 seconds: Manager for platform 'gcp' \
+             is not ready yet: the project's manager 'acme-gcp' has not sent a recent heartbeat"
+        );
+        assert_eq!(
+            crate::output::json_error_request_id(&error).as_deref(),
+            Some("req_503")
+        );
+
+        // A body that is not the API's JSON error still reaches the user as sent.
+        let plain = super::manager_not_ready(
+            "gcp",
+            std::time::Duration::from_secs(60),
+            "upstream unavailable",
+        );
+        assert!(
+            plain.message.ends_with(": upstream unavailable"),
+            "{}",
+            plain.message
+        );
     }
 
     /// Only the API's "no manager for this platform" answer becomes `NoManagerForPlatform`, which a

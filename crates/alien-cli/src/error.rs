@@ -317,6 +317,25 @@ pub enum ErrorData {
         request_id: Option<String>,
     },
 
+    /// The project's manager on a platform stayed not ready for as long as the CLI waits.
+    #[error(
+        code = "MANAGER_NOT_READY",
+        message = "The {platform} manager did not become ready within {seconds} seconds: {message}",
+        retryable = "true",
+        internal = "false",
+        http_status_code = 503
+    )]
+    ManagerNotReady {
+        /// Platform the manager was resolved for, such as gcp
+        platform: String,
+        /// How long the CLI waited
+        seconds: u64,
+        /// The API's message from its last answer, which names the manager
+        message: String,
+        /// The API's request ID from its last answer, when it sent one
+        request_id: Option<String>,
+    },
+
     /// Looking up, pushing or tagging a remote sandbox base image failed.
     #[error(
         code = "SANDBOX_IMAGE_PUBLISH_FAILED",
