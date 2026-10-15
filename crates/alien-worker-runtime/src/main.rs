@@ -4,6 +4,21 @@ use alien_worker_runtime::{
 use tracing::{error, info};
 
 fn main() -> std::process::ExitCode {
+    // Image builders can inspect the packaged reader without loading secrets,
+    // starting a child application, or connecting to a cloud transport.
+    let mut arguments = std::env::args_os().skip(1);
+    if arguments.next().as_deref() == Some(std::ffi::OsStr::new("--print-capabilities-json"))
+        && arguments.next().is_none()
+    {
+        println!(
+            "{}",
+            serde_json::json!({
+                "containerAppGatewayMetadataVersion": if cfg!(feature = "azure") { Some(1) } else { None },
+            })
+        );
+        return std::process::ExitCode::SUCCESS;
+    }
+
     // Build tokio runtime manually with a larger worker thread stack size.
     // The default musl stack size (128KB) is too small for the deep async call
     // stacks from gRPC + OTLP initialization, causing stack overflows.

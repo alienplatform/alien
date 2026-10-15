@@ -38,18 +38,21 @@ fn one_header<'a>(headers: &'a HeaderMap, name: &str) -> std::result::Result<&'a
 }
 
 /// Return true only for authenticated application HTTP; absent metadata retains
-/// native trigger handling. Partial or ambiguous metadata never falls through.
+/// native trigger handling. Once configured, partial or ambiguous metadata is
+/// rejected. Without a credential, legacy application headers are untouched.
 pub(super) fn restore_request<B>(
     request: &mut Request<B>,
     credential: Option<&GatewayCredential>,
 ) -> std::result::Result<bool, StatusCode> {
+    let Some(credential) = credential else {
+        return Ok(false);
+    };
     if !HEADERS
         .iter()
         .any(|name| request.headers().contains_key(*name))
     {
         return Ok(false);
     }
-    let credential = credential.ok_or(StatusCode::FORBIDDEN)?;
     let token = one_header(request.headers(), TOKEN)?;
     if !bool::from(credential.0.as_slice().ct_eq(token.as_bytes())) {
         return Err(StatusCode::FORBIDDEN);
@@ -107,12 +110,9 @@ mod tests {
     }
 
     #[test]
-    fn missing_wrong_duplicate_and_disabled_credentials_are_rejected() {
+    fn missing_wrong_and_duplicate_credentials_are_rejected() {
         let credential = GatewayCredential::new(SECRET).unwrap();
-        assert_eq!(
-            restore_request(&mut request(), None),
-            Err(StatusCode::FORBIDDEN)
-        );
+
         for name in HEADERS {
             let mut missing = request();
             missing.headers_mut().remove(name);
@@ -142,6 +142,15 @@ mod tests {
         let mut native = Request::new(());
         assert_eq!(restore_request(&mut native, Some(&credential)), Ok(false));
         assert!(GatewayCredential::new("").is_err());
+    }
+
+    #[test]
+    fn unconfigured_gateway_preserves_legacy_application_headers() {
+        let mut request = request();
+        let headers = request.headers().clone();
+        assert_eq!(restore_request(&mut request, None), Ok(false));
+        assert_eq!(request.uri(), "/rewritten");
+        assert_eq!(request.headers(), &headers);
     }
 
     #[test]
