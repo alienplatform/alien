@@ -132,6 +132,6 @@ async fn local_startup_retry_prepares_new_release_and_preserves_existing_data() 
         );
         assert!(directory.path().join("storage/blocked").is_dir());
         assert_eq!(std::fs::read_to_string(kept).unwrap(), "preserve this data");
-        bindings.shutdown().await.unwrap();
+        bindings.shutdown().await;
     }
 }
