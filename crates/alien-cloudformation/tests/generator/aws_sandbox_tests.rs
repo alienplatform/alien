@@ -2087,21 +2087,43 @@ fn a_profile_granted_the_sandbox_reaches_its_image_and_nothing_wider() {
 /// so the sandbox must not attach a second, image-scoped copy: every copy adds to the role's
 /// policies, which IAM caps. A `"*"` set the account's stack-level policy does not hold is attached
 /// by the sandbox, and must still be. The stack mutations build the account from the same profile,
-/// so that last case only arises in a hand-built stack like this one.
+/// so the last two cases only arise in a hand-built stack like this one. A kept policy keeps the
+/// logical id it has when nothing is left out, so leaving one set out never replaces another.
+/// Two policies on one role are folded into a managed policy, so only a lone one shows its id.
 #[test]
 fn a_stack_wide_sandbox_grant_is_attached_once() {
     const IMAGE: &str =
         "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:microvm-image:${AWS::StackName}-agents";
     const STACK_WIDE: &str =
         "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:microvm-image:${AWS::StackName}-*";
+    const EXECUTE_POLICY: &str = "AgentsExecutionSaRoleSandboxPermission01";
+    const EXECUTE: [&str; 2] = ["lambda:CreateMicrovmAuthToken", "lambda:GetMicrovm"];
+    const BOTH: [&str; 6] = [
+        "lambda:CreateMicrovmAuthToken",
+        "lambda:GetMicrovm",
+        "lambda:ResumeMicrovm",
+        "lambda:RunMicrovm",
+        "lambda:SuspendMicrovm",
+        "lambda:TerminateMicrovm",
+    ];
     let global = PermissionProfile::new().global(["sandbox/management", "sandbox/execute"]);
+    let management_only = PermissionProfile::new().global(["sandbox/management"]);
     for lifecycle in [ResourceLifecycle::Frozen, ResourceLifecycle::Live] {
-        for (account, stack_level, attached) in [
-            (&global, vec![STACK_WIDE.to_string()], None),
+        for (account, stack_level, attached, on_image, policies) in [
+            (&global, vec![STACK_WIDE.to_string()], None, &[][..], vec![]),
             (
                 &PermissionProfile::new(),
                 vec![],
                 Some(vec![IMAGE.to_string()]),
+                &BOTH[..],
+                vec![],
+            ),
+            (
+                &management_only,
+                vec![STACK_WIDE.to_string()],
+                None,
+                &EXECUTE[..],
+                vec![EXECUTE_POLICY],
             ),
         ] {
             let service_account = ServiceAccount::from_permission_profile(
@@ -2121,8 +2143,30 @@ fn a_stack_wide_sandbox_grant_is_attached_once() {
                 "stack-wide sandbox grant",
             );
 
+            let sandbox_policies: Vec<&str> = template
+                .resources
+                .iter()
+                .filter(|(id, resource)| {
+                    resource.resource_type == "AWS::IAM::Policy" && id.contains("SandboxPermission")
+                })
+                .map(|(id, _)| id.as_str())
+                .collect();
             assert_eq!(
-                granted_actions(&template, "ExecutionSaRole").get("lambda:RunMicrovm"),
+                sandbox_policies, policies,
+                "{lifecycle:?} on {account:?}: the sandbox's own policies"
+            );
+            let granted = granted_actions(&template, "ExecutionSaRole");
+            let granted_on_image: Vec<&str> = granted
+                .iter()
+                .filter(|(_, resources)| resources.iter().any(|resource| resource == IMAGE))
+                .map(|(action, _)| action.as_str())
+                .collect();
+            assert_eq!(
+                granted_on_image, on_image,
+                "{lifecycle:?} on {account:?}: what the sandbox's own policies grant"
+            );
+            assert_eq!(
+                granted.get("lambda:RunMicrovm"),
                 attached.as_ref(),
                 "{lifecycle:?} on {account:?}: the sandbox's own copy"
             );

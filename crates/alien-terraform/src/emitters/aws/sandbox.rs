@@ -639,8 +639,7 @@ fn emit_remote_bindings_policy(ctx: &EmitContext<'_>, fragment: &mut TfFragment)
 /// profile's role, scoped to this sandbox's image.
 ///
 /// A `"*"` set the service account's stack-level policy already grants for this image is left
-/// out, by the same rule the runtime applies
-/// ([`without_refs_the_stack_policy_grants`]).
+/// out, by the same rule the runtime applies ([`without_refs_the_stack_policy_grants`]).
 ///
 /// Emitted for both lifecycles: a Live image is built after apply, under the same
 /// `${local.resource_prefix}-<id>` name, so a name-scoped grant written now covers it. Without
@@ -672,11 +671,11 @@ fn emit_profile_policies(ctx: &EmitContext<'_>, fragment: &mut TfFragment) -> Re
             &context,
         )
         .context(ErrorData::GenericError {
-                message: format!(
-                    "failed to compare profile '{profile_name}' grants on sandbox '{}' with its stack-level policy",
-                    ctx.resource_id
-                ),
-            })?;
+            message: format!(
+                "failed to select profile '{profile_name}' policies for sandbox '{}'",
+                ctx.resource_id
+            ),
+        })?;
         for reference in granted {
             let permission_set = reference
                 .resolve(|name| alien_permissions::get_permission_set(name).cloned())

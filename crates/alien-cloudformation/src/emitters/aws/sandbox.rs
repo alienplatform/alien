@@ -412,10 +412,9 @@ fn remote_access_policy(ctx: &EmitContext<'_>) -> Result<Option<CfResource>> {
 /// to this sandbox's image.
 ///
 /// A `"*"` set the service account's stack-level policy already grants for this image is left
-/// out, by the same rule the runtime applies
-/// ([`without_refs_the_stack_policy_grants`]). The runtime
-/// generator decides that coverage and the CloudFormation generator renders the policies; both
-/// read the same AWS entry of the set.
+/// out, by the same rule the runtime applies ([`without_refs_the_stack_policy_grants`]). The
+/// runtime generator decides that coverage and the CloudFormation generator renders the policies;
+/// both read the same AWS entry of the set.
 ///
 /// Emitted for both lifecycles: a Live image is built after the stack completes, but under the
 /// same `${AWS::StackName}-<id>` name, so a name-scoped grant written now covers it. Without these
@@ -452,11 +451,11 @@ fn profile_policies(ctx: &EmitContext<'_>, sandbox: &Sandbox) -> Result<Vec<CfRe
             &coverage_context,
         )
         .context(ErrorData::GenericError {
-                message: format!(
-                    "failed to compare profile '{profile_name}' grants on sandbox '{}' with its stack-level policy",
-                    sandbox.id()
-                ),
-            })?;
+            message: format!(
+                "failed to select profile '{profile_name}' policies for sandbox '{}'",
+                sandbox.id()
+            ),
+        })?;
         // Indexed before the filter, so a kept policy keeps its logical id.
         for (permission_index, permission_ref) in permission_refs
             .iter()

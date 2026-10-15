@@ -7,8 +7,10 @@ use crate::{
     generators::{AwsIamPolicy, AwsIamStatement, AwsRuntimePermissionsGenerator},
     BindingTarget, ErrorData, PermissionContext, Result,
 };
-use alien_core::permissions::PermissionProfile;
-use alien_core::{PermissionSet, PermissionSetReference, ServiceAccount, Stack, Worker};
+use alien_core::{
+    permissions::PermissionProfile, PermissionSet, PermissionSetReference, ServiceAccount, Stack,
+    Worker,
+};
 use alien_error::{Context, IntoAlienError};
 use tracing::debug;
 
@@ -132,7 +134,17 @@ pub fn without_refs_the_stack_policy_grants(
     };
     let mut kept = Vec::new();
     for reference in refs {
-        if selection.is_redundant(&reference)? {
+        let redundant = selection
+            .is_redundant(&reference)
+            .context(ErrorData::GeneratorError {
+                platform: "aws".to_string(),
+                message: format!(
+                    "Failed to compare permission set '{}' on '{resource_id}' with the \
+                     stack-level policy of profile '{profile_name}'",
+                    reference.id()
+                ),
+            })?;
+        if redundant {
             debug!(
                 resource_id = %resource_id,
                 profile = %profile_name,
@@ -358,6 +370,38 @@ mod tests {
         };
         let error = selection.is_redundant(&reference).unwrap_err();
         assert_eq!(error.code, "VARIABLE_NOT_FOUND");
+        assert!(!error.retryable);
+    }
+
+    /// A failed comparison names the set it was comparing, since a profile grants many.
+    #[test]
+    fn a_failed_comparison_names_the_set() {
+        let profile = PermissionProfile::new().global(["storage/data-read"]);
+        let stack = Stack::new("q5-naming".to_string())
+            .add(
+                ServiceAccount::from_permission_profile(
+                    "execution-sa".to_string(),
+                    &profile,
+                    |name| crate::get_permission_set(name).cloned(),
+                )
+                .unwrap(),
+                alien_core::ResourceLifecycle::Frozen,
+            )
+            .build();
+        let error = without_refs_the_stack_policy_grants(
+            &stack,
+            "execution",
+            &profile,
+            "objects",
+            vec![PermissionSetReference::from_name(
+                "storage/data-read".to_string(),
+            )],
+            &AwsRuntimePermissionsGenerator::new(),
+            &PermissionContext::new(),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "GENERATOR_ERROR");
+        assert!(error.message.contains("'storage/data-read'"), "{error}");
         assert!(!error.retryable);
     }
 
