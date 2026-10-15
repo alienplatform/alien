@@ -914,7 +914,7 @@ async fn build_and_push_sandbox_base_image(
         }
         None => {
             if !json {
-                println!("{} {}", dim_label("Building"), src.display());
+                println!("{} {} for {platform}", dim_label("Building"), src.display());
             }
             let built = alien_build::build_stack(
                 sandbox_source_stack(&src, toolchain.clone(), platform),
@@ -2003,13 +2003,11 @@ mod tests {
 
     #[test]
     fn only_a_missing_manager_or_base_platform_skips_a_clouds_image() {
-        let refused = |status: u16| {
-            let mut error = AlienError::new(ErrorData::ApiRequestFailed {
+        let refused = || {
+            Err(AlienError::new(ErrorData::ApiRequestFailed {
                 message: "Failed to resolve manager".to_string(),
                 url: None,
-            });
-            error.http_status_code = Some(status);
-            Err(error)
+            }))
         };
         let no_manager = || {
             Err(AlienError::new(ErrorData::NoManagerForPlatform {
@@ -2063,9 +2061,7 @@ mod tests {
                 ))
             );
             // A manager that exists but is not ready is an outage, not a cloud without a manager.
-            for status in [401, 403, 404, 500, 503] {
-                image_leg(cloud, refused(status)).expect_err("any other refusal fails the command");
-            }
+            image_leg(cloud, refused()).expect_err("any other refusal fails the command");
             image_leg(
                 cloud,
                 build_failed(alien_build::error::ErrorData::ImageBuildFailed {

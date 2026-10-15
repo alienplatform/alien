@@ -1274,10 +1274,7 @@ mod tests {
         let missing = resolve("azure", StatusCode::NOT_FOUND, NO_MANAGER).await;
         assert_eq!(missing.code, "NO_MANAGER_FOR_PLATFORM");
         assert_eq!(missing.http_status_code, Some(404));
-        assert_eq!(
-            missing.message,
-            "The project has no azure manager: No system manager found for platform 'azure'."
-        );
+        assert_eq!(missing.message, "The project has no azure manager");
         assert_eq!(
             crate::output::json_error_request_id(&missing).as_deref(),
             Some("req_123")

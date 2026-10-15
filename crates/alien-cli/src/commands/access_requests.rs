@@ -937,9 +937,8 @@ pub(crate) fn requested_expiration(
         .parse::<CreateAccessRequestRequestedExpiresAt>()
         .map(Some)
         .into_alien_error()
-        .context(ErrorData::ValidationError {
-            field: "duration".to_string(),
-            message: "the deadline is not a UTC timestamp".to_string(),
+        .context(ErrorData::GenericError {
+            message: format!("The deadline {deadline} is not a UTC timestamp"),
         })
 }
 

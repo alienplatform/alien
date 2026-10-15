@@ -302,7 +302,7 @@ pub enum ErrorData {
     /// The platform has no manager on this cloud for the project.
     #[error(
         code = "NO_MANAGER_FOR_PLATFORM",
-        message = "The project has no {platform} manager: {message}",
+        message = "The project has no {platform} manager",
         hint = "Create one with `alien managers create --cloud {platform} --region <region>`, then make it the project's default with `alien managers defaults set --cloud {platform} --manager <id>`.",
         retryable = "false",
         internal = "false",
