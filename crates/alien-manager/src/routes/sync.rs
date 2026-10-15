@@ -393,6 +393,7 @@ async fn acquire(
     // `Authz::can_acquire_deployments` over the slice. Workspace-scoped
     // callers (e.g., legacy admin tokens) can run with no id list — the
     // store-side filter applies after role authorization.
+    let mut restricted_teardown = false;
     if let Some(ids) = req.deployment_ids.as_ref() {
         let mut deployments = Vec::with_capacity(ids.len());
         for id in ids {
@@ -402,15 +403,16 @@ async fn acquire(
                 Err(e) => return e.into_response(),
             }
         }
-        if !state.authz.can_acquire_deployments(&subject, &deployments)
-            && !(req.acquire_mode.as_deref() == Some("setup-teardown")
+        if !state.authz.can_acquire_deployments(&subject, &deployments) {
+            restricted_teardown = req.acquire_mode.as_deref() == Some("setup-teardown")
                 && !deployments.is_empty()
                 && deployments
                     .iter()
-                    .all(|d| state.authz.can_setup_teardown(&subject, d)))
-        {
-            return ErrorData::forbidden("Access denied: cannot acquire these deployments")
-                .into_response();
+                    .all(|d| state.authz.can_setup_teardown(&subject, d));
+            if !restricted_teardown {
+                return ErrorData::forbidden("Access denied: cannot acquire these deployments")
+                    .into_response();
+            }
         }
     } else if !matches!(subject.scope, crate::auth::Scope::Workspace) {
         return ErrorData::forbidden(
@@ -460,7 +462,12 @@ async fn acquire(
     };
     let mut deployments = Vec::with_capacity(acquire_result.deployments.len());
     for acquired in &acquire_result.deployments {
-        match acquired_deployment_response(state.release_store.as_ref(), &sources, acquired).await {
+        let response = if restricted_teardown {
+            restricted_teardown_acquired_response(acquired)
+        } else {
+            acquired_deployment_response(state.release_store.as_ref(), &sources, acquired).await
+        };
+        match response {
             Ok(deployment) => deployments.push(deployment),
             Err(error) => {
                 // The caller never learns it holds these leases, so give them
@@ -488,6 +495,29 @@ async fn acquire(
         not_acquired: acquire_result.not_acquired,
     })
     .into_response()
+}
+
+/// An acquired deployment as a restricted setup-teardown caller receives it.
+///
+/// The caller runs teardown from its own saved state and only needs the record
+/// and the lease claim. It gets no `deploymentConfig`, which would carry the
+/// deployment's own token, commands credentials and management config, and no
+/// user environment variables, so a cleanup credential cannot be traded for
+/// workload access. No release is read on its behalf.
+fn restricted_teardown_acquired_response(
+    acquired: &crate::traits::deployment_store::AcquiredDeployment,
+) -> Result<AcquiredDeploymentResponse, AlienError> {
+    let mut record = acquired.deployment.clone();
+    record.user_environment_variables = None;
+    let deployment = serde_json::to_value(&record)
+        .into_alien_error()
+        .context(GenericError {
+            message: format!("Failed to serialize deployment {}", record.id),
+        })?;
+    Ok(AcquiredDeploymentResponse {
+        deployment,
+        execution_claim: acquired.execution_claim.clone(),
+    })
 }
 
 /// An acquired deployment as the runner that acquired it receives it.
@@ -575,9 +605,9 @@ async fn reconcile(
         Ok(None) => return ErrorData::not_found_deployment(&req.deployment_id).into_response(),
         Err(e) => return e.into_response(),
     };
-    let restricted_teardown = !state.authz.can_sync_deployment(&subject, &deployment)
-        && state.authz.can_setup_teardown(&subject, &deployment);
-    if !state.authz.can_sync_deployment(&subject, &deployment) && !restricted_teardown {
+    let can_sync = state.authz.can_sync_deployment(&subject, &deployment);
+    let restricted_teardown = !can_sync && state.authz.can_setup_teardown(&subject, &deployment);
+    if !can_sync && !restricted_teardown {
         return ErrorData::forbidden("Access denied").into_response();
     }
 
@@ -679,6 +709,9 @@ async fn reconcile(
         Err(e) => return e.into_response(),
     };
 
+    // Restricted teardown starts from `teardown-required`, so an AWS deployment's access was
+    // already revoked before that state was saved. The GCP recheck reads caller-reported
+    // state, which a cleanup credential is not trusted to supply.
     if !restricted_teardown {
         if let Err(error) = crate::registry_access::revoke_after_persisting(
             state.deployment_store.as_ref(),
@@ -2921,6 +2954,10 @@ async fn initialize(
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
+    // A cleanup credential never registers a deployment or reads one, whatever its scope.
+    if subject.role == crate::auth::Role::DeploymentTeardown {
+        return ErrorData::forbidden("Access denied").into_response();
+    }
 
     match subject.scope.clone() {
         crate::auth::Scope::Deployment { deployment_id, .. } => {

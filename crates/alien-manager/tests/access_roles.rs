@@ -25,7 +25,7 @@ use alien_core::{
     CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
 };
 use alien_error::AlienError;
-use alien_manager::auth::{Role, Scope, Subject, SubjectKind};
+use alien_manager::auth::{Authz, DeploymentCreateCtx, Role, Scope, Subject, SubjectKind};
 use alien_manager::config::ManagerConfig;
 use alien_manager::providers::OssAuthz;
 use alien_manager::routes::registry_proxy::{
@@ -37,8 +37,8 @@ use alien_manager::stores::sqlite::{
 };
 use alien_manager::traits::{
     AuthValidator, CreateDeploymentGroupParams, CreateImportedDeploymentParams,
-    CreateReleaseParams, CredentialResolver, DeploymentRecord, DeploymentStore, ReleaseStore,
-    TelemetrySignal, TokenStore,
+    CreateReleaseParams, CredentialResolver, DeploymentGroupRecord, DeploymentRecord,
+    DeploymentStore, ProjectRecord, ReleaseRecord, ReleaseStore, TelemetrySignal, TokenStore,
 };
 use alien_tunnel::manager::TunnelRegistry;
 use alien_tunnel::operator::{self, TunnelClientConfig, TunnelTargets};
@@ -93,6 +93,15 @@ fn token(role: Role) -> String {
 /// below: deployment-scoped for the tunnel roles, project-scoped for the
 /// pull roles. Returns the state and the deployment's ID.
 async fn state() -> (AppState, String) {
+    state_with(Arc::new(OssAuthz), false).await
+}
+
+/// The deployment's own token in [`state_with`] fixtures awaiting setup teardown.
+const DEPLOYMENT_SECRET: &str = "deployment-own-secret";
+
+/// [`state`] with another policy. With `awaiting_teardown`, the deployment is
+/// `teardown-required` and holds its own token, as one handed to setup teardown does.
+async fn state_with(authz: Arc<dyn Authz>, awaiting_teardown: bool) -> (AppState, String) {
     let tmp = tempfile::tempdir().unwrap();
     let db = Arc::new(
         SqliteDatabase::new(&tmp.path().join("manager.db").to_string_lossy())
@@ -128,7 +137,12 @@ async fn state() -> (AppState, String) {
                 stack_state: StackState::new(Platform::Kubernetes),
                 environment_info: None,
                 runtime_metadata: RuntimeMetadata::default(),
-                status: "running".to_string(),
+                status: if awaiting_teardown {
+                    "teardown-required"
+                } else {
+                    "running"
+                }
+                .to_string(),
                 current_release_id: None,
                 desired_release_id: None,
                 import_source: None,
@@ -137,7 +151,7 @@ async fn state() -> (AppState, String) {
                 setup_fingerprint: "test".to_string(),
                 setup_fingerprint_version: 1,
                 input_values: Default::default(),
-                deployment_token: None,
+                deployment_token: awaiting_teardown.then(|| DEPLOYMENT_SECRET.to_string()),
                 management_config: None,
             },
         )
@@ -176,6 +190,26 @@ async fn state() -> (AppState, String) {
     );
 
     subjects.insert(
+        "group-teardown".to_string(),
+        subject(
+            Scope::DeploymentGroup {
+                project_id: deployment.project_id.clone(),
+                deployment_group_id: group.id.clone(),
+            },
+            Role::DeploymentTeardown,
+        ),
+    );
+    subjects.insert(
+        "foreign-teardown".to_string(),
+        subject(
+            Scope::Deployment {
+                project_id: deployment.project_id.clone(),
+                deployment_id: "another-deployment".to_string(),
+            },
+            Role::DeploymentTeardown,
+        ),
+    );
+    subjects.insert(
         "workspace-teardown".to_string(),
         subject(Scope::Workspace, Role::DeploymentTeardown),
     );
@@ -199,7 +233,7 @@ async fn state() -> (AppState, String) {
         project_store: Arc::new(alien_manager::providers::SingleWorkspaceProjects),
         token_store,
         auth_validator: Arc::new(RoleValidator(subjects)),
-        authz: Arc::new(OssAuthz),
+        authz,
         telemetry_backend: Arc::new(alien_manager::providers::NullTelemetryBackend),
         credential_resolver: Arc::new(NoCredentials),
         command_server: Arc::new(CommandServer::new(
@@ -482,6 +516,46 @@ async fn initialize_checks_deployment_read_authority() {
     }
 }
 
+/// A group-scoped initialize registers a new deployment and returns its token; a cleanup
+/// credential must not, whatever scope an embedder gives it.
+#[tokio::test]
+async fn teardown_credentials_cannot_register_deployments() {
+    let (state, _) = state().await;
+    let count = || async {
+        state
+            .deployment_store
+            .list_deployments(&Subject::system(), &Default::default())
+            .await
+            .unwrap()
+            .len()
+    };
+    let before = count().await;
+    let router = alien_manager::routes::sync::initialize_router().with_state(state.clone());
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/initialize")
+                .header(header::AUTHORIZATION, "Bearer group-teardown")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"name":"registered-by-cleanup","platform":"kubernetes","initialDesiredRelease":"none"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "{}",
+        String::from_utf8_lossy(&body)
+    );
+    assert_eq!(count().await, before);
+}
+
 #[tokio::test]
 async fn workspace_acquire_checks_role_without_deployment_ids() {
     let (state, deployment_id) = state().await;
@@ -578,5 +652,232 @@ async fn workspace_admin_can_acquire_matching_deployment_without_ids() {
     assert_eq!(
         serde_json::to_value(saved).unwrap()["lockedBy"],
         "admin-acquisition"
+    );
+}
+
+/// An embedder policy that admits setup teardown for a teardown credential's own
+/// deployment and otherwise defers to the default policy.
+struct SetupTeardownAuthz;
+
+impl Authz for SetupTeardownAuthz {
+    fn can_setup_teardown(&self, subject: &Subject, deployment: &DeploymentRecord) -> bool {
+        subject.role == Role::DeploymentTeardown
+            && matches!(
+                &subject.scope,
+                Scope::Deployment { deployment_id, .. } if deployment_id == &deployment.id
+            )
+    }
+
+    fn can_create_release(&self, s: &Subject, project_id: &str) -> bool {
+        OssAuthz.can_create_release(s, project_id)
+    }
+    fn can_read_release(&self, s: &Subject, release: &ReleaseRecord) -> bool {
+        OssAuthz.can_read_release(s, release)
+    }
+    fn can_export_release(&self, s: &Subject, release: &ReleaseRecord) -> bool {
+        OssAuthz.can_export_release(s, release)
+    }
+    fn can_create_deployment(&self, s: &Subject, ctx: DeploymentCreateCtx<'_>) -> bool {
+        OssAuthz.can_create_deployment(s, ctx)
+    }
+    fn can_read_deployment(&self, s: &Subject, d: &DeploymentRecord) -> bool {
+        OssAuthz.can_read_deployment(s, d)
+    }
+    fn can_update_deployment(&self, s: &Subject, d: &DeploymentRecord) -> bool {
+        OssAuthz.can_update_deployment(s, d)
+    }
+    fn can_delete_deployment(&self, s: &Subject, d: &DeploymentRecord) -> bool {
+        OssAuthz.can_delete_deployment(s, d)
+    }
+    fn can_create_deployment_group(&self, s: &Subject, project_id: &str) -> bool {
+        OssAuthz.can_create_deployment_group(s, project_id)
+    }
+    fn can_read_deployment_group(&self, s: &Subject, dg: &DeploymentGroupRecord) -> bool {
+        OssAuthz.can_read_deployment_group(s, dg)
+    }
+    fn can_update_deployment_group(&self, s: &Subject, dg: &DeploymentGroupRecord) -> bool {
+        OssAuthz.can_update_deployment_group(s, dg)
+    }
+    fn can_delete_deployment_group(&self, s: &Subject, dg: &DeploymentGroupRecord) -> bool {
+        OssAuthz.can_delete_deployment_group(s, dg)
+    }
+    fn can_dispatch_command(&self, s: &Subject, d: &DeploymentRecord) -> bool {
+        OssAuthz.can_dispatch_command(s, d)
+    }
+    fn can_read_command(&self, s: &Subject, d: &DeploymentRecord) -> bool {
+        OssAuthz.can_read_command(s, d)
+    }
+    fn can_read_command_context(
+        &self,
+        s: &Subject,
+        command: &alien_commands::server::CommandAccessContext,
+    ) -> bool {
+        OssAuthz.can_read_command_context(s, command)
+    }
+    fn can_sync_deployment(&self, s: &Subject, d: &DeploymentRecord) -> bool {
+        OssAuthz.can_sync_deployment(s, d)
+    }
+    fn can_acquire_deployments(&self, s: &Subject, deployments: &[DeploymentRecord]) -> bool {
+        OssAuthz.can_acquire_deployments(s, deployments)
+    }
+    fn can_ingest_telemetry(&self, s: &Subject, signal: TelemetrySignal) -> bool {
+        OssAuthz.can_ingest_telemetry(s, signal)
+    }
+    fn can_push_image(&self, s: &Subject, project: &ProjectRecord, repo_name: &str) -> bool {
+        OssAuthz.can_push_image(s, project, repo_name)
+    }
+    fn can_act_on_deployment(&self, s: &Subject, d: &DeploymentRecord) -> bool {
+        OssAuthz.can_act_on_deployment(s, d)
+    }
+}
+
+async fn post_sync(
+    router: &axum::Router,
+    bearer: &str,
+    path: &str,
+    body: serde_json::Value,
+) -> (StatusCode, String) {
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(path)
+                .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    (status, String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// With an embedder's opt-in, a teardown credential may hold a setup-teardown lease on its own
+/// deployment and nothing else, and the acquire response gives it no deployment secrets. The
+/// deployment manager's response to the same request shows what is withheld.
+#[tokio::test]
+async fn opted_in_teardown_credential_holds_only_a_setup_teardown_lease() {
+    let (state, deployment_id) = state_with(Arc::new(SetupTeardownAuthz), true).await;
+    let router = alien_manager::routes::sync::router().with_state(state.clone());
+    let teardown = token(Role::DeploymentTeardown);
+    let acquire = |mode: Option<&str>, ids: Option<Vec<&str>>, session: &str| {
+        let mut body = serde_json::json!({
+            "session": session,
+            "deploymentModel": "push",
+            "statuses": ["teardown-required"],
+        });
+        if let Some(mode) = mode {
+            body["acquireMode"] = mode.into();
+        }
+        if let Some(ids) = ids {
+            body["deploymentIds"] = serde_json::json!(ids);
+        }
+        body
+    };
+    let locked_by = || async {
+        state
+            .deployment_store
+            .get_deployment(&Subject::system(), &deployment_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .locked_by
+    };
+
+    // Anything but explicit setup teardown of its own deployment is refused, and takes no lease.
+    for (bearer, mode, ids) in [
+        (teardown.as_str(), None, Some(vec![deployment_id.as_str()])),
+        (
+            teardown.as_str(),
+            Some("runtime"),
+            Some(vec![deployment_id.as_str()]),
+        ),
+        (
+            teardown.as_str(),
+            Some("setup-run"),
+            Some(vec![deployment_id.as_str()]),
+        ),
+        (teardown.as_str(), Some("setup-teardown"), None),
+        (teardown.as_str(), Some("setup-teardown"), Some(vec![])),
+        (
+            "foreign-teardown",
+            Some("setup-teardown"),
+            Some(vec![deployment_id.as_str()]),
+        ),
+    ] {
+        let (status, body) = post_sync(
+            &router,
+            bearer,
+            "/v1/sync/acquire",
+            acquire(mode, ids.clone(), "refused"),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::FORBIDDEN,
+            "{bearer} {mode:?} {ids:?}: {body}"
+        );
+        assert_eq!(locked_by().await, None);
+    }
+
+    let (status, body) = post_sync(
+        &router,
+        &teardown,
+        "/v1/sync/acquire",
+        acquire(
+            Some("setup-teardown"),
+            Some(vec![deployment_id.as_str()]),
+            "cleanup",
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let acquired = &value["deployments"][0]["deployment"];
+    assert_eq!(acquired["id"], deployment_id.as_str());
+    assert!(acquired.get("deploymentConfig").is_none(), "{body}");
+    assert!(!body.contains(DEPLOYMENT_SECRET), "{body}");
+    assert_eq!(locked_by().await.as_deref(), Some("cleanup"));
+
+    // Its own lease can be renewed and given back; another deployment's credential cannot.
+    let lease = serde_json::json!({ "deploymentId": deployment_id, "session": "cleanup" });
+    let (status, body) =
+        post_sync(&router, "foreign-teardown", "/v1/sync/renew", lease.clone()).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    let (status, body) = post_sync(
+        &router,
+        "foreign-teardown",
+        "/v1/sync/release",
+        lease.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(locked_by().await.as_deref(), Some("cleanup"));
+    let (status, body) = post_sync(&router, &teardown, "/v1/sync/renew", lease.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = post_sync(&router, &teardown, "/v1/sync/release", lease).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(locked_by().await, None);
+
+    // A deployment manager acquiring the same deployment receives its config and token.
+    let (status, body) = post_sync(
+        &router,
+        &token(Role::DeploymentManager),
+        "/v1/sync/acquire",
+        acquire(
+            Some("setup-teardown"),
+            Some(vec![deployment_id.as_str()]),
+            "manager",
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+        value["deployments"][0]["deployment"]["deploymentConfig"]["deploymentToken"],
+        DEPLOYMENT_SECRET
     );
 }
