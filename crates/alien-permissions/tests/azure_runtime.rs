@@ -192,6 +192,81 @@ fn compute_cluster_lifecycle_can_discover_subscription_sku_availability() {
 }
 
 #[test]
+fn compute_management_roles_keep_quota_reads_separate_from_fleet_writes() {
+    let generator = AzureRuntimePermissionsGenerator::new();
+    let permission_set = get_permission_set("compute-cluster/management").unwrap();
+    let context = create_test_context();
+    for target in [BindingTarget::Stack, BindingTarget::Resource] {
+        let plan = generator
+            .generate_grant_plan(permission_set, target, &context)
+            .unwrap();
+        assert_eq!(plan.custom_roles.len(), 2);
+        let quota = plan
+            .custom_roles
+            .iter()
+            .find(|role| {
+                role.role_definition
+                    .actions
+                    .iter()
+                    .any(|action| action == "Microsoft.Compute/locations/usages/read")
+            })
+            .unwrap();
+        let fleet = plan
+            .custom_roles
+            .iter()
+            .find(|role| {
+                role.role_definition
+                    .actions
+                    .iter()
+                    .any(|action| action == "Microsoft.Compute/virtualMachineScaleSets/write")
+            })
+            .unwrap();
+        assert_ne!(quota.key, fleet.key);
+        assert_ne!(quota.role_definition.name, fleet.role_definition.name);
+        // Keep the existing fleet identity when adding subscription quota reads.
+        assert_eq!(
+            fleet.key,
+            "compute-cluster/management:inspect_cloud_networking"
+        );
+        for role in [&quota, &fleet] {
+            let bindings: Vec<_> = plan
+                .bindings
+                .iter()
+                .filter(|binding| {
+                    binding.role_definition
+                        == AzureRoleDefinitionRef::Custom {
+                            key: role.key.clone(),
+                        }
+                })
+                .collect();
+            assert_eq!(bindings.len(), 1);
+            assert_eq!(
+                role.role_definition.assignable_scopes,
+                [bindings[0].scope.clone()]
+            );
+        }
+        assert_eq!(
+            quota.role_definition.assignable_scopes,
+            ["/subscriptions/00000000-0000-0000-0000-000000000000"]
+        );
+        assert_eq!(
+            fleet.role_definition.assignable_scopes,
+            [
+                "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-observability-prod"
+            ]
+        );
+        assert!(
+            quota
+                .role_definition
+                .actions
+                .iter()
+                .all(|action| action.ends_with("/read"))
+        );
+        assert!(quota.role_definition.data_actions.is_empty());
+    }
+}
+
+#[test]
 fn test_azure_hybrid_grant_plan() {
     let generator = AzureRuntimePermissionsGenerator::new();
     let permission_set = create_azure_hybrid_permission_set();
