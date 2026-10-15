@@ -7,8 +7,8 @@
 use crate::{
     emitter::CfEmitter,
     emitters::aws::helpers::{
-        cf_from_json, private_subnet_ids_expr, required_logical_id, resource_config,
-        resource_permission_owners, service_trust_policy, subnet_refs, tags,
+        cf_from_json, prefixed_permission_refs, private_subnet_ids_expr, required_logical_id,
+        resource_config, service_account_role_id, service_trust_policy, subnet_refs, tags,
         uniquify_iam_statement_sids, vpc_id_expr, CONDITION_NETWORK_MODE_CREATE,
         PARAM_PRIVATE_SUBNET_IDS,
     },
@@ -23,7 +23,11 @@ use alien_core::{
     SandboxCode, SandboxEgress,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_permissions::{generators::AwsCloudFormationPermissionsGenerator, BindingTarget};
+use alien_permissions::{
+    aws_resource_policies::without_refs_the_stack_policy_grants,
+    generators::{AwsCloudFormationPermissionsGenerator, AwsRuntimePermissionsGenerator},
+    BindingTarget,
+};
 
 /// The only architecture MicroVM images accept — the schema's enum has one member, so the agent
 /// in the image has to be an aarch64 Linux binary.
@@ -407,6 +411,12 @@ fn remote_access_policy(ctx: &EmitContext<'_>) -> Result<Option<CfResource>> {
 /// IAM policies attaching each profile's granted `sandbox/*` sets to that profile's role, scoped
 /// to this sandbox's image.
 ///
+/// A `"*"` set the service account's stack-level policy already grants for this image is left
+/// out, by the same rule the runtime applies
+/// ([`without_refs_the_stack_policy_grants`]). The runtime
+/// generator decides that coverage and the CloudFormation generator renders the policies; both
+/// read the same AWS entry of the set.
+///
 /// Emitted for both lifecycles: a Live image is built after the stack completes, but under the
 /// same `${AWS::StackName}-<id>` name, so a name-scoped grant written now covers it. Without these
 /// a Worker holding `sandbox/management` on the sandbox is denied its first `RunMicrovm`.
@@ -417,13 +427,42 @@ fn profile_policies(ctx: &EmitContext<'_>, sandbox: &Sandbox) -> Result<Vec<CfRe
     // `${stackPrefix}-${resourceName}`, and the generator renders the prefix as the stack name.
     let context = permission_context().with_resource_name(sandbox.id().to_string());
 
+    // The stack prefix as the CloudFormation generator renders it, so the stack-level and
+    // per-image patterns compare as they are written.
+    let coverage_context = context.clone().with_stack_prefix("${AWS::StackName}");
+
     let mut resources = Vec::new();
-    for (owner_index, (role_id, permission_refs)) in
-        resource_permission_owners(ctx, PERMISSION_SET_PREFIX)
-            .into_iter()
+    let mut owner_index = 0;
+    for (profile_name, profile) in ctx.stack.permission_profiles() {
+        let permission_refs =
+            prefixed_permission_refs(profile, ctx.resource_id, PERMISSION_SET_PREFIX);
+        if permission_refs.is_empty() {
+            continue;
+        }
+        let Some(role_id) = service_account_role_id(ctx, profile_name) else {
+            continue;
+        };
+        let kept = without_refs_the_stack_policy_grants(
+            ctx.stack,
+            profile_name,
+            profile,
+            ctx.resource_id,
+            permission_refs.clone(),
+            &AwsRuntimePermissionsGenerator::new(),
+            &coverage_context,
+        )
+        .context(ErrorData::GenericError {
+                message: format!(
+                    "failed to compare profile '{profile_name}' grants on sandbox '{}' with its stack-level policy",
+                    sandbox.id()
+                ),
+            })?;
+        // Indexed before the filter, so a kept policy keeps its logical id.
+        for (permission_index, permission_ref) in permission_refs
+            .iter()
             .enumerate()
-    {
-        for (permission_index, permission_ref) in permission_refs.iter().enumerate() {
+            .filter(|(_, permission_ref)| kept.contains(permission_ref))
+        {
             let permission_set = permission_ref
                 .resolve(|name| alien_permissions::get_permission_set(name).cloned())
                 .ok_or_else(|| {
@@ -490,6 +529,7 @@ fn profile_policies(ctx: &EmitContext<'_>, sandbox: &Sandbox) -> Result<Vec<CfRe
             policy_resource.depends_on.push(role_id.clone());
             resources.push(policy_resource);
         }
+        owner_index += 1;
     }
     Ok(resources)
 }

@@ -1767,50 +1767,68 @@ fn an_execute_only_profile_cannot_start_sessions() {
 
 /// A set granted under `"*"` reaches the sandbox through the service account's stack-wide policy,
 /// so the sandbox must not attach a second, image-scoped copy: every copy counts against the
-/// role's 10,240-character inline policy limit. A set granted on the sandbox by id is attached
-/// by the sandbox alone, and must still be.
+/// role's 10,240-character inline policy limit. A set granted on the sandbox by id, or a `"*"` set
+/// the account's stack-wide policy does not hold, is attached by the sandbox, and must still be.
+/// The stack mutations build the account from the same profile, so that last case only arises in
+/// a hand-built stack like this one.
 #[test]
 fn a_stack_wide_sandbox_grant_is_attached_once() {
     let stack_wide = format!("microvm-image:{PARITY_PREFIX}-*");
     let this_image = format!("microvm-image:{PARITY_PREFIX}-agents");
-    for (profile, expected_policies, granted_on) in [
-        (
-            PermissionProfile::new().global(["sandbox/management", "sandbox/execute"]),
-            vec![],
-            &stack_wide,
-        ),
-        (
-            PermissionProfile::new().resource("agents", ["sandbox/management", "sandbox/execute"]),
-            vec![
-                "execution_sa_agents_sandbox-management",
-                "execution_sa_agents_sandbox-execute",
-            ],
-            &this_image,
-        ),
-    ] {
-        let module = granted_sandbox_module(ResourceLifecycle::Frozen, profile.clone());
-        let sandbox_policies: Vec<String> = module
-            .iter()
-            .filter(|(file, _)| file.ends_with(".tf"))
-            .flat_map(|(file, contents)| {
-                let body: hcl::Body =
-                    hcl::parse(contents).unwrap_or_else(|error| panic!("{file} parses: {error}"));
-                resource_blocks(&body, "aws_iam_role_policy")
-                    .map(|block| block.labels()[1].as_str().to_string())
-                    .filter(|label| label.starts_with("execution_sa_agents_"))
-                    .collect::<Vec<_>>()
-            })
-            .collect();
-        assert_eq!(sandbox_policies, expected_policies, "{profile:?}");
+    let global = PermissionProfile::new().global(["sandbox/management", "sandbox/execute"]);
+    let by_id =
+        PermissionProfile::new().resource("agents", ["sandbox/management", "sandbox/execute"]);
+    let attached = vec![
+        "execution_sa_agents_sandbox-management",
+        "execution_sa_agents_sandbox-execute",
+    ];
+    for lifecycle in [ResourceLifecycle::Frozen, ResourceLifecycle::Live] {
+        for (profile, account, expected_policies, granted_on) in [
+            (&global, &global, vec![], &stack_wide),
+            (&by_id, &by_id, attached.clone(), &this_image),
+            (
+                &global,
+                &PermissionProfile::new(),
+                attached.clone(),
+                &this_image,
+            ),
+        ] {
+            let module = sandbox_module_with_account(lifecycle, profile.clone(), account);
+            if lifecycle == ResourceLifecycle::Live {
+                assert_terraform_valid(&module, "live sandbox with profile grants");
+            }
+            let sandbox_policies: Vec<String> = module
+                .iter()
+                .filter(|(file, _)| file.ends_with(".tf"))
+                .flat_map(|(file, contents)| {
+                    let body: hcl::Body = hcl::parse(contents)
+                        .unwrap_or_else(|error| panic!("{file} parses: {error}"));
+                    resource_blocks(&body, "aws_iam_role_policy")
+                        .map(|block| block.labels()[1].as_str().to_string())
+                        .filter(|label| label.starts_with("execution_sa_agents_"))
+                        .collect::<Vec<_>>()
+                })
+                .collect();
+            assert_eq!(
+                sandbox_policies, expected_policies,
+                "{lifecycle:?} {profile:?} on {account:?}"
+            );
 
-        let run = granted_actions(&module, "execution_sa")
-            .remove("lambda:RunMicrovm")
-            .unwrap_or_else(|| panic!("{profile:?}: the role must be able to start a session"));
-        assert_eq!(run.len(), 1, "{profile:?}: granted once: {run:?}");
-        assert!(
-            run[0].ends_with(granted_on.as_str()),
-            "{profile:?}: {run:?}"
-        );
+            let run = granted_actions(&module, "execution_sa")
+                .remove("lambda:RunMicrovm")
+                .unwrap_or_else(|| {
+                    panic!("{lifecycle:?} {profile:?}: the role must be able to start a session")
+                });
+            assert_eq!(
+                run.len(),
+                1,
+                "{lifecycle:?} {profile:?}: granted once: {run:?}"
+            );
+            assert!(
+                run[0].ends_with(granted_on.as_str()),
+                "{lifecycle:?} {profile:?} on {account:?}: {run:?}"
+            );
+        }
     }
 }
 
@@ -1818,6 +1836,16 @@ fn a_stack_wide_sandbox_grant_is_attached_once() {
 fn granted_sandbox_module(
     lifecycle: ResourceLifecycle,
     profile: PermissionProfile,
+) -> alien_terraform::ModuleFiles {
+    let account = profile.clone();
+    sandbox_module_with_account(lifecycle, profile, &account)
+}
+
+/// As [`granted_sandbox_module`], with the `execution` service account built from `account`.
+fn sandbox_module_with_account(
+    lifecycle: ResourceLifecycle,
+    profile: PermissionProfile,
+    account: &PermissionProfile,
 ) -> alien_terraform::ModuleFiles {
     let settings = StackSettings {
         network: Some(NetworkSettings::Create {
@@ -1828,7 +1856,7 @@ fn granted_sandbox_module(
     };
     let stack = Stack::new("acme-sandbox-grants".to_string())
         .add(
-            ServiceAccount::from_permission_profile("execution-sa".to_string(), &profile, |name| {
+            ServiceAccount::from_permission_profile("execution-sa".to_string(), account, |name| {
                 alien_permissions::get_permission_set(name).cloned()
             })
             .expect("every set in the profile is registered"),

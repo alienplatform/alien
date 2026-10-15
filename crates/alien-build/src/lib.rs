@@ -696,15 +696,7 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
     // any other compute image. On AWS the bundle layers the sandbox agent on afterwards and AWS
     // builds the MicroVM from that bundle inside the customer's account.
     if !sandboxes_to_build.is_empty() {
-        // The base boots on the cloud's sandbox runtime (an arm64 MicroVM on AWS, an amd64 disk
-        // image on Azure), not on the compute the stack's other targets were chosen for.
-        let sandbox_settings = {
-            let mut s = settings.clone();
-            s.targets = Some(BinaryTarget::defaults_for_platform(
-                settings.platform.runtime_platform(),
-            ));
-            s
-        };
+        let sandbox_settings = sandbox_base_settings(settings);
         let build_targets = sandbox_settings.get_targets();
 
         info!(
@@ -2401,6 +2393,17 @@ async fn build_resource(
     Ok(finalized_dir)
 }
 
+/// The settings a sandbox base is built with. The base boots on the cloud's sandbox runtime (an
+/// arm64 MicroVM on AWS, an amd64 disk image on Azure and GCP), not on the compute the stack's
+/// other targets were chosen for.
+fn sandbox_base_settings(settings: &BuildSettings) -> BuildSettings {
+    let mut sandbox_settings = settings.clone();
+    sandbox_settings.targets = Some(BinaryTarget::defaults_for_platform(
+        settings.platform.runtime_platform(),
+    ));
+    sandbox_settings
+}
+
 /// The agent `alien release` layers onto a GCP sandbox base. It is folded into both the artifact
 /// cache key and the artifact's directory name, which the release push cache keys on, so a new
 /// agent reaches a sandbox whose source did not change.
@@ -2427,8 +2430,7 @@ pub fn sandbox_image_hash(content_hash: String, platform: Platform) -> String {
 }
 
 /// The hash an artifact directory is named by: its tarballs' content hash, and the layered agent
-/// for a GCP sandbox, since a rebuilt base can be byte-identical to the one an older agent was
-/// layered onto.
+/// for a GCP sandbox (see [`layered_sandbox_agent`]).
 fn artifact_hash(content_hash: String, layered_agent: Option<&str>) -> String {
     match layered_agent {
         Some(agent) => format!("{:x}", Sha256::digest(format!("{content_hash}\0{agent}"))),
@@ -3707,6 +3709,9 @@ fn nonretryable_push_reason(error: &dockdash::Error) -> String {
     "The upload request was not accepted".to_string()
 }
 
+/// Throttling, a server error or a dropped connection from the registry, whichever dockdash
+/// variant carries it. Under another variant only a registry or network cause in the chain
+/// counts: a local I/O failure says nothing the registry can clear.
 fn is_retryable_dockdash_image_pull_error(error: &dockdash::Error) -> bool {
     match error {
         dockdash::Error::ImagePull { source, .. } => {
@@ -3716,7 +3721,21 @@ fn is_retryable_dockdash_image_pull_error(error: &dockdash::Error) -> bool {
                 .unwrap_or(false)
                 || is_retryable_transport_text(&error.to_string())
         }
-        _ => false,
+        _ => {
+            let mut current = Some(error as &(dyn StdError + 'static));
+            while let Some(cause) = current {
+                if let Some(oci_error) =
+                    cause.downcast_ref::<oci_client::errors::OciDistributionError>()
+                {
+                    return is_retryable_oci_error(oci_error);
+                }
+                if let Some(reqwest_error) = cause.downcast_ref::<reqwest::Error>() {
+                    return is_retryable_reqwest_error(reqwest_error);
+                }
+                current = cause.source();
+            }
+            false
+        }
     }
 }
 
@@ -3764,14 +3783,7 @@ fn is_retryable_transport_source(source: &(dyn StdError + Send + Sync + 'static)
         }
 
         if let Some(reqwest_error) = error.downcast_ref::<reqwest::Error>() {
-            return reqwest_error.is_timeout()
-                || reqwest_error.is_connect()
-                || reqwest_error.is_request()
-                || reqwest_error.is_body()
-                || reqwest_error
-                    .status()
-                    .map(|status| status.is_server_error() || status.as_u16() == 429)
-                    .unwrap_or(false);
+            return is_retryable_reqwest_error(reqwest_error);
         }
 
         if let Some(io_error) = error.downcast_ref::<std::io::Error>() {
@@ -3782,6 +3794,17 @@ fn is_retryable_transport_source(source: &(dyn StdError + Send + Sync + 'static)
     }
 
     false
+}
+
+fn is_retryable_reqwest_error(error: &reqwest::Error) -> bool {
+    error.is_timeout()
+        || error.is_connect()
+        || error.is_request()
+        || error.is_body()
+        || error
+            .status()
+            .map(|status| status.is_server_error() || status.as_u16() == 429)
+            .unwrap_or(false)
 }
 
 fn is_retryable_io_error(error: &std::io::Error) -> bool {
@@ -3807,14 +3830,7 @@ fn is_retryable_oci_error(error: &oci_client::errors::OciDistributionError) -> b
             .iter()
             .any(|entry| entry.code == oci_client::errors::OciErrorCode::Toomanyrequests),
         oci_client::errors::OciDistributionError::RequestError(error) => {
-            error.is_timeout()
-                || error.is_connect()
-                || error.is_request()
-                || error.is_body()
-                || error
-                    .status()
-                    .map(|status| status.is_server_error() || status.as_u16() == 429)
-                    .unwrap_or(false)
+            is_retryable_reqwest_error(error)
         }
         oci_client::errors::OciDistributionError::IoError(error) => matches!(
             error.kind(),
@@ -4462,6 +4478,89 @@ mod tests {
 
         assert!(!is_retryable_dockdash_image_pull_error(&auth_error));
         assert!(!is_retryable_dockdash_image_pull_error(&missing_error));
+    }
+
+    /// A sandbox base is built for its cloud's sandbox runtime whatever targets the stack's other
+    /// workloads build for: the AWS targets here are x86_64 and the MicroVM is arm64.
+    #[test]
+    fn a_sandbox_base_is_built_for_its_backend_architecture() {
+        for (platform, expected) in [
+            (
+                PlatformBuildSettings::Aws {
+                    managing_account_id: None,
+                },
+                BinaryTarget::LinuxArm64,
+            ),
+            (PlatformBuildSettings::Azure {}, BinaryTarget::LinuxX64),
+            (PlatformBuildSettings::Gcp {}, BinaryTarget::LinuxX64),
+        ] {
+            let settings = BuildSettings {
+                output_directory: "out".to_string(),
+                platform,
+                targets: Some(vec![BinaryTarget::LinuxX64, BinaryTarget::LinuxArm64]),
+                cache_url: None,
+                override_base_image: None,
+                debug_mode: false,
+                rebuild: false,
+                pull_base_images: false,
+            };
+            let x86 = BuildSettings {
+                targets: Some(vec![BinaryTarget::LinuxX64]),
+                ..settings.clone()
+            };
+            for settings in [settings, x86] {
+                assert_eq!(
+                    sandbox_base_settings(&settings).get_targets(),
+                    vec![expected],
+                    "{:?} with {:?}",
+                    settings.platform,
+                    settings.targets
+                );
+            }
+        }
+    }
+
+    /// A throttled registry is retryable whichever dockdash variant reports it; a local I/O
+    /// failure is not.
+    #[test]
+    fn retryable_image_pull_follows_the_source_of_any_variant() {
+        let throttled = dockdash::Error::Generic {
+            message: "Failed to assemble the image".to_string(),
+            source: Some(Box::new(
+                oci_client::errors::OciDistributionError::ServerError {
+                    code: 429,
+                    url: "https://ghcr.io/v2/example/base/manifests/tag".to_string(),
+                    message: "Too Many Requests".to_string(),
+                },
+            )),
+        };
+        let refused = dockdash::Error::Generic {
+            message: "Failed to assemble the image".to_string(),
+            source: Some(Box::new(
+                oci_client::errors::OciDistributionError::UnauthorizedError {
+                    url: "https://ghcr.io/v2/example/base/manifests/tag".to_string(),
+                },
+            )),
+        };
+
+        // A local read that ends early or times out is not the registry's to clear.
+        let local = |kind| dockdash::Error::Io {
+            message: "Failed to read the image archive".to_string(),
+            source: std::io::Error::new(kind, "local archive"),
+        };
+
+        assert!(is_retryable_dockdash_image_pull_error(&throttled));
+        assert!(!is_retryable_dockdash_image_pull_error(&refused));
+        for kind in [
+            std::io::ErrorKind::UnexpectedEof,
+            std::io::ErrorKind::TimedOut,
+            std::io::ErrorKind::ConnectionReset,
+        ] {
+            assert!(
+                !is_retryable_dockdash_image_pull_error(&local(kind)),
+                "{kind:?}"
+            );
+        }
     }
 
     #[test]
@@ -6542,7 +6641,7 @@ mod sandbox_push_tests {
         // The same registry under another name is outside the exception, so the agent pull
         // goes over HTTPS and the plain-HTTP registry cannot answer it.
         let elsewhere = agent_image.replacen("localhost", "127.0.0.1", 1);
-        push_target(
+        let error = push_target(
             &targets[0],
             &Platform::Gcp,
             &repository,
@@ -6551,6 +6650,16 @@ mod sandbox_push_tests {
         )
         .await
         .expect_err("an agent outside the base's registry is pulled over HTTPS");
+        assert_eq!(error.code, "IMAGE_PULL_TEMPORARILY_UNAVAILABLE", "{error}");
+        assert_eq!(
+            error
+                .context
+                .as_ref()
+                .and_then(|context| context.get("image"))
+                .and_then(|image| image.as_str()),
+            Some(elsewhere.as_str()),
+            "the failed pull is the agent's: {error}"
+        );
     }
 
     /// An unbuilt source sandbox has no directory to push, so a release says so rather than

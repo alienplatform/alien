@@ -2306,9 +2306,8 @@ mod tests {
         );
     }
 
-    /// `alien build` builds an AWS, Azure or GCP sandbox's base image, so source is a declaration
-    /// there. On every other platform the image is pulled as declared, and an unbuilt source would
-    /// schedule a pod that can never run, so the refusal still has to happen at plan time.
+    /// Source is refused at plan time on every platform whose sandbox image `alien build` does
+    /// not build (the reason is at the check in `validate_for_platform`).
     #[test]
     fn source_code_is_refused_where_no_backend_builds_it() {
         let sandbox = Sandbox::new("agent".to_string())

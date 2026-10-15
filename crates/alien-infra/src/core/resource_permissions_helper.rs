@@ -13,10 +13,7 @@ use crate::error::{ErrorData, Result};
 use alien_azure_clients::authorization::Scope;
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::permissions::{PermissionProfile, PermissionSetReference};
-use alien_core::{
-    KubernetesCluster, PermissionSet, RemoteStackManagement, ResourceLifecycle, ServiceAccount,
-    Stack,
-};
+use alien_core::{KubernetesCluster, PermissionSet, RemoteStackManagement, ResourceLifecycle};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_gcp_clients::iam::{
     Binding, CreateRoleRequest, IamApi, IamPolicy, Role, RoleLaunchStage,
@@ -24,7 +21,7 @@ use alien_gcp_clients::iam::{
 use alien_permissions::{
     aws_resource_policies::{
         aws_management_resource_policy_name, aws_resource_policy_name, render_aws_resource_policy,
-        AwsResourcePolicyContext,
+        without_refs_the_stack_policy_grants,
     },
     generators::*,
     BindingTarget, PermissionContext,
@@ -1352,7 +1349,8 @@ impl ResourcePermissionsHelper {
 
         // Process each permission profile in the stack
         for (profile_name, profile) in &ctx.desired_stack.permissions.profiles {
-            let combined_refs = Self::without_refs_the_stack_policy_grants(
+            // Policies written before this check stay on the role; they are only redundant.
+            let combined_refs = without_refs_the_stack_policy_grants(
                 ctx.desired_stack,
                 profile_name,
                 profile,
@@ -1360,7 +1358,13 @@ impl ResourcePermissionsHelper {
                 Self::aws_resource_scoped_refs(profile, resource_id, &type_prefix),
                 &generator,
                 &permission_context,
-            )?;
+            )
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to compare profile '{profile_name}' grants with its stack-level policy"
+                ),
+                resource_id: Some(resource_id.to_string()),
+            })?;
 
             if !combined_refs.is_empty() {
                 info!(
@@ -1503,64 +1507,6 @@ impl ResourcePermissionsHelper {
             );
         }
         combined_refs
-    }
-
-    /// Drops the wildcard sets that the service account's stack-level policy already grants for
-    /// this resource.
-    ///
-    /// A profile's `"*"` sets are written once on its role as the stack-level policy, scoped to
-    /// the stack prefix. Writing them again per resource duplicates that grant, and IAM caps a
-    /// role's inline policies at 10,240 characters in total, so a stack with a handful of
-    /// resources fails setup. A set stays when the resource names it, or when the stack-level
-    /// grant does not reach this resource (a bring-your-own resource outside the stack prefix).
-    /// Policies written before this check stay on the role; they are only redundant.
-    fn without_refs_the_stack_policy_grants(
-        stack: &Stack,
-        profile_name: &str,
-        profile: &PermissionProfile,
-        resource_id: &str,
-        refs: Vec<PermissionSetReference>,
-        generator: &AwsRuntimePermissionsGenerator,
-        permission_context: &PermissionContext,
-    ) -> Result<Vec<PermissionSetReference>> {
-        let named_by_resource = profile.0.get(resource_id);
-        let stack_sets = stack
-            .resources
-            .get(&format!("{profile_name}-sa"))
-            .and_then(|entry| entry.config.downcast_ref::<ServiceAccount>())
-            .map(|service_account| service_account.stack_permission_sets.as_slice())
-            .unwrap_or_default();
-
-        let selection = AwsResourcePolicyContext {
-            named_by_resource: named_by_resource.map(Vec::as_slice).unwrap_or_default(),
-            stack_sets,
-            generator,
-            permission_context,
-        };
-        let mut kept = Vec::new();
-        for reference in refs {
-            let granted =
-                selection
-                    .is_redundant(&reference)
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to select resource policy for permission set '{}'",
-                            reference.id()
-                        ),
-                        resource_id: Some(resource_id.to_string()),
-                    })?;
-            if granted {
-                debug!(
-                    resource_id = %resource_id,
-                    profile = %profile_name,
-                    permission_set = %reference.id(),
-                    "Stack-level policy already grants this set for the resource; skipping its resource policy"
-                );
-            } else {
-                kept.push(reference);
-            }
-        }
-        Ok(kept)
     }
 
     /// Remove inline policies that `apply_aws_resource_scoped_permissions`
@@ -2323,7 +2269,7 @@ pub(crate) fn aws_remote_access_policy(
 mod tests {
     use super::*;
     use alien_core::permissions::{PermissionProfile, PermissionSetReference};
-    use alien_core::{Stack, Storage};
+    use alien_core::{ServiceAccount, Stack, Storage};
     use alien_gcp_clients::iam::MockIamApi;
     use mockall::Sequence;
 
@@ -2635,7 +2581,7 @@ mod tests {
                         resource_id,
                         &type_prefix,
                     );
-                    let after = ResourcePermissionsHelper::without_refs_the_stack_policy_grants(
+                    let after = without_refs_the_stack_policy_grants(
                         &stack,
                         profile_name,
                         profile,

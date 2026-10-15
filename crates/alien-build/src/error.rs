@@ -1,6 +1,5 @@
 use alien_core::Platform;
-use alien_error::AlienErrorData;
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_error::{AlienError, AlienErrorData, Context, IntoAlienError};
 use serde::{Deserialize, Serialize};
 
 /// Represents application-specific errors for alien-build.
@@ -163,6 +162,23 @@ pub enum ErrorData {
         image: String,
         /// What the pull was for
         reason: String,
+    },
+
+    /// The sandbox agent tagged with this release is not in its registry. Retryable, as a missing
+    /// versioned Worker base is (`IMAGE_BUILD_FAILED`): a build can run ahead of the release that
+    /// publishes it. A development build's version is never published; the hint names the version.
+    #[error(
+        code = "SANDBOX_AGENT_IMAGE_MISSING",
+        message = "The sandbox agent image '{image}' is not published",
+        retryable = "true",
+        internal = "false",
+        hint = "The sandbox agent is published with each Alien release. If Alien {version} was released moments ago, retry once its release finishes; otherwise build with a released Alien CLI."
+    )]
+    SandboxAgentImageMissing {
+        /// Agent image reference that was pulled
+        image: String,
+        /// Alien version the agent is tagged with
+        version: String,
     },
 
     /// An image manifest cannot be read from its registry, for a reason a retry does not change.
@@ -369,8 +385,13 @@ where
             },
         ),
     );
+    let missing_platform = ErrorData::BaseImagePlatformMissing {
+        image: String::new(),
+        platform: String::new(),
+    }
+    .code();
     layers
-        .filter(|(code, _, _)| *code == "BASE_IMAGE_PLATFORM_MISSING")
+        .filter(|(code, _, _)| *code == missing_platform)
         .find_map(|(_, context, hint)| {
             let context = context?;
             Some(MissingBasePlatform {

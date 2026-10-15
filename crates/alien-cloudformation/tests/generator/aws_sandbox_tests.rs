@@ -1944,6 +1944,19 @@ fn the_emitted_registration_matches_the_direct_seed() {
 
 /// A deny sandbox whose `execution` profile is granted `sets` on it, next to that profile's role.
 fn granted_sandbox_stack(lifecycle: ResourceLifecycle, sets: &[&str]) -> (Stack, StackSettings) {
+    profile_sandbox_stack(
+        lifecycle,
+        PermissionProfile::new().resource("agents", sets.iter().copied()),
+        ServiceAccount::new("execution-sa".to_string()).build(),
+    )
+}
+
+/// A deny sandbox next to `account`, the role of an `execution` profile holding `profile`.
+fn profile_sandbox_stack(
+    lifecycle: ResourceLifecycle,
+    profile: PermissionProfile,
+    account: ServiceAccount,
+) -> (Stack, StackSettings) {
     let settings = StackSettings {
         network: Some(NetworkSettings::Create {
             cidr: None,
@@ -1952,14 +1965,8 @@ fn granted_sandbox_stack(lifecycle: ResourceLifecycle, sets: &[&str]) -> (Stack,
         ..StackSettings::default()
     };
     let stack = Stack::new("acme-sandbox-grants".to_string())
-        .permission(
-            "execution",
-            PermissionProfile::new().resource("agents", sets.iter().copied()),
-        )
-        .add(
-            ServiceAccount::new("execution-sa".to_string()).build(),
-            ResourceLifecycle::Frozen,
-        )
+        .permission("execution", profile)
+        .add(account, ResourceLifecycle::Frozen)
         .add(
             Network::new("default-network".to_string())
                 .settings(settings.network.clone().expect("network"))
@@ -2073,6 +2080,82 @@ fn a_profile_granted_the_sandbox_reaches_its_image_and_nothing_wider() {
                 && !granted.contains_key("iam:PassRole"),
             "{lifecycle:?}: neither set reaches a shell or a role: {granted:#?}"
         );
+    }
+}
+
+/// A set granted under `"*"` reaches the sandbox through the service account's stack-level policy,
+/// so the sandbox must not attach a second, image-scoped copy: every copy adds to the role's
+/// policies, which IAM caps. A `"*"` set the account's stack-level policy does not hold is attached
+/// by the sandbox, and must still be. The stack mutations build the account from the same profile,
+/// so that last case only arises in a hand-built stack like this one.
+#[test]
+fn a_stack_wide_sandbox_grant_is_attached_once() {
+    const IMAGE: &str =
+        "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:microvm-image:${AWS::StackName}-agents";
+    const STACK_WIDE: &str =
+        "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:microvm-image:${AWS::StackName}-*";
+    let global = PermissionProfile::new().global(["sandbox/management", "sandbox/execute"]);
+    for lifecycle in [ResourceLifecycle::Frozen, ResourceLifecycle::Live] {
+        for (account, stack_level, attached) in [
+            (&global, vec![STACK_WIDE.to_string()], None),
+            (
+                &PermissionProfile::new(),
+                vec![],
+                Some(vec![IMAGE.to_string()]),
+            ),
+        ] {
+            let service_account = ServiceAccount::from_permission_profile(
+                "execution-sa".to_string(),
+                account,
+                |name| alien_permissions::get_permission_set(name).cloned(),
+            )
+            .expect("every set in the profile is registered");
+            let (stack, settings) =
+                profile_sandbox_stack(lifecycle, global.clone(), service_account);
+            let (template, _yaml) = render_built_ins_template(
+                &stack,
+                settings,
+                custom_resource_registration(),
+                CloudFormationTarget::Aws,
+                "aws",
+                "stack-wide sandbox grant",
+            );
+
+            assert_eq!(
+                granted_actions(&template, "ExecutionSaRole").get("lambda:RunMicrovm"),
+                attached.as_ref(),
+                "{lifecycle:?} on {account:?}: the sandbox's own copy"
+            );
+            let role = serde_json::to_value(&template.resources["ExecutionSaRole"].properties)
+                .expect("serializes");
+            let run_on_the_role: Vec<String> = role["Policies"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .flat_map(|policy| {
+                    policy["PolicyDocument"]["Statement"]
+                        .as_array()
+                        .cloned()
+                        .unwrap_or_default()
+                })
+                .filter(|statement| {
+                    statement["Action"]
+                        .as_array()
+                        .is_some_and(|actions| actions.contains(&"lambda:RunMicrovm".into()))
+                })
+                .flat_map(|statement| {
+                    statement["Resource"]
+                        .as_array()
+                        .cloned()
+                        .unwrap_or_default()
+                })
+                .map(|resource| resource["Fn::Sub"].as_str().expect("Fn::Sub").to_string())
+                .collect();
+            assert_eq!(
+                run_on_the_role, stack_level,
+                "{lifecycle:?} on {account:?}: the account's stack-level policy"
+            );
+        }
     }
 }
 

@@ -7,8 +7,10 @@ use crate::{
     generators::{AwsIamPolicy, AwsIamStatement, AwsRuntimePermissionsGenerator},
     BindingTarget, ErrorData, PermissionContext, Result,
 };
+use alien_core::permissions::PermissionProfile;
 use alien_core::{PermissionSet, PermissionSetReference, ServiceAccount, Stack, Worker};
 use alien_error::{Context, IntoAlienError};
+use tracing::debug;
 
 /// Physical name used by AWS prefixed-resource create controllers.
 pub fn aws_prefixed_resource_name(prefix: &str, resource_id: &str) -> String {
@@ -92,6 +94,56 @@ impl AwsResourcePolicyContext<'_> {
         )?;
         Ok(aws_policy_grants(&stack, &resource))
     }
+}
+
+/// Drops the wildcard sets that the service account's stack-level policy already grants for
+/// this resource.
+///
+/// A profile's `"*"` sets are written once on its role as the stack-level policy, scoped to
+/// the stack prefix. Writing them again per resource duplicates that grant, and IAM caps a
+/// role's inline policies at 10,240 characters in total, so a stack with a handful of
+/// resources fails setup. A set stays when the resource names it, or when the stack-level
+/// grant does not reach this resource (a bring-your-own resource outside the stack prefix).
+/// The runtime, Terraform and CloudFormation all select a resource's policies with this.
+pub fn without_refs_the_stack_policy_grants(
+    stack: &Stack,
+    profile_name: &str,
+    profile: &PermissionProfile,
+    resource_id: &str,
+    refs: Vec<PermissionSetReference>,
+    generator: &AwsRuntimePermissionsGenerator,
+    permission_context: &PermissionContext,
+) -> Result<Vec<PermissionSetReference>> {
+    let stack_sets = stack
+        .resources
+        .get(&format!("{profile_name}-sa"))
+        .and_then(|entry| entry.config.downcast_ref::<ServiceAccount>())
+        .map(|service_account| service_account.stack_permission_sets.as_slice())
+        .unwrap_or_default();
+    let selection = AwsResourcePolicyContext {
+        named_by_resource: profile
+            .0
+            .get(resource_id)
+            .map(Vec::as_slice)
+            .unwrap_or_default(),
+        stack_sets,
+        generator,
+        permission_context,
+    };
+    let mut kept = Vec::new();
+    for reference in refs {
+        if selection.is_redundant(&reference)? {
+            debug!(
+                resource_id = %resource_id,
+                profile = %profile_name,
+                permission_set = %reference.id(),
+                "Stack-level policy already grants this set for the resource; skipping its resource policy"
+            );
+        } else {
+            kept.push(reference);
+        }
+    }
+    Ok(kept)
 }
 
 /// The exact name and document supplied to IAM's PutRolePolicy operation.

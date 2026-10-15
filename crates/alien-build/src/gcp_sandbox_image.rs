@@ -40,8 +40,14 @@ pub struct GcpSandboxImage {
 
 /// Layers the agent from `agent_image`, the exec identity and the GCP Agent Platform contract
 /// onto `base_image`, a registry reference pulled with `base_auth`. `base` is a local copy of the
-/// same image, read for its `/etc/passwd` and `/etc/group` and dropped before the agent pull. `resource_name` is the sandbox the
-/// image is for, named in a build failure. `cache` holds the pulled blobs and the agent layer.
+/// same image, read for its `/etc/passwd` and `/etc/group` and dropped before the agent pull.
+/// `resource_name` is the sandbox the image is for, named in a build failure. `cache` holds the
+/// pulled blobs and the agent layer.
+///
+/// The agent pull and the assembly, which fetches the base again, are each tried up to
+/// `BASE_IMAGE_BUILD_MAX_ATTEMPTS` times when the registry throttles, answers with a server error
+/// or drops the connection. A missing agent tag is not retried here; it is returned as
+/// [`ErrorData::SandboxAgentImageMissing`].
 pub async fn build_gcp_sandbox_image(
     resource_name: &str,
     base: Image,
@@ -173,9 +179,19 @@ pub async fn build_gcp_sandbox_image(
 enum Pulled {
     /// The developer's image: a missing tag is theirs to fix.
     Base,
-    /// Alien's agent tag, published by a release workflow a deploy can race, so a missing tag is
-    /// reported as temporary like a throttled pull.
+    /// Alien's agent, tagged with this release: a missing tag is
+    /// [`ErrorData::SandboxAgentImageMissing`].
     Agent,
+}
+
+impl Pulled {
+    /// What the image is pulled for, as a still-failing pull names it.
+    fn purpose(self) -> &'static str {
+        match self {
+            Pulled::Base => "the base the sandbox agent is layered onto",
+            Pulled::Agent => "the sandbox agent layered onto the image",
+        }
+    }
 }
 
 /// Builds the image `prepare` describes, retrying a transient pull of `reference`. `step` names
@@ -211,12 +227,15 @@ where
                 sleep(delay).await;
             }
             Err(error) => {
-                let context = if is_retryable_dockdash_image_pull_error(&error)
-                    || (pulled == Pulled::Agent && is_missing_manifest(&error))
-                {
+                let context = if is_retryable_dockdash_image_pull_error(&error) {
                     ErrorData::ImagePullTemporarilyUnavailable {
                         image: reference.to_string(),
-                        reason: step.to_string(),
+                        reason: pulled.purpose().to_string(),
+                    }
+                } else if pulled == Pulled::Agent && is_missing_manifest(&error) {
+                    ErrorData::SandboxAgentImageMissing {
+                        image: reference.to_string(),
+                        version: env!("CARGO_PKG_VERSION").to_string(),
                     }
                 } else {
                     ErrorData::ImageBuildFailed {
@@ -724,10 +743,63 @@ mod tests {
         assert_eq!(error.code, "IMAGE_PULL_TEMPORARILY_UNAVAILABLE", "{error}");
         assert!(error.retryable, "{error}");
         assert_eq!(
+            reason(&error),
+            Pulled::Agent.purpose(),
+            "the reason says what the pull was for, not the image again"
+        );
+        assert_eq!(
             manifests.hits_async().await,
             crate::BASE_IMAGE_BUILD_MAX_ATTEMPTS,
             "every attempt is made"
         );
+    }
+
+    /// A registry that throttles the base fetch during assembly gets every attempt, and the
+    /// failure stays retryable and names the base's purpose as its reason.
+    #[tokio::test]
+    async fn a_throttled_assembly_is_retried_and_stays_retryable() {
+        let (_registry, host) = setup_local_registry().await.expect("local registry");
+        let agent_image = format!("{host}/alien/agent:test");
+        push_image(&agent_image, &[(AGENT_PATH, b"#!/bin/sh\nexit 0\n")]).await;
+        let server = httpmock::MockServer::start_async().await;
+        let manifests = server
+            .mock_async(|when, then| {
+                when.path_contains("/manifests/");
+                then.status(429)
+                    .header("content-type", "application/json")
+                    .body(r#"{"errors":[{"code":"TOOMANYREQUESTS","message":"rate limited"}]}"#);
+            })
+            .await;
+        server
+            .mock_async(|when, then| {
+                when.any_request();
+                then.status(200);
+            })
+            .await;
+
+        let error = layering_error(
+            &agent_image,
+            &format!("{}/proj/sandbox:base", server.address()),
+        )
+        .await;
+        assert_eq!(error.code, "IMAGE_PULL_TEMPORARILY_UNAVAILABLE", "{error}");
+        assert!(error.retryable, "{error}");
+        assert_eq!(reason(&error), Pulled::Base.purpose());
+        assert_eq!(
+            manifests.hits_async().await,
+            crate::BASE_IMAGE_BUILD_MAX_ATTEMPTS,
+            "every attempt is made"
+        );
+    }
+
+    /// The `reason` an error carries.
+    fn reason(error: &AlienError<ErrorData>) -> &str {
+        error
+            .context
+            .as_ref()
+            .and_then(|context| context.get("reason"))
+            .and_then(|reason| reason.as_str())
+            .expect("the error carries a reason")
     }
 
     /// A registry that answers every manifest request as a real one does for a missing tag.
@@ -753,9 +825,9 @@ mod tests {
     }
 
     /// The agent tag is published by a release workflow a deploy can race, so a missing one is
-    /// reported as temporary.
+    /// its own retryable error, whose hint names the release it waits for.
     #[tokio::test]
-    async fn a_missing_agent_tag_is_temporary() {
+    async fn a_missing_agent_tag_names_the_release_it_waits_for() {
         let registry = registry_without_the_tag().await;
 
         let error = layering_error(
@@ -763,7 +835,10 @@ mod tests {
             "registry.example.com/proj/sandbox:base",
         )
         .await;
-        assert_eq!(error.code, "IMAGE_PULL_TEMPORARILY_UNAVAILABLE", "{error}");
+        assert_eq!(error.code, "SANDBOX_AGENT_IMAGE_MISSING", "{error}");
+        assert!(error.retryable, "{error}");
+        let hint = error.hint.as_deref().expect("the error carries a hint");
+        assert!(hint.contains(env!("CARGO_PKG_VERSION")), "{hint}");
     }
 
     /// The base is the developer's image; a tag the registry does not have will not appear on a
