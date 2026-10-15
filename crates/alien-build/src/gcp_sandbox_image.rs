@@ -1068,9 +1068,10 @@ mod tests {
         assert_eq!(error.code, "IMAGE_PULL_TEMPORARILY_UNAVAILABLE", "{error}");
         assert!(error.retryable, "{error}");
         assert_eq!(reason(&error), Pulled::Agent.purpose());
-        assert!(
-            manifests.hits_async().await > crate::BASE_IMAGE_BUILD_MAX_ATTEMPTS,
-            "the redirects were followed"
+        assert_eq!(
+            manifests.hits_async().await,
+            11,
+            "one attempt: the first request and the client's ten redirects"
         );
     }
 
