@@ -787,7 +787,8 @@ impl GcpArtifactRegistryController {
 }
 
 impl GcpArtifactRegistryController {
-    /// Applies resource-scoped permissions to the artifact registry using repository-level IAM
+    /// Applies the repository's IAM policy: the pull and push accounts the binding hands out
+    /// credentials for, and the stack's resource-scoped permissions.
     async fn apply_resource_scoped_permissions(
         &self,
         ctx: &ResourceControllerContext<'_>,
@@ -800,7 +801,27 @@ impl GcpArtifactRegistryController {
         let project_id = gcp_config.project_id.clone();
         let location = gcp_config.region.clone();
 
-        let mut bindings = Vec::new();
+        // The binding's credentials are these accounts' tokens, and every name the binding
+        // creates is an image path in this repository, so this grant is all a push or pull needs.
+        let mut bindings: Vec<alien_gcp_clients::iam::Binding> = [
+            (
+                "roles/artifactregistry.reader",
+                &self.pull_service_account_email,
+            ),
+            (
+                "roles/artifactregistry.writer",
+                &self.push_service_account_email,
+            ),
+        ]
+        .into_iter()
+        .filter_map(|(role, email)| {
+            Some(alien_gcp_clients::iam::Binding {
+                role: role.to_string(),
+                members: vec![format!("serviceAccount:{}", email.as_ref()?)],
+                condition: None,
+            })
+        })
+        .collect();
         ResourcePermissionsHelper::collect_gcp_resource_scoped_bindings(
             ctx,
             &config.id,
@@ -813,7 +834,7 @@ impl GcpArtifactRegistryController {
         if bindings.is_empty() {
             info!(
                 repository_id = %repository_name,
-                "No resource-scoped permissions to apply to Artifact Registry repository"
+                "No permissions to apply to Artifact Registry repository"
             );
             return Ok(());
         }
@@ -822,17 +843,62 @@ impl GcpArtifactRegistryController {
         let location_owned = location.clone();
         let repository_id_owned = repository_name.clone();
         let config_id_owned = config.id.clone();
-        let iam_policy = IamPolicy {
-            version: Some(3),
-            bindings,
-            etag: None,
-            kind: None,
-            resource_id: None,
-        };
 
         let client = ctx
             .service_provider
             .get_gcp_artifact_registry_client(gcp_config)?;
+        // An adopted repository may already grant others; add to its policy behind its etag
+        // rather than replace it.
+        let mut iam_policy = client
+            .get_repository_iam_policy(
+                project_id.clone(),
+                location.clone(),
+                repository_name.clone(),
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to read the IAM policy of Artifact Registry repository '{}'",
+                    repository_name
+                ),
+                resource_id: Some(config.id.clone()),
+            })?;
+        let mut changed = false;
+        for binding in bindings {
+            match iam_policy.bindings.iter_mut().find(|existing| {
+                existing.role == binding.role
+                    && existing
+                        .condition
+                        .as_ref()
+                        .map(|condition| &condition.expression)
+                        == binding
+                            .condition
+                            .as_ref()
+                            .map(|condition| &condition.expression)
+            }) {
+                Some(existing) => {
+                    for member in binding.members {
+                        if !existing.members.contains(&member) {
+                            existing.members.push(member);
+                            changed = true;
+                        }
+                    }
+                }
+                None => {
+                    iam_policy.bindings.push(binding);
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            info!(
+                repository_id = %repository_name,
+                "Artifact Registry repository IAM policy already holds its grants"
+            );
+            return Ok(());
+        }
+        iam_policy.version = Some(3);
+
         client
             .set_repository_iam_policy(
                 project_id_owned,
@@ -1019,8 +1085,33 @@ mod tests {
         Arc::new(mock_iam)
     }
 
-    fn setup_mock_ar_client_existing_repo() -> Arc<MockArtifactRegistryApi> {
+    fn setup_mock_ar_client_existing_repo(
+        written: Arc<std::sync::Mutex<Vec<IamPolicy>>>,
+    ) -> Arc<MockArtifactRegistryApi> {
         let mut mock_ar = MockArtifactRegistryApi::new();
+
+        // An adopted repository already grants someone else, behind an etag.
+        mock_ar
+            .expect_get_repository_iam_policy()
+            .returning(|_, _, _| {
+                Ok(IamPolicy {
+                    version: Some(1),
+                    bindings: vec![alien_gcp_clients::iam::Binding {
+                        role: "roles/artifactregistry.reader".to_string(),
+                        members: vec!["user:keep@example.com".to_string()],
+                        condition: None,
+                    }],
+                    etag: Some("original".to_string()),
+                    kind: None,
+                    resource_id: None,
+                })
+            });
+        mock_ar
+            .expect_set_repository_iam_policy()
+            .returning(move |_, _, _, policy| {
+                written.lock().unwrap().push(policy.clone());
+                Ok(policy)
+            });
 
         // Repository already exists — CreateStart will skip creation
         mock_ar
@@ -1040,8 +1131,11 @@ mod tests {
         Arc::new(mock_ar)
     }
 
-    fn setup_mock_service_provider(mock_iam: Arc<MockIamApi>) -> Arc<MockPlatformServiceProvider> {
-        let mock_ar = setup_mock_ar_client_existing_repo();
+    fn setup_mock_service_provider(
+        mock_iam: Arc<MockIamApi>,
+        written: Arc<std::sync::Mutex<Vec<IamPolicy>>>,
+    ) -> Arc<MockPlatformServiceProvider> {
+        let mock_ar = setup_mock_ar_client_existing_repo(written);
         let mut mock_provider = MockPlatformServiceProvider::new();
 
         mock_provider
@@ -1063,7 +1157,8 @@ mod tests {
         let location = "us-central1";
 
         let mock_iam = setup_mock_client_for_creation_and_deletion();
-        let mock_provider = setup_mock_service_provider(mock_iam);
+        let written = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mock_provider = setup_mock_service_provider(mock_iam, written.clone());
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(registry)
@@ -1094,6 +1189,39 @@ mod tests {
         assert!(registry_outputs.pull_role.is_some());
         assert!(registry_outputs.push_role.is_some());
 
+        // The binding's pull and push accounts reach the repository that holds every name,
+        // added to the existing policy behind its etag.
+        let policies = written.lock().unwrap().clone();
+        assert_eq!(policies.len(), 1);
+        assert_eq!(policies[0].etag.as_deref(), Some("original"));
+        let grants: Vec<(String, Vec<String>)> = policies[0]
+            .bindings
+            .iter()
+            .map(|binding| (binding.role.clone(), binding.members.clone()))
+            .collect();
+        assert_eq!(
+            grants,
+            vec![
+                (
+                    "roles/artifactregistry.reader".to_string(),
+                    vec![
+                        "user:keep@example.com".to_string(),
+                        format!(
+                            "serviceAccount:{}",
+                            registry_outputs.pull_role.clone().unwrap()
+                        )
+                    ]
+                ),
+                (
+                    "roles/artifactregistry.writer".to_string(),
+                    vec![format!(
+                        "serviceAccount:{}",
+                        registry_outputs.push_role.clone().unwrap()
+                    )]
+                ),
+            ]
+        );
+
         // Test delete flow
         executor.delete().unwrap();
         executor.run_until_terminal().await.unwrap();
@@ -1108,7 +1236,8 @@ mod tests {
         let location = "us-central1";
 
         let mock_iam = setup_mock_client_for_creation_and_update();
-        let mock_provider = setup_mock_service_provider(mock_iam);
+        let mock_provider =
+            setup_mock_service_provider(mock_iam, Arc::new(std::sync::Mutex::new(Vec::new())));
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(registry.clone())

@@ -100,7 +100,7 @@ async fn ensure_registry_access(
 
 /// Revokes cross-account registry access for a deployment during cleanup.
 ///
-/// Called during sync/reconcile when the deployment reaches `Deleted` status.
+/// Called during sync/reconcile once runtime teardown is complete.
 async fn revoke_registry_access(
     artifact_registry: &dyn ArtifactRegistry,
     repo_id: &str,
@@ -108,6 +108,7 @@ async fn revoke_registry_access(
     stack_state: Option<&StackState>,
     deployment_store: &dyn DeploymentStore,
     deployment_id: &str,
+    project_id: &str,
 ) -> Result<()> {
     if let EnvironmentInfo::Gcp(GcpEnvironmentInfo { project_number, .. }) = environment_info {
         if let Some(service_account_email) = extract_rsm_access_configuration(stack_state) {
@@ -126,8 +127,17 @@ async fn revoke_registry_access(
             .await?;
         }
 
+        // The binding's own repository held every Alien project's images before per-project
+        // repositories, so a deployment of any project in this GCP project still pulls from it.
+        let consumer_project = (repo_id != artifact_registry.upstream_repository_prefix())
+            .then(|| project_id.to_string());
         let shared_with_another_deployment = deployment_store
-            .has_other_gcp_project_deployment(&Subject::system(), project_number, deployment_id)
+            .has_other_gcp_project_deployment(
+                &Subject::system(),
+                project_number,
+                consumer_project,
+                deployment_id,
+            )
             .await
             .context(ErrorData::RegistryAccessCleanupFailed {
                 deployment_id: deployment_id.to_string(),
@@ -329,11 +339,13 @@ pub async fn reconcile_registry_access_with_proxy(
     }
     let refused_any = !refused.is_empty();
     if repo_ids.is_empty() {
-        if refused_any {
-            state
-                .runtime_metadata
-                .get_or_insert_with(RuntimeMetadata::default)
-                .registry_access_granted = false;
+        let metadata = state
+            .runtime_metadata
+            .get_or_insert_with(RuntimeMetadata::default);
+        // A grant made before the record existed is named by this marker alone; clearing it would
+        // leave the delete nothing to revoke.
+        if refused_any && metadata.registry_access.is_some() {
+            metadata.registry_access_granted = false;
         }
         return;
     }
@@ -376,6 +388,11 @@ pub async fn reconcile_registry_access_with_proxy(
     // A repository the deployment stopped naming keeps its grant, recorded so the delete revokes
     // it. Revoking it here would cut a sibling deployment off a policy it still pulls through.
     opened.extend(previously_opened(recorded.as_ref(), &repo_ids));
+    opened.extend(legacy_shared_repository(
+        artifact_registry.as_ref(),
+        state,
+        &platform,
+    ));
 
     opened.sort();
     opened.dedup();
@@ -416,6 +433,51 @@ fn needs_regrant(
 }
 
 /// Repositories the record names that the deployment no longer needs.
+/// The GCP binding's own repository, when this deployment may hold a grant written there before
+/// per-project repositories: one recorded by the marker alone, or one for an image under it.
+///
+/// Every older project's images live in that repository, so a grant left on it after teardown
+/// keeps the target project's service agent reading all of them.
+fn legacy_shared_repository(
+    artifact_registry: &dyn ArtifactRegistry,
+    state: &DeploymentState,
+    platform: &Platform,
+) -> Option<String> {
+    if *platform != Platform::Gcp {
+        return None;
+    }
+    let shared = artifact_registry.upstream_repository_prefix();
+    if shared.is_empty() {
+        return None;
+    }
+    let marker_only = state.runtime_metadata.as_ref().is_some_and(|metadata| {
+        metadata.registry_access_granted && metadata.registry_access.is_none()
+    });
+    let image_under_shared = |stack: &Stack| {
+        stack.resources().any(|(_, entry)| {
+            [SandboxImageSource::None, sandbox_image_source(*platform)]
+                .into_iter()
+                .filter_map(|source| resource_image_reference(entry, source))
+                .filter_map(image_repository_path)
+                .any(|path| path.starts_with(&format!("{shared}/")))
+        })
+    };
+    let legacy_image = state
+        .current_release
+        .as_ref()
+        .is_some_and(|release| image_under_shared(&release.stack))
+        || state
+            .target_release
+            .as_ref()
+            .is_some_and(|release| image_under_shared(&release.stack))
+        || state
+            .runtime_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.prepared_stack.as_ref())
+            .is_some_and(image_under_shared);
+    (marker_only || legacy_image).then_some(shared)
+}
+
 fn previously_opened(recorded: Option<&RegistryAccess>, needed: &[String]) -> Vec<String> {
     recorded
         .map(|access| {
@@ -463,10 +525,10 @@ fn service_type_name(service_type: &ComputeServiceType) -> String {
 }
 
 /// Revokes registry access once runtime teardown is complete.
-/// AWS also revokes at TeardownRequired, before setup deletion removes its identity and record.
+/// Revoke at TeardownRequired before imported or native setup deletion.
 ///
 /// Cloud Run's service agent is project-scoped, so multiple deployments in
-/// the same GCP project share one GAR reader grant. The final active consumer
+/// the same GCP project and Alien project share one GAR reader grant. The final active consumer
 /// removes that shared grant; every deployment still removes its own remote
 /// management service-account grant.
 pub async fn cleanup_deleted_registry_access(
@@ -477,11 +539,14 @@ pub async fn cleanup_deleted_registry_access(
     project_id: &str,
     state: &DeploymentState,
 ) -> Result<()> {
-    // AWS setup deletion removes the target role and then the deployment record. Revoke
-    // while runtime teardown is complete and that setup handoff is still recorded.
+    // Setup deletion removes identity outputs. Revoke deployment-owned access while
+    // runtime teardown is complete and those outputs are still recorded.
     match (state.status, state.environment_info.as_ref()) {
         (DeploymentStatus::Deleted, _)
-        | (DeploymentStatus::TeardownRequired, Some(EnvironmentInfo::Aws(_))) => {}
+        | (
+            DeploymentStatus::TeardownRequired,
+            Some(EnvironmentInfo::Aws(_) | EnvironmentInfo::Gcp(_)),
+        ) => {}
         _ => return Ok(()),
     }
     let Some(environment_info) = state.environment_info.as_ref() else {
@@ -579,7 +644,7 @@ pub async fn cleanup_deleted_registry_access(
             let mut collect = |stack: &Stack| {
                 for (_, entry) in stack.resources() {
                     if let Some(image) = resource_image_reference(entry, SandboxImageSource::None) {
-                        if let Some(repository) = ecr_repository_from_image(image, &prefix) {
+                        if let Some(repository) = repository_path_under_prefix(image, &prefix) {
                             repo_ids.push(repository);
                         }
                     }
@@ -600,12 +665,14 @@ pub async fn cleanup_deleted_registry_access(
             }
         }
     }
-    // GAR binds IAM on the registry itself and ignores the repository, so a GCP grant is always
-    // named by the prefix even when nothing else names it.
-    if repo_ids.is_empty() && recorded_grant && matches!(platform, Platform::Gcp) {
-        let prefix = artifact_registry.upstream_repository_prefix();
-        if !prefix.is_empty() {
-            repo_ids.push(prefix);
+
+    // Every GCP teardown also revokes on the binding's shared repository. A legacy grant there
+    // is kept while any deployment remains in the GCP project, so whichever deployment is last,
+    // old or new, must be the one that removes it; a missing repository revokes nothing.
+    if platform == Platform::Gcp {
+        let shared = artifact_registry.upstream_repository_prefix();
+        if !shared.is_empty() {
+            repo_ids.push(shared);
         }
     }
     repo_ids.sort();
@@ -635,13 +702,14 @@ pub async fn cleanup_deleted_registry_access(
             state.stack_state.as_ref(),
             deployment_store,
             deployment_id,
+            project_id,
         )
         .await?;
     }
     Ok(())
 }
 
-/// Revokes a deleted AWS deployment's registry access before the state that ends its runtime
+/// Revokes registry access before the state that ends its runtime
 /// cleanup is persisted, and returns the state to persist instead.
 ///
 /// The revoke goes first because a persisted `TeardownRequired` hands the deployment to setup
@@ -650,7 +718,7 @@ pub async fn cleanup_deleted_registry_access(
 /// the manager lacks a permission, and a retry of the delete revokes once it is granted. Any other
 /// failure is returned with nothing persisted, for the caller to retry.
 ///
-/// Other platforms revoke in [`revoke_after_persisting`].
+/// GCP project service agents are checked again in [`revoke_after_persisting`].
 pub async fn revoke_before_persisting(
     deployment_store: &dyn DeploymentStore,
     bindings_provider: &Option<Arc<dyn BindingsProviderApi>>,
@@ -659,7 +727,10 @@ pub async fn revoke_before_persisting(
     project_id: &str,
     state: DeploymentState,
 ) -> Result<DeploymentState> {
-    if !matches!(state.environment_info, Some(EnvironmentInfo::Aws(_))) {
+    if !matches!(state.environment_info, Some(EnvironmentInfo::Aws(_)))
+        && !(matches!(state.environment_info, Some(EnvironmentInfo::Gcp(_)))
+            && state.status == DeploymentStatus::TeardownRequired)
+    {
         return Ok(state);
     }
     match cleanup_deleted_registry_access(
@@ -696,12 +767,13 @@ pub async fn revoke_before_persisting(
     }
 }
 
-/// Revokes a deleted GCP deployment's registry access once its `Deleted` state is persisted.
+/// Rechecks GCP registry access after runtime teardown or deletion is persisted.
 ///
-/// GCP removes a project's shared grant only when no other deployment in that project is still
-/// saved as active. Each deletion is saved before it asks, so of two deletions finishing together
-/// the one that asks last sees both deleted and removes the grant; asking first, both could see
-/// the other active and both keep it. AWS revokes in [`revoke_before_persisting`].
+/// GCP removes a project's shared grant only when no other deployment in that project still
+/// needs its runtime. Rechecking after persistence lets concurrent teardowns observe each other
+/// as complete and remove the final grant; checking only before persistence could leave
+/// the other active and both keep it. Imported setup may be forgotten after `TeardownRequired`,
+/// so that handoff must also remove the last service-agent grant. AWS revokes before persistence.
 pub async fn revoke_after_persisting(
     deployment_store: &dyn DeploymentStore,
     bindings_provider: &Option<Arc<dyn BindingsProviderApi>>,
@@ -765,7 +837,7 @@ fn repository_access_with_proxy(
         .map(EnvironmentInfo::platform);
     let sandbox_source = platform.map_or(SandboxImageSource::None, sandbox_image_source);
 
-    if matches!(platform, Some(Platform::Aws)) {
+    if matches!(platform, Some(Platform::Aws | Platform::Gcp)) {
         let mut repo_ids = HashSet::new();
         let refused = collect_image_repositories(
             state,
@@ -781,44 +853,7 @@ fn repository_access_with_proxy(
         return (repo_ids, refused);
     }
 
-    // No per-project path to hold a sandbox to here: a GCP sandbox pulls the agents image Alien
-    // publishes under the shared prefix, and GAR binds IAM at the repository, so every grant on
-    // this platform opens the same shared repository. AWS narrows its own grant per project.
-    if !has_image_in_repository_prefix(state, &prefix, sandbox_source) {
-        return (Vec::new(), Vec::new());
-    }
-
-    let repo_ids = HashSet::from([prefix]);
-    let mut repo_ids: Vec<_> = repo_ids.into_iter().collect();
-    repo_ids.sort();
-    (repo_ids, Vec::new())
-}
-
-fn has_image_in_repository_prefix(
-    state: &DeploymentState,
-    prefix: &str,
-    sandbox_source: SandboxImageSource,
-) -> bool {
-    let stack_matches = |stack: &Stack| {
-        stack.resources().any(|(_id, entry)| {
-            resource_image_reference(entry, sandbox_source)
-                .is_some_and(|image| image_repository_matches_prefix(image, prefix))
-        })
-    };
-
-    state
-        .current_release
-        .as_ref()
-        .is_some_and(|release| stack_matches(&release.stack))
-        || state
-            .target_release
-            .as_ref()
-            .is_some_and(|release| stack_matches(&release.stack))
-        || state
-            .runtime_metadata
-            .as_ref()
-            .and_then(|runtime_metadata| runtime_metadata.prepared_stack.as_ref())
-            .is_some_and(stack_matches)
+    (Vec::new(), Vec::new())
 }
 
 /// The principals a GCP grant names: Cloud Run always, and the sandbox agent when a release
@@ -942,6 +977,15 @@ fn ecr_registry_identity(host: &str) -> Option<(&str, &str)> {
 /// the `{region}` token, which stands for whichever region the deployment renders; any other
 /// region names a different repository than the one being opened.
 fn served_by_registry(image: &str, registry_endpoint: &str) -> bool {
+    let host = alien_core::image_rewrite::strip_url_scheme(image)
+        .split('/')
+        .next();
+    let registry_host = alien_core::image_rewrite::strip_url_scheme(registry_endpoint)
+        .split('/')
+        .next();
+    if registry_host.is_some_and(|host| host.ends_with("-docker.pkg.dev")) {
+        return host == registry_host;
+    }
     let (Some((account, region)), Some((registry_account, registry_region))) = (
         ecr_registry_identity(image),
         ecr_registry_identity(registry_endpoint),
@@ -969,13 +1013,33 @@ fn collect_image_repositories(
             let Some(image) = resource_image_reference(entry, sandbox_source) else {
                 continue;
             };
-            let Some(repo_id) = ecr_repository_from_image(image, prefix) else {
+            let Some(image_path) = repository_path_under_prefix(image, prefix) else {
                 continue;
+            };
+            let (repo_id, own_repository) = if let Some((cloud_project, gar_prefix)) = prefix
+                .split_once('/')
+                .filter(|_| matches!(state.environment_info, Some(EnvironmentInfo::Gcp(_))))
+            {
+                let path = image_path
+                    .strip_prefix(&format!("{cloud_project}/"))
+                    .unwrap_or_default();
+                let owner = alien_core::gar_repository::project_id_for_path(path, gar_prefix);
+                let repository = path.split('/').next().unwrap_or_default();
+                (
+                    format!("{cloud_project}/{repository}"),
+                    owner == Some(project_id),
+                )
+            } else {
+                let own = image_path == own_repository
+                    || (entry.config.downcast_ref::<Worker>().is_some()
+                        && project_id == "default"
+                        && image_path == prefix);
+                (image_path, own)
             };
             // The host too: the grant is written on this registry, so a same-path repository in
             // another account would be granted here and pulled from there.
             let is_worker = entry.config.downcast_ref::<Worker>().is_some();
-            let proxy_image = is_worker
+            let proxy_image = (is_worker || sandbox_source == SandboxImageSource::Code)
                 && proxy_url.is_some_and(|proxy| {
                     let host = alien_core::image_rewrite::strip_url_scheme(image)
                         .split_once('/')
@@ -983,10 +1047,6 @@ fn collect_image_repositories(
                     host == Some(alien_core::image_rewrite::strip_url_scheme(proxy))
                 });
             let own_registry = served_by_registry(image, registry_endpoint) || proxy_image;
-            // Standalone releases publish workers into the bare prefix; the proxy routes that
-            // repository to the canonical default project. Other projects always use a suffix.
-            let own_repository = repo_id == own_repository
-                || (is_worker && project_id == "default" && repo_id == prefix);
             // Returned, not logged: cleanup derives repositories here without the proxy URL,
             // so only the grant path knows a refusal is real.
             if !own_repository || !own_registry {
@@ -1043,22 +1103,17 @@ fn stack_has_registry_backed_image(stack: &Stack, sandbox_source: SandboxImageSo
         .any(|(_id, entry)| resource_image_reference(entry, sandbox_source).is_some())
 }
 
-fn ecr_repository_from_image(image: &str, prefix: &str) -> Option<String> {
+fn repository_path_under_prefix(image: &str, prefix: &str) -> Option<String> {
     let repository = image_repository_path(image)?;
 
-    if repository == prefix || repository.starts_with(&format!("{prefix}-")) {
+    if repository == prefix
+        || repository.starts_with(&format!("{prefix}-"))
+        || (prefix.contains('/') && repository.starts_with(&format!("{prefix}/")))
+    {
         Some(repository)
     } else {
         None
     }
-}
-
-fn image_repository_matches_prefix(image: &str, prefix: &str) -> bool {
-    image_repository_path(image).is_some_and(|repository| {
-        repository == prefix
-            || repository.starts_with(&format!("{prefix}-"))
-            || repository.starts_with(&format!("{prefix}/"))
-    })
 }
 
 fn image_repository_path(image: &str) -> Option<String> {
@@ -1269,9 +1324,11 @@ mod tests {
     #[async_trait]
     impl ArtifactRegistry for TestArtifactRegistry {
         fn registry_endpoint(&self) -> String {
-            // The ECR shape, since the sandbox check compares the account a reference names
-            // against the account its grant would be written in.
-            "https://123456789012.dkr.ecr.us-east-2.amazonaws.com".to_string()
+            if self.prefix.contains('/') {
+                "https://region-docker.pkg.dev".to_string()
+            } else {
+                "https://123456789012.dkr.ecr.us-east-2.amazonaws.com".to_string()
+            }
         }
 
         fn upstream_repository_prefix(&self) -> String {
@@ -2069,20 +2126,111 @@ mod tests {
     }
 
     #[test]
-    fn gcp_registry_access_requires_worker_image_under_prefix() {
+    fn gar_grants_only_the_own_project_repository() {
         let registry = TestArtifactRegistry {
-            prefix: "test-project/alien-artifacts".to_string(),
+            prefix: "vendor/artifacts".to_string(),
+            fail_remove: false,
+            removed_repository_is_gone: false,
+        };
+        for (owner, expected) in [
+            (
+                PROJECT,
+                vec![format!(
+                    "vendor/{}",
+                    alien_core::gar_repository::project_repository("artifacts", PROJECT).unwrap()
+                )],
+            ),
+            ("prj_other", Vec::new()),
+        ] {
+            let state = gcp_state_with_stack(worker_stack(&format!(
+                "region-docker.pkg.dev/vendor/{}/{owner}/worker:v1",
+                alien_core::gar_repository::project_repository("artifacts", owner).unwrap()
+            )));
+            let (repositories, refused) = repository_access(&registry, &state, PROJECT);
+            assert_eq!(repositories, expected);
+            assert_eq!(!refused.is_empty(), owner != PROJECT);
+        }
+    }
+
+    /// The granted repositories, and whether any image was refused.
+    fn any_refused(access: (Vec<String>, Vec<RefusedImage>)) -> (Vec<String>, bool) {
+        (access.0, !access.1.is_empty())
+    }
+
+    #[test]
+    fn gcp_worker_and_sandbox_grants_name_only_their_project_repository() {
+        let registry = TestArtifactRegistry {
+            prefix: "vendor/artifacts".to_string(),
+            fail_remove: false,
+            removed_repository_is_gone: false,
+        };
+        let own = alien_core::gar_repository::project_repository("artifacts", PROJECT).unwrap();
+        for host in [
+            "region-docker.pkg.dev",
+            "manager.example.com",
+            "other.example.com",
+        ] {
+            let mut state = gcp_state_with_stack(worker_stack(&format!(
+                "{host}/vendor/{own}/{PROJECT}/worker:v1"
+            )));
+            state.target_release = Some(ReleaseInfo {
+                release_id: Some("rel_sandbox".to_string()),
+                version: None,
+                description: None,
+                stack: sandbox_stack_with_code(
+                    &format!("{host}/vendor/{own}/{PROJECT}/sandbox:v1"),
+                    None,
+                ),
+            });
+            assert_eq!(
+                any_refused(repository_access_with_proxy(
+                    &registry,
+                    &state,
+                    PROJECT,
+                    Some("https://manager.example.com")
+                )),
+                if host == "other.example.com" {
+                    (vec![], true)
+                } else {
+                    (vec![format!("vendor/{own}")], false)
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn standalone_gcp_releases_use_the_default_project_repository() {
+        let registry = TestArtifactRegistry {
+            prefix: "vendor/artifacts".to_string(),
             fail_remove: false,
             removed_repository_is_gone: false,
         };
         let state = gcp_state_with_stack(worker_stack(
-            "manager.example.com/test-project/alien-artifacts/test-worker:abc123",
+            "region-docker.pkg.dev/vendor/artifacts-default/default/worker:v1",
         ));
-
         assert_eq!(
-            repository_ids_for_access(&registry, &state, PROJECT),
-            vec!["test-project/alien-artifacts".to_string()]
+            any_refused(repository_access(&registry, &state, "default")),
+            (vec!["vendor/artifacts-default".to_string()], false)
         );
+        assert_eq!(
+            any_refused(repository_access(&registry, &state, PROJECT)),
+            (vec![], true)
+        );
+        for path in [
+            "artifacts/worker",
+            "artifacts/default/worker",
+            "artifacts-shared/agents",
+            "artifacts-prj-test/prj_other/worker",
+            "artifacts-default/prj_test/worker",
+        ] {
+            let state = gcp_state_with_stack(worker_stack(&format!(
+                "region-docker.pkg.dev/vendor/{path}:v1"
+            )));
+            assert_eq!(
+                any_refused(repository_access(&registry, &state, "default")),
+                (vec![], true)
+            );
+        }
     }
 
     /// What a GCP revoke asked the registry to remove, one entry per call.
@@ -2171,11 +2319,14 @@ mod tests {
         let mut store = MockDeploymentStore::new();
         store
             .expect_has_other_gcp_project_deployment()
-            .withf(|caller, project_number, excluding| {
-                caller.is_system() && project_number == PROJECT_NUMBER && excluding == "dep_deleted"
+            .withf(|caller, project_number, project_id, excluding| {
+                caller.is_system()
+                    && project_number == PROJECT_NUMBER
+                    && project_id.as_deref() == Some("default")
+                    && excluding == "dep_deleted"
             })
             .times(1)
-            .returning(move |_, _, _| {
+            .returning(move |_, _, _, _| {
                 answer.map_err(|message| {
                     AlienError::new(alien_error::GenericError {
                         message: message.to_string(),
@@ -2186,17 +2337,38 @@ mod tests {
         store
     }
 
+    /// A store for a GCP teardown, which asks once for its project's repository and once, across
+    /// every Alien project, for the binding's shared repository.
+    fn store_answering_teardown(answer: bool) -> MockDeploymentStore {
+        let mut store = MockDeploymentStore::new();
+        for project in [Some("default".to_string()), None] {
+            store
+                .expect_has_other_gcp_project_deployment()
+                .withf(move |caller, project_number, project_id, excluding| {
+                    caller.is_system()
+                        && project_number == PROJECT_NUMBER
+                        && *project_id == project
+                        && excluding == "dep_deleted"
+                })
+                .times(1)
+                .returning(move |_, _, _, _| Ok(answer));
+        }
+        store.expect_list_deployments().times(0);
+        store
+    }
+
     async fn revoke_gcp(
         registry: &RecordingGcpRegistry,
         store: &MockDeploymentStore,
     ) -> Result<()> {
         revoke_registry_access(
             registry,
-            "vendor-project/alien-artifacts",
+            "vendor-project/alien-artifacts-default",
             &gcp_environment(),
             None,
             store,
             "dep_deleted",
+            "default",
         )
         .await
     }
@@ -2243,6 +2415,63 @@ mod tests {
 
         assert_eq!(error.code, "REGISTRY_ACCESS_CLEANUP_FAILED");
         assert!(registry.removals.lock().expect("removals lock").is_empty());
+    }
+
+    #[tokio::test]
+    async fn gcp_teardown_revokes_access_before_imported_setup_is_forgotten() {
+        let registry = Arc::new(RecordingGcpRegistry::default());
+        let provider: Arc<dyn BindingsProviderApi> = Arc::new(TestBindingsProvider {
+            binding_name: "artifact-registry",
+            registry: registry.clone(),
+        });
+        let providers = Some(provider);
+        let targets = HashMap::new();
+        let store = store_answering_teardown(true);
+        let email = "management@test-project.iam.gserviceaccount.com";
+        let mut state = gcp_state_with_stack(worker_stack(
+            "us-central1-docker.pkg.dev/vendor-project/alien-artifacts-default/default:latest",
+        ));
+        state.status = DeploymentStatus::TeardownRequired;
+        state.stack_state = Some(registered_stack_state(email));
+        let state = revoke_before_persisting(
+            &store,
+            &providers,
+            &targets,
+            "dep_deleted",
+            "default",
+            state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(state.status, DeploymentStatus::TeardownRequired);
+        // The deployment's own account leaves both its project repository and the shared one.
+        assert_eq!(
+            *registry.removals.lock().unwrap(),
+            vec![(Vec::<String>::new(), vec![email.to_string()]); 2]
+        );
+        registry.removals.lock().unwrap().clear();
+        // Imported setup may be forgotten after this handoff, without reaching Deleted.
+        // A sibling has also reached the persisted runtime teardown handoff.
+        let store = store_answering_teardown(false);
+        revoke_after_persisting(
+            &store,
+            &providers,
+            &targets,
+            "dep_deleted",
+            "default",
+            &state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            *registry.removals.lock().unwrap(),
+            vec![
+                (Vec::<String>::new(), vec![email.to_string()]),
+                (vec![PROJECT_NUMBER.to_string()], Vec::<String>::new()),
+                (Vec::<String>::new(), vec![email.to_string()]),
+                (vec![PROJECT_NUMBER.to_string()], Vec::<String>::new()),
+            ]
+        );
     }
 
     #[tokio::test]
@@ -2799,13 +3028,13 @@ mod tests {
             removed_repository_is_gone: false,
         };
         let state = gcp_state_with_stack(sandbox_stack_with_code(
-            "manager.example.com/test-project/alien-artifacts/agents:abc123",
+            "region-docker.pkg.dev/test-project/alien-artifacts-prj-test/prj_test/sandbox:abc123",
             None,
         ));
 
         assert_eq!(
             repository_ids_for_access(&registry, &state, PROJECT),
-            vec!["test-project/alien-artifacts".to_string()],
+            vec!["test-project/alien-artifacts-prj-test".to_string()],
             "a GCP sandbox pulls its container from Alien's registry, so it earns the grant"
         );
     }
@@ -2937,7 +3166,7 @@ mod tests {
             "123456789012.dkr.ecr.us-east-2.amazonaws.com/alien-artifacts-prj_test:latest";
         const GCP_PREFIX: &str = "vendor-project/alien-artifacts";
         const GCP_IMAGE: &str =
-            "us-central1-docker.pkg.dev/vendor-project/alien-artifacts/test-worker:abc123";
+            "us-central1-docker.pkg.dev/vendor-project/alien-artifacts-prj-test/prj_test/test-worker:abc123";
 
         #[derive(Debug, Clone, Copy, PartialEq)]
         enum Answer {
@@ -3150,6 +3379,12 @@ mod tests {
                         let mut state = gcp_state_with_stack(worker_stack(GCP_IMAGE));
                         state.runtime_metadata = Some(RuntimeMetadata {
                             registry_access_granted: true,
+                            // A grant on this revision records what it opened; one with the
+                            // marker alone predates per-project repositories.
+                            registry_access: Some(RegistryAccess {
+                                repositories: vec![format!("{GCP_PREFIX}-prj-test")],
+                                service_types: vec!["worker".to_string()],
+                            }),
                             ..RuntimeMetadata::default()
                         });
                         state
@@ -3296,13 +3531,357 @@ mod tests {
                 .await
                 .expect("the deletion checkpoint should succeed");
 
+            let statuses = harness.statuses_at_revoke();
+            assert!(!statuses.is_empty());
             assert_eq!(
-                harness.statuses_at_revoke(),
-                vec!["deleted".to_string()],
+                statuses,
+                vec!["deleted".to_string(); statuses.len()],
                 "the shared grant is removed only when no other deployment in the project is \
                  saved as active, so each deletion must be saved before it asks: two deletions \
                  asking first would each see the other active and both keep the grant"
             );
         }
+    }
+
+    /// A deployment granted before per-project GAR repositories recorded its grant on the
+    /// binding's shared repository. Its teardown must revoke that grant through the real GAR
+    /// binding instead of failing every retry with a repository outside the project namespace.
+    #[tokio::test]
+    async fn gcp_teardown_revokes_a_grant_recorded_on_the_shared_repository() {
+        use alien_bindings::providers::artifact_registry::GarArtifactRegistry;
+        use alien_core::bindings::{
+            ArtifactRegistryBinding, BindingValue, GarArtifactRegistryBinding,
+        };
+        use alien_core::{GcpClientConfig, GcpCredentials, GcpServiceOverrides};
+        use axum::{extract::State, http::Uri, Json, Router};
+
+        const AGENT: &str =
+            "serviceAccount:service-123456789012@serverless-robot-prod.iam.gserviceaccount.com";
+        type Policies = Arc<Mutex<Vec<(String, serde_json::Value)>>>;
+        async fn gar(
+            State(written): State<Policies>,
+            uri: Uri,
+            body: String,
+        ) -> Json<serde_json::Value> {
+            if let Some(path) = uri.path().strip_suffix(":setIamPolicy") {
+                let input: serde_json::Value = serde_json::from_str(&body).unwrap();
+                written
+                    .lock()
+                    .unwrap()
+                    .push((path.to_string(), input["policy"].clone()));
+                return Json(input["policy"].clone());
+            }
+            Json(serde_json::json!({"etag": "e1", "bindings": [
+                {"role": "roles/artifactregistry.reader", "members": [AGENT, "user:keep@example.com"]}
+            ]}))
+        }
+
+        for status in [
+            DeploymentStatus::TeardownRequired,
+            DeploymentStatus::Deleted,
+        ] {
+            let written: Policies = Arc::default();
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = format!("http://{}", listener.local_addr().unwrap());
+            let app = Router::new().fallback(gar).with_state(written.clone());
+            let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            let config = GcpClientConfig {
+                project_id: "vendor".to_string(),
+                region: "us-central1".to_string(),
+                project_number: None,
+                credentials: GcpCredentials::AccessToken {
+                    token: "local".to_string(),
+                },
+                service_overrides: Some(GcpServiceOverrides {
+                    endpoints: HashMap::from([("artifactregistry".to_string(), endpoint)]),
+                }),
+            };
+            let registry = GarArtifactRegistry::new(
+                "artifact-registry".to_string(),
+                ArtifactRegistryBinding::Gar(GarArtifactRegistryBinding {
+                    repository_name: BindingValue::Value("alien-artifacts".to_string()),
+                    pull_service_account_email: None,
+                    push_service_account_email: None,
+                }),
+                &config,
+            )
+            .await
+            .unwrap();
+            let provider: Arc<dyn BindingsProviderApi> = Arc::new(TestBindingsProvider {
+                binding_name: "artifact-registry",
+                registry: Arc::new(registry),
+            });
+            let providers = Some(provider);
+            let mut state = gcp_state_with_stack(worker_stack(
+                "us-central1-docker.pkg.dev/vendor/alien-artifacts/prj_test/worker:v1",
+            ));
+            state.status = status;
+            state.runtime_metadata = Some(RuntimeMetadata {
+                registry_access: Some(RegistryAccess {
+                    repositories: vec!["vendor/alien-artifacts".to_string()],
+                    service_types: vec!["worker".to_string()],
+                }),
+                registry_access_granted: true,
+                ..Default::default()
+            });
+            let mut store = MockDeploymentStore::new();
+            store
+                .expect_has_other_gcp_project_deployment()
+                .returning(|_, _, _, _| Ok(false));
+            let targets = HashMap::new();
+            let result = if status == DeploymentStatus::TeardownRequired {
+                revoke_before_persisting(&store, &providers, &targets, "dep_old", PROJECT, state)
+                    .await
+                    .map(|state| assert_eq!(state.status, DeploymentStatus::TeardownRequired))
+            } else {
+                revoke_after_persisting(&store, &providers, &targets, "dep_old", PROJECT, &state)
+                    .await
+            };
+            server.abort();
+            assert!(result.is_ok(), "{status:?} teardown failed: {result:?}");
+            let written = written.lock().unwrap();
+            assert_eq!(written.len(), 1, "{status:?}: {written:?}");
+            assert!(written[0].0.ends_with("/repositories/alien-artifacts"));
+            assert_eq!(
+                written[0].1["bindings"][0]["members"],
+                serde_json::json!(["user:keep@example.com"]),
+                "{status:?}: the shared grant is removed and unrelated members kept"
+            );
+        }
+    }
+    /// A GCP grant made before the grant record existed is named by the marker alone and sits on
+    /// the binding's shared repository. A reconcile that refuses the legacy image path must not
+    /// erase that marker, and the delete must still revoke the shared grant: otherwise the target
+    /// project's service agent keeps reading every project's older images.
+    #[tokio::test]
+    async fn gcp_marker_only_shared_grant_survives_a_refusing_reconcile_and_is_revoked() {
+        use alien_bindings::providers::artifact_registry::GarArtifactRegistry;
+        use alien_core::bindings::{
+            ArtifactRegistryBinding, BindingValue, GarArtifactRegistryBinding,
+        };
+        use alien_core::{GcpClientConfig, GcpCredentials, GcpServiceOverrides};
+        use axum::{extract::State, http::Uri, Json, Router};
+
+        const AGENT: &str =
+            "serviceAccount:service-123456789012@serverless-robot-prod.iam.gserviceaccount.com";
+        type Policies = Arc<Mutex<Vec<(String, serde_json::Value)>>>;
+        async fn gar(
+            State(written): State<Policies>,
+            uri: Uri,
+            body: String,
+        ) -> Json<serde_json::Value> {
+            if let Some(path) = uri.path().strip_suffix(":setIamPolicy") {
+                let input: serde_json::Value = serde_json::from_str(&body).unwrap();
+                written
+                    .lock()
+                    .unwrap()
+                    .push((path.to_string(), input["policy"].clone()));
+                return Json(input["policy"].clone());
+            }
+            Json(serde_json::json!({"etag": "e1", "bindings": [
+                {"role": "roles/artifactregistry.reader", "members": [AGENT, "user:keep@example.com"]}
+            ]}))
+        }
+
+        // Each answer the consumer check can give: no consumer anywhere in the GCP project, or
+        // a deployment of another Alien project that still pulls from the shared repository.
+        for other_consumer in [false, true] {
+            let written: Policies = Arc::default();
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = format!("http://{}", listener.local_addr().unwrap());
+            let app = Router::new().fallback(gar).with_state(written.clone());
+            let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            let config = GcpClientConfig {
+                project_id: "vendor".to_string(),
+                region: "us-central1".to_string(),
+                project_number: None,
+                credentials: GcpCredentials::AccessToken {
+                    token: "local".to_string(),
+                },
+                service_overrides: Some(GcpServiceOverrides {
+                    endpoints: HashMap::from([("artifactregistry".to_string(), endpoint)]),
+                }),
+            };
+            let registry = GarArtifactRegistry::new(
+                "artifact-registry".to_string(),
+                ArtifactRegistryBinding::Gar(GarArtifactRegistryBinding {
+                    repository_name: BindingValue::Value("alien-artifacts".to_string()),
+                    pull_service_account_email: None,
+                    push_service_account_email: None,
+                }),
+                &config,
+            )
+            .await
+            .unwrap();
+            let provider: Arc<dyn BindingsProviderApi> = Arc::new(TestBindingsProvider {
+                binding_name: "artifact-registry",
+                registry: Arc::new(registry),
+            });
+            let providers = Some(provider);
+            let targets = HashMap::new();
+            let mut state = gcp_state_with_stack(worker_stack(
+                "us-central1-docker.pkg.dev/vendor/alien-artifacts/prj_test/worker:v1",
+            ));
+            state.status = DeploymentStatus::Running;
+            state.runtime_metadata = Some(RuntimeMetadata {
+                registry_access_granted: true,
+                ..Default::default()
+            });
+
+            reconcile_registry_access(&providers, &targets, "dep_old", PROJECT, &mut state).await;
+            let metadata = state.runtime_metadata.clone().unwrap();
+            assert!(
+                metadata.registry_access_granted,
+                "the marker is the only record of the shared grant"
+            );
+            assert!(
+                written.lock().unwrap().is_empty(),
+                "a legacy path is never granted"
+            );
+
+            state.status = DeploymentStatus::Deleted;
+            let mut store = MockDeploymentStore::new();
+            // The shared repository served every Alien project, so the check spans them all.
+            store
+                .expect_has_other_gcp_project_deployment()
+                .withf(|_, project_number, project_id, excluding| {
+                    project_number == "123456789012"
+                        && project_id.is_none()
+                        && excluding == "dep_old"
+                })
+                .times(1)
+                .returning(move |_, _, _, _| Ok(other_consumer));
+            let result =
+                revoke_after_persisting(&store, &providers, &targets, "dep_old", PROJECT, &state)
+                    .await;
+            server.abort();
+            assert!(result.is_ok(), "{result:?}");
+            let written = written.lock().unwrap();
+            if other_consumer {
+                assert!(
+                    written.is_empty(),
+                    "another project's deployment still pulls: {written:?}"
+                );
+            } else {
+                assert_eq!(written.len(), 1, "{written:?}");
+                assert!(written[0].0.ends_with("/repositories/alien-artifacts"));
+                assert_eq!(
+                    written[0].1["bindings"][0]["members"],
+                    serde_json::json!(["user:keep@example.com"])
+                );
+            }
+        }
+    }
+    /// A legacy deployment torn down beside a newer one keeps the shared repository's grant for
+    /// it. The newer deployment, the last one in the GCP project, must remove that grant at its own
+    /// teardown even though nothing it ran came from the shared repository.
+    #[tokio::test]
+    async fn the_last_gcp_deployment_removes_a_shared_grant_an_older_one_left() {
+        use alien_bindings::providers::artifact_registry::GarArtifactRegistry;
+        use alien_core::bindings::{
+            ArtifactRegistryBinding, BindingValue, GarArtifactRegistryBinding,
+        };
+        use alien_core::{GcpClientConfig, GcpCredentials, GcpServiceOverrides};
+        use axum::{extract::State, http::Uri, Json, Router};
+
+        const AGENT: &str =
+            "serviceAccount:service-123456789012@serverless-robot-prod.iam.gserviceaccount.com";
+        type Policies = Arc<Mutex<Vec<(String, serde_json::Value)>>>;
+        async fn gar(
+            State(written): State<Policies>,
+            uri: Uri,
+            body: String,
+        ) -> Json<serde_json::Value> {
+            if let Some(path) = uri.path().strip_suffix(":setIamPolicy") {
+                let input: serde_json::Value = serde_json::from_str(&body).unwrap();
+                written
+                    .lock()
+                    .unwrap()
+                    .push((path.to_string(), input["policy"].clone()));
+                return Json(input["policy"].clone());
+            }
+            Json(serde_json::json!({"etag": "e1", "bindings": [
+                {"role": "roles/artifactregistry.reader", "members": [AGENT]}
+            ]}))
+        }
+
+        let written: Policies = Arc::default();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let app = Router::new().fallback(gar).with_state(written.clone());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let config = GcpClientConfig {
+            project_id: "vendor".to_string(),
+            region: "us-central1".to_string(),
+            project_number: None,
+            credentials: GcpCredentials::AccessToken {
+                token: "local".to_string(),
+            },
+            service_overrides: Some(GcpServiceOverrides {
+                endpoints: HashMap::from([("artifactregistry".to_string(), endpoint)]),
+            }),
+        };
+        let registry = GarArtifactRegistry::new(
+            "artifact-registry".to_string(),
+            ArtifactRegistryBinding::Gar(GarArtifactRegistryBinding {
+                repository_name: BindingValue::Value("alien-artifacts".to_string()),
+                pull_service_account_email: None,
+                push_service_account_email: None,
+            }),
+            &config,
+        )
+        .await
+        .unwrap();
+        let provider: Arc<dyn BindingsProviderApi> = Arc::new(TestBindingsProvider {
+            binding_name: "artifact-registry",
+            registry: Arc::new(registry),
+        });
+        let providers = Some(provider);
+        let mut state = gcp_state_with_stack(worker_stack(
+            "us-central1-docker.pkg.dev/vendor/alien-artifacts-prj-test/prj_test/worker:v2",
+        ));
+        state.status = DeploymentStatus::Deleted;
+        state.runtime_metadata = Some(RuntimeMetadata {
+            registry_access_granted: true,
+            registry_access: Some(RegistryAccess {
+                repositories: vec!["vendor/alien-artifacts-prj-test".to_string()],
+                service_types: vec!["worker".to_string()],
+            }),
+            ..Default::default()
+        });
+        let mut store = MockDeploymentStore::new();
+        store
+            .expect_has_other_gcp_project_deployment()
+            .times(2)
+            .returning(|_, _, _, _| Ok(false));
+        let result = revoke_after_persisting(
+            &store,
+            &providers,
+            &HashMap::new(),
+            "dep_new",
+            PROJECT,
+            &state,
+        )
+        .await;
+        server.abort();
+        assert!(result.is_ok(), "{result:?}");
+        let mut repositories: Vec<String> = written
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(path, policy)| {
+                assert!(
+                    policy["bindings"].as_array().is_none_or(Vec::is_empty),
+                    "{path}: {policy}"
+                );
+                path.rsplit('/').next().unwrap().to_string()
+            })
+            .collect();
+        repositories.sort();
+        assert_eq!(
+            repositories,
+            vec!["alien-artifacts", "alien-artifacts-prj-test"],
+            "both the project repository and the shared one lose the service agent"
+        );
     }
 }

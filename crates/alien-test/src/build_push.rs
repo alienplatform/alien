@@ -94,7 +94,7 @@ pub async fn build_and_push_stack_for_registry(
         .map_err(|e| anyhow::anyhow!("build_stack failed: {}", e))?;
     info!("Stack built successfully");
 
-    let push_settings = create_proxy_push_settings(registry_platform, config, manager);
+    let push_settings = create_proxy_push_settings(registry_platform, manager).await?;
     info!(repository = %push_settings.repository, "Pushing stack through manager proxy");
 
     let pushed_stack = alien_build::push_stack(built_stack, build_platform, &push_settings)
@@ -105,18 +105,11 @@ pub async fn build_and_push_stack_for_registry(
     Ok(pushed_stack)
 }
 
-/// Create push settings that push through the manager's OCI proxy.
-///
-/// The repo name is the real upstream repo path — no proxying mapping.
-/// Each platform has its own path convention:
-/// - ECR: flat repo name (e.g., `alien-e2e`)
-/// - GAR: `{project_id}/{gar_repo_name}` (e.g., `alien-test-mgmt/alien-e2e`)
-/// - ACR: flat repo name (e.g., `alien-e2e`)
-fn create_proxy_push_settings(
+/// Provision the standalone project's cloud repository and push through the manager's OCI proxy.
+async fn create_proxy_push_settings(
     platform: Platform,
-    config: &TestConfig,
     manager: &TestManager,
-) -> PushSettings {
+) -> anyhow::Result<PushSettings> {
     // Use the public URL (ngrok) so the image URI in the release is reachable
     // from cloud platforms (Azure Container Apps, etc). The ngrok tunnel
     // forwards to localhost, so the push actually goes to the local manager.
@@ -129,10 +122,28 @@ fn create_proxy_push_settings(
         ClientProtocol::Http
     };
 
-    // Derive the upstream repo name per platform — matches build_artifact_registry_config().
-    let repo_name = upstream_repo_name(platform, config);
+    let repo_name = if matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure) {
+        let response: serde_json::Value = reqwest::Client::new()
+            .post(format!("{}/v1/image-repositories", manager.url))
+            .bearer_auth(&manager.admin_token)
+            .json(&serde_json::json!({ "projectId": "default", "platform": platform }))
+            .send()
+            .await
+            .context("Failed to provision the test project's image repository")?
+            .error_for_status()
+            .context("The manager could not provision the test project's image repository")?
+            .json()
+            .await
+            .context("Invalid image repository response")?;
+        response["repository"]
+            .as_str()
+            .context("Image repository response has no repository path")?
+            .to_string()
+    } else {
+        "artifacts/default".to_string()
+    };
 
-    PushSettings {
+    Ok(PushSettings {
         repository: format!("{}/{}", registry_host, repo_name),
         destination_label: Some(format!("{:?} test manager", platform)),
         options: PushOptions {
@@ -144,47 +155,7 @@ fn create_proxy_push_settings(
             monolithic_push: dockdash::MonolithicPushPolicy::Always,
             ..Default::default()
         },
-    }
-}
-
-/// Derive the upstream repo name for the given platform.
-///
-/// Must match what `build_artifact_registry_config()` configured in the manager's
-/// artifact registry binding — the proxy forwards the path unchanged, so the
-/// repo name here must be the exact OCI path the upstream expects.
-fn upstream_repo_name(platform: Platform, config: &TestConfig) -> String {
-    match platform {
-        Platform::Aws => {
-            // ECR: flat repo name from binding's repositoryPrefix
-            "alien-e2e".to_string()
-        }
-        Platform::Gcp => {
-            // GAR requires 3 segments: {gcp_project}/{gar_repo}/{image_name}
-            // "gcp_project" = GCP Cloud project (not Alien project)
-            // "gar_repo" = the Artifact Registry repository resource
-            // "image_name" = the image within the repo (our Alien project namespace)
-            let project_id = config
-                .gcp_mgmt
-                .as_ref()
-                .map(|m| m.project_id.as_str())
-                .unwrap_or("alien-test-mgmt");
-            let gar_repo = config
-                .e2e_artifact_registry
-                .gcp_gar_repository
-                .as_ref()
-                .and_then(|url| url.rsplit('/').next().map(|s| s.to_string()))
-                .unwrap_or_else(|| "alien-e2e".to_string());
-            format!("{}/{}/default", project_id, gar_repo)
-        }
-        Platform::Azure => {
-            // ACR: flat repo name — must match repository_prefix in build_artifact_registry_config
-            "azure-e2e".to_string()
-        }
-        // Local platform uses the embedded local registry whose prefix is
-        // "artifacts/default" — matching the CLI dev mode and the local AR's
-        // upstream_repository_prefix().
-        _ => "artifacts/default".to_string(),
-    }
+    })
 }
 
 /// Construct [`BuildSettings`] for the given platform.

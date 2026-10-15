@@ -428,19 +428,30 @@ impl ArtifactRegistryTestContext for KubernetesProviderArtifactRegistryTestConte
     }
 }
 
-// Helper function to get real service account email from environment
-fn get_real_service_account_email() -> Option<String> {
-    if let Ok(credential_json) = env::var("GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_KEY") {
-        if let Ok(credential_value) = serde_json::from_str::<serde_json::Value>(&credential_json) {
-            if let Some(email) = credential_value
-                .get("client_email")
-                .and_then(|v| v.as_str())
-            {
-                return Some(format!("serviceAccount:{}", email));
-            }
-        }
+/// GCP names are image paths in one repository, so a grant on one to another principal would
+/// reach every name's images. It must be refused, not widened.
+#[cfg(feature = "gcp")]
+async fn assert_gcp_per_name_grants_refused(
+    artifact_registry: &Arc<dyn ArtifactRegistry>,
+    repo_id: &str,
+) {
+    let access = CrossAccountAccess::Gcp(GcpCrossAccountAccess {
+        project_numbers: vec!["123456789012".to_string()],
+        allowed_service_types: vec![ComputeServiceType::Worker],
+        service_account_emails: vec!["tenant@example.com".to_string()],
+    });
+    for result in [
+        artifact_registry
+            .add_cross_account_access(repo_id, access.clone())
+            .await,
+        artifact_registry
+            .remove_cross_account_access(repo_id, access)
+            .await,
+    ] {
+        let error = result.expect_err("a per-name GCP grant must be refused");
+        assert_eq!(error.code, "OPERATION_NOT_SUPPORTED", "{error:?}");
+        assert!(!error.retryable);
     }
-    None
 }
 
 // Helper function to generate unique repository names
@@ -587,6 +598,16 @@ async fn test_add_remove_cross_account_access(#[case] ctx: impl ArtifactRegistry
         .await;
     }
 
+    #[cfg(feature = "gcp")]
+    if provider_name == "gcp" {
+        assert_gcp_per_name_grants_refused(&artifact_registry, &create_response.name).await;
+        artifact_registry
+            .delete_repository(&create_response.name)
+            .await
+            .expect("deleting a GCP image path succeeds");
+        return;
+    }
+
     // Create two different cross-account access configurations based on provider
     let (cross_account_access_1, cross_account_access_2) = match provider_name {
         "aws" => {
@@ -604,28 +625,7 @@ async fn test_add_remove_cross_account_access(#[case] ctx: impl ArtifactRegistry
             });
             (access_1, access_2)
         }
-        "gcp" => {
-            // Use real service account from environment if available
-            let service_accounts = if let Some(real_sa) = get_real_service_account_email() {
-                // Strip the "serviceAccount:" prefix if present
-                let email = real_sa.strip_prefix("serviceAccount:").unwrap_or(&real_sa);
-                vec![email.to_string()]
-            } else {
-                vec!["test1@example.com".to_string()]
-            };
-
-            let access_1 = CrossAccountAccess::Gcp(GcpCrossAccountAccess {
-                project_numbers: vec!["123456789012".to_string()],
-                allowed_service_types: vec![ComputeServiceType::Worker],
-                service_account_emails: service_accounts,
-            });
-            let access_2 = CrossAccountAccess::Gcp(GcpCrossAccountAccess {
-                project_numbers: vec!["987654321098".to_string()],
-                allowed_service_types: vec![ComputeServiceType::Worker],
-                service_account_emails: vec!["test2@example.com".to_string()],
-            });
-            (access_1, access_2)
-        }
+        "gcp" => unreachable!("GCP refuses per-name grants and returned above"),
         "azure" => {
             // Azure should return OperationNotSupported
             println!(
@@ -1292,8 +1292,12 @@ async fn test_full_repository_lifecycle(#[case] ctx: impl ArtifactRegistryTestCo
     }
     println!("[{}] ✓ Repository is ready", provider_name);
 
-    // 3. Add cross-account access (only for AWS and GCP)
-    if matches!(provider_name, "aws" | "gcp") {
+    // 3. Add cross-account access (AWS; GCP refuses a per-name grant)
+    #[cfg(feature = "gcp")]
+    if provider_name == "gcp" {
+        assert_gcp_per_name_grants_refused(&artifact_registry, &create_response.name).await;
+    }
+    if matches!(provider_name, "aws") {
         let cross_account_access = match provider_name {
             "aws" => CrossAccountAccess::Aws(AwsCrossAccountAccess {
                 account_ids: vec!["123456789012".to_string()],
@@ -1301,20 +1305,6 @@ async fn test_full_repository_lifecycle(#[case] ctx: impl ArtifactRegistryTestCo
                 role_arns: vec!["arn:aws:iam::123456789012:role/test-role".to_string()],
                 regions: vec![],
             }),
-            "gcp" => {
-                let service_accounts = if let Some(real_sa) = get_real_service_account_email() {
-                    let email = real_sa.strip_prefix("serviceAccount:").unwrap_or(&real_sa);
-                    vec![email.to_string()]
-                } else {
-                    vec!["test@example.com".to_string()]
-                };
-
-                CrossAccountAccess::Gcp(GcpCrossAccountAccess {
-                    project_numbers: vec!["123456789012".to_string()],
-                    allowed_service_types: vec![ComputeServiceType::Worker],
-                    service_account_emails: service_accounts,
-                })
-            }
             _ => unreachable!(),
         };
 
