@@ -8,7 +8,6 @@
 use std::{future::Future, sync::Arc, time::Duration};
 
 use alien_commands::Envelope;
-use alien_error::{Context, IntoAlienError};
 #[cfg(any(feature = "gcp", feature = "azure"))]
 use alien_worker_protocol::control::{
     CronEvent, QueueMessage as ProtoQueueMessage, StorageEvent as ProtoStorageEvent,
@@ -28,14 +27,16 @@ use axum::{body::Bytes, http::header};
 use chrono::{DateTime, Utc};
 #[cfg(any(feature = "gcp", feature = "azure"))]
 use cloudevents::EventBuilder;
-use futures_util::{StreamExt, TryStreamExt};
-use http_body_util::BodyExt;
+use futures_util::StreamExt;
+use http_body_util::{BodyExt, StreamBody};
+use hyper_util::{
+    client::legacy::{connect::HttpConnector, Client},
+    rt::TokioExecutor,
+};
 use prost_types::Timestamp;
 use tokio::{net::TcpListener, sync::broadcast, sync::Semaphore, time::Instant};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, warn};
-
-use crate::error::{ErrorData, Result};
 
 fn http_server_join_result(
     joined: std::result::Result<std::io::Result<()>, tokio::task::JoinError>,
@@ -272,121 +273,65 @@ async fn process_command_with_budget(
     }
 }
 
-/// Create a shared reqwest client for forwarding HTTP requests.
-///
-/// This client is meant to be created once and reused across all requests
-/// to benefit from connection pooling. Configured for localhost forwarding
-/// with no proxy, generous timeouts (the app may make slow cloud API calls),
-/// and disabled TCP user timeout (gVisor on Cloud Run Gen2 can prematurely
-/// close idle connections with the default settings).
-pub fn create_forward_client() -> Result<reqwest::Client> {
-    reqwest::Client::builder()
-        // The caller owns redirect handling; never replay its request elsewhere.
-        .redirect(reqwest::redirect::Policy::none())
-        .connect_timeout(std::time::Duration::from_secs(5))
-        .read_timeout(std::time::Duration::from_secs(300))
-        .no_proxy()
-        .tcp_keepalive(None)
-        .build()
-        .into_alien_error()
-        .context(ErrorData::HandlerStartupFailed {
-            message: "Failed to configure application HTTP forwarding".to_string(),
-            handler_type: Some("http-forwarder".to_string()),
-        })
+/// Pooled loopback HTTP client. Hyper preserves the original encoded request
+/// target and header bytes instead of normalizing them through a URL parser.
+pub type ForwardClient = Client<HttpConnector, Body>;
+
+pub fn create_forward_client() -> ForwardClient {
+    let mut connector = HttpConnector::new();
+    connector.set_connect_timeout(Some(Duration::from_secs(5)));
+    connector.set_keepalive(None);
+    Client::builder(TokioExecutor::new()).build(connector)
 }
 
-/// Forward an HTTP request to the application.
-///
-/// This is the core proxy logic used by all HTTP-based transports.
-/// Supports streaming responses (SSE, chunked transfer, etc.).
+/// Stream application HTTP in both directions without interpreting redirects.
 pub async fn forward_http_request(
-    client: &reqwest::Client,
-    request: Request<Body>,
+    client: &ForwardClient,
+    mut request: Request<Body>,
     app_port: u16,
     shutdown: CancellationToken,
 ) -> Response<Body> {
-    let method = request.method().clone();
-    let uri = request.uri().clone();
-    let headers = request.headers().clone();
-
-    // Build target URL
-    let path_and_query = uri.path_and_query().map(|pq| pq.as_str()).unwrap_or("/");
-    let target_url = format!("http://127.0.0.1:{}{}", app_port, path_and_query);
-
-    // Collect request body
-    let body_bytes = match tokio::select! {
-        body = request.into_body().collect() => body,
-        _ = shutdown.cancelled() => {
-            return (StatusCode::SERVICE_UNAVAILABLE, "Runtime is shutting down").into_response();
-        }
-    } {
-        Ok(collected) => collected.to_bytes(),
-        Err(e) => {
-            error!(error = %e, "Failed to read request body");
-            return (StatusCode::BAD_REQUEST, "Failed to read body").into_response();
-        }
+    let target = request
+        .uri()
+        .path_and_query()
+        .map(|value| value.as_str())
+        .unwrap_or("/");
+    let uri = match format!("http://127.0.0.1:{app_port}{target}").parse() {
+        Ok(uri) => uri,
+        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
     };
+    *request.uri_mut() = uri;
+    *request.version_mut() = axum::http::Version::HTTP_11;
 
-    // Build reqwest request
-    let mut req_builder = client.request(
-        reqwest::Method::from_bytes(method.as_str().as_bytes()).unwrap_or(reqwest::Method::GET),
-        &target_url,
-    );
-
-    // Copy headers
-    for (name, value) in headers.iter() {
-        if let Ok(v) = value.to_str() {
-            req_builder = req_builder.header(name.as_str(), v);
-        }
-    }
-
-    // Add body
-    req_builder = req_builder.body(body_bytes.to_vec());
-
-    // Send request and stream response
+    let request = request.map(|body| {
+        Body::new(StreamBody::new(
+            body.into_stream()
+                .take_until(shutdown.clone().cancelled_owned()),
+        ))
+    });
     let forwarded = tokio::select! {
-        response = req_builder.send() => response,
+        response = tokio::time::timeout(Duration::from_secs(300), client.request(request)) => response,
         _ = shutdown.cancelled() => {
             return (StatusCode::SERVICE_UNAVAILABLE, "Runtime is shutting down").into_response();
         }
     };
-
     match forwarded {
-        Ok(resp) => {
-            let status = StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::OK);
-            let resp_headers = resp.headers().clone();
-
-            // Stream the response body instead of buffering it
-            let byte_stream = resp
-                .bytes_stream()
-                .map_err(std::io::Error::other)
-                .take_until(shutdown.cancelled_owned());
-            let stream_body = Body::from_stream(byte_stream);
-
-            let mut response = Response::builder().status(status);
-
-            for (name, value) in resp_headers.iter() {
-                response = response.header(name.as_str(), value.as_bytes());
-            }
-
-            response
-                .body(stream_body)
-                .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+        Ok(Ok(response)) => {
+            let (parts, body) = response.into_parts();
+            // Preserve data and trailers while still allowing bounded shutdown
+            // of an application that never closes its response stream.
+            let frames = body.into_stream().take_until(shutdown.cancelled_owned());
+            Response::from_parts(parts, Body::new(StreamBody::new(frames)))
         }
-        Err(e) => {
-            let is_connect = e.is_connect();
-            let is_timeout = e.is_timeout();
-            let is_request = e.is_request();
-            error!(
-                error = %e,
-                target_url = %target_url,
-                is_connect,
-                is_timeout,
-                is_request,
-                "Failed to forward request"
-            );
+        Ok(Err(error)) => {
+            error!(%error, "Failed to forward application HTTP request");
             (StatusCode::BAD_GATEWAY, "Failed to forward request").into_response()
         }
+        Err(_) => (
+            StatusCode::GATEWAY_TIMEOUT,
+            "Application response timed out",
+        )
+            .into_response(),
     }
 }
 
@@ -838,6 +783,132 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn forwarding_streams_upload_before_completion_and_preserves_raw_target() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (upload_tx, upload_rx) =
+            tokio::sync::mpsc::channel::<std::result::Result<axum::body::Bytes, std::io::Error>>(1);
+        let (first_seen_tx, first_seen_rx) = tokio::sync::oneshot::channel();
+        let first_seen = Arc::new(tokio::sync::Mutex::new(Some(first_seen_tx)));
+        let app = Router::new().fallback(axum::routing::any(move |request: Request<Body>| {
+            let first_seen = first_seen.clone();
+            async move {
+                assert_eq!(request.uri().to_string(), "/one/../two/%2e%2e/%2F?x=1&x=2");
+                assert_eq!(request.headers()["x-opaque"].as_bytes(), &[0xff]);
+                assert_eq!(request.headers().get_all("x-repeat").iter().count(), 2);
+                let mut body = request.into_body();
+                let first = body.frame().await.unwrap().unwrap().into_data().unwrap();
+                assert_eq!(first, "first");
+                first_seen.lock().await.take().unwrap().send(()).unwrap();
+                let rest = body.collect().await.unwrap().to_bytes();
+                assert_eq!(rest, "second");
+                (StatusCode::ACCEPTED, "both chunks received")
+            }
+        }));
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let request = Request::builder()
+            .method("POST")
+            .uri("/one/../two/%2e%2e/%2F?x=1&x=2")
+            .header(
+                "x-opaque",
+                axum::http::HeaderValue::from_bytes(&[0xff]).unwrap(),
+            )
+            .header("x-repeat", "one")
+            .header("x-repeat", "two")
+            .body(Body::from_stream(
+                tokio_stream::wrappers::ReceiverStream::new(upload_rx),
+            ))
+            .unwrap();
+        let forwarding = tokio::spawn(async move {
+            forward_http_request(
+                &create_forward_client(),
+                request,
+                port,
+                CancellationToken::new(),
+            )
+            .await
+        });
+        upload_tx
+            .send(Ok(axum::body::Bytes::from_static(b"first")))
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), first_seen_rx)
+            .await
+            .expect("application must receive first chunk before upload completes")
+            .unwrap();
+        upload_tx
+            .send(Ok(axum::body::Bytes::from_static(b"second")))
+            .await
+            .unwrap();
+        drop(upload_tx);
+        let response = forwarding.await.unwrap();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        assert_eq!(
+            response.into_body().collect().await.unwrap().to_bytes(),
+            "both chunks received"
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn forwarding_preserves_streamed_response_frames_and_trailers() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (frames_tx, frames_rx) = tokio::sync::mpsc::channel::<
+            std::result::Result<hyper::body::Frame<axum::body::Bytes>, std::io::Error>,
+        >(2);
+        let receiver = Arc::new(tokio::sync::Mutex::new(Some(frames_rx)));
+        let app = Router::new().fallback(axum::routing::any(move || {
+            let receiver = receiver.clone();
+            async move {
+                let frames = tokio_stream::wrappers::ReceiverStream::new(
+                    receiver.lock().await.take().unwrap(),
+                );
+                Response::builder()
+                    .header("trailer", "x-checksum")
+                    .body(Body::new(StreamBody::new(frames)))
+                    .unwrap()
+            }
+        }));
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        frames_tx
+            .send(Ok(hyper::body::Frame::data(
+                axum::body::Bytes::from_static(b"first"),
+            )))
+            .await
+            .unwrap();
+        let response = forward_http_request(
+            &create_forward_client(),
+            Request::builder()
+                .uri("/stream")
+                .header("te", "trailers")
+                .body(Body::empty())
+                .unwrap(),
+            port,
+            CancellationToken::new(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let mut body = response.into_body();
+        let first = tokio::time::timeout(Duration::from_secs(2), body.frame())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.into_data().unwrap(), "first");
+        let mut trailers = axum::http::HeaderMap::new();
+        trailers.insert("x-checksum", "verified".parse().unwrap());
+        frames_tx
+            .send(Ok(hyper::body::Frame::trailers(trailers)))
+            .await
+            .unwrap();
+        drop(frames_tx);
+        let remaining = body.collect().await.unwrap();
+        assert_eq!(remaining.trailers().unwrap()["x-checksum"], "verified");
+        server.abort();
+    }
+
+    #[tokio::test]
     async fn forwarding_preserves_redirect_without_contacting_destination() {
         let destination_calls = Arc::new(AtomicUsize::new(0));
         let calls = Arc::clone(&destination_calls);
@@ -867,7 +938,7 @@ mod tests {
             );
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let response = forward_http_request(
-            &create_forward_client().unwrap(),
+            &create_forward_client(),
             Request::builder()
                 .uri("/redirect")
                 .body(Body::empty())

@@ -99,7 +99,7 @@ impl ContainerAppTransport {
             control_server: self.control_server,
             app_http_port: self.app_http_port,
             command_timeout: self.command_timeout,
-            http_client: create_forward_client()?,
+            http_client: create_forward_client(),
             proxy_shutdown: proxy_shutdown.clone(),
         };
 
@@ -147,7 +147,7 @@ struct TransportState {
     control_server: Arc<ControlGrpcServer>,
     app_http_port: Option<u16>,
     command_timeout: Duration,
-    http_client: reqwest::Client,
+    http_client: super::shared::ForwardClient,
     proxy_shutdown: CancellationToken,
 }
 
@@ -512,7 +512,7 @@ mod gateway_tests {
             control_server: Arc::new(ControlGrpcServer::new()),
             app_http_port: Some(port),
             command_timeout: Duration::from_secs(1),
-            http_client: create_forward_client().unwrap(),
+            http_client: create_forward_client(),
             proxy_shutdown: CancellationToken::new(),
         };
         let payload = vec![0xff; 131_072];

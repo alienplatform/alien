@@ -150,7 +150,7 @@ impl LocalTransport {
             command_concurrency: Arc::new(Semaphore::new(1)),
             in_flight_commands: InFlightCommands::default(),
             command_tasks: command_tasks.clone(),
-            http_client: create_forward_client()?,
+            http_client: create_forward_client(),
             proxy_shutdown: proxy_shutdown.clone(),
         };
 
@@ -225,7 +225,7 @@ struct TransportState {
     command_concurrency: Arc<Semaphore>,
     in_flight_commands: InFlightCommands,
     command_tasks: CommandTasks,
-    http_client: reqwest::Client,
+    http_client: super::shared::ForwardClient,
     proxy_shutdown: CancellationToken,
 }
 
