@@ -68,18 +68,19 @@ fn template_identity(sandbox: &Sandbox) -> Result<(String, SandboxLimits, bool)>
 
 /// The image Agent Platform pulls. Agent Platform pulls from the registry directly, as its own
 /// service agent, which the manager's registry grant names; it cannot pull through the manager's
-/// proxy. An image in a per-project repository was pushed through the manager, so it is named on the
-/// native registry host, whichever host the release stamped on it. Any other reference is pulled as
-/// declared.
+/// proxy. An image in a per-project repository on any host but Artifact Registry's own was pushed
+/// through the manager, so it is named on the native registry host, whichever host the release
+/// stamped on it. Any other reference is pulled as declared, including one already on an Artifact
+/// Registry host, whose region the native host may not share.
 fn pulled_image(
     image: &str,
     deployment_config: &DeploymentConfig,
     resource_id: &str,
 ) -> Result<String> {
-    let Some((_, path)) = image.split_once('/') else {
+    let Some((host, path)) = image.split_once('/') else {
         return Ok(image.to_string());
     };
-    if per_project_image_project_id(path).is_none() {
+    if host.ends_with("-docker.pkg.dev") || per_project_image_project_id(path).is_none() {
         return Ok(image.to_string());
     }
     match (
@@ -1540,12 +1541,16 @@ mod tests {
 
     /// Only a per-project repository is moved to the native host: any other reference is already
     /// pullable where it is, including one on the manager's own host, and a repository whose name
-    /// and project path disagree is not a per-project repository.
+    /// and project path disagree is not a per-project repository. A per-project path already on an
+    /// Artifact Registry host stays there, because the same path in another region is a different
+    /// repository.
     #[test]
     fn a_native_or_public_image_is_sent_as_declared() {
         let config = deployment_config(Some("https://manager.example.com"), Some(NATIVE_HOST));
         for image in [
             "us-central1-docker.pkg.dev/proj/repo/sandbox:v1",
+            "europe-west1-docker.pkg.dev/acme/artifacts-default/default:sbx",
+            "europe-west1-docker.pkg.dev/acme/artifacts-prj-abc/prj_abc/agent@sha256:0123",
             "ghcr.io/acme/sandbox:v1",
             "ubuntu:24.04",
             "manager.example.com/proj/repo/default:sbx-abc-agent",
