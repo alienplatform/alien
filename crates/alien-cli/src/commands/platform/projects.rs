@@ -21,8 +21,9 @@ use alien_platform_api::types::{
     ConfigureProjectRegistryBody, ConfigureProjectRegistryBodyCredentialPolicy,
     ConfigureProjectRegistryBodyRepositoriesItem, ConfigureRemoteSandboxRequest,
     ConfigureRemoteSandboxRequestAzureImage, ConfigureRemoteSandboxRequestCustomImage,
-    CreateProjectBody, CreateProjectBodyName, CreateProjectWorkspace, DeleteProjectWorkspace,
-    ListProjectsWorkspace, ProjectIdOrNamePathParam, SandboxBaseImageRepository,
+    ConfigureRemoteSandboxRequestGcpImage, CreateProjectBody, CreateProjectBodyName,
+    CreateProjectWorkspace, DeleteProjectWorkspace, ListProjectsWorkspace,
+    ProjectIdOrNamePathParam, SandboxBaseImageRepository,
 };
 use alien_platform_api::SdkResultExt;
 use clap::{Parser, Subcommand, ValueEnum};
@@ -127,9 +128,9 @@ pub enum CapabilityCommand {
         /// keep the saved image, or to use the platform's default images when none is saved.
         #[arg(long = "image", alias = "base-image", conflicts_with = "src")]
         image: Option<String>,
-        /// Directory with a Dockerfile. The image is built locally with Docker for AWS and, when
-        /// the project has an Azure manager, for Azure, and each is pushed to the project's
-        /// private repository on that cloud. It does not run on GCP yet.
+        /// Directory with a Dockerfile, built locally with Docker as linux/arm64 for AWS, and as
+        /// linux/amd64 for Azure and for GCP, each only when the project has a manager on that
+        /// cloud. Each image is pushed to the project's private repository on its cloud.
         #[arg(long)]
         src: Option<PathBuf>,
         /// Dockerfile path relative to --src (default: Dockerfile).
@@ -470,11 +471,11 @@ async fn capabilities_task(
                         })),
                         (None, None) => None,
                     };
-                    let (custom_image, azure_leg) = match source {
-                        Some(SandboxImageSource::Image(image)) => (Some(image), None),
+                    let (custom_image, azure_leg, gcp_leg) = match source {
+                        Some(SandboxImageSource::Image(image)) => (Some(image), None, None),
                         Some(SandboxImageSource::Source(source)) => {
-                            // Runs first: a 404 from resolving the Azure manager then means no
-                            // Azure manager, because a missing project already failed here.
+                            // Runs first: a 404 from resolving another cloud's manager then means
+                            // no manager there, because a missing project already failed here.
                             let aws_image = build_and_push_sandbox_base_image(
                                 ctx,
                                 http,
@@ -485,7 +486,8 @@ async fn capabilities_task(
                                 json,
                             )
                             .await?;
-                            let azure = azure_leg(
+                            let azure = image_leg(
+                                "Azure",
                                 build_and_push_sandbox_base_image(
                                     ctx,
                                     http,
@@ -497,19 +499,28 @@ async fn capabilities_task(
                                 )
                                 .await,
                             )?;
-                            (Some(aws_image), Some(azure))
+                            let gcp = image_leg(
+                                "GCP",
+                                build_and_push_sandbox_base_image(
+                                    ctx,
+                                    http,
+                                    workspace,
+                                    project,
+                                    &source,
+                                    Platform::Gcp,
+                                    json,
+                                )
+                                .await,
+                            )?;
+                            (Some(aws_image), Some(azure), Some(gcp))
                         }
-                        None => (None, None),
+                        None => (None, None, None),
                     };
                     let saved = saved_remote_sandbox_settings(http, workspace, project).await?;
-                    let (azure_image, azure_skip) = match &azure_leg {
-                        Some(AzureLeg::Published(image)) => (Some(image.as_str()), None),
-                        Some(AzureLeg::Skipped(reason)) => (None, Some(reason.as_str())),
-                        None => (None, None),
-                    };
                     let body = remote_sandbox_request(
                         custom_image.as_deref(),
-                        azure_image,
+                        azure_leg.as_ref().and_then(ImageLeg::image),
+                        gcp_leg.as_ref().and_then(ImageLeg::image),
                         max_lifetime_seconds,
                         saved,
                     )?;
@@ -530,7 +541,11 @@ async fn capabilities_task(
                         })?
                         .into_inner();
                     if !json {
-                        for (cloud, reason) in skipped_clouds(&configured, azure_skip) {
+                        for (cloud, reason) in skipped_clouds(
+                            &configured,
+                            azure_leg.as_ref().and_then(ImageLeg::skip_reason),
+                            gcp_leg.as_ref().and_then(ImageLeg::skip_reason),
+                        ) {
                             println!("{} {cloud}: {reason}", dim_label("Skipped"));
                         }
                     }
@@ -620,7 +635,7 @@ fn remote_sandbox_lifetime(
 }
 
 /// The configure endpoint replaces the whole sandbox configuration, so an omitted value returns
-/// to its default, except the Azure registry image, which the API keeps while the custom image is
+/// to its default, except the Azure and GCP images, which the API keeps while the custom image is
 /// unchanged. Returns the saved image, lifetime and Azure idle time, which a command keeps unless a
 /// flag replaces them. The request has no Azure catalog image: the API always picks it.
 async fn saved_remote_sandbox_settings(
@@ -663,6 +678,7 @@ async fn saved_remote_sandbox_settings(
     Ok(ConfigureRemoteSandboxRequest {
         custom_image,
         azure_image: None,
+        gcp_image: None,
         max_lifetime_seconds: sandbox.max_lifetime_seconds,
         azure_idle_suspend_seconds: sandbox.azure.map(|azure| azure.idle_suspend_seconds),
     })
@@ -670,11 +686,12 @@ async fn saved_remote_sandbox_settings(
 
 /// A flag replaces the saved value. Without either, the API picks the default images and the
 /// lifetime is `DEFAULT_REMOTE_SANDBOX_LIFETIME_SECONDS`. No flag sets the Azure idle time, so the
-/// saved one is always resent, with or without a custom image. `azure_image` is the image a `--src`
-/// run built for Azure, never read from the saved configuration.
+/// saved one is always resent, with or without a custom image. `azure_image` and `gcp_image` are
+/// the images a `--src` run built for those clouds, never read from the saved configuration.
 fn remote_sandbox_request(
     custom_image: Option<&str>,
     azure_image: Option<&str>,
+    gcp_image: Option<&str>,
     max_lifetime_seconds: Option<NonZeroU64>,
     saved: ConfigureRemoteSandboxRequest,
 ) -> Result<ConfigureRemoteSandboxRequest> {
@@ -698,9 +715,20 @@ fn remote_sandbox_request(
                 })
         })
         .transpose()?;
+    let gcp_image = gcp_image
+        .map(|image| {
+            ConfigureRemoteSandboxRequestGcpImage::try_from(image)
+                .into_alien_error()
+                .context(ErrorData::ValidationError {
+                    field: "gcpImage".to_string(),
+                    message: format!("'{image}' is not a valid image reference"),
+                })
+        })
+        .transpose()?;
     Ok(ConfigureRemoteSandboxRequest {
         custom_image: custom_image.or(saved.custom_image),
         azure_image,
+        gcp_image,
         max_lifetime_seconds: Some(
             max_lifetime_seconds
                 .or(saved.max_lifetime_seconds)
@@ -710,23 +738,40 @@ fn remote_sandbox_request(
     })
 }
 
-/// The Azure leg of a `--src` run, which configures no Azure image when that leg cannot exist.
+/// The Azure or GCP leg of a `--src` run, which configures no image for that cloud when the leg
+/// cannot exist.
 #[derive(Debug, PartialEq)]
-enum AzureLeg {
+enum ImageLeg {
     Published(String),
-    /// Why there is no Azure image, as the command prints it.
+    /// Why there is no image for the cloud, as the command prints it.
     Skipped(String),
 }
 
-/// Skips the Azure image when the project has no Azure manager, which resolving it answers with
-/// a 404, or when the Dockerfile's base has no linux/amd64 variant, such as an arm64-only base
-/// meant for AWS. Any other failure fails the command.
-fn azure_leg(published: Result<String>) -> Result<AzureLeg> {
+impl ImageLeg {
+    fn image(&self) -> Option<&str> {
+        match self {
+            Self::Published(image) => Some(image),
+            Self::Skipped(_) => None,
+        }
+    }
+
+    fn skip_reason(&self) -> Option<&str> {
+        match self {
+            Self::Published(_) => None,
+            Self::Skipped(reason) => Some(reason),
+        }
+    }
+}
+
+/// Skips the image for `cloud` when the project has no manager there, which resolving it answers
+/// with a 404, or when the Dockerfile's base has no linux/amd64 variant, such as an arm64-only
+/// base meant for AWS. Any other failure fails the command.
+fn image_leg(cloud: &str, published: Result<String>) -> Result<ImageLeg> {
     match published {
-        Ok(image) => Ok(AzureLeg::Published(image)),
-        Err(error) if error.http_status_code == Some(404) => Ok(AzureLeg::Skipped(
-            "the project has no Azure manager".to_string(),
-        )),
+        Ok(image) => Ok(ImageLeg::Published(image)),
+        Err(error) if error.http_status_code == Some(404) => Ok(ImageLeg::Skipped(format!(
+            "the project has no {cloud} manager"
+        ))),
         Err(error) => match alien_build::error::base_image_missing_platform(&error) {
             Some(base) => {
                 let hint = alien_build::error::ErrorData::BaseImagePlatformMissing {
@@ -735,8 +780,8 @@ fn azure_leg(published: Result<String>) -> Result<AzureLeg> {
                 }
                 .hint()
                 .unwrap_or_default();
-                Ok(AzureLeg::Skipped(format!(
-                    "{base} has no linux/amd64, so the sandbox is not offered on Azure. {hint}"
+                Ok(ImageLeg::Skipped(format!(
+                    "{base} has no linux/amd64, so the sandbox is not offered on {cloud}. {hint}"
                 )))
             }
             None => Err(error),
@@ -745,12 +790,13 @@ fn azure_leg(published: Result<String>) -> Result<AzureLeg> {
 }
 
 /// The clouds the configured sandbox does not reach, each with the reason the command prints.
-/// `azure_skip` is why a `--src` run built no Azure image. Other reasons come only from the
-/// response, since which images a cloud accepts is the API's decision. Default images reach
-/// every cloud.
+/// `azure_skip` and `gcp_skip` are why a `--src` run built no image for that cloud. Other reasons
+/// come only from the response, since which images a cloud accepts is the API's decision. Default
+/// images reach every cloud.
 fn skipped_clouds(
     configured: &CapabilityMaterialization,
     azure_skip: Option<&str>,
+    gcp_skip: Option<&str>,
 ) -> Vec<(&'static str, String)> {
     let Some(sandbox) = &configured.project_capabilities.capabilities.remote_sandbox else {
         return Vec::new();
@@ -772,10 +818,10 @@ fn skipped_clouds(
                         | CapabilityMaterializationPackagesItemStatus::Building
                 )
         });
-        let reason = if building {
-            "Alien is still building the GCP image"
-        } else {
-            "the saved image is not offered on GCP"
+        let reason = match gcp_skip {
+            Some(reason) => reason,
+            None if building => "Alien is still building the GCP image",
+            None => "the saved image is not offered on GCP",
         };
         skipped.push(("gcp", reason.to_string()));
     }
@@ -809,7 +855,7 @@ async fn build_and_push_sandbox_base_image(
     // registry miss would push the older image under the new tag.
     settings.rebuild = true;
     settings.pull_base_images = source.rebuild;
-    let input_hash = source_input_hash(&src, &toolchain, &settings).await?;
+    let input_hash = source_input_hash(&src, &toolchain, &settings, platform).await?;
 
     let (manager, destination) = if platform == Platform::Aws {
         let manager = ctx
@@ -869,7 +915,7 @@ async fn build_and_push_sandbox_base_image(
         Some(digest) => {
             // The lookup ran on the hash taken before it, so a tree edited since would
             // configure an image of the older tree.
-            ensure_source_unchanged(&src, &toolchain, &settings, &input_hash).await?;
+            ensure_source_unchanged(&src, &toolchain, &settings, platform, &input_hash).await?;
             if !json {
                 println!("{} {}", dim_label("Unchanged"), source_image);
             }
@@ -887,7 +933,7 @@ async fn build_and_push_sandbox_base_image(
             .context(ErrorData::BuildFailed)?;
             // The tag is shared by every machine with this tree, so it must not name an image
             // built from a tree that was edited mid-build.
-            ensure_source_unchanged(&src, &toolchain, &settings, &input_hash).await?;
+            ensure_source_unchanged(&src, &toolchain, &settings, platform, &input_hash).await?;
             if !json {
                 println!("{} {}", dim_label("Pushing"), push_settings.repository);
             }
@@ -917,20 +963,26 @@ async fn source_input_hash(
     src: &Path,
     toolchain: &ToolchainConfig,
     settings: &alien_build::settings::BuildSettings,
+    platform: Platform,
 ) -> Result<SourceInputHash> {
     let hash = alien_build::docker_source_input_hash(src, toolchain, settings)
         .await
         .context(ErrorData::BuildFailed)?;
-    Ok(SourceInputHash(hash))
+    // The GCP image also carries the sandbox agent, which the source does not name, so a CLI
+    // with a new agent misses the tag and pushes again.
+    Ok(SourceInputHash(alien_build::sandbox_image_hash(
+        hash, platform,
+    )))
 }
 
 async fn ensure_source_unchanged(
     src: &Path,
     toolchain: &ToolchainConfig,
     settings: &alien_build::settings::BuildSettings,
+    platform: Platform,
     input_hash: &SourceInputHash,
 ) -> Result<()> {
-    if source_input_hash(src, toolchain, settings).await? != *input_hash {
+    if source_input_hash(src, toolchain, settings, platform).await? != *input_hash {
         return Err(AlienError::new(ErrorData::ValidationError {
             field: "src".to_string(),
             message: format!(
@@ -1056,7 +1108,13 @@ fn validate_capability_options(
     if capability == CapabilityName::RemoteSandbox {
         let max_lifetime_seconds = remote_sandbox_lifetime(sandbox.max_session_lifetime_seconds)?;
         if let Some(image) = sandbox.image {
-            remote_sandbox_request(Some(image), None, max_lifetime_seconds, Default::default())?;
+            remote_sandbox_request(
+                Some(image),
+                None,
+                None,
+                max_lifetime_seconds,
+                Default::default(),
+            )?;
         }
         if let Some(src) = sandbox.src {
             let dockerfile = src.join(sandbox.dockerfile.unwrap_or("Dockerfile"));
@@ -1684,7 +1742,7 @@ mod tests {
         ];
         for (image, lifetime, saved, expected) in cases {
             let request =
-                remote_sandbox_request(image, None, lifetime, saved).expect("valid request");
+                remote_sandbox_request(image, None, None, lifetime, saved).expect("valid request");
             assert_eq!(
                 serde_json::to_value(request).expect("request should serialize"),
                 expected,
@@ -1702,8 +1760,9 @@ mod tests {
             }))
             .expect("the saved configuration should parse")
         };
-        let request = remote_sandbox_request(None, None, NonZeroU64::new(7200), saved_defaults())
-            .expect("valid");
+        let request =
+            remote_sandbox_request(None, None, None, NonZeroU64::new(7200), saved_defaults())
+                .expect("valid");
         assert_eq!(
             serde_json::to_value(request).expect("request should serialize"),
             serde_json::json!({ "maxLifetimeSeconds": 7200, "azureIdleSuspendSeconds": 900 }),
@@ -1711,6 +1770,7 @@ mod tests {
 
         let request = remote_sandbox_request(
             Some("public.ecr.aws/example/analysis:v1"),
+            None,
             None,
             None,
             saved_defaults(),
@@ -1730,7 +1790,7 @@ mod tests {
             "azureIdleSuspendSeconds": 900,
         }))
         .expect("the saved configuration should parse");
-        let request = remote_sandbox_request(None, None, None, saved_custom).expect("valid");
+        let request = remote_sandbox_request(None, None, None, None, saved_custom).expect("valid");
         assert_eq!(
             serde_json::to_value(request).expect("request should serialize"),
             serde_json::json!({
@@ -1948,6 +2008,7 @@ mod tests {
         let request = remote_sandbox_request(
             Some(&base_image),
             None,
+            None,
             NonZeroU64::new(3600),
             Default::default(),
         )
@@ -1959,10 +2020,10 @@ mod tests {
     }
 
     #[test]
-    fn only_a_missing_azure_manager_or_amd64_base_skips_the_azure_image() {
+    fn only_a_missing_manager_or_amd64_base_skips_a_clouds_image() {
         let refused = |status: u16| {
             let mut error = AlienError::new(ErrorData::ApiRequestFailed {
-                message: "Failed to resolve manager for azure platform".to_string(),
+                message: "Failed to resolve manager".to_string(),
                 url: None,
             });
             error.http_status_code = Some(status);
@@ -1971,42 +2032,45 @@ mod tests {
         let build_failed = |cause: alien_build::error::ErrorData| {
             Err(AlienError::new(cause).context(ErrorData::BuildFailed))
         };
-        assert_eq!(
-            azure_leg(Ok("manager.example/prj_x@sha256:aaa".to_string()))
-                .expect("a published image is configured"),
-            AzureLeg::Published("manager.example/prj_x@sha256:aaa".to_string())
-        );
-        assert_eq!(
-            azure_leg(refused(404)).expect("no Azure manager is a skip"),
-            AzureLeg::Skipped("the project has no Azure manager".to_string())
-        );
-        assert_eq!(
-            azure_leg(build_failed(
-                alien_build::error::ErrorData::BaseImagePlatformMissing {
-                    image: "public.ecr.aws/lambda/microvms:al2023-minimal".to_string(),
-                    platform: "linux/amd64".to_string(),
-                }
-            ))
-            .expect("an arm64-only base is a skip"),
-            AzureLeg::Skipped(
-                "public.ecr.aws/lambda/microvms:al2023-minimal has no linux/amd64, so the sandbox \
-                 is not offered on Azure. Use a base with a linux/amd64 variant, such as a \
-                 multi-arch base, or pick one base per architecture with \
-                 `FROM my-base-${TARGETARCH}`."
-                    .to_string()
+        for cloud in ["Azure", "GCP"] {
+            assert_eq!(
+                image_leg(cloud, Ok("manager.example/prj_x@sha256:aaa".to_string()))
+                    .expect("a published image is configured"),
+                ImageLeg::Published("manager.example/prj_x@sha256:aaa".to_string())
+            );
+            assert_eq!(
+                image_leg(cloud, refused(404)).expect("no manager is a skip"),
+                ImageLeg::Skipped(format!("the project has no {cloud} manager"))
+            );
+            assert_eq!(
+                image_leg(
+                    cloud,
+                    build_failed(alien_build::error::ErrorData::BaseImagePlatformMissing {
+                        image: "public.ecr.aws/lambda/microvms:al2023-minimal".to_string(),
+                        platform: "linux/amd64".to_string(),
+                    })
+                )
+                .expect("an arm64-only base is a skip"),
+                ImageLeg::Skipped(format!(
+                    "public.ecr.aws/lambda/microvms:al2023-minimal has no linux/amd64, so the \
+                     sandbox is not offered on {cloud}. Use a base with a linux/amd64 variant, \
+                     such as a multi-arch base, or pick one base per architecture with \
+                     `FROM my-base-${{TARGETARCH}}`."
+                ))
+            );
+            for status in [401, 403, 500] {
+                image_leg(cloud, refused(status)).expect_err("any other refusal fails the command");
+            }
+            image_leg(
+                cloud,
+                build_failed(alien_build::error::ErrorData::ImageBuildFailed {
+                    resource_name: "docker-build".to_string(),
+                    reason: "docker buildx build failed".to_string(),
+                    build_output: None,
+                }),
             )
-        );
-        for status in [401, 403, 500] {
-            azure_leg(refused(status)).expect_err("any other refusal fails the command");
+            .expect_err("any other build failure fails the command");
         }
-        azure_leg(build_failed(
-            alien_build::error::ErrorData::ImageBuildFailed {
-                resource_name: "docker-build".to_string(),
-                reason: "docker buildx build failed".to_string(),
-                build_output: None,
-            },
-        ))
-        .expect_err("any other build failure fails the command");
     }
 
     #[test]
@@ -2050,17 +2114,18 @@ mod tests {
         assert_eq!(
             skipped_clouds(
                 &configured(serde_json::json!({ "enabled": true }), None),
+                None,
                 None
             ),
             vec![],
             "default images reach every cloud"
         );
         assert_eq!(
-            skipped_clouds(&configured(custom(true, true), None), None),
+            skipped_clouds(&configured(custom(true, true), None), None, None),
             vec![]
         );
         assert_eq!(
-            skipped_clouds(&configured(custom(false, false), None), None),
+            skipped_clouds(&configured(custom(false, false), None), None, None),
             vec![
                 (
                     "azure",
@@ -2070,13 +2135,27 @@ mod tests {
             ]
         );
         assert_eq!(
-            skipped_clouds(&configured(custom(true, false), Some("building")), None),
+            skipped_clouds(
+                &configured(custom(true, false), Some("building")),
+                None,
+                None
+            ),
             vec![("gcp", "Alien is still building the GCP image".to_string())]
         );
         assert_eq!(
             skipped_clouds(
+                &configured(custom(true, false), Some("building")),
+                None,
+                Some("the project has no GCP manager")
+            ),
+            vec![("gcp", "the project has no GCP manager".to_string())],
+            "the build's reason wins over the response's"
+        );
+        assert_eq!(
+            skipped_clouds(
                 &configured(custom(false, true), None),
-                Some("the project has no Azure manager")
+                Some("the project has no Azure manager"),
+                None
             ),
             vec![("azure", "the project has no Azure manager".to_string())],
             "the build's reason wins over the response's"
@@ -2084,12 +2163,14 @@ mod tests {
     }
 
     #[test]
-    fn remote_sandbox_request_sends_the_azure_leg_image() {
+    fn remote_sandbox_request_sends_each_leg_image() {
         const AWS_IMAGE: &str = "aws-manager.example/acme-sandbox@sha256:aaa";
         const AZURE_IMAGE: &str = "azure-manager.example/prj_x@sha256:bbb";
+        const GCP_IMAGE: &str = "gcp-manager.example/cloud/artifacts-prj-x/prj_x@sha256:ccc";
         let request = remote_sandbox_request(
             Some(AWS_IMAGE),
             Some(AZURE_IMAGE),
+            Some(GCP_IMAGE),
             NonZeroU64::new(3600),
             Default::default(),
         )
@@ -2099,8 +2180,96 @@ mod tests {
             serde_json::json!({
                 "customImage": AWS_IMAGE,
                 "azureImage": AZURE_IMAGE,
+                "gcpImage": GCP_IMAGE,
                 "maxLifetimeSeconds": 3600,
             }),
+        );
+    }
+
+    #[tokio::test]
+    async fn only_the_gcp_source_tag_names_the_layered_agent() {
+        let src = tempfile::tempdir().expect("temp dir");
+        std::fs::write(src.path().join("Dockerfile"), "FROM scratch\n").expect("Dockerfile");
+        let toolchain = ToolchainConfig::Docker {
+            dockerfile: None,
+            build_args: None,
+            target: None,
+        };
+        let settings =
+            auto_build_settings_for_platform("gcp", &src.path().join(".alien"), None, None, None)
+                .expect("build settings");
+        let source_hash = alien_build::docker_source_input_hash(src.path(), &toolchain, &settings)
+            .await
+            .expect("source hash");
+        let tag = |platform| {
+            let toolchain = toolchain.clone();
+            let settings = settings.clone();
+            let src = src.path().to_path_buf();
+            async move {
+                source_input_hash(&src, &toolchain, &settings, platform)
+                    .await
+                    .expect("source hash")
+                    .tag()
+            }
+        };
+        for platform in [Platform::Aws, Platform::Azure] {
+            assert_eq!(
+                tag(platform).await,
+                format!("remote-sandbox-src-{}", &source_hash[..16]),
+                "{platform}: nothing is layered onto the image"
+            );
+        }
+        assert_ne!(tag(Platform::Gcp).await, tag(Platform::Aws).await);
+    }
+
+    /// The configure endpoint accepts a GCP image only as the manager's host, then the GCP project,
+    /// then the project's GAR path, which `project_id_for_path` must resolve to the project.
+    #[test]
+    fn the_gcp_image_names_the_projects_gar_path_under_the_manager_host() {
+        const GAR_PREFIX: &str = "alien-artifacts";
+        const PROJECT_ID: &str = "prj_0123456789abcdefghijklmnopqr";
+        let gar_repository = alien_core::gar_repository::project_repository(GAR_PREFIX, PROJECT_ID)
+            .expect("a valid project repository");
+        // The repository the GCP manager returns for the project.
+        let destination = SandboxBaseImageRepository {
+            registry_host: "https://manager-gcp.example".to_string(),
+            repository: format!("my-gcp-project/{gar_repository}/{PROJECT_ID}"),
+        };
+        let digest = "sha256:7d5463a6f1c2b3e4d5c6b7a8f9e0d1c2b3a4f5e6d7c8b9a0f1e2d3c4b5a69788";
+        let pushed_repository = format!("manager-gcp.example/{}", destination.repository);
+        let gcp_image = configured_base_image(
+            &format!("{pushed_repository}@{digest}"),
+            &pushed_repository,
+            &destination,
+        )
+        .expect("the pushed image is in the pushed repository");
+        assert_eq!(
+            gcp_image,
+            format!(
+                "manager-gcp.example/my-gcp-project/alien-artifacts-prj-0123456789abcdefghijklmnopqr/\
+                 {PROJECT_ID}@{digest}"
+            )
+        );
+        let gar_path = gcp_image
+            .strip_prefix("manager-gcp.example/my-gcp-project/")
+            .and_then(|path| path.strip_suffix(&format!("@{digest}")))
+            .expect("the manager host and GCP project lead, the digest ends");
+        assert_eq!(
+            alien_core::gar_repository::project_id_for_path(gar_path, GAR_PREFIX),
+            Some(PROJECT_ID)
+        );
+
+        let request = remote_sandbox_request(
+            Some("aws-manager.example/acme-sandbox@sha256:aaa"),
+            None,
+            Some(&gcp_image),
+            None,
+            Default::default(),
+        )
+        .expect("valid request");
+        assert_eq!(
+            serde_json::to_value(request).expect("request should serialize")["gcpImage"],
+            serde_json::json!(gcp_image)
         );
     }
 
@@ -2109,7 +2278,7 @@ mod tests {
     #[tokio::test]
     async fn the_source_stack_passes_the_build_time_preflights_on_each_platform() {
         let src = tempfile::tempdir().expect("temp dir");
-        for platform in [Platform::Aws, Platform::Azure] {
+        for platform in [Platform::Aws, Platform::Azure, Platform::Gcp] {
             let toolchain = ToolchainConfig::Docker {
                 dockerfile: None,
                 build_args: None,

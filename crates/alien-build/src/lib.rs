@@ -2408,9 +2408,22 @@ fn layered_sandbox_agent(
     settings: &BuildSettings,
     workload: toolchain::WorkloadKind,
 ) -> Option<String> {
-    (workload == toolchain::WorkloadKind::SandboxBase
-        && settings.platform.runtime_platform() == Platform::Gcp)
-        .then(gcp_sandbox_image::sandbox_agent_image)
+    (workload == toolchain::WorkloadKind::SandboxBase)
+        .then(|| sandbox_agent_layered_on(settings.platform.runtime_platform()))
+        .flatten()
+}
+
+/// The agent the push layers onto a sandbox image built for `platform`. Only a GCP sandbox
+/// carries its agent inside the image.
+fn sandbox_agent_layered_on(platform: Platform) -> Option<String> {
+    (platform == Platform::Gcp).then(gcp_sandbox_image::sandbox_agent_image)
+}
+
+/// The hash of a sandbox image built for `platform` from inputs that hash to `content_hash`. On
+/// GCP it also covers the agent the push layers onto the image, so the same inputs under a new
+/// agent hash differently.
+pub fn sandbox_image_hash(content_hash: String, platform: Platform) -> String {
+    artifact_hash(content_hash, sandbox_agent_layered_on(platform).as_deref())
 }
 
 /// The hash an artifact directory is named by: its tarballs' content hash, and the layered agent
@@ -5121,6 +5134,13 @@ mod tests {
             tarballs(),
             "an artifact nothing is layered onto keeps its content hash"
         );
+        assert_eq!(
+            sandbox_image_hash(tarballs(), Platform::Gcp),
+            artifact_hash(tarballs(), agent.as_deref())
+        );
+        for platform in [Platform::Aws, Platform::Azure] {
+            assert_eq!(sandbox_image_hash(tarballs(), platform), tarballs());
+        }
     }
 
     #[tokio::test]
