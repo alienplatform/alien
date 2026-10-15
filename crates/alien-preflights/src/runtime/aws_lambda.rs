@@ -208,6 +208,7 @@ mod tests {
             current.outputs = Some(ResourceOutputs::new(WorkerOutputs {
                 worker_name: id.into(),
                 public_endpoints: Default::default(),
+                private_endpoints: Default::default(),
                 identifier: None,
                 commands_push_target: None,
             }));
@@ -259,6 +260,7 @@ mod tests {
         current.outputs = Some(ResourceOutputs::new(WorkerOutputs {
             worker_name: "worker".into(),
             public_endpoints: Default::default(),
+            private_endpoints: Default::default(),
             identifier: None,
             commands_push_target: None,
         }));

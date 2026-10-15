@@ -624,6 +624,7 @@ mod tests {
                     "worker" => alien_core::ResourceOutputs::new(WorkerOutputs {
                         worker_name: name,
                         public_endpoints: Default::default(),
+                        private_endpoints: Default::default(),
                         identifier: None,
                         commands_push_target: None,
                     }),
