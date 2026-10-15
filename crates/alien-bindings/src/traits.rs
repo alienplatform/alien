@@ -369,6 +369,13 @@ pub trait ArtifactRegistry: Binding {
         self.create_repository(project_id).await
     }
 
+    /// Reads the repository for a logical project identifier without creating it.
+    /// Implementations with prefixed repository names must resolve the project identifier
+    /// before calling [`Self::get_repository`].
+    async fn get_project_repository(&self, project_id: &str) -> Result<RepositoryResponse> {
+        self.get_repository(project_id).await
+    }
+
     /// Gets repository details. `repo_id` is the routable name returned by
     /// [`Self::create_repository`]; implementations MUST NOT re-apply
     /// prefixing.

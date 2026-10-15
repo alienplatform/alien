@@ -276,6 +276,10 @@ impl ArtifactRegistry for LocalArtifactRegistry {
         })
     }
 
+    async fn get_project_repository(&self, project_id: &str) -> Result<RepositoryResponse> {
+        self.get_repository(&self.routable_name(project_id)).await
+    }
+
     async fn get_repository(&self, repo_id: &str) -> Result<RepositoryResponse> {
         debug!(
             binding_name = %self.binding_name,

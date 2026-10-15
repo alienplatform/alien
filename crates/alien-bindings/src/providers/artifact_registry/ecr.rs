@@ -525,6 +525,11 @@ impl ArtifactRegistry for EcrArtifactRegistry {
         })
     }
 
+    async fn get_project_repository(&self, project_id: &str) -> Result<RepositoryResponse> {
+        self.get_repository(&self.make_full_repo_name(project_id))
+            .await
+    }
+
     async fn get_repository(&self, repo_id: &str) -> Result<RepositoryResponse> {
         let lookup_names = repository_lookup_names(&self.repository_prefix, repo_id);
 

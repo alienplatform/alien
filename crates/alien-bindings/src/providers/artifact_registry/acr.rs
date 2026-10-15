@@ -126,6 +126,11 @@ impl ArtifactRegistry for AcrArtifactRegistry {
         })
     }
 
+    async fn get_project_repository(&self, project_id: &str) -> Result<RepositoryResponse> {
+        self.get_repository(&self.routable_repository_name(project_id))
+            .await
+    }
+
     async fn get_repository(&self, repo_id: &str) -> Result<RepositoryResponse> {
         // ACR repositories are implicit — return the routable name and URI.
         let repository_uri = format!("{}/{}", self.registry_endpoint, repo_id);
@@ -405,6 +410,9 @@ mod tests {
 
         assert_eq!(registry.upstream_repository_prefix(), "team-a");
         assert_eq!(repository.name, "team-a/worker");
+        let read = registry.get_project_repository("worker").await.unwrap();
+        assert_eq!(read.name, repository.name);
+        assert_eq!(read.uri, repository.uri);
         assert_eq!(
             repository.uri,
             Some("registrytest.azurecr.io/team-a/worker".to_string())

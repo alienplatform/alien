@@ -625,6 +625,12 @@ impl ArtifactRegistry for GarArtifactRegistry {
         })
     }
 
+    async fn get_project_repository(&self, project_id: &str) -> Result<RepositoryResponse> {
+        let repository = self.project_repository_name(project_id)?;
+        self.get_repository(&format!("{}/{repository}/{project_id}", self.project_id))
+            .await
+    }
+
     async fn get_repository(&self, repo_id: &str) -> Result<RepositoryResponse> {
         let name = match self.target(repo_id)? {
             GarTarget::Project(name) => name,
@@ -1625,6 +1631,21 @@ mod tests {
             .contains_key("artifacts-default"));
         let own = registry.create_project_repository("prj_b").await.unwrap();
         let other = registry.create_project_repository("prj_a").await.unwrap();
+        let read = registry.get_project_repository("prj_b").await.unwrap();
+        assert_eq!(read.name, own.name);
+        assert_eq!(
+            read.uri.as_deref(),
+            Some("region-docker.pkg.dev/vendor/artifacts-prj-b/prj_b")
+        );
+        assert!(registry
+            .get_project_repository("prj_missing")
+            .await
+            .is_err());
+        assert!(!state
+            .lock()
+            .unwrap()
+            .repositories
+            .contains_key("artifacts-prj-missing"));
         assert_ne!(own.name, other.name);
         assert_eq!(
             registry
