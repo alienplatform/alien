@@ -112,7 +112,8 @@ pub enum ErrorData {
         code = "BASE_IMAGE_PLATFORM_MISSING",
         message = "Base image '{image}' has no {platform} variant",
         retryable = "false",
-        internal = "false"
+        internal = "false",
+        hint = "Use a base with a {platform} variant, such as a multi-arch base, or pick one base per architecture with `FROM my-base-${{TARGETARCH}}`."
     )]
     BaseImagePlatformMissing {
         /// Base image reference as the build resolved it
