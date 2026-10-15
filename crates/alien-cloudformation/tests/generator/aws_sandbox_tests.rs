@@ -2088,7 +2088,7 @@ fn a_profile_granted_the_sandbox_reaches_its_image_and_nothing_wider() {
 /// policies, which IAM caps. A `"*"` set the account's stack-level policy does not hold is attached
 /// by the sandbox, and must still be. The stack mutations build the account from the same profile,
 /// so the last two cases only arise in a hand-built stack like this one. A kept policy keeps the
-/// logical id it has when nothing is left out, so leaving one set out never replaces another.
+/// logical id it has when nothing is left out, so leaving one set out does not rename the others.
 /// Two policies on one role are folded into a managed policy, so only a lone one shows its id.
 #[test]
 fn a_stack_wide_sandbox_grant_is_attached_once() {
