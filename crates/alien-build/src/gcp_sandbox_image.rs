@@ -446,6 +446,7 @@ mod tests {
     use super::*;
     use dockdash::test_utils::setup_local_registry;
     use dockdash::PushOptions;
+    use httpmock::Method::GET;
     use oci_client::client::{Client, ClientConfig};
     use std::io::Read;
 
@@ -806,13 +807,15 @@ mod tests {
         assert_eq!(layered.agent_digest, registry_digest);
     }
 
-    /// A registry that never answers says nothing about the image, so once the retries run out
-    /// the failure is still one a caller can retry later.
+    /// A registry that drops every connection without answering says nothing about the image, so
+    /// once the retries run out the failure is still one a caller can retry later.
     #[tokio::test]
     async fn a_pull_still_failing_transiently_after_its_retries_stays_retryable() {
+        // The listener stays bound: a port freed here could be handed to another test's mock
+        // registry, which would then answer these pulls and count them as its own.
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
         let address = listener.local_addr().expect("address");
-        drop(listener);
+        std::thread::spawn(move || for _ in listener.incoming() {});
 
         let error = layering_error(
             &format!("{address}/alien/agent:test"),
@@ -831,7 +834,8 @@ mod tests {
         let server = httpmock::MockServer::start_async().await;
         let manifests = server
             .mock_async(|when, then| {
-                when.path_contains("/manifests/");
+                when.method(GET)
+                    .path("/v2/alien/agent/manifests/rate-limited");
                 then.status(429)
                     .header("content-type", "application/json")
                     .body(r#"{"errors":[{"code":"TOOMANYREQUESTS","message":"rate limited"}]}"#);
@@ -845,7 +849,7 @@ mod tests {
             .await;
 
         let error = layering_error(
-            &format!("{}/alien/agent:test", server.address()),
+            &format!("{}/alien/agent:rate-limited", server.address()),
             "registry.example.com/proj/sandbox:base",
         )
         .await;
@@ -873,7 +877,8 @@ mod tests {
         let server = httpmock::MockServer::start_async().await;
         let manifests = server
             .mock_async(|when, then| {
-                when.path_contains("/manifests/");
+                when.method(GET)
+                    .path("/v2/proj/sandbox/manifests/throttled");
                 then.status(429)
                     .header("content-type", "application/json")
                     .body(r#"{"errors":[{"code":"TOOMANYREQUESTS","message":"rate limited"}]}"#);
@@ -888,7 +893,7 @@ mod tests {
 
         let error = layering_error(
             &agent_image,
-            &format!("{}/proj/sandbox:base", server.address()),
+            &format!("{}/proj/sandbox:throttled", server.address()),
         )
         .await;
         assert_eq!(error.code, "IMAGE_PULL_TEMPORARILY_UNAVAILABLE", "{error}");
@@ -1167,9 +1172,10 @@ mod tests {
         let server = httpmock::MockServer::start_async().await;
         let manifests = server
             .mock_async(|when, then| {
-                when.path_contains("/manifests/");
+                when.method(GET)
+                    .path("/v2/alien/agent/manifests/redirected");
                 then.status(302)
-                    .header("location", "/v2/alien/agent/manifests/test");
+                    .header("location", "/v2/alien/agent/manifests/redirected");
             })
             .await;
         server
@@ -1180,7 +1186,7 @@ mod tests {
             .await;
 
         let error = layering_error(
-            &format!("{}/alien/agent:test", server.address()),
+            &format!("{}/alien/agent:redirected", server.address()),
             "registry.example.com/proj/sandbox:base",
         )
         .await;
