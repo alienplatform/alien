@@ -71,7 +71,7 @@ async fn exercise_recovery(case: RecoveryTarget) {
     let resources = &state.stack_state.as_ref().unwrap().resources;
     assert_eq!(
         resources[&dependency_id].error.as_ref().unwrap().code,
-        "SETUP_RERUN_REQUIRED"
+        "MANAGEMENT_PERMISSION_MISSING"
     );
     let api = &resources[&api_id];
     assert_eq!(api.status, ResourceStatus::UpdateFailed);
@@ -116,7 +116,7 @@ async fn exercise_recovery(case: RecoveryTarget) {
         assert_eq!(resources[&api_id].status, ResourceStatus::UpdateFailed);
         assert_eq!(
             resources[&api_id].error.as_ref().unwrap().code,
-            "SETUP_RERUN_REQUIRED"
+            "MANAGEMENT_PERMISSION_MISSING"
         );
         assert!(resources[&api_id].last_failed_state.is_some());
         give_test_worker_setup_grant(&api_id);
