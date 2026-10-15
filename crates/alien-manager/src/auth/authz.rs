@@ -111,6 +111,14 @@ pub trait Authz: Send + Sync {
     // -- Sync protocol -----------------------------------------------------
     fn can_sync_deployment(&self, subject: &Subject, deployment: &DeploymentRecord) -> bool;
     fn can_acquire_deployments(&self, subject: &Subject, deployments: &[DeploymentRecord]) -> bool;
+    /// Admit only setup teardown acquire/reconcile/renew/release requests.
+    /// An implementation opting in must use an authoritative store that checks
+    /// cleanup eligibility, deletion-only reports and exact lease claims on every
+    /// call with the original caller. This grants no runtime sync permission and
+    /// skips manager-side registry changes and release enrichment.
+    fn can_setup_teardown(&self, _subject: &Subject, _deployment: &DeploymentRecord) -> bool {
+        false
+    }
 
     // -- Telemetry ingest --------------------------------------------------
     /// Authorize an OTLP signal from the authenticated subject.

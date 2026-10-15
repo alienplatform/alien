@@ -36,8 +36,9 @@ use alien_manager::stores::sqlite::{
     SqliteDatabase, SqliteDeploymentStore, SqliteReleaseStore, SqliteTokenStore,
 };
 use alien_manager::traits::{
-    AuthValidator, CreateDeploymentGroupParams, CreateImportedDeploymentParams, CredentialResolver,
-    DeploymentRecord, DeploymentStore, ReleaseStore, TokenStore,
+    AuthValidator, CreateDeploymentGroupParams, CreateImportedDeploymentParams,
+    CreateReleaseParams, CredentialResolver, DeploymentRecord, DeploymentStore, ReleaseStore,
+    TelemetrySignal, TokenStore,
 };
 use alien_tunnel::manager::TunnelRegistry;
 use alien_tunnel::operator::{self, TunnelClientConfig, TunnelTargets};
@@ -166,6 +167,22 @@ async fn state() -> (AppState, String) {
     ] {
         subjects.insert(token(role), subject(project_scope.clone(), role));
     }
+
+    let teardown_role: Role = serde_json::from_str("\"deployment-teardown\"")
+        .expect("an embedder can authenticate the restricted teardown role");
+    subjects.insert(
+        token(teardown_role),
+        subject(deployment_scope, teardown_role),
+    );
+
+    subjects.insert(
+        "workspace-teardown".to_string(),
+        subject(Scope::Workspace, Role::DeploymentTeardown),
+    );
+    subjects.insert(
+        "workspace-admin".to_string(),
+        subject(Scope::Workspace, Role::WorkspaceAdmin),
+    );
 
     let kv: Arc<dyn alien_bindings::traits::Kv> =
         Arc::new(LocalKv::new(tmp.path().join("kv")).await.unwrap());
@@ -321,4 +338,245 @@ async fn capability_credentials_cannot_pull_charts_or_the_operator_image() {
             "developer pulling {path}: {body}"
         );
     }
+}
+
+/// Recognizing a cleanup credential must not turn it into an Operator or a
+/// workload credential under the default policy. An embedder must authorize
+/// its delete protocol explicitly.
+#[tokio::test]
+async fn teardown_credentials_have_no_default_workload_access() {
+    let (state, deployment_id) = state().await;
+    let role: Role = serde_json::from_str("\"deployment-teardown\"")
+        .expect("restricted teardown role is recognized");
+    let deployment = state
+        .deployment_store
+        .get_deployment(&Subject::system(), &deployment_id)
+        .await
+        .expect("load deployment")
+        .expect("deployment exists");
+    let caller = subject(
+        Scope::Deployment {
+            project_id: deployment.project_id.clone(),
+            deployment_id: deployment_id.clone(),
+        },
+        role,
+    );
+    for scope in [
+        caller.scope.clone(),
+        Scope::Workspace,
+        Scope::Project {
+            project_id: deployment.project_id.clone(),
+        },
+        Scope::DeploymentGroup {
+            project_id: deployment.project_id.clone(),
+            deployment_group_id: deployment.deployment_group_id.clone(),
+        },
+    ] {
+        let scoped = subject(scope, role);
+        assert!(!state.authz.can_read_deployment(&scoped, &deployment));
+        assert!(!state.authz.can_update_deployment(&scoped, &deployment));
+        assert!(!state.authz.can_delete_deployment(&scoped, &deployment));
+        assert!(!state.authz.can_sync_deployment(&scoped, &deployment));
+        assert!(!state
+            .authz
+            .can_acquire_deployments(&scoped, &[deployment.clone()]));
+        assert!(!state.authz.can_acquire_deployments(&scoped, &[]));
+        assert!(!state.authz.can_dispatch_command(&scoped, &deployment));
+        assert!(!state.authz.can_execute_command(&scoped, &deployment));
+        assert!(!state
+            .authz
+            .can_ingest_telemetry(&scoped, TelemetrySignal::Logs));
+        assert!(!state
+            .authz
+            .can_ingest_telemetry(&scoped, TelemetrySignal::Metrics));
+    }
+
+    let release = state
+        .release_store
+        .create_release(
+            &Subject::system(),
+            CreateReleaseParams {
+                project_id: caller
+                    .scope
+                    .project_id()
+                    .expect("project scope")
+                    .to_string(),
+                stacks: HashMap::new(),
+                git_commit_sha: None,
+                git_commit_ref: None,
+                git_commit_message: None,
+            },
+        )
+        .await
+        .expect("persist release");
+    let router = alien_manager::routes::releases::router()
+        .merge(alien_manager::routes::deployments::router())
+        .with_state(state.clone());
+    for path in [
+        format!("/v1/releases/{}", release.id),
+        format!("/v1/deployments/{deployment_id}"),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(path)
+                    .header(header::AUTHORIZATION, format!("Bearer {}", token(role)))
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("route response");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+    assert_eq!(connect(&state, role).await, StatusCode::FORBIDDEN);
+    for path in [
+        "charts/files/manifests/0.1.0",
+        "alien-operator/manifests/v1",
+    ] {
+        let (status, _) = pull(&state, role, path).await;
+        assert_eq!(
+            status,
+            StatusCode::FORBIDDEN,
+            "teardown token pulling {path}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn initialize_checks_deployment_read_authority() {
+    let (state, deployment_id) = state().await;
+    let router = alien_manager::routes::sync::initialize_router().with_state(state);
+    for (role, expected) in [
+        (Role::DeploymentTeardown, StatusCode::FORBIDDEN),
+        (Role::DeploymentManager, StatusCode::OK),
+        (Role::DeploymentViewer, StatusCode::OK),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/initialize")
+                    .header(header::AUTHORIZATION, format!("Bearer {}", token(role)))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"initialDesiredRelease":"none"}"#))
+                    .expect("request"),
+            )
+            .await
+            .expect("initialize response");
+        let status = response.status();
+        let body = to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .expect("response body");
+        assert_eq!(
+            status,
+            expected,
+            "{role:?}: {}",
+            String::from_utf8_lossy(&body)
+        );
+        if expected == StatusCode::OK {
+            let value: serde_json::Value = serde_json::from_slice(&body).expect("initialize JSON");
+            assert_eq!(value["deploymentId"], deployment_id);
+        }
+    }
+}
+
+#[tokio::test]
+async fn workspace_acquire_checks_role_without_deployment_ids() {
+    let (state, deployment_id) = state().await;
+    let before = state
+        .deployment_store
+        .get_deployment(&Subject::system(), &deployment_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let before = serde_json::to_value(before).unwrap();
+    let router = alien_manager::routes::sync::router().with_state(state.clone());
+    for mode in [
+        None,
+        Some("runtime"),
+        Some("setup-run"),
+        Some("setup-teardown"),
+    ] {
+        for (bearer, expected) in [
+            ("workspace-teardown", StatusCode::FORBIDDEN),
+            ("workspace-admin", StatusCode::OK),
+        ] {
+            let mut body = serde_json::json!({
+                "session": "workspace-acquisition", "deploymentModel": "push",
+                "statuses": if bearer == "workspace-teardown" { vec!["running"] } else { vec!["not-a-status"] }
+            });
+            if let Some(mode) = mode {
+                body["acquireMode"] = mode.into();
+            }
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/v1/sync/acquire")
+                        .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(body.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let status = response.status();
+            let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+            assert_eq!(
+                status,
+                expected,
+                "{bearer} {mode:?}: {}",
+                String::from_utf8_lossy(&bytes)
+            );
+            if expected == StatusCode::OK {
+                let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                assert_eq!(value["deployments"], serde_json::json!([]));
+            }
+            let after = state
+                .deployment_store
+                .get_deployment(&Subject::system(), &deployment_id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(serde_json::to_value(after).unwrap(), before);
+        }
+    }
+}
+
+#[tokio::test]
+async fn workspace_admin_can_acquire_matching_deployment_without_ids() {
+    let (state, deployment_id) = state().await;
+    let response = alien_manager::routes::sync::router()
+        .with_state(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/sync/acquire")
+                .header(header::AUTHORIZATION, "Bearer workspace-admin")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"session":"admin-acquisition","deploymentModel":"push","statuses":["running"]}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(value["deployments"].as_array().unwrap().len(), 1);
+    assert_eq!(value["deployments"][0]["deployment"]["id"], deployment_id);
+    let saved = state
+        .deployment_store
+        .get_deployment(&Subject::system(), &deployment_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(saved).unwrap()["lockedBy"],
+        "admin-acquisition"
+    );
 }

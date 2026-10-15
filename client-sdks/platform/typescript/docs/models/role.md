@@ -20,7 +20,7 @@ const value: models.ProjectRole = "project.viewer";
 ### `models.DeploymentRole`
 
 ```typescript
-const value: models.DeploymentRole = "deployment.viewer";
+const value: models.DeploymentRole = "deployment.manager";
 ```
 
 ### `models.DeploymentGroupRole`

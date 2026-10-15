@@ -495,11 +495,13 @@ fn setup_run_acquire_statuses() -> Vec<String> {
 /// Unlike the normal manager acquire path, this can acquire `teardown-required`
 /// so setup-authority callers can resume frozen-resource teardown.
 ///
-/// `deletion_lookup` confirms that a refused acquire means the record is gone.
-/// Removing the record also removes the deployment's own credential, so a
-/// manager that authenticates through the platform refuses `client` with 401
-/// rather than 404. Callers that requested the deletion with other credentials
-/// pass a client holding them; others pass `client`.
+/// `deletion_lookup` reads the deployment while waiting and confirms that a
+/// refused acquire means the record is gone. Removing the record also removes
+/// the deployment's own credential, so a manager that authenticates through the
+/// platform refuses `client` with 401 rather than 404, and a teardown-only
+/// credential cannot read deployments at all. Callers that requested the
+/// deletion with other credentials pass a client holding them; others pass
+/// `client`.
 pub async fn acquire_setup_delete_deployment(
     client: &ManagerClient,
     deletion_lookup: &ManagerClient,
@@ -575,7 +577,12 @@ pub async fn acquire_setup_delete_deployment(
 
         reject_non_retryable_acquire_reason(deployment_id, &response.not_acquired, true)?;
 
-        let status = match client.get_deployment().id(deployment_id).send().await {
+        let status = match deletion_lookup
+            .get_deployment()
+            .id(deployment_id)
+            .send()
+            .await
+        {
             Ok(resp) => resp.into_inner().status,
             Err(err) => {
                 let message = err.to_string();
@@ -882,6 +889,40 @@ mod tests {
         let result = acquire_setup_delete_deployment(
             &client,
             &client,
+            "deployment-1",
+            "session-1",
+            DeploymentModel::Push,
+        )
+        .await
+        .expect("confirmed removed record is completed deletion");
+        assert!(matches!(result, SetupDeleteAcquireOutcome::AlreadyDeleted));
+        acquire.assert_async().await;
+        lookup.assert_async().await;
+    }
+
+    /// A teardown-only credential cannot read deployments, so the wait loop reads
+    /// through the lookup client.
+    #[tokio::test]
+    async fn setup_delete_acquire_uses_discovery_when_runtime_has_not_handed_off() {
+        let server = MockServer::start_async().await;
+        let discovery_server = MockServer::start_async().await;
+        let acquire = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/sync/acquire");
+                then.status(200).json_body(serde_json::json!({
+                    "deployments": [], "notAcquired": []
+                }));
+            })
+            .await;
+        let lookup = discovery_server
+            .mock_async(|when, then| {
+                when.method(GET).path("/v1/deployments/deployment-1");
+                then.status(404).body("removed deployment");
+            })
+            .await;
+        let result = acquire_setup_delete_deployment(
+            &ManagerClient::new(&server.base_url()),
+            &ManagerClient::new(&discovery_server.base_url()),
             "deployment-1",
             "session-1",
             DeploymentModel::Push,

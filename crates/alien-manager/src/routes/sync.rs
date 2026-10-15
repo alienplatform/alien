@@ -334,7 +334,9 @@ async fn renew(
         Ok(None) => return ErrorData::not_found_deployment(&req.deployment_id).into_response(),
         Err(error) => return error.into_response(),
     };
-    if !state.authz.can_sync_deployment(&subject, &deployment) {
+    if !state.authz.can_sync_deployment(&subject, &deployment)
+        && !state.authz.can_setup_teardown(&subject, &deployment)
+    {
         return ErrorData::forbidden("Access denied").into_response();
     }
 
@@ -390,7 +392,7 @@ async fn acquire(
     // If the caller named specific deployments, fetch each and run
     // `Authz::can_acquire_deployments` over the slice. Workspace-scoped
     // callers (e.g., legacy admin tokens) can run with no id list — the
-    // store-side filter applies.
+    // store-side filter applies after role authorization.
     if let Some(ids) = req.deployment_ids.as_ref() {
         let mut deployments = Vec::with_capacity(ids.len());
         for id in ids {
@@ -400,7 +402,13 @@ async fn acquire(
                 Err(e) => return e.into_response(),
             }
         }
-        if !state.authz.can_acquire_deployments(&subject, &deployments) {
+        if !state.authz.can_acquire_deployments(&subject, &deployments)
+            && !(req.acquire_mode.as_deref() == Some("setup-teardown")
+                && !deployments.is_empty()
+                && deployments
+                    .iter()
+                    .all(|d| state.authz.can_setup_teardown(&subject, d)))
+        {
             return ErrorData::forbidden("Access denied: cannot acquire these deployments")
                 .into_response();
         }
@@ -409,6 +417,8 @@ async fn acquire(
             "Access denied: only workspace-scoped tokens can acquire without an id filter",
         )
         .into_response();
+    } else if !state.authz.can_acquire_deployments(&subject, &[]) {
+        return ErrorData::forbidden("Access denied: cannot acquire deployments").into_response();
     }
 
     let acquire_mode = match req.acquire_mode.as_deref() {
@@ -565,7 +575,9 @@ async fn reconcile(
         Ok(None) => return ErrorData::not_found_deployment(&req.deployment_id).into_response(),
         Err(e) => return e.into_response(),
     };
-    if !state.authz.can_sync_deployment(&subject, &deployment) {
+    let restricted_teardown = !state.authz.can_sync_deployment(&subject, &deployment)
+        && state.authz.can_setup_teardown(&subject, &deployment);
+    if !state.authz.can_sync_deployment(&subject, &deployment) && !restricted_teardown {
         return ErrorData::forbidden("Access denied").into_response();
     }
 
@@ -584,57 +596,61 @@ async fn reconcile(
     //    This must happen before persisting so the `registry_access_granted`
     //    flag is included in the persisted state (matches ManagerTransport).
     let mut final_state = deployment_state;
-    preserve_recorded_gate_answers(&mut final_state, &deployment);
     let legacy_cli = headers
         .get("user-agent")
         .and_then(|value| value.to_str().ok())
         == Some("alien-cli");
-    if legacy_cli {
-        preserve_legacy_key_observations(&mut final_state, &deployment);
-    }
-    crate::registry_access::reconcile_registry_access_with_proxy()
-        .bindings_provider(&state.bindings_provider)
-        .target_bindings_providers(&state.target_bindings_providers)
-        .deployment_id(&req.deployment_id)
-        .project_id(&deployment.project_id)
-        .state(&mut final_state)
-        .proxy_url(&state.config.base_url())
-        .call()
-        .await;
+    // Restricted cleanup must reach the authoritative store unchanged, before
+    // any manager-side registry mutation or privileged release lookup.
+    if !restricted_teardown {
+        preserve_recorded_gate_answers(&mut final_state, &deployment);
+        if legacy_cli {
+            preserve_legacy_key_observations(&mut final_state, &deployment);
+        }
+        crate::registry_access::reconcile_registry_access_with_proxy()
+            .bindings_provider(&state.bindings_provider)
+            .target_bindings_providers(&state.target_bindings_providers)
+            .deployment_id(&req.deployment_id)
+            .project_id(&deployment.project_id)
+            .state(&mut final_state)
+            .proxy_url(&state.config.base_url())
+            .call()
+            .await;
 
-    // 1a. Inject target_release from the deployment record's
-    //     desired_release_id. The CLI's deploy command initializes state with
-    //     `target_release: None` and depends on the manager to populate it on
-    //     reconcile — without this, handlers like `pending::handle_pending`
-    //     fail with "Target release required for deployment" on the first
-    //     step.
-    if final_state.target_release.is_none() {
-        if let Some(ref release_id) = deployment.desired_release_id {
-            let system = crate::auth::Subject::system();
-            if let Ok(Some(rel)) = state.release_store.get_release(&system, release_id).await {
-                let release_stack_platform = release_stack_platform(deployment.platform);
-                if let Some(info) = release_info_from_record(&rel, release_stack_platform) {
-                    final_state.target_release = Some(info);
+        // 1a. Inject target_release from the deployment record's
+        //     desired_release_id. The CLI's deploy command initializes state with
+        //     `target_release: None` and depends on the manager to populate it on
+        //     reconcile — without this, handlers like `pending::handle_pending`
+        //     fail with "Target release required for deployment" on the first
+        //     step.
+        if final_state.target_release.is_none() {
+            if let Some(ref release_id) = deployment.desired_release_id {
+                let system = crate::auth::Subject::system();
+                if let Ok(Some(rel)) = state.release_store.get_release(&system, release_id).await {
+                    let release_stack_platform = release_stack_platform(deployment.platform);
+                    if let Some(info) = release_info_from_record(&rel, release_stack_platform) {
+                        final_state.target_release = Some(info);
+                    }
                 }
             }
         }
-    }
 
-    // 1b. Revoke a deleted AWS deployment's access before persisting the state that hands it to
-    //     setup teardown. A denied revoke comes back as a failed delete to persist instead.
-    let final_state = match crate::registry_access::revoke_before_persisting(
-        state.deployment_store.as_ref(),
-        &state.bindings_provider,
-        &state.target_bindings_providers,
-        &req.deployment_id,
-        &deployment.project_id,
-        final_state,
-    )
-    .await
-    {
-        Ok(final_state) => final_state,
-        Err(error) => return error.into_response(),
-    };
+        // 1b. Revoke a deleted AWS deployment's access before persisting the state that hands it to
+        //     setup teardown. A denied revoke comes back as a failed delete to persist instead.
+        final_state = match crate::registry_access::revoke_before_persisting(
+            state.deployment_store.as_ref(),
+            &state.bindings_provider,
+            &state.target_bindings_providers,
+            &req.deployment_id,
+            &deployment.project_id,
+            final_state,
+        )
+        .await
+        {
+            Ok(final_state) => final_state,
+            Err(error) => return error.into_response(),
+        };
+    }
 
     // 2. Persist the step result (including any registry access changes).
     let _result = match state
@@ -663,35 +679,41 @@ async fn reconcile(
         Err(e) => return e.into_response(),
     };
 
-    if let Err(error) = crate::registry_access::revoke_after_persisting(
-        state.deployment_store.as_ref(),
-        &state.bindings_provider,
-        &state.target_bindings_providers,
-        &req.deployment_id,
-        &deployment.project_id,
-        &final_state,
-    )
-    .await
-    {
-        // The state is already persisted, and for a deletion the record may be gone, so the
-        // caller cannot repeat this cleanup. Leave the unrevoked grant in the manager's log.
-        tracing::error!(
-            deployment_id = %req.deployment_id,
-            status = ?final_state.status,
-            error = %error,
-            "Registry access cleanup failed after the deployment state was persisted"
-        );
-        return error.into_response();
+    if !restricted_teardown {
+        if let Err(error) = crate::registry_access::revoke_after_persisting(
+            state.deployment_store.as_ref(),
+            &state.bindings_provider,
+            &state.target_bindings_providers,
+            &req.deployment_id,
+            &deployment.project_id,
+            &final_state,
+        )
+        .await
+        {
+            // The state is already persisted, and for a deletion the record may be gone, so the
+            // caller cannot repeat this cleanup. Leave the unrevoked grant in the manager's log.
+            tracing::error!(
+                deployment_id = %req.deployment_id,
+                status = ?final_state.status,
+                error = %error,
+                "Registry access cleanup failed after the deployment state was persisted"
+            );
+            return error.into_response();
+        }
     }
 
     // Derive native image host for Lambda/Cloud Run so push clients
     // can set it on their local DeploymentConfig.
-    let native_image_host = crate::registry_access::derive_native_image_host(
-        &state.bindings_provider,
-        &state.target_bindings_providers,
-        &final_state.platform,
-    )
-    .await;
+    let native_image_host = if restricted_teardown {
+        None
+    } else {
+        crate::registry_access::derive_native_image_host(
+            &state.bindings_provider,
+            &state.target_bindings_providers,
+            &final_state.platform,
+        )
+        .await
+    };
 
     let mut current = match serde_json::to_value(&final_state) {
         Ok(v) => v,
@@ -783,7 +805,9 @@ async fn release(
         Ok(None) => return ErrorData::not_found_deployment(&req.deployment_id).into_response(),
         Err(e) => return e.into_response(),
     };
-    if !state.authz.can_sync_deployment(&subject, &deployment) {
+    if !state.authz.can_sync_deployment(&subject, &deployment)
+        && !state.authz.can_setup_teardown(&subject, &deployment)
+    {
         return ErrorData::forbidden("Access denied").into_response();
     }
 
@@ -2909,6 +2933,10 @@ async fn initialize(
                 Ok(None) => return ErrorData::not_found_deployment(&deployment_id).into_response(),
                 Err(e) => return e.into_response(),
             };
+
+            if !state.authz.can_read_deployment(&subject, &deployment) {
+                return ErrorData::forbidden("Access denied").into_response();
+            }
 
             Json(InitializeResponse {
                 deployment_id,
