@@ -1085,7 +1085,9 @@ mod tests {
                     .path("/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Network/publicIPAddresses/fresh-generation")
                     .query_param("api-version", "2024-05-01")
                     .header("Authorization", "Bearer test-token")
-                    .header_missing("If-None-Match");
+                    .matches(|request| request.headers.as_ref().is_none_or(|headers| {
+                        headers.iter().all(|(name, _)| !name.eq_ignore_ascii_case("If-None-Match"))
+                    }));
                 then.status(status).json_body(if status == 201 {
                     json!({"name":"fresh-generation","location":"eastus","properties":{"resourceGuid":"owned"}})
                 } else {
