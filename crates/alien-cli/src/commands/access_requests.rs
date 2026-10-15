@@ -10,11 +10,11 @@ use std::time::Duration;
 
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_platform_api::types::{
-    AccessRequestStatus, CreateAccessRequest, CreateAccessRequestMaxRisk, DebugGrantTool,
-    RevokeAccessRequest,
+    AccessRequestStatus, CreateAccessRequest, CreateAccessRequestMaxRisk,
+    CreateAccessRequestRequestedExpiresAt, DebugGrantTool, RevokeAccessRequest,
 };
 use alien_platform_api::SdkResultExt as _;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, SecondsFormat, Utc};
 use clap::{Parser, Subcommand};
 use serde_json::Value;
 
@@ -906,7 +906,7 @@ pub(crate) fn parse_duration_seconds(value: &str) -> Result<u64> {
 pub(crate) fn requested_expiration(
     now: DateTime<Utc>,
     duration: Option<&str>,
-) -> Result<Option<DateTime<Utc>>> {
+) -> Result<Option<CreateAccessRequestRequestedExpiresAt>> {
     let Some(duration) = duration else {
         return Ok(None);
     };
@@ -923,13 +923,22 @@ pub(crate) fn requested_expiration(
             message: "duration is too large".to_string(),
         })
     })?;
-    now.checked_add_signed(chrono::Duration::seconds(seconds))
-        .map(Some)
+    let deadline = now
+        .checked_add_signed(chrono::Duration::seconds(seconds))
         .ok_or_else(|| {
             AlienError::new(ErrorData::ValidationError {
                 field: "duration".to_string(),
                 message: "duration is too large".to_string(),
             })
+        })?;
+    // The API accepts only a `Z`-suffixed UTC deadline; `to_rfc3339()` would write `+00:00`.
+    deadline
+        .to_rfc3339_opts(SecondsFormat::AutoSi, true)
+        .parse::<CreateAccessRequestRequestedExpiresAt>()
+        .map(Some)
+        .into_alien_error()
+        .context(ErrorData::GenericError {
+            message: format!("The deadline {deadline} is not a UTC timestamp"),
         })
 }
 
@@ -963,10 +972,13 @@ mod tests {
     fn requested_duration_becomes_an_absolute_utc_deadline() {
         let now = "2026-09-17T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
         assert_eq!(
-            requested_expiration(now, Some("90s")).unwrap(),
-            Some("2026-09-17T00:01:30Z".parse().unwrap())
+            requested_expiration(now, Some("90s"))
+                .unwrap()
+                .as_deref()
+                .map(String::as_str),
+            Some("2026-09-17T00:01:30Z")
         );
-        assert_eq!(requested_expiration(now, None).unwrap(), None);
+        assert!(requested_expiration(now, None).unwrap().is_none());
         assert!(requested_expiration(now, Some("361m")).is_err());
     }
 

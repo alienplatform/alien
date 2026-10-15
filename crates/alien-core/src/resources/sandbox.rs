@@ -33,8 +33,9 @@ pub enum SandboxCode {
     },
     /// A Dockerfile `alien build` builds into the sandbox's base image.
     ///
-    /// AWS only, and docker only: the base image is a root filesystem, not a binary laid on one.
-    /// `alien release` pushes it and the bundle layers the sandbox agent on afterwards.
+    /// AWS, Azure and GCP, and docker only: the base image is a root filesystem, not a binary laid
+    /// on one. `alien release` pushes it; on AWS the bundle layers the sandbox agent on afterwards,
+    /// and on GCP the release layers it on and pushes the result.
     #[serde(rename_all = "camelCase")]
     Source {
         /// The source directory to build from
@@ -667,10 +668,13 @@ impl Sandbox {
             capabilities.domain_egress_rules = true;
         }
 
-        // `alien build` builds an AWS sandbox's base image, so source is a declaration there and
-        // the emitters refuse it only if it reaches them unbuilt. Everywhere else the image is
-        // pulled as declared, and an empty image string would schedule a pod that can never run.
-        if matches!(&self.code, SandboxCode::Source { .. }) && platform != Platform::Aws {
+        // `alien build` builds an AWS, Azure or GCP sandbox's base image, so source is a
+        // declaration there and the emitters refuse it only if it reaches them unbuilt. Everywhere
+        // else the image is pulled as declared, and an empty image string would schedule a pod
+        // that can never run.
+        if matches!(&self.code, SandboxCode::Source { .. })
+            && !matches!(platform, Platform::Aws | Platform::Azure | Platform::Gcp)
+        {
             return Err(AlienError::new(ErrorData::SandboxLimitInvalid {
                 resource_id: self.id.clone(),
                 field: "code".to_string(),
@@ -691,8 +695,9 @@ impl Sandbox {
             }));
         }
 
-        // Read before the limits, because the image is declared whether or not any are.
-        if platform == Platform::Azure {
+        // Read before the limits, because the image is declared whether or not any are. A source
+        // declaration has no image until `alien build` writes one.
+        if platform == Platform::Azure && matches!(&self.code, SandboxCode::Image { .. }) {
             self.azure_image()?;
         }
 
@@ -761,7 +766,8 @@ impl Sandbox {
                 resource_id: self.id.clone(),
                 field: "code".to_string(),
                 value: "source".to_string(),
-                reason: "no sandbox backend builds an image from source yet".to_string(),
+                reason: "the sandbox still has unbuilt source code. Run 'alien build' first"
+                    .to_string(),
             }));
         };
 
@@ -2300,11 +2306,10 @@ mod tests {
         );
     }
 
-    /// `alien build` builds an AWS sandbox's base image, so source is a declaration there. On
-    /// every other platform the image is pulled as declared, and an unbuilt source would schedule
-    /// a pod that can never run, so the refusal still has to happen at plan time.
+    /// Source is refused at plan time on every platform whose sandbox image `alien build` does
+    /// not build (the reason is at the check in `validate_for_platform`).
     #[test]
-    fn source_code_is_refused_off_aws_rather_than_producing_a_broken_manifest() {
+    fn source_code_is_refused_where_no_backend_builds_it() {
         let sandbox = Sandbox::new("agent".to_string())
             .code(SandboxCode::Source {
                 src: "./sandbox".to_string(),
@@ -2324,13 +2329,14 @@ mod tests {
         sandbox
             .validate_for_platform(Platform::Aws)
             .expect("an AWS sandbox base image is built by `alien build`");
+        sandbox
+            .validate_for_platform(Platform::Azure)
+            .expect("an Azure sandbox base image is built by `alien build`");
+        sandbox
+            .validate_for_platform(Platform::Gcp)
+            .expect("a GCP sandbox base image is built by `alien build`");
 
-        for platform in [
-            Platform::Azure,
-            Platform::Gcp,
-            Platform::Kubernetes,
-            Platform::Local,
-        ] {
+        for platform in [Platform::Kubernetes, Platform::Local] {
             let error = sandbox
                 .validate_for_platform(platform)
                 .expect_err("no backend builds a sandbox image from source here");

@@ -94,6 +94,16 @@ impl DockerToolchain {
         .to_string()
     }
 
+    /// The base image buildx names when the registry has no variant of it for the target platform.
+    fn base_image_without_platform_in_output(build_output: &str) -> Option<&str> {
+        build_output.lines().find_map(|line| {
+            let (resolving, _) = line.split_once(": no match for platform in manifest")?;
+            resolving
+                .rsplit_once("failed to resolve source metadata for ")
+                .map(|(_, image)| image)
+        })
+    }
+
     /// `ImageBuildFailed` for a docker setup step (no captured build output).
     fn docker_build_error(reason: impl Into<String>) -> ErrorData {
         ErrorData::ImageBuildFailed {
@@ -388,7 +398,7 @@ impl DockerToolchain {
             "--builder".to_string(),
             builder.name.clone(),
             "--platform".to_string(),
-            platform_str,
+            platform_str.clone(),
             "--output".to_string(),
             output,
             "-f".to_string(),
@@ -486,6 +496,12 @@ impl DockerToolchain {
 
             if !output.success() {
                 let build_output = captured_output.display();
+                if let Some(image) = Self::base_image_without_platform_in_output(&build_output) {
+                    return Err(AlienError::new(ErrorData::BaseImagePlatformMissing {
+                        image: image.to_string(),
+                        platform: platform_str,
+                    }));
+                }
                 return Err(AlienError::new(ErrorData::ImageBuildFailed {
                     resource_name: "docker-build".to_string(),
                     reason: Self::humanize_buildx_failure(&build_output),
@@ -1089,6 +1105,26 @@ mod tests {
             .output()
             .map(|output| output.status.success())
             .unwrap_or(false)
+    }
+
+    /// Buildx output for a linux/amd64 build FROM an image that publishes only linux/arm64.
+    #[test]
+    fn a_base_without_the_target_platform_is_named_from_the_build_output() {
+        let output = "#3 [internal] load metadata for public.ecr.aws/lambda/microvms:al2023-minimal\n\
+            #3 ERROR: no match for platform in manifest: not found\n\
+            ERROR: failed to build: failed to solve: public.ecr.aws/lambda/microvms:al2023-minimal: \
+            failed to resolve source metadata for public.ecr.aws/lambda/microvms:al2023-minimal: \
+            no match for platform in manifest: not found\n";
+        assert_eq!(
+            DockerToolchain::base_image_without_platform_in_output(output),
+            Some("public.ecr.aws/lambda/microvms:al2023-minimal")
+        );
+        assert_eq!(
+            DockerToolchain::base_image_without_platform_in_output(
+                "ERROR: failed to build: failed to solve: process \"/bin/sh -c false\" did not complete successfully: exit code: 1\n"
+            ),
+            None
+        );
     }
 
     #[test]

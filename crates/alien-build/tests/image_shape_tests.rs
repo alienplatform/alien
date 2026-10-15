@@ -9,7 +9,9 @@
 //! - a compiled TypeScript Container with a staged native bindings addon
 //!   actually SERVES HTTP and round-trips a real local kv binding (the
 //!   compile-smoke pattern from `packages/package-layout/steps/compile.ts`,
-//!   exercised through the real `TypeScriptToolchain` staging path).
+//!   exercised through the real `TypeScriptToolchain` staging path);
+//! - a Sandbox base image is built for the architecture its cloud's sandbox
+//!   runtime boots, whatever targets the stack's other workloads build for.
 //!
 //! The image-shape test needs network access to pull base images (the same
 //! requirement as the existing `typescript_integration_tests`). The binding
@@ -21,10 +23,12 @@ use alien_build::build_stack;
 use alien_build::settings::{BuildSettings, PlatformBuildSettings};
 use alien_build::toolchain::typescript::TypeScriptToolchain;
 use alien_build::toolchain::{ImageBuildStrategy, Toolchain, ToolchainContext, WorkloadKind};
+use alien_core::instance_catalog::Architecture;
 use alien_core::permissions::PermissionProfile;
 use alien_core::{
-    BinaryTarget, Container, ContainerCode, Daemon, DaemonCode, ResourceLifecycle, Worker,
-    WorkerCode,
+    BinaryTarget, CapacityGroup, ComputeCluster, Container, ContainerCode, Daemon, DaemonCode,
+    MachineProfile, ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy,
+    Worker, WorkerCode,
 };
 use dockdash::Image;
 use std::path::{Path, PathBuf};
@@ -536,4 +540,114 @@ export default {{
         status.is_success() && body == format!("OK {value}"),
         "unexpected HTTP response {status}: {body}\nstdout: {stdout}\nstderr: {stderr}"
     );
+}
+
+/// The sandbox base boots as an arm64 MicroVM on AWS and an amd64 disk image on Azure, so the
+/// targets a stack's compute pool sets for its other workloads must not change it. The AWS pool
+/// here is x86_64 and the build targets follow it, so its base can only come out arm64 if the
+/// build ignores them. Azure offers no arm64 pool to conflict with; its row builds a Frozen source
+/// sandbox end to end.
+#[tokio::test]
+async fn a_sandbox_base_is_built_for_its_backend_architecture() {
+    let src = tempdir().expect("temp src dir");
+    std::fs::write(
+        src.path().join("Dockerfile"),
+        "FROM scratch\nCOPY marker /marker\n",
+    )
+    .expect("write Dockerfile");
+    std::fs::write(src.path().join("marker"), "built\n").expect("write marker");
+
+    // Each in the lifecycle its platform accepts a source sandbox under.
+    for (platform, lifecycle, pool, targets, expected) in [
+        (
+            PlatformBuildSettings::Aws {
+                managing_account_id: None,
+            },
+            ResourceLifecycle::Live,
+            Some(Architecture::X86_64),
+            Some(vec![BinaryTarget::LinuxX64]),
+            BinaryTarget::LinuxArm64,
+        ),
+        (
+            PlatformBuildSettings::Azure {},
+            ResourceLifecycle::Frozen,
+            None,
+            None,
+            BinaryTarget::LinuxX64,
+        ),
+    ] {
+        let output_dir = tempdir().expect("temp output dir");
+        let sandbox = Sandbox::new("base".to_string())
+            .code(SandboxCode::Source {
+                src: src.path().to_string_lossy().into_owned(),
+                toolchain: alien_core::ToolchainConfig::Docker {
+                    dockerfile: None,
+                    target: None,
+                    build_args: None,
+                },
+            })
+            .egress(SandboxEgress::Allow)
+            .lifecycle(SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build();
+        let mut stack = alien_core::Stack::new("sandbox-arch".to_string());
+        if let Some(architecture) = pool {
+            stack = stack.add(
+                ComputeCluster::new("pool".to_string())
+                    .capacity_group(CapacityGroup {
+                        group_id: "general".to_string(),
+                        instance_type: None,
+                        profile: Some(MachineProfile {
+                            cpu: "1".to_string(),
+                            memory_bytes: 2 * 1024 * 1024 * 1024,
+                            ephemeral_storage_bytes: 20 * 1024 * 1024 * 1024,
+                            architecture: Some(architecture),
+                            gpu: None,
+                        }),
+                        min_size: 1,
+                        max_size: 1,
+                        scale_policy: None,
+                        nested_virtualization: None,
+                    })
+                    .build(),
+                ResourceLifecycle::Frozen,
+            );
+        }
+        let stack = stack.add(sandbox, lifecycle).build();
+        let settings = BuildSettings {
+            output_directory: output_dir.path().to_string_lossy().into_owned(),
+            platform,
+            targets,
+            cache_url: None,
+            override_base_image: None,
+            debug_mode: false,
+            rebuild: true,
+            pull_base_images: false,
+        };
+
+        build_stack(stack, &settings)
+            .await
+            .unwrap_or_else(|error| panic!("sandbox base builds for {expected}: {error}"));
+
+        let platform_dir = output_dir
+            .path()
+            .join("build")
+            .join(settings.platform.runtime_platform().as_str());
+        let tarball = find_image_tarball(&platform_dir, "base", expected);
+        let built: Vec<_> = std::fs::read_dir(tarball.parent().expect("image dir"))
+            .expect("read image dir")
+            .filter_map(|entry| {
+                let name = entry.expect("dir entry").file_name();
+                let name = name.to_string_lossy().into_owned();
+                name.ends_with(".oci.tar").then_some(name)
+            })
+            .collect();
+        assert_eq!(
+            built,
+            vec![format!("{}.oci.tar", expected.runtime_platform_id())],
+            "the sandbox base is built for its backend's architecture alone"
+        );
+    }
 }

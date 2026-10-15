@@ -473,7 +473,8 @@ impl ExecutionMode {
         project: &str,
         platform: &str,
     ) -> Result<ManagerContext> {
-        self.resolve_manager_inner(project, platform, false).await
+        self.resolve_manager_inner(project, platform, false, MANAGER_READY_WAIT)
+            .await
     }
 
     #[cfg(feature = "platform")]
@@ -531,14 +532,17 @@ impl ExecutionMode {
     /// - Platform: calls /v1/resolve to discover the project's manager URL,
     ///   then calls the manager directly to create/get the artifact registry repo.
     pub async fn resolve_manager(&self, project: &str, platform: &str) -> Result<ManagerContext> {
-        self.resolve_manager_inner(project, platform, true).await
+        self.resolve_manager_inner(project, platform, true, MANAGER_READY_WAIT)
+            .await
     }
 
+    /// `manager_wait` bounds how long a manager that answers 503 is waited for.
     async fn resolve_manager_inner(
         &self,
         project: &str,
         platform: &str,
         with_artifact_repo: bool,
+        manager_wait: Duration,
     ) -> Result<ManagerContext> {
         match self {
             Self::Standalone {
@@ -614,7 +618,6 @@ impl ExecutionMode {
                 let resolve_url = format!("{}/v1/resolve?{}", http.base_url, query.join("&"));
 
                 // Retry logic: manager might be starting up (503)
-                let max_duration = std::time::Duration::from_secs(60);
                 let start_time = std::time::Instant::now();
                 let mut attempt: u32 = 0;
 
@@ -647,10 +650,15 @@ impl ExecutionMode {
 
                     let is_retryable = status.as_u16() == 503;
 
-                    if is_retryable && start_time.elapsed() < max_duration {
+                    if is_retryable && start_time.elapsed() < manager_wait {
                         let backoff_secs = std::cmp::min(2u64.pow(attempt.saturating_sub(1)), 15);
                         if attempt == 1 {
                             info!("Manager not ready yet, waiting for startup...");
+                            // stderr, so a `--json` command's stdout stays one JSON document.
+                            eprintln!(
+                                "Waiting up to {} seconds for the {platform} manager to become ready...",
+                                manager_wait.as_secs()
+                            );
                         } else {
                             info!("Still waiting for manager (attempt {})...", attempt);
                         }
@@ -660,15 +668,25 @@ impl ExecutionMode {
 
                     let body = resp.text().await.unwrap_or_default();
 
-                    if is_retryable {
-                        return Err(AlienError::new(ErrorData::ApiRequestFailed {
-                            message: format!(
-                                "Manager for {} platform did not become ready within {} seconds",
-                                platform,
-                                max_duration.as_secs()
-                            ),
-                            url: Some(resolve_url),
+                    if let Some(error) = serde_json::from_str::<ResolveErrorBody>(&body)
+                        .ok()
+                        // Only a cloud platform can get a manager of its own, which the hint
+                        // tells the user to create.
+                        .filter(|error| {
+                            status.as_u16() == 404
+                                && error.code == "NO_SYSTEM_MANAGER"
+                                && matches!(platform, "aws" | "gcp" | "azure")
+                        })
+                    {
+                        return Err(AlienError::new(ErrorData::NoManagerForPlatform {
+                            platform: platform.to_string(),
+                            message: error.message,
+                            request_id: error.request_id,
                         }));
+                    }
+
+                    if is_retryable {
+                        return Err(manager_not_ready(platform, start_time.elapsed(), &body));
                     } else {
                         return Err(AlienError::new(ErrorData::ApiRequestFailed {
                             message: format!(
@@ -884,6 +902,49 @@ struct ResolveResponse {
     project_id: String,
 }
 
+/// How long a manager that answers 503 is waited for before the command fails.
+const MANAGER_READY_WAIT: Duration = Duration::from_secs(60);
+
+/// How much of a 503 body that is not the API's JSON error reaches the message. A proxy in front
+/// of the API can answer with a whole HTML page.
+#[cfg(feature = "platform")]
+const UNREADY_BODY_MAX_CHARS: usize = 200;
+
+/// The last 503 `/v1/resolve` answered once the CLI stops waiting. The API's message names the
+/// manager that is not ready, which the user needs to act on.
+#[cfg(feature = "platform")]
+fn manager_not_ready(
+    platform: &str,
+    waited: Duration,
+    body: &str,
+) -> alien_error::AlienError<ErrorData> {
+    let answer = serde_json::from_str::<ResolveErrorBody>(body).ok();
+    let message = match &answer {
+        Some(answer) => answer.message.clone(),
+        None if body.chars().count() > UNREADY_BODY_MAX_CHARS => {
+            let shown: String = body.chars().take(UNREADY_BODY_MAX_CHARS).collect();
+            format!("{shown}...")
+        }
+        None => body.to_string(),
+    };
+    AlienError::new(ErrorData::ManagerNotReady {
+        platform: platform.to_string(),
+        seconds: waited.as_secs(),
+        message,
+        request_id: answer.and_then(|answer| answer.request_id),
+    })
+}
+
+/// The API's JSON error body, as `/v1/resolve` sends it on failure.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ResolveErrorBody {
+    code: String,
+    message: String,
+    #[serde(default)]
+    request_id: Option<String>,
+}
+
 fn normalize_base_url(url: &str) -> String {
     let trimmed = url.trim_end_matches('/');
     if trimmed.is_empty() {
@@ -1063,6 +1124,7 @@ mod tests {
     #[cfg(feature = "platform")]
     use super::is_retryable_artifact_registry_error;
     use super::{normalize_base_url, ExecutionMode};
+    use crate::error::ErrorData;
     #[cfg(feature = "platform")]
     use tokio::io::AsyncWriteExt;
     #[cfg(feature = "platform")]
@@ -1207,5 +1269,159 @@ mod tests {
             .unwrap();
         assert_eq!(ctx.name, "demo");
         assert_eq!(ctx.query, Some("demo".to_string()));
+    }
+
+    /// The user acts on the manager the API names, so its last 503 reaches the final error.
+    #[cfg(feature = "platform")]
+    #[test]
+    fn a_manager_that_stays_unready_names_itself_in_the_error() {
+        let error = super::manager_not_ready(
+            "gcp",
+            std::time::Duration::from_secs(60),
+            r#"{"code":"MANAGER_NOT_READY","message":"Manager for platform 'gcp' is not ready yet: the project's manager 'acme-gcp' has not sent a recent heartbeat","requestId":"req_503"}"#,
+        );
+        assert_eq!(error.code, "MANAGER_NOT_READY");
+        assert!(error.retryable);
+        assert_eq!(
+            error.message,
+            "The gcp manager did not become ready within 60 seconds: Manager for platform 'gcp' \
+             is not ready yet: the project's manager 'acme-gcp' has not sent a recent heartbeat"
+        );
+        assert_eq!(
+            crate::output::json_error_request_id(&error).as_deref(),
+            Some("req_503")
+        );
+
+        // A body that is not the API's JSON error still reaches the user as sent.
+        let plain = super::manager_not_ready(
+            "gcp",
+            std::time::Duration::from_secs(60),
+            "upstream unavailable",
+        );
+        assert!(
+            plain.message.ends_with(": upstream unavailable"),
+            "{}",
+            plain.message
+        );
+    }
+
+    /// The error says how long the CLI actually waited, which the backoff can carry past the
+    /// wait it set out with, and a proxy's HTML page does not fill the message.
+    #[cfg(feature = "platform")]
+    #[tokio::test]
+    async fn a_manager_still_unready_when_the_wait_ends_reports_the_time_waited() {
+        use axum::{http::StatusCode, routing::get, Router};
+
+        let page = format!(
+            "<html><body>{}</body></html>",
+            "503 Service Unavailable ".repeat(40)
+        );
+        let body = page.clone();
+        let app = Router::new().route(
+            "/v1/resolve",
+            get(move || {
+                let body = body.clone();
+                async move { (StatusCode::SERVICE_UNAVAILABLE, body) }
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await });
+        let mode = ExecutionMode::Platform {
+            base_url,
+            api_key: Some("ax_test".to_string()),
+            no_browser: true,
+            workspace: None,
+            project: None,
+        };
+
+        let error = mode
+            .resolve_manager_inner("prj_test", "gcp", true, std::time::Duration::from_secs(2))
+            .await
+            .err()
+            .expect("a manager that never becomes ready fails the resolve");
+        server.abort();
+
+        assert_eq!(error.code, "MANAGER_NOT_READY");
+        // Retries at 0s and 1s fall inside the wait; the one after the 2s backoff lands at 3s.
+        let seconds = error
+            .context
+            .as_ref()
+            .and_then(|context| context["seconds"].as_u64())
+            .expect("the error carries the seconds waited");
+        assert!(seconds > 2, "waited {seconds}s");
+        assert_eq!(
+            error.message,
+            format!(
+                "The gcp manager did not become ready within {seconds} seconds: {}...",
+                page.chars().take(200).collect::<String>()
+            )
+        );
+    }
+
+    /// Only the API's "no manager for this platform" answer becomes `NoManagerForPlatform`, which a
+    /// caller may treat as "the project is not on this cloud". Any other 404 stays a failure.
+    #[cfg(feature = "platform")]
+    #[tokio::test]
+    async fn only_the_apis_no_manager_answer_is_a_missing_manager() {
+        use axum::{http::StatusCode, routing::get, Router};
+
+        async fn resolve(
+            platform: &str,
+            status: StatusCode,
+            body: &'static str,
+        ) -> alien_error::AlienError<ErrorData> {
+            let app =
+                Router::new().route("/v1/resolve", get(move || async move { (status, body) }));
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let base_url = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move { axum::serve(listener, app).await });
+            let mode = ExecutionMode::Platform {
+                base_url,
+                api_key: Some("ax_test".to_string()),
+                no_browser: true,
+                workspace: None,
+                project: None,
+            };
+            let error = mode
+                .resolve_manager("prj_test", platform)
+                .await
+                .err()
+                .expect("a failed resolve returns no manager");
+            server.abort();
+            error
+        }
+        const NO_MANAGER: &str = r#"{"code":"NO_SYSTEM_MANAGER","message":"No system manager found for platform 'azure'.","requestId":"req_123"}"#;
+
+        let missing = resolve("azure", StatusCode::NOT_FOUND, NO_MANAGER).await;
+        assert_eq!(missing.code, "NO_MANAGER_FOR_PLATFORM");
+        assert_eq!(missing.http_status_code, Some(404));
+        assert_eq!(missing.message, "The project has no azure manager");
+        assert_eq!(
+            crate::output::json_error_request_id(&missing).as_deref(),
+            Some("req_123")
+        );
+        assert!(missing
+            .hint
+            .as_deref()
+            .is_some_and(|hint| hint.contains("alien managers create --cloud azure")));
+
+        // `alien managers create` takes only a cloud, so another platform keeps the API's error.
+        for (platform, status, body) in [
+            (
+                "azure",
+                StatusCode::NOT_FOUND,
+                r#"{"code":"PROJECT_NOT_FOUND","message":"no"}"#,
+            ),
+            ("azure", StatusCode::NOT_FOUND, "not found"),
+            ("azure", StatusCode::INTERNAL_SERVER_ERROR, NO_MANAGER),
+            ("local", StatusCode::NOT_FOUND, NO_MANAGER),
+        ] {
+            let other = resolve(platform, status, body).await;
+            assert_eq!(
+                other.code, "API_REQUEST_FAILED",
+                "{platform} {status} {body}"
+            );
+        }
     }
 }

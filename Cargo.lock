@@ -427,6 +427,7 @@ dependencies = [
  "which 6.0.3",
  "workspace_root",
  "zip 2.4.2",
+ "zstd",
 ]
 
 [[package]]
