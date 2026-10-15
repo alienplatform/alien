@@ -1,6 +1,6 @@
 use alien_core::Platform;
 use alien_error::AlienErrorData;
-use alien_error::{Context, IntoAlienError};
+use alien_error::{AlienError, Context, IntoAlienError};
 use serde::{Deserialize, Serialize};
 
 /// Represents application-specific errors for alien-build.
@@ -105,6 +105,20 @@ pub enum ErrorData {
         reason: String,
         /// Full build output (stdout and stderr combined)
         build_output: Option<String>,
+    },
+
+    /// A base image the Dockerfile builds from publishes no variant for the target platform.
+    #[error(
+        code = "BASE_IMAGE_PLATFORM_MISSING",
+        message = "Base image '{image}' has no {platform} variant",
+        retryable = "false",
+        internal = "false"
+    )]
+    BaseImagePlatformMissing {
+        /// Base image reference as the build resolved it
+        image: String,
+        /// Platform the build targeted, such as linux/amd64
+        platform: String,
     },
 
     /// Container image push operation failed.
@@ -321,3 +335,18 @@ impl<T> DockdashResultExt<T> for std::result::Result<T, dockdash::Error> {
 }
 
 pub type Result<T> = alien_error::Result<T, ErrorData>;
+
+/// The base image a build failed on because it has no variant for the target platform: the error,
+/// or an error it wraps, is [`ErrorData::BaseImagePlatformMissing`].
+pub fn base_image_missing_platform<T>(error: &AlienError<T>) -> Option<&str>
+where
+    T: AlienErrorData + Clone + std::fmt::Debug + Serialize,
+{
+    let contexts = std::iter::once((error.code.as_str(), error.context.as_ref())).chain(
+        std::iter::successors(error.source.as_deref(), |source| source.source.as_deref())
+            .map(|source| (source.code.as_str(), source.context.as_ref())),
+    );
+    contexts
+        .filter(|(code, _)| *code == "BASE_IMAGE_PLATFORM_MISSING")
+        .find_map(|(_, context)| context?.get("image")?.as_str())
+}

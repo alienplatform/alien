@@ -484,7 +484,7 @@ async fn capabilities_task(
                                 json,
                             )
                             .await?;
-                            let azure_image = azure_image_unless_no_manager(
+                            let azure_image = match azure_leg(
                                 build_and_push_sandbox_base_image(
                                     ctx,
                                     http,
@@ -495,13 +495,15 @@ async fn capabilities_task(
                                     json,
                                 )
                                 .await,
-                            )?;
-                            if azure_image.is_none() && !json {
-                                println!(
-                                    "{} azure: the project has no Azure manager",
-                                    dim_label("Skipped")
-                                );
-                            }
+                            )? {
+                                AzureLeg::Published(image) => Some(image),
+                                AzureLeg::Skipped(reason) => {
+                                    if !json {
+                                        println!("{} azure: {reason}", dim_label("Skipped"));
+                                    }
+                                    None
+                                }
+                            };
                             (Some(aws_image), azure_image)
                         }
                         None => (None, None),
@@ -703,13 +705,30 @@ fn remote_sandbox_request(
     })
 }
 
-/// The Azure image a `--src` run configures, or `None` when the project has no Azure manager,
-/// which resolving it answers with a 404.
-fn azure_image_unless_no_manager(published: Result<String>) -> Result<Option<String>> {
+/// The Azure leg of a `--src` run, which configures no Azure image when that leg cannot exist.
+#[derive(Debug, PartialEq)]
+enum AzureLeg {
+    Published(String),
+    /// Why there is no Azure image, as the command prints it.
+    Skipped(String),
+}
+
+/// Skips the Azure image when the project has no Azure manager, which resolving it answers with
+/// a 404, or when the Dockerfile's base has no linux/amd64 variant, such as an arm64-only base
+/// meant for AWS. Any other failure fails the command.
+fn azure_leg(published: Result<String>) -> Result<AzureLeg> {
     match published {
-        Ok(image) => Ok(Some(image)),
-        Err(error) if error.http_status_code == Some(404) => Ok(None),
-        Err(error) => Err(error),
+        Ok(image) => Ok(AzureLeg::Published(image)),
+        Err(error) if error.http_status_code == Some(404) => Ok(AzureLeg::Skipped(
+            "the project has no Azure manager".to_string(),
+        )),
+        Err(error) => match alien_build::error::base_image_missing_platform(&error) {
+            Some(base) => Ok(AzureLeg::Skipped(format!(
+                "{base} has no linux/amd64; the sandbox is not offered on Azure. Existing Azure \
+                 installs keep their current image."
+            ))),
+            None => Err(error),
+        },
     }
 }
 
@@ -1257,6 +1276,7 @@ async fn list_projects_task(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_error::ContextError;
     use axum::{extract::Query, http::StatusCode, routing::delete, Json, Router};
     use std::collections::HashMap;
 
@@ -1889,7 +1909,7 @@ mod tests {
     }
 
     #[test]
-    fn only_a_missing_azure_manager_skips_the_azure_image() {
+    fn only_a_missing_azure_manager_or_amd64_base_skips_the_azure_image() {
         let refused = |status: u16| {
             let mut error = AlienError::new(ErrorData::ApiRequestFailed {
                 message: "Failed to resolve manager for azure platform".to_string(),
@@ -1898,19 +1918,43 @@ mod tests {
             error.http_status_code = Some(status);
             Err(error)
         };
+        let build_failed = |cause: alien_build::error::ErrorData| {
+            Err(AlienError::new(cause).context(ErrorData::BuildFailed))
+        };
         assert_eq!(
-            azure_image_unless_no_manager(Ok("manager.example/prj_x@sha256:aaa".to_string()))
+            azure_leg(Ok("manager.example/prj_x@sha256:aaa".to_string()))
                 .expect("a published image is configured"),
-            Some("manager.example/prj_x@sha256:aaa".to_string())
+            AzureLeg::Published("manager.example/prj_x@sha256:aaa".to_string())
         );
         assert_eq!(
-            azure_image_unless_no_manager(refused(404)).expect("no Azure manager is a skip"),
-            None
+            azure_leg(refused(404)).expect("no Azure manager is a skip"),
+            AzureLeg::Skipped("the project has no Azure manager".to_string())
+        );
+        assert_eq!(
+            azure_leg(build_failed(
+                alien_build::error::ErrorData::BaseImagePlatformMissing {
+                    image: "public.ecr.aws/lambda/microvms:al2023-minimal".to_string(),
+                    platform: "linux/amd64".to_string(),
+                }
+            ))
+            .expect("an arm64-only base is a skip"),
+            AzureLeg::Skipped(
+                "public.ecr.aws/lambda/microvms:al2023-minimal has no linux/amd64; the sandbox is not \
+                 offered on Azure. Existing Azure installs keep their current image."
+                    .to_string()
+            )
         );
         for status in [401, 403, 500] {
-            azure_image_unless_no_manager(refused(status))
-                .expect_err("any other refusal fails the command");
+            azure_leg(refused(status)).expect_err("any other refusal fails the command");
         }
+        azure_leg(build_failed(
+            alien_build::error::ErrorData::ImageBuildFailed {
+                resource_name: "docker-build".to_string(),
+                reason: "docker buildx build failed".to_string(),
+                build_output: None,
+            },
+        ))
+        .expect_err("any other build failure fails the command");
     }
 
     #[test]
