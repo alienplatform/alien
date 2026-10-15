@@ -408,6 +408,9 @@ struct AlienRuntimeSecretsConfig {
     otlp_metrics_auth_header: Option<String>,
     /// Hash of runtime secret values.
     hash: String,
+    /// References owned by other runtime features must survive monitoring updates.
+    #[serde(flatten)]
+    other: BTreeMap<String, serde_json::Value>,
 }
 
 /// Whether containers and daemons get OTLP env vars on this platform.
@@ -545,14 +548,25 @@ pub fn inject_monitoring_environment_variables(
                 );
             }
             if is_worker {
-                let runtime_secrets = AlienRuntimeSecretsConfig {
+                let mut runtime_secrets = AlienRuntimeSecretsConfig {
                     otlp_logs_auth_header: Some(RUNTIME_OTLP_LOGS_AUTH_HEADER_SECRET.to_string()),
                     otlp_metrics_auth_header: monitoring
                         .metrics_endpoint
                         .as_ref()
                         .map(|_| RUNTIME_OTLP_METRICS_AUTH_HEADER_SECRET.to_string()),
                     hash: runtime_monitoring_secrets_hash(monitoring),
+                    other: BTreeMap::new(),
                 };
+                if let Some(existing) = env.get(ENV_ALIEN_RUNTIME_SECRETS) {
+                    let existing: AlienRuntimeSecretsConfig = serde_json::from_str(existing)
+                        .into_alien_error()
+                        .context(ErrorData::InternalError {
+                            message: format!(
+                                "Invalid ALIEN_RUNTIME_SECRETS config for resource '{resource_name}'"
+                            ),
+                        })?;
+                    runtime_secrets.other = existing.other;
+                }
                 let runtime_secrets_json = serde_json::to_string(&runtime_secrets)
                     .into_alien_error()
                     .context(ErrorData::InternalError {
@@ -2803,6 +2817,78 @@ mod tests {
             &daemon.environment
         } else {
             panic!("resource '{id}' is not a compute resource");
+        }
+    }
+
+    #[test]
+    fn monitoring_updates_preserve_other_runtime_secret_references() {
+        let mut stack = make_compute_stack();
+        let worker = stack
+            .resources
+            .get_mut("worker")
+            .unwrap()
+            .config
+            .downcast_mut::<Worker>()
+            .unwrap();
+        worker.environment.insert(
+            ENV_ALIEN_RUNTIME_SECRETS.into(),
+            serde_json::json!({
+                "gatewayCredential": "worker-generation-2",
+                "previousGatewayCredential": "worker-generation-1",
+                "hash": "old-monitoring-hash"
+            })
+            .to_string(),
+        );
+        let mut monitoring = make_monitoring_with_metrics();
+        inject_monitoring_environment_variables(&mut stack, &monitoring, Platform::Azure).unwrap();
+        let first = resource_env(&stack, "worker")[ENV_ALIEN_RUNTIME_SECRETS].clone();
+        inject_monitoring_environment_variables(&mut stack, &monitoring, Platform::Azure).unwrap();
+        assert_eq!(
+            resource_env(&stack, "worker")[ENV_ALIEN_RUNTIME_SECRETS],
+            first
+        );
+
+        monitoring.metrics_endpoint = None;
+        inject_monitoring_environment_variables(&mut stack, &monitoring, Platform::Azure).unwrap();
+        let current: serde_json::Value =
+            serde_json::from_str(&resource_env(&stack, "worker")[ENV_ALIEN_RUNTIME_SECRETS])
+                .unwrap();
+        assert_eq!(current["gatewayCredential"], "worker-generation-2");
+        assert_eq!(current["previousGatewayCredential"], "worker-generation-1");
+        assert_eq!(
+            current["otlpLogsAuthHeader"],
+            RUNTIME_OTLP_LOGS_AUTH_HEADER_SECRET
+        );
+        assert!(current["otlpMetricsAuthHeader"].is_null());
+        assert_eq!(
+            current["hash"],
+            runtime_monitoring_secrets_hash(&monitoring)
+        );
+    }
+
+    #[test]
+    fn monitoring_rejects_malformed_existing_runtime_secrets() {
+        for invalid in ["not-json", "[]", "null", "{\"hash\":42}"] {
+            let mut stack = make_compute_stack();
+            stack
+                .resources
+                .get_mut("worker")
+                .unwrap()
+                .config
+                .downcast_mut::<Worker>()
+                .unwrap()
+                .environment
+                .insert(ENV_ALIEN_RUNTIME_SECRETS.into(), invalid.into());
+            assert!(inject_monitoring_environment_variables(
+                &mut stack,
+                &make_monitoring_with_metrics(),
+                Platform::Azure
+            )
+            .is_err());
+            assert_eq!(
+                resource_env(&stack, "worker")[ENV_ALIEN_RUNTIME_SECRETS],
+                invalid
+            );
         }
     }
 
