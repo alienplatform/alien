@@ -122,10 +122,12 @@ pub enum CapabilityCommand {
         /// Permit registry pushes in addition to pulls.
         #[arg(long)]
         push: bool,
-        /// Prebuilt public container image the sandbox starts from, used as is. It needs a
-        /// linux/arm64 variant, which runs on AWS; a linux/amd64 variant also runs it on Azure,
-        /// and on GCP once the platform has built it. For a private image, use --src. Omit to
-        /// keep the saved image, or to use the platform's default images when none is saved.
+        /// Prebuilt public container image the sandbox starts from. It needs a linux/arm64
+        /// variant, which runs on AWS; a linux/amd64 variant also runs it on Azure, and on GCP
+        /// once Alien has added the sandbox agent to it. GCP gets no copy on a self-hosted GCP
+        /// manager, or for a variant over 512 MiB compressed. For a private image, use --src.
+        /// Omit to keep the saved image, or to use the platform's default images when none is
+        /// saved.
         #[arg(long = "image", alias = "base-image", conflicts_with = "src")]
         image: Option<String>,
         /// Directory with a Dockerfile, built locally with Docker and pushed to the project's
