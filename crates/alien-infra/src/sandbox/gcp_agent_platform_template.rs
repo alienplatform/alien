@@ -116,6 +116,8 @@ fn per_project_image_project_id(path: &str) -> Option<&str> {
     let (_, repository_path) = name.split_once('/')?;
     let (repository, rest) = repository_path.split_once('/')?;
     let project_id = rest.split('/').next()?;
+    // The deployment does not carry the registry's repository prefix, so it is read back from the
+    // name; `project_id_for_path` then applies the naming rule's character and length checks.
     let suffix = match project_id {
         "default" => "-default".to_string(),
         id => format!("-prj-{}", id.strip_prefix("prj_")?),

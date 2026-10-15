@@ -1349,7 +1349,8 @@ impl ResourcePermissionsHelper {
 
         // Process each permission profile in the stack
         for (profile_name, profile) in &ctx.desired_stack.permissions.profiles {
-            // Policies written before this check stay on the role; they are only redundant.
+            // This decides only what is written. A copy of a left-out set already on the role
+            // repeats the stack-level grant, so it is harmless and left in place.
             let combined_refs = without_refs_the_stack_policy_grants(
                 ctx.desired_stack,
                 profile_name,
