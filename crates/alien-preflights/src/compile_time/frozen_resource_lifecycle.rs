@@ -91,7 +91,8 @@ impl CompileTimeCheck for FrozenResourceLifecycleCheck {
                     // private by the time anything reads it, and by then setup has already tried
                     // to pull. Azure pulls it through the registry proxy with the deployment's
                     // own credentials. On GCP only the Agent Platform template names the image,
-                    // and its controller creates it after setup applies, so setup pulls nothing.
+                    // and its controller creates it after the deployment registers, when the
+                    // manager opens the repository to Agent Platform.
                     if matches!(&sandbox.code, SandboxCode::Source { .. })
                         && platform == Platform::Aws
                     {
