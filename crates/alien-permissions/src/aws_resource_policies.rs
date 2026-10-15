@@ -83,7 +83,8 @@ impl AwsResourcePolicyContext<'_> {
         let stack_set = reference
             .resolve(|name| crate::get_permission_set(name).cloned())
             .and_then(|resolved| self.stack_sets.iter().find(|set| **set == resolved));
-        // A set with no AWS entry renders no policy to compare; callers skip it themselves.
+        // A set with no AWS entry has no policy to compare, so it is kept: the Terraform emitter
+        // skips it, and the runtime and CloudFormation writers refuse it as unsupported on AWS.
         let Some(set) = stack_set.filter(|set| set.platforms.aws.is_some()) else {
             return Ok(false);
         };
@@ -406,10 +407,10 @@ mod tests {
         assert!(!error.retryable);
     }
 
-    /// A multi-cloud profile can grant an Azure-only set under `"*"`; on AWS it is kept for the
-    /// emitter's own skip, not compared.
+    /// A multi-cloud profile can grant an Azure-only set under `"*"`; on AWS it is kept rather
+    /// than compared, and the AWS policy writer decides what to do with it.
     #[test]
-    fn a_set_without_an_aws_entry_is_kept_without_comparing() {
+    fn a_stack_wide_set_without_an_aws_entry_is_kept() {
         let profile = PermissionProfile::new().global(["sandbox/images"]);
         let stack = Stack::new("q5-azure-only".to_string())
             .add(

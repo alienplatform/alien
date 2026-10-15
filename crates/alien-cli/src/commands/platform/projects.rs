@@ -124,10 +124,10 @@ pub enum CapabilityCommand {
         push: bool,
         /// Prebuilt public container image the sandbox starts from. It needs a linux/arm64
         /// variant, which runs on AWS; a linux/amd64 variant also runs it on Azure, and on GCP
-        /// once Alien has added the sandbox agent to it. GCP gets no copy on a self-hosted GCP
-        /// manager, or for a variant over 512 MiB compressed. For a private image, use --src.
-        /// Omit to keep the saved image, or to use the platform's default images when none is
-        /// saved.
+        /// once Alien has added the sandbox agent to it. GCP gets no copy when the project's
+        /// default GCP manager is a private manager, or when the variant's layers total more than
+        /// 512 MiB compressed or leave their sizes out. For a private image, use --src. Omit to
+        /// keep the saved image, or to use the platform's default images when none is saved.
         #[arg(long = "image", alias = "base-image", conflicts_with = "src")]
         image: Option<String>,
         /// Directory with a Dockerfile, built locally with Docker and pushed to the project's
