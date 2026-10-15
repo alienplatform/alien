@@ -473,44 +473,86 @@ fn create_topology(ctx: &EmitContext<'_>, label: &str, cidr: Option<String>) -> 
         ],
     ));
 
+    let mut workload_nsg = vec![
+        attr(
+            "name",
+            expr::template(format!("${{local.resource_prefix}}-{label}-workload")),
+        ),
+        attr(
+            "resource_group_name",
+            expr::raw("var.azure_resource_group_name"),
+        ),
+        attr("location", expr::raw("var.azure_location")),
+        nested(crate::block::block(
+            "security_rule",
+            [
+                attr("name", Expression::String("AllowVnetInbound".to_string())),
+                attr("priority", Expression::Number(hcl::Number::from(100i64))),
+                attr("direction", Expression::String("Inbound".to_string())),
+                attr("access", Expression::String("Allow".to_string())),
+                attr("protocol", Expression::String("*".to_string())),
+                attr("source_port_range", Expression::String("*".to_string())),
+                attr(
+                    "destination_port_range",
+                    Expression::String("*".to_string()),
+                ),
+                attr(
+                    "source_address_prefix",
+                    Expression::String("VirtualNetwork".to_string()),
+                ),
+                attr(
+                    "destination_address_prefix",
+                    Expression::String("VirtualNetwork".to_string()),
+                ),
+            ],
+        )),
+        attr("tags", tags(ctx, "network")),
+    ];
+    // Public load balancers retain the client's source IP. The default
+    // AzureLoadBalancer rule admits probes only, not that application traffic.
+    // Nodes have private addresses; an owned public frontend controls exposure.
+    if !ctx.targets_kubernetes
+        && ctx.resource_id == "default-network"
+        && ctx.stack.resources().any(|(_, entry)| {
+            entry
+                .config
+                .downcast_ref::<alien_core::ComputeCluster>()
+                .is_some()
+        })
+    {
+        workload_nsg.push(nested(crate::block::block(
+            "security_rule",
+            [
+                attr(
+                    "name",
+                    Expression::String("AllowComputeBackendInbound".to_string()),
+                ),
+                attr("priority", Expression::Number(hcl::Number::from(110i64))),
+                attr("direction", Expression::String("Inbound".to_string())),
+                attr("access", Expression::String("Allow".to_string())),
+                attr("protocol", Expression::String("Tcp".to_string())),
+                attr("source_port_range", Expression::String("*".to_string())),
+                attr(
+                    "destination_port_range",
+                    Expression::String("8001-8999".to_string()),
+                ),
+                attr(
+                    "source_address_prefix",
+                    Expression::String("Internet".to_string()),
+                ),
+                attr(
+                    "destination_address_prefix",
+                    expr::raw(format!(
+                        "azurerm_subnet.{private_label}.address_prefixes[0]"
+                    )),
+                ),
+            ],
+        )));
+    }
     fragment.resource_blocks.push(resource_block(
         "azurerm_network_security_group",
         &nsg_label,
-        [
-            attr(
-                "name",
-                expr::template(format!("${{local.resource_prefix}}-{label}-workload")),
-            ),
-            attr(
-                "resource_group_name",
-                expr::raw("var.azure_resource_group_name"),
-            ),
-            attr("location", expr::raw("var.azure_location")),
-            nested(crate::block::block(
-                "security_rule",
-                [
-                    attr("name", Expression::String("AllowVnetInbound".to_string())),
-                    attr("priority", Expression::Number(hcl::Number::from(100i64))),
-                    attr("direction", Expression::String("Inbound".to_string())),
-                    attr("access", Expression::String("Allow".to_string())),
-                    attr("protocol", Expression::String("*".to_string())),
-                    attr("source_port_range", Expression::String("*".to_string())),
-                    attr(
-                        "destination_port_range",
-                        Expression::String("*".to_string()),
-                    ),
-                    attr(
-                        "source_address_prefix",
-                        Expression::String("VirtualNetwork".to_string()),
-                    ),
-                    attr(
-                        "destination_address_prefix",
-                        Expression::String("VirtualNetwork".to_string()),
-                    ),
-                ],
-            )),
-            attr("tags", tags(ctx, "network")),
-        ],
+        workload_nsg,
     ));
 
     fragment.resource_blocks.push(resource_block(
