@@ -433,7 +433,12 @@
             "Microsoft.Authorization/roleAssignments/delete",
             "Microsoft.Network/publicIPAddresses/write",
             "Microsoft.Network/publicIPAddresses/read",
-            "Microsoft.Network/publicIPAddresses/delete"
+            "Microsoft.Network/publicIPAddresses/delete",
+            // Every gateway PUT re-checks join on its App Gateway subnet and frontend public IP.
+            // https://learn.microsoft.com/azure/application-gateway/configuration-infrastructure
+            "Microsoft.Network/publicIPAddresses/join/action",
+            "Microsoft.Network/virtualNetworks/subnets/read",
+            "Microsoft.Network/virtualNetworks/subnets/join/action"
           ],
           "dataActions": [
             "Microsoft.KeyVault/vaults/certificates/import/action",
