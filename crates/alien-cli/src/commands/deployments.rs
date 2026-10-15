@@ -130,6 +130,7 @@ impl DeploymentsArgs {
                 | DeploymentsCmd::Move { json: true, .. }
                 | DeploymentsCmd::Pin { json: true, .. }
                 | DeploymentsCmd::SetChannel { json: true, .. }
+                | DeploymentsCmd::SetEndpointAccess { json: true, .. }
         )
     }
 }
@@ -396,6 +397,17 @@ pub enum DeploymentsCmd {
         /// Channel to follow
         channel: String,
         /// Print the updated deployment as machine-readable JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Request internet, private, or both endpoint paths for a Platform deployment
+    SetEndpointAccess {
+        /// Deployment ID, or <deployment-group-name>/<deployment-name>
+        id: String,
+        /// Endpoint access mode: internet, private, or both
+        #[arg(value_parser = network::parse_endpoint_access)]
+        access: alien_core::EndpointAccess,
+        /// Print the accepted operation or unchanged result as JSON
         #[arg(long)]
         json: bool,
     },
@@ -850,6 +862,51 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
                 println!("Deployment {id} now follows {channel}.");
                 Ok(())
             }
+        }
+        DeploymentsCmd::SetEndpointAccess { id, access, json } => {
+            if !ctx.is_platform() {
+                return Err(AlienError::new(ErrorData::ValidationError {
+                    field: "endpoint-access".to_string(),
+                    message: "Endpoint access updates require Platform mode.".to_string(),
+                }));
+            }
+            let workspace = ctx.resolve_workspace_with_bootstrap(!json).await?;
+            let client = ctx.sdk_client().await?;
+            let deployment = crate::platform_deployment_resolver::resolve(
+                &ctx, &client, &workspace, &id, None, !json,
+            )
+            .await?;
+            let deployment_id = String::from(deployment.id);
+            let body = serde_json::from_value::<
+                alien_platform_api::types::UpdateDeploymentEndpointAccessRequest,
+            >(serde_json::json!({ "endpointAccess": access }))
+            .into_alien_error()
+            .context(ErrorData::ValidationError {
+                field: "endpoint-access".to_string(),
+                message: "Failed to encode endpoint access request".to_string(),
+            })?;
+            let response = client
+                .update_deployment_endpoint_access()
+                .id(deployment_id.as_str())
+                .workspace(workspace.as_str())
+                .body(body)
+                .send()
+                .await
+                .into_sdk_error()
+                .context(ErrorData::ApiRequestFailed {
+                    message: format!("updating endpoint access for deployment '{deployment_id}'"),
+                    url: None,
+                })?
+                .into_inner();
+            if json {
+                print_json(&response)?;
+            } else if let Some(operation) = response.operation.0 {
+                println!("Endpoint access update requested: {}", operation.id);
+                println!("The manager checks setup permissions before applying the update.");
+            } else {
+                println!("Endpoint access is unchanged.");
+            }
+            Ok(())
         }
         DeploymentsCmd::Token { id } => {
             if ctx.is_dev() {

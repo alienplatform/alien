@@ -113,7 +113,8 @@ pub struct NetworkArgs {
     pub private_subnet_name: Option<String>,
 }
 
-fn parse_endpoint_access(value: &str) -> std::result::Result<EndpointAccess, String> {
+/// Parse the endpoint access modes shared by setup and deployment updates.
+pub fn parse_endpoint_access(value: &str) -> std::result::Result<EndpointAccess, String> {
     match value {
         "internet" => Ok(EndpointAccess::Internet),
         "private" => Ok(EndpointAccess::Private),

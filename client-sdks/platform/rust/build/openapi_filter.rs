@@ -102,6 +102,7 @@ pub const REQUIRED_OPERATION_IDS: &[&str] = &[
     "revokeAccessRequest",
     "setDeploymentGroupExternalId",
     "setDeploymentReleaseChannel",
+    "updateDeploymentEndpointAccess",
     "verifyOperationCheck",
     "whoami",
 ];
