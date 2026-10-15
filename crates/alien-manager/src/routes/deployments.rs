@@ -830,10 +830,15 @@ fn deployment_response_for_client(
     {
         return response;
     }
-    if let Some(resources) = response
-        .stack_state
-        .as_mut()
-        .and_then(|stack| stack.get_mut("resources"))
+    if let Some(stack) = response.stack_state.as_mut() {
+        remove_legacy_key_observations(stack);
+    }
+    response
+}
+
+pub(super) fn remove_legacy_key_observations(stack: &mut serde_json::Value) {
+    if let Some(resources) = stack
+        .get_mut("resources")
         .and_then(serde_json::Value::as_object_mut)
     {
         for resource in resources.values_mut() {
@@ -847,7 +852,6 @@ fn deployment_response_for_client(
             }
         }
     }
-    response
 }
 
 #[cfg_attr(feature = "openapi", utoipa::path(
@@ -1343,6 +1347,59 @@ mod tests {
                     Some(&serde_json::Value::Bool(false))
                 }
             );
+            // Resume from exactly the response this client read, then save a failed step.
+            let mut stored = deployment_record();
+            stored.stack_state = Some(stack.clone());
+            let returned = stored.clone();
+            let mut store = MockDeploymentStore::new();
+            store
+                .expect_get_deployment()
+                .times(1)
+                .return_once(move |_, _| Ok(Some(stored)));
+            store
+                .expect_reconcile()
+                .times(1)
+                .withf(|_, data| {
+                    let key = data.state.stack_state.as_ref().unwrap().resources["key"]
+                        .outputs
+                        .as_ref()
+                        .unwrap()
+                        .downcast_ref::<alien_core::resources::KeyOutputs>()
+                        .unwrap();
+                    key.available == Some(false)
+                })
+                .return_once(move |_, _| {
+                    Ok(crate::traits::deployment_store::ReconcileOutcome {
+                        record: returned,
+                        target_operations_bundle_set: None,
+                        target_dynamic_containers: None,
+                    })
+                });
+            let request = Request::builder()
+                .method("POST")
+                .uri("/v1/sync/reconcile")
+                .header(http::header::AUTHORIZATION, "Bearer test-token")
+                .header(http::header::USER_AGENT, user_agent)
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "deploymentId": "deployment-1", "session": "test-session",
+                        "state": { "status": "failed", "platform": "aws", "protocolVersion": 1,
+                            "stackState": body["stackState"] }
+                    })
+                    .to_string(),
+                ))
+                .expect("save request");
+            let (status, saved) = send(store, request).await;
+            assert_eq!(status, StatusCode::OK, "{saved}");
+            assert_eq!(
+                saved["current"]["stackState"]["resources"]["key"]["outputs"].get("available"),
+                if user_agent == "alien-cli" {
+                    None
+                } else {
+                    Some(&serde_json::Value::Bool(false))
+                }
+            );
             assert!(!stack.resources["key"]
                 .outputs
                 .as_ref()
@@ -1463,7 +1520,9 @@ mod tests {
             bundle_sources: None,
             log_buffer: std::sync::Arc::new(crate::dev::LogBuffer::new()),
         };
-        let app = router().with_state(state);
+        let app = router()
+            .merge(super::super::sync::router())
+            .with_state(state);
         if real_http {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
                 .await

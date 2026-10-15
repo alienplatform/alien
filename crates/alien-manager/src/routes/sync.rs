@@ -15,13 +15,14 @@ fn deserialize_bool_or_null<'de, D: Deserializer<'de>>(deserializer: D) -> Resul
 }
 
 use alien_core::{
+    resources::KeyOutputs,
     sync::{
         ObservedApplicationReport, OperationsReport, OperatorCapabilityReport, OperatorImageReport,
         TargetDeployment, TargetOperationsBundleSet,
     },
     DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus, EnvironmentVariable,
     EnvironmentVariablesSnapshot, ObservedInventoryBatch, Platform, ReleaseInfo, ResourceHeartbeat,
-    StackState,
+    ResourceOutputs, StackState,
 };
 use alien_error::{AlienError, Context, GenericError, IntoAlienError};
 
@@ -585,6 +586,13 @@ async fn reconcile(
     //    flag is included in the persisted state (matches ManagerTransport).
     let mut final_state = deployment_state;
     preserve_recorded_gate_answers(&mut final_state, &deployment);
+    let legacy_cli = headers
+        .get("user-agent")
+        .and_then(|value| value.to_str().ok())
+        == Some("alien-cli");
+    if legacy_cli {
+        preserve_legacy_key_observations(&mut final_state, &deployment);
+    }
     crate::registry_access::reconcile_registry_access_with_proxy()
         .bindings_provider(&state.bindings_provider)
         .target_bindings_providers(&state.target_bindings_providers)
@@ -686,7 +694,7 @@ async fn reconcile(
     )
     .await;
 
-    let current = match serde_json::to_value(&final_state) {
+    let mut current = match serde_json::to_value(&final_state) {
         Ok(v) => v,
         Err(e) => {
             tracing::warn!("Failed to serialize reconciled state: {e}");
@@ -694,12 +702,54 @@ async fn reconcile(
         }
     };
 
+    if legacy_cli {
+        if let Some(stack) = current.get_mut("stackState") {
+            super::deployments::remove_legacy_key_observations(stack);
+        }
+    }
+
     Json(ReconcileResponse {
         success: true,
         current,
         native_image_host,
     })
     .into_response()
+}
+
+/// Old clients cannot carry availability observations through a read/save round trip.
+/// Keep the stored observation only for the same provider key and wrapping version;
+/// a removed or replaced key must never inherit another key's observation.
+fn preserve_legacy_key_observations(state: &mut DeploymentState, stored: &DeploymentRecord) {
+    let (Some(incoming), Some(previous)) =
+        (state.stack_state.as_mut(), stored.stack_state.as_ref())
+    else {
+        return;
+    };
+    for (id, resource) in &mut incoming.resources {
+        let Some(key) = resource
+            .outputs
+            .as_ref()
+            .and_then(|outputs| outputs.downcast_ref::<KeyOutputs>())
+        else {
+            continue;
+        };
+        let Some(old_key) = previous
+            .resources
+            .get(id)
+            .and_then(|resource| resource.outputs.as_ref())
+            .and_then(|outputs| outputs.downcast_ref::<KeyOutputs>())
+        else {
+            continue;
+        };
+        if key.available.is_none()
+            && key.fingerprint == old_key.fingerprint
+            && key.wrapping_key_id == old_key.wrapping_key_id
+        {
+            let mut key = key.clone();
+            key.available = old_key.available;
+            resource.outputs = Some(ResourceOutputs::new(key));
+        }
+    }
 }
 
 /// `POST /v1/sync/release` — Inbound: workspace / dg / deployment bearer.
