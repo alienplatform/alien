@@ -2938,6 +2938,72 @@ mod tests {
         assert_eq!(executor.status(), ResourceStatus::Deleted);
     }
 
+    #[tokio::test]
+    async fn projected_sandbox_controller_preserves_exact_deletion_and_lifecycle() {
+        for projected in [false, true] {
+            for lifecycle in [
+                alien_core::ResourceLifecycle::Live,
+                alien_core::ResourceLifecycle::Frozen,
+            ] {
+                for lost_image in [false, true] {
+                    let mut controller = ready_controller();
+                    controller.supervisor_environment = BTreeMap::from([(
+                        "TOKEN".to_string(),
+                        "workload-secret-sentinel".to_string(),
+                    )]);
+                    controller.pending_supervisor_environment = BTreeMap::from([(
+                        "TOKEN".to_string(),
+                        "pending-secret-sentinel".to_string(),
+                    )]);
+                    controller._internal_stay_count = Some(2);
+                    if lost_image {
+                        controller.image_identifier = None;
+                    }
+                    let mut value = crate::serialize_controller(&controller).unwrap();
+                    assert!(value.to_string().contains("secret-sentinel"));
+                    if projected {
+                        value.as_object_mut().unwrap().retain(|key, _| {
+                            matches!(
+                                key.as_str(),
+                                "type"
+                                    | "_controllerStateVersion"
+                                    | "state"
+                                    | "internalStayCount"
+                                    | "imageIdentifier"
+                            )
+                        });
+                        assert!(!value.to_string().contains("sentinel"));
+                        assert_eq!(value["type"], "AwsSandboxController");
+                        assert_eq!(value["_controllerStateVersion"], 1);
+                    }
+                    let restored: AwsSandboxController = serde_json::from_value(value).unwrap();
+                    assert_eq!(restored._internal_stay_count, Some(2));
+                    let mut client = MockLambdaMicrovmsApi::new();
+                    client
+                        .expect_delete_microvm_image()
+                        .withf(|identifier| identifier == IMAGE_ARN)
+                        .times(usize::from(
+                            lifecycle == alien_core::ResourceLifecycle::Live,
+                        ))
+                        .returning(|_| Ok(()));
+                    let mut executor = SingleControllerExecutor::builder()
+                        .resource(sandbox())
+                        .controller(restored)
+                        .platform(Platform::Aws)
+                        .resource_lifecycle(lifecycle)
+                        .service_provider(provider(client))
+                        .build()
+                        .await
+                        .unwrap();
+                    executor.delete().unwrap();
+                    executor.run_until_terminal().await.unwrap();
+                    assert_eq!(executor.status(), ResourceStatus::Deleted);
+                    assert!(executor.outputs().is_none());
+                }
+            }
+        }
+    }
+
     /// The binding promises sessions can start now; it must be withdrawn before the first
     /// delete, not after the last one.
     #[tokio::test]

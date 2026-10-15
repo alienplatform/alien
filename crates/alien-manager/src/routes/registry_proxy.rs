@@ -1358,9 +1358,17 @@ async fn require_push_auth(
     }
 }
 
-/// Credentials that exist to provision or push images pull nothing. They are refused before
-/// charts and the Operator image are routed, which `Authz::can_pull_image` does not see.
+/// Credentials that exist to provision or push images, or only to tear a deployment down, pull
+/// nothing. They are refused before charts and the Operator image are routed, which
+/// `Authz::can_pull_image` does not see.
 fn refuse_capability_pull(subject: &Subject) -> Result<(), RegistryRefusal> {
+    if subject.role == Role::DeploymentTeardown {
+        return Err(RegistryRefusal::new(
+            StatusCode::FORBIDDEN,
+            "DENIED",
+            "Deployment teardown credentials cannot pull images",
+        ));
+    }
     if subject.role == Role::ImageRepositoryProvisioner {
         return Err(RegistryRefusal::new(
             StatusCode::FORBIDDEN,

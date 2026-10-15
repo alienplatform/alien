@@ -335,6 +335,12 @@ pub enum Role {
     ProjectDeveloper,
     ProjectViewer,
     DeploymentManager,
+    /// Exact deployment cleanup credential for an embedder's delete protocol.
+    ///
+    /// Paired with [`Scope::Deployment`]. The default policy grants no access;
+    /// embedders must enforce current cleanup eligibility and delete-only use.
+    /// Never substitute this role for a deployment manager or workload token.
+    DeploymentTeardown,
     DeploymentTelemetryWriter,
     DeploymentViewer,
     DeploymentGroupDeployer,
