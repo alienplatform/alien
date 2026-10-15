@@ -199,11 +199,17 @@ pub async fn handle_provisioning(
         .context(ErrorData::StackExecutionFailed {
             message: "Failed to determine outstanding provisioning deletions".to_string(),
         })?;
+    let pending_recovery_updates = executor
+        .pending_recovery_updates(&step_result.next_state)
+        .context(ErrorData::StackExecutionFailed {
+            message: "Failed to determine outstanding provisioning recovery updates".to_string(),
+        })?;
     let stack_status = crate::updating::compute_update_status(
         &step_result.next_state,
         &target_stack,
         &reconciled_ids,
         &pending_deletions,
+        &pending_recovery_updates,
     )?;
 
     // Check if all live resources are deployed

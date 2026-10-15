@@ -9,6 +9,8 @@ use alien_infra::{
 enum RecoveryTarget {
     NewRelease,
     NewDependency,
+    DependencyDenied,
+    ReplacementDependency,
     LegacyRejection,
     NeverConfirm,
     CurrentWriter,
@@ -26,6 +28,16 @@ async fn retry_new_release_supersedes_legacy_interrupted_update() {
 #[tokio::test]
 async fn retry_new_release_waits_for_dependency_before_starting_replacement_update() {
     exercise_recovery(RecoveryTarget::NewDependency).await;
+}
+
+#[tokio::test]
+async fn deferred_recovery_does_not_hide_a_dependency_handler_failure() {
+    exercise_recovery(RecoveryTarget::DependencyDenied).await;
+}
+
+#[tokio::test]
+async fn retry_does_not_block_replacement_of_a_new_dependency() {
+    exercise_recovery(RecoveryTarget::ReplacementDependency).await;
 }
 
 #[tokio::test]
@@ -68,6 +80,8 @@ async fn exercise_recovery(case: RecoveryTarget) {
     let suffix = match case {
         RecoveryTarget::NewRelease => "new-release",
         RecoveryTarget::NewDependency => "new-dependency",
+        RecoveryTarget::DependencyDenied => "dependency-denied",
+        RecoveryTarget::ReplacementDependency => "replacement-dependency",
         RecoveryTarget::LegacyRejection => "legacy-rejection",
         RecoveryTarget::NeverConfirm => "never-confirm",
         RecoveryTarget::CurrentWriter => "current-writer",
@@ -93,7 +107,10 @@ async fn exercise_recovery(case: RecoveryTarget) {
 
     let mut interrupted = installed;
     add_live_worker(&mut interrupted, image_worker(&api_id, "test:v2", 1024));
-    if matches!(case, RecoveryTarget::NeverConfirm) {
+    if matches!(
+        case,
+        RecoveryTarget::NeverConfirm | RecoveryTarget::ReplacementDependency
+    ) {
         interrupted
             .resources
             .get_mut(&api_id)
@@ -124,13 +141,45 @@ async fn exercise_recovery(case: RecoveryTarget) {
     assert_eq!(api.error.as_ref().unwrap().code, "DEPLOYMENT_INTERRUPTED");
     assert_eq!(
         api.last_failed_state.as_ref().unwrap()["state"],
-        if matches!(case, RecoveryTarget::NeverConfirm) {
+        if matches!(
+            case,
+            RecoveryTarget::NeverConfirm | RecoveryTarget::ReplacementDependency
+        ) {
             "updateCodePolling"
         } else {
             "updateConfigPolling"
         }
     );
     give_test_worker_setup_grant(&dependency_id);
+
+    let replacement_id = format!("replacement-{suffix}");
+    if matches!(case, RecoveryTarget::ReplacementDependency) {
+        // A second real failed release leaves a partially created dependency to replace,
+        // while the interrupted consumer still waits on a rollout that cannot confirm.
+        let mut failing = image_worker(&replacement_id, "test:broken", 1024);
+        failing
+            .environment
+            .insert("SIMULATE_CREATE_WORKER_FAILURE".into(), "true".into());
+        add_live_worker(&mut interrupted, failing);
+        state.target_release = Some(release_of("rel_failed_create", interrupted.clone()));
+        request_retry(&mut state);
+        state = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+            .await
+            .unwrap()
+            .state;
+        state = run_to_completion(state, config.clone()).await;
+        assert_eq!(state.status, DeploymentStatus::UpdateFailed);
+        let resources = &state.stack_state.as_ref().unwrap().resources;
+        assert_eq!(
+            resources[&replacement_id].status,
+            ResourceStatus::ProvisionFailed
+        );
+        assert_eq!(resources[&api_id].status, ResourceStatus::UpdateFailed);
+        assert_eq!(
+            resources[&api_id].error.as_ref().unwrap().code,
+            "DEPLOYMENT_INTERRUPTED"
+        );
+    }
 
     let api = state
         .stack_state
@@ -195,6 +244,8 @@ async fn exercise_recovery(case: RecoveryTarget) {
         case,
         RecoveryTarget::NewRelease
             | RecoveryTarget::NewDependency
+            | RecoveryTarget::DependencyDenied
+            | RecoveryTarget::ReplacementDependency
             | RecoveryTarget::LegacyRejection
             | RecoveryTarget::NeverConfirm
             | RecoveryTarget::CurrentWriter
@@ -203,19 +254,40 @@ async fn exercise_recovery(case: RecoveryTarget) {
     if corrective {
         add_live_worker(&mut target, image_worker(&api_id, "test:v3", 1024));
     }
-    if matches!(case, RecoveryTarget::NewDependency) {
+    if matches!(
+        case,
+        RecoveryTarget::NewDependency
+            | RecoveryTarget::ReplacementDependency
+            | RecoveryTarget::DependencyDenied
+    ) {
         target
             .resources
             .get_mut(&api_id)
             .unwrap()
             .dependencies
-            .push(ResourceRef::new("worker".into(), &dependency_id));
+            .push(ResourceRef::new(
+                "worker".into(),
+                if matches!(case, RecoveryTarget::ReplacementDependency) {
+                    &replacement_id
+                } else {
+                    &dependency_id
+                },
+            ));
+        if matches!(case, RecoveryTarget::ReplacementDependency) {
+            add_live_worker(
+                &mut target,
+                image_worker(&replacement_id, "test:fixed", 1024),
+            );
+        }
     }
     if matches!(case, RecoveryTarget::Removed) {
         target.resources.shift_remove(&api_id);
     }
     if matches!(case, RecoveryTarget::Denied) {
         withhold_test_worker_setup_grant(&api_id, TestSetupGrant::Update);
+    }
+    if matches!(case, RecoveryTarget::DependencyDenied) {
+        withhold_test_worker_setup_grant(&dependency_id, TestSetupGrant::Update);
     }
     state.target_release = Some(release_of("rel_target", target));
     request_retry(&mut state);
@@ -230,7 +302,14 @@ async fn exercise_recovery(case: RecoveryTarget) {
         .expect("corrective release preflights should succeed")
         .state;
     assert_eq!(state.status, DeploymentStatus::Updating);
-    if corrective && !matches!(case, RecoveryTarget::NewDependency) {
+    if corrective
+        && !matches!(
+            case,
+            RecoveryTarget::NewDependency
+                | RecoveryTarget::ReplacementDependency
+                | RecoveryTarget::DependencyDenied
+        )
+    {
         state = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
             .await
             .expect("the corrective update should start")
@@ -246,7 +325,12 @@ async fn exercise_recovery(case: RecoveryTarget) {
             "the newer release must supersede the stale wait on its first update step",
         );
     }
-    let state = if matches!(case, RecoveryTarget::NewDependency) {
+    let state = if matches!(
+        case,
+        RecoveryTarget::NewDependency
+            | RecoveryTarget::ReplacementDependency
+            | RecoveryTarget::DependencyDenied
+    ) {
         for _ in 0..MAX_STEPS {
             if matches!(
                 state.status,
@@ -254,8 +338,12 @@ async fn exercise_recovery(case: RecoveryTarget) {
             ) {
                 break;
             }
-            let dependency_ready = state.stack_state.as_ref().unwrap().resources[&dependency_id]
-                .status
+            let awaited_id = if matches!(case, RecoveryTarget::ReplacementDependency) {
+                &replacement_id
+            } else {
+                &dependency_id
+            };
+            let dependency_ready = state.stack_state.as_ref().unwrap().resources[awaited_id].status
                 == ResourceStatus::Running;
             let writes = test_worker_configs_deployed(&api_identifier).len();
             state = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
@@ -268,12 +356,36 @@ async fn exercise_recovery(case: RecoveryTarget) {
                     "the new update must not run before its dependency is ready"
                 );
             }
+            if test_worker_configs_deployed(&api_identifier).len() == 2 {
+                assert!(
+                    !state.stack_state.as_ref().unwrap().resources[&api_id]
+                        .dependencies
+                        .iter()
+                        .any(|dependency| dependency.id() == awaited_id),
+                    "a deferred update must preserve the dependencies it actually uses"
+                );
+            }
         }
         state
     } else {
         run_to_completion(state, config).await
     };
 
+    if matches!(case, RecoveryTarget::DependencyDenied) {
+        assert_eq!(state.status, DeploymentStatus::UpdateFailed);
+        let resources = &state.stack_state.as_ref().unwrap().resources;
+        assert_eq!(
+            resources[&dependency_id].error.as_ref().unwrap().code,
+            "MANAGEMENT_PERMISSION_MISSING"
+        );
+        assert_eq!(
+            test_worker_configs_deployed(&api_identifier).len(),
+            2,
+            "a deferred consumer must not write while its dependency fails"
+        );
+        give_test_worker_setup_grant(&dependency_id);
+        return;
+    }
     if matches!(case, RecoveryTarget::Denied) {
         assert_eq!(state.status, DeploymentStatus::UpdateFailed);
         let resources = &state.stack_state.as_ref().unwrap().resources;
@@ -308,6 +420,14 @@ async fn exercise_recovery(case: RecoveryTarget) {
         assert_eq!(resources[id].status, ResourceStatus::Running);
         assert!(resources[id].error.is_none());
         assert!(test_worker_deletes_issued(&format!("test:worker:{id}")).is_empty());
+    }
+    if matches!(case, RecoveryTarget::ReplacementDependency) {
+        assert_eq!(resources[&replacement_id].status, ResourceStatus::Running);
+        assert_eq!(
+            test_worker_deletes_issued(&format!("test:worker:{replacement_id}")).len(),
+            1
+        );
+        assert_eq!(deployed_worker_image(&state, &replacement_id), "test:fixed");
     }
     let expected_images = if corrective {
         vec!["test:v1", "test:v2", "test:v3"]

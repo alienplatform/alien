@@ -994,6 +994,31 @@ impl StackExecutor {
         Ok(pending)
     }
 
+    /// Failed updates superseded by the desired configuration but still waiting to start.
+    ///
+    /// These records retain the dependencies their current resources actually use. Treating
+    /// them as fresh failures would interrupt their dependencies' recovery; transitioning
+    /// them early would instead make their new dependency edges block replacement deletes.
+    pub fn pending_recovery_updates<'a>(&self, state: &'a StackState) -> Result<HashSet<&'a str>> {
+        let mut pending = HashSet::new();
+        for (id, current) in &state.resources {
+            let Some(desired) = self.resources.get(id) else {
+                continue;
+            };
+            if current.status == ResourceStatus::UpdateFailed
+                && (desired.resource != current.config
+                    || desired.dependencies != current.dependencies
+                    || self.external_binding_drifted(id, current)?)
+                && current
+                    .get_internal_controller()?
+                    .is_some_and(|mut controller| controller.transition_to_update().is_ok())
+            {
+                pending.insert(id.as_str());
+            }
+        }
+        Ok(pending)
+    }
+
     /// Computes the **diff** between the *desired* stack configuration and the
     /// *current* [`StackState`].
     ///
@@ -1114,18 +1139,7 @@ impl StackExecutor {
                                     .iter()
                                     .all(|dep_ref| self.dependency_settled(dep_ref.id(), state));
 
-                                // A failed update must leave its terminal status before waiting
-                                // for a dependency; otherwise it aborts that dependency's recovery.
-                                // Staging the entry is local. Its handler waits below.
-                                let can_wait_at_entry = !new_dependencies_ready
-                                    && status == ResourceStatus::UpdateFailed
-                                    && current_resource_state
-                                        .get_internal_controller()?
-                                        .is_some_and(|mut controller| {
-                                            controller.transition_to_update().is_ok()
-                                                && controller.is_update_entry()
-                                        });
-                                if new_dependencies_ready || can_wait_at_entry {
+                                if new_dependencies_ready {
                                     debug!("Scheduling UPDATE transition for '{}'", resource_id);
 
                                     // Skipped only for an adopted binding: the rules guard
@@ -2214,14 +2228,7 @@ impl StackExecutor {
                 let replacing = self.resources.contains_key(resource_id);
                 self.deletion_ready(resource_id, &next_state, replacing)
             } else if current_resource_view.status == ResourceStatus::Updating {
-                let at_entry = current_resource_view
-                    .get_internal_controller()?
-                    .is_some_and(|controller| controller.is_update_entry());
-                !at_entry
-                    || current_resource_view
-                        .dependencies
-                        .iter()
-                        .all(|dependency| self.dependency_settled(dependency.id(), &next_state))
+                true
             } else if current_resource_view.status == ResourceStatus::Running {
                 // Running resources should always be stepped to run their Ready handler.
                 // This is important for local platform where ephemeral state (ports, URLs)

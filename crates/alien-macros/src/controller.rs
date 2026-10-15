@@ -498,10 +498,6 @@ fn generate_controller_impl(
         generate_transition_to_teardown(state_enum_name, flow_entries);
     let transition_to_update_body =
         generate_transition_to_update(state_enum_name, handlers, flow_entries);
-    let is_update_entry = match flow_entries.get("Update") {
-        Some((entry, _)) => quote! { matches!(self.state, #state_enum_name::#entry) },
-        None => quote! { false },
-    };
 
     let get_binding_params_impl = if let Some(method) = get_binding_params_method {
         // Include the user's implementation directly in the trait
@@ -603,10 +599,6 @@ fn generate_controller_impl(
             fn transition_to_update(&mut self) -> crate::Result<()> {
                 use #state_enum_name::*;
                 #transition_to_update_body
-            }
-
-            fn is_update_entry(&self) -> bool {
-                #is_update_entry
             }
 
             fn get_status(&self) -> alien_core::ResourceStatus {
