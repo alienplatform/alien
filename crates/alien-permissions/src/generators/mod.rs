@@ -12,9 +12,9 @@ pub use aws_runtime::{
     ensure_unique_statement_sids, AwsIamPolicy, AwsIamStatement, AwsRuntimePermissionsGenerator,
 };
 pub use azure_runtime::{
-    azure_predefined_role_id, dedupe_azure_role_bindings, AzureCustomRole, AzureGrantPlan,
-    AzureRoleBinding, AzureRoleDefinition, AzureRoleDefinitionRef,
-    AzureRuntimePermissionsGenerator,
+    azure_predefined_role_id, custom_roles_by_scope, dedupe_azure_role_bindings, AzureCustomRole,
+    AzureGrantPlan, AzureManagementScopeKind, AzureRoleBinding, AzureRoleDefinition,
+    AzureRoleDefinitionRef, AzureRuntimePermissionsGenerator, AzureScopedCustomRole,
 };
 pub use gcp_runtime::{
     custom_role_description_names_prefix, custom_role_namespace_for_prefix,

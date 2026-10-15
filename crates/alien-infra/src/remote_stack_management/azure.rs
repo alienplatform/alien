@@ -28,13 +28,13 @@ use alien_error::{AlienError, Context, ContextError};
 use alien_macros::controller;
 use alien_permissions::{
     generators::{
-        dedupe_azure_role_bindings, AzureGrantPlan, AzureRoleDefinitionRef,
-        AzureRuntimePermissionsGenerator,
+        custom_roles_by_scope, dedupe_azure_role_bindings, AzureGrantPlan,
+        AzureManagementScopeKind, AzureRoleDefinitionRef, AzureRuntimePermissionsGenerator,
     },
     get_permission_set, BindingTarget, PermissionContext,
 };
 use chrono::Utc;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 #[cfg(not(test))]
 const AZURE_ROLE_ASSIGNMENT_RBAC_WAIT_SECS: u64 = 300;
@@ -169,8 +169,14 @@ pub struct AzureRemoteStackManagementController {
     pub(crate) tenant_id: Option<String>,
     /// The name of the FIC.
     pub(crate) fic_name: Option<String>,
-    /// The full resource ID of the custom role definition
+    /// The single combined custom role that earlier versions created and assigned at every
+    /// binding scope, which gave resource-group actions to the whole subscription. Only read
+    /// so update and delete remove it.
     pub(crate) role_definition_id: Option<String>,
+    /// Full resource IDs of the custom management role definitions, keyed by the one scope each
+    /// is assignable and assigned at.
+    #[serde(default)]
+    pub(crate) scoped_role_definition_ids: BTreeMap<String, String>,
     /// Resource IDs of created role assignments
     pub(crate) role_assignment_ids: Vec<String>,
     /// Deadline for Azure RBAC propagation after management assignments.
@@ -362,7 +368,7 @@ impl AzureRemoteStackManagementController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<RemoteStackManagement>()?;
-        let role_definition_props = self.generate_management_role_definition(ctx)?;
+        let role_definitions = self.generate_management_role_definitions(ctx)?;
 
         let resource_group_name = azure_utils::get_resource_group_name(ctx.state)?;
         let azure_cfg = ctx.get_azure_config()?;
@@ -370,64 +376,46 @@ impl AzureRemoteStackManagementController {
             .service_provider
             .get_azure_authorization_client(azure_cfg)?;
 
-        let role_definition_uuid = Uuid::new_v5(
-            &Uuid::NAMESPACE_OID,
-            format!("deployment:azure:mgmt-role-def:{}", ctx.resource_prefix).as_bytes(),
-        )
-        .to_string();
-
-        let Some(role_definition_props) = role_definition_props else {
+        if role_definitions.is_empty() {
             info!("No residual Azure management custom role required");
-            self.role_definition_id = None;
-            return Ok(HandlerAction::Continue {
-                state: CreatingRoleAssignments,
-                suggested_delay: None,
-            });
-        };
-
-        let role_definition = RoleDefinition {
-            properties: Some(role_definition_props),
-            ..Default::default()
-        };
-        let scope = management_role_definition_scope(
-            role_definition
-                .properties
-                .as_ref()
-                .map(|properties| properties.assignable_scopes.as_slice())
-                .unwrap_or_default(),
-            &azure_cfg.subscription_id,
-            &resource_group_name,
-        );
-
-        let created = client
-            .create_or_update_role_definition(
-                &scope,
-                role_definition_uuid.clone(),
-                &role_definition,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to create management role definition for stack '{}'",
-                    ctx.resource_prefix
-                ),
-                resource_id: Some(config.id.clone()),
+        }
+        self.role_definition_id = None;
+        self.scoped_role_definition_ids.clear();
+        for role in role_definitions {
+            let role_definition = RoleDefinition {
+                properties: Some(role.properties),
+                ..Default::default()
+            };
+            let scope = management_role_definition_scope(
+                std::slice::from_ref(&role.scope),
+                &azure_cfg.subscription_id,
+                &resource_group_name,
+            );
+            let created = client
+                .create_or_update_role_definition(&scope, role.uuid.clone(), &role_definition)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to create {} management role definition for stack '{}'",
+                        role.scope_kind.as_str(),
+                        ctx.resource_prefix
+                    ),
+                    resource_id: Some(config.id.clone()),
+                })?;
+            let role_id = created.id.ok_or_else(|| {
+                AlienError::new(ErrorData::InfrastructureError {
+                    message: "Created role definition missing ID".to_string(),
+                    operation: Some("create_management_role_definition".to_string()),
+                    resource_id: Some(config.id.clone()),
+                })
             })?;
-
-        let role_id = created.id.ok_or_else(|| {
-            AlienError::new(ErrorData::InfrastructureError {
-                message: "Created role definition missing ID".to_string(),
-                operation: Some("create_management_role_definition".to_string()),
-                resource_id: Some(config.id.clone()),
-            })
-        })?;
-
-        info!(
-            role_definition_id = %role_id,
-            "Management role definition created"
-        );
-
-        self.role_definition_id = Some(role_id);
+            info!(
+                role_definition_id = %role_id,
+                scope = %role.scope,
+                "Management role definition created"
+            );
+            self.scoped_role_definition_ids.insert(role.scope, role_id);
+        }
 
         Ok(HandlerAction::Continue {
             state: CreatingRoleAssignments,
@@ -464,13 +452,20 @@ impl AzureRemoteStackManagementController {
                 AzureRoleDefinitionRef::Predefined { role_definition_id } => {
                     role_definition_id.clone()
                 }
-                AzureRoleDefinitionRef::Custom { .. } => self.role_definition_id.clone().ok_or_else(|| {
-                    AlienError::new(ErrorData::InfrastructureError {
-                        message: "Role definition ID not available for custom management role assignment".to_string(),
-                        operation: Some("create_role_assignments".to_string()),
-                        resource_id: Some(config.id.clone()),
-                    })
-                })?,
+                AzureRoleDefinitionRef::Custom { .. } => self
+                    .scoped_role_definition_ids
+                    .get(&binding.scope)
+                    .cloned()
+                    .ok_or_else(|| {
+                        AlienError::new(ErrorData::InfrastructureError {
+                            message: format!(
+                                "No management role definition for custom grants at '{}'",
+                                binding.scope
+                            ),
+                            operation: Some("create_role_assignments".to_string()),
+                            resource_id: Some(config.id.clone()),
+                        })
+                    })?,
             };
             let assignment_id = Uuid::new_v5(
                 &Uuid::NAMESPACE_OID,
@@ -692,36 +687,17 @@ impl AzureRemoteStackManagementController {
         }
         self.role_assignment_ids.clear();
 
-        if let Some(role_def_id) = &self.role_definition_id {
-            let role_def_uuid = role_def_id.split('/').last().unwrap_or(role_def_id);
-            let scope = role_definition_scope_from_id(role_def_id, &resource_group_name);
-
-            match auth_client
-                .delete_role_definition(&scope, role_def_uuid.to_string())
-                .await
-            {
-                Ok(_) => {
-                    info!(role_definition_id = %role_def_id, "Management role definition deleted for update");
-                }
-                Err(e)
-                    if matches!(
-                        &e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
-                    info!(role_definition_id = %role_def_id, "Management role definition already absent for update");
-                }
-                Err(e) => {
-                    return Err(e.context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to delete management role definition '{}' for update",
-                            role_def_id
-                        ),
-                        resource_id: Some(config.id.clone()),
-                    }));
-                }
-            }
+        for role_def_id in self.management_role_definition_ids() {
+            delete_management_role_definition(
+                &auth_client,
+                &role_def_id,
+                &resource_group_name,
+                "for update",
+                &config.id,
+            )
+            .await?;
         }
+        self.scoped_role_definition_ids.clear();
         self.role_definition_id = None;
 
         // Update FIC if OIDC config changed
@@ -836,41 +812,25 @@ impl AzureRemoteStackManagementController {
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<RemoteStackManagement>()?;
 
-        if let Some(role_def_id) = &self.role_definition_id {
+        let role_definition_ids = self.management_role_definition_ids();
+        if !role_definition_ids.is_empty() {
             let resource_group_name = azure_utils::get_resource_group_name(ctx.state)?;
             let azure_cfg = ctx.get_azure_config()?;
             let client = ctx
                 .service_provider
                 .get_azure_authorization_client(azure_cfg)?;
-
-            let scope = role_definition_scope_from_id(role_def_id, &resource_group_name);
-
-            let role_def_uuid = role_def_id.split('/').last().unwrap_or(role_def_id);
-
-            match client
-                .delete_role_definition(&scope, role_def_uuid.to_string())
-                .await
-            {
-                Ok(_) => {
-                    info!(role_definition_id = %role_def_id, "Role definition deleted");
-                }
-                Err(e)
-                    if matches!(
-                        &e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
-                    info!(role_definition_id = %role_def_id, "Role definition already deleted");
-                }
-                Err(e) => {
-                    return Err(e.context(ErrorData::CloudPlatformError {
-                        message: format!("Failed to delete role definition '{}'", role_def_id),
-                        resource_id: Some(config.id.clone()),
-                    }));
-                }
+            for role_def_id in role_definition_ids {
+                delete_management_role_definition(
+                    &client,
+                    &role_def_id,
+                    &resource_group_name,
+                    "",
+                    &config.id,
+                )
+                .await?;
             }
-
             self.role_definition_id = None;
+            self.scoped_role_definition_ids.clear();
         }
 
         Ok(HandlerAction::Continue {
@@ -1096,6 +1056,70 @@ mod tests {
                 "/subscriptions/sub-123",
             ),
             "Azure rejects updating scope on an existing role assignment ID"
+        );
+    }
+
+    /// A custom role grants its actions on everything under the scope it is assigned at, so each
+    /// management role is assignable at one scope and holds only what is bound there. The
+    /// subscription role carries SKU and usage discovery; the scale set and gateway writes stay
+    /// in the resource-group role.
+    #[test]
+    fn management_roles_hold_only_the_grants_bound_at_their_scope() {
+        let profile = PermissionProfile::new().global([
+            PermissionSetReference::from_name("compute-cluster/management"),
+            PermissionSetReference::from_name("container/provision"),
+        ]);
+        let grant_plan = generate_stack_management_grant_plan(
+            &profile,
+            std::iter::empty(),
+            &permission_context(),
+            &Default::default(),
+        )
+        .unwrap();
+        let roles = management_role_definitions(&grant_plan, "test", "Management role.").unwrap();
+
+        let custom_scopes: BTreeSet<&str> = grant_plan
+            .bindings
+            .iter()
+            .filter(|b| matches!(b.role_definition, AzureRoleDefinitionRef::Custom { .. }))
+            .map(|b| b.scope.as_str())
+            .collect();
+        let role_scopes: BTreeSet<&str> = roles.iter().map(|r| r.scope.as_str()).collect();
+        assert_eq!(
+            custom_scopes, role_scopes,
+            "one role per custom binding scope"
+        );
+        for role in &roles {
+            assert_eq!(role.properties.assignable_scopes, vec![role.scope.clone()]);
+        }
+
+        let actions_at = |scope: &str| -> Vec<String> {
+            roles
+                .iter()
+                .find(|r| r.scope == scope)
+                .unwrap_or_else(|| panic!("a role at {scope}"))
+                .properties
+                .permissions[0]
+                .actions
+                .clone()
+        };
+        assert_eq!(
+            actions_at("/subscriptions/sub-123"),
+            [
+                "Microsoft.Compute/locations/usages/read",
+                "Microsoft.Compute/skus/read"
+            ]
+        );
+        let resource_group = actions_at("/subscriptions/sub-123/resourceGroups/rg-123");
+        for action in [
+            "Microsoft.Compute/virtualMachineScaleSets/write",
+            "Microsoft.Network/applicationGateways/write",
+        ] {
+            assert!(resource_group.iter().any(|a| a == action), "{action}");
+        }
+        assert_ne!(
+            roles[0].uuid, roles[1].uuid,
+            "each scope gets its own role definition"
         );
     }
 
@@ -1467,6 +1491,95 @@ where
     })
 }
 
+/// One custom management role, assignable and assigned only at `scope`.
+struct ManagementRoleDefinition {
+    scope: String,
+    scope_kind: AzureManagementScopeKind,
+    uuid: String,
+    properties: RoleDefinitionProperties,
+}
+
+/// Builds one custom role per scope the plan's custom grants bind at. Each role carries only the
+/// actions bound at its scope, so a resource-group grant never reaches the subscription.
+fn management_role_definitions(
+    grant_plan: &AzureGrantPlan,
+    resource_prefix: &str,
+    description: &str,
+) -> Result<Vec<ManagementRoleDefinition>> {
+    let roles = custom_roles_by_scope(grant_plan).context(ErrorData::InfrastructureError {
+        message: "Failed to group Azure management grants by scope".to_string(),
+        operation: Some("generate_management_role_definitions".to_string()),
+        resource_id: Some("management".to_string()),
+    })?;
+    Ok(roles
+        .into_iter()
+        .map(|role| {
+            let kind = role.scope_kind.as_str();
+            ManagementRoleDefinition {
+                uuid: Uuid::new_v5(
+                    &Uuid::NAMESPACE_OID,
+                    format!(
+                        "deployment:azure:mgmt-role-def:{resource_prefix}:{}",
+                        role.scope
+                    )
+                    .as_bytes(),
+                )
+                .to_string(),
+                properties: RoleDefinitionProperties {
+                    role_name: Some(format!("{resource_prefix}-management-{kind}-role")),
+                    description: Some(format!("{description} Scope: {kind}.")),
+                    type_: Some("CustomRole".to_string()),
+                    permissions: vec![Permission {
+                        actions: role.actions,
+                        not_actions: vec![],
+                        data_actions: role.data_actions,
+                        not_data_actions: vec![],
+                    }],
+                    assignable_scopes: vec![role.scope.clone()],
+                    ..Default::default()
+                },
+                scope: role.scope,
+                scope_kind: role.scope_kind,
+            }
+        })
+        .collect())
+}
+
+async fn delete_management_role_definition(
+    client: &std::sync::Arc<dyn alien_azure_clients::authorization::AuthorizationApi>,
+    role_def_id: &str,
+    resource_group_name: &str,
+    purpose: &str,
+    config_id: &str,
+) -> Result<()> {
+    let role_def_uuid = role_def_id.split('/').last().unwrap_or(role_def_id);
+    let scope = role_definition_scope_from_id(role_def_id, resource_group_name);
+    match client
+        .delete_role_definition(&scope, role_def_uuid.to_string())
+        .await
+    {
+        Ok(_) => {
+            info!(role_definition_id = %role_def_id, purpose, "Management role definition deleted");
+            Ok(())
+        }
+        Err(e)
+            if matches!(
+                &e.error,
+                Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+            ) =>
+        {
+            info!(role_definition_id = %role_def_id, purpose, "Management role definition already absent");
+            Ok(())
+        }
+        Err(e) => Err(e.context(ErrorData::CloudPlatformError {
+            message: format!(
+                "Failed to delete management role definition '{role_def_id}' {purpose}"
+            ),
+            resource_id: Some(config_id.to_string()),
+        })),
+    }
+}
+
 fn dedupe_management_role_bindings(
     bindings: Vec<alien_permissions::generators::AzureRoleBinding>,
 ) -> Vec<alien_permissions::generators::AzureRoleBinding> {
@@ -1490,35 +1603,12 @@ fn dedupe_management_role_bindings(
 }
 
 impl AzureRemoteStackManagementController {
-    /// Generate management role definition properties from /provision permission sets
-    fn generate_management_role_definition(
+    /// The custom management roles for this stack, one per scope its grants bind at.
+    fn generate_management_role_definitions(
         &self,
         ctx: &ResourceControllerContext<'_>,
-    ) -> Result<Option<RoleDefinitionProperties>> {
+    ) -> Result<Vec<ManagementRoleDefinition>> {
         let grant_plan = self.generate_management_grant_plan(ctx)?;
-
-        if grant_plan.custom_roles.is_empty() {
-            return Ok(None);
-        }
-
-        let mut combined_actions = Vec::new();
-        let mut combined_data_actions = Vec::new();
-        let mut assignable_scopes = Vec::new();
-
-        for custom_role in grant_plan.custom_roles {
-            combined_actions.extend(custom_role.role_definition.actions);
-            combined_data_actions.extend(custom_role.role_definition.data_actions);
-            assignable_scopes.extend(custom_role.role_definition.assignable_scopes);
-        }
-
-        combined_actions.sort();
-        combined_actions.dedup();
-        combined_data_actions.sort();
-        combined_data_actions.dedup();
-        assignable_scopes.sort();
-        assignable_scopes.dedup();
-
-        let role_name = format!("{}-management-role", ctx.resource_prefix);
         let description = match ctx.deployment_name_for_metadata() {
             Some(deployment_name) => format!(
                 "Management role for {deployment_name}. Resource prefix: {}.",
@@ -1526,20 +1616,17 @@ impl AzureRemoteStackManagementController {
             ),
             None => format!("Management role. Resource prefix: {}.", ctx.resource_prefix),
         };
+        management_role_definitions(&grant_plan, ctx.resource_prefix, &description)
+    }
 
-        Ok(Some(RoleDefinitionProperties {
-            role_name: Some(role_name),
-            description: Some(description),
-            type_: Some("CustomRole".to_string()),
-            permissions: vec![Permission {
-                actions: combined_actions,
-                not_actions: vec![],
-                data_actions: combined_data_actions,
-                not_data_actions: vec![],
-            }],
-            assignable_scopes,
-            ..Default::default()
-        }))
+    /// Every custom management role this controller may own: the per-scope roles and the
+    /// single combined role older controllers created.
+    fn management_role_definition_ids(&self) -> Vec<String> {
+        self.role_definition_id
+            .iter()
+            .chain(self.scoped_role_definition_ids.values())
+            .cloned()
+            .collect()
     }
 
     fn generate_management_grant_plan(
@@ -1727,6 +1814,7 @@ impl AzureRemoteStackManagementController {
                 "/subscriptions/sub-1234/providers/Microsoft.Authorization/roleDefinitions/{}-mgmt-role",
                 prefix
             )),
+            scoped_role_definition_ids: BTreeMap::new(),
             role_assignment_ids: vec![],
             role_assignment_wait_until_epoch_secs: None,
             management_permissions_revision: None,
