@@ -106,6 +106,20 @@ pub enum ErrorData {
         build_output: Option<String>,
     },
 
+    /// A container image cannot be built, for a reason a retry does not change.
+    #[error(
+        code = "IMAGE_BUILD_REJECTED",
+        message = "Cannot build container image for resource '{resource_name}': {reason}",
+        retryable = "false",
+        internal = "false"
+    )]
+    ImageBuildRejected {
+        /// Name of the resource being built
+        resource_name: String,
+        /// Reason the image cannot be built
+        reason: String,
+    },
+
     /// A base image the Dockerfile builds from publishes no variant for the target platform.
     #[error(
         code = "BASE_IMAGE_PLATFORM_MISSING",
@@ -153,7 +167,7 @@ pub enum ErrorData {
     /// a dropped connection, a timeout, throttling or a registry server error.
     #[error(
         code = "IMAGE_PULL_TEMPORARILY_UNAVAILABLE",
-        message = "Container image '{image}' could not be pulled yet: {reason}",
+        message = "Container image '{image}', {reason}, could not be pulled yet",
         retryable = "true",
         internal = "false"
     )]
@@ -166,7 +180,7 @@ pub enum ErrorData {
 
     /// The sandbox agent tagged with this release is not in its registry. Retryable, as a missing
     /// versioned Worker base is (`IMAGE_BUILD_FAILED`): a build can run ahead of the release that
-    /// publishes it. A development build's version is never published; the hint names the version.
+    /// publishes it. A development build's version is never published; the hint names the tag.
     #[error(
         code = "SANDBOX_AGENT_IMAGE_MISSING",
         message = "The sandbox agent image '{image}' is not published",
@@ -177,7 +191,7 @@ pub enum ErrorData {
     SandboxAgentImageMissing {
         /// Agent image reference that was pulled
         image: String,
-        /// Alien version the agent is tagged with
+        /// Tag the agent was pulled at, which names the Alien release that publishes it
         version: String,
     },
 

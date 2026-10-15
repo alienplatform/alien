@@ -17,6 +17,7 @@ use dockdash::{
     RegistryAuth,
 };
 use oci_client::errors::{OciDistributionError, OciErrorCode};
+use oci_client::Reference;
 use std::error::Error as StdError;
 use tokio::time::sleep;
 use tracing::warn;
@@ -40,14 +41,18 @@ pub struct GcpSandboxImage {
 
 /// Layers the agent from `agent_image`, the exec identity and the GCP Agent Platform contract
 /// onto `base_image`, a registry reference pulled with `base_auth`. `base` is a local copy of the
-/// same image, read for its `/etc/passwd` and `/etc/group` and dropped before the agent pull.
+/// same image, read for its `/etc/passwd` and `/etc/group` and dropped before the agent pull. A
+/// pulled `base` owns its archive, which the drop deletes; a `base` opened with
+/// [`Image::from_tarball`] leaves the tarball to its caller, so the drop frees nothing.
 /// `resource_name` is the sandbox the image is for, named in a build failure. `cache` holds the
 /// pulled blobs and the agent layer.
 ///
 /// The agent pull and the assembly, which fetches the base again, are each tried up to
 /// `BASE_IMAGE_BUILD_MAX_ATTEMPTS` times when the registry throttles, answers with a server error
 /// or drops the connection. A missing agent tag is not retried here; it is returned as
-/// [`ErrorData::SandboxAgentImageMissing`].
+/// [`ErrorData::SandboxAgentImageMissing`]. Any other registry refusal is
+/// [`ErrorData::ImageLookupRejected`], and an image that cannot hold the agent is
+/// [`ErrorData::ImageBuildRejected`]; neither is retryable.
 pub async fn build_gcp_sandbox_image(
     resource_name: &str,
     base: Image,
@@ -62,9 +67,13 @@ pub async fn build_gcp_sandbox_image(
         reason,
         build_output: None,
     };
+    let rejected = |reason: String| ErrorData::ImageBuildRejected {
+        resource_name: resource_name.to_string(),
+        reason,
+    };
     let passwd = read_identity_file(&base, "/etc/passwd", resource_name).await?;
     let group = read_identity_file(&base, "/etc/group", resource_name).await?;
-    // A pulled base holds a full archive on disk; only its identity files were needed.
+    // Only the identity files were needed, and a pulled base is a full archive on disk.
     drop(base);
 
     // The agent image is public, so no registry credential is sent to its registry.
@@ -93,7 +102,7 @@ pub async fn build_gcp_sandbox_image(
             "Failed to read {AGENT_PATH} from the agent image {agent_image}"
         )))?
         .ok_or_else(|| {
-            AlienError::new(failed(format!(
+            AlienError::new(rejected(format!(
                 "The agent image {agent_image} has no file at {AGENT_PATH}"
             )))
         })?;
@@ -102,7 +111,7 @@ pub async fn build_gcp_sandbox_image(
 
     let contract = GCP_AGENT_PLATFORM;
     let user = contract.user().ok_or_else(|| {
-        AlienError::new(failed(
+        AlienError::new(rejected(
             "The GCP image contract declares no user".to_string(),
         ))
     })?;
@@ -235,7 +244,12 @@ where
                 } else if pulled == Pulled::Agent && is_missing_manifest(&error) {
                     ErrorData::SandboxAgentImageMissing {
                         image: reference.to_string(),
-                        version: env!("CARGO_PKG_VERSION").to_string(),
+                        version: release_tag(reference),
+                    }
+                } else if let Some(answer) = oci_cause(&error) {
+                    ErrorData::ImageLookupRejected {
+                        image: reference.to_string(),
+                        reason: crate::registry::registry_answer(answer),
                     }
                 } else {
                     ErrorData::ImageBuildFailed {
@@ -256,25 +270,42 @@ where
 /// index is `ImageManifestNotFoundError`, which is not this. Narrower than the manifest lookup in
 /// `registry.rs`: this error comes from a whole pull, where `BLOB_UNKNOWN` can be a missing layer.
 fn is_missing_manifest(error: &dockdash::Error) -> bool {
+    match oci_cause(error) {
+        Some(OciDistributionError::RegistryError { envelope, .. }) => {
+            envelope.errors.iter().any(|entry| {
+                matches!(
+                    entry.code,
+                    OciErrorCode::ManifestUnknown | OciErrorCode::NameUnknown
+                )
+            })
+        }
+        Some(OciDistributionError::ServerError { code, .. }) => *code == 404,
+        _ => false,
+    }
+}
+
+/// The registry's answer `error` carries, or `None` for a failure on this side of the pull.
+fn oci_cause(error: &dockdash::Error) -> Option<&OciDistributionError> {
     let mut cause: Option<&(dyn StdError + 'static)> = Some(error);
     while let Some(current) = cause {
         if let Some(oci_error) = current.downcast_ref::<OciDistributionError>() {
-            return match oci_error {
-                OciDistributionError::RegistryError { envelope, .. } => {
-                    envelope.errors.iter().any(|entry| {
-                        matches!(
-                            entry.code,
-                            OciErrorCode::ManifestUnknown | OciErrorCode::NameUnknown
-                        )
-                    })
-                }
-                OciDistributionError::ServerError { code, .. } => *code == 404,
-                _ => false,
-            };
+            return Some(oci_error);
         }
         cause = current.source();
     }
-    false
+    None
+}
+
+/// The release `reference` is tagged with, as the hint names it: `v1.2.3` reads as `1.2.3`. A
+/// reference with no tag names itself.
+fn release_tag(reference: &str) -> String {
+    Reference::try_from(reference)
+        .ok()
+        .and_then(|parsed| {
+            let tag = parsed.tag()?;
+            Some(tag.strip_prefix('v').unwrap_or(tag).to_string())
+        })
+        .unwrap_or_else(|| reference.to_string())
 }
 
 /// `None` for a base with no such file, which is how a scratch or distroless base looks. A link
@@ -298,7 +329,10 @@ async fn read_identity_file(
         .map(|bytes| {
             String::from_utf8(bytes)
                 .into_alien_error()
-                .context(failed(format!("{path} in the base image is not UTF-8")))
+                .context(ErrorData::ImageBuildRejected {
+                    resource_name: resource_name.to_string(),
+                    reason: format!("{path} in the base image is not UTF-8"),
+                })
         })
         .transpose()
 }
@@ -337,7 +371,6 @@ mod tests {
     use dockdash::test_utils::setup_local_registry;
     use dockdash::PushOptions;
     use oci_client::client::{Client, ClientConfig};
-    use oci_client::Reference;
     use std::io::Read;
 
     /// An amd64 image holding `files`, pushed to `reference`; also returned, as the local copy a
@@ -825,26 +858,29 @@ mod tests {
     }
 
     /// The agent tag is published by a release workflow a deploy can race, so a missing one is
-    /// its own retryable error, whose hint names the release it waits for.
+    /// its own retryable error, whose hint names the release of the tag the caller asked for.
     #[tokio::test]
     async fn a_missing_agent_tag_names_the_release_it_waits_for() {
         let registry = registry_without_the_tag().await;
 
         let error = layering_error(
-            &format!("{}/alien/agent:missing", registry.address()),
+            &format!("{}/alien/agent:v0.0.0-unreleased", registry.address()),
             "registry.example.com/proj/sandbox:base",
         )
         .await;
         assert_eq!(error.code, "SANDBOX_AGENT_IMAGE_MISSING", "{error}");
         assert!(error.retryable, "{error}");
         let hint = error.hint.as_deref().expect("the error carries a hint");
-        assert!(hint.contains(env!("CARGO_PKG_VERSION")), "{hint}");
+        assert!(
+            hint.contains("If Alien 0.0.0-unreleased was released"),
+            "{hint}"
+        );
     }
 
     /// The base is the developer's image; a tag the registry does not have will not appear on a
     /// retry.
     #[tokio::test]
-    async fn a_missing_base_tag_is_a_build_failure() {
+    async fn a_missing_base_tag_is_a_rejected_lookup() {
         let (_registry, host) = setup_local_registry().await.expect("local registry");
         let agent_image = format!("{host}/alien/agent:test");
         push_image(&agent_image, &[(AGENT_PATH, b"#!/bin/sh\nexit 0\n")]).await;
@@ -855,7 +891,51 @@ mod tests {
             &format!("{}/proj/sandbox:missing", base_registry.address()),
         )
         .await;
-        assert_eq!(error.code, "IMAGE_BUILD_FAILED", "{error}");
+        assert_eq!(error.code, "IMAGE_LOOKUP_REJECTED", "{error}");
+        assert!(!error.retryable, "{error}");
+        assert_eq!(reason(&error), "Registry answered ManifestUnknown");
+    }
+
+    /// An agent image without the agent binary is a broken release; pulling it again returns the
+    /// same image.
+    #[tokio::test]
+    async fn an_agent_image_without_the_agent_is_rejected() {
+        let (_registry, host) = setup_local_registry().await.expect("local registry");
+        let agent_image = format!("{host}/alien/agent:empty");
+        push_image(&agent_image, &[("/README", b"no agent here\n")]).await;
+
+        let error = layering_error(&agent_image, "registry.example.com/proj/sandbox:base").await;
+        assert_eq!(error.code, "IMAGE_BUILD_REJECTED", "{error}");
+        assert!(!error.retryable, "{error}");
+    }
+
+    /// A base whose `/etc/passwd` is not text cannot have the exec identity merged into it, on
+    /// any attempt.
+    #[tokio::test]
+    async fn a_base_with_a_binary_passwd_is_rejected() {
+        let layer = Layer::builder()
+            .and_then(|layer| layer.data_with_owner("/etc/passwd", &[0xff, 0xfe], 0o644, 0, 0))
+            .expect("layer");
+        let (base, _) = Image::builder()
+            .platform("linux", &Arch::Amd64)
+            .layer(layer.build().await.expect("layer builds"))
+            .build()
+            .await
+            .expect("image builds");
+
+        let error = build_gcp_sandbox_image(
+            "box",
+            base,
+            "registry.example.com/proj/sandbox:base",
+            "registry.example.com/alien/agent:test",
+            ClientProtocol::Http,
+            RegistryAuth::Anonymous,
+            default_cache(),
+        )
+        .await
+        .expect_err("a binary passwd cannot be merged");
+        assert_eq!(error.code, "IMAGE_BUILD_REJECTED", "{error}");
+        assert!(!error.retryable, "{error}");
     }
 
     #[test]
@@ -896,8 +976,9 @@ mod tests {
         )));
     }
 
-    /// A pulled base is a full archive on disk, so it is dropped once its identity files are read
-    /// rather than held through the agent pull and the assembly.
+    /// A base that owns its archive, as a pulled one does, is deleted once its identity files are
+    /// read rather than held through the agent pull and the assembly. A base opened from the
+    /// caller's tarball is not deleted, so only the owned case has anything to observe.
     #[tokio::test]
     async fn the_base_archive_is_gone_before_the_agent_is_pulled() {
         use std::io::Write;
