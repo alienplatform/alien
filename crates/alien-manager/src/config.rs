@@ -49,6 +49,12 @@ pub struct ManagerConfig {
     /// embedded manager. Standalone and platform managers leave it disabled
     /// unless they have a real OTLP forwarding endpoint configured.
     pub enable_local_log_ingest: bool,
+    /// Whether shutdown stops the Docker containers of local push deployments.
+    ///
+    /// `alien dev` enables this so a development session owns the lifetime of the
+    /// workloads it started; the next session restarts them. Standalone managers
+    /// leave it disabled so local containers keep running across manager restarts.
+    pub stop_local_containers_on_shutdown: bool,
     /// Allowed CORS origins. Defaults to `[base_url]` when `None`.
     pub allowed_origins: Option<Vec<String>>,
     /// Signing key for HMAC-signed command response URLs.
@@ -109,6 +115,7 @@ impl Default for ManagerConfig {
             disable_deployment_loop: false,
             disable_heartbeat_loop: false,
             enable_local_log_ingest: false,
+            stop_local_containers_on_shutdown: false,
             allowed_origins: None,
             response_signing_key: Vec::new(),
         }

@@ -343,6 +343,7 @@ impl ManagerTomlConfig {
             disable_deployment_loop: false,
             disable_heartbeat_loop: false,
             enable_local_log_ingest: false,
+            stop_local_containers_on_shutdown: false,
             allowed_origins: None,
             response_signing_key: Vec::new(), // Set by caller after admin token bootstrap
         }

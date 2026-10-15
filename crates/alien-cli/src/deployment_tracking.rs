@@ -237,7 +237,10 @@ fn authenticated_client(api_key: &str, base_url: &str) -> Result<SdkClient> {
                 message: "Invalid authorization header value".to_string(),
             })?,
     );
-    headers.insert(USER_AGENT, HeaderValue::from_static("alien-cli"));
+    headers.insert(
+        USER_AGENT,
+        HeaderValue::from_static(crate::http_client::USER_AGENT),
+    );
 
     let reqwest_client = crate::http_client::builder()
         .default_headers(headers)

@@ -42,12 +42,29 @@ pub(crate) fn deserialize_bool_from_bool_or_string<'de, D>(
 where
     D: Deserializer<'de>,
 {
-    let value = serde_json::Value::deserialize(deserializer)?;
+    bool_from_bool_or_string(serde_json::Value::deserialize(deserializer)?)
+}
+
+/// Optional form of [`deserialize_bool_from_bool_or_string`]: `null` stays `None`. Pair it with
+/// `#[serde(default)]` so an absent field is also `None`.
+pub(crate) fn deserialize_optional_bool_from_bool_or_string<'de, D>(
+    deserializer: D,
+) -> Result<Option<bool>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    match serde_json::Value::deserialize(deserializer)? {
+        serde_json::Value::Null => Ok(None),
+        value => bool_from_bool_or_string(value).map(Some),
+    }
+}
+
+fn bool_from_bool_or_string<E: serde::de::Error>(value: serde_json::Value) -> Result<bool, E> {
     match value {
         serde_json::Value::Bool(value) => Ok(value),
         serde_json::Value::String(value) if value.eq_ignore_ascii_case("true") => Ok(true),
         serde_json::Value::String(value) if value.eq_ignore_ascii_case("false") => Ok(false),
-        other => Err(serde::de::Error::custom(format!(
+        other => Err(E::custom(format!(
             "expected boolean or boolean string, got {other}"
         ))),
     }
@@ -282,6 +299,89 @@ mod tests {
         .expect("sandbox import data should still parse native JSON types");
         assert!(!native.allow_egress);
         assert_eq!(native.preview_ports, vec![3000]);
+    }
+
+    /// CloudFormation delivers every boolean property as a string, so a setup that declares a
+    /// customer encryption key or a CloudFormation-created EKS cluster registers with "true" or
+    /// "false" here. Rejecting the string form fails registration and rolls the customer's stack back.
+    #[test]
+    fn stringified_key_and_kubernetes_cluster_booleans_parse() {
+        let key = |probe: serde_json::Value| -> Result<AwsKeyImportData, serde_json::Error> {
+            let mut data = json!({ "keyArn": "arn:aws:kms:us-east-1:123456789012:key/k-1" });
+            if !probe.is_null() {
+                data["availabilityProbe"] = probe;
+            }
+            serde_json::from_value(data)
+        };
+        assert!(key(json!("true")).expect("string true").availability_probe);
+        assert!(
+            !key(json!("false"))
+                .expect("string false")
+                .availability_probe
+        );
+        assert!(key(json!(true)).expect("native true").availability_probe);
+        assert!(!key(json!(false)).expect("native false").availability_probe);
+        assert!(
+            !key(serde_json::Value::Null)
+                .expect("an absent probe defaults to false")
+                .availability_probe
+        );
+        assert!(
+            key(json!("yes")).is_err(),
+            "a non-boolean string must be rejected"
+        );
+        assert!(key(json!(1)).is_err(), "a number must be rejected");
+
+        let cluster = |ready: Option<serde_json::Value>| -> Result<
+            KubernetesClusterImportData,
+            serde_json::Error,
+        > {
+            let mut data = json!({
+                "provider": "eks",
+                "ownership": "managed",
+                "namespace": "alien",
+                "clusterName": "acme",
+            });
+            if let Some(ready) = ready {
+                data["cloudMetadataReady"] = ready;
+            }
+            serde_json::from_value(data)
+        };
+        assert_eq!(
+            cluster(Some(json!("true")))
+                .expect("string true")
+                .cloud_metadata_ready,
+            Some(true)
+        );
+        assert_eq!(
+            cluster(Some(json!("false")))
+                .expect("string false")
+                .cloud_metadata_ready,
+            Some(false)
+        );
+        assert_eq!(
+            cluster(Some(json!(true)))
+                .expect("native true")
+                .cloud_metadata_ready,
+            Some(true)
+        );
+        assert_eq!(
+            cluster(Some(json!(false)))
+                .expect("native false")
+                .cloud_metadata_ready,
+            Some(false)
+        );
+        assert_eq!(
+            cluster(Some(serde_json::Value::Null))
+                .expect("null")
+                .cloud_metadata_ready,
+            None
+        );
+        assert_eq!(cluster(None).expect("absent").cloud_metadata_ready, None);
+        assert!(
+            cluster(Some(json!("ready"))).is_err(),
+            "a non-boolean string must be rejected"
+        );
     }
 
     /// A runtime-provisioned sandbox registers without an image; the build role and bundle take its

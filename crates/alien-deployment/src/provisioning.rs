@@ -199,11 +199,17 @@ pub async fn handle_provisioning(
         .context(ErrorData::StackExecutionFailed {
             message: "Failed to determine outstanding provisioning deletions".to_string(),
         })?;
+    let pending_recovery_updates = executor
+        .pending_recovery_updates(&step_result.next_state)
+        .context(ErrorData::StackExecutionFailed {
+            message: "Failed to determine outstanding provisioning recovery updates".to_string(),
+        })?;
     let stack_status = crate::updating::compute_update_status(
         &step_result.next_state,
         &target_stack,
         &reconciled_ids,
         &pending_deletions,
+        &pending_recovery_updates,
     )?;
 
     // Check if all live resources are deployed
@@ -231,6 +237,11 @@ pub async fn handle_provisioning(
         next.status = DeploymentStatus::Running;
         next.stack_state = Some(step_result.next_state);
         next.error = None;
+        if next.platform == alien_core::Platform::Local
+            && runtime_metadata.pending_prepared_stack.is_none()
+        {
+            runtime_metadata.pending_prepared_release_id = None;
+        }
         next.runtime_metadata = Some(runtime_metadata);
 
         // Promote target to current: deployment successful
@@ -271,7 +282,7 @@ pub async fn handle_provisioning(
             .collect();
 
         // Interrupt all in-progress resources so every resource reflects its true status.
-        crate::helpers::interrupt_in_progress_resources(&mut next_state, &failed_refs, None);
+        crate::helpers::interrupt_in_progress_resources(&mut next_state, &failed_refs, None)?;
 
         // An installed deployment provisions only to continue an update that setup handed
         // back. Its installed release keeps serving, so the failure is an update failure.
@@ -320,9 +331,9 @@ pub async fn handle_provisioning(
 /// 4. Sets clear_retry_requested flag to clear the retry marker
 pub async fn handle_provisioning_failed(
     current: DeploymentState,
-    _target_stack: Stack,
+    target_stack: Stack,
     config: DeploymentConfig,
-    _client_config: alien_core::ClientConfig,
+    client_config: alien_core::ClientConfig,
     _service_provider: std::sync::Arc<dyn alien_infra::PlatformServiceProvider>,
 ) -> Result<DeploymentStepResult> {
     info!("Handling ProvisioningFailed status");
@@ -350,12 +361,42 @@ pub async fn handle_provisioning_failed(
         })
     })?;
 
+    let local_setup_retry = current.platform == alien_core::Platform::Local
+        && next.runtime_metadata.as_ref().is_some_and(|metadata| {
+            metadata.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
+        });
+    if local_setup_retry {
+        let metadata = next.runtime_metadata.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::MissingConfiguration {
+                message: "Direct local setup metadata is required for retry".to_string(),
+            })
+        })?;
+        next.runtime_metadata = Some(
+            crate::pending::prepare_direct_setup_update(
+                target_stack,
+                &stack_state,
+                &config,
+                &client_config,
+                metadata,
+            )
+            .await?,
+        );
+    }
+
+    if local_setup_retry {
+        if let Some(metadata) = next.runtime_metadata.as_mut() {
+            metadata.pending_prepared_release_id = next
+                .target_release
+                .as_ref()
+                .and_then(|release| release.release_id.clone());
+        }
+    }
     // Every failure whose config is unchanged resumes where it stopped. A changed runtime
     // resource is left to the planner, which updates or replaces it. A changed setup-owned one
     // needs setup, which this runtime executor never does for it, so the retry is refused.
     let outcome = crate::helpers::retry_failed_runtime_resources(
         &mut stack_state,
-        current.runtime_metadata.as_ref(),
+        next.runtime_metadata.as_ref(),
         &config,
     )?;
     let blocking = outcome
@@ -385,7 +426,11 @@ pub async fn handle_provisioning_failed(
     );
 
     // Transition back to Provisioning to continue deployment
-    next.status = DeploymentStatus::Provisioning;
+    next.status = if local_setup_retry {
+        DeploymentStatus::InitialSetup
+    } else {
+        DeploymentStatus::Provisioning
+    };
     next.stack_state = Some(stack_state);
     next.error = None;
     next.retry_requested = false; // Clear retry flag directly

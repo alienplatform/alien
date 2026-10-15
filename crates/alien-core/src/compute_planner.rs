@@ -119,6 +119,13 @@ pub fn plan_compute_with_state(
         &mut resolved_stack,
         selected_settings,
     )?;
+    if let Some(previous_state) = previous_state {
+        crate::container_resources::retain_installed_volume_sizes(
+            &mut resolved_stack,
+            selected_settings,
+            previous_state,
+        );
+    }
     let (minimum, maximum) = match platform {
         Platform::Gcp => (10, 65536),
         Platform::Azure => (1, 32767),
@@ -1442,6 +1449,198 @@ mod tests {
             .code,
             "CONTAINER_RESOURCE_SELECTION_INVALID"
         );
+    }
+
+    fn stack_with_volume(size: &str) -> Stack {
+        let mut stack = stack_with_container();
+        stack
+            .resources
+            .get_mut("api")
+            .unwrap()
+            .config
+            .downcast_mut::<Container>()
+            .unwrap()
+            .persistent_storage = Some(crate::PersistentStorage {
+            size: size.into(),
+            mount_path: "/data".into(),
+            backups: crate::VolumeBackups::default(),
+            encryption_key: None,
+        });
+        stack
+    }
+
+    fn installed_with_volume(platform: Platform, size: &str) -> StackState {
+        let mut installed = StackState::new(platform);
+        installed.resources.insert(
+            "api".into(),
+            crate::StackResourceState::new_pending(
+                "Container".into(),
+                stack_with_volume(size).resources["api"].config.clone(),
+                None,
+                vec![],
+            ),
+        );
+        installed
+    }
+
+    fn api_volume(plan: &ComputePlan) -> (Option<u32>, Option<u32>) {
+        let api = plan
+            .containers
+            .iter()
+            .find(|container| container.container_id == "api")
+            .expect("api is planned");
+        (api.volume_size_gib, api.minimum_volume_size_gib)
+    }
+
+    /// A release that lowers its default volume size must not turn into a shrink of every
+    /// installed deployment that never chose a size: they keep their installed volumes. A
+    /// larger default still grows them.
+    #[test]
+    fn a_lower_release_default_keeps_installed_volumes_without_a_selection() {
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            let installed = installed_with_volume(platform, "30Gi");
+            let plan = plan_compute_with_state(
+                &stack_with_volume("20Gi"),
+                platform,
+                None,
+                Some(&installed),
+            )
+            .expect("a lower release default keeps the installed volume");
+            assert_eq!(api_volume(&plan), (Some(30), Some(30)), "{platform}");
+
+            let plan = plan_compute_with_state(
+                &stack_with_volume("40Gi"),
+                platform,
+                None,
+                Some(&installed),
+            )
+            .expect("a larger release default grows the volume");
+            assert_eq!(api_volume(&plan), (Some(40), Some(30)), "{platform}");
+
+            // A selection is the deployment's own choice, so it still cannot shrink.
+            let shrinking: ComputeSettings = serde_json::from_value(serde_json::json!({
+                "containers": {"api": {"volumeSizeGib": 25}}
+            }))
+            .unwrap();
+            let error = plan_compute_with_state(
+                &stack_with_volume("20Gi"),
+                platform,
+                Some(&shrinking),
+                Some(&installed),
+            )
+            .unwrap_err();
+            assert!(
+                error.to_string().contains("cannot shrink from 30 to 25"),
+                "{error}"
+            );
+        }
+    }
+
+    /// Setup sources (CloudFormation parameters, Terraform variables, CLI config files) cannot see
+    /// growth made through a compute update. Their lower values keep the installed size; equal
+    /// or larger values, and containers without an installed volume, are left alone.
+    #[test]
+    fn setup_source_volume_sizes_below_installed_keep_the_installed_size() {
+        let mut installed = installed_with_volume(Platform::Aws, "30Gi");
+        let mut worker = stack_with_volume("10Gi").resources["api"].config.clone();
+        worker
+            .downcast_mut::<Container>()
+            .unwrap()
+            .persistent_storage = None;
+        installed.resources.insert(
+            "worker".into(),
+            crate::StackResourceState::new_pending("Container".into(), worker, None, vec![]),
+        );
+        let mut settings: ComputeSettings = serde_json::from_value(serde_json::json!({
+            "containers": {
+                "api": {"volumeSizeGib": 25, "cpu": 2},
+                "worker": {"volumeSizeGib": 5},
+                "new": {"volumeSizeGib": 8}
+            }
+        }))
+        .unwrap();
+
+        let kept = crate::container_resources::keep_volume_sizes_over_setup_source(
+            &mut settings,
+            Some(&installed),
+            None,
+        );
+
+        assert_eq!(
+            kept,
+            vec![crate::container_resources::KeptVolumeSize {
+                container_id: "api".into(),
+                requested_gib: 25,
+                kept_gib: 30,
+            }]
+        );
+        assert_eq!(settings.containers["api"].volume_size_gib, Some(30));
+        assert_eq!(
+            settings.containers["api"].cpu,
+            Some(serde_json::Number::from(2))
+        );
+        assert_eq!(settings.containers["worker"].volume_size_gib, Some(5));
+        assert_eq!(settings.containers["new"].volume_size_gib, Some(8));
+        let plan = plan_compute_with_state(
+            &stack_with_volume("20Gi"),
+            Platform::Aws,
+            Some(&ComputeSettings {
+                containers: [("api".to_string(), settings.containers["api"].clone())].into(),
+                ..Default::default()
+            }),
+            Some(&installed_with_volume(Platform::Aws, "30Gi")),
+        )
+        .expect("the kept size plans");
+        assert_eq!(api_volume(&plan), (Some(30), Some(30)));
+
+        let mut growing: ComputeSettings = serde_json::from_value(serde_json::json!({
+            "containers": {"api": {"volumeSizeGib": 35}}
+        }))
+        .unwrap();
+        assert!(
+            crate::container_resources::keep_volume_sizes_over_setup_source(
+                &mut growing,
+                Some(&installed),
+                None,
+            )
+            .is_empty()
+        );
+        assert_eq!(growing.containers["api"].volume_size_gib, Some(35));
+
+        // A growth the deployment chose but has not applied yet is not undone either.
+        let chosen: ComputeSettings = serde_json::from_value(serde_json::json!({
+            "containers": {"api": {"volumeSizeGib": 40}}
+        }))
+        .unwrap();
+        let mut stale: ComputeSettings = serde_json::from_value(serde_json::json!({
+            "containers": {"api": {"volumeSizeGib": 25}}
+        }))
+        .unwrap();
+        let kept = crate::container_resources::keep_volume_sizes_over_setup_source(
+            &mut stale,
+            Some(&installed),
+            Some(&chosen),
+        );
+        assert_eq!(kept[0].kept_gib, 40);
+        assert_eq!(stale.containers["api"].volume_size_gib, Some(40));
+
+        // Before anything is installed (a first install whose preflights failed), a smaller
+        // value is a correction of the saved choice and is kept as asked.
+        let mut correction: ComputeSettings = serde_json::from_value(serde_json::json!({
+            "containers": {"api": {"volumeSizeGib": 20}}
+        }))
+        .unwrap();
+        for nothing_installed in [None, Some(&StackState::new(Platform::Aws))] {
+            assert!(
+                crate::container_resources::keep_volume_sizes_over_setup_source(
+                    &mut correction,
+                    nothing_installed,
+                    Some(&chosen),
+                )
+                .is_empty()
+            );
+            assert_eq!(correction.containers["api"].volume_size_gib, Some(20));
+        }
     }
 
     #[test]

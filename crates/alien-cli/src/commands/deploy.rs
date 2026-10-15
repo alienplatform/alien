@@ -37,7 +37,10 @@ use alien_deployment::runner::{RunnerPolicy, RunnerResult};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_infra::ClientConfigExt;
 use alien_manager_api::SdkResultExt as _;
-use alien_platform_api::types::DeploymentUpdateOperationStatus;
+use alien_platform_api::types::{
+    DeploymentListItemResponse, DeploymentListItemResponseStatus, DeploymentUpdateOperationStatus,
+    ListDeploymentsIncludeItem,
+};
 use alien_platform_api::Client as SdkClient;
 use alien_platform_api::SdkResultExt as _;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -580,7 +583,10 @@ fn create_platform_client(api_key: &str, base_url: &str) -> Result<SdkClient> {
                 message: "Invalid authorization header value".to_string(),
             })?,
     );
-    headers.insert(USER_AGENT, HeaderValue::from_static("alien-cli"));
+    headers.insert(
+        USER_AGENT,
+        HeaderValue::from_static(crate::http_client::USER_AGENT),
+    );
 
     let http_client = crate::http_client::builder()
         .default_headers(headers)
@@ -694,6 +700,27 @@ async fn create_self_deployment(
     let workspace = ctx.resolve_platform_workspace_context(true).await?;
     let (project_id, _project_link) = ctx.resolve_project(None, true).await?;
 
+    // Without --deployment-group the new deployment gets its own group named
+    // after it. Deployment names are unique only within a group, so a
+    // deployment with this name in another group (created from another machine,
+    // or untracked here) would silently get a same-named twin with its own
+    // cloud resources.
+    if args.deployment_group.is_none() {
+        let existing = live_deployments_named(
+            auth.sdk_client(),
+            workspace.query.as_deref(),
+            &project_id,
+            &resolved_args.name,
+        )
+        .await?;
+        if !existing.is_empty() {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "name".to_string(),
+                message: duplicate_deployment_name_message(&resolved_args.name, &existing),
+            }));
+        }
+    }
+
     let deployment_group = match args.deployment_group.as_deref() {
         Some(reference) => {
             resolve_self_deployment_group(
@@ -755,6 +782,82 @@ async fn create_self_deployment(
         .context(ErrorData::ConfigurationError {
             message: "Failed to track newly created deployment".to_string(),
         })
+}
+
+/// Deployments in the project, in any group, that are named exactly `name` and
+/// not deleted.
+async fn live_deployments_named(
+    client: &SdkClient,
+    workspace: Option<&str>,
+    project_id: &str,
+    name: &str,
+) -> Result<Vec<DeploymentListItemResponse>> {
+    let mut matches = Vec::new();
+    let mut cursor: Option<String> = None;
+    loop {
+        // `search` is a substring match on deployment and group names; the
+        // exact name is checked below.
+        let mut request = client
+            .list_deployments()
+            .project(project_id)
+            .search(name)
+            .include(vec![ListDeploymentsIncludeItem::DeploymentGroup])
+            .limit(NonZeroU64::new(100).expect("constant is non-zero"));
+        if let Some(workspace) = workspace {
+            request = request.workspace(workspace);
+        }
+        if let Some(cursor) = cursor.as_deref() {
+            request = request.cursor(cursor);
+        }
+        let page = request
+            .send()
+            .await
+            .into_sdk_error()
+            .context(ErrorData::ApiRequestFailed {
+                message: format!("Failed to check for an existing deployment named '{name}'"),
+                url: None,
+            })?
+            .into_inner();
+        matches.extend(page.items.into_iter().filter(|deployment| {
+            deployment.name == name
+                && deployment.status != DeploymentListItemResponseStatus::Deleted
+        }));
+        cursor = page.next_cursor;
+        if cursor.is_none() {
+            break;
+        }
+    }
+    Ok(matches)
+}
+
+fn duplicate_deployment_name_message(
+    name: &str,
+    existing: &[DeploymentListItemResponse],
+) -> String {
+    let references = existing
+        .iter()
+        .map(|deployment| match deployment.deployment_group.as_ref() {
+            Some(group) => format!(
+                "{} in group '{}'",
+                deployment.id.as_str(),
+                group.name.as_str()
+            ),
+            None => deployment.id.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let update_hint = match existing {
+        [deployment] => format!(
+            "To update it from this machine, save a deployment key with `alien deployments token {} > deployment-token.txt` and run `alien deploy --token-file deployment-token.txt --name {name}`.",
+            deployment.id.as_str()
+        ),
+        _ => format!(
+            "To update one of them from this machine, save its deployment key with `alien deployments token <id> > deployment-token.txt` and run `alien deploy --token-file deployment-token.txt --name {name}`."
+        ),
+    };
+    format!(
+        "A deployment named '{name}' already exists in this project ({references}), and this machine has no stored key for it. {update_hint} To create another deployment with this name, pass --deployment-group with an existing group."
+    )
 }
 
 async fn resolve_self_deployment_group(
@@ -1285,7 +1388,10 @@ fn create_platform_http_client(token: &str) -> Result<reqwest::Client> {
                 message: "Invalid authorization header value".to_string(),
             })?,
     );
-    headers.insert(USER_AGENT, HeaderValue::from_static("alien-cli"));
+    headers.insert(
+        USER_AGENT,
+        HeaderValue::from_static(crate::http_client::USER_AGENT),
+    );
 
     crate::http_client::builder()
         .default_headers(headers)
@@ -1348,7 +1454,7 @@ async fn deploy_task_with_environment(
         }));
     }
 
-    let resolved_args = resolve_deploy_args(&args)?;
+    let mut resolved_args = resolve_deploy_args(&args)?;
 
     if args.validate_only {
         println!("Deployment config is valid.");
@@ -1802,6 +1908,41 @@ async fn deploy_task_with_environment(
             .context(ErrorData::ConfigurationError {
                 message: format!("Unknown deployment status: {}", deployment.status),
             })?;
+    let installed_stack_state: Option<alien_core::StackState> = deployment
+        .stack_state
+        .take()
+        .map(serde_json::from_value)
+        .transpose()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to deserialize stack_state".to_string(),
+        })?;
+    // The config file cannot see growth made through a compute update, so a
+    // smaller volume size there keeps the deployment's size instead of asking
+    // for a shrink or a compute change.
+    if let Some(compute) = resolved_args.compute_settings.as_mut() {
+        let current: Option<alien_core::StackSettings> = deployment
+            .stack_settings
+            .clone()
+            .map(serde_json::from_value)
+            .transpose()
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to deserialize stack_settings".to_string(),
+            })?;
+        for kept in alien_core::container_resources::keep_volume_sizes_over_setup_source(
+            compute,
+            installed_stack_state.as_ref(),
+            current
+                .as_ref()
+                .and_then(|settings| settings.compute.as_ref()),
+        ) {
+            steps.println(&dim_label(&format!(
+                "Keeping {}'s {} GiB volume; the config asks for {} GiB. Set volumeSizeGib = {} to match.",
+                kept.container_id, kept.kept_gib, kept.requested_gib, kept.kept_gib
+            )));
+        }
+    }
 
     let requested_overrides = (args.clear_quota_warning_overrides
         || !args.quota_warning_overrides.is_empty())
@@ -2018,14 +2159,7 @@ async fn deploy_task_with_environment(
         platform,
         current_release: None,
         target_release: None,
-        stack_state: deployment
-            .stack_state
-            .map(serde_json::from_value)
-            .transpose()
-            .into_alien_error()
-            .context(ErrorData::ConfigurationError {
-                message: "Failed to deserialize stack_state".to_string(),
-            })?,
+        stack_state: installed_stack_state,
         error: None,
         environment_info: deployment
             .environment_info

@@ -415,6 +415,60 @@ fn oci_error(status: StatusCode, code: &'static str, message: impl Into<String>)
     response
 }
 
+/// Why the proxy refused a pull or push, kept as data so the caller can log it
+/// before turning it into the OCI error response.
+#[derive(Debug)]
+struct RegistryRefusal {
+    status: StatusCode,
+    code: &'static str,
+    message: String,
+}
+
+impl RegistryRefusal {
+    fn new(status: StatusCode, code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            status,
+            code,
+            message: message.into(),
+        }
+    }
+
+    fn into_response(self) -> Response {
+        oci_error(self.status, self.code, self.message)
+    }
+}
+
+/// Log a refused pull or push. A refusal otherwise leaves no trace in the
+/// manager's logs: the client sees only the OCI error, and a machine or worker
+/// that cannot pull reports something unrelated, such as a crash loop.
+fn log_refusal(
+    state: &AppState,
+    subject: &Subject,
+    operation: &'static str,
+    repo_name: &str,
+    refusal: &RegistryRefusal,
+) {
+    // Server errors are logged where they happen, with their cause.
+    if refusal.status.is_server_error() {
+        return;
+    }
+    let subject_kind = match &subject.kind {
+        crate::auth::SubjectKind::User { .. } => "user",
+        crate::auth::SubjectKind::ServiceAccount { .. } => "service-account",
+    };
+    warn!(
+        operation,
+        subject_kind,
+        role = ?subject.role,
+        scope = ?subject.scope,
+        repository = %repo_name,
+        requested_project = ?state.registry_routing_table.project_id_for_repo(repo_name),
+        status = %refusal.status.as_u16(),
+        reason = %refusal.message,
+        "Refused a registry proxy request"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Version check
 // ---------------------------------------------------------------------------
@@ -498,8 +552,9 @@ async fn proxy_push(
             Ok(s) => s,
             Err(e) => return oci_error(StatusCode::UNAUTHORIZED, "UNAUTHORIZED", e.to_string()),
         };
-        if let Err(e) = require_push_auth(&state, &subject, &oci.repo).await {
-            return e;
+        if let Err(refused) = require_push_auth(&state, &subject, &oci.repo).await {
+            log_refusal(&state, &subject, "push", &oci.repo, &refused);
+            return refused.into_response();
         }
         let mut query = query;
         // Mount parameters apply only to the upload-init POST.
@@ -559,8 +614,8 @@ async fn restrict_mount_source(
         Some(source) => match validate_pull_access(state, subject, &source).await {
             Ok(()) => true,
             Err(refused) => {
-                if refused.status().is_server_error() {
-                    warn!(%source, status = %refused.status(), "Mount source check failed; forwarding a plain upload");
+                if refused.status.is_server_error() {
+                    warn!(%source, status = %refused.status, "Mount source check failed; forwarding a plain upload");
                 }
                 false
             }
@@ -693,8 +748,9 @@ async fn proxy_upload_session(
         return invalid_upload_session_auth();
     }
 
-    if let Err(e) = require_push_auth(&state, &subject, &repo_name).await {
-        return e;
+    if let Err(refused) = require_push_auth(&state, &subject, &repo_name).await {
+        log_refusal(&state, &subject, "push", &repo_name, &refused);
+        return refused.into_response();
     }
 
     // Forward the full path (including /artifacts-uploads/) to upstream.
@@ -743,7 +799,8 @@ async fn proxy_pull(
     // Capability credentials pull nothing, charts and the Operator image
     // included, so they are refused before the pull is routed.
     if let Err(refused) = refuse_capability_pull(&subject) {
-        return refused;
+        log_refusal(&state, &subject, "pull", &oci.repo, &refused);
+        return refused.into_response();
     }
     if oci_path_str.starts_with(super::charts::CHART_NAMESPACE) {
         return super::charts::serve(&state, &subject, &method, oci_path_str).await;
@@ -752,8 +809,9 @@ async fn proxy_pull(
         return super::operator_image::serve(&state, &subject, &method, oci_path_str, &headers)
             .await;
     }
-    if let Err(e) = validate_pull_access(&state, &subject, &oci.repo).await {
-        return e;
+    if let Err(refused) = validate_pull_access(&state, &subject, &oci.repo).await {
+        log_refusal(&state, &subject, "pull", &oci.repo, &refused);
+        return refused.into_response();
     }
 
     forward_to_upstream(&state, &method, &oci, "", &headers, None, None).await
@@ -1248,7 +1306,7 @@ async fn repository_project(
     state: &AppState,
     subject: &Subject,
     repo_name: &str,
-) -> Result<ProjectRecord, Response> {
+) -> Result<ProjectRecord, RegistryRefusal> {
     let routes = &state.registry_routing_table;
     let project_id = routes.project_id_for_repo(repo_name);
     if project_id.is_none()
@@ -1256,7 +1314,7 @@ async fn repository_project(
             .resolve(repo_name)
             .is_some_and(|route| route.platform == Platform::Gcp)
     {
-        return Err(oci_error(
+        return Err(RegistryRefusal::new(
             StatusCode::FORBIDDEN,
             "DENIED",
             "Invalid project repository path.",
@@ -1265,14 +1323,14 @@ async fn repository_project(
     let project_id = project_id.unwrap_or("default");
     match state.project_store.get_project(subject, project_id).await {
         Ok(Some(project)) => Ok(project),
-        Ok(None) => Err(oci_error(
+        Ok(None) => Err(RegistryRefusal::new(
             StatusCode::FORBIDDEN,
             "DENIED",
             "Repository does not belong to a project the caller can access.",
         )),
         Err(e) => {
             warn!(error = %e, %project_id, "Failed to resolve the project of a registry repository");
-            Err(oci_error(
+            Err(RegistryRefusal::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "INTERNAL_ERROR",
                 "Failed to resolve repository project",
@@ -1287,12 +1345,12 @@ async fn require_push_auth(
     state: &AppState,
     subject: &Subject,
     repo_name: &str,
-) -> Result<(), Response> {
+) -> Result<(), RegistryRefusal> {
     let project = repository_project(state, subject, repo_name).await?;
     if state.authz.can_push_image(subject, &project, repo_name) {
         Ok(())
     } else {
-        Err(oci_error(
+        Err(RegistryRefusal::new(
             StatusCode::FORBIDDEN,
             "DENIED",
             "Caller cannot push images to this project.",
@@ -1302,16 +1360,16 @@ async fn require_push_auth(
 
 /// Credentials that exist to provision or push images pull nothing. They are refused before
 /// charts and the Operator image are routed, which `Authz::can_pull_image` does not see.
-fn refuse_capability_pull(subject: &Subject) -> Result<(), Response> {
+fn refuse_capability_pull(subject: &Subject) -> Result<(), RegistryRefusal> {
     if subject.role == Role::ImageRepositoryProvisioner {
-        return Err(oci_error(
+        return Err(RegistryRefusal::new(
             StatusCode::FORBIDDEN,
             "DENIED",
             "Image repository provisioning credentials cannot pull images",
         ));
     }
     if subject.role == Role::SandboxImagePusher {
-        return Err(oci_error(
+        return Err(RegistryRefusal::new(
             StatusCode::FORBIDDEN,
             "DENIED",
             "Sandbox image push credentials cannot pull images",
@@ -1329,7 +1387,7 @@ async fn validate_pull_access(
     state: &AppState,
     subject: &Subject,
     repo_name: &str,
-) -> Result<(), Response> {
+) -> Result<(), RegistryRefusal> {
     refuse_capability_pull(subject)?;
     let deployment = match &subject.scope {
         Scope::Workspace | Scope::Project { .. } => None,
@@ -1338,28 +1396,28 @@ async fn validate_pull_access(
             deployment_id,
         } => Some((deployment_id.as_str(), project_id.as_str())),
         Scope::DeploymentGroup { .. } => {
-            return Err(oci_error(
+            return Err(RegistryRefusal::new(
                 StatusCode::FORBIDDEN,
                 "DENIED",
                 "Registry proxy pulls require a deployment token",
             ))
         }
         Scope::Commands { .. } => {
-            return Err(oci_error(
+            return Err(RegistryRefusal::new(
                 StatusCode::FORBIDDEN,
                 "DENIED",
                 "Command credentials cannot access the registry proxy",
             ))
         }
         Scope::RemoteBindings { .. } => {
-            return Err(oci_error(
+            return Err(RegistryRefusal::new(
                 StatusCode::FORBIDDEN,
                 "DENIED",
                 "Remote bindings credentials cannot access the registry proxy",
             ))
         }
         Scope::Telemetry { .. } => {
-            return Err(oci_error(
+            return Err(RegistryRefusal::new(
                 StatusCode::FORBIDDEN,
                 "DENIED",
                 "Telemetry credentials cannot access the registry proxy",
@@ -1369,7 +1427,7 @@ async fn validate_pull_access(
 
     let project = repository_project(state, subject, repo_name).await?;
     if !state.authz.can_pull_image(subject, &project, repo_name) {
-        return Err(oci_error(
+        return Err(RegistryRefusal::new(
             StatusCode::FORBIDDEN,
             "DENIED",
             "Caller cannot pull images from this repository.",
@@ -1405,14 +1463,14 @@ async fn validate_pull_access(
             .await
             .map_err(|e| {
                 warn!(error = %e, "Failed to get deployment for registry proxy");
-                oci_error(
+                RegistryRefusal::new(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "INTERNAL_ERROR",
                     "Failed to resolve deployment",
                 )
             })?
             .ok_or_else(|| {
-                oci_error(
+                RegistryRefusal::new(
                     StatusCode::NOT_FOUND,
                     "NAME_UNKNOWN",
                     format!("Deployment {} not found", deployment_id),
@@ -1424,7 +1482,7 @@ async fn validate_pull_access(
             .as_deref()
             .or(deployment.desired_release_id.as_deref())
             .ok_or_else(|| {
-                oci_error(
+                RegistryRefusal::new(
                     StatusCode::NOT_FOUND,
                     "NAME_UNKNOWN",
                     "Deployment has no release",
@@ -1438,14 +1496,14 @@ async fn validate_pull_access(
             .await
             .map_err(|e| {
                 warn!(error = %e, "Failed to get release for registry proxy");
-                oci_error(
+                RegistryRefusal::new(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "INTERNAL_ERROR",
                     "Failed to resolve release",
                 )
             })?
             .ok_or_else(|| {
-                oci_error(
+                RegistryRefusal::new(
                     StatusCode::NOT_FOUND,
                     "NAME_UNKNOWN",
                     format!("Release {} not found", release_id),
@@ -1471,7 +1529,7 @@ async fn validate_pull_access(
     };
 
     if !repo_names.iter().any(|r| r == repo_name) {
-        return Err(oci_error(
+        return Err(RegistryRefusal::new(
             StatusCode::FORBIDDEN,
             "DENIED",
             format!(
@@ -1924,7 +1982,7 @@ mod tests {
         for role in [Role::ImageRepositoryProvisioner, Role::SandboxImagePusher] {
             let refused = refuse_capability_pull(&subject(role))
                 .expect_err("a capability role must not reach the project-scope pull bypass");
-            assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+            assert_eq!(refused.status, StatusCode::FORBIDDEN);
         }
         assert!(refuse_capability_pull(&subject(Role::ProjectDeveloper)).is_ok());
     }
