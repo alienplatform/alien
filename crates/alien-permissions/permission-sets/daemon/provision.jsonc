@@ -543,6 +543,7 @@
             // Ingress validation is required even with heartbeats disabled.
             "Microsoft.Network/virtualNetworks/read",
             "Microsoft.Network/virtualNetworks/subnets/read",
+            "Microsoft.Network/networkSecurityGroups/read",
             "Microsoft.Network/virtualNetworks/subnets/join/action",
             "Microsoft.Network/virtualNetworks/checkIpAddressAvailability/read",
             "Microsoft.Network/applicationGateways/write",
