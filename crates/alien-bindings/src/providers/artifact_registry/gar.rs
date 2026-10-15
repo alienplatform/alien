@@ -390,6 +390,21 @@ impl GarArtifactRegistry {
         Ok(())
     }
 
+    /// Whether reading the repository itself says it does not exist. Any other answer, a denial
+    /// included, is not proof that it is gone.
+    async fn repository_is_gone(&self, repository: &str) -> bool {
+        matches!(
+            self.client
+                .get_repository(
+                    self.project_id.clone(),
+                    self.location.clone(),
+                    repository.to_string(),
+                )
+                .await,
+            Err(error) if error.http_status_code == Some(404)
+        )
+    }
+
     /// Internal helper to add or remove members from IAM policy bindings
     async fn update_policy_members(
         &self,
@@ -824,13 +839,25 @@ impl ArtifactRegistry for GarArtifactRegistry {
                 return Ok(());
             }
             Err(error) => {
+                // GAR answers getIamPolicy on a repository that does not exist with 403, even to
+                // the project owner. Every GCP teardown revokes on the shared repository, which a
+                // manager set up after per-project repositories never had, so only a 404 from
+                // reading the repository itself tells a gone repository from a denied read.
+                if matches!(
+                    error.error,
+                    Some(alien_client_core::ErrorData::RemoteAccessDenied { .. })
+                ) && self.repository_is_gone(&repo_name).await
+                {
+                    info!(repo_name = %repo_name, "GCP Artifact Registry repository is gone; no access to remove");
+                    return Ok(());
+                }
                 return Err(map_cloud_client_error(
                     error,
                     format!(
                         "Failed to read the IAM policy of GCP Artifact Registry repository '{repo_name}' to revoke access"
                     ),
                     Some(repo_name.to_string()),
-                ))
+                ));
             }
         };
 
@@ -1364,6 +1391,94 @@ mod tests {
             "{:?}",
             calls.lock().unwrap()
         );
+        server.abort();
+    }
+
+    /// GAR answers getIamPolicy on a repository that does not exist with 403 PERMISSION_DENIED,
+    /// even to the project owner (checked against the real API); only reading the repository
+    /// itself returns 404. A manager without the shared repository revokes there on every GCP
+    /// teardown, so that 403 must not fail the delete, while a real denial still must.
+    #[tokio::test]
+    async fn a_revoke_on_a_missing_repository_succeeds_and_a_denied_read_still_fails() {
+        #[derive(Default)]
+        struct ApiState {
+            policy_writes: usize,
+        }
+        async fn api(State(state): State<Arc<Mutex<ApiState>>>, uri: Uri) -> impl IntoResponse {
+            let repository = uri.path().rsplit('/').next().unwrap();
+            if repository.ends_with(":setIamPolicy") {
+                state.lock().unwrap().policy_writes += 1;
+                return (StatusCode::OK, Json(json!({})));
+            }
+            if repository.ends_with(":getIamPolicy") {
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(
+                        json!({"error":{"code":403,"message":"The caller does not have permission","status":"PERMISSION_DENIED"}}),
+                    ),
+                );
+            }
+            if repository == "artifacts-prj-a" {
+                return (
+                    StatusCode::OK,
+                    Json(json!({"name": repository, "format": "DOCKER"})),
+                );
+            }
+            (
+                StatusCode::NOT_FOUND,
+                Json(
+                    json!({"error":{"code":404,"message":"Requested entity was not found.","status":"NOT_FOUND"}}),
+                ),
+            )
+        }
+        let state = Arc::new(Mutex::new(ApiState::default()));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let app = Router::new().fallback(api).with_state(state.clone());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let config = GcpClientConfig {
+            project_id: "vendor".to_string(),
+            region: "region".to_string(),
+            project_number: None,
+            credentials: GcpCredentials::AccessToken {
+                token: "synthetic-local-token".to_string(),
+            },
+            service_overrides: Some(GcpServiceOverrides {
+                endpoints: HashMap::from([("artifactregistry".to_string(), endpoint)]),
+            }),
+        };
+        let registry = GarArtifactRegistry {
+            client: ArtifactRegistryClient::new(
+                reqwest::Client::builder().no_proxy().build().unwrap(),
+                config.clone(),
+            ),
+            binding_name: "artifacts".to_string(),
+            project_id: "vendor".to_string(),
+            location: "region".to_string(),
+            repository_name: "artifacts".to_string(),
+            pull_service_account_email: None,
+            push_service_account_email: None,
+            gcp_config: config,
+        };
+        let access = CrossAccountAccess::Gcp(GcpCrossAccountAccess {
+            project_numbers: vec!["123456789012".to_string()],
+            allowed_service_types: vec![ComputeServiceType::Worker],
+            service_account_emails: vec![],
+        });
+
+        // The shared repository was never created.
+        registry
+            .remove_cross_account_access("vendor/artifacts", access.clone())
+            .await
+            .expect("a repository that does not exist holds nothing to revoke");
+
+        // The project repository exists, so its 403 is a real denial.
+        let denied = registry
+            .remove_cross_account_access("vendor/artifacts-prj-a/prj_a", access)
+            .await
+            .expect_err("a denied policy read must not count as revoked");
+        assert_eq!(denied.code, "REMOTE_ACCESS_DENIED");
+        assert_eq!(state.lock().unwrap().policy_writes, 0);
         server.abort();
     }
 
