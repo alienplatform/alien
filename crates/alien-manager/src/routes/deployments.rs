@@ -1384,7 +1384,7 @@ mod tests {
                 .body(Body::from(
                     serde_json::json!({
                         "deploymentId": "deployment-1", "session": "test-session",
-                        "state": { "status": "failed", "platform": "aws", "protocolVersion": 1,
+                        "state": { "status": "preflights-failed", "platform": "aws", "protocolVersion": 1,
                             "stackState": body["stackState"] }
                     })
                     .to_string(),
