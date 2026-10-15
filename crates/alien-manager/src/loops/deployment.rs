@@ -1534,6 +1534,7 @@ mod tests {
     };
     use alien_deployment::loop_contract::{classify_status, LoopOperation};
     use alien_error::AlienError;
+    use alien_local::{ContainerConfig, LocalContainerManager};
     use chrono::Utc;
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
@@ -2910,6 +2911,110 @@ mod tests {
                 .unwrap();
         }
         panic!("the prepared release and its queued successor must converge");
+    }
+
+    /// Only `alien dev` ties container lifetime to the manager. A standalone manager
+    /// restart must leave a saved deployment's container running.
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    #[ignore = "requires Docker and registry access"]
+    async fn only_dev_managers_stop_saved_local_containers_on_shutdown() {
+        for stop_containers in [false, true] {
+            let directory = TempDir::new().unwrap();
+            let manager = crate::server::AlienManager::builder(crate::config::ManagerConfig {
+                db_path: Some(directory.path().join("manager.db")),
+                state_dir: Some(directory.path().to_path_buf()),
+                stop_local_containers_on_shutdown: stop_containers,
+                ..Default::default()
+            })
+            .credential_resolver(Arc::new(
+                crate::providers::local_credentials::LocalCredentialResolver::new(
+                    directory.path().to_path_buf(),
+                ),
+            ))
+            .with_standalone_defaults(&crate::standalone_config::ManagerTomlConfig::default())
+            .await
+            .unwrap()
+            .build()
+            .await
+            .unwrap();
+            let subject = Subject::system();
+            let group = manager
+                .deployment_store
+                .create_deployment_group(
+                    &subject,
+                    crate::traits::CreateDeploymentGroupParams {
+                        name: "local".to_string(),
+                        max_deployments: 10,
+                        setup: Default::default(),
+                    },
+                )
+                .await
+                .unwrap();
+            let deployment = manager
+                .deployment_store
+                .create_deployment(
+                    &subject,
+                    CreateDeploymentParams {
+                        name: "saved".to_string(),
+                        deployment_group_id: group.id,
+                        platform: Platform::Local,
+                        deployment_protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+                        base_platform: None,
+                        stack_settings: StackSettings::default(),
+                        stack_state: None,
+                        environment_variables: None,
+                        public_subdomain: None,
+                        input_values: Default::default(),
+                        setup_item: None,
+                        deployment_token: None,
+                    },
+                )
+                .await
+                .unwrap();
+            // A container recorded by an earlier session; this process never loaded it.
+            let containers =
+                LocalContainerManager::new(directory.path().join(&deployment.id)).unwrap();
+            let id = format!("shutdown-gate-{}-{stop_containers}", std::process::id());
+            containers
+                .start_container(
+                    &id,
+                    ContainerConfig {
+                        image: "busybox:1.37.0".to_string(),
+                        command: Some(vec!["sleep".to_string(), "300".to_string()]),
+                        ports: vec![],
+                        public_endpoint: None,
+                        health_check_port: None,
+                        env_vars: HashMap::new(),
+                        stateful: false,
+                        ordinal: None,
+                        volume_mount: None,
+                        volume_size: None,
+                        bind_mounts: vec![],
+                        proxy_token: None,
+                    },
+                )
+                .await
+                .unwrap();
+            let runner = DeploymentLoop::new(
+                manager.config.clone(),
+                manager.deployment_store.clone(),
+                manager.release_store.clone(),
+                manager.credential_resolver.clone(),
+                manager.server_bindings.clone(),
+                None,
+            );
+
+            let result = runner.shutdown_local_runtimes().await;
+            let running = containers.is_running(&id).await;
+            containers.delete_container(&id).await.unwrap();
+
+            result.unwrap();
+            assert_eq!(
+                running, !stop_containers,
+                "stop_local_containers_on_shutdown={stop_containers}"
+            );
+        }
     }
 
     #[tokio::test]
