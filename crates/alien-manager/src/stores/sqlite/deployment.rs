@@ -1196,15 +1196,37 @@ impl DeploymentStore for SqliteDeploymentStore {
     ) -> Result<(), AlienError> {
         // Set desired_release_id on all deployments that are in a state that can receive updates
         let eligible_statuses = ["running", "update-failed", "refresh-failed"];
+        // A new local session must retry the release it just built, not the failed
+        // first release. Keep the failed phase so the explicit retry resumes safely.
+        let local_startup_failures = [
+            "preflights-failed",
+            "initial-setup-failed",
+            "provisioning-failed",
+        ];
 
         let sql = {
             let mut query = Query::update();
             query
                 .table(Deployments::Table)
                 .value(Deployments::DesiredReleaseId, release_id)
-                .value(Deployments::Status, "update-pending")
+                .value(
+                    Deployments::Status,
+                    Expr::case(
+                        Expr::col(Deployments::Status).is_in(local_startup_failures),
+                        Expr::col(Deployments::Status),
+                    )
+                    .finally("update-pending"),
+                )
                 .value(Deployments::NextStepAfter, Option::<String>::None)
-                .and_where(Expr::col(Deployments::Status).is_in(eligible_statuses));
+                .cond_where(
+                    sea_query::Cond::any()
+                        .add(Expr::col(Deployments::Status).is_in(eligible_statuses))
+                        .add(
+                            sea_query::Cond::all()
+                                .add(Expr::col(Deployments::Platform).eq(Platform::Local.as_str()))
+                                .add(Expr::col(Deployments::Status).is_in(local_startup_failures)),
+                        ),
+                );
 
             if let Some(p) = platform {
                 query.and_where(Expr::col(Deployments::Platform).eq(p.as_str()));
@@ -1546,22 +1568,26 @@ impl DeploymentStore for SqliteDeploymentStore {
         let status_update: sea_query::SimpleExpr = if Self::is_delete_progress(state.status) {
             status_str.clone().into()
         } else {
-            Expr::case(
+            let mut status = Expr::case(
                 Expr::col(Deployments::Status).is_in(Self::RUNTIME_DELETE_STATUSES),
                 Expr::col(Deployments::Status),
-            )
-            .finally(status_str.clone())
-            .into()
+            );
+            if matches!(
+                state.status,
+                alien_core::DeploymentStatus::Running | alien_core::DeploymentStatus::RefreshFailed
+            ) {
+                let newer_release = match current_release_id.as_deref() {
+                    Some(current) => Expr::col(Deployments::DesiredReleaseId).ne(current),
+                    None => Expr::col(Deployments::Status)
+                        .eq("update-pending")
+                        .and(Expr::col(Deployments::DesiredReleaseId).is_not_null()),
+                };
+                // A heartbeat can finish after a new release queues its update.
+                // Persist its resource observations without consuming that request.
+                status = status.case(newer_release, "update-pending");
+            }
+            status.finally(status_str.clone()).into()
         };
-        let deployment_completed = deployment
-            .as_ref()
-            .and_then(|d| d.desired_release_id.as_ref())
-            .and_then(|desired| {
-                current_release_id
-                    .as_ref()
-                    .map(|current| current == desired)
-            })
-            .unwrap_or(false);
         let preserve_retry_requested = deployment
             .as_ref()
             .is_some_and(|d| Self::should_preserve_retry_requested(d, state));
@@ -1622,17 +1648,18 @@ impl DeploymentStore for SqliteDeploymentStore {
                 None => query.value(Deployments::Error, Option::<String>::None),
             };
 
-            // Clear desired_release_id when deployment completed (current matches desired)
-            if deployment_completed {
-                query.value(Deployments::DesiredReleaseId, Option::<String>::None);
-            } else if let Some(desired) = deployment
-                .as_ref()
-                .and_then(|d| d.desired_release_id.as_ref())
-            {
-                query.value(Deployments::DesiredReleaseId, desired as &str);
-            } else {
-                query.value(Deployments::DesiredReleaseId, Option::<String>::None);
-            }
+            // Compare against the row being updated, not the earlier read: a new
+            // release may arrive while reconciliation serializes its observations.
+            let desired_release: sea_query::SimpleExpr = match current_release_id.as_deref() {
+                Some(current) => Expr::case(
+                    Expr::col(Deployments::DesiredReleaseId).eq(current),
+                    Expr::val(Option::<String>::None),
+                )
+                .finally(Expr::col(Deployments::DesiredReleaseId))
+                .into(),
+                None => Expr::col(Deployments::DesiredReleaseId).into(),
+            };
+            query.value(Deployments::DesiredReleaseId, desired_release);
 
             // Match by `Id` only. Authz at the route layer (`can_sync_deployment`)
             // gates who may call `reconcile`; race protection between competing

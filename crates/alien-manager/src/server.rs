@@ -185,9 +185,11 @@ impl AlienManager {
                 task_error = Some(error);
             }
         }
-        if let Some(processor) = deployment_loop {
-            processor.shutdown_local_runtimes().await;
-        }
+        let runtime_result = if let Some(processor) = deployment_loop {
+            processor.shutdown_local_runtimes().await
+        } else {
+            Ok(())
+        };
         if let Some(result) = server_result {
             result
                 .into_alien_error()
@@ -201,6 +203,7 @@ impl AlienManager {
         } else {
             server.shutdown().await;
         }
+        runtime_result?;
         if let Some(error) = task_error {
             return Err(error)
                 .into_alien_error()

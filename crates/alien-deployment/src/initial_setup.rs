@@ -525,9 +525,9 @@ pub fn setup_run_has_pending_update(
 /// 4. Sets clear_retry_requested flag to clear the retry marker
 pub async fn handle_initial_setup_failed(
     current: DeploymentState,
-    _target_stack: Stack,
+    target_stack: Stack,
     config: DeploymentConfig,
-    _client_config: alien_core::ClientConfig,
+    client_config: alien_core::ClientConfig,
     _service_provider: std::sync::Arc<dyn alien_infra::PlatformServiceProvider>,
 ) -> Result<DeploymentStepResult> {
     info!("Handling InitialSetupFailed status");
@@ -555,7 +555,38 @@ pub async fn handle_initial_setup_failed(
         })
     })?;
 
-    let runtime_metadata = current.runtime_metadata.as_ref().ok_or_else(|| {
+    if current.platform == alien_core::Platform::Local
+        && next.runtime_metadata.as_ref().is_some_and(|metadata| {
+            metadata.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
+        })
+    {
+        let metadata = next.runtime_metadata.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::MissingConfiguration {
+                message: "Direct local setup metadata is required for retry".to_string(),
+            })
+        })?;
+        next.runtime_metadata = Some(
+            crate::pending::prepare_direct_setup_update(
+                target_stack,
+                &stack_state,
+                &config,
+                &client_config,
+                metadata,
+            )
+            .await?,
+        );
+    }
+    if current.platform == alien_core::Platform::Local {
+        if let Some(metadata) = next.runtime_metadata.as_mut().filter(|metadata| {
+            metadata.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
+        }) {
+            metadata.pending_prepared_release_id = next
+                .target_release
+                .as_ref()
+                .and_then(|release| release.release_id.clone());
+        }
+    }
+    let runtime_metadata = next.runtime_metadata.as_ref().ok_or_else(|| {
         AlienError::new(ErrorData::MissingConfiguration {
             message: "Runtime metadata with prepared stack required for setup retry".to_string(),
         })

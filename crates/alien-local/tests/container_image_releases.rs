@@ -183,3 +183,47 @@ async fn repeated_archive_tag_runs_new_content_and_loopback_pull_uses_host() {
         docker(&["image", "rm", "--force", image.config_digest()]);
     }
 }
+
+#[tokio::test]
+#[ignore = "requires Docker and registry access"]
+async fn shutdown_stops_owned_ids_and_leaves_a_same_named_replacement_running() {
+    let directory = TempDir::new().unwrap();
+    let manager = LocalContainerManager::new(directory.path().to_path_buf()).unwrap();
+    let name = format!("shutdown-owner-{}", std::process::id());
+    let second = format!("shutdown-peer-{}", std::process::id());
+    let mut settings = config("busybox:1.37.0".to_string());
+    settings.command = Some(vec!["sleep".to_string(), "300".to_string()]);
+    let original = manager
+        .start_container(&name, settings.clone())
+        .await
+        .unwrap();
+    let owned = manager.start_container(&second, settings).await.unwrap();
+    docker(&["rm", "-f", &original.docker_container_id]);
+    let foreign = docker(&[
+        "run",
+        "-d",
+        "--name",
+        &format!("alien-{name}"),
+        "busybox:1.37.0",
+        "sleep",
+        "300",
+    ]);
+    let recovered = alien_local::LocalBindingsProvider::new(directory.path()).unwrap();
+    let result = recovered.stop_containers().await;
+    recovered.shutdown().await;
+    let foreign_running = docker(&["inspect", "--format", "{{.State.Running}}", &foreign]);
+    let owned_running = docker(&[
+        "inspect",
+        "--format",
+        "{{.State.Running}}",
+        &owned.docker_container_id,
+    ]);
+    docker(&["rm", "-f", &foreign]);
+    manager.delete_container(&second).await.unwrap();
+    result.unwrap();
+    assert_eq!(owned_running, "false");
+    assert_eq!(
+        foreign_running, "true",
+        "shutdown must use immutable recorded IDs, never a reused name"
+    );
+}
