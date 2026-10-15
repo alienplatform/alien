@@ -6,6 +6,8 @@
 //! - Service Bus (Dapr) → QueueMessage via gRPC (or Command if command envelope)
 //! - Timer trigger → CronEvent via gRPC
 
+mod gateway;
+
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -45,6 +47,7 @@ pub struct ContainerAppTransport {
     app_http_port: Option<u16>,
     command_timeout: Duration,
     http_shutdown_grace: Duration,
+    gateway: Option<Arc<gateway::GatewayCredential>>,
     shutdown_rx: broadcast::Receiver<()>,
 }
 
@@ -60,6 +63,7 @@ impl ContainerAppTransport {
             port,
             control_server,
             app_http_port: None,
+            gateway: None,
             command_timeout: Duration::from_secs(300),
             http_shutdown_grace: DEFAULT_HTTP_SHUTDOWN_GRACE,
             shutdown_rx,
@@ -76,6 +80,13 @@ impl ContainerAppTransport {
         self
     }
 
+    /// Enable authenticated gateway metadata using a dedicated runtime credential.
+    /// The caller must keep this credential out of application environment variables.
+    pub fn with_gateway_credential(mut self, credential: &str) -> Result<Self> {
+        self.gateway = Some(Arc::new(gateway::GatewayCredential::new(credential)?));
+        Ok(self)
+    }
+
     /// Run the transport
     pub async fn run(self) -> Result<()> {
         let addr = SocketAddr::from(([0, 0, 0, 0], self.port));
@@ -84,6 +95,7 @@ impl ContainerAppTransport {
 
         let proxy_shutdown = CancellationToken::new();
         let state = TransportState {
+            gateway: self.gateway,
             control_server: self.control_server,
             app_http_port: self.app_http_port,
             command_timeout: self.command_timeout,
@@ -131,6 +143,7 @@ impl ContainerAppTransport {
 
 #[derive(Clone)]
 struct TransportState {
+    gateway: Option<Arc<gateway::GatewayCredential>>,
     control_server: Arc<ControlGrpcServer>,
     app_http_port: Option<u16>,
     command_timeout: Duration,
@@ -140,8 +153,28 @@ struct TransportState {
 
 async fn handle_request(
     State(state): State<TransportState>,
-    request: Request<Body>,
+    mut request: Request<Body>,
 ) -> impl IntoResponse {
+    // Gateway HTTP must not be interpreted as native trigger delivery, even when
+    // its original path or application headers resemble Dapr or timer metadata.
+    match gateway::restore_request(&mut request, state.gateway.as_deref()) {
+        Ok(true) => {
+            return match state.app_http_port {
+                Some(port) => {
+                    forward_http_request(
+                        &state.http_client,
+                        request,
+                        port,
+                        state.proxy_shutdown.clone(),
+                    )
+                    .await
+                }
+                None => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+            };
+        }
+        Ok(false) => {}
+        Err(status) => return status.into_response(),
+    }
     let path = request.uri().path().to_string();
     let method = request.method().clone();
 
@@ -451,5 +484,55 @@ async fn handle_azure_storage_cloudevent(
             error!(error = %e, event_type = %event_type, "Failed to parse Azure storage CloudEvent");
             (StatusCode::BAD_REQUEST, "Invalid storage event").into_response()
         }
+    }
+}
+
+#[cfg(test)]
+mod gateway_tests {
+    use super::*;
+    use axum::http::header::HOST;
+
+    #[tokio::test]
+    async fn authenticated_gateway_http_bypasses_trigger_classification() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let app = Router::new().fallback(any(|request: Request<Body>| async move {
+            assert_eq!(request.uri().to_string(), "/api/timer%2Fname?x=1&x=2");
+            assert_eq!(request.headers()[HOST], "private.example.test:443");
+            assert!(!request.headers().contains_key("x-alien-gateway-token"));
+            assert!(!request.headers().contains_key("x-alien-original-host"));
+            assert!(!request.headers().contains_key("x-alien-original-target"));
+            let bytes = request.into_body().collect().await.unwrap().to_bytes();
+            (StatusCode::ACCEPTED, bytes)
+        }));
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let secret = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let state = TransportState {
+            gateway: Some(Arc::new(gateway::GatewayCredential::new(secret).unwrap())),
+            control_server: Arc::new(ControlGrpcServer::new()),
+            app_http_port: Some(port),
+            command_timeout: Duration::from_secs(1),
+            http_client: create_forward_client().unwrap(),
+            proxy_shutdown: CancellationToken::new(),
+        };
+        let payload = vec![0xff; 131_072];
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri("/api/timer")
+            .header("x-alien-gateway-token", secret)
+            .header("x-alien-original-host", "private.example.test:443")
+            .header("x-alien-original-target", "/api/timer%2Fname?x=1&x=2")
+            .header("x-azure-timer", "spoofed")
+            .header("ce-type", "com.dapr.event.sent")
+            .header("dapr-content-type", "application/json")
+            .body(Body::from(payload.clone()))
+            .unwrap();
+        let response = handle_request(State(state), request).await.into_response();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        assert_eq!(
+            response.into_body().collect().await.unwrap().to_bytes(),
+            payload
+        );
+        server.abort();
     }
 }

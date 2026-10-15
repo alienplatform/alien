@@ -1474,6 +1474,7 @@ dependencies = [
  "sha2 0.10.9",
  "snapbox",
  "strip-ansi-escapes",
+ "subtle",
  "tempfile",
  "test-context",
  "tokio",
