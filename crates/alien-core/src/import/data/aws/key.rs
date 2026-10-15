@@ -8,4 +8,10 @@ use serde::{Deserialize, Serialize};
 pub struct AwsKeyImportData {
     /// Immutable KMS key ARN. Alias ARNs are not accepted.
     pub key_arn: String,
+    /// Setup installed the scoped key availability probe permission.
+    #[serde(
+        default,
+        deserialize_with = "crate::import::data::deserialize_bool_from_bool_or_string"
+    )]
+    pub availability_probe: bool,
 }

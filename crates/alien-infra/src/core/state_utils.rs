@@ -52,6 +52,11 @@ pub trait StackResourceStateExt {
     /// Attempts to retry this resource if it's currently in a failed state.
     /// Uses the stored `last_failed_state` to resume from exactly where the failure occurred.
     fn retry_failed(&mut self) -> Result<bool>;
+
+    /// Reconciles a failed resource record whose controller is still mid-operation.
+    /// Keeps the polling checkpoint for same-config retries, while allowing a changed
+    /// configuration to enter a new update from the controller's failure state.
+    fn settle_failed_controller(&mut self) -> Result<bool>;
 }
 
 impl StackResourceStateExt for StackResourceState {
@@ -166,6 +171,36 @@ impl StackResourceStateExt for StackResourceState {
             }
             None => Ok(None),
         }
+    }
+
+    fn settle_failed_controller(&mut self) -> Result<bool> {
+        if !matches!(
+            self.status,
+            ResourceStatus::ProvisionFailed
+                | ResourceStatus::UpdateFailed
+                | ResourceStatus::DeleteFailed
+        ) {
+            return Ok(false);
+        }
+        let Some(mut controller) = self.get_internal_controller()? else {
+            return Ok(false);
+        };
+        if !matches!(
+            (self.status, controller.get_status()),
+            (
+                ResourceStatus::ProvisionFailed,
+                ResourceStatus::Provisioning
+            ) | (ResourceStatus::UpdateFailed, ResourceStatus::Updating)
+                | (ResourceStatus::DeleteFailed, ResourceStatus::Deleting)
+        ) {
+            return Ok(false);
+        }
+        if self.last_failed_state.is_none() {
+            self.set_last_failed_controller(Some(controller.box_clone()))?;
+        }
+        controller.transition_to_failure();
+        self.set_internal_controller(Some(controller))?;
+        Ok(true)
     }
 
     fn retry_failed(&mut self) -> Result<bool> {
@@ -464,6 +499,27 @@ fn prepare_for_destroy_matching(
                                 );
                             }
                             Err(e) => {
+                                // Only a controller without a delete flow refuses this
+                                // transition. Types that enter a deployment only through
+                                // stack import (keys) have none. If creating failed before
+                                // anything was recorded, there is nothing to tear down.
+                                let never_provisioned = resource_state.status
+                                    == ResourceStatus::ProvisionFailed
+                                    && resource_state.outputs.is_none()
+                                    && resource_state.previous_config.is_none();
+                                if never_provisioned {
+                                    tracing::info!(
+                                        resource_id = %resource_id,
+                                        "Marking never-provisioned resource without a delete flow as deleted"
+                                    );
+                                    resource_state.set_internal_controller(None)?;
+                                    resource_state.status = ResourceStatus::Deleted;
+                                    resource_state.retry_attempt = 0;
+                                    resource_state.error = None;
+                                    resource_state.last_failed_state = None;
+                                    prepared_resource_ids.push(resource_id.clone());
+                                    continue;
+                                }
                                 if mode == DestroyPreparationMode::Teardown {
                                     return Err(e);
                                 }

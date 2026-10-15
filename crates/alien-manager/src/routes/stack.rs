@@ -33,8 +33,10 @@ use axum::{
     Router,
 };
 use sha2::{Digest, Sha256};
+use tracing::warn;
 
 use alien_core::{
+    container_resources::keep_volume_sizes_over_setup_source,
     import::{
         ImportContext, ImportedResource, StackImportRequest, StackImportResponse,
         CURRENT_SETUP_IMPORT_FORMAT_VERSION, MIN_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION,
@@ -297,6 +299,29 @@ pub async fn stack_import(
                 return ErrorData::bad_request(
                     "Endpoint access cannot change after setup. Create a new deployment to change endpoint access.",
                 ).into_response();
+            }
+            // A compute update can grow a volume without the setup source
+            // learning about it, so its stale lower value keeps the installed
+            // capacity instead of failing the next update as a shrink.
+            if let Some(compute) = req.stack_settings.compute.as_mut() {
+                for kept in keep_volume_sizes_over_setup_source(
+                    compute,
+                    existing.stack_state.as_ref(),
+                    existing
+                        .stack_settings
+                        .as_ref()
+                        .and_then(|settings| settings.compute.as_ref()),
+                ) {
+                    // WARN, not INFO: the stored size silently differs from what the setup
+                    // source says until its parameter or config is updated.
+                    warn!(
+                        deployment_id = %existing.id,
+                        container_id = %kept.container_id,
+                        requested_gib = kept.requested_gib,
+                        kept_gib = kept.kept_gib,
+                        "Setup registration asked for a smaller volume than the deployment has; keeping the larger size. Update the setup source to the kept size"
+                    );
+                }
             }
             // This write replaces the stored map and the request never carries
             // a generated secret, so keep the value the deployment holds.
@@ -1220,8 +1245,8 @@ fn reimport_runtime_metadata(
             ),
         })
     })?;
-    let baseline_frozen_digest = baseline_stack.setup_owned_digest();
-    let target_frozen_digest = prepared_stack.setup_owned_digest();
+    let baseline_frozen_digest = baseline_stack.setup_update_digest();
+    let target_frozen_digest = prepared_stack.setup_update_digest();
 
     metadata.setup_update_authorization =
         (baseline_frozen_digest != target_frozen_digest).then(|| SetupUpdateAuthorization {
@@ -1238,12 +1263,10 @@ fn reimport_runtime_metadata(
 
 /// Refuses setup choices whose change would alter the management permissions setup installed.
 ///
-/// Some settings, such as heartbeats, decide management permission sets. A setup rerun proves
-/// only its Frozen resources (`SetupUpdateAuthorization` digests them, not permissions), so the
-/// update it schedules would fail the permission compatibility preflight after the setup artifact
-/// already reported success. Refusing here, inside the registration the artifact calls
-/// synchronously, fails the setup run itself: CloudFormation rolls the stack back and nothing is
-/// recorded. Both sides are prepared from the same source stack, so only the settings differ.
+/// Settings such as heartbeats remain fixed for an installation. Refusing a change inside
+/// registration fails the setup run itself, so CloudFormation can roll back the change.
+/// Both sides use the same source stack: a new release's explicitly installed permission
+/// changes are instead covered by its exact setup-update authorization.
 async fn refuse_management_permission_changes(
     source_stack: &Stack,
     installed_settings: &StackSettings,
@@ -1348,7 +1371,8 @@ async fn prepare_import_stack(
         volume_restores: Vec::new(),
     };
 
-    runner
+    let quota_activation_declared = source_stack.resources.contains_key("enable-cloud-quotas");
+    let mut prepared = runner
         .apply_mutations(source_stack, &stack_state, &config)
         .await
         .map_err(|err| {
@@ -1358,7 +1382,20 @@ async fn prepare_import_stack(
                     err.message
                 ),
             })
-        })
+        })?;
+    // Older setup artifacts never enabled the optional quota API. Keep it
+    // absent, rather than fabricate imported Running state or ask a management
+    // identity to perform setup. Disabled quota reads remain non-blocking.
+    if req.base_platform.unwrap_or(req.platform) == Platform::Gcp
+        && !quota_activation_declared
+        && !req
+            .resources
+            .iter()
+            .any(|resource| resource.id == "enable-cloud-quotas")
+    {
+        prepared.resources.shift_remove("enable-cloud-quotas");
+    }
+    Ok(prepared)
 }
 
 fn infer_import_environment_info(req: &StackImportRequest) -> Option<EnvironmentInfo> {
@@ -1705,6 +1742,35 @@ mod setup_update_authorization_tests {
         );
     }
 
+    #[tokio::test]
+    async fn old_gcp_handoff_only_omits_implicit_quota_activation() {
+        let mut req = request();
+        req.platform = Platform::Gcp;
+        let source = Stack::new("legacy".into()).build();
+        let prepared = prepare_import_stack(source, &req, &req.stack_settings)
+            .await
+            .unwrap();
+        assert!(!prepared.resources.contains_key("enable-cloud-quotas"));
+        validate_import_handoff(&req, &prepared).unwrap();
+
+        // An explicitly requested activation remains required, including this
+        // API. Backwards compatibility must not weaken ordinary setup ownership.
+        for service in ["cloudquotas.googleapis.com", "compute.googleapis.com"] {
+            let source = Stack::new("explicit".into())
+                .add(
+                    alien_core::ServiceActivation::new("enable-cloud-quotas".into())
+                        .service_name(service.into())
+                        .build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build();
+            // Internal setup resources are not legal source-template resources;
+            // exercise the ownership guard directly with the prepared shape.
+            let error = validate_import_handoff(&req, &source).unwrap_err();
+            assert!(error.message.contains("enable-cloud-quotas"));
+        }
+    }
+
     fn record(prepared_stack: Stack) -> DeploymentRecord {
         DeploymentRecord {
             supplied_stacks: None,
@@ -1969,6 +2035,38 @@ mod setup_update_authorization_tests {
     }
 
     #[test]
+    fn permission_only_reimport_mints_exact_setup_authority() {
+        let baseline = stack("live", "frozen");
+        let mut target = baseline.clone();
+        target.permissions.management = alien_core::permissions::ManagementPermissions::Extend(
+            alien_core::permissions::PermissionProfile::new()
+                .resource("database", ["postgres/key-recovery"]),
+        );
+        let metadata = reimport_runtime_metadata(
+            &record(baseline.clone()),
+            &target,
+            "release",
+            &request(),
+            Default::default(),
+        )
+        .expect("setup may install a new scoped grant");
+        let authority = metadata
+            .setup_update_authorization
+            .expect("permission update authority");
+        assert_eq!(baseline.setup_owned_digest(), target.setup_owned_digest());
+        assert_ne!(
+            authority.baseline_frozen_digest,
+            authority.target_frozen_digest
+        );
+        assert_eq!(
+            authority.baseline_frozen_digest,
+            baseline.setup_update_digest()
+        );
+        assert_eq!(authority.target_frozen_digest, target.setup_update_digest());
+        assert_eq!(metadata.prepared_stack, Some(baseline));
+    }
+
+    #[test]
     fn frozen_reimport_mints_exact_authority_without_losing_runtime_metadata() {
         let baseline = stack("live", "frozen-a");
         let target = stack("live", "frozen-b");
@@ -1986,11 +2084,11 @@ mod setup_update_authorization_tests {
 
         assert_eq!(
             authorization.baseline_frozen_digest,
-            baseline.setup_owned_digest()
+            baseline.setup_update_digest()
         );
         assert_eq!(
             authorization.target_frozen_digest,
-            target.setup_owned_digest()
+            target.setup_update_digest()
         );
         assert_eq!(authorization.release_id, "release");
         assert_eq!(

@@ -1,0 +1,25 @@
+{
+  "id": "key/availability",
+  "description": "Allows checking key availability by encrypting public probe text, without decrypting data",
+  "platforms": {
+    "aws": [
+      {
+        "label": "probe-key-availability",
+        "description": "Exercise the external key store with an isolated probe context.",
+        "grant": {
+          "actions": ["kms:Encrypt"]
+        },
+        "binding": {
+          "resource": {
+            "resources": ["${resourceName}"],
+            "condition": {
+              "StringEquals": {
+                "kms:EncryptionContext:alien.dev/purpose": "key-health"
+              }
+            }
+          }
+        }
+      }
+    ]
+  }
+}

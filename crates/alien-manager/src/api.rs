@@ -60,6 +60,7 @@ impl Modify for BearerSecurity {
         crate::routes::deployments::get_deployment_info,
         crate::routes::deployments::delete_deployment,
         crate::routes::deployments::retry_deployment,
+        crate::routes::deployments::set_quota_warning_overrides,
         crate::routes::deployments::redeploy,
         // Releases
         crate::routes::releases::create_release,
@@ -81,7 +82,6 @@ impl Modify for BearerSecurity {
         crate::routes::sync::agent_sync,
         crate::routes::sync::initialize,
         // Credentials
-        crate::routes::credentials::mint_credentials,
         // Remote bindings
         crate::routes::bindings::resolve_binding,
         // Vault secrets
@@ -92,6 +92,7 @@ impl Modify for BearerSecurity {
     components(schemas(
         // Deployment types
         crate::routes::deployments::CreateDeploymentRequest,
+        crate::routes::deployments::SetQuotaWarningOverridesRequest,
         crate::routes::deployments::CreateDeploymentResponse,
         crate::routes::deployments::DeploymentResponse,
         crate::routes::deployments::DeploymentGroupMinimal,
@@ -140,8 +141,6 @@ impl Modify for BearerSecurity {
         alien_core::sync::DynamicContainerReport,
         alien_core::sync::DynamicContainerStatus,
         // Credentials types
-        crate::routes::credentials::MintCredentialsRequest,
-        crate::routes::credentials::MintCredentialsResponse,
         // Remote binding types
         crate::routes::bindings::ResolveBindingRequest,
         crate::routes::bindings::ResolveBindingResponse,
@@ -190,7 +189,6 @@ impl Modify for BearerSecurity {
         (name = "deployment-groups", description = "Deployment group management"),
         (name = "stack-import", description = "Setup artifact stack import (CFN, TF, Helm)"),
         (name = "sync", description = "Agent sync and state reconciliation"),
-        (name = "credentials", description = "Credential resolution for deployments"),
         (name = "bindings", description = "Remote resource binding resolution"),
         (name = "vault", description = "Deployment Vault secret management"),
         (name = "telemetry", description = "OTLP telemetry ingestion"),

@@ -35,6 +35,21 @@ pub enum ErrorData {
         resource_id: Option<String>,
     },
 
+    /// A checked cloud quota filled after the preflight read.
+    #[cfg(any(feature = "aws", feature = "gcp"))]
+    #[error(
+        code = "CLOUD_QUOTA_EXCEEDED",
+        message = "Cloud quota exceeded: {message}",
+        retryable = "false",
+        internal = "false"
+    )]
+    CloudQuotaExceeded {
+        /// The same identity reported by the runtime quota check.
+        quota: alien_preflights::quotas::QuotaIdentity,
+        /// Provider failure with scope and quota increase guidance.
+        message: String,
+    },
+
     /// Resource configuration validation failed.
     #[error(
         code = "RESOURCE_CONFIG_INVALID",

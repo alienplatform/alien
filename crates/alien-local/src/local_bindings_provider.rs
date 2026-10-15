@@ -186,6 +186,10 @@ impl LocalBindingsProvider {
     }
 
     /// Triggers graceful shutdown and waits for all background tasks to complete.
+    ///
+    /// Native Workers and Daemons are child processes and always drain here. Docker
+    /// containers are independent of this process and keep running; owners that tie
+    /// container lifetime to their session call [`Self::stop_containers`].
     pub async fn shutdown(self: Arc<Self>) {
         let worker_manager = { self.worker_manager.read().unwrap().clone() };
         if let Some(worker_manager) = worker_manager {
@@ -206,6 +210,22 @@ impl LocalBindingsProvider {
             if let Err(e) = task.await {
                 tracing::warn!("Background task failed during shutdown: {:?}", e);
             }
+        }
+    }
+
+    /// Stops the Docker containers recorded in this state directory by their
+    /// immutable IDs, keeping metadata and data for the next session.
+    pub async fn stop_containers(&self) -> Result<()> {
+        let container_manager = { self.container_manager.read().unwrap().clone() };
+        match container_manager {
+            Some(manager) => manager.shutdown_all().await,
+            // A resumed session can stop before its first reconciliation loads Docker.
+            None if self.state_dir.join("containers").is_dir() => {
+                LocalContainerManager::new(self.state_dir.clone())?
+                    .shutdown_all()
+                    .await
+            }
+            None => Ok(()),
         }
     }
 

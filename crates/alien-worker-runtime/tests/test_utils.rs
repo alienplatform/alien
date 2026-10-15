@@ -6,12 +6,14 @@
 
 use anyhow::Context;
 use std::{
+    io::ErrorKind,
     net::{Ipv4Addr, TcpListener},
     path::PathBuf,
     process::Command as StdCommand,
     sync::Once,
 };
 use tracing::{debug, info};
+use uuid::Uuid;
 use workspace_root::get_workspace_root;
 
 /// Global state to ensure alien-test-app is built only once across all tests
@@ -145,13 +147,14 @@ pub fn get_test_app_path() -> anyhow::Result<PathBuf> {
 
 /// Allocates distinct loopback ports for the child application and its transport.
 ///
-/// Both listeners stay bound until both ports have been selected, preventing the
-/// operating system from returning the same ephemeral port for each endpoint.
+/// Both listeners stay bound until both ports have been selected. Use ports below
+/// the OS ephemeral range: after these reservations close, the worker's outgoing
+/// gRPC connection must not claim a port before its HTTP transport binds it.
 pub fn distinct_free_local_ports() -> anyhow::Result<(u16, u16)> {
-    let application_listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
-        .context("Failed to allocate child application port")?;
-    let transport_listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
-        .context("Failed to allocate runtime transport port")?;
+    let application_listener =
+        reserve_test_listener().context("Failed to allocate child application port")?;
+    let transport_listener =
+        reserve_test_listener().context("Failed to allocate runtime transport port")?;
 
     let application_port = application_listener
         .local_addr()
@@ -163,4 +166,20 @@ pub fn distinct_free_local_ports() -> anyhow::Result<(u16, u16)> {
         .port();
 
     Ok((application_port, transport_port))
+}
+
+fn reserve_test_listener() -> std::io::Result<TcpListener> {
+    let start = (Uuid::new_v4().as_u128() % 10_000) as u16;
+    for offset in 0..10_000 {
+        let port = 10_000 + (start + offset) % 10_000;
+        match TcpListener::bind((Ipv4Addr::UNSPECIFIED, port)) {
+            Ok(listener) => return Ok(listener),
+            Err(error) if error.kind() == ErrorKind::AddrInUse => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(std::io::Error::new(
+        ErrorKind::AddrInUse,
+        "No free worker test port in 10000..20000",
+    ))
 }

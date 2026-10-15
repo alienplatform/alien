@@ -184,6 +184,17 @@ pub struct UpArgs {
     #[arg(long)]
     pub config: Option<PathBuf>,
 
+    /// Downgrade a quota failure to a visible warning for this deployment (repeatable).
+    #[arg(
+        long = "quota-warning-override",
+        conflicts_with = "clear_quota_warning_overrides"
+    )]
+    pub quota_warning_overrides: Vec<String>,
+
+    /// Remove all saved quota warning overrides from this deployment.
+    #[arg(long)]
+    pub clear_quota_warning_overrides: bool,
+
     /// Validate the config locally without authentication, API calls, or deployment tracking.
     #[arg(long, requires = "config")]
     pub validate_only: bool,
@@ -219,6 +230,8 @@ struct DeployConfigFile {
     base_platform: Option<String>,
     /// Network settings for cloud deployments.
     network: Option<DeployConfigNetwork>,
+    /// Quota identities whose failures become visible, non-blocking warnings.
+    quota_warning_overrides: Option<Vec<String>>,
     /// Update delivery mode.
     updates: Option<UpdatesMode>,
     /// Telemetry delivery mode.
@@ -996,6 +1009,77 @@ mod tests {
         reconcile.assert_hits_async(0).await;
     }
 
+    /// A hosted detail read keeps the previous failure visible while acquire projects
+    /// the newly accepted target to Pending. Setup must execute the claimed target.
+    #[tokio::test]
+    async fn setup_retries_a_failed_first_install_from_the_claimed_status() {
+        let server = MockServer::start_async().await;
+        let mut detail = installed_deployment("preflights-failed", Some("rel_target"));
+        detail["currentReleaseId"] = serde_json::Value::Null;
+        let deployment = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/v1/deployments/dep_demo");
+                then.status(200).json_body(detail);
+            })
+            .await;
+        let acquire = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST).path("/v1/sync/acquire");
+                then.status(200).json_body(serde_json::json!({"deployments": [{
+                "deployment": {"id": "dep_demo", "status": "pending", "retryRequested": false},
+                "executionClaim": {"operationId": "op_corrected", "attemptId": "attempt_2"}
+            }]}));
+            })
+            .await;
+        let mut target = mock_release("rel_target");
+        target["stack"]["machines"] = target["stack"]["aws"].take();
+        let release = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/v1/releases/rel_target");
+                then.status(200).json_body(target);
+            })
+            .await;
+        let progressed = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST).path("/v1/sync/reconcile")
+                .json_body_partial(serde_json::json!({
+                    "state": {"status": "initial-setup"},
+                    "executionClaim": {"operationId": "op_corrected", "attemptId": "attempt_2"}
+                }).to_string());
+                then.status(409).json_body(serde_json::json!({
+                    "code": "CHECKPOINT_REFUSED", "message": "claimed target reached initial setup",
+                    "retryable": false, "internal": false
+                }));
+            })
+            .await;
+        let unlock = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST).path("/v1/sync/release");
+                then.status(200);
+            })
+            .await;
+        let error = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            run_machines_setup(&server),
+        )
+        .await
+        .expect("setup finishes")
+        .expect_err("stop at the first execution checkpoint");
+        assert!(
+            error
+                .to_string()
+                .contains("claimed target reached initial setup"),
+            "{error:?}"
+        );
+        assert!(progressed.hits_async().await >= 1);
+        deployment.assert_hits_async(2).await;
+        acquire.assert_hits_async(1).await;
+        release.assert_hits_async(1).await;
+        unlock.assert_hits_async(1).await;
+    }
+
     /// A manager can remove the record on the `Deleted` checkpoint and still answer 500 (work
     /// after its commit failed). The final reconcile then finds the record gone, so the
     /// teardown that finished is reported as finished.
@@ -1612,6 +1696,387 @@ mod tests {
     fn non_machines_deploy_prints_progress() {
         assert!(should_print_deploy_progress(Platform::Aws));
         assert!(should_print_deploy_progress(Platform::Local));
+    }
+
+    #[tokio::test]
+    async fn standalone_override_command_saves_clears_and_stops_on_refusal() {
+        for (clear, response_status, change_compute, status, same) in [
+            (false, 204, false, "running", false),
+            (true, 204, false, "running", false),
+            (false, 409, false, "running", false),
+            (false, 403, false, "running", false),
+            (false, 404, false, "running", false),
+            (false, 204, true, "running", false),
+            (false, 204, false, "preflights-failed", false),
+            (false, 409, false, "preflights-failed", false),
+            (false, 204, false, "running", true),
+            (false, 204, false, "preflights-failed", true),
+            (false, 204, true, "running", true),
+            (false, 204, false, "update-failed", false),
+            (true, 204, false, "update-failed", false),
+            (false, 409, false, "update-failed", false),
+            (false, 204, false, "update-failed", true),
+        ] {
+            let failed = status != "running";
+            let server = httpmock::MockServer::start_async().await;
+            let name = format!("standalone-override-{}", uuid::Uuid::new_v4());
+            let id = "dep_demo";
+            let mut body = installed_deployment("running", None);
+            body["id"] = serde_json::json!(id);
+            body["platform"] = serde_json::json!("aws");
+            body["status"] = serde_json::json!(status);
+            if failed {
+                body["currentReleaseId"] = if status == "update-failed" {
+                    serde_json::json!("rel_demo")
+                } else {
+                    serde_json::Value::Null
+                };
+                body["desiredReleaseId"] = serde_json::json!("rel_demo");
+            }
+            body["stackSettings"] = serde_json::json!({"compute": {
+                "pools": {"general": {"mode": "fixed", "machines": 1, "machine": "t4g.small"}}
+            }, "quotaWarningOverrides": if clear || same { vec!["L-1216C47A"] } else { vec![] }});
+            let deployment = server
+                .mock_async(|when, then| {
+                    when.method(httpmock::Method::GET)
+                        .path(format!("/v1/deployments/{id}"));
+                    then.status(200).json_body(body);
+                })
+                .await;
+            let overrides: Vec<&str> = if clear { vec![] } else { vec!["L-1216C47A"] };
+            let save = server
+                .mock_async(|when, then| {
+                    when.method(httpmock::Method::PATCH)
+                        .path(format!("/v1/deployments/{id}/quota-warning-overrides"))
+                        .header("authorization", "Bearer test-override-token")
+                        .json_body(serde_json::json!({"quotaWarningOverrides": overrides}));
+                    if response_status == 204 {
+                        then.status(204);
+                    } else {
+                        then.status(response_status).json_body(serde_json::json!({
+                            "code": "QUOTA_OVERRIDES_NOT_SAVED", "message": "settings refused", "retryable": false, "internal": false
+                        }));
+                    }
+                })
+                .await;
+            let acquire = server
+                .mock_async(|when, then| {
+                    when.method(httpmock::Method::POST).path("/v1/sync/acquire");
+                    then.status(500);
+                })
+                .await;
+            let retry = server
+                .mock_async(|when, then| {
+                    when.method(httpmock::Method::POST)
+                        .path(format!("/v1/deployments/{id}/retry"));
+                    then.status(409).json_body(serde_json::json!({
+                        "code": "RETRY_REFUSED", "message": "retry refused after save", "retryable": false, "internal": false
+                    }));
+                })
+                .await;
+            let release = server
+                .mock_async(|when, then| {
+                    when.method(httpmock::Method::GET)
+                        .path("/v1/releases/rel_demo");
+                    then.status(200).json_body(
+                        serde_json::json!({"stack": {"aws": {"id": "override", "resources": {}}}}),
+                    );
+                })
+                .await;
+            let mut argv = vec!["deploy", "--name", &name, "--platform", "aws"];
+            if clear {
+                argv.push("--clear-quota-warning-overrides");
+            } else {
+                argv.extend(["--quota-warning-override", "L-1216C47A"]);
+            }
+            let config = tempfile::NamedTempFile::new().unwrap();
+            if change_compute {
+                std::fs::write(config.path(), "[compute.pools.general]\nmode = \"fixed\"\nmachines = 2\nmachine = \"t4g.small\"\n").unwrap();
+                argv.extend(["--config", config.path().to_str().unwrap()]);
+            }
+            let base_url = server.base_url();
+            argv.extend([
+                "--base-url",
+                &base_url,
+                "--manager-url",
+                &base_url,
+                "--token",
+                "test-override-token",
+            ]);
+            let resolve = server
+                .mock_async(|when, then| {
+                    when.method(httpmock::Method::GET).path("/v1/resolve");
+                    then.status(200)
+                        .json_body(serde_json::json!({"managerUrl": base_url}));
+                })
+                .await;
+            let initialize = server.mock_async(|when, then| {
+                when.method(httpmock::Method::POST).path("/v1/initialize");
+                then.status(200).json_body(serde_json::json!({"deploymentId": id, "deploymentModel": "push", "token": "test-override-token"}));
+            }).await;
+            let result = tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                up_command(UpArgs::try_parse_from(argv).unwrap(), None),
+            )
+            .await
+            .expect("command finishes");
+            let mut tracker = DeploymentTracker::new().unwrap();
+            tracker.remove(&name).unwrap();
+            resolve.assert_async().await;
+            initialize.assert_async().await;
+            if same && !change_compute {
+                if failed {
+                    let error = result
+                        .expect_err("explicit deploy retries even an unchanged saved override");
+                    assert!(
+                        error.to_string().contains("retry refused after save"),
+                        "{error:?}"
+                    );
+                } else {
+                    result.expect("same saved list succeeds without a write");
+                }
+                save.assert_hits_async(0).await;
+            } else if change_compute {
+                let error = result.expect_err("compute change must stop before save");
+                assert_eq!(error.code, "VALIDATION_ERROR", "{error:?}");
+                save.assert_hits_async(0).await;
+            } else {
+                if response_status == 204 && !failed {
+                    result.expect("save or clear succeeds");
+                } else {
+                    let error = result.expect_err("refusal must stop command");
+                    assert!(
+                        error
+                            .to_string()
+                            .contains(if failed && response_status == 204 {
+                                "retry refused after save"
+                            } else {
+                                "settings refused"
+                            }),
+                        "{error:?}"
+                    );
+                }
+                save.assert_async().await;
+            }
+            deployment.assert_async().await;
+            acquire.assert_hits_async(0).await;
+            retry
+                .assert_hits_async(usize::from(failed && response_status == 204))
+                .await;
+            release.assert_hits_async(0).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn hosted_initial_override_command_submits_before_setup_and_stops_on_refusal() {
+        for (status, same) in [
+            ("pending", false),
+            ("preflights-failed", false),
+            ("preflights-failed", true),
+        ] {
+            let manager = MockServer::start_async().await;
+            let api = MockServer::start_async().await;
+            let name = format!("hosted-override-{}", uuid::Uuid::new_v4());
+            let mut detail = installed_deployment(status, Some("rel_target"));
+            detail["platform"] = serde_json::json!("aws");
+            detail["currentReleaseId"] = serde_json::Value::Null;
+            detail["stackSettings"] = serde_json::json!({"quotaWarningOverrides":
+                if same { vec!["L-1216C47A"] } else { vec![] }});
+            let deployment = manager
+                .mock_async(|when, then| {
+                    when.method(httpmock::Method::GET)
+                        .path("/v1/deployments/dep_demo");
+                    then.status(200).json_body(detail);
+                })
+                .await;
+            let save = api
+                .mock_async(|when, then| {
+                    when.method(httpmock::Method::PATCH)
+                        .path("/v1/deployments/dep_demo/compute")
+                        .header("authorization", "Bearer test-override-token")
+                        .json_body(serde_json::json!({"quotaWarningOverrides": ["L-1216C47A"]}));
+                    then.status(409).body("hosted settings refused");
+                })
+                .await;
+            let acquire = manager
+                .mock_async(|when, then| {
+                    when.method(httpmock::Method::POST).path("/v1/sync/acquire");
+                    then.status(500);
+                })
+                .await;
+            let manager_url = manager.base_url();
+            api.mock_async(|when, then| {
+                when.method(httpmock::Method::GET).path("/v1/resolve");
+                then.status(200)
+                    .json_body(serde_json::json!({"managerUrl": manager_url}));
+            })
+            .await;
+            manager
+                .mock_async(|when, then| {
+                    when.method(httpmock::Method::POST).path("/v1/initialize");
+                    then.status(200)
+                        .json_body(serde_json::json!({"deploymentId": "dep_demo",
+                    "deploymentModel": "push", "token": "test-override-token"}));
+                })
+                .await;
+            let api_url = api.base_url();
+            let args = UpArgs::parse_from([
+                "deploy",
+                "--name",
+                &name,
+                "--platform",
+                "aws",
+                "--base-url",
+                &api_url,
+                "--manager-url",
+                &manager_url,
+                "--token",
+                "test-override-token",
+                "--quota-warning-override",
+                "L-1216C47A",
+            ]);
+            let error = up_command(args, None)
+                .await
+                .expect_err("refusal stops setup");
+            DeploymentTracker::new().unwrap().remove(&name).unwrap();
+            assert!(
+                error.to_string().contains("hosted settings refused"),
+                "{status}: {error:?}"
+            );
+            save.assert_hits_async(1).await;
+            deployment.assert_hits_async(1).await;
+            acquire.assert_hits_async(0).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn quota_warning_overrides_are_saved_and_cleared_without_replacing_compute() {
+        let server = httpmock::MockServer::start_async().await;
+        let compute: ComputeSettings = serde_json::from_value(serde_json::json!({
+            "pools": {"general": {"mode": "fixed", "machines": 1, "machine": "t4g.small"}}
+        }))
+        .unwrap();
+        let overrides = vec!["L-1216C47A".to_string()];
+        let clear = vec![];
+        let cases = [
+            (
+                None,
+                Some(&overrides),
+                serde_json::json!({"quotaWarningOverrides": overrides}),
+            ),
+            (
+                None,
+                Some(&clear),
+                serde_json::json!({"quotaWarningOverrides": []}),
+            ),
+            (
+                Some(&compute),
+                Some(&overrides),
+                serde_json::json!({"compute": compute, "quotaWarningOverrides": overrides}),
+            ),
+            (
+                Some(&compute),
+                None,
+                serde_json::json!({"compute": compute}),
+            ),
+        ];
+        for (compute, overrides, expected) in cases {
+            let patch = hosted_settings_patch(compute, overrides);
+            assert_eq!(patch, expected);
+            let saved = server
+                .mock_async(|when, then| {
+                    when.method(httpmock::Method::PATCH)
+                        .path("/v1/deployments/test-deployment/compute")
+                        .json_body(patch.clone());
+                    then.status(200)
+                        .json_body(serde_json::json!({"outcome": "accepted", "operation": null}));
+                })
+                .await;
+            update_hosted_settings(&server.base_url(), "test-token", "test-deployment", &patch)
+                .await
+                .unwrap();
+            saved.assert_async().await;
+            saved.delete_async().await;
+        }
+        let rejected = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::PATCH)
+                    .path("/v1/deployments/test-deployment/compute");
+                then.status(403).body("permission denied");
+            })
+            .await;
+        let error = update_hosted_settings(
+            &server.base_url(),
+            "test-token",
+            "test-deployment",
+            &serde_json::json!({"quotaWarningOverrides": ["L-1216C47A"]}),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("403"));
+        rejected.assert_async().await;
+    }
+
+    #[test]
+    fn quota_warning_overrides_preserve_explicit_intent_and_sdk_contract() {
+        let config: DeployConfigFile =
+            toml::from_str(r#"quotaWarningOverrides = ["L-1216C47A"]"#).unwrap();
+        let absent = UpArgs::parse_from(["alien-deploy"]);
+        assert_eq!(requested_quota_warning_overrides(&absent, None), None);
+        let settings =
+            load_stack_settings(&absent, Platform::Aws, Platform::Aws, Some(&config)).unwrap();
+        assert_eq!(settings.quota_warning_overrides, ["L-1216C47A"]);
+        let wire = serde_json::to_value(sdk_stack_settings(&settings).unwrap()).unwrap();
+        let restored: StackSettings = serde_json::from_value(wire).unwrap();
+        assert_eq!(
+            restored.quota_warning_overrides,
+            settings.quota_warning_overrides
+        );
+
+        let flags = UpArgs::parse_from([
+            "alien-deploy",
+            "--quota-warning-override",
+            "L-F678F1CE",
+            "--quota-warning-override",
+            "L-0263D0A3",
+        ]);
+        let settings =
+            load_stack_settings(&flags, Platform::Aws, Platform::Aws, Some(&config)).unwrap();
+        assert_eq!(
+            settings.quota_warning_overrides,
+            ["L-F678F1CE", "L-0263D0A3"]
+        );
+        let clear = UpArgs::parse_from(["alien-deploy", "--clear-quota-warning-overrides"]);
+        assert_eq!(
+            requested_quota_warning_overrides(&clear, Some(&config)),
+            Some(vec![])
+        );
+        assert!(
+            load_stack_settings(&clear, Platform::Aws, Platform::Aws, Some(&config))
+                .unwrap()
+                .quota_warning_overrides
+                .is_empty()
+        );
+        assert!(UpArgs::try_parse_from([
+            "alien-deploy",
+            "--clear-quota-warning-overrides",
+            "--quota-warning-override",
+            "L-1216C47A",
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn quota_warning_overrides_reject_unknown_or_wrong_cloud_identities() {
+        for (platform, id) in [
+            (Platform::Aws, "L-NOT-A-QUOTA"),
+            (Platform::Gcp, "L-1216C47A"),
+            (Platform::Local, "L-1216C47A"),
+        ] {
+            let args = UpArgs::parse_from(["alien-deploy", "--quota-warning-override", id]);
+            let error = load_stack_settings(&args, platform, platform, None).unwrap_err();
+            assert!(error.to_string().contains("Invalid quota warning override"));
+        }
     }
 
     #[test]
@@ -2836,6 +3301,120 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
 
     let hosted_platform =
         manager_url.trim_end_matches('/') != resolved.base_url.trim_end_matches('/');
+    let requested_overrides = requested_quota_warning_overrides(&args, deploy_config.as_ref());
+    if let Some(overrides) = &requested_overrides {
+        let saved: StackSettings = current_deployment
+            .stack_settings
+            .clone()
+            .map(serde_json::from_value)
+            .transpose()
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to deserialize saved quota warning overrides".into(),
+            })?
+            .unwrap_or_default();
+        if !hosted_platform {
+            // The standalone endpoint only saves overrides. Refuse a
+            // simultaneous compute change before persisting anything.
+            if stack_settings
+                .compute
+                .as_ref()
+                .is_some_and(|compute| saved.compute.as_ref() != Some(compute))
+            {
+                return Err(AlienError::new(ErrorData::ValidationError {
+                        field: "compute".into(),
+                        message: "Compute settings cannot be changed while saving standalone quota warning overrides. Apply compute changes separately.".into(),
+                    }));
+            }
+        }
+        if *overrides != saved.quota_warning_overrides
+            || (hosted_platform && current_deployment.status == "preflights-failed")
+        {
+            if !hosted_platform {
+                client
+                    .set_quota_warning_overrides()
+                    .id(&deployment_id)
+                    .body(alien_manager_api::types::SetQuotaWarningOverridesRequest {
+                        quota_warning_overrides: overrides.clone(),
+                    })
+                    .send()
+                    .await
+                    .into_sdk_error()
+                    .await
+                    .context(ErrorData::ConfigurationError {
+                        message: "Failed to save quota warning overrides".into(),
+                    })?;
+                if current_deployment.status == "running" {
+                    output::success("Quota warning overrides saved. Redeploy to apply them to the running deployment.");
+                    return Ok(());
+                }
+            } else {
+                if !(init.deployment_model == DeploymentModel::Push
+                    && (supports_hosted_compute_update(&current_deployment.status)
+                        || matches!(
+                            current_deployment.status.as_str(),
+                            "pending" | "preflights-failed"
+                        )))
+                {
+                    return Err(AlienError::new(ErrorData::ValidationError {
+                    field: "quota-warning-override".into(),
+                    message: "This manager cannot save quota warning overrides in the deployment's current state. Update its saved stack settings before retrying.".into(),
+                }));
+                }
+                if matches!(
+                    current_deployment.status.as_str(),
+                    "pending" | "preflights-failed"
+                ) {
+                    // Persist a simultaneous compute correction with the override.
+                    // The API must accept or reject the complete request atomically.
+                    let patch =
+                        hosted_settings_patch(stack_settings.compute.as_ref(), Some(overrides));
+                    update_hosted_settings(
+                        &resolved.base_url,
+                        &effective_token,
+                        &deployment_id,
+                        &patch,
+                    )
+                    .await?;
+                    current_deployment = client
+                        .get_deployment()
+                        .id(&deployment_id)
+                        .send()
+                        .await
+                        .into_sdk_error()
+                        .await
+                        .context(ErrorData::ConfigurationError {
+                            message: "Failed to refresh saved quota warning overrides".into(),
+                        })?
+                        .into_inner();
+                }
+            }
+        }
+    }
+    if !hosted_platform && requested_overrides.is_some() && current_deployment.status == "running" {
+        output::success("Deployment already has the requested quota warning overrides.");
+        return Ok(());
+    }
+    if !hosted_platform
+        && requested_overrides.is_some()
+        && matches!(
+            current_deployment.status.as_str(),
+            "preflights-failed" | "update-failed"
+        )
+    {
+        // Saving does not schedule execution. An explicit deploy must
+        // request the retry only after the setting was accepted.
+        client
+            .retry_deployment()
+            .id(&deployment_id)
+            .send()
+            .await
+            .into_sdk_error()
+            .await
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to retry deployment after saving quota warning overrides".into(),
+            })?;
+    }
     let setup_revision = embedded_config.and_then(|config| config.setup_revision.as_deref());
     let applied_setup_revision = current_deployment
         .runtime_metadata
@@ -2921,7 +3500,7 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
     if supports_hosted_compute_update(&current_deployment.status)
         && init.deployment_model == DeploymentModel::Push
         && hosted_platform
-        && stack_settings.compute.is_some()
+        && (stack_settings.compute.is_some() || requested_overrides.is_some())
     {
         let current_stack_settings: StackSettings = current_deployment
             .stack_settings
@@ -2960,23 +3539,26 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
         }
         if hosted_compute_update_required(
             &current_deployment.status,
-            current_stack_settings.compute != stack_settings.compute,
+            (stack_settings.compute.is_some()
+                && current_stack_settings.compute != stack_settings.compute)
+                || requested_overrides
+                    .as_ref()
+                    .is_some_and(|ids| *ids != current_stack_settings.quota_warning_overrides),
         ) {
-            update_hosted_compute_settings(
-                &resolved.base_url,
-                &effective_token,
-                &deployment_id,
-                stack_settings.compute.as_ref().expect("checked above"),
-            )
-            .await?;
+            let patch = hosted_settings_patch(
+                stack_settings.compute.as_ref(),
+                requested_overrides.as_ref(),
+            );
+            update_hosted_settings(&resolved.base_url, &effective_token, &deployment_id, &patch)
+                .await?;
             output::success(&format!(
-                "Deployment '{}' compute update was accepted by the hosted manager.",
+                "Deployment '{}' settings update was accepted by the hosted manager.",
                 name
             ));
             return Ok(());
         }
         output::success(&format!(
-            "Deployment '{}' already has the requested compute settings.",
+            "Deployment '{}' already has the requested settings.",
             name
         ));
         return Ok(());
@@ -3954,7 +4536,30 @@ fn load_stack_settings(
         }
     }
 
+    if let Some(overrides) = requested_quota_warning_overrides(args, deploy_config) {
+        alien_preflights::quotas::validate_warning_overrides(platform, &overrides).context(
+            ErrorData::ValidationError {
+                field: "quota-warning-override".into(),
+                message: "Invalid quota warning override".into(),
+            },
+        )?;
+        settings.quota_warning_overrides = overrides;
+    }
+
     Ok(settings)
+}
+
+fn requested_quota_warning_overrides(
+    args: &UpArgs,
+    config: Option<&DeployConfigFile>,
+) -> Option<Vec<String>> {
+    if args.clear_quota_warning_overrides {
+        Some(Vec::new())
+    } else if !args.quota_warning_overrides.is_empty() {
+        Some(args.quota_warning_overrides.clone())
+    } else {
+        config.and_then(|config| config.quota_warning_overrides.clone())
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -4826,6 +5431,35 @@ async fn update_hosted_compute_settings(
     deployment_id: &str,
     compute: &ComputeSettings,
 ) -> Result<()> {
+    update_hosted_settings(
+        base_url,
+        token,
+        deployment_id,
+        &serde_json::json!({ "compute": compute }),
+    )
+    .await
+}
+
+fn hosted_settings_patch(
+    compute: Option<&ComputeSettings>,
+    overrides: Option<&Vec<String>>,
+) -> serde_json::Value {
+    let mut patch = serde_json::json!({});
+    if let Some(compute) = compute {
+        patch["compute"] = serde_json::json!(compute);
+    }
+    if let Some(overrides) = overrides {
+        patch["quotaWarningOverrides"] = serde_json::json!(overrides);
+    }
+    patch
+}
+
+async fn update_hosted_settings(
+    base_url: &str,
+    token: &str,
+    deployment_id: &str,
+    patch: &serde_json::Value,
+) -> Result<()> {
     let client = create_manager_http_client(token)?;
     let url = format!(
         "{}/v1/deployments/{}/compute",
@@ -4834,18 +5468,18 @@ async fn update_hosted_compute_settings(
     );
     let response = client
         .patch(&url)
-        .json(&serde_json::json!({ "compute": compute }))
+        .json(patch)
         .send()
         .await
         .into_alien_error()
         .context(ErrorData::ConfigurationError {
-            message: "Failed to update hosted deployment compute settings".to_string(),
+            message: "Failed to update hosted deployment settings".to_string(),
         })?;
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
         return Err(AlienError::new(ErrorData::ConfigurationError {
-            message: format!("Hosted compute update failed with HTTP {status}: {body}"),
+            message: format!("Hosted deployment settings update failed with HTTP {status}: {body}"),
         }));
     }
     Ok(())
@@ -6148,6 +6782,23 @@ async fn push_initial_setup_targeted(
             return Ok(None);
         }
 
+        // Detail reads preserve a previous failure for display. The claim carries
+        // the execution phase for the accepted target (for example Pending after
+        // correcting a first-install preflight failure). Keep the settled-update
+        // check above, then execute that phase rather than the display status.
+        let status = if acquired_deployment.execution_claim.is_some() {
+            acquired_deployment.deployment.get("status")
+                .and_then(serde_json::Value::as_str)
+                .map(parse_deployment_status)
+                .transpose()?
+                .unwrap_or(status)
+        } else {
+            status
+        };
+        state.retry_requested = acquired_deployment.deployment.get("retryRequested")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(deployment.retry_requested);
+
         // Apply the choice only after acquiring the lock and refreshing status,
         // so a setup that completed while we waited cannot change reachability.
         apply_endpoint_access_override(
@@ -6678,7 +7329,7 @@ async fn run_setup_deletion(
 ) -> Result<()> {
     let session = format!("push-setup-deletion-{}", uuid::Uuid::new_v4());
     let acquire_outcome =
-        acquire_setup_delete_deployment(client, deployment_id, &session, deployment_model)
+        acquire_setup_delete_deployment(client, client, deployment_id, &session, deployment_model)
             .await
             .context(ErrorData::DeploymentFailed {
                 operation: "acquire setup teardown lock".to_string(),

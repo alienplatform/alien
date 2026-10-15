@@ -48,6 +48,7 @@ get "network"(){
     }).catchall(z.object({
     
     }).catchall(z.string())).describe("Exact externally managed endpoint URLs, keyed by resource ID and endpoint name.\n\nThis is intended for adopted Machines deployments whose DNS and certificates remain\ncustomer-owned. The platform passes these URLs to the runtime without creating or\nreplacing DNS records or certificates.").nullish(),
+"quotaWarningOverrides": z.optional(z.array(z.string()).describe("Provider quota identities whose preflight failures become visible warnings\nfor this deployment. Checks still run; deploy-time provider limits still apply.\nUnknown identities are rejected. An empty list restores normal blocking.")),
 get "telemetry"(){
                 return TelemetryModeSchema.describe("How telemetry (logs, metrics, traces) is handled.").optional()
               },

@@ -200,6 +200,12 @@ pub trait Ec2Api: Send + Sync + std::fmt::Debug {
         request: DescribeInstanceTypeOfferingsRequest,
     ) -> Result<DescribeInstanceTypeOfferingsResponse>;
 
+    /// Public hardware metadata; quota counts the instance type's default vCPUs.
+    async fn describe_instance_types(
+        &self,
+        instance_types: &[String],
+    ) -> Result<DescribeInstanceTypesResponse>;
+
     // AMI Operations
     async fn describe_images(
         &self,
@@ -633,6 +639,8 @@ impl Ec2Client {
             },
             // Conflict / already exists errors
             "VpcLimitExceeded"
+            | "InternetGatewayLimitExceeded"
+            | "NatGatewayLimitExceeded"
             | "SubnetLimitExceeded"
             | "SecurityGroupLimitExceeded"
             | "AddressLimitExceeded" => ErrorData::QuotaExceeded { message },
@@ -1801,6 +1809,21 @@ impl Ec2Api for Ec2Client {
     // ---------------------------------------------------------------------------
     // Instance Type Operations
     // ---------------------------------------------------------------------------
+
+    async fn describe_instance_types(
+        &self,
+        instance_types: &[String],
+    ) -> Result<DescribeInstanceTypesResponse> {
+        let mut form_data = HashMap::from([
+            ("Action".to_string(), "DescribeInstanceTypes".to_string()),
+            ("Version".to_string(), "2016-11-15".to_string()),
+        ]);
+        for (index, instance_type) in instance_types.iter().enumerate() {
+            form_data.insert(format!("InstanceType.{}", index + 1), instance_type.clone());
+        }
+        self.send_form(form_data, "DescribeInstanceTypes", "InstanceType")
+            .await
+    }
 
     async fn describe_instance_type_offerings(
         &self,
@@ -3693,6 +3716,31 @@ pub struct InstanceState {
     pub name: Option<String>,
 }
 
+/// Public instance-type metadata returned by EC2.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DescribeInstanceTypesResponse {
+    pub instance_type_set: Option<InstanceTypeInfoSet>,
+    pub next_token: Option<String>,
+}
+#[derive(Debug, Deserialize)]
+pub struct InstanceTypeInfoSet {
+    #[serde(rename = "item", default)]
+    pub items: Vec<InstanceTypeInfo>,
+}
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstanceTypeInfo {
+    pub instance_type: Option<String>,
+    #[serde(rename = "vCpuInfo")]
+    pub vcpu_info: Option<VcpuInfo>,
+}
+#[derive(Debug, Deserialize)]
+pub struct VcpuInfo {
+    #[serde(rename = "defaultVCpus")]
+    pub default_vcpus: Option<u32>,
+}
+
 /// Request to describe instances.
 #[derive(Debug, Clone, Serialize, Builder, Default)]
 pub struct DescribeInstancesRequest {
@@ -3742,6 +3790,8 @@ pub struct InstanceSet {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Instance {
+    /// Absent for On-Demand; spot instances consume a separate quota.
+    pub instance_lifecycle: Option<String>,
     pub instance_id: Option<String>,
     pub image_id: Option<String>,
     pub instance_type: Option<String>,
@@ -3944,6 +3994,8 @@ pub struct Volume {
     pub iops: Option<i32>,
     pub throughput: Option<i32>,
     pub encrypted: Option<bool>,
+    /// ARN of the KMS key that encrypts this resource.
+    pub kms_key_id: Option<String>,
     pub snapshot_id: Option<String>,
     pub create_time: Option<String>,
     #[serde(rename = "attachmentSet")]
@@ -4039,6 +4091,8 @@ pub struct Snapshot {
     pub volume_size: Option<i32>,
     pub description: Option<String>,
     pub encrypted: Option<bool>,
+    /// ARN of the KMS key that encrypts this resource.
+    pub kms_key_id: Option<String>,
     pub storage_tier: Option<String>,
     #[serde(rename = "tagSet")]
     pub tag_set: Option<TagSet>,
@@ -4387,6 +4441,19 @@ mod error_mapping_tests {
             matches!(mapped("InvalidVpcState"), Some(ErrorData::RemoteResourceConflict { message, .. })
             if !message.contains("InvalidGroup.Duplicate"))
         );
+    }
+
+    #[test]
+    fn network_count_limit_errors_decode_as_quotas() {
+        for code in [
+            "VpcLimitExceeded",
+            "InternetGatewayLimitExceeded",
+            "NatGatewayLimitExceeded",
+        ] {
+            assert!(
+                matches!(mapped(code), Some(ErrorData::QuotaExceeded { message }) if message == "m")
+            );
+        }
     }
 
     #[test]

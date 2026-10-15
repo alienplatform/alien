@@ -153,6 +153,18 @@ pub fn generate_azure_models(
         let file = std::fs::File::open(source_path).unwrap();
         let mut spec_json: serde_json::Value = serde_json::from_reader(file).unwrap();
         remove_zero_min_length(&mut spec_json);
+        if *spec_name == "ComputeRP.json" {
+            // Azure marks VM sizes as extensible strings: the listed SKUs are examples,
+            // not an exhaustive set. Progenitor otherwise rejects newer live VM sizes.
+            let vm_sizes = spec_json
+                .pointer_mut("/components/schemas/VirtualMachineSizeTypes")
+                .expect("ComputeRP defines VirtualMachineSizeTypes");
+            assert_eq!(
+                vm_sizes.pointer("/x-ms-enum/modelAsString"),
+                Some(&serde_json::Value::Bool(true))
+            );
+            vm_sizes.as_object_mut().unwrap().remove("enum");
+        }
         if !full_models {
             let roots = model_roots
                 .get(*spec_name)

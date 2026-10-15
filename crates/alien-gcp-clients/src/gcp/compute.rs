@@ -70,6 +70,12 @@ impl GcpServiceConfig for ComputeServiceConfig {
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 pub trait ComputeApi: Send + Sync + Debug {
+    /// Reads applied regional quota limits and provider-counted usage.
+    async fn get_region_quotas(&self, region: String) -> Result<QuotaCollection>;
+
+    /// Reads project quotas, including CPUs across all regions when present.
+    async fn get_project_quotas(&self) -> Result<QuotaCollection>;
+
     // --- Zone Operations ---
 
     /// Lists zones in the project.
@@ -765,6 +771,15 @@ pub trait ComputeApi: Send + Sync + Debug {
     /// See: https://cloud.google.com/compute/docs/reference/rest/v1/disks/insert
     async fn insert_disk(&self, zone: String, disk: Disk) -> Result<Operation>;
 
+    /// Expands a disk without detaching it. Capacity is in GiB.
+    /// See: https://cloud.google.com/compute/docs/reference/rest/v1/disks/resize
+    async fn resize_disk(
+        &self,
+        zone: String,
+        disk_name: String,
+        size_gib: u32,
+    ) -> Result<Operation>;
+
     /// Deletes a disk.
     /// See: https://cloud.google.com/compute/docs/reference/rest/v1/disks/delete
     async fn delete_disk(&self, zone: String, disk_name: String) -> Result<Operation>;
@@ -884,6 +899,20 @@ impl ComputeClient {
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 impl ComputeApi for ComputeClient {
+    async fn get_region_quotas(&self, region: String) -> Result<QuotaCollection> {
+        let path = format!("projects/{}/regions/{region}", self.project_id);
+        self.base
+            .execute_request(Method::GET, &path, None, Option::<()>::None, "region")
+            .await
+    }
+
+    async fn get_project_quotas(&self) -> Result<QuotaCollection> {
+        let path = format!("projects/{}", self.project_id);
+        self.base
+            .execute_request(Method::GET, &path, None, Option::<()>::None, "project")
+            .await
+    }
+
     // --- Zone Operations ---
 
     async fn list_zones(&self, filter: Option<String>) -> Result<ZoneList> {
@@ -2681,6 +2710,27 @@ impl ComputeApi for ComputeClient {
         let resource_name = disk.name.clone().unwrap_or_default();
         self.base
             .execute_request(Method::POST, &path, None, Some(disk), &resource_name)
+            .await
+    }
+
+    async fn resize_disk(
+        &self,
+        zone: String,
+        disk_name: String,
+        size_gib: u32,
+    ) -> Result<Operation> {
+        let path = format!(
+            "projects/{}/zones/{}/disks/{}/resize",
+            self.project_id, zone, disk_name
+        );
+        self.base
+            .execute_request(
+                Method::POST,
+                &path,
+                None,
+                Some(serde_json::json!({"sizeGb": size_gib.to_string()})),
+                &disk_name,
+            )
             .await
     }
 
@@ -7504,4 +7554,24 @@ mod tests {
             })
         );
     }
+}
+
+/// Quota fields shared by Compute regions.get and projects.get.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotaCollection {
+    /// Absent quota data is distinct from zero usage.
+    pub quotas: Option<Vec<ComputeQuota>>,
+}
+
+/// Applied quota value and usage reported directly by Compute Engine.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputeQuota {
+    /// Provider metric identity, such as N2_CPUS.
+    pub metric: String,
+    /// Applied limit; absence must not become a catalog default.
+    pub limit: Option<f64>,
+    /// Current provider-counted usage.
+    pub usage: Option<f64>,
 }

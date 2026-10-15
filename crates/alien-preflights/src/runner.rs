@@ -98,6 +98,10 @@ impl PreflightRunner {
         client_config: &ClientConfig,
         platform: Platform,
     ) -> Result<PreflightSummary> {
+        crate::quotas::validate_warning_overrides(
+            platform,
+            &config.stack_settings.quota_warning_overrides,
+        )?;
         info!("Running runtime checks for platform {:?}", platform);
 
         let checks = self.registry.get_runtime_checks(stack, platform);
@@ -115,6 +119,10 @@ impl PreflightRunner {
                     platform: Some(platform.to_string()),
                 })?;
 
+            crate::quotas::apply_warning_overrides(
+                &mut result,
+                &config.stack_settings.quota_warning_overrides,
+            );
             result = result.with_check_metadata(check.code(), check.description());
 
             if !result.success {
@@ -359,6 +367,13 @@ impl PreflightRunner {
         setup_update_authorization: Option<&alien_core::SetupUpdateAuthorization>,
         setup_authority: Option<alien_core::InitialSetupAuthority>,
     ) -> Result<(Stack, PreflightSummary, bool)> {
+        // Invalid deployment settings must not be hidden by setup or
+        // compatibility failures encountered while preparing the target.
+        crate::quotas::validate_warning_overrides(
+            stack_state.platform,
+            &config.stack_settings.quota_warning_overrides,
+        )?;
+
         // Updates reuse saved allocations across releases. Ignore entries for
         // containers no longer declared, including ones removed several releases
         // ago. Fresh installs and planning still reject unknown container IDs.
@@ -408,6 +423,36 @@ impl PreflightRunner {
                     setup_update_authorization_matches(old_stack, target, authorization)
                 })
             });
+
+        // Match the deployment values used by the IAM policy writers. Physical
+        // resource names use shared create naming or saved outputs where available.
+        let mut permission_context = alien_permissions::PermissionContext::new();
+        if let Some(aws) = client_config.aws_config() {
+            permission_context = permission_context
+                .with_aws_account_id(aws.account_id.clone())
+                .with_aws_region(aws.region.clone())
+                .with_stack_prefix(stack_state.resource_prefix.clone());
+        }
+
+        if let Some(alien_core::ManagementConfig::Aws(management)) = &config.management_config {
+            permission_context =
+                permission_context.with_managing_role_arn(management.managing_role_arn.clone());
+            if let Some(account) =
+                alien_permissions::PermissionContext::extract_account_id_from_role_arn(
+                    &management.managing_role_arn,
+                )
+            {
+                permission_context = permission_context.with_managing_account_id(account);
+            }
+        }
+
+        all_results.push(crate::compile_time::iam_workload_aggregate::check(
+            &mutated_stack,
+            platform,
+            setup_authority,
+            &permission_context,
+            Some(stack_state),
+        )?);
 
         let prerequisite_summary = self
             .run_deployment_prerequisite_checks(&mutated_stack, stack_state, config)
@@ -515,8 +560,8 @@ fn setup_update_authorization_matches(
     authorization: &alien_core::SetupUpdateAuthorization,
 ) -> bool {
     old_stack.is_some_and(|old_stack| {
-        old_stack.setup_owned_digest() == authorization.baseline_frozen_digest
-    }) && target_stack.setup_owned_digest() == authorization.target_frozen_digest
+        old_stack.setup_update_digest() == authorization.baseline_frozen_digest
+    }) && target_stack.setup_update_digest() == authorization.target_frozen_digest
 }
 
 impl Default for PreflightRunner {
@@ -577,6 +622,7 @@ mod setup_update_authorization_tests {
                 "removed".into(),
                 ContainerResourceSelection {
                     cpu: Some(4.into()),
+                    volume_size_gib: None,
                     memory: Some("8Gi".into()),
                 },
             )]
@@ -622,13 +668,48 @@ mod setup_update_authorization_tests {
     fn authorization(stack: &Stack) -> SetupUpdateAuthorization {
         SetupUpdateAuthorization {
             nonce: "revision".to_string(),
-            baseline_frozen_digest: stack.setup_owned_digest(),
-            target_frozen_digest: stack.setup_owned_digest(),
+            baseline_frozen_digest: stack.setup_update_digest(),
+            target_frozen_digest: stack.setup_update_digest(),
             release_id: "release".to_string(),
             setup_target: "target".to_string(),
             setup_fingerprint: "fingerprint".to_string(),
             setup_fingerprint_version: 1,
         }
+    }
+
+    #[cfg(feature = "runtime-checks")]
+    #[tokio::test]
+    async fn invalid_quota_override_rejected_even_without_registered_checks() {
+        let config = DeploymentConfig::builder()
+            .stack_settings(alien_core::StackSettings {
+                quota_warning_overrides: vec!["L-TYPO".into()],
+                ..Default::default()
+            })
+            .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .allow_frozen_changes(false)
+            .external_bindings(alien_core::ExternalBindings::default())
+            .build();
+        let runner = PreflightRunner::with_registry(crate::PreflightRegistry::new());
+        let error = runner
+            .run_runtime_checks(
+                &empty_stack(),
+                &StackState::new(Platform::Aws),
+                &config,
+                &ClientConfig::Local {
+                    state_directory: "/unused".into(),
+                },
+                Platform::Aws,
+            )
+            .await
+            .expect_err(
+                "invalid settings cannot hide behind an empty stack or missing credentials",
+            );
+        assert!(error.to_string().contains("L-TYPO"));
+        assert!(error.to_string().contains("Unknown quota override"));
     }
 
     #[cfg(feature = "runtime-checks")]
@@ -697,6 +778,78 @@ mod setup_update_authorization_tests {
             .await
             .expect("explicit setup authority may prepare the new storage");
         assert!(authorized);
+    }
+
+    #[cfg(feature = "runtime-checks")]
+    #[tokio::test]
+    async fn permission_updates_require_exact_setup_authority() {
+        use alien_core::permissions::{ManagementPermissions, PermissionProfile};
+
+        let baseline = empty_stack();
+        let mut target = baseline.clone();
+        target.permissions.management = ManagementPermissions::Extend(
+            PermissionProfile::new().resource("database", ["postgres/key-recovery"]),
+        );
+        let mut authority = authorization(&baseline);
+        let runner = PreflightRunner::with_registry({
+            let mut registry = crate::PreflightRegistry::new();
+            registry.add_compatibility_check(Box::new(
+                crate::compatibility::PermissionProfilesUnchangedCheck,
+            ));
+            registry
+        });
+        let config = deployment_config();
+        let state = StackState::new(Platform::Local);
+        let client = ClientConfig::Local {
+            state_directory: "/unused".to_string(),
+        };
+        for stale_authority in [None, Some(&authority)] {
+            let error = runner
+                .run_deployment_time_preflights(
+                    target.clone(),
+                    &state,
+                    &config,
+                    &client,
+                    Some(&baseline),
+                    stale_authority,
+                    None,
+                )
+                .await
+                .expect_err("an uninstalled grant requires setup");
+            assert_eq!(error.code, "DEPLOYMENT_SETUP_REQUIRED");
+        }
+        authority.target_frozen_digest = target.setup_update_digest();
+        let (prepared, _, authorized) = runner
+            .run_deployment_time_preflights(
+                target.clone(),
+                &state,
+                &config,
+                &client,
+                Some(&baseline),
+                Some(&authority),
+                None,
+            )
+            .await
+            .expect("setup installed this exact grant");
+        assert!(authorized);
+        assert_eq!(prepared.permissions, target.permissions);
+
+        target.permissions.management = ManagementPermissions::Extend(
+            PermissionProfile::new().resource("database", ["postgres/provision"]),
+        );
+        let error = runner
+            .run_deployment_time_preflights(
+                target,
+                &state,
+                &config,
+                &client,
+                Some(&baseline),
+                Some(&authority),
+                None,
+            )
+            .await
+            .expect_err("recovery authority cannot authorize provisioning");
+        assert_eq!(error.code, "DEPLOYMENT_SETUP_REQUIRED");
     }
 
     #[test]
@@ -878,8 +1031,8 @@ mod setup_update_authorization_tests {
 
             let rerun = SetupUpdateAuthorization {
                 nonce: "revision".to_string(),
-                baseline_frozen_digest: old.setup_owned_digest(),
-                target_frozen_digest: target.setup_owned_digest(),
+                baseline_frozen_digest: old.setup_update_digest(),
+                target_frozen_digest: target.setup_update_digest(),
                 release_id: "release".to_string(),
                 setup_target: "target".to_string(),
                 setup_fingerprint: "fingerprint".to_string(),

@@ -12,6 +12,8 @@ use crate::traits::release_channel_store::*;
 /// Statuses in which a deployment takes a new release, as when a release is
 /// created without channels.
 const ELIGIBLE_STATUSES: &str = "('running', 'update-failed', 'refresh-failed')";
+const LOCAL_STARTUP_FAILURES: &str =
+    "('preflights-failed', 'initial-setup-failed', 'provisioning-failed')";
 
 pub struct SqliteReleaseChannelStore {
     db: Arc<SqliteDatabase>,
@@ -202,8 +204,12 @@ impl ReleaseChannelStore for SqliteReleaseChannelStore {
         self.run(
             &format!(
                 "UPDATE deployments
-                 SET desired_release_id = ?1, status = 'update-pending', next_step_after = NULL
-                 WHERE status IN {ELIGIBLE_STATUSES}
+                 SET desired_release_id = ?1,
+                     status = CASE WHEN platform = 'local' AND status IN {LOCAL_STARTUP_FAILURES}
+                                   THEN status ELSE 'update-pending' END,
+                     next_step_after = NULL
+                 WHERE (status IN {ELIGIBLE_STATUSES}
+                        OR (platform = 'local' AND status IN {LOCAL_STARTUP_FAILURES}))
                    AND id IN (
                      SELECT d.id FROM deployments d
                      LEFT JOIN deployment_channels c ON c.deployment_id = d.id

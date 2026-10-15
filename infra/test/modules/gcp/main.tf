@@ -108,6 +108,7 @@ resource "google_project_service" "management_apis" {
     "pubsub.googleapis.com",
     "firestore.googleapis.com",
     "serviceusage.googleapis.com",
+    "cloudquotas.googleapis.com",
     "cloudresourcemanager.googleapis.com",
     "cloudscheduler.googleapis.com",
     "container.googleapis.com",
@@ -120,6 +121,7 @@ resource "google_project_service" "target_apis" {
   provider = google.target
   for_each = toset([
     "serviceusage.googleapis.com",
+    "cloudquotas.googleapis.com",
     "cloudresourcemanager.googleapis.com",
     "storage.googleapis.com",
     "artifactregistry.googleapis.com",
@@ -165,6 +167,7 @@ locals {
     "roles/iam.serviceAccountUser",          # Bind SAs to resources (actAs)
     "roles/iam.roleAdmin",                   # Custom IAM roles
     "roles/resourcemanager.projectIamAdmin", # Project-level IAM bindings
+    "roles/cloudkms.admin",                  # Key setup and key-version lifecycle
     "roles/secretmanager.admin",             # Secret Manager
     "roles/cloudbuild.builds.editor",        # Cloud Build
     "roles/datastore.owner",                 # Firestore

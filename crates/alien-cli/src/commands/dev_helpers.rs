@@ -88,6 +88,7 @@ pub struct DevDeploymentLiveState {
     pub deployment_name: String,
     pub status: DeploymentStatus,
     pub current_release_id: Option<String>,
+    pub retry_requested: bool,
     pub resources: HashMap<String, DevResourceInfo>,
     pub stack_state: Option<StackState>,
     pub error: Option<serde_json::Value>,
@@ -416,6 +417,7 @@ pub async fn build_embedded_dev_manager(
         db_path: Some(state_dir.join("dev-server.db")),
         state_dir: Some(state_dir.clone()),
         enable_local_log_ingest: true,
+        stop_local_containers_on_shutdown: true,
         response_signing_key: b"alien-dev-commands-signing-key".to_vec(),
         ..Default::default()
     };
@@ -927,6 +929,50 @@ pub async fn create_initial_deployment(
     Ok(deployment_id)
 }
 
+/// Finish a resumed operation before publishing a different release.
+/// Active setup/update phases keep their prepared target until they settle.
+pub async fn wait_for_resumed_dev_deployment(port: u16, deployment_name: &str) -> Result<()> {
+    let client = local_dev_client(port);
+    let deadline = dev_deployment_deadline()?;
+    let mut announced = false;
+    loop {
+        let existing = tokio::time::timeout_at(
+            deadline,
+            find_named_local_deployment(&client, deployment_name),
+        )
+        .await
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Timed out resuming the previous local deployment".to_string(),
+        })??;
+        let Some(existing) = existing else {
+            return Ok(());
+        };
+        if !existing.retry_requested
+            && !matches!(
+                existing.status.as_str(),
+                "pending"
+                    | "initial-setup"
+                    | "provisioning"
+                    | "update-pending"
+                    | "updating"
+                    | "waiting-for-machines"
+                    | "waiting-for-secrets"
+            )
+        {
+            return Ok(());
+        }
+        if !announced {
+            eprintln!("Resuming the previous local deployment before publishing this release...");
+            announced = true;
+        }
+        tokio::time::sleep_until(
+            (tokio::time::Instant::now() + Duration::from_secs(1)).min(deadline),
+        )
+        .await;
+    }
+}
+
 /// Prepare the deployment used by the full `alien dev` session.
 ///
 /// Reuse its durable deployment so restart does not delete storage or change bindings.
@@ -935,7 +981,34 @@ pub async fn prepare_dev_session_deployment(
     port: u16,
     environment_variables: Option<Vec<alien_core::EnvironmentVariable>>,
 ) -> Result<String> {
-    create_initial_deployment(deployment_name, port, environment_variables, HashMap::new()).await
+    let id =
+        create_initial_deployment(deployment_name, port, environment_variables, HashMap::new())
+            .await?;
+    let client = local_dev_client(port);
+    if let Some(existing) = find_named_local_deployment(&client, deployment_name).await? {
+        if matches!(
+            existing.status.as_str(),
+            "preflights-failed"
+                | "initial-setup-failed"
+                | "provisioning-failed"
+                | "update-failed"
+                | "refresh-failed"
+        ) && !existing.retry_requested
+        {
+            client
+                .retry_deployment()
+                .id(&id)
+                .send()
+                .await
+                .into_sdk_error()
+                .await
+                .context(ErrorData::ApiRequestFailed {
+                    message: format!("Failed to retry local deployment '{deployment_name}'"),
+                    url: None,
+                })?;
+        }
+    }
+    Ok(id)
 }
 
 /// `alien dev destroy`: delete a local deployment by name and wait until it's gone. Dev
@@ -1037,6 +1110,28 @@ async fn wait_for_local_deployment_absent(port: u16, deployment_name: &str) -> R
     }))
 }
 
+fn dev_deployment_deadline() -> Result<tokio::time::Instant> {
+    let timeout_seconds = std::env::var("ALIEN_DEV_DEPLOYMENT_TIMEOUT_SECONDS")
+        .map(|value| value.parse::<u64>())
+        .unwrap_or(Ok(300))
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "ALIEN_DEV_DEPLOYMENT_TIMEOUT_SECONDS must be a positive integer".to_string(),
+        })?;
+    if timeout_seconds == 0 {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: "ALIEN_DEV_DEPLOYMENT_TIMEOUT_SECONDS must be greater than zero".to_string(),
+        }));
+    }
+    tokio::time::Instant::now()
+        .checked_add(Duration::from_secs(timeout_seconds))
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ConfigurationError {
+                message: "ALIEN_DEV_DEPLOYMENT_TIMEOUT_SECONDS is too large".to_string(),
+            })
+        })
+}
+
 pub async fn wait_for_dev_deployment_ready(
     port: u16,
     deployment_name: &str,
@@ -1056,25 +1151,7 @@ where
 {
     let client = local_dev_client(port);
 
-    let timeout_seconds = std::env::var("ALIEN_DEV_DEPLOYMENT_TIMEOUT_SECONDS")
-        .map(|value| value.parse::<u64>())
-        .unwrap_or(Ok(300))
-        .into_alien_error()
-        .context(ErrorData::ConfigurationError {
-            message: "ALIEN_DEV_DEPLOYMENT_TIMEOUT_SECONDS must be a positive integer".to_string(),
-        })?;
-    if timeout_seconds == 0 {
-        return Err(AlienError::new(ErrorData::ConfigurationError {
-            message: "ALIEN_DEV_DEPLOYMENT_TIMEOUT_SECONDS must be greater than zero".to_string(),
-        }));
-    }
-    let deadline = tokio::time::Instant::now()
-        .checked_add(Duration::from_secs(timeout_seconds))
-        .ok_or_else(|| {
-            AlienError::new(ErrorData::ConfigurationError {
-                message: "ALIEN_DEV_DEPLOYMENT_TIMEOUT_SECONDS is too large".to_string(),
-            })
-        })?;
+    let deadline = dev_deployment_deadline()?;
     while tokio::time::Instant::now() < deadline {
         if let Ok(Ok(list_response)) =
             tokio::time::timeout_at(deadline, client.list_deployments().send()).await
@@ -1084,6 +1161,12 @@ where
                 .iter()
                 .find(|d| d.name == deployment_name)
             {
+                // A retry request is asynchronous; the previous failure remains visible
+                // until the manager consumes it. Do not publish that stale failure.
+                if deployment.retry_requested {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    continue;
+                }
                 if let Ok(Ok(info_response)) = tokio::time::timeout_at(
                     deadline,
                     client.get_deployment_info().id(&deployment.id).send(),
@@ -1129,7 +1212,7 @@ where
     }
 
     Err(AlienError::new(ErrorData::ConfigurationError {
-        message: format!("Stopped waiting after {}s; the local deployment may still be progressing. Inspect it with `alien dev deployments ls` or increase ALIEN_DEV_DEPLOYMENT_TIMEOUT_SECONDS.", timeout_seconds),
+        message: "Stopped waiting for the local deployment; it may still be progressing. Inspect it with `alien dev deployments ls` or increase ALIEN_DEV_DEPLOYMENT_TIMEOUT_SECONDS.".to_string(),
     }))
 }
 
@@ -1261,6 +1344,7 @@ async fn live_state_from_deployment(
         deployment_name: deployment.name.clone(),
         status: parse_deployment_status(&deployment.status)?,
         current_release_id: deployment.current_release_id.clone(),
+        retry_requested: deployment.retry_requested,
         resources,
         stack_state,
         error: deployment
@@ -1490,6 +1574,147 @@ mod tests {
                 .contains("No local deployment is named 'missing'"),
             "{error:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn resumed_operation_settles_before_the_session_release_is_published() {
+        type Data = Arc<Mutex<(String, String, usize, bool)>>;
+        async fn groups() -> Json<serde_json::Value> {
+            Json(
+                serde_json::json!({"items":[{"id":"dg_local", "name":"local-dev", "deploymentCount":1,
+                "maxDeployments":100, "projectId":"default", "workspaceId":"default", "createdAt":"2026-01-01T00:00:00Z"}]}),
+            )
+        }
+        async fn list(State(data): State<Data>) -> Json<serde_json::Value> {
+            let mut data = data.lock().unwrap();
+            data.2 += 1;
+            let phase = if data.2 < 3 { &data.0 } else { &data.1 };
+            Json(
+                serde_json::json!({"items":[{"id":"dep_selected", "name":"api", "platform":"local",
+                "status":phase, "retryRequested":false, "deploymentGroupId":"dg_local",
+                "deploymentProtocolVersion":1, "projectId":"default", "workspaceId":"default", "createdAt":"2026-01-01T00:00:00Z"}]}),
+            )
+        }
+        async fn publish(State(data): State<Data>) -> (StatusCode, Json<serde_json::Value>) {
+            let mut data = data.lock().unwrap();
+            // Like the manager, accept the release but do not switch an active operation.
+            data.3 = data.2 >= 3;
+            (
+                StatusCode::CREATED,
+                Json(
+                    serde_json::json!({"id":"rel_session", "workspaceId":"default", "projectId":"default",
+                "stack":{}, "createdAt":"2026-01-01T00:00:00Z", "setupFingerprints":{}}),
+                ),
+            )
+        }
+        let data: Data = Arc::new(Mutex::new((String::new(), String::new(), 0, false)));
+        let app = Router::new()
+            .route("/v1/deployment-groups", get(groups))
+            .route("/v1/deployments", get(list))
+            .route("/v1/releases", post(publish))
+            .with_state(data.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let directory = TempDir::new().unwrap();
+        let artifacts = directory.path().join(".alien/build/local");
+        fs::create_dir_all(&artifacts).unwrap();
+        fs::write(
+            artifacts.join("stack.json"),
+            serde_json::to_vec(&Stack::new("app".to_string()).build()).unwrap(),
+        )
+        .unwrap();
+        for (active, settled) in [
+            ("initial-setup", "running"),
+            ("provisioning", "provisioning-failed"),
+            ("updating", "running"),
+        ] {
+            *data.lock().unwrap() = (active.to_string(), settled.to_string(), 0, false);
+            build_and_post_release_simple(&directory.path().to_path_buf(), port, true, None)
+                .await
+                .unwrap();
+            assert!(
+                !data.lock().unwrap().3,
+                "publishing before {active} settles leaves the release unselected"
+            );
+            wait_for_resumed_dev_deployment(port, "api").await.unwrap();
+            build_and_post_release_simple(&directory.path().to_path_buf(), port, true, None)
+                .await
+                .unwrap();
+            assert!(
+                data.lock().unwrap().3,
+                "the session release must be selected after {active}"
+            );
+        }
+        server.abort();
+        assert!(server.await.unwrap_err().is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn restarted_failed_session_requests_retry_only_for_its_named_deployment() {
+        type StateData = Arc<Mutex<(String, bool, Vec<String>)>>;
+        async fn groups() -> Json<serde_json::Value> {
+            Json(
+                serde_json::json!({"items":[{"id":"dg_local", "name":"local-dev", "deploymentCount":1, "maxDeployments":100,
+                "projectId":"default", "workspaceId":"default", "createdAt":"2026-01-01T00:00:00Z"}]}),
+            )
+        }
+        async fn list(State(state): State<StateData>) -> Json<serde_json::Value> {
+            let state = state.lock().unwrap();
+            let deployment = |id: &str, name: &str| {
+                serde_json::json!({
+                    "id":id, "name":name, "platform":"local", "status":state.0, "retryRequested":state.1,
+                    "deploymentGroupId":"dg_local", "deploymentProtocolVersion":1, "projectId":"default", "workspaceId":"default", "createdAt":"2026-01-01T00:00:00Z"
+                })
+            };
+            Json(
+                serde_json::json!({"items":[deployment("dep_other", "other"), deployment("dep_selected", "api")]}),
+            )
+        }
+        async fn retry(
+            State(state): State<StateData>,
+            AxumPath(id): AxumPath<String>,
+        ) -> Json<serde_json::Value> {
+            state.lock().unwrap().2.push(id);
+            Json(serde_json::json!({"success":true}))
+        }
+        let state: StateData = Arc::new(Mutex::new(("pending".to_string(), false, vec![])));
+        let app = Router::new()
+            .route("/v1/deployment-groups", get(groups))
+            .route("/v1/deployments", get(list))
+            .route("/v1/deployments/{id}/retry", post(retry))
+            .with_state(state.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        for (status, requested, expected) in [
+            ("provisioning-failed", false, 1),
+            ("initial-setup-failed", false, 1),
+            ("preflights-failed", false, 1),
+            ("update-failed", false, 1),
+            ("refresh-failed", false, 1),
+            ("provisioning-failed", true, 0),
+            ("running", false, 0),
+            ("pending", false, 0),
+            ("delete-failed", false, 0),
+        ] {
+            *state.lock().unwrap() = (status.to_string(), requested, vec![]);
+            assert_eq!(
+                prepare_dev_session_deployment("api", port, None)
+                    .await
+                    .unwrap(),
+                "dep_selected"
+            );
+            let state = state.lock().unwrap();
+            assert_eq!(
+                state.2.len(),
+                expected,
+                "status {status}, queued={requested}"
+            );
+            assert!(state.2.iter().all(|id| id == "dep_selected"));
+        }
+        server.abort();
+        assert!(server.await.unwrap_err().is_cancelled());
     }
 
     /// `alien dev deploy --input` reaches the dev manager with the create request; a rerun

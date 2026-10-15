@@ -118,11 +118,14 @@ pub enum NetworkSettings {
         /// The ID of the existing VPC
         vpc_id: String,
         /// IDs of public subnets (required for public ingress)
+        #[serde(deserialize_with = "crate::network_ids::deserialize_ids")]
         public_subnet_ids: Vec<String>,
         /// IDs of private subnets
+        #[serde(deserialize_with = "crate::network_ids::deserialize_ids")]
         private_subnet_ids: Vec<String>,
         /// Optional security group IDs to use
         #[serde(default)]
+        #[serde(deserialize_with = "crate::network_ids::deserialize_ids")]
         security_group_ids: Vec<String>,
     },
 
@@ -202,6 +205,33 @@ pub struct ContainerResourceSelection {
     /// Memory allocation, using binary units such as Mi or Gi.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory: Option<String>,
+    /// Persistent volume capacity per replica, in whole GiB. Omitted values
+    /// use the release default. Existing volumes can only grow.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "deserialize_selected_volume_size")]
+    pub volume_size_gib: Option<u32>,
+}
+
+fn deserialize_selected_volume_size<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<u32>, D::Error> {
+    // CloudFormation Number references arrive as strings in setup import JSON.
+    match Option::<serde_json::Value>::deserialize(deserializer)? {
+        None => Ok(None),
+        Some(serde_json::Value::Number(number)) => number
+            .as_u64()
+            .and_then(|number| u32::try_from(number).ok())
+            .map(Some)
+            .ok_or_else(|| {
+                serde::de::Error::custom("volumeSizeGib must be a whole positive capacity")
+            }),
+        Some(serde_json::Value::String(number)) => {
+            number.parse().map(Some).map_err(serde::de::Error::custom)
+        }
+        Some(_) => Err(serde::de::Error::custom(
+            "volumeSizeGib must be a whole positive capacity",
+        )),
+    }
 }
 
 fn deserialize_selected_cpu<'de, D: serde::Deserializer<'de>>(
@@ -790,6 +820,12 @@ pub struct KubernetesTlsSecretRef {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct StackSettings {
+    /// Provider quota identities whose preflight failures become visible warnings
+    /// for this deployment. Checks still run; deploy-time provider limits still apply.
+    /// Unknown identities are rejected. An empty list restores normal blocking.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub quota_warning_overrides: Vec<String>,
+
     /// Who can reach public endpoints. Private access requires AWS managed containers.
     /// This choice cannot change after setup; create a new deployment to change it.
     #[serde(default)]

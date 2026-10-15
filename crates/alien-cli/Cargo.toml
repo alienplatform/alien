@@ -20,7 +20,9 @@ otlp = ["dep:alien-worker-runtime", "alien-worker-runtime/otlp"]
 platform = ["dep:oauth2", "dep:open"]
 
 [dependencies]
+bon = { workspace = true }
 alien-core = { workspace = true }
+alien-client-config = { workspace = true, features = ["aws"] }
 alien-cloudformation = { workspace = true }
 alien-helm = { workspace = true }
 alien-terraform = { workspace = true }
@@ -80,6 +82,7 @@ portpicker = { version = "0.1" }
 rand = { workspace = true }
 rand_distr = { workspace = true }
 reqwest = { workspace = true, default-features = false, features = ["json", "rustls-tls-webpki-roots", "stream"] }
+h2 = { workspace = true }
 semver = { workspace = true }
 self-replace = { workspace = true }
 rustls = { version = "0.23", default-features = false, features = ["ring"] }

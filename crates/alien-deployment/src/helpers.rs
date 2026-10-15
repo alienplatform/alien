@@ -1270,7 +1270,7 @@ pub fn interrupt_in_progress_resources(
     stack_state: &mut StackState,
     failed_resources: &[(&str, &str)], // (resource_id, resource_type)
     lifecycle: Option<ResourceLifecycle>,
-) {
+) -> Result<()> {
     // Pick the first real failure to reference in the interrupted error message.
     // If there are no failures yet (shouldn't happen), fall back to a generic message.
     let (ref_id, ref_type) = failed_resources
@@ -1312,7 +1312,16 @@ pub fn interrupt_in_progress_resources(
         resource_state.status = interrupted_status;
         resource_state.error = Some(interrupted_error.clone());
         resource_state.retry_attempt = 0;
+        resource_state
+            .settle_failed_controller()
+            .context(ErrorData::StackExecutionFailed {
+                message: format!(
+                    "Failed to record the interruption of '{}'",
+                    resource_state.config.id()
+                ),
+            })?;
     }
+    Ok(())
 }
 
 /// The deployment error for a stack whose every failure waits for the installation's setup to

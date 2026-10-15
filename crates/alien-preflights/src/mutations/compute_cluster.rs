@@ -253,8 +253,12 @@ impl StackMutation for ComputeClusterMutation {
                     .and_then(ComputePoolSelection::failure_domains)
                     .cloned();
                 match &mut selection {
-                    ComputePoolSelection::Fixed { failure_domains, .. }
-                    | ComputePoolSelection::Autoscale { failure_domains, .. } => {
+                    ComputePoolSelection::Fixed {
+                        failure_domains, ..
+                    }
+                    | ComputePoolSelection::Autoscale {
+                        failure_domains, ..
+                    } => {
                         *failure_domains = domains;
                     }
                 }
@@ -280,7 +284,37 @@ impl StackMutation for ComputeClusterMutation {
         };
 
         let stack = self.materialize_capacity_groups(stack, stack_state, config)?;
-        self.materialize_persistent_container_pools(stack, stack_state)
+        let mut stack = self.materialize_persistent_container_pools(stack, stack_state)?;
+        if stack_state.platform == Platform::Aws {
+            let keys: Vec<_> = stack
+                .resources
+                .values()
+                .filter_map(|entry| entry.config.downcast_ref::<Container>())
+                .filter_map(|container| {
+                    Some((
+                        container.cluster.clone()?,
+                        container
+                            .persistent_storage
+                            .as_ref()?
+                            .encryption_key
+                            .clone()?,
+                    ))
+                })
+                .collect();
+            for (cluster, key) in keys {
+                let entry = stack.resources.get_mut(&cluster).ok_or_else(|| {
+                    AlienError::new(crate::error::ErrorData::StackMutationFailed {
+                        mutation_name: self.description().to_string(),
+                        resource_id: Some(cluster.clone()),
+                        message: "Encrypted volume has no compute cluster".to_string(),
+                    })
+                })?;
+                if !entry.dependencies.contains(&key) {
+                    entry.dependencies.push(key);
+                }
+            }
+        }
+        Ok(stack)
     }
 }
 
@@ -1109,7 +1143,12 @@ fn build_categorized_capacity_groups(
                 gpu: None,
             }),
             min_size: 0,
-            max_size: 0,
+            // Machines groups need a concrete capacity bound.
+            max_size: if platform == Platform::Machines {
+                10
+            } else {
+                0
+            },
             scale_policy: None,
             nested_virtualization: None,
         }]),
@@ -1395,6 +1434,49 @@ mod tests {
             crate::mutations::ServiceAccountDependenciesMutation,
         ));
         crate::runner::PreflightRunner::with_registry(registry)
+    }
+
+    #[tokio::test]
+    async fn machines_implicit_cluster_has_bounded_capacity() {
+        for platform in [Platform::Machines, Platform::Kubernetes, Platform::Test] {
+            let container = test_container("api", "1", "1Gi");
+            let stack = Stack::new("machines-test".to_string())
+                .add(container, ResourceLifecycle::Live)
+                .build();
+            let state = StackState::new(platform);
+            let config = DeploymentConfig::builder()
+                .stack_settings(StackSettings::default())
+                .environment_variables(empty_env_snapshot())
+                .allow_frozen_changes(false)
+                .external_bindings(ExternalBindings::default())
+                .build();
+            let mutation = ComputeClusterMutation;
+            if platform == Platform::Kubernetes {
+                assert!(!mutation.should_run(&stack, &state, &config));
+                continue;
+            }
+            assert!(mutation.should_run(&stack, &state, &config));
+            let prepared = mutation.mutate(stack, &state, &config).await.unwrap();
+            let container = prepared.resources["api"]
+                .config
+                .downcast_ref::<Container>()
+                .unwrap();
+            let cluster = prepared.resources[container.cluster.as_deref().unwrap()]
+                .config
+                .downcast_ref::<ComputeCluster>()
+                .unwrap();
+            assert_eq!(cluster.capacity_groups.len(), 1);
+            let group = &cluster.capacity_groups[0];
+            assert_eq!(group.group_id, "general");
+            let expected_max = if platform == Platform::Machines {
+                10
+            } else {
+                0
+            };
+            assert_eq!((group.min_size, group.max_size), (0, expected_max));
+            assert!(group.profile.is_some());
+            assert!(!mutation.should_run(&prepared, &state, &config));
+        }
     }
 
     #[tokio::test]
@@ -1739,6 +1821,7 @@ mod tests {
                 desired: "1Gi".to_string(),
             })
             .persistent_storage(PersistentStorage {
+                encryption_key: None,
                 size: "20Gi".to_string(),
                 mount_path: "/data".to_string(),
                 backups: VolumeBackups::default(),
@@ -2000,6 +2083,7 @@ mod tests {
                 desired: "1Gi".to_string(),
             })
             .persistent_storage(PersistentStorage {
+                encryption_key: None,
                 size: "20Gi".to_string(),
                 mount_path: "/data".to_string(),
                 backups: VolumeBackups::default(),
@@ -2061,6 +2145,7 @@ mod tests {
                 desired: "1Gi".to_string(),
             })
             .persistent_storage(PersistentStorage {
+                encryption_key: None,
                 size: "20Gi".to_string(),
                 mount_path: "/data".to_string(),
                 backups: VolumeBackups::default(),

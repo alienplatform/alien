@@ -1,7 +1,7 @@
 //! Image repository provisioning.
 //!
-//! ECR needs a project's repository to exist before a push, while GAR and ACR
-//! create it on first push. This endpoint makes the three behave the same and
+//! ECR and GAR need a project's repository to exist before a push, while ACR
+//! creates it on first push. This endpoint makes the three behave the same and
 //! returns the repository name to push to through the registry proxy.
 
 use alien_core::Platform;
@@ -45,6 +45,19 @@ async fn provision_image_repository(
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
+    let project = match state
+        .project_store
+        .get_project(&subject, &request.project_id)
+        .await
+    {
+        Ok(Some(project)) if project.id == request.project_id => project,
+        Ok(_) => return ErrorData::forbidden("Project is not available").into_response(),
+        Err(error) => return error.into_response(),
+    };
+    if project.workspace_id != subject.workspace_id {
+        return ErrorData::forbidden("Caller cannot provision this project's image repository")
+            .into_response();
+    }
     if !state
         .authz
         .can_provision_image_repository(&subject, &request.project_id)
@@ -94,7 +107,7 @@ async fn provision(
         .await
         .context(failed())?;
     let repository = registry
-        .create_repository(project_id)
+        .create_project_repository(project_id)
         .await
         .context(failed())?;
     Ok(repository.name)

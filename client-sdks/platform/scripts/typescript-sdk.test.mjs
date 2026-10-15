@@ -443,3 +443,17 @@ test("published deep imports retain moved enums and response parsers", async () 
   const provider = { provider: "awsAlb", scheme: "internet-facing", targetType: "ip" };
   assert.deepEqual(manager.CreateManagerResponseProviderAwsAlb2$inboundSchema.parse(provider), provider);
 });
+
+test("execution and target configs retain saved quota overrides and explicit clear", async () => {
+  const { DeploymentConfig$inboundSchema } = await import("../typescript/esm/models/deploymentconfig.js");
+  const { TargetDeploymentConfig$inboundSchema } = await import("../typescript/esm/models/targetdeploymentconfig.js");
+  for (const schema of [DeploymentConfig$inboundSchema, TargetDeploymentConfig$inboundSchema]) {
+    for (const overrides of [["L-1216C47A"], []]) {
+      const decoded = schema.parse({
+        environmentVariables: { variables: [], hash: "", createdAt: "" },
+        stackSettings: { quotaWarningOverrides: overrides },
+      });
+      assert.deepEqual(decoded.stackSettings.quotaWarningOverrides, overrides);
+    }
+  }
+});

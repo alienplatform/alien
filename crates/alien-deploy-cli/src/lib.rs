@@ -127,7 +127,8 @@ pub fn setup_tracing(verbose: bool) {
         EnvFilter::try_from_default_env()
             .unwrap_or_else(|_| EnvFilter::new("debug,turso_core=warn,hyper_util=warn"))
     } else {
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("error"))
+        EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| EnvFilter::new("error,alien_preflights=warn"))
     };
 
     tracing_subscriber::registry()

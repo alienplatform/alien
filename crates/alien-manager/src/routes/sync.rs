@@ -20,13 +20,14 @@ use alien_core::{
         TargetDeployment, TargetOperationsBundleSet,
     },
     DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus, EnvironmentVariable,
-    EnvironmentVariablesSnapshot, ObservedInventoryBatch, Platform, ReleaseInfo, ResourceHeartbeat,
-    StackState,
+    EnvironmentVariablesSnapshot, KeyOutputs, ObservedInventoryBatch, Platform, ReleaseInfo,
+    ResourceHeartbeat, ResourceOutputs, StackState,
 };
-use alien_error::AlienError;
+use alien_error::{AlienError, Context, GenericError, IntoAlienError};
 
 use crate::error::ErrorData;
 use crate::ids;
+use crate::loops::deployment::{target_release_stack, RunnerConfigSources};
 use crate::traits::{
     CreateDeploymentParams, CreateTokenParams, DeploymentAcquireMode, DeploymentFilter,
     DeploymentRecord, ReconcileData, ReconcileInput, ReleaseRecord, TokenType,
@@ -441,39 +442,92 @@ async fn acquire(
         Err(e) => return e.into_response(),
     };
 
-    let deployments: Vec<AcquiredDeploymentResponse> = match acquire_result
-        .deployments
-        .into_iter()
-        .map(|a| {
-            let mut deployment = serde_json::to_value(&a.deployment)?;
-            if let (Some(config), Some(object)) = (
-                a.deployment.deployment_config.as_ref(),
-                deployment.as_object_mut(),
-            ) {
-                object.insert(
-                    "deploymentConfig".to_string(),
-                    serde_json::to_value(config)?,
-                );
-            }
-            Ok::<_, serde_json::Error>(AcquiredDeploymentResponse {
-                deployment,
-                execution_claim: a.execution_claim,
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()
-    {
-        Ok(d) => d,
-        Err(e) => {
-            tracing::warn!("Failed to serialize deployment: {e}");
-            return ErrorData::internal("Failed to serialize deployment").into_response();
-        }
+    let sources = RunnerConfigSources {
+        config: &state.config,
+        credential_resolver: state.credential_resolver.as_ref(),
+        bindings_provider: &state.bindings_provider,
+        target_bindings_providers: &state.target_bindings_providers,
     };
+    let mut deployments = Vec::with_capacity(acquire_result.deployments.len());
+    for acquired in &acquire_result.deployments {
+        match acquired_deployment_response(state.release_store.as_ref(), &sources, acquired).await {
+            Ok(deployment) => deployments.push(deployment),
+            Err(error) => {
+                // The caller never learns it holds these leases, so give them
+                // back instead of blocking every runner until they expire.
+                for acquired in &acquire_result.deployments {
+                    if let Err(give_back_error) = state
+                        .deployment_store
+                        .release_unused_acquisition(&subject, acquired, &req.session)
+                        .await
+                    {
+                        tracing::warn!(
+                            deployment_id = %acquired.deployment.id,
+                            error = %give_back_error,
+                            "Failed to give back a lease after the acquire response failed"
+                        );
+                    }
+                }
+                return error.into_response();
+            }
+        }
+    }
 
     Json(AcquireResponse {
         deployments,
         not_acquired: acquire_result.not_acquired,
     })
     .into_response()
+}
+
+/// An acquired deployment as the runner that acquired it receives it.
+///
+/// `deploymentConfig` is the config the manager's own loop would run with, so
+/// a runner that takes over an operation applies the same desired state. It can
+/// carry deployment secrets (the commands token, secret variables): the caller
+/// is authorized to run this deployment, and running it writes them into the
+/// workloads anyway.
+async fn acquired_deployment_response(
+    release_store: &dyn crate::traits::ReleaseStore,
+    sources: &RunnerConfigSources<'_>,
+    acquired: &crate::traits::deployment_store::AcquiredDeployment,
+) -> Result<AcquiredDeploymentResponse, AlienError> {
+    let record = &acquired.deployment;
+    let target_release_id = record
+        .desired_release_id
+        .as_deref()
+        .or(record.current_release_id.as_deref());
+    let deployment_stack = match target_release_id {
+        Some(release_id) => target_release_stack(release_store, record, release_id).await?,
+        None => None,
+    };
+    let config = sources
+        .deployment_config(record, deployment_stack.as_ref())
+        .await
+        .context(GenericError {
+            message: format!("Failed to build the config for deployment {}", record.id),
+        })?;
+
+    let mut deployment = serde_json::to_value(record)
+        .into_alien_error()
+        .context(GenericError {
+            message: format!("Failed to serialize deployment {}", record.id),
+        })?;
+    let config = serde_json::to_value(&config)
+        .into_alien_error()
+        .context(GenericError {
+            message: format!(
+                "Failed to serialize the config for deployment {}",
+                record.id
+            ),
+        })?;
+    if let Some(object) = deployment.as_object_mut() {
+        object.insert("deploymentConfig".to_string(), config);
+    }
+    Ok(AcquiredDeploymentResponse {
+        deployment,
+        execution_claim: acquired.execution_claim.clone(),
+    })
 }
 
 /// `POST /v1/sync/reconcile` — Inbound: workspace / dg / deployment
@@ -531,14 +585,22 @@ async fn reconcile(
     //    flag is included in the persisted state (matches ManagerTransport).
     let mut final_state = deployment_state;
     preserve_recorded_gate_answers(&mut final_state, &deployment);
-    crate::registry_access::reconcile_registry_access(
-        &state.bindings_provider,
-        &state.target_bindings_providers,
-        &req.deployment_id,
-        &deployment.project_id,
-        &mut final_state,
-    )
-    .await;
+    let legacy_cli = headers
+        .get("user-agent")
+        .and_then(|value| value.to_str().ok())
+        == Some("alien-cli");
+    if legacy_cli {
+        preserve_legacy_key_observations(&mut final_state, &deployment);
+    }
+    crate::registry_access::reconcile_registry_access_with_proxy()
+        .bindings_provider(&state.bindings_provider)
+        .target_bindings_providers(&state.target_bindings_providers)
+        .deployment_id(&req.deployment_id)
+        .project_id(&deployment.project_id)
+        .state(&mut final_state)
+        .proxy_url(&state.config.base_url())
+        .call()
+        .await;
 
     // 1a. Inject target_release from the deployment record's
     //     desired_release_id. The CLI's deploy command initializes state with
@@ -631,7 +693,7 @@ async fn reconcile(
     )
     .await;
 
-    let current = match serde_json::to_value(&final_state) {
+    let mut current = match serde_json::to_value(&final_state) {
         Ok(v) => v,
         Err(e) => {
             tracing::warn!("Failed to serialize reconciled state: {e}");
@@ -639,12 +701,54 @@ async fn reconcile(
         }
     };
 
+    if legacy_cli {
+        if let Some(stack) = current.get_mut("stackState") {
+            super::deployments::remove_legacy_key_observations(stack);
+        }
+    }
+
     Json(ReconcileResponse {
         success: true,
         current,
         native_image_host,
     })
     .into_response()
+}
+
+/// Old clients cannot carry availability observations through a read/save round trip.
+/// Keep the stored observation only for the same provider key and wrapping version;
+/// a removed or replaced key must never inherit another key's observation.
+fn preserve_legacy_key_observations(state: &mut DeploymentState, stored: &DeploymentRecord) {
+    let (Some(incoming), Some(previous)) =
+        (state.stack_state.as_mut(), stored.stack_state.as_ref())
+    else {
+        return;
+    };
+    for (id, resource) in &mut incoming.resources {
+        let Some(key) = resource
+            .outputs
+            .as_ref()
+            .and_then(|outputs| outputs.downcast_ref::<KeyOutputs>())
+        else {
+            continue;
+        };
+        let Some(old_key) = previous
+            .resources
+            .get(id)
+            .and_then(|resource| resource.outputs.as_ref())
+            .and_then(|outputs| outputs.downcast_ref::<KeyOutputs>())
+        else {
+            continue;
+        };
+        if key.available.is_none()
+            && key.fingerprint == old_key.fingerprint
+            && key.wrapping_key_id == old_key.wrapping_key_id
+        {
+            let mut key = key.clone();
+            key.available = old_key.available;
+            resource.outputs = Some(ResourceOutputs::new(key));
+        }
+    }
 }
 
 /// `POST /v1/sync/release` — Inbound: workspace / dg / deployment bearer.
@@ -717,13 +821,13 @@ mod tests {
     use crate::traits::DeploymentRecord;
 
     use super::{
-        agent_needs_initial_state_hydration, agent_report_completes_claim,
-        build_target_deployment_config, deployment_needs_target, deployment_state_from_record,
-        deployment_target_release_id, management_platform, may_deliver_agent_target,
-        preserve_recorded_gate_answers, release_stack_platform, should_ignore_agent_state_report,
-        should_return_current_state_for_agent_sync, validate_initialize_base_platform,
-        AgentSyncRequest, AgentSyncWireRequest, InitialDesiredRelease, InitializeRequest,
-        ReconcileRequest,
+        acquired_deployment_response, agent_needs_initial_state_hydration,
+        agent_report_completes_claim, build_target_deployment_config, deployment_needs_target,
+        deployment_state_from_record, deployment_target_release_id, management_platform,
+        may_deliver_agent_target, preserve_recorded_gate_answers, release_stack_platform,
+        should_ignore_agent_state_report, should_return_current_state_for_agent_sync,
+        validate_initialize_base_platform, AgentSyncRequest, AgentSyncWireRequest,
+        InitialDesiredRelease, InitializeRequest, ReconcileRequest, RunnerConfigSources,
     };
 
     #[tokio::test]
@@ -1592,6 +1696,118 @@ mod tests {
         }
     }
 
+    /// The reported case: a control plane supplies the config and stacks, the
+    /// manager's loop starts the update, and `alien deploy` acquires it. The
+    /// acquired config must be the one the loop runs with, or the second
+    /// runner rolls every workload again without the manager's variables.
+    #[tokio::test]
+    async fn acquired_config_is_the_config_the_manager_loop_runs_with() {
+        let api = alien_core::Container::new("api".to_string())
+            .code(alien_core::ContainerCode::Image {
+                image: "api:latest".to_string(),
+            })
+            .cpu(alien_core::ResourceSpec {
+                min: "0.5".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(alien_core::ResourceSpec {
+                min: "512Mi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .port(8080)
+            .permissions("execution".to_string())
+            .commands_enabled(true)
+            .build();
+        let stack = Stack::new("app".to_string())
+            .add(api, alien_core::ResourceLifecycle::Live)
+            .build();
+        let user_variable = alien_core::EnvironmentVariable {
+            name: "LOG_LEVEL".to_string(),
+            value: "debug".to_string(),
+            var_type: alien_core::EnvironmentVariableType::Plain,
+            target_resources: None,
+        };
+        // The control plane's own config: its copy of the user variables only.
+        let mut control_plane_config = test_deployment_config();
+        control_plane_config.environment_variables.variables = vec![user_variable.clone()];
+        let mut record = deployment_record_with_state("update-pending", None);
+        record.desired_release_id = Some("rel_next".to_string());
+        record.deployment_token = Some("ax_dep_test".to_string());
+        record.user_environment_variables = Some(vec![user_variable]);
+        record.deployment_config = Some(control_plane_config);
+        record.supplied_stacks = Some(crate::traits::deployment_store::SuppliedStacks {
+            current: None,
+            desired: Some(stack.clone()),
+        });
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = std::sync::Arc::new(
+            crate::stores::sqlite::SqliteDatabase::new(
+                &dir.path().join("manager.db").to_string_lossy(),
+            )
+            .await
+            .expect("database"),
+        );
+        let release_store = crate::stores::sqlite::SqliteReleaseStore::new(db);
+        let manager_config = crate::config::ManagerConfig {
+            base_url: Some("https://manager.example.test".to_string()),
+            ..Default::default()
+        };
+        let credential_resolver = crate::providers::local_credentials::LocalCredentialResolver::new(
+            dir.path().to_path_buf(),
+        );
+        let sources = RunnerConfigSources {
+            config: &manager_config,
+            credential_resolver: &credential_resolver,
+            bindings_provider: &None,
+            target_bindings_providers: &HashMap::new(),
+        };
+
+        let response = acquired_deployment_response(
+            &release_store,
+            &sources,
+            &crate::traits::deployment_store::AcquiredDeployment {
+                deployment: record.clone(),
+                execution_claim: None,
+            },
+        )
+        .await
+        .expect("acquire response");
+        let loop_config = sources
+            .deployment_config(&record, Some(&stack))
+            .await
+            .expect("loop config");
+
+        // The snapshot's creation time is the only field allowed to differ.
+        let without_created_at = |mut config: Value| {
+            config["environmentVariables"]["createdAt"] = Value::Null;
+            config
+        };
+        let acquired = without_created_at(response.deployment["deploymentConfig"].clone());
+        assert_eq!(
+            acquired,
+            without_created_at(serde_json::to_value(&loop_config).expect("loop config json"))
+        );
+        let names: Vec<&str> = acquired["environmentVariables"]["variables"]
+            .as_array()
+            .expect("variables")
+            .iter()
+            .map(|variable| variable["name"].as_str().expect("name"))
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                alien_core::ENV_ALIEN_DEPLOYMENT_ID,
+                alien_core::ENV_ALIEN_DEPLOYMENT_NAME,
+                alien_core::ENV_ALIEN_COMMANDS_URL,
+                alien_core::ENV_ALIEN_COMMANDS_TOKEN,
+                alien_core::ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE,
+                alien_core::ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID,
+                "LOG_LEVEL",
+            ]
+        );
+    }
+
     #[test]
     fn preserving_gate_answers_folds_key_by_key_with_the_record_winning() {
         let mut recorded = RuntimeMetadata::default();
@@ -1813,14 +2029,15 @@ async fn agent_sync(
                     preserve_recorded_gate_answers(&mut agent_state, &deployment);
                     // Reconcile registry access before persisting so the flag
                     // is saved in the same DB write.
-                    crate::registry_access::reconcile_registry_access(
-                        &state.bindings_provider,
-                        &state.target_bindings_providers,
-                        &req.deployment_id,
-                        &deployment.project_id,
-                        &mut agent_state,
-                    )
-                    .await;
+                    crate::registry_access::reconcile_registry_access_with_proxy()
+                        .bindings_provider(&state.bindings_provider)
+                        .target_bindings_providers(&state.target_bindings_providers)
+                        .deployment_id(&req.deployment_id)
+                        .project_id(&deployment.project_id)
+                        .state(&mut agent_state)
+                        .proxy_url(&state.config.base_url())
+                        .call()
+                        .await;
 
                     let reconcile_data = ReconcileData {
                         deployment_id: req.deployment_id.clone(),

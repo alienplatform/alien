@@ -13,6 +13,7 @@ import {
   type ResourceSpec,
   type ResourceType,
 } from "./generated/index.js"
+import { encryptionKeyRef } from "./key.js"
 import { type Resource, ResourceBuilder } from "./resource.js"
 
 /** Deployment-time choices for one resource dimension. */
@@ -55,6 +56,8 @@ export {
 } from "./generated/index.js"
 
 export interface PersistentStorageOptions {
+  /** Key in the same stack used to encrypt this volume and its snapshots. Immutable after creation. */
+  encryptionKey?: Resource
   /**
    * Mount path inside the container.
    *
@@ -384,13 +387,16 @@ export class Container extends ResourceBuilder {
    * Configures persistent storage and marks the container stateful.
    * Data survives container restarts.
    * @param size Storage size (e.g., "100Gi", "500Gi", "1Ti").
-   * @param options Optional mount path and backup schedule.
+   * @param options Optional mount path, encryption key, and backup schedule.
    * @returns The Container builder instance.
    */
   public persistentStorage(size: string, options: PersistentStorageOptions = {}): this {
     const persistentStorage: PersistentStorage = {
       size,
       mountPath: options.mountPath ?? "/data",
+    }
+    if (options.encryptionKey !== undefined) {
+      persistentStorage.encryptionKey = encryptionKeyRef(options.encryptionKey)
     }
     if (options.backups !== undefined) {
       persistentStorage.backups =

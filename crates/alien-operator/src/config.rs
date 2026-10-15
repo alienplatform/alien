@@ -244,6 +244,7 @@ mod tests {
                 external_bindings: None,
                 compute: None,
                 public_endpoints: None,
+                quota_warning_overrides: Vec::new(),
                 endpoint_access: alien_core::EndpointAccess::Internet,
             }))
             .api_server_port(8080)
@@ -322,6 +323,7 @@ mod tests {
                 external_bindings: None,
                 compute: None,
                 public_endpoints: None,
+                quota_warning_overrides: Vec::new(),
                 endpoint_access: alien_core::EndpointAccess::Internet,
             }))
             .build();
@@ -347,6 +349,7 @@ mod tests {
                 external_bindings: None,
                 compute: None,
                 public_endpoints: None,
+                quota_warning_overrides: Vec::new(),
                 endpoint_access: alien_core::EndpointAccess::Internet,
             }))
             .build();
@@ -372,6 +375,7 @@ mod tests {
                 external_bindings: None,
                 compute: None,
                 public_endpoints: None,
+                quota_warning_overrides: Vec::new(),
                 endpoint_access: alien_core::EndpointAccess::Internet,
             }))
             .build();

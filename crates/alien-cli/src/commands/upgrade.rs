@@ -179,7 +179,7 @@ fn upgrade_with_package_manager(
 async fn upgrade_standalone(args: &UpgradeArgs, current_exe: &Path) -> Result<()> {
     let releases_url =
         env::var(RELEASES_URL_ENV).unwrap_or_else(|_| DEFAULT_RELEASES_URL.to_string());
-    let client = reqwest::Client::new();
+    let client = crate::http_client::client()?;
     let channel = if args.canary {
         ReleaseChannel::Canary
     } else {

@@ -1002,6 +1002,7 @@ fn key_handoff_preserves_provider_identity_and_remote_binding() {
         (
             Platform::Aws,
             serde_json::to_value(AwsKeyImportData {
+                availability_probe: true,
                 key_arn: "arn:aws:kms:us-east-1:123456789012:key/11111111-2222-3333-4444-555555555555".to_string(),
             })
             .unwrap(),
@@ -1704,4 +1705,70 @@ fn aws_sandbox_partial_shape_is_refused() {
         msg.contains("agents"),
         "the refusal must name the resource, got: {msg}"
     );
+}
+
+#[test]
+fn key_reimport_rejects_identity_changes_but_allows_version_rotation() {
+    let cases = [
+        (
+            Platform::Aws,
+            json!({"keyArn": "arn:aws:kms:us-east-1:123456789012:key/first"}),
+            json!({"keyArn": "arn:aws:kms:us-east-1:123456789012:key/first"}),
+            json!({"keyArn": "arn:aws:kms:us-east-1:123456789012:key/second"}),
+        ),
+        (
+            Platform::Gcp,
+            json!({"cryptoKeyName": "projects/example/locations/us/keyRings/data/cryptoKeys/first", "primaryVersion": "version/1"}),
+            json!({"cryptoKeyName": "projects/example/locations/us/keyRings/data/cryptoKeys/first", "primaryVersion": "version/2"}),
+            json!({"cryptoKeyName": "projects/example/locations/us/keyRings/data/cryptoKeys/second", "primaryVersion": "version/1"}),
+        ),
+        (
+            Platform::Azure,
+            json!({"vaultResourceId": "/subscriptions/test/resourceGroups/test/providers/Microsoft.KeyVault/vaults/test", "keyName": "first", "lineageVersionId": "lineage", "keyId": "https://test.vault.azure.net/keys/first/version1"}),
+            json!({"vaultResourceId": "/subscriptions/test/resourceGroups/test/providers/Microsoft.KeyVault/vaults/test", "keyName": "first", "lineageVersionId": "lineage", "keyId": "https://test.vault.azure.net/keys/first/version2"}),
+            json!({"vaultResourceId": "/subscriptions/test/resourceGroups/test/providers/Microsoft.KeyVault/vaults/test", "keyName": "first", "lineageVersionId": "different-lineage", "keyId": "https://test.vault.azure.net/keys/first/version3"}),
+        ),
+    ];
+    let registry = ImporterRegistry::built_in();
+    for (platform, original, rotated, different) in cases {
+        let entry = remote_entry(Key::new("key".to_string()).build());
+        let settings = settings();
+        let management = match platform {
+            Platform::Aws => aws_management_config(),
+            Platform::Gcp => gcp_management_config(),
+            Platform::Azure => azure_management_config(),
+            _ => unreachable!(),
+        };
+        let ctx = ImportContext {
+            resource_id: "key",
+            platform,
+            region: "test-region",
+            stack_settings: &settings,
+            management_config: Some(&management),
+            resource: &entry,
+        };
+        let original = registry
+            .run(&Key::RESOURCE_TYPE, platform, original, &ctx)
+            .unwrap();
+        let rotated = registry
+            .run(&Key::RESOURCE_TYPE, platform, rotated, &ctx)
+            .unwrap();
+        let merged = registry
+            .merge_reimport(
+                &Key::RESOURCE_TYPE,
+                platform,
+                original.clone(),
+                rotated.clone(),
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(merged.outputs, rotated.outputs);
+        let different = registry
+            .run(&Key::RESOURCE_TYPE, platform, different, &ctx)
+            .unwrap();
+        let error = registry
+            .merge_reimport(&Key::RESOURCE_TYPE, platform, original, different, &ctx)
+            .unwrap_err();
+        assert_eq!(error.code, "INVALID_RESOURCE_UPDATE");
+    }
 }

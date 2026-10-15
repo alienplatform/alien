@@ -34,15 +34,15 @@ pub struct AuthHttp {
 
 impl AuthHttp {
     /// Create an unauthenticated client (for dev server which requires no auth)
-    pub(crate) fn new_unauthenticated(base_url: String) -> Self {
-        let client = Client::new();
+    pub(crate) fn new_unauthenticated(base_url: String) -> Result<Self> {
+        let client = crate::http_client::client()?;
         let sdk_client = SdkClient::new_with_client(&base_url, client.clone());
-        Self {
+        Ok(Self {
             client,
             base_url,
             bearer_token: None,
             sdk_client,
-        }
+        })
     }
 
     /// Get a configured SDK client for making API calls
@@ -137,8 +137,11 @@ pub fn client_with_header(auth_value: &str) -> Result<Client> {
                 reason: "Invalid authorization header value".to_string(),
             })?,
     );
-    headers.insert(USER_AGENT, HeaderValue::from_static("alien-cli"));
-    Ok(Client::builder()
+    headers.insert(
+        USER_AGENT,
+        HeaderValue::from_static(crate::http_client::USER_AGENT),
+    );
+    Ok(crate::http_client::builder()
         .default_headers(headers)
         .build()
         .into_alien_error()
@@ -171,8 +174,11 @@ pub fn client_with_auth_and_workspace(auth_value: &str, workspace: &str) -> Resu
                         .to_string(),
             })?,
     );
-    headers.insert(USER_AGENT, HeaderValue::from_static("alien-cli"));
-    Ok(Client::builder()
+    headers.insert(
+        USER_AGENT,
+        HeaderValue::from_static(crate::http_client::USER_AGENT),
+    );
+    Ok(crate::http_client::builder()
         .default_headers(headers)
         .build()
         .into_alien_error()
@@ -547,7 +553,7 @@ mod oauth_flow {
             .set_auth_uri(auth_url)
             .set_token_uri(token_url);
 
-        let http_client = reqwest::Client::builder()
+        let http_client = crate::http_client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .into_alien_error()
@@ -832,7 +838,7 @@ mod oauth_flow {
     ) -> Result<TokenResponse> {
         let oauth_client = build_oauth_client(base, redirect)?;
 
-        let http_client = reqwest::Client::builder()
+        let http_client = crate::http_client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .into_alien_error()

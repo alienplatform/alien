@@ -9,8 +9,7 @@
 //! a capability scoped to it; the cluster credential stays with the operator.
 //!
 //! **Why no token of ours.** The caller authenticates with the ServiceAccount token Kubernetes
-//! already mounted in its pod, checked with a `TokenReview`. `alien-bindings`'
-//! `credential_source` states the rule this follows: managed workloads use their
+//! already mounted in its pod, checked with a `TokenReview`. Managed workloads use their
 //! platform-projected identity and do not receive Alien bearer tokens.
 
 use std::collections::BTreeSet;

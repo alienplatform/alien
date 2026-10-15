@@ -5,7 +5,6 @@
 import { ClientSDK } from "../lib/sdks.js";
 import { Bindings } from "./bindings.js";
 import { Commands } from "./commands.js";
-import { Credentials } from "./credentials.js";
 import { DeploymentGroups } from "./deploymentgroups.js";
 import { Deployments } from "./deployments.js";
 import { Health } from "./health.js";
@@ -37,11 +36,6 @@ export class AlienManager extends ClientSDK {
   private _leases?: Leases;
   get leases(): Leases {
     return (this._leases ??= new Leases(this._options));
-  }
-
-  private _credentials?: Credentials;
-  get credentials(): Credentials {
-    return (this._credentials ??= new Credentials(this._options));
   }
 
   private _deploymentGroups?: DeploymentGroups;

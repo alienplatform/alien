@@ -46,6 +46,16 @@ pub enum ErrorData {
         status: String,
     },
 
+    /// Override settings cannot change while a deployment is active or locked.
+    #[error(
+        code = "QUOTA_OVERRIDES_NOT_SAVED",
+        message = "Quota warning overrides for deployment '{deployment_id}' were not saved; wait until it is idle and unlocked, then try again",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    QuotaOverridesNotSaved { deployment_id: String },
+
     /// Deployment group not found
     #[error(
         code = "DEPLOYMENT_GROUP_NOT_FOUND",
@@ -201,6 +211,18 @@ pub enum ErrorData {
         http_status_code = 401
     )]
     Unauthorized { reason: String },
+
+    /// The credentials could not be checked right now (for example the
+    /// service that verifies them is unreachable). The same request can
+    /// succeed later; this says nothing about whether the credentials are valid.
+    #[error(
+        code = "AUTHENTICATION_UNAVAILABLE",
+        message = "Could not verify the credentials right now; retry the request",
+        retryable = "true",
+        internal = "false",
+        http_status_code = 503
+    )]
+    AuthenticationUnavailable,
 
     /// Forbidden - insufficient permissions
     #[error(

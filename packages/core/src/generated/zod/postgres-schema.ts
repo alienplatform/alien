@@ -5,6 +5,7 @@
 
 import * as z from "zod";
 import { PostgresBackendSchema } from "./postgres-backend-schema.js";
+import { ResourceRefSchema } from "./resource-ref-schema.js";
 
 /**
  * @description A managed PostgreSQL database. The target platform decides the backend\n(AWS Aurora Serverless v2, GCP Cloud SQL, Azure Flexible Server, or an\nembedded native process on Local); the database is never publicly reachable.
@@ -14,6 +15,9 @@ export const PostgresSchema = z.object({
                 return z.union([PostgresBackendSchema, z.null()]).optional()
               },
 "cpu": z.string().describe("Requested vCPUs (e.g. \"0.5\", \"2\"). None = smallest available tier.").nullish(),
+get "encryptionKey"(){
+                return z.union([ResourceRefSchema, z.null()]).optional()
+              },
 "highAvailability": z.optional(z.boolean().describe("Multi-AZ / regional / zone-redundant high availability. Default false.")),
 "id": z.string(),
 "memory": z.string().describe("Requested memory (e.g. \"1Gi\", \"8Gi\"). None = smallest available tier.").nullish(),

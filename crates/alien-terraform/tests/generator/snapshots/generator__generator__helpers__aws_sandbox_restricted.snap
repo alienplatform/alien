@@ -228,7 +228,7 @@ locals {
   deployment_region            = data.aws_region.current.region
   deployment_management_config = null
   advanced_settings            = merge(jsondecode(var.advanced_settings_json), jsondecode(var.advanced_settings_overlay_json))
-  deployment_settings          = merge(local.advanced_settings, { deploymentModel = var.deployment_model, updates = var.updates_mode, telemetry = var.telemetry_mode, heartbeats = var.heartbeats_mode, endpointAccess = var.endpoint_access, network = jsondecode(var.network_mode == "create-new" ? jsonencode({ type = "create", cidr = var.vpc_cidr == "" ? null : var.vpc_cidr, availabilityZones = var.availability_zones }) : var.network_mode == "use-existing" ? jsonencode({ type = "byo-vpc-aws", vpcId = var.vpc_id, publicSubnetIds = var.public_subnet_ids, privateSubnetIds = var.private_subnet_ids, securityGroupIds = var.security_group_ids }) : jsonencode({ type = "use-default" })) })
+  deployment_settings          = merge(local.advanced_settings, { deploymentModel = var.deployment_model, updates = var.updates_mode, telemetry = var.telemetry_mode, heartbeats = var.heartbeats_mode, endpointAccess = var.endpoint_access, network = jsondecode(var.network_mode == "create-new" ? jsonencode({ type = "create", cidr = var.vpc_cidr == "" ? null : var.vpc_cidr, availabilityZones = var.availability_zones }) : var.network_mode == "use-existing" ? jsonencode({ type = "byo-vpc-aws", vpcId = var.vpc_id, publicSubnetIds = compact([for id in var.public_subnet_ids : trimspace(id)]), privateSubnetIds = compact([for id in var.private_subnet_ids : trimspace(id)]), securityGroupIds = compact([for id in var.security_group_ids : trimspace(id)]) }) : jsonencode({ type = "use-default" })) })
   deployment_resources = [
     {
       id   = "default-network"
@@ -239,11 +239,11 @@ locals {
         internetGatewayId   = var.network_mode == "create-new" ? aws_internet_gateway.default_network[0].id : null
         natGatewayId        = var.network_mode == "create-new" ? aws_nat_gateway.default_network[0].id : null
         eipAllocationId     = var.network_mode == "create-new" ? aws_eip.default_network_nat[0].id : null
-        publicSubnetIds     = var.network_mode == "create-new" ? aws_subnet.default_network_public[*].id : var.network_mode == "use-existing" ? var.public_subnet_ids : []
-        privateSubnetIds    = var.network_mode == "create-new" ? aws_subnet.default_network_private[*].id : var.network_mode == "use-existing" ? var.private_subnet_ids : []
+        publicSubnetIds     = var.network_mode == "create-new" ? aws_subnet.default_network_public[*].id : var.network_mode == "use-existing" ? compact([for id in var.public_subnet_ids : trimspace(id)]) : []
+        privateSubnetIds    = var.network_mode == "create-new" ? aws_subnet.default_network_private[*].id : var.network_mode == "use-existing" ? compact([for id in var.private_subnet_ids : trimspace(id)]) : []
         publicRouteTableId  = var.network_mode == "create-new" ? aws_route_table.default_network_public[0].id : null
         privateRouteTableId = var.network_mode == "create-new" ? aws_route_table.default_network_private[0].id : null
-        securityGroupId     = var.network_mode == "create-new" ? aws_security_group.default_network_workload[0].id : var.network_mode == "use-existing" ? try(var.security_group_ids[0], null) : null
+        securityGroupId     = var.network_mode == "create-new" ? aws_security_group.default_network_workload[0].id : var.network_mode == "use-existing" ? try(compact([for id in var.security_group_ids : trimspace(id)])[0], null) : null
         availabilityZones   = var.network_mode == "use-default" ? [] : slice(data.aws_availability_zones.available.names, 0, 2)
         isByoVpc            = var.network_mode != "create-new"
       }
@@ -514,7 +514,7 @@ resource "awscc_lambda_network_connector" "agents" {
         "MicroVm"
       ]
       "network_protocol" = "IPv4"
-      "subnet_ids"       = var.network_mode == "create-new" ? aws_subnet.default_network_private[*].id : var.network_mode == "use-existing" ? var.private_subnet_ids : []
+      "subnet_ids"       = var.network_mode == "create-new" ? aws_subnet.default_network_private[*].id : var.network_mode == "use-existing" ? compact([for id in var.private_subnet_ids : trimspace(id)]) : []
       "security_group_ids" = [
         aws_security_group.agents_egress.id
       ]

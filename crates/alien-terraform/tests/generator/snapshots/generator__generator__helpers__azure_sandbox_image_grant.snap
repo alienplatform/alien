@@ -300,6 +300,15 @@ resource "azurerm_user_assigned_identity" "management" {
   ]
 }
 
+resource "azurerm_role_assignment" "management_self_read" {
+  scope                = azurerm_user_assigned_identity.management.id
+  role_definition_name = "Reader"
+  principal_id         = azurerm_user_assigned_identity.management.principal_id
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
 resource "azurerm_federated_identity_credential" "management_fic" {
   count               = var.azure_oidc_issuer != "" && var.azure_oidc_subject != "" ? 1 : 0
   name                = "${local.resource_prefix}-federated-credential"
@@ -338,6 +347,7 @@ resource "terraform_data" "deployment_registration" {
     azapi_resource.agents,
     azurerm_role_assignment.agents_images_0,
     azurerm_user_assigned_identity.management,
+    azurerm_role_assignment.management_self_read,
     azurerm_federated_identity_credential.management_fic
   ]
 }

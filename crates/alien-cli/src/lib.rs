@@ -8,6 +8,7 @@ pub mod deployment_tracking;
 pub mod error;
 pub mod execution_context;
 pub mod git_utils;
+pub mod http_client;
 pub mod interaction;
 pub mod manager_profile;
 pub mod output;
@@ -625,7 +626,7 @@ async fn login_to_manager(url: &str, token: Option<String>) -> Result<()> {
             }))
         }
     };
-    let response = reqwest::Client::new()
+    let response = crate::http_client::client()?
         .get(format!("{url}/v1/whoami"))
         .bearer_auth(&token)
         .send()
@@ -1443,7 +1444,31 @@ async fn run_dev_session(
                 eprint!("Building... ");
             }
         }
-        build_and_post_release_simple(&current_dir, port, skip_build, config_file.as_ref()).await?;
+        let resume = commands::wait_for_resumed_dev_deployment(port, &deployment_name);
+        #[cfg(unix)]
+        tokio::select! {
+            result = resume => result?,
+            _ = terminate.recv() => return Ok(()),
+            result = tokio::signal::ctrl_c() => {
+                result.into_alien_error().context(ErrorData::ServerStartFailed {
+                    reason: "Failed to wait for Ctrl+C".to_string(),
+                })?;
+                return Ok(());
+            }
+        }
+        #[cfg(not(unix))]
+        tokio::select! {
+            result = resume => result?,
+            result = tokio::signal::ctrl_c() => {
+                result.into_alien_error().context(ErrorData::ServerStartFailed {
+                    reason: "Failed to wait for Ctrl+C".to_string(),
+                })?;
+                return Ok(());
+            }
+        }
+        let release_id =
+            build_and_post_release_simple(&current_dir, port, skip_build, config_file.as_ref())
+                .await?;
         if !skip_build {
             steps.complete(0, None::<String>);
             if !is_tty {
@@ -1462,6 +1487,7 @@ async fn run_dev_session(
         let watch = watch_dev_deployments_until_ctrl_c(
             port,
             &deployment_name,
+            &release_id,
             status_file.as_ref(),
             &screen,
             &steps,
@@ -1613,6 +1639,7 @@ fn deployment_error_message(error: &serde_json::Value) -> Option<String> {
 async fn watch_dev_deployments_until_ctrl_c(
     port: u16,
     primary_deployment_name: &str,
+    initial_release_id: &str,
     status_file: Option<&PathBuf>,
     screen: &DevCardScreen,
     steps: &FixedSteps,
@@ -1645,6 +1672,20 @@ async fn watch_dev_deployments_until_ctrl_c(
                 else {
                     continue;
                 };
+
+                // A resumed manager may still report the previously installed release.
+                // Startup is ready only after this session's release actually converges.
+                if primary_state.retry_requested
+                    || (!deploy_step_completed
+                        && primary_state.status == alien_core::DeploymentStatus::Running
+                        && primary_state.current_release_id.as_deref() != Some(initial_release_id))
+                {
+                    if let Some(status_file) = status_file {
+                        write_dev_status(status_file, &build_dev_status(port,
+                            alien_core::DevStatusState::Initializing, None, None))?;
+                    }
+                    continue;
+                }
 
                 // Update status file (unchanged — machine-readable contract)
                 if let Some(status_file) = status_file {

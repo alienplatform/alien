@@ -10,13 +10,17 @@
 //! [`crate::TfRegistry::built_in`]).
 
 use crate::registry::TfRegistry;
-use alien_core::{import::EmitContext, Result};
+use alien_core::{Result, import::EmitContext};
 use hcl::{expr::Expression, structure::Block};
 use indexmap::IndexMap;
 
 /// Terraform fragment emitted by a single `(resource_type, platform)` emitter.
 #[derive(Debug, Default)]
 pub struct TfFragment {
+    /// Per-resource deployment inputs, rendered beside the resource.
+    pub variable_blocks: Vec<Block>,
+    /// Address migrations that preserve existing setup-owned resources.
+    pub moved_blocks: Vec<Block>,
     /// `resource "..." "..." { ... }` blocks. Merged into `main.tf`.
     pub resource_blocks: Vec<Block>,
     /// `data "..." "..." { ... }` blocks. Merged into `main.tf`.
@@ -138,6 +142,8 @@ impl TfFragment {
     /// Merge another fragment into this one (used by the K8s identity overlay
     /// layer to append on top of cloud emitters).
     pub fn extend(&mut self, other: TfFragment) {
+        self.variable_blocks.extend(other.variable_blocks);
+        self.moved_blocks.extend(other.moved_blocks);
         self.resource_blocks.extend(other.resource_blocks);
         self.data_blocks.extend(other.data_blocks);
         self.locals.extend(other.locals);

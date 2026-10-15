@@ -368,7 +368,8 @@ pub(crate) fn failed_resources_from_context(context: Option<&Value>) -> Vec<Stri
 }
 
 /// Walk the source chain of a serialized AlienError to find the root cause message.
-/// Prefers the deepest non-internal error; falls back to the deepest error overall.
+/// Keeps mapped quota guidance; otherwise prefers the deepest non-internal error.
+/// Falls back to the deepest error overall.
 pub(crate) fn root_cause_message(error: &Value) -> Option<String> {
     let mut deepest_non_internal: Option<&str> = None;
     let mut deepest: Option<&str> = None;
@@ -382,6 +383,13 @@ pub(crate) fn root_cause_message(error: &Value) -> Option<String> {
             .unwrap_or(true);
 
         if let Some(m) = msg {
+            // The mapped error adds the provider quota ID, scope and increase link.
+            // Its raw provider source has less actionable information.
+            if !is_internal
+                && current.get("code").and_then(Value::as_str) == Some("CLOUD_QUOTA_EXCEEDED")
+            {
+                return Some(m.to_owned());
+            }
             deepest = Some(m);
             if !is_internal {
                 deepest_non_internal = Some(m);
@@ -409,6 +417,20 @@ mod event_tests {
     };
     use alien_error::Context;
     use std::collections::HashMap;
+
+    #[test]
+    fn saved_quota_race_retains_provider_identity_and_increase_link() {
+        let error: AlienError =
+            serde_json::from_str(include_str!("fixtures/aws-igw-quota-race-error.json"))
+                .expect("redacted real deployment failure");
+        let rendered = render_human_error(&error);
+        assert!(rendered.contains("default-network: Cloud quota exceeded: Internet gateways per Region (L-A4707A72, eu-west-1)"), "{rendered}");
+        assert!(rendered.contains("Request an increase: https://eu-west-1.console.aws.amazon.com/servicequotas/home?region=eu-west-1#!/services/vpc/quotas/L-A4707A72"), "{rendered}");
+        assert!(
+            !rendered.contains("Failed to create Internet Gateway"),
+            "{rendered}"
+        );
+    }
 
     /// `deployments get` renders the stored deployment error. A deployment failure's own
     /// message only counts the failed resources, so each one is listed with its root cause.
@@ -551,6 +573,7 @@ mod event_tests {
             success: errors.is_empty(),
             errors: errors.iter().map(ToString::to_string).collect(),
             warnings: Vec::new(),
+            quota_results: Vec::new(),
         };
         let error = Err::<(), _>(AlienError::new(
             alien_preflights::error::ErrorData::ValidationFailed {
@@ -1527,7 +1550,9 @@ impl LineCommandEventHandler {
     fn print_created(event: &AlienEvent) {
         match event {
             AlienEvent::LoadingConfiguration => eprintln!("Loading configuration"),
-            AlienEvent::RunningPreflights { stack, platform } => {
+            AlienEvent::RunningPreflights {
+                stack, platform, ..
+            } => {
                 eprintln!("Running preflights for {stack} ({platform})")
             }
             AlienEvent::BuildingResource {
@@ -1563,6 +1588,14 @@ impl EventHandler for LineCommandEventHandler {
         match change {
             EventChange::Created { event, .. } => Self::print_created(&event),
             EventChange::Updated { id, event, .. } => {
+                if let AlienEvent::RunningPreflights {
+                    platform, warnings, ..
+                } = &event
+                {
+                    for warning in warnings {
+                        eprintln!("Warning ({platform}): {warning}");
+                    }
+                }
                 if let AlienEvent::CompilingCode {
                     progress: Some(progress),
                     ..
@@ -1709,7 +1742,9 @@ impl CommandEventHandler {
                 self.set_status(state, "Loading configuration");
                 state.event_roles.insert(id.to_string(), EventRole::Status);
             }
-            AlienEvent::RunningPreflights { stack, platform } => {
+            AlienEvent::RunningPreflights {
+                stack, platform, ..
+            } => {
                 self.set_status(
                     state,
                     format!("Running preflights for {stack} ({platform})"),
@@ -1781,7 +1816,9 @@ impl CommandEventHandler {
                 self.set_status(state, "Loading configuration");
                 state.event_roles.insert(id.to_string(), EventRole::Status);
             }
-            AlienEvent::RunningPreflights { stack, platform } => {
+            AlienEvent::RunningPreflights {
+                stack, platform, ..
+            } => {
                 self.set_status(
                     state,
                     format!("Running preflights for {stack} ({platform})"),
@@ -1920,6 +1957,15 @@ impl EventHandler for CommandEventHandler {
                 );
             }
             EventChange::Updated { id, event, .. } => {
+                if let AlienEvent::RunningPreflights {
+                    platform, warnings, ..
+                } = &event
+                {
+                    for warning in warnings {
+                        self.live
+                            .println(&format!("Warning ({platform}): {warning}"));
+                    }
+                }
                 let mut state = self.state.lock().expect("command event state poisoned");
                 let resource_key = match state.event_roles.get(&id).cloned() {
                     Some(EventRole::ResourceChild(resource_key)) => Some(resource_key),
@@ -2132,6 +2178,84 @@ mod command_event_tests {
             state.lock().unwrap().resources["deployment:data"].state,
             RowState::Failed
         );
+    }
+
+    // Capture the real handlers in isolated processes: eprintln! and console::Term
+    // use different stderr paths, and a tracing subscriber must not mask a regression.
+    #[test]
+    fn completed_preflight_warnings_reach_stderr_with_tracing_off() {
+        for handler in ["line", "terminal"] {
+            for warnings in ["present", "empty"] {
+                let output = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "ui::command_event_tests::preflight_warning_output_child",
+                        "--ignored",
+                        "--nocapture",
+                        "--quiet",
+                    ])
+                    .env("ALIEN_LOG", "off")
+                    .env("RUST_LOG", "off")
+                    .env("ALIEN_TEST_WARNING_HANDLER", handler)
+                    .env("ALIEN_TEST_WARNING_LIST", warnings)
+                    .output()
+                    .expect("warning output subprocess should run");
+                assert!(output.status.success(), "{handler}/{warnings}: {output:?}");
+
+                let stderr = String::from_utf8(output.stderr).unwrap();
+                let expected = if warnings == "present" {
+                    "Warning (aws): quota observation unavailable\n"
+                } else {
+                    ""
+                };
+                assert_eq!(stderr, expected, "{handler}/{warnings}");
+
+                // libtest writes its opening banner before invoking the child.
+                // The child exits after writing the same JSON-shaped command result
+                // to stdout, so any handler output there makes this parse fail.
+                let stdout = String::from_utf8(output.stdout).unwrap();
+                let json = stdout
+                    .strip_prefix("\nrunning 1 test\n")
+                    .expect("only the libtest banner may precede the command result");
+                let result: serde_json::Value = serde_json::from_str(json)
+                    .expect("warning handlers must leave JSON stdout parseable");
+                assert_eq!(result, serde_json::json!({"success": true}));
+            }
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "invoked in a subprocess to capture actual stdout/stderr"]
+    async fn preflight_warning_output_child() {
+        let handler = std::env::var("ALIEN_TEST_WARNING_HANDLER").unwrap();
+        let warnings = if std::env::var("ALIEN_TEST_WARNING_LIST").unwrap() == "present" {
+            vec!["quota observation unavailable".to_string()]
+        } else {
+            Vec::new()
+        };
+        assert!(!tracing::enabled!(tracing::Level::WARN));
+        let change = EventChange::Updated {
+            id: "preflights".to_string(),
+            updated_at: chrono::Utc::now(),
+            event: AlienEvent::RunningPreflights {
+                stack: "example".to_string(),
+                platform: "aws".to_string(),
+                warnings,
+            },
+        };
+        if handler == "line" {
+            LineCommandEventHandler::new()
+                .on_event_change(change)
+                .await
+                .unwrap();
+        } else {
+            let handler = CommandEventHandler::new(UiCommandKind::Build);
+            handler.on_event_change(change).await.unwrap();
+            drop(handler);
+        }
+        println!("{{\"success\":true}}");
+        // Avoid libtest's success footer contaminating the captured command result.
+        std::process::exit(0);
     }
 
     fn empty_command_state() -> CommandEventState {

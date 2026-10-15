@@ -29,9 +29,11 @@ pub enum InitialSetupAuthority {
 pub struct SetupUpdateAuthorization {
     /// Unique revision used by persistence layers for compare-and-swap updates.
     pub nonce: String,
-    /// Setup-owned digest (`Stack::setup_owned_digest`) of the last successful deployment.
+    /// Setup resources and permissions digest (`Stack::setup_update_digest`) of the last
+    /// successful deployment. The field name is retained for serialized compatibility.
     pub baseline_frozen_digest: String,
-    /// Setup-owned digest (`Stack::setup_owned_digest`) of the stack the setup re-import prepared.
+    /// Setup resources and permissions digest (`Stack::setup_update_digest`) of the stack
+    /// the setup re-import prepared.
     pub target_frozen_digest: String,
     /// Release whose stack was prepared by setup.
     pub release_id: String,
@@ -87,7 +89,8 @@ pub struct RuntimeMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending_prepared_stack: Option<crate::Stack>,
 
-    /// Release `pending_prepared_stack` was prepared from. The target can move
+    /// Release the in-flight stack was prepared from: `pending_prepared_stack`
+    /// during updates, or `prepared_stack` during local first startup. The target can move
     /// to a newer release while that stack is still being applied; this tells
     /// the update which release actually converged.
     #[serde(default, skip_serializing_if = "Option::is_none")]

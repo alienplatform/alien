@@ -994,6 +994,31 @@ impl StackExecutor {
         Ok(pending)
     }
 
+    /// Failed updates superseded by the desired configuration but still waiting to start.
+    ///
+    /// These records retain the dependencies their current resources actually use. Treating
+    /// them as fresh failures would interrupt their dependencies' recovery; transitioning
+    /// them early would instead make their new dependency edges block replacement deletes.
+    pub fn pending_recovery_updates<'a>(&self, state: &'a StackState) -> Result<HashSet<&'a str>> {
+        let mut pending = HashSet::new();
+        for (id, current) in &state.resources {
+            let Some(desired) = self.resources.get(id) else {
+                continue;
+            };
+            if current.status == ResourceStatus::UpdateFailed
+                && (desired.resource != current.config
+                    || desired.dependencies != current.dependencies
+                    || self.external_binding_drifted(id, current)?)
+                && current
+                    .get_internal_controller()?
+                    .is_some_and(|mut controller| controller.transition_to_update().is_ok())
+            {
+                pending.insert(id.as_str());
+            }
+        }
+        Ok(pending)
+    }
+
     /// Computes the **diff** between the *desired* stack configuration and the
     /// *current* [`StackState`].
     ///
@@ -1637,6 +1662,11 @@ impl StackExecutor {
         validate_stack_controller_state_versions(&state)?;
 
         let mut state = state;
+        // Repair checkpoints written before interrupted controllers were settled, including
+        // ones whose interruption error was overwritten by a rejected update transition.
+        for resource in state.resources.values_mut() {
+            resource.settle_failed_controller()?;
+        }
         if apply_plan && self.resume_unchanged_failed_resources {
             for (resource_id, resource_state) in &mut state.resources {
                 if !matches!(
@@ -2154,6 +2184,10 @@ impl StackExecutor {
 
         // Apply the calculated initial transitions for Creates/Updates
         next_state.resources.extend(initial_transitions);
+        // A rejected transition must not leave a failed record with a runnable controller.
+        for resource in next_state.resources.values_mut() {
+            resource.settle_failed_controller()?;
+        }
         // --- Planning Phase End ---
 
         // --- Execution Phase ---
@@ -2243,7 +2277,11 @@ impl StackExecutor {
                 }
             };
 
-            if is_ready {
+            // An unavailable dependency suspends automatic work, including a
+            // repair/replacement already in progress. Explicit teardown still runs.
+            let explicit_delete = current_resource_view.status == ResourceStatus::Deleting
+                && !self.resources.contains_key(resource_id);
+            if is_ready && (explicit_delete || self.dependencies_available(resource_id, &state)) {
                 ready_resource_ids.push(resource_id.clone());
             }
         }
@@ -2775,6 +2813,42 @@ impl StackExecutor {
         }
     }
 
+    fn dependencies_available(&self, resource_id: &str, state: &StackState) -> bool {
+        let mut pending = vec![resource_id];
+        let mut visited = HashSet::new();
+        while let Some(id) = pending.pop() {
+            if !visited.insert(id) {
+                continue;
+            }
+            if id != resource_id
+                && state
+                    .resources
+                    .get(id)
+                    .and_then(|resource| resource.outputs.as_ref())
+                    .is_some_and(|outputs| !outputs.as_resource_outputs().is_available())
+            {
+                return false;
+            }
+            if let Some(resource) = state.resources.get(id) {
+                pending.extend(
+                    resource
+                        .dependencies
+                        .iter()
+                        .map(|dependency| dependency.id()),
+                );
+            }
+            if let Some(resource) = self.resources.get(id) {
+                pending.extend(
+                    resource
+                        .dependencies
+                        .iter()
+                        .map(|dependency| dependency.id()),
+                );
+            }
+        }
+        true
+    }
+
     fn dependencies_met(&self, node_index: NodeIndex, state: &StackState) -> bool {
         // Resolve the source resource ID from the graph index.
         let source_id = match self.node_index_to_id.get(&node_index) {
@@ -2864,6 +2938,14 @@ impl StackExecutor {
     pub(crate) fn is_resource_synced(&self, resource_id: &str, state: &StackState) -> bool {
         match state.resources.get(resource_id) {
             Some(view) => {
+                if matches!(
+                    view.status,
+                    ResourceStatus::ProvisionFailed
+                        | ResourceStatus::UpdateFailed
+                        | ResourceStatus::DeleteFailed
+                ) {
+                    return true;
+                }
                 if self.is_external_binding_resource(resource_id) {
                     if self.resources.contains_key(resource_id) {
                         return view.status == ResourceStatus::Running;

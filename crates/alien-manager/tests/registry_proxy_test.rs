@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 use std::net::{SocketAddr, TcpListener};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use bollard::image::CreateImageOptions;
@@ -81,6 +81,35 @@ fn test_stack(stack_id: &str, function_id: &str, image_uri: &str) -> Stack {
 /// only the release_id matters, not the stack contents).
 fn empty_stack(stack_id: &str) -> Stack {
     Stack::new(stack_id.to_string()).build()
+}
+
+/// Everything this test binary logs at WARN and above, for tests that check what an operator
+/// would find in the manager's logs. The in-process manager logs through the global subscriber.
+fn captured_logs() -> &'static Arc<Mutex<Vec<u8>>> {
+    static LOGS: OnceLock<Arc<Mutex<Vec<u8>>>> = OnceLock::new();
+    LOGS.get_or_init(|| {
+        let logs = Arc::new(Mutex::new(Vec::new()));
+        let writer = logs.clone();
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::WARN)
+            .with_ansi(false)
+            .with_writer(move || CapturedWriter(writer.clone()))
+            .init();
+        logs
+    })
+}
+
+struct CapturedWriter(Arc<Mutex<Vec<u8>>>);
+
+impl std::io::Write for CapturedWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -189,11 +218,15 @@ struct TestSetup {
 
 /// Full test setup: registry + image + manager + deployment.
 async fn setup() -> TestSetup {
+    setup_with_repository("artifacts/test-fn", false).await
+}
+
+async fn setup_with_repository(repository: &str, configure_routing: bool) -> TestSetup {
     let (registry_url, registry_handle) = start_local_registry().await;
 
     // Build and push a real image using dockdash
     // Two-level path required by container-registry: namespace/repo
-    let image_uri = build_and_push_image(&registry_url, "artifacts/test-fn", "v1").await;
+    let image_uri = build_and_push_image(&registry_url, repository, "v1").await;
 
     // Start manager
     let port = free_port();
@@ -248,6 +281,7 @@ async fn setup() -> TestSetup {
         disable_deployment_loop: true,
         disable_heartbeat_loop: true,
         enable_local_log_ingest: false,
+        stop_local_containers_on_shutdown: false,
         allowed_origins: None,
         response_signing_key: b"test-signing-key".to_vec(),
     };
@@ -368,6 +402,14 @@ async fn setup() -> TestSetup {
     // Create a bindings provider that can load the local artifact registry
     let mut env_map: HashMap<String, String> = std::env::vars().collect();
     env_map.insert("ALIEN_ARTIFACTS_BINDING".to_string(), binding_json.clone());
+    // The legacy proxy tests exercise the artifacts binding fallback. Project scoping also
+    // needs the canonical binding that registers a repository route at startup.
+    if configure_routing {
+        env_map.insert(
+            "ALIEN_ARTIFACT_REGISTRY_BINDING".to_string(),
+            binding_json.clone(),
+        );
+    }
     env_map.insert("ALIEN_DEPLOYMENT_TYPE".to_string(), "local".to_string());
     let bindings_provider = Arc::new(
         alien_bindings::BindingsProvider::from_env(env_map)
@@ -1081,4 +1123,73 @@ async fn image_repository_provisioning_authorizes_first_and_serves_only_cloud_re
         provision(&s.admin_token, "aws").await.unwrap(),
     )
     .await;
+}
+
+/// A release naming another project's repository does not let its deployment pull it.
+#[tokio::test]
+async fn worker_release_cannot_open_another_projects_proxy_repository() {
+    let repository = "artifacts/default-other";
+    let s = setup_with_repository(repository, true).await;
+    let client = reqwest::Client::new();
+    let url = format!("{}/v2/{repository}/manifests/v1", s.manager_url);
+
+    let admin = client
+        .get(&url)
+        .bearer_auth(&s.admin_token)
+        .send()
+        .await
+        .expect("admin manifest request should finish");
+    assert_eq!(admin.status(), reqwest::StatusCode::OK);
+
+    let deployment = client
+        .get(&url)
+        .bearer_auth(&s.deployment_token)
+        .send()
+        .await
+        .expect("deployment manifest request should finish");
+    assert_eq!(deployment.status(), reqwest::StatusCode::FORBIDDEN);
+    let body: serde_json::Value = deployment.json().await.expect("OCI error response");
+    assert_eq!(body["errors"][0]["code"], "DENIED");
+}
+
+/// A refused pull leaves a WARN line naming who asked, for which repository and project, and why.
+/// Without it a pull refused after a release is invisible in the manager's logs: the machine or
+/// worker that cannot pull reports a crash loop or an access error of its own.
+#[tokio::test]
+async fn a_refused_pull_is_logged_with_the_caller_and_the_reason() {
+    let logs = captured_logs();
+    let repository = "artifacts/default-refusal-log";
+    let s = setup_with_repository(repository, true).await;
+    let response = reqwest::Client::new()
+        .get(format!("{}/v2/{repository}/manifests/v1", s.manager_url))
+        .bearer_auth(&s.deployment_token)
+        .send()
+        .await
+        .expect("deployment manifest request should finish");
+    assert_eq!(response.status(), reqwest::StatusCode::FORBIDDEN);
+
+    let logs = String::from_utf8(logs.lock().unwrap().clone()).unwrap();
+    let line = logs
+        .lines()
+        .find(|line| {
+            line.contains("Refused a registry proxy request")
+                && line.contains(&format!("repository={repository}"))
+        })
+        .unwrap_or_else(|| panic!("no refusal line for {repository} in:\n{logs}"));
+    assert!(line.contains("WARN"), "{line}");
+    assert!(line.contains("operation=\"pull\""), "{line}");
+    assert!(line.contains("subject_kind=\"service-account\""), "{line}");
+    assert!(
+        line.contains(&s.deployment_id),
+        "the caller's scope: {line}"
+    );
+    assert!(line.contains("status=403"), "{line}");
+    assert!(
+        line.contains("reason="),
+        "the reason the client was given: {line}"
+    );
+    assert!(
+        !line.contains(&s.deployment_token),
+        "the bearer token must never be logged: {line}"
+    );
 }

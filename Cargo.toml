@@ -183,8 +183,9 @@ prost-types = "0.13"
 rand = "0.9"
 rand_distr = "0.5"
 regex = "1"
-reqwest = { version = "0.12.2", default-features = false }
-hickory-resolver = { version = "0.25.2", default-features = false, features = ["system-config", "tokio"] }
+reqwest = { version = "0.12.23", default-features = false }
+h2 = "0.4"
+hickory-resolver = { version = "0.26.1", default-features = false, features = ["system-config", "tokio"] }
 semver = "1"
 self-replace = "1.5"
 rkyv = "0.8.0"

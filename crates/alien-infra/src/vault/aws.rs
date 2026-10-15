@@ -1,5 +1,6 @@
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_macros::controller;
+use alien_permissions::aws_resource_policies::aws_prefixed_resource_name;
 use std::time::Duration;
 use tracing::{debug, info};
 
@@ -55,7 +56,7 @@ impl AwsVaultController {
 
         let account_id = aws_cfg.account_id.to_string();
 
-        let vault_prefix = format!("{}-{}", ctx.resource_prefix, config.id);
+        let vault_prefix = aws_prefixed_resource_name(ctx.resource_prefix, &config.id);
 
         ResourcePermissionsHelper::apply_aws_resource_scoped_permissions(
             ctx,

@@ -9,7 +9,6 @@ use crate::{
     },
 };
 
-use crate::credential_source::{MintingCredentialSource, MintingResolver};
 #[cfg(feature = "aws")]
 use crate::providers::queue::aws_sqs::{create_http_client as create_sqs_http_client, AwsSqsQueue};
 use alien_client_config::ClientConfigExt;
@@ -48,11 +47,8 @@ pub struct BindingsProvider {
 /// process. They should still start when no startup secret needs loading, even
 /// if cloud metadata is temporarily unavailable.
 ///
-/// On first binding use it resolves credentials in a fixed order (see
-/// [`LazyEnvBindingsProvider::select`]): native/projected `ClientConfig::from_env`
-/// first, then minting-backed resolution if an external/bootstrap caller
-/// explicitly supplied the mint environment contract, otherwise the original
-/// `from_env` error is surfaced unchanged.
+/// On first binding use it resolves native or projected credentials through
+/// `ClientConfig::from_env`, preserving any configuration error unchanged.
 pub struct LazyEnvBindingsProvider {
     env: HashMap<String, String>,
     /// Deployment platform parsed at construction on the runtime path
@@ -69,8 +65,8 @@ pub struct LazyEnvBindingsProvider {
     /// fail fast at construction, and `select` reuses the parse instead of
     /// re-parsing `env` on first use.
     bindings: HashMap<String, serde_json::Value>,
-    /// The credential resolution strategy, decided once on first use.
-    resolver: OnceCell<CredentialResolver>,
+    /// The provider, initialized once on first use.
+    resolver: OnceCell<Arc<BindingsProvider>>,
 }
 
 /// Manual `Debug`: `env` may hold live credential material (cloud secret keys,
@@ -79,33 +75,8 @@ impl std::fmt::Debug for LazyEnvBindingsProvider {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LazyEnvBindingsProvider")
             .field("env_keys", &self.env.keys().collect::<Vec<_>>())
-            .field("resolver", &self.resolver.get())
+            .field("initialized", &self.resolver.initialized())
             .finish()
-    }
-}
-
-/// How a [`LazyEnvBindingsProvider`] obtains its [`BindingsProvider`], chosen
-/// once at first binding use.
-enum CredentialResolver {
-    /// Native/projected credentials resolved from the environment. The provider
-    /// (and its `ClientConfig`) never changes for the process lifetime.
-    Static(Arc<BindingsProvider>),
-    /// Minting-backed credentials fetched from the manager. The backing provider
-    /// is rebuilt on each re-mint; see [`MintingResolver`]. Boxed so this variant
-    /// doesn't bloat the common `Static` one.
-    Minting(Box<MintingResolver>),
-}
-
-/// Manual `Debug`: the `Static` provider embeds a live `ClientConfig` and the
-/// `Minting` resolver a bearer token / minted config. Never render either.
-impl std::fmt::Debug for CredentialResolver {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            CredentialResolver::Static(_) => f.write_str("Static(<redacted>)"),
-            CredentialResolver::Minting(resolver) => {
-                f.debug_tuple("Minting").field(resolver).finish()
-            }
-        }
     }
 }
 
@@ -131,8 +102,8 @@ impl BindingsProvider {
         })
     }
 
-    /// The workload's resolved cloud credentials (native/projected identity or Alien-minted
-    /// short-lived credentials). Consumers that need to authorize a request themselves — the
+    /// The workload's resolved cloud credentials (native, projected, or explicit).
+    /// Consumers that need to authorize a request themselves — the
     /// AI gateway signs upstream model calls with this — read it here rather than going
     /// through a per-resource binding.
     pub fn client_config(&self) -> &ClientConfig {
@@ -441,31 +412,16 @@ impl BindingsProvider {
 }
 
 impl LazyEnvBindingsProvider {
-    /// Resolve (once) which credential strategy to use, then return a provider
-    /// backed by fresh-enough credentials.
-    ///
-    /// The strategy selection happens exactly once (via `OnceCell`); on the
-    /// minting path each call additionally checks credential freshness and
-    /// re-mints on access if stale.
+    /// Resolve and cache the provider using the workload's environment.
     pub async fn provider(&self) -> Result<Arc<BindingsProvider>> {
-        let resolver = self
-            .resolver
-            .get_or_try_init(|| async { self.select().await })
-            .await?;
-
-        match resolver {
-            CredentialResolver::Static(provider) => Ok(provider.clone()),
-            CredentialResolver::Minting(minting) => minting.provider().await,
-        }
+        self.resolver
+            .get_or_try_init(|| self.select())
+            .await
+            .cloned()
     }
 
-    /// Decide the credential strategy at first use, in a fixed order:
-    ///
-    /// 1. Native/projected `ClientConfig::from_env` succeeds → use it, never mint.
-    /// 2. Else if the complete external/bootstrap mint env contract is present
-    ///    → mint.
-    /// 3. Else → surface the original `from_env` error unchanged.
-    async fn select(&self) -> Result<CredentialResolver> {
+    /// Resolve native or projected credentials at first use.
+    async fn select(&self) -> Result<Arc<BindingsProvider>> {
         // Binding JSON (and, on the `from_env_lazy` path, the platform) was
         // already parsed and validated at construction; `env` cannot have
         // changed since, so re-parsing would just repeat that work for the
@@ -475,21 +431,11 @@ impl LazyEnvBindingsProvider {
             Some(platform) => platform,
             None => crate::get_platform_from_env(&self.env)?,
         };
-        match BindingsProvider::client_config_from_env(platform, &self.env).await {
-            Ok(client_config) => Ok(CredentialResolver::Static(Arc::new(BindingsProvider::new(
-                client_config,
-                self.bindings.clone(),
-            )?))),
-            Err(from_env_error) => match MintingCredentialSource::from_env(&self.env)? {
-                Some(source) => Ok(CredentialResolver::Minting(Box::new(MintingResolver::new(
-                    source,
-                    self.bindings.clone(),
-                )))),
-                // No mint contract: the environment simply couldn't produce
-                // credentials. Preserve the exact original error.
-                None => Err(from_env_error),
-            },
-        }
+        let client_config = BindingsProvider::client_config_from_env(platform, &self.env).await?;
+        Ok(Arc::new(BindingsProvider::new(
+            client_config,
+            self.bindings.clone(),
+        )?))
     }
 
     /// Fail fast with [`ErrorData::BindingNotConfigured`] when `binding_name`
@@ -2274,7 +2220,7 @@ mod tests {
 
     #[tokio::test]
     async fn lazy_env_provider_defers_cloud_client_config_until_binding_use() {
-        let env = HashMap::from([
+        let mut env = HashMap::from([
             (
                 ENV_ALIEN_DEPLOYMENT_TYPE.to_string(),
                 Platform::Aws.as_str().to_string(),
@@ -2290,6 +2236,14 @@ mod tests {
             ),
         ]);
 
+        let expected = BindingsProvider::from_env(env.clone())
+            .await
+            .expect_err("eager construction must require AWS client config");
+        env.insert(
+            "ALIEN_MANAGER_URL".to_string(),
+            "http://127.0.0.1:1".to_string(),
+        );
+        env.insert("ALIEN_DEPLOYMENT_TOKEN".to_string(), "unused".to_string());
         let provider = BindingsProvider::from_env_lazy(env)
             .expect("lazy provider construction should validate binding JSON without AWS config");
 
@@ -2299,6 +2253,10 @@ mod tests {
             .expect_err("binding use should still require AWS client config");
 
         assert_eq!(error.code, "CLIENT_CONFIG_INVALID");
+        assert_eq!(error.to_string(), expected.to_string());
+        assert_eq!(error.retryable, expected.retryable);
+        assert_eq!(error.internal, expected.internal);
+        assert_eq!(error.http_status_code, expected.http_status_code);
     }
 
     /// The construction-time binding-JSON parse is load-bearing: `select`
@@ -2568,167 +2526,5 @@ mod tests {
             error.to_string().contains("ALIEN_CACHE_BINDING"),
             "message should name the env var, got: {error}"
         );
-    }
-
-    // --- Selection order on the lazy path (native-vs-mint) ---
-
-    mod selection {
-        use super::*;
-        use crate::traits::BindingsProviderApi;
-        use alien_core::{
-            ENV_ALIEN_DEPLOYMENT_ID, ENV_ALIEN_DEPLOYMENT_SERVICE_ACCOUNT,
-            ENV_ALIEN_DEPLOYMENT_TOKEN, ENV_ALIEN_MANAGER_URL, ENV_ALIEN_RESOURCE_ID,
-        };
-        use axum::{extract::State, routing::post, Json, Router};
-        use std::net::SocketAddr;
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        use tempfile::TempDir;
-
-        /// Fake mint endpoint that counts requests and returns a `Local` config.
-        async fn mint_handler(State(calls): State<Arc<AtomicUsize>>) -> Json<serde_json::Value> {
-            calls.fetch_add(1, Ordering::SeqCst);
-            let expires_at = (chrono::Utc::now() + chrono::Duration::seconds(3600)).to_rfc3339();
-            Json(serde_json::json!({
-                "clientConfig": { "platform": "local", "state_directory": "/tmp/alien-sel-test" },
-                "expiresAt": expires_at,
-                "principal": "local:mint-test",
-            }))
-        }
-
-        async fn spawn_mint_server() -> (String, Arc<AtomicUsize>) {
-            let calls = Arc::new(AtomicUsize::new(0));
-            let app = Router::new()
-                .route("/v1/credentials/mint", post(mint_handler))
-                .with_state(calls.clone());
-            let listener = tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
-                .await
-                .expect("bind");
-            let addr = listener.local_addr().expect("addr");
-            tokio::spawn(async move {
-                axum::serve(listener, app).await.expect("serve");
-            });
-            (format!("http://{addr}"), calls)
-        }
-
-        fn local_storage_binding(dir: &TempDir) -> String {
-            format!(
-                r#"{{"service":"local-storage","storagePath":"{}"}}"#,
-                dir.path().display()
-            )
-        }
-
-        /// Full mint env contract pointing at `manager_url`.
-        fn mint_env(manager_url: &str) -> HashMap<String, String> {
-            HashMap::from([
-                (ENV_ALIEN_MANAGER_URL.to_string(), manager_url.to_string()),
-                (
-                    ENV_ALIEN_DEPLOYMENT_TOKEN.to_string(),
-                    "ax_deploy_tok".to_string(),
-                ),
-                (ENV_ALIEN_DEPLOYMENT_ID.to_string(), "dep_1".to_string()),
-                (
-                    ENV_ALIEN_DEPLOYMENT_SERVICE_ACCOUNT.to_string(),
-                    "management".to_string(),
-                ),
-                (ENV_ALIEN_RESOURCE_ID.to_string(), "api".to_string()),
-            ])
-        }
-
-        #[tokio::test]
-        async fn native_config_wins_and_never_mints() {
-            // Local platform resolves `ClientConfig::from_env` successfully, so
-            // even with a full mint contract present the resolver must pick the
-            // native path and never call the manager.
-            let (base_url, calls) = spawn_mint_server().await;
-            let dir = TempDir::new().expect("tempdir");
-
-            let mut env = mint_env(&base_url);
-            env.insert(
-                ENV_ALIEN_DEPLOYMENT_TYPE.to_string(),
-                Platform::Local.as_str().to_string(),
-            );
-            env.insert(
-                "ALIEN_FILES_BINDING".to_string(),
-                local_storage_binding(&dir),
-            );
-
-            let provider = BindingsProvider::from_env_lazy(env).expect("lazy construct");
-            provider
-                .load_storage("files")
-                .await
-                .expect("native local storage should load");
-
-            assert_eq!(
-                calls.load(Ordering::SeqCst),
-                0,
-                "native credentials must never trigger a mint"
-            );
-        }
-
-        #[tokio::test]
-        async fn mints_when_native_config_unavailable() {
-            // AWS platform with no usable credentials makes `from_env` fail; with
-            // the mint contract present the resolver falls through to minting and
-            // resolves the (Local) minted config, which then serves the binding.
-            let (base_url, calls) = spawn_mint_server().await;
-            let dir = TempDir::new().expect("tempdir");
-
-            let mut env = mint_env(&base_url);
-            env.insert(
-                ENV_ALIEN_DEPLOYMENT_TYPE.to_string(),
-                Platform::Aws.as_str().to_string(),
-            );
-            env.insert("AWS_EC2_METADATA_DISABLED".to_string(), "true".to_string());
-            env.insert(
-                "AWS_PROFILE".to_string(),
-                "__alien_missing_test_profile__".to_string(),
-            );
-            env.insert(
-                "ALIEN_FILES_BINDING".to_string(),
-                local_storage_binding(&dir),
-            );
-
-            let provider = BindingsProvider::from_env_lazy(env).expect("lazy construct");
-            provider
-                .load_storage("files")
-                .await
-                .expect("mint path should resolve a usable config");
-
-            assert_eq!(
-                calls.load(Ordering::SeqCst),
-                1,
-                "unavailable native credentials must trigger exactly one mint"
-            );
-        }
-
-        #[tokio::test]
-        async fn no_mint_contract_preserves_original_from_env_error() {
-            // AWS platform, no usable creds, and no mint contract: the resolver
-            // must surface the original `from_env` error unchanged (path 3).
-            let dir = TempDir::new().expect("tempdir");
-            let env = HashMap::from([
-                (
-                    ENV_ALIEN_DEPLOYMENT_TYPE.to_string(),
-                    Platform::Aws.as_str().to_string(),
-                ),
-                ("AWS_EC2_METADATA_DISABLED".to_string(), "true".to_string()),
-                (
-                    "AWS_PROFILE".to_string(),
-                    "__alien_missing_test_profile__".to_string(),
-                ),
-                (
-                    "ALIEN_FILES_BINDING".to_string(),
-                    local_storage_binding(&dir),
-                ),
-            ]);
-
-            let provider = BindingsProvider::from_env_lazy(env).expect("lazy construct");
-            let error = provider
-                .load_storage("files")
-                .await
-                .expect_err("no creds and no mint contract must error");
-
-            assert_eq!(error.code, "CLIENT_CONFIG_INVALID");
-        }
     }
 }

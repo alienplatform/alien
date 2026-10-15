@@ -973,3 +973,71 @@ fn secret_presence_native_type_is_narrow_and_constraint_checked_in_both_modes() 
         assert!(normalize(&required).is_err());
     }
 }
+
+#[test]
+fn mixed_json_and_empty_successes_preserve_raw_status_and_body_contracts() {
+    let document = json!({
+        "openapi": "3.0.3",
+        "info": { "title": "test", "version": "1" },
+        "components": { "schemas": { "TestResponse": { "type": "object" } } },
+        "paths": { "/requests": { "post": {
+            "operationId": "acceptRequest",
+            "responses": {
+                "202": { "description": "Accepted", "content": {
+                    "application/json": { "schema": { "$ref": "#/components/schemas/TestResponse" } }
+                }, "headers": { "Location": { "schema": { "type": "string" } } } },
+                "204": { "description": "Already absent" },
+                "403": { "description": "Denied", "content": {
+                    "application/json": { "schema": { "$ref": "#/components/schemas/TestResponse" } }
+                } }
+            }
+        } } }
+    });
+    for normalized in [
+        openapi_filter::normalize_openapi(&document).unwrap(),
+        openapi_filter::filter_openapi(&document, &["acceptRequest"]).unwrap(),
+    ] {
+        let responses = &normalized["paths"]["/requests"]["post"]["responses"];
+        assert_eq!(responses.as_object().unwrap().len(), 3);
+        for status in ["202", "204"] {
+            // Any non-JSON content maps to Progenitor's raw response kind. It
+            // preserves the actual status/body, including an empty HTTP 204.
+            assert_eq!(
+                responses[status]["content"],
+                json!({"application/octet-stream": {}})
+            );
+        }
+        assert_eq!(
+            responses["202"]["headers"],
+            document["paths"]["/requests"]["post"]["responses"]["202"]["headers"]
+        );
+        assert_eq!(
+            responses["403"],
+            document["paths"]["/requests"]["post"]["responses"]["403"]
+        );
+        assert_eq!(
+            openapi_filter::normalize_openapi(&normalized).unwrap(),
+            normalized
+        );
+    }
+    assert!(
+        document["paths"]["/requests"]["post"]["responses"]["202"]["content"]
+            .get("application/json")
+            .is_some()
+    );
+}
+
+#[test]
+fn homogeneous_success_responses_keep_typed_decoding() {
+    for responses in [
+        json!({"200": {"description": "OK", "content": {"application/json": {"schema": {"type": "string"}}}}, "202": {"description": "Accepted", "content": {"application/json": {"schema": {"type": "string"}}}}}),
+        json!({"202": {"description": "Accepted"}, "204": {"description": "Already absent"}}),
+    ] {
+        let document = json!({"openapi": "3.0.3", "info": {"title": "test", "version": "1"}, "paths": {"/requests": {"post": {"operationId": "acceptRequest", "responses": responses}}}});
+        let normalized = openapi_filter::normalize_openapi(&document).unwrap();
+        assert_eq!(
+            normalized["paths"]["/requests"]["post"]["responses"],
+            responses
+        );
+    }
+}

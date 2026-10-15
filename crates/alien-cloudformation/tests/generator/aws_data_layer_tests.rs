@@ -68,11 +68,11 @@ fn aws_key_template_is_valid_and_retained() {
     );
     assert_eq!(
         metadata_policy_json["PolicyDocument"]["Statement"][0]["Action"],
-        "kms:DescribeKey"
+        serde_json::json!(["kms:DescribeKey"])
     );
     assert_eq!(
         metadata_policy_json["PolicyDocument"]["Statement"][0]["Resource"],
-        serde_json::json!({ "Fn::GetAtt": ["CustomerKey", "Arn"] })
+        serde_json::json!([{ "Fn::GetAtt": ["CustomerKey", "Arn"] }])
     );
 
     let cryptography_policy = template

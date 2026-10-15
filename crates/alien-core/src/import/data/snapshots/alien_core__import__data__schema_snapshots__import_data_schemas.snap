@@ -314,6 +314,11 @@ expression: schemas
     "$schema": "http://json-schema.org/draft-07/schema#",
     "description": "AWS KMS key created by the customer-installed setup stack.",
     "properties": {
+      "availabilityProbe": {
+        "default": false,
+        "description": "Setup installed the scoped key availability probe permission.",
+        "type": "boolean"
+      },
       "keyArn": {
         "description": "Immutable KMS key ARN. Alias ARNs are not accepted.",
         "type": "string"

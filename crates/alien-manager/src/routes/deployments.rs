@@ -4,7 +4,7 @@ use axum::{
     extract::{Path, State},
     http::{request::Parts, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{get, patch, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -42,6 +42,14 @@ pub struct CreateDeploymentRequest {
     /// deployment step, like the values a setup collects.
     #[serde(default)]
     pub input_values: std::collections::HashMap<String, serde_json::Value>,
+}
+
+/// Replace the saved quota warning overrides. An empty list explicitly clears them.
+#[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SetQuotaWarningOverridesRequest {
+    pub quota_warning_overrides: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -285,6 +293,10 @@ pub fn router() -> Router<AppState> {
         .route("/v1/deployments/{id}/delete", post(delete_deployment))
         .route("/v1/deployments/{id}/info", get(get_deployment_info))
         .route("/v1/deployments/{id}/retry", post(retry_deployment))
+        .route(
+            "/v1/deployments/{id}/quota-warning-overrides",
+            patch(set_quota_warning_overrides),
+        )
         .route("/v1/deployments/{id}/redeploy", post(redeploy))
 }
 
@@ -322,7 +334,19 @@ fn record_to_response(
         current_release_id: r.current_release_id.clone(),
         desired_release_id: r.desired_release_id.clone(),
         import_source: r.import_source,
-        retry_requested: r.retry_requested,
+        // Acquisition consumes the queue bit before reconciliation commits its result.
+        // Local clients must still see that failed checkpoint as an in-flight retry.
+        // RefreshFailed is excluded: heartbeats lock it without any retry request.
+        retry_requested: r.retry_requested
+            || (r.platform == Platform::Local
+                && r.locked_by.is_some()
+                && matches!(
+                    r.status.as_str(),
+                    "preflights-failed"
+                        | "initial-setup-failed"
+                        | "provisioning-failed"
+                        | "update-failed"
+                )),
         created_at: r.created_at.to_rfc3339(),
         // Platform SDK requires `updatedAt`. Fall back to created_at when
         // no update has happened yet.
@@ -416,6 +440,15 @@ async fn create_deployment(
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
+
+    if let Some(settings) = &req.stack_settings {
+        if let Err(error) = alien_preflights::quotas::validate_warning_overrides(
+            req.platform,
+            &settings.quota_warning_overrides,
+        ) {
+            return error.into_response();
+        }
+    }
 
     // Determine deployment group from the subject's scope or the explicit
     // request body. DG-scoped subjects use their own group; workspace/project
@@ -789,7 +822,48 @@ async fn get_deployment(
         return ErrorData::forbidden("Access denied").into_response();
     }
 
-    Json(record_to_response(&deployment, None)).into_response()
+    Json(deployment_response_for_client(
+        record_to_response(&deployment, None),
+        &headers,
+    ))
+    .into_response()
+}
+
+fn deployment_response_for_client(
+    mut response: DeploymentResponse,
+    headers: &HeaderMap,
+) -> DeploymentResponse {
+    // Released CLIs used a closed KeyOutputs type and an unversioned user agent.
+    // Adapt only the serialized response; reconciliation still needs availability.
+    if headers
+        .get("user-agent")
+        .and_then(|value| value.to_str().ok())
+        != Some("alien-cli")
+    {
+        return response;
+    }
+    if let Some(stack) = response.stack_state.as_mut() {
+        remove_legacy_key_observations(stack);
+    }
+    response
+}
+
+pub(super) fn remove_legacy_key_observations(stack: &mut serde_json::Value) {
+    if let Some(resources) = stack
+        .get_mut("resources")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        for resource in resources.values_mut() {
+            if let Some(outputs) = resource
+                .get_mut("outputs")
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                if outputs.get("type").and_then(serde_json::Value::as_str) == Some("key") {
+                    outputs.remove("available");
+                }
+            }
+        }
+    }
 }
 
 #[cfg_attr(feature = "openapi", utoipa::path(
@@ -940,6 +1014,63 @@ async fn delete_deployment(
     (StatusCode::ACCEPTED, Json(response)).into_response()
 }
 
+/// Save settings only; retrying a failed deployment remains an explicit operation.
+#[cfg_attr(feature = "openapi", utoipa::path(
+    patch,
+    path = "/v1/deployments/{id}/quota-warning-overrides",
+    tag = "deployments",
+    security(("bearer" = [])),
+    params(("id" = String, Path, description = "Deployment ID")),
+    request_body = SetQuotaWarningOverridesRequest,
+    responses(
+        (status = 204, description = "Overrides saved without scheduling execution"),
+        (status = 400, description = "Invalid quota identity or unsupported store"),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden"),
+        (status = 404, description = "Not found"),
+        (status = 409, description = "Deployment is active or locked"),
+    )
+))]
+async fn set_quota_warning_overrides(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(req): Json<SetQuotaWarningOverridesRequest>,
+) -> Response {
+    let subject = match auth::require_auth(&state, &headers).await {
+        Ok(s) => s,
+        Err(e) => return e.into_response(),
+    };
+    let deployment = match state.deployment_store.get_deployment(&subject, &id).await {
+        Ok(Some(d)) => d,
+        Ok(None) => return ErrorData::not_found_deployment(&id).into_response(),
+        Err(e) => return e.into_response(),
+    };
+    if !state.authz.can_update_deployment(&subject, &deployment) {
+        return ErrorData::forbidden("Cannot update quota warning overrides").into_response();
+    }
+    if let Err(e) = alien_preflights::quotas::validate_warning_overrides(
+        deployment.platform,
+        &req.quota_warning_overrides,
+    ) {
+        return e.into_response();
+    }
+    // The store makes the eligibility check and JSON patch in one write. Do not
+    // check status here and then overwrite settings after a manager claims work.
+    match state
+        .deployment_store
+        .set_quota_warning_overrides(&subject, &id, &req.quota_warning_overrides)
+        .await
+    {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => {
+            alien_error::AlienError::new(ErrorData::QuotaOverridesNotSaved { deployment_id: id })
+                .into_response()
+        }
+        Err(e) => e.into_response(),
+    }
+}
+
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/v1/deployments/{id}/retry",
@@ -992,13 +1123,14 @@ async fn retry_deployment(
     Json(serde_json::json!({ "success": true })).into_response()
 }
 
-/// Whether a retry can move this deployment back to work.
+/// Whether a retry may reach the deployment store.
 ///
 /// Failed statuses retry their last operation. A deployment can also sit in
 /// `provisioning` with an installed release and no desired release: a setup
 /// run handed it back with no update to apply. A manager that runs only
 /// pending updates never takes that deployment, so a retry must reach the
-/// store, which repeats the installed release.
+/// store, which repeats the installed release. `update-pending` retries also
+/// reach the store, which decides whether pending work can safely recover.
 fn retry_accepted(deployment: &DeploymentRecord) -> bool {
     const RETRYABLE_FAILED_STATUSES: [&str; 6] = [
         "preflights-failed",
@@ -1011,7 +1143,9 @@ fn retry_accepted(deployment: &DeploymentRecord) -> bool {
     let handed_off_without_update = deployment.status == "provisioning"
         && deployment.current_release_id.is_some()
         && deployment.desired_release_id.is_none();
-    RETRYABLE_FAILED_STATUSES.contains(&deployment.status.as_str()) || handed_off_without_update
+    RETRYABLE_FAILED_STATUSES.contains(&deployment.status.as_str())
+        || handed_off_without_update
+        || deployment.status == "update-pending"
 }
 
 #[cfg_attr(feature = "openapi", utoipa::path(
@@ -1180,6 +1314,143 @@ mod tests {
         }
     }
 
+    #[test]
+    fn local_retry_remains_visible_between_acquire_and_reconcile() {
+        let mut deployment = deployment_record();
+        deployment.platform = Platform::Local;
+        deployment.status = "provisioning-failed".to_string();
+        assert!(!record_to_response(&deployment, None).retry_requested);
+        deployment.retry_requested = true;
+        assert!(record_to_response(&deployment, None).retry_requested);
+        // Acquiring clears the queue bit while keeping the failed checkpoint visible.
+        deployment.retry_requested = false;
+        deployment.locked_by = Some("local-manager".to_string());
+        assert!(record_to_response(&deployment, None).retry_requested);
+        deployment.status = "provisioning".to_string();
+        assert!(!record_to_response(&deployment, None).retry_requested);
+        deployment.status = "provisioning-failed".to_string();
+        deployment.locked_by = None;
+        assert!(
+            !record_to_response(&deployment, None).retry_requested,
+            "a newly committed failure is terminal"
+        );
+        // A heartbeat locks a refresh-failed deployment without a retry request.
+        deployment.status = "refresh-failed".to_string();
+        deployment.locked_by = Some("local-manager".to_string());
+        assert!(!record_to_response(&deployment, None).retry_requested);
+        deployment.platform = Platform::Aws;
+        deployment.status = "provisioning-failed".to_string();
+        deployment.locked_by = Some("cloud-manager".to_string());
+        assert!(!record_to_response(&deployment, None).retry_requested);
+    }
+
+    #[tokio::test]
+    async fn deployment_read_keeps_legacy_cli_outputs_without_changing_stored_key_availability() {
+        let stack: StackState = serde_json::from_value(serde_json::json!({
+            "platform": "aws",
+            "resourcePrefix": "example",
+            "resources": {
+                "key": {
+                    "type": "key", "status": "running",
+                    "config": { "type": "key", "id": "key" },
+                    "outputs": {
+                        "type": "key", "available": false,
+                        "fingerprint": { "provider": "aws", "key_arn": "example-key" },
+                        "wrappingKeyId": "example-key"
+                    }
+                }
+            }
+        }))
+        .expect("stack");
+        for user_agent in ["alien-cli", "alien-cli/3.3.33", "alien-manager"] {
+            let mut deployment = deployment_record();
+            deployment.stack_state = Some(stack.clone());
+            let mut store = MockDeploymentStore::new();
+            store
+                .expect_get_deployment()
+                .withf(|_, id| id == "deployment-1")
+                .times(1)
+                .return_once(move |_, _| Ok(Some(deployment)));
+            let request = Request::builder()
+                .uri("/v1/deployments/deployment-1")
+                .header(http::header::AUTHORIZATION, "Bearer test-token")
+                .header(http::header::USER_AGENT, user_agent)
+                .body(Body::empty())
+                .expect("request");
+            let (status, body) = send(store, request).await;
+            assert_eq!(status, StatusCode::OK);
+            let outputs = &body["stackState"]["resources"]["key"]["outputs"];
+            assert_eq!(outputs["wrappingKeyId"], "example-key");
+            assert_eq!(
+                outputs.get("available"),
+                if user_agent == "alien-cli" {
+                    None
+                } else {
+                    Some(&serde_json::Value::Bool(false))
+                }
+            );
+            // Resume from exactly the response this client read, then save a failed step.
+            let mut stored = deployment_record();
+            stored.stack_state = Some(stack.clone());
+            let returned = stored.clone();
+            let mut store = MockDeploymentStore::new();
+            store
+                .expect_get_deployment()
+                .times(1)
+                .return_once(move |_, _| Ok(Some(stored)));
+            store
+                .expect_reconcile()
+                .times(1)
+                .withf(|_, data| {
+                    let key = data.state.stack_state.as_ref().unwrap().resources["key"]
+                        .outputs
+                        .as_ref()
+                        .unwrap()
+                        .downcast_ref::<alien_core::KeyOutputs>()
+                        .unwrap();
+                    key.available == Some(false)
+                })
+                .return_once(move |_, _| {
+                    Ok(crate::traits::deployment_store::ReconcileOutcome {
+                        record: returned,
+                        target_operations_bundle_set: None,
+                        target_dynamic_containers: None,
+                    })
+                });
+            let request = Request::builder()
+                .method("POST")
+                .uri("/v1/sync/reconcile")
+                .header(http::header::AUTHORIZATION, "Bearer test-token")
+                .header(http::header::USER_AGENT, user_agent)
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "deploymentId": "deployment-1", "session": "test-session",
+                        "state": { "status": "preflights-failed", "platform": "aws", "protocolVersion": 1,
+                            "stackState": body["stackState"] }
+                    })
+                    .to_string(),
+                ))
+                .expect("save request");
+            let (status, saved) = send(store, request).await;
+            assert_eq!(status, StatusCode::OK, "{saved}");
+            assert_eq!(
+                saved["current"]["stackState"]["resources"]["key"]["outputs"].get("available"),
+                if user_agent == "alien-cli" {
+                    None
+                } else {
+                    Some(&serde_json::Value::Bool(false))
+                }
+            );
+            assert!(!stack.resources["key"]
+                .outputs
+                .as_ref()
+                .expect("stored outputs")
+                .as_resource_outputs()
+                .is_available());
+        }
+    }
+
     async fn cleanup_route_response(deployment_remains: bool) -> (StatusCode, serde_json::Value) {
         let deployment = deployment_record();
         let mut deployment_store = MockDeploymentStore::new();
@@ -1217,6 +1488,29 @@ mod tests {
         deployment_store: MockDeploymentStore,
         request: Request<Body>,
     ) -> (StatusCode, serde_json::Value) {
+        send_with_transport(deployment_store, request, false).await
+    }
+
+    async fn send_with_transport(
+        deployment_store: MockDeploymentStore,
+        request: Request<Body>,
+        real_http: bool,
+    ) -> (StatusCode, serde_json::Value) {
+        send_with_validator(
+            deployment_store,
+            Arc::new(crate::providers::permissive_auth::PermissiveAuthValidator::new()),
+            request,
+            real_http,
+        )
+        .await
+    }
+
+    async fn send_with_validator(
+        deployment_store: MockDeploymentStore,
+        auth_validator: Arc<dyn crate::traits::AuthValidator>,
+        request: Request<Body>,
+        real_http: bool,
+    ) -> (StatusCode, serde_json::Value) {
         let temp = tempfile::tempdir().expect("test directory should be created");
         let kv: Arc<dyn alien_bindings::traits::Kv> = Arc::new(
             LocalKv::new(temp.path().join("kv"))
@@ -1242,10 +1536,9 @@ mod tests {
         let state = AppState {
             deployment_store: Arc::new(deployment_store),
             release_store: Arc::new(UnusedReleaseStore),
+            project_store: Arc::new(crate::providers::SingleWorkspaceProjects),
             token_store: Arc::new(UnusedTokenStore),
-            auth_validator: Arc::new(
-                crate::providers::permissive_auth::PermissiveAuthValidator::new(),
-            ),
+            auth_validator,
             authz: Arc::new(OssAuthz),
             telemetry_backend: Arc::new(NullTelemetryBackend),
             credential_resolver: Arc::new(LocalCredentialResolver::new(temp.path().to_path_buf())),
@@ -1269,11 +1562,47 @@ mod tests {
             bundle_sources: None,
             log_buffer: std::sync::Arc::new(crate::dev::LogBuffer::new()),
         };
-        let response = router()
-            .with_state(state)
-            .oneshot(request)
-            .await
-            .expect("route should respond");
+        let app = router()
+            .merge(super::super::sync::router())
+            .with_state(state);
+        if real_http {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("HTTP listener should bind");
+            let address = listener
+                .local_addr()
+                .expect("listener should have an address");
+            let server = tokio::spawn(async move { axum::serve(listener, app).await });
+            let (parts, body) = request.into_parts();
+            let body = to_bytes(body, 1024 * 1024)
+                .await
+                .expect("request body should load");
+            let response = reqwest::Client::builder()
+                .no_proxy()
+                .build()
+                .expect("HTTP client should build")
+                .request(parts.method, format!("http://{address}{}", parts.uri))
+                .headers(parts.headers)
+                .body(body)
+                .send()
+                .await
+                .expect("HTTP route should respond");
+            let status = response.status();
+            let bytes = response
+                .bytes()
+                .await
+                .expect("HTTP response body should load");
+            let json = if status == StatusCode::NO_CONTENT {
+                assert!(bytes.is_empty(), "204 response must be empty");
+                serde_json::Value::Null
+            } else {
+                serde_json::from_slice(&bytes).expect("HTTP response should contain JSON")
+            };
+            server.abort();
+            assert!(server.await.expect_err("server should stop").is_cancelled());
+            return (status, json);
+        }
+        let response = app.oneshot(request).await.expect("route should respond");
         let status = response.status();
         let body = to_bytes(response.into_body(), 1024 * 1024)
             .await
@@ -1283,6 +1612,212 @@ mod tests {
             status,
             serde_json::from_slice(&body).expect("response should contain JSON"),
         )
+    }
+
+    /// A validator that fails every request with a fixed error, the way an
+    /// embedder's validator fails when its identity service answers.
+    struct FailingValidator {
+        retryable: bool,
+    }
+
+    #[async_trait]
+    impl crate::traits::AuthValidator for FailingValidator {
+        async fn validate(
+            &self,
+            _headers: &http::HeaderMap,
+        ) -> Result<Option<Subject>, AlienError> {
+            let mut error = AlienError::new(alien_error::GenericError {
+                message: "identity service answered 503 at http://identity.internal".to_string(),
+            });
+            error.retryable = self.retryable;
+            Err(error)
+        }
+    }
+
+    async fn list_with_failing_validator(retryable: bool) -> (StatusCode, serde_json::Value) {
+        // The store must not be reached when authentication fails.
+        let deployment_store = MockDeploymentStore::new();
+        let request = Request::builder()
+            .method("GET")
+            .uri("/v1/deployments")
+            .header(http::header::AUTHORIZATION, "Bearer valid-key")
+            .body(Body::empty())
+            .expect("request should build");
+        send_with_validator(
+            deployment_store,
+            Arc::new(FailingValidator { retryable }),
+            request,
+            true,
+        )
+        .await
+    }
+
+    fn override_request(overrides: &[&str]) -> Request<Body> {
+        Request::builder()
+            .method("PATCH")
+            .uri("/v1/deployments/deployment-1/quota-warning-overrides")
+            .header(http::header::AUTHORIZATION, "Bearer test-token")
+            .header(http::header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "quotaWarningOverrides": overrides,
+                })
+                .to_string(),
+            ))
+            .expect("override request should build")
+    }
+
+    #[tokio::test]
+    async fn override_patch_saves_clears_and_preserves_atomic_refusal_over_http() {
+        for (overrides, saved, expected) in [
+            (vec!["L-1216C47A"], true, StatusCode::NO_CONTENT),
+            (vec![], true, StatusCode::NO_CONTENT),
+            (vec!["L-1216C47A"], false, StatusCode::CONFLICT),
+        ] {
+            let mut store = MockDeploymentStore::new();
+            store
+                .expect_get_deployment()
+                .times(1)
+                .returning(|_, _| Ok(Some(deployment_record())));
+            let expected_ids: Vec<String> = overrides.iter().map(|id| id.to_string()).collect();
+            store
+                .expect_set_quota_warning_overrides()
+                .withf(move |_, id, ids| id == "deployment-1" && ids == expected_ids)
+                .times(1)
+                .return_once(move |_, _, _| Ok(saved));
+            // No retry or other settings mutation is permitted by the mock.
+            let (status, body) =
+                send_with_transport(store, override_request(&overrides), true).await;
+            assert_eq!(status, expected, "{body}");
+            if !saved {
+                assert_eq!(body["code"], "QUOTA_OVERRIDES_NOT_SAVED");
+                assert_eq!(body["retryable"], false);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn override_patch_rejects_invalid_ids_missing_records_and_unsupported_stores() {
+        for (exists, quota, expected) in [
+            (true, "L-TYPO", StatusCode::BAD_REQUEST),
+            (true, "CPUS", StatusCode::BAD_REQUEST),
+            (false, "L-1216C47A", StatusCode::NOT_FOUND),
+            (true, "L-1216C47A", StatusCode::BAD_REQUEST),
+        ] {
+            let mut store = MockDeploymentStore::new();
+            store
+                .expect_get_deployment()
+                .times(1)
+                .return_once(move |_, _| Ok(exists.then(deployment_record)));
+            if exists && quota == "L-1216C47A" {
+                store
+                    .expect_set_quota_warning_overrides()
+                    .times(1)
+                    .return_once(|_, _, _| {
+                        Err(ErrorData::bad_request(
+                            "This manager cannot update saved quota warning overrides",
+                        )
+                        .into_generic())
+                    });
+            }
+            let (status, body) = send_with_transport(store, override_request(&[quota]), true).await;
+            assert_eq!(status, expected, "{body}");
+            if quota != "L-1216C47A" {
+                assert_eq!(body["code"], "INVALID_QUOTA_OVERRIDE");
+            }
+        }
+    }
+
+    struct OverrideViewer;
+
+    #[async_trait]
+    impl crate::traits::AuthValidator for OverrideViewer {
+        async fn validate(&self, _: &http::HeaderMap) -> Result<Option<Subject>, AlienError> {
+            Ok(Some(Subject {
+                kind: crate::auth::SubjectKind::ServiceAccount {
+                    id: "viewer".into(),
+                },
+                workspace_id: "default".into(),
+                scope: crate::auth::Scope::Deployment {
+                    project_id: "default".into(),
+                    deployment_id: "deployment-1".into(),
+                },
+                role: crate::auth::Role::DeploymentViewer,
+                bearer_token: "test-token".into(),
+            }))
+        }
+    }
+
+    #[tokio::test]
+    async fn override_patch_requires_update_authority_before_validation_or_writes() {
+        let mut store = MockDeploymentStore::new();
+        store
+            .expect_get_deployment()
+            .times(1)
+            .returning(|_, _| Ok(Some(deployment_record())));
+        let (status, body) = send_with_validator(
+            store,
+            Arc::new(OverrideViewer),
+            override_request(&["L-TYPO"]),
+            true,
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        assert_eq!(body["code"], "FORBIDDEN");
+    }
+
+    #[tokio::test]
+    async fn create_rejects_unknown_quota_overrides_before_store_access() {
+        for (platform, quota_id) in [("aws", "L-TYPO"), ("gcp", "L-1216C47A")] {
+            let request = Request::builder()
+                .method("POST")
+                .uri("/v1/deployments")
+                .header(http::header::AUTHORIZATION, "Bearer test-token")
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "name": "q5-override",
+                        "platform": platform,
+                        "deploymentGroupId": "group-1",
+                        "stackSettings": { "quotaWarningOverrides": [quota_id] }
+                    })
+                    .to_string(),
+                ))
+                .expect("create request should build");
+            // No store expectations: invalid settings must not read or create a deployment.
+            let (status, body) =
+                send_with_transport(MockDeploymentStore::new(), request, true).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+            assert_eq!(body["code"], "INVALID_QUOTA_OVERRIDE", "{body}");
+            assert_eq!(body["retryable"], false, "{body}");
+            assert!(body["message"]
+                .as_str()
+                .expect("message")
+                .contains(quota_id));
+        }
+    }
+
+    #[tokio::test]
+    async fn credentials_that_cannot_be_verified_right_now_get_a_retryable_503() {
+        let (status, body) = list_with_failing_validator(true).await;
+
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+        assert_eq!(body["code"], "AUTHENTICATION_UNAVAILABLE", "{body}");
+        assert_eq!(body["retryable"], true, "{body}");
+        let message = body["message"].as_str().expect("message");
+        assert!(
+            !message.contains("identity.internal"),
+            "the validator's internals must not reach the caller: {message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_credentials_still_get_a_non_retryable_401() {
+        let (status, body) = list_with_failing_validator(false).await;
+
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+        assert_eq!(body["code"], "UNAUTHORIZED", "{body}");
+        assert_eq!(body["retryable"], false, "{body}");
     }
 
     /// `<group>/<name>` specs send the group's name: `alien dev` names its group `local-dev`
@@ -1338,6 +1873,14 @@ mod tests {
         deployment: DeploymentRecord,
         store_receives_retry: bool,
     ) -> (StatusCode, serde_json::Value) {
+        retry_route_response_with_result(deployment, store_receives_retry, Ok(())).await
+    }
+
+    async fn retry_route_response_with_result(
+        deployment: DeploymentRecord,
+        store_receives_retry: bool,
+        store_result: Result<(), AlienError>,
+    ) -> (StatusCode, serde_json::Value) {
         let mut deployment_store = MockDeploymentStore::new();
         deployment_store
             .expect_get_deployment()
@@ -1345,9 +1888,9 @@ mod tests {
             .return_once(move |_, _| Ok(Some(deployment)));
         deployment_store
             .expect_set_retry_requested()
-            .withf(|_, id| id == "deployment-1")
+            .withf(|caller, id| caller.bearer_token == "test-token" && id == "deployment-1")
             .times(usize::from(store_receives_retry))
-            .returning(|_, _| Ok(()));
+            .return_once(move |_, _| store_result);
 
         let request = Request::builder()
             .method("POST")
@@ -1355,7 +1898,73 @@ mod tests {
             .header(http::header::AUTHORIZATION, "Bearer test-token")
             .body(Body::empty())
             .expect("request should build");
-        send(deployment_store, request).await
+        send_with_transport(deployment_store, request, true).await
+    }
+
+    #[tokio::test]
+    async fn retry_forwards_update_pending_to_the_store() {
+        let deployment = DeploymentRecord {
+            status: "update-pending".to_string(),
+            current_release_id: Some("rel_installed".to_string()),
+            desired_release_id: Some("rel_target".to_string()),
+            ..deployment_record()
+        };
+        let (status, json) = retry_route_response(deployment, true).await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        assert_eq!(json["success"], true);
+    }
+
+    #[tokio::test]
+    async fn retry_preserves_the_store_refusal_for_update_pending() {
+        let deployment = DeploymentRecord {
+            status: "update-pending".to_string(),
+            current_release_id: Some("rel_installed".to_string()),
+            desired_release_id: Some("rel_target".to_string()),
+            ..deployment_record()
+        };
+        let refusal = ErrorData::bad_request("Pending work cannot safely recover").into_generic();
+        let (status, json) = retry_route_response_with_result(deployment, true, Err(refusal)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
+        assert_eq!(json["code"], "BAD_REQUEST");
+        assert_eq!(json["message"], "Pending work cannot safely recover");
+        assert_eq!(json["httpStatusCode"], 400);
+        assert!(json.get("success").is_none(), "{json}");
+    }
+
+    #[tokio::test]
+    async fn retry_keeps_failed_statuses_and_other_active_status_guards() {
+        for (deployment_status, accepted) in [
+            ("preflights-failed", true),
+            ("initial-setup-failed", true),
+            ("provisioning-failed", true),
+            ("refresh-failed", true),
+            ("update-failed", true),
+            ("delete-failed", true),
+            ("running", false),
+            ("updating", false),
+            ("refreshing", false),
+            ("deleting", false),
+        ] {
+            let deployment = DeploymentRecord {
+                status: deployment_status.to_string(),
+                ..deployment_record()
+            };
+            let (status, json) = retry_route_response(deployment, accepted).await;
+            assert_eq!(
+                status,
+                if accepted {
+                    StatusCode::OK
+                } else {
+                    StatusCode::BAD_REQUEST
+                },
+                "{deployment_status}: {json}"
+            );
+            if accepted {
+                assert_eq!(json["success"], true);
+            } else {
+                assert_eq!(json["code"], "BAD_REQUEST");
+            }
+        }
     }
 
     /// A setup run that handed a running deployment back at `provisioning` with

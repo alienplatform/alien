@@ -497,7 +497,16 @@ impl From<&Resource> for ResourceRef {
 /// Trait that defines the interface for all resource output types in the Alien system.
 /// This trait enables extensibility by allowing new resource output types to be registered
 /// and managed alongside built-in resource outputs.
+/// Resource observations may gain fields as providers and servers are upgraded.
+/// Implementations should accept unknown output fields so older readers remain compatible;
+/// user-authored resource configuration is validated separately.
 pub trait ResourceOutputsDefinition: Debug + Send + Sync + 'static {
+    /// Whether dependents may reconcile. Temporary unavailability preserves their
+    /// identities and controller progress until the dependency recovers.
+    fn is_available(&self) -> bool {
+        true
+    }
+
     /// Returns the resource type for this instance
     fn get_resource_type(&self) -> ResourceType;
 

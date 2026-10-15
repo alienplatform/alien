@@ -1,0 +1,8 @@
+{
+  "Quota": {
+    "QuotaCode": "L-F678F1CE",
+    "ServiceCode": "vpc",
+    "QuotaName": "VPCs per Region",
+    "Value": 5.0
+  }
+}

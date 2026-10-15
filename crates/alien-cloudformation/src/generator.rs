@@ -1,6 +1,8 @@
 use crate::{
-    emitters::enabled,
-    inline_policy::{consolidate_role_inline_policies, expression_references},
+    emitters::{aws::helpers::list_parameter_value, enabled},
+    inline_policy::{
+        consolidate_role_inline_policies, expression_references, validate_role_policy_limits,
+    },
     registry::CfRegistry,
     template::{
         CfExpression, CfMapping, CfOutput, CfParameter, CfResource, CfRule, CfRuleAssertion,
@@ -594,6 +596,7 @@ pub fn generate_cloudformation_template(
         )?;
     }
 
+    validate_role_policy_limits(&template)?;
     Ok(template)
 }
 
@@ -771,6 +774,9 @@ fn add_stack_input_parameters(
                 ),
             }));
         }
+        if input.kind == StackInputKind::StringList {
+            add_list_parameter_condition(template, &parameter_name);
+        }
         template
             .parameters
             .insert(parameter_name, stack_input_parameter(input));
@@ -843,7 +849,11 @@ fn stack_input_values_expression(inputs: &[StackInputDefinition]) -> CfExpressio
     CfExpression::object(inputs.iter().map(|input| {
         (
             input.id.clone(),
-            CfExpression::ref_(stack_input_parameter_name(input)),
+            if input.kind == StackInputKind::StringList {
+                list_parameter_value(&stack_input_parameter_name(input))
+            } else {
+                CfExpression::ref_(stack_input_parameter_name(input))
+            },
         )
     }))
 }
@@ -1699,13 +1709,15 @@ fn add_container_resource_parameters(
         .resources
         .values()
         .filter_map(|entry| entry.config.downcast_ref::<Container>())
-        .filter(|container| container.resource_choices.is_some())
+        .filter(|container| {
+            container.resource_choices.is_some() || container.persistent_storage.is_some()
+        })
         .collect();
     containers.sort_by(|a, b| a.id.cmp(&b.id));
     for container in containers {
-        let choices = container.resource_choices.as_ref().expect("filtered above");
+        let choices = container.resource_choices.clone().unwrap_or_default();
         let prefix = format!("Container{}", pascal_identifier(&container.id));
-        for suffix in ["Cpu", "Memory"] {
+        for suffix in ["Cpu", "Memory", "VolumeSizeGib"] {
             if template
                 .parameters
                 .contains_key(&format!("{prefix}{suffix}"))
@@ -1715,6 +1727,26 @@ fn add_container_resource_parameters(
                     reason: format!("Container '{}' produces a duplicate CloudFormation parameter name; use distinct alphanumeric container names", container.id),
                 }));
             }
+        }
+        if let Some(storage) = &container.persistent_storage {
+            let size = alien_core::container_resources::parse_volume_size_gib(&storage.size)
+                .map_err(|message| {
+                    AlienError::new(ErrorData::ContainerResourceSelectionInvalid {
+                        reason: message,
+                        dimension: "volumeSizeGib".into(),
+                        resource_id: container.id.clone(),
+                    })
+                })?;
+            let mut parameter = number_parameter(
+                "Persistent volume capacity per replica, in GiB. Existing volumes can only grow.",
+                size,
+                None,
+            );
+            parameter.min_value = Some(CfExpression::from(1u32));
+            parameter.max_value = Some(CfExpression::from(65536u32));
+            template
+                .parameters
+                .insert(format!("{prefix}VolumeSizeGib"), parameter);
         }
         if let Some(range) = choices.cpu.as_ref() {
             let mut parameter =
@@ -1788,6 +1820,16 @@ fn add_custom_domain_certificate_rule(template: &mut CfTemplate) {
     );
 }
 
+fn add_list_parameter_condition(template: &mut CfTemplate, parameter: &str) {
+    template.conditions.insert(
+        format!("Has{parameter}"),
+        CfExpression::not(CfExpression::equals(
+            CfExpression::join("", CfExpression::ref_(parameter)),
+            CfExpression::from(""),
+        )),
+    );
+}
+
 fn add_standard_conditions(
     template: &mut CfTemplate,
     stack: &Stack,
@@ -1795,6 +1837,15 @@ fn add_standard_conditions(
     supports_custom_domain: bool,
     target: CloudFormationTarget,
 ) {
+    for parameter in [
+        PARAM_PUBLIC_SUBNET_IDS,
+        PARAM_PRIVATE_SUBNET_IDS,
+        PARAM_SECURITY_GROUP_IDS,
+    ] {
+        if template.parameters.contains_key(parameter) {
+            add_list_parameter_condition(template, parameter);
+        }
+    }
     let has_created_network = stack_has_created_network(stack);
     if has_dynamic_aws_network_settings(settings.network.as_ref()) || has_created_network {
         template.conditions.insert(
@@ -2208,11 +2259,15 @@ fn compute_settings_expression(
         else {
             continue;
         };
-        let Some(choices) = &container.resource_choices else {
-            continue;
-        };
+        let choices = container.resource_choices.clone().unwrap_or_default();
         let prefix = format!("Container{}", pascal_identifier(id));
         let mut allocation = Vec::new();
+        if container.persistent_storage.is_some() {
+            allocation.push((
+                "volumeSizeGib",
+                CfExpression::ref_(format!("{prefix}VolumeSizeGib")),
+            ));
+        }
         if choices.cpu.is_some() {
             allocation.push(("cpu", CfExpression::ref_(format!("{prefix}Cpu"))));
         }
@@ -2869,15 +2924,15 @@ fn network_expression(
                     ("vpc_id", CfExpression::ref_(PARAM_VPC_ID)),
                     (
                         "public_subnet_ids",
-                        CfExpression::ref_(PARAM_PUBLIC_SUBNET_IDS),
+                        list_parameter_value(PARAM_PUBLIC_SUBNET_IDS),
                     ),
                     (
                         "private_subnet_ids",
-                        CfExpression::ref_(PARAM_PRIVATE_SUBNET_IDS),
+                        list_parameter_value(PARAM_PRIVATE_SUBNET_IDS),
                     ),
                     (
                         "security_group_ids",
-                        CfExpression::ref_(PARAM_SECURITY_GROUP_IDS),
+                        list_parameter_value(PARAM_SECURITY_GROUP_IDS),
                     ),
                 ]);
                 if restricts_network_mode(stack, target) {

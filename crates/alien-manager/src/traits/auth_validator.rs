@@ -18,7 +18,14 @@ use crate::auth::Subject;
 #[async_trait]
 pub trait AuthValidator: Send + Sync {
     /// Validate the Bearer token from the Authorization header.
-    /// Returns None if no token is provided (for optional-auth endpoints).
-    /// Returns Err for invalid tokens.
+    ///
+    /// Returns `Ok(None)` if no token is provided (for optional-auth endpoints).
+    ///
+    /// Errors carry one of two meanings, told apart by `retryable`:
+    /// - not retryable: the credentials are invalid. Callers answer 401.
+    /// - retryable: the credentials could not be checked right now (a
+    ///   dependency such as a database or identity service failed or timed
+    ///   out). Callers answer 503 so clients retry instead of treating valid
+    ///   credentials as rejected.
     async fn validate(&self, headers: &http::HeaderMap) -> Result<Option<Subject>, AlienError>;
 }

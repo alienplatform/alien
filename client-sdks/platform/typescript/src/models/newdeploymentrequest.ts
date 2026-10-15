@@ -185,6 +185,13 @@ export type NewDeploymentRequestContainers = {
    * Memory allocation, using binary units such as Mi or Gi.
    */
   memory?: string | null | undefined;
+  /**
+   * Persistent volume capacity per replica, in whole GiB. Omitted values
+   *
+   * @remarks
+   * use the release default. Existing volumes can only grow.
+   */
+  volumeSizeGib?: number | null | undefined;
 };
 
 /**
@@ -1375,6 +1382,14 @@ export type NewDeploymentRequestStackSettings = {
    */
   publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
+   * Provider quota identities whose preflight failures become visible warnings
+   *
+   * @remarks
+   * for this deployment. Checks still run; deploy-time provider limits still apply.
+   * Unknown identities are rejected. An empty list restores normal blocking.
+   */
+  quotaWarningOverrides?: Array<string> | undefined;
+  /**
    * How telemetry (logs, metrics, traces) is handled.
    */
   telemetry?: NewDeploymentRequestTelemetry | undefined;
@@ -1722,6 +1737,7 @@ export function newDeploymentRequestEnvironmentInfoUnionToJSON(
 export type NewDeploymentRequestContainers$Outbound = {
   cpu?: number | null | undefined;
   memory?: string | null | undefined;
+  volumeSizeGib?: number | null | undefined;
 };
 
 /** @internal */
@@ -1731,6 +1747,7 @@ export const NewDeploymentRequestContainers$outboundSchema: z.ZodType<
 > = z.object({
   cpu: z.nullable(z.number()).optional(),
   memory: z.nullable(z.string()).optional(),
+  volumeSizeGib: z.nullable(z.int()).optional(),
 });
 
 export function newDeploymentRequestContainersToJSON(
@@ -4212,6 +4229,7 @@ export type NewDeploymentRequestStackSettings$Outbound = {
     | null
     | undefined;
   publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
+  quotaWarningOverrides?: Array<string> | undefined;
   telemetry?: string | undefined;
   updates?: string | undefined;
 };
@@ -4259,6 +4277,7 @@ export const NewDeploymentRequestStackSettings$outboundSchema: z.ZodType<
   publicEndpoints: z.nullable(
     z.record(z.string(), z.record(z.string(), z.string())),
   ).optional(),
+  quotaWarningOverrides: z.array(z.string()).optional(),
   telemetry: NewDeploymentRequestTelemetry$outboundSchema.optional(),
   updates: NewDeploymentRequestUpdates$outboundSchema.optional(),
 });

@@ -27,14 +27,17 @@ impl GcpRemoteBindingsController {
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<RemoteBindings>()?;
         let account_id = service_account_id(ctx.resource_prefix);
-        let created = ctx.service_provider.get_gcp_iam_client(ctx.get_gcp_config()?)?
+        let gcp_config = ctx.get_gcp_config()?;
+        let created = ctx.service_provider.get_gcp_iam_client(gcp_config)?
             .create_service_account(account_id, CreateServiceAccountRequest::builder()
                 .service_account(ServiceAccount::builder()
                     .display_name("Application access service account".to_string())
                     .description(format!("Data-plane identity for explicitly published resources. Resource prefix: {}.", ctx.resource_prefix))
                     .build())
                 .build())
-            .await.context(ErrorData::CloudPlatformError {
+            .await
+            .map_err(|error| ResourcePermissionsHelper::gcp_service_account_creation_error(error, &gcp_config.project_id))
+            .context(ErrorData::CloudPlatformError {
                 message: "Failed to create Remote Bindings service account".to_string(),
                 resource_id: Some(config.id.clone()),
             })?;

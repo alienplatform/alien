@@ -65,6 +65,27 @@ impl TfEmitter for AzureRemoteStackManagementEmitter {
             ],
         ));
 
+        // The management heartbeat reads its own identity even when the setup
+        // imports bindings only and grants no resource-group-wide Reader role.
+        fragment.resource_blocks.push(resource_block(
+            "azurerm_role_assignment",
+            &format!("{label}_self_read"),
+            [
+                attr(
+                    "scope",
+                    expr::traversal(["azurerm_user_assigned_identity", label, "id"]),
+                ),
+                attr(
+                    "role_definition_name",
+                    Expression::String("Reader".to_string()),
+                ),
+                attr(
+                    "principal_id",
+                    expr::traversal(["azurerm_user_assigned_identity", label, "principal_id"]),
+                ),
+            ],
+        ));
+
         let (global_refs, resource_scoped_refs) = ctx
             .stack
             .management()

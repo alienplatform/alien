@@ -1,4 +1,4 @@
-//! App-facing binding handles that keep minted credentials fresh.
+//! App-facing binding handles that resolve their provider before each operation.
 //!
 //! Each operation re-enters the configured [`BindingsProviderApi`]. Static or
 //! fresh providers remain cheap cache hits; short-lived providers inside their

@@ -7,8 +7,12 @@ them exactly.
 ## Engine
 
 Both stores run on **turso**, an async-native database engine that reads and
-writes the **SQLite-compatible file format** — the `.sqlite` file extension
-stays truthful, and the files can be inspected with standard SQLite tooling.
+writes the **SQLite-compatible file format**. Standard SQLite tooling can
+inspect the store after all processes using it have stopped. Live inspection
+must use the pinned turso engine with the same multi-process WAL mode as the
+bindings: compatible database files do not imply interchangeable live WAL and
+shared-memory coordination. A SQLite reader can encounter short reads while
+turso writers remain healthy.
 
 Multi-process safety comes from turso's **multi-process WAL mode**
 (`Builder::experimental_multiprocess_wal(true)`), enabled explicitly on every

@@ -4,7 +4,7 @@ use crate::error::Result;
 use crate::mutations::runs_on_platform_or_base;
 use crate::StackMutation;
 use alien_core::{
-    DeploymentConfig, Platform, ResourceEntry, ResourceLifecycle, ServiceActivation, Stack,
+    DeploymentConfig, Key, Platform, ResourceEntry, ResourceLifecycle, ServiceActivation, Stack,
     StackState,
 };
 use async_trait::async_trait;
@@ -45,7 +45,7 @@ impl StackMutation for GcpServiceActivationMutation {
         }
 
         // Check what resource types exist in the stack that need service activation
-        let required_services = self.get_required_services(stack);
+        let required_services = self.get_required_services(stack, stack_state);
 
         if required_services.is_empty() {
             return false;
@@ -73,12 +73,12 @@ impl StackMutation for GcpServiceActivationMutation {
     async fn mutate(
         &self,
         mut stack: Stack,
-        _stack_state: &StackState,
+        stack_state: &StackState,
         _config: &DeploymentConfig,
     ) -> Result<Stack> {
         info!("Adding GCP ServiceActivation resources");
 
-        let required_services = self.get_required_services(&stack);
+        let required_services = self.get_required_services(&stack, stack_state);
 
         for (service_id, service_name) in required_services {
             // Check if this service activation already exists
@@ -87,6 +87,12 @@ impl StackMutation for GcpServiceActivationMutation {
                 .iter()
                 .any(|(existing_id, _)| existing_id == &service_id)
             {
+                continue;
+            }
+            if service_id == CLOUD_KMS_ACTIVATION_ID && kms_used_without_activation(stack_state) {
+                debug!(
+                    "Cloud KMS is already in use by the installed Key; not adding its activation"
+                );
                 continue;
             }
 
@@ -115,11 +121,46 @@ impl StackMutation for GcpServiceActivationMutation {
     }
 }
 
+/// The Cloud KMS activation. Its id is also the Key's dependency.
+pub(crate) const CLOUD_KMS_ACTIVATION_ID: &str = "enable-cloud-kms";
+
+/// Whether the installed stack already has a Key but no Cloud KMS activation.
+///
+/// Setups from before the activation existed created the key ring through the Cloud KMS API, so
+/// the API is already enabled in that project. Adding the activation now would be a new
+/// setup-owned resource, which would make the next update require setup for nothing.
+///
+/// A Terraform setup rerun prepares its import from empty state, so it adds the activation, and
+/// later updates keep it. A direct setup update prepares from the installed state and keeps
+/// leaving it out; GCP Keys are imported from Terraform, and the API is already enabled anyway.
+fn kms_used_without_activation(stack_state: &StackState) -> bool {
+    stack_state
+        .resources
+        .values()
+        .any(|resource| resource.resource_type == Key::RESOURCE_TYPE.as_ref())
+        && !stack_state.resources.contains_key(CLOUD_KMS_ACTIVATION_ID)
+}
+
 impl GcpServiceActivationMutation {
     /// Get the mapping of service activation ID to API name based on resources in the stack.
     /// Ordered, because `mutate` inserts in this order and setup renders the stack in it.
-    fn get_required_services(&self, stack: &Stack) -> BTreeMap<String, String> {
+    fn get_required_services(
+        &self,
+        stack: &Stack,
+        stack_state: &StackState,
+    ) -> BTreeMap<String, String> {
         let mut services = BTreeMap::new();
+        // Enable quota reads in new setup artifacts. An installed deployment
+        // without this optional API must keep updating with Unknown warnings;
+        // adding a Frozen resource would require setup permissions it may lack.
+        if stack_state.resources.is_empty()
+            || stack_state.resources.contains_key("enable-cloud-quotas")
+        {
+            services.insert(
+                "enable-cloud-quotas".to_string(),
+                "cloudquotas.googleapis.com".to_string(),
+            );
+        }
 
         for (_, entry) in &stack.resources {
             let resource_type = entry.config.resource_type();
@@ -140,6 +181,12 @@ impl GcpServiceActivationMutation {
                     services.insert(
                         "enable-cloud-storage".to_string(),
                         "storage.googleapis.com".to_string(),
+                    );
+                }
+                "key" => {
+                    services.insert(
+                        CLOUD_KMS_ACTIVATION_ID.to_string(),
+                        "cloudkms.googleapis.com".to_string(),
                     );
                 }
                 "role" => {
@@ -257,6 +304,97 @@ mod tests {
     use super::*;
     use alien_core::{Ai, ResourceLifecycle, Stack};
 
+    #[tokio::test]
+    async fn quota_activation_is_added_once_for_native_and_imported_gcp_setup() {
+        let mutation = GcpServiceActivationMutation;
+        let config = DeploymentConfig::builder()
+            .stack_settings(alien_core::StackSettings::default())
+            .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                variables: Vec::new(),
+                hash: String::new(),
+                created_at: "2024-01-01T00:00:00Z".into(),
+            })
+            .allow_frozen_changes(false)
+            .external_bindings(alien_core::ExternalBindings::default())
+            .build();
+        for platform in [Platform::Gcp, Platform::Kubernetes] {
+            let mut config = config.clone();
+            if platform == Platform::Kubernetes {
+                config.base_platform = Some(Platform::Gcp);
+            }
+            let state = StackState::new(platform);
+            let stack = Stack::new("quota-activation".into()).build();
+            assert!(mutation.should_run(&stack, &state, &config));
+            let stack = mutation.mutate(stack, &state, &config).await.unwrap();
+            assert_eq!(stack.resources.len(), 1);
+            let entry = &stack.resources["enable-cloud-quotas"];
+            let activation = entry.config.downcast_ref::<ServiceActivation>().unwrap();
+            assert_eq!(activation.service_name, "cloudquotas.googleapis.com");
+            assert_eq!(entry.lifecycle, ResourceLifecycle::Frozen);
+            assert!(!mutation.should_run(&stack, &state, &config));
+            let repeated = mutation
+                .mutate(stack.clone(), &state, &config)
+                .await
+                .unwrap();
+            assert_eq!(
+                serde_json::to_value(repeated).unwrap(),
+                serde_json::to_value(stack).unwrap()
+            );
+        }
+        for platform in [
+            Platform::Aws,
+            Platform::Azure,
+            Platform::Local,
+            Platform::Kubernetes,
+        ] {
+            let state = StackState::new(platform);
+            let stack = Stack::new("no-gcp".into()).build();
+            assert!(!mutation.should_run(&stack, &state, &config));
+        }
+    }
+
+    #[tokio::test]
+    async fn installed_stack_without_quota_activation_keeps_optional_api_absent() {
+        let config = DeploymentConfig::builder()
+            .stack_settings(alien_core::StackSettings::default())
+            .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                variables: Vec::new(),
+                hash: String::new(),
+                created_at: "2024-01-01T00:00:00Z".into(),
+            })
+            .allow_frozen_changes(false)
+            .external_bindings(alien_core::ExternalBindings::default())
+            .build();
+        let stack = Stack::new("installed".into())
+            .add(Ai::new("llm".into()).build(), ResourceLifecycle::Frozen)
+            .build();
+        let mut state = StackState::new(Platform::Gcp);
+        let entry = &stack.resources["llm"];
+        state.resources.insert(
+            "llm".into(),
+            alien_core::StackResourceState::new_pending(
+                entry.config.resource_type().to_string(),
+                entry.config.clone(),
+                Some(entry.lifecycle),
+                Vec::new(),
+            ),
+        );
+        // Roundtrip installed state without the optional activation.
+        let state: StackState =
+            serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
+        let mutation = GcpServiceActivationMutation;
+        assert!(mutation.should_run(&stack, &state, &config));
+        let prepared = mutation.mutate(stack, &state, &config).await.unwrap();
+        assert!(!prepared.resources.contains_key("enable-cloud-quotas"));
+        assert!(prepared.resources.contains_key("enable-aiplatform"));
+        assert!(!mutation.should_run(&prepared, &state, &config));
+        let repeated = mutation
+            .mutate(prepared.clone(), &state, &config)
+            .await
+            .unwrap();
+        assert_eq!(repeated, prepared);
+    }
+
     #[test]
     fn ai_resource_requires_vertex_aiplatform() {
         let stack = Stack::new("test-stack".to_string())
@@ -265,7 +403,8 @@ mod tests {
                 ResourceLifecycle::Frozen,
             )
             .build();
-        let services = GcpServiceActivationMutation.get_required_services(&stack);
+        let services = GcpServiceActivationMutation
+            .get_required_services(&stack, &StackState::new(Platform::Gcp));
         assert_eq!(
             services.get("enable-aiplatform").map(String::as_str),
             Some("aiplatform.googleapis.com"),

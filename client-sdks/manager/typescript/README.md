@@ -154,10 +154,6 @@ run();
 * [submitResponse](docs/sdks/commands/README.md#submitresponse) - Submit response from deployment
 * [uploadComplete](docs/sdks/commands/README.md#uploadcomplete) - Mark upload as complete
 
-### [Credentials](docs/sdks/credentials/README.md)
-
-* [mintCredentials](docs/sdks/credentials/README.md#mintcredentials)
-
 ### [DeploymentGroups](docs/sdks/deploymentgroups/README.md)
 
 * [listDeploymentGroups](docs/sdks/deploymentgroups/README.md#listdeploymentgroups)
@@ -183,6 +179,7 @@ passthrough; single-tenant impls ignore it. See the trait doc on
 * [getDeploymentInfo](docs/sdks/deployments/README.md#getdeploymentinfo)
 * [getDeploymentLogs](docs/sdks/deployments/README.md#getdeploymentlogs)
 * [setDeploymentPin](docs/sdks/deployments/README.md#setdeploymentpin)
+* [setQuotaWarningOverrides](docs/sdks/deployments/README.md#setquotawarningoverrides) - Save settings only; retrying a failed deployment remains an explicit operation.
 * [redeploy](docs/sdks/deployments/README.md#redeploy)
 * [retryDeployment](docs/sdks/deployments/README.md#retrydeployment)
 * [getDeploymentRouting](docs/sdks/deployments/README.md#getdeploymentrouting)
@@ -279,7 +276,6 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`commandsStoreCommandPayload`](docs/sdks/commands/README.md#storecommandpayload) - Store command payload data (params and/or response) directly into KV.
 - [`commandsSubmitResponse`](docs/sdks/commands/README.md#submitresponse) - Submit response from deployment
 - [`commandsUploadComplete`](docs/sdks/commands/README.md#uploadcomplete) - Mark upload as complete
-- [`credentialsMintCredentials`](docs/sdks/credentials/README.md#mintcredentials)
 - [`deploymentGroupsCreateDeploymentGroup`](docs/sdks/deploymentgroups/README.md#createdeploymentgroup) - Every handler in this file runs `auth::require_auth(&state, &headers)`
 and then threads `&subject` into the `DeploymentStore` calls — see the
 trait doc on [`DeploymentStore`] for the convention.
@@ -304,6 +300,7 @@ passthrough; single-tenant impls ignore it. See the trait doc on
 - [`deploymentsRetryDeployment`](docs/sdks/deployments/README.md#retrydeployment)
 - [`deploymentsSetDeploymentChannel`](docs/sdks/deployments/README.md#setdeploymentchannel)
 - [`deploymentsSetDeploymentPin`](docs/sdks/deployments/README.md#setdeploymentpin)
+- [`deploymentsSetQuotaWarningOverrides`](docs/sdks/deployments/README.md#setquotawarningoverrides) - Save settings only; retrying a failed deployment remains an explicit operation.
 - [`deploymentsSignDeploymentBundle`](docs/sdks/deployments/README.md#signdeploymentbundle)
 - [`healthHealth`](docs/sdks/health/README.md#health)
 - [`leasesAcquireLeases`](docs/sdks/leases/README.md#acquireleases) - Acquire leases for polling deployments

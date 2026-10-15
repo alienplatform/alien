@@ -371,6 +371,10 @@ fn generate_terraform_module_internal(
         }
     }
 
+    if matches!(platform, alien_core::Platform::Aws) {
+        crate::iam_limits::validate_role_policy_limits(&per_resource)?;
+    }
+
     let gcp_iam_propagation_dependencies = if matches!(platform, alien_core::Platform::Gcp) {
         gcp_iam_resource_addresses(&per_resource)
     } else {
@@ -601,6 +605,7 @@ fn retained_key_detach_script(
         match target.cloud_platform() {
             alien_core::Platform::Aws => {
                 addresses.push(format!("aws_kms_key.{label}"));
+                addresses.push(format!("aws_kms_key.{label}[0]"));
             }
             alien_core::Platform::Gcp => {
                 addresses.push(format!("google_kms_crypto_key.{label}"));
@@ -992,7 +997,12 @@ fn is_count_attribute(structure: &Structure) -> bool {
 }
 
 fn fragment_to_body(fragment: TfFragment) -> Body {
-    let mut structures: Vec<Structure> = Vec::new();
+    let mut structures: Vec<Structure> = fragment
+        .variable_blocks
+        .into_iter()
+        .chain(fragment.moved_blocks)
+        .map(Structure::Block)
+        .collect();
     for data_block in fragment.data_blocks {
         structures.push(Structure::Block(data_block));
     }
@@ -3243,9 +3253,9 @@ fn stack_settings_expression(
     }}) : var.network_mode == "use-existing" ? jsonencode({{
       type             = "byo-vpc-aws"
       vpcId            = var.vpc_id
-      publicSubnetIds  = var.public_subnet_ids
-      privateSubnetIds = var.private_subnet_ids
-      securityGroupIds = var.security_group_ids
+      publicSubnetIds  = compact([for id in var.public_subnet_ids : trimspace(id)])
+      privateSubnetIds = compact([for id in var.private_subnet_ids : trimspace(id)])
+      securityGroupIds = compact([for id in var.security_group_ids : trimspace(id)])
     }}) : jsonencode({{
       type = "use-default"
     }})

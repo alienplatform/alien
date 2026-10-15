@@ -16,6 +16,7 @@ import { deploymentsRedeploy } from "../funcs/deploymentsRedeploy.js";
 import { deploymentsRetryDeployment } from "../funcs/deploymentsRetryDeployment.js";
 import { deploymentsSetDeploymentChannel } from "../funcs/deploymentsSetDeploymentChannel.js";
 import { deploymentsSetDeploymentPin } from "../funcs/deploymentsSetDeploymentPin.js";
+import { deploymentsSetQuotaWarningOverrides } from "../funcs/deploymentsSetQuotaWarningOverrides.js";
 import { deploymentsSignDeploymentBundle } from "../funcs/deploymentsSignDeploymentBundle.js";
 import { ClientSDK, RequestOptions } from "../lib/sdks.js";
 import * as models from "../models/index.js";
@@ -148,6 +149,22 @@ export class Deployments extends ClientSDK {
       this,
       id,
       setDeploymentPinRequest,
+      options,
+    ));
+  }
+
+  /**
+   * Save settings only; retrying a failed deployment remains an explicit operation.
+   */
+  async setQuotaWarningOverrides(
+    id: string,
+    setQuotaWarningOverridesRequest: models.SetQuotaWarningOverridesRequest,
+    options?: RequestOptions,
+  ): Promise<void> {
+    return unwrapAsync(deploymentsSetQuotaWarningOverrides(
+      this,
+      id,
+      setQuotaWarningOverridesRequest,
       options,
     ));
   }
