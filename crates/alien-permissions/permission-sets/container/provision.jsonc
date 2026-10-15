@@ -1028,6 +1028,8 @@
             "Microsoft.ManagedIdentity/userAssignedIdentities/write",
             "Microsoft.ManagedIdentity/userAssignedIdentities/delete",
             "Microsoft.ManagedIdentity/userAssignedIdentities/assign/action",
+            // Verify setup-owned node grants before creating endpoint frontends.
+            "Microsoft.Authorization/roleDefinitions/read",
             "Microsoft.Authorization/roleAssignments/read",
             "Microsoft.Authorization/roleAssignments/write",
             "Microsoft.Authorization/roleAssignments/delete",
