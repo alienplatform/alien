@@ -660,6 +660,23 @@ impl ExecutionMode {
 
                     let body = resp.text().await.unwrap_or_default();
 
+                    if let Some(error) = serde_json::from_str::<ResolveErrorBody>(&body)
+                        .ok()
+                        // Only a cloud platform can get a manager of its own, which the hint
+                        // tells the user to create.
+                        .filter(|error| {
+                            status.as_u16() == 404
+                                && error.code == "NO_SYSTEM_MANAGER"
+                                && matches!(platform, "aws" | "gcp" | "azure")
+                        })
+                    {
+                        return Err(AlienError::new(ErrorData::NoManagerForPlatform {
+                            platform: platform.to_string(),
+                            message: error.message,
+                            request_id: error.request_id,
+                        }));
+                    }
+
                     if is_retryable {
                         return Err(AlienError::new(ErrorData::ApiRequestFailed {
                             message: format!(
@@ -670,16 +687,13 @@ impl ExecutionMode {
                             url: Some(resolve_url),
                         }));
                     } else {
-                        let mut error = AlienError::new(ErrorData::ApiRequestFailed {
+                        return Err(AlienError::new(ErrorData::ApiRequestFailed {
                             message: format!(
                                 "Failed to resolve manager for {} platform (HTTP {}): {}",
                                 platform, status, body
                             ),
                             url: Some(resolve_url),
-                        });
-                        // Carried so a caller can tell a missing manager (404) from any other refusal.
-                        error.http_status_code = Some(status.as_u16());
-                        return Err(error);
+                        }));
                     }
                 };
 
@@ -887,6 +901,16 @@ struct ResolveResponse {
     project_id: String,
 }
 
+/// The API's JSON error body, as `/v1/resolve` sends it on failure.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ResolveErrorBody {
+    code: String,
+    message: String,
+    #[serde(default)]
+    request_id: Option<String>,
+}
+
 fn normalize_base_url(url: &str) -> String {
     let trimmed = url.trim_end_matches('/');
     if trimmed.is_empty() {
@@ -1066,6 +1090,7 @@ mod tests {
     #[cfg(feature = "platform")]
     use super::is_retryable_artifact_registry_error;
     use super::{normalize_base_url, ExecutionMode};
+    use crate::error::ErrorData;
     #[cfg(feature = "platform")]
     use tokio::io::AsyncWriteExt;
     #[cfg(feature = "platform")]
@@ -1212,40 +1237,72 @@ mod tests {
         assert_eq!(ctx.query, Some("demo".to_string()));
     }
 
-    /// A caller tells "this project has no manager on the platform" apart from any other failure
-    /// by the status the resolve endpoint answered with.
+    /// Only the API's "no manager for this platform" answer becomes `NoManagerForPlatform`, which a
+    /// caller may treat as "the project is not on this cloud". Any other 404 stays a failure.
     #[cfg(feature = "platform")]
     #[tokio::test]
-    async fn resolving_a_platform_without_a_manager_keeps_the_404() {
+    async fn only_the_apis_no_manager_answer_is_a_missing_manager() {
         use axum::{http::StatusCode, routing::get, Router};
 
-        let app = Router::new().route(
-            "/v1/resolve",
-            get(|| async {
-                (
-                    StatusCode::NOT_FOUND,
-                    r#"{"code":"NO_SYSTEM_MANAGER","message":"No system manager found for platform 'azure'."}"#,
-                )
-            }),
+        async fn resolve(
+            platform: &str,
+            status: StatusCode,
+            body: &'static str,
+        ) -> alien_error::AlienError<ErrorData> {
+            let app =
+                Router::new().route("/v1/resolve", get(move || async move { (status, body) }));
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let base_url = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move { axum::serve(listener, app).await });
+            let mode = ExecutionMode::Platform {
+                base_url,
+                api_key: Some("ax_test".to_string()),
+                no_browser: true,
+                workspace: None,
+                project: None,
+            };
+            let error = mode
+                .resolve_manager("prj_test", platform)
+                .await
+                .err()
+                .expect("a failed resolve returns no manager");
+            server.abort();
+            error
+        }
+        const NO_MANAGER: &str = r#"{"code":"NO_SYSTEM_MANAGER","message":"No system manager found for platform 'azure'.","requestId":"req_123"}"#;
+
+        let missing = resolve("azure", StatusCode::NOT_FOUND, NO_MANAGER).await;
+        assert_eq!(missing.code, "NO_MANAGER_FOR_PLATFORM");
+        assert_eq!(missing.http_status_code, Some(404));
+        assert_eq!(
+            missing.message,
+            "The project has no azure manager: No system manager found for platform 'azure'."
         );
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let base_url = format!("http://{}", listener.local_addr().unwrap());
-        let server = tokio::spawn(async move { axum::serve(listener, app).await });
+        assert_eq!(
+            crate::output::json_error_request_id(&missing).as_deref(),
+            Some("req_123")
+        );
+        assert!(missing
+            .hint
+            .as_deref()
+            .is_some_and(|hint| hint.contains("alien managers create --cloud azure")));
 
-        let mode = ExecutionMode::Platform {
-            base_url,
-            api_key: Some("ax_test".to_string()),
-            no_browser: true,
-            workspace: None,
-            project: None,
-        };
-        let error = mode
-            .resolve_manager("prj_test", "azure")
-            .await
-            .err()
-            .expect("a project with no Azure manager does not resolve one");
-        server.abort();
-
-        assert_eq!(error.http_status_code, Some(404));
+        // `alien managers create` takes only a cloud, so another platform keeps the API's error.
+        for (platform, status, body) in [
+            (
+                "azure",
+                StatusCode::NOT_FOUND,
+                r#"{"code":"PROJECT_NOT_FOUND","message":"no"}"#,
+            ),
+            ("azure", StatusCode::NOT_FOUND, "not found"),
+            ("azure", StatusCode::INTERNAL_SERVER_ERROR, NO_MANAGER),
+            ("local", StatusCode::NOT_FOUND, NO_MANAGER),
+        ] {
+            let other = resolve(platform, status, body).await;
+            assert_eq!(
+                other.code, "API_REQUEST_FAILED",
+                "{platform} {status} {body}"
+            );
+        }
     }
 }

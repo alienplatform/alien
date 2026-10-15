@@ -337,17 +337,46 @@ impl<T> DockdashResultExt<T> for std::result::Result<T, dockdash::Error> {
 
 pub type Result<T> = alien_error::Result<T, ErrorData>;
 
-/// The base image a build failed on because it has no variant for the target platform: the error,
-/// or an error it wraps, is [`ErrorData::BaseImagePlatformMissing`].
-pub fn base_image_missing_platform<T>(error: &AlienError<T>) -> Option<&str>
+/// A build that failed on a base image with no variant for the platform it targeted.
+#[derive(Debug)]
+pub struct MissingBasePlatform<'a> {
+    /// Base image reference as the build resolved it
+    pub image: &'a str,
+    /// Platform the build targeted, such as linux/amd64
+    pub platform: &'a str,
+    /// How to fix the Dockerfile, as the error renders it
+    pub hint: Option<&'a str>,
+}
+
+/// The [`ErrorData::BaseImagePlatformMissing`] in `error` or in an error it wraps.
+pub fn base_image_missing_platform<T>(error: &AlienError<T>) -> Option<MissingBasePlatform<'_>>
 where
     T: AlienErrorData + Clone + std::fmt::Debug + Serialize,
 {
-    let contexts = std::iter::once((error.code.as_str(), error.context.as_ref())).chain(
-        std::iter::successors(error.source.as_deref(), |source| source.source.as_deref())
-            .map(|source| (source.code.as_str(), source.context.as_ref())),
+    let layers = std::iter::once((
+        error.code.as_str(),
+        error.context.as_ref(),
+        error.hint.as_deref(),
+    ))
+    .chain(
+        std::iter::successors(error.source.as_deref(), |source| source.source.as_deref()).map(
+            |source| {
+                (
+                    source.code.as_str(),
+                    source.context.as_ref(),
+                    source.hint.as_deref(),
+                )
+            },
+        ),
     );
-    contexts
-        .filter(|(code, _)| *code == "BASE_IMAGE_PLATFORM_MISSING")
-        .find_map(|(_, context)| context?.get("image")?.as_str())
+    layers
+        .filter(|(code, _, _)| *code == "BASE_IMAGE_PLATFORM_MISSING")
+        .find_map(|(_, context, hint)| {
+            let context = context?;
+            Some(MissingBasePlatform {
+                image: context.get("image")?.as_str()?,
+                platform: context.get("platform")?.as_str()?,
+                hint,
+            })
+        })
 }

@@ -299,6 +299,24 @@ pub enum ErrorData {
         message: String,
     },
 
+    /// The platform has no manager on this cloud for the project.
+    #[error(
+        code = "NO_MANAGER_FOR_PLATFORM",
+        message = "The project has no {platform} manager: {message}",
+        hint = "Create one with `alien managers create --cloud {platform} --region <region>`, then make it the project's default with `alien managers defaults set --cloud {platform} --manager <id>`.",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 404
+    )]
+    NoManagerForPlatform {
+        /// Platform the manager was resolved for, such as gcp
+        platform: String,
+        /// The API's message
+        message: String,
+        /// The API's request ID, when it sent one
+        request_id: Option<String>,
+    },
+
     /// Looking up, pushing or tagging a remote sandbox base image failed.
     #[error(
         code = "SANDBOX_IMAGE_PUBLISH_FAILED",
