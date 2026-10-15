@@ -265,6 +265,55 @@ fn azure_management_grants_stay_at_the_scope_their_permission_set_names() {
     assert_eq!(grants.len(), 2, "{grants:?}");
 }
 
+/// An inline permission set can bind its grants at a resource group other than the deployment's.
+/// That scope gets its own role, with its own Terraform address and Azure name, so the module
+/// still validates and each grant stays at the scope it names.
+#[test]
+fn azure_management_grant_at_another_resource_group_gets_its_own_role() {
+    let mut other = alien_permissions::get_permission_set("network/heartbeat")
+        .cloned()
+        .expect("the built-in set is registered");
+    other.id = "custom/other-group-network-read".to_string();
+    let mut value = serde_json::to_value(&other).expect("permission set serializes");
+    for entry in value["platforms"]["azure"]
+        .as_array_mut()
+        .expect("network/heartbeat has Azure grants")
+    {
+        entry["binding"]["stack"]["scope"] =
+            serde_json::json!("/subscriptions/${subscriptionId}/resourceGroups/shared-network");
+    }
+    let other: alien_core::permissions::PermissionSet =
+        serde_json::from_value(value).expect("permission set deserializes");
+    let stack = Stack::new("acme-other-group".to_string())
+        .management(ManagementPermissions::extend(
+            PermissionProfile::new().global([
+                alien_core::PermissionSetReference::from_name("container/provision"),
+                alien_core::PermissionSetReference::from_inline(other),
+            ]),
+        ))
+        .add(resource_group(), ResourceLifecycle::Frozen)
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+    assert_terraform_valid(&module, "azure_management_other_group");
+
+    let grants = management_custom_grants_by_scope(&module);
+    let other_group = grants
+        .get("/subscriptions/${var.azure_subscription_id}/resourceGroups/shared-network")
+        .expect("the other group has its own assignment");
+    assert!(
+        !other_group.contains("Microsoft.Network/applicationGateways/write"),
+        "the other group's role holds only its own grants: {other_group:?}"
+    );
+    assert!(grants
+        .get("/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}")
+        .expect("the deployment group keeps its role")
+        .contains("Microsoft.Network/applicationGateways/write"));
+}
+
 /// Azure folds every resource-scoped management permission set into one
 /// assignment, so the grant belongs to all of its contributors at once. When
 /// every contributor is gated the assignment carries their gates, and

@@ -272,14 +272,18 @@ fn emit_management_roles(
 
 fn emit_management_role(fragment: &mut TfFragment, label: &str, role: AzureScopedCustomRole) {
     let kind = role.scope_kind.as_str();
+    let name = match scope_suffix(&role.scope) {
+        None => format!("${{local.resource_prefix}}-management-{kind}-role"),
+        Some(suffix) => format!(
+            "${{local.resource_prefix}}-management-{kind}-role-{}",
+            suffix.replace('_', "-")
+        ),
+    };
     fragment.resource_blocks.push(resource_block(
         "azurerm_role_definition",
-        &management_role_address(label, role.scope_kind),
+        &management_role_address(label, &role.scope, role.scope_kind),
         [
-            attr(
-                "name",
-                expr::template(format!("${{local.resource_prefix}}-management-{kind}-role")),
-            ),
+            attr("name", expr::template(name)),
             attr(
                 "role_definition_id",
                 expr::raw(format!(
@@ -287,7 +291,7 @@ fn emit_management_role(fragment: &mut TfFragment, label: &str, role: AzureScope
                     role.scope
                 )),
             ),
-            attr("scope", management_role_definition_scope(role.scope_kind)),
+            attr("scope", expr::template(role.scope.clone())),
             attr(
                 "description",
                 Expression::String(format!(
@@ -311,12 +315,36 @@ fn emit_management_role(fragment: &mut TfFragment, label: &str, role: AzureScope
     ));
 }
 
-fn management_role_address(label: &str, kind: AzureManagementScopeKind) -> String {
-    match kind {
+const OWN_SUBSCRIPTION_SCOPE: &str = "/subscriptions/${var.azure_subscription_id}";
+const OWN_RESOURCE_GROUP_SCOPE: &str =
+    "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}";
+
+/// `None` for the deployment's own subscription and resource group. Any other scope (an inline
+/// permission set may name another resource group) gets a suffix built from the scope, so its
+/// role has its own address and Azure name.
+fn scope_suffix(scope: &str) -> Option<String> {
+    if scope == OWN_SUBSCRIPTION_SCOPE || scope == OWN_RESOURCE_GROUP_SCOPE {
+        return None;
+    }
+    let suffix = scope
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|part| !part.is_empty() && !part.eq_ignore_ascii_case("subscriptions"))
+        .collect::<Vec<_>>()
+        .join("_")
+        .to_ascii_lowercase();
+    Some(suffix)
+}
+
+fn management_role_address(label: &str, scope: &str, kind: AzureManagementScopeKind) -> String {
+    let base = match kind {
         AzureManagementScopeKind::Subscription => format!("{label}_management_subscription_role"),
         AzureManagementScopeKind::ResourceGroup => {
             format!("{label}_management_resource_group_role")
         }
+    };
+    match scope_suffix(scope) {
+        None => base,
+        Some(suffix) => format!("{base}_{suffix}"),
     }
 }
 
@@ -524,21 +552,10 @@ fn management_role_definition_id(
             })?;
             Ok(expr::traversal([
                 "azurerm_role_definition",
-                &management_role_address(label, kind),
+                &management_role_address(label, scope, kind),
                 "role_definition_resource_id",
             ]))
         }
-    }
-}
-
-fn management_role_definition_scope(kind: AzureManagementScopeKind) -> Expression {
-    match kind {
-        AzureManagementScopeKind::Subscription => {
-            expr::raw("\"/subscriptions/${var.azure_subscription_id}\"")
-        }
-        AzureManagementScopeKind::ResourceGroup => expr::raw(
-            "\"/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}\"",
-        ),
     }
 }
 
