@@ -471,6 +471,7 @@
       // Resource SKU availability is subscription-specific and cannot be read through a
       // resource-group-scoped role assignment.
       {
+        "label": "Read Compute Quotas",
         "grant": {
           // Applied regional quotas and usage; no VM inventory or telemetry.
           "actions": ["Microsoft.Compute/skus/read", "Microsoft.Compute/locations/usages/read"]

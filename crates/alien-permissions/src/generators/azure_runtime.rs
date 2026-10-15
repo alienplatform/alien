@@ -256,6 +256,8 @@ impl AzureRuntimePermissionsGenerator {
             })?;
 
         let mut custom_roles = Vec::new();
+        let mut custom_role_keys = BTreeSet::new();
+        let mut custom_role_names = BTreeSet::new();
         let mut bindings = Vec::new();
 
         // An empty `azure` list is valid by design (postgres/data-access). Return an empty plan rather
@@ -317,6 +319,17 @@ impl AzureRuntimePermissionsGenerator {
                 let mut role_definition =
                     self.generate_entry_role_definition(permission_set, index, &scope, context)?;
                 role_definition.assignable_scopes = vec![scope.clone()];
+                if !custom_role_keys.insert(key.clone())
+                    || !custom_role_names.insert(role_definition.name.clone())
+                {
+                    return Err(alien_error::AlienError::new(ErrorData::GeneratorError {
+                        platform: "azure".to_string(),
+                        message: format!(
+                            "permission set '{}' has colliding custom role keys or names; use distinct labels for each grant",
+                            permission_set.id
+                        ),
+                    }));
+                }
                 custom_roles.push(AzureCustomRole {
                     key: key.clone(),
                     role_definition,

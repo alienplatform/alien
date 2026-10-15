@@ -160,6 +160,24 @@ fn compute_cluster_lifecycle_can_discover_subscription_sku_availability() {
             .generate_grant_plan(permission_set, BindingTarget::Stack, &context)
             .expect("compute cluster grant plan should generate");
 
+        let keys: std::collections::HashSet<_> =
+            result.custom_roles.iter().map(|role| &role.key).collect();
+        let names: std::collections::HashSet<_> = result
+            .custom_roles
+            .iter()
+            .map(|role| &role.role_definition.name)
+            .collect();
+        assert_eq!(
+            keys.len(),
+            result.custom_roles.len(),
+            "{permission_set_id}: role keys collide"
+        );
+        assert_eq!(
+            names.len(),
+            result.custom_roles.len(),
+            "{permission_set_id}: role names collide"
+        );
+
         let sku_role = result
             .custom_roles
             .iter()
@@ -263,6 +281,27 @@ fn compute_management_roles_keep_quota_reads_separate_from_fleet_writes() {
                 .all(|action| action.ends_with("/read"))
         );
         assert!(quota.role_definition.data_actions.is_empty());
+    }
+}
+
+#[test]
+fn azure_grant_plan_rejects_colliding_role_keys_and_names() {
+    let generator = AzureRuntimePermissionsGenerator::new();
+    let context = create_test_context();
+    for label in [
+        None,
+        Some("Compute Cluster Management Inspect Cloud Networking".to_string()),
+    ] {
+        let mut permission_set = get_permission_set("compute-cluster/management")
+            .unwrap()
+            .clone();
+        permission_set.platforms.azure.as_mut().unwrap()[0].label = label;
+        for target in [BindingTarget::Stack, BindingTarget::Resource] {
+            let error = generator
+                .generate_grant_plan(&permission_set, target, &context)
+                .expect_err("Ambiguous role ownership must fail before returning a grant plan");
+            assert_eq!(error.code, "GENERATOR_ERROR");
+        }
     }
 }
 
