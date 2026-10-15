@@ -2009,6 +2009,14 @@ mod tests {
                 url: None,
             }))
         };
+        let not_ready = || {
+            Err(AlienError::new(ErrorData::ManagerNotReady {
+                platform: "gcp".to_string(),
+                seconds: 60,
+                message: "Manager for platform 'gcp' is not ready yet".to_string(),
+                request_id: None,
+            }))
+        };
         let no_manager = || {
             Err(AlienError::new(ErrorData::NoManagerForPlatform {
                 platform: "gcp".to_string(),
@@ -2061,6 +2069,7 @@ mod tests {
                 ))
             );
             // A manager that exists but is not ready is an outage, not a cloud without a manager.
+            image_leg(cloud, not_ready()).expect_err("an unready manager fails the command");
             image_leg(cloud, refused()).expect_err("any other refusal fails the command");
             image_leg(
                 cloud,

@@ -473,7 +473,8 @@ impl ExecutionMode {
         project: &str,
         platform: &str,
     ) -> Result<ManagerContext> {
-        self.resolve_manager_inner(project, platform, false).await
+        self.resolve_manager_inner(project, platform, false, MANAGER_READY_WAIT)
+            .await
     }
 
     #[cfg(feature = "platform")]
@@ -531,14 +532,17 @@ impl ExecutionMode {
     /// - Platform: calls /v1/resolve to discover the project's manager URL,
     ///   then calls the manager directly to create/get the artifact registry repo.
     pub async fn resolve_manager(&self, project: &str, platform: &str) -> Result<ManagerContext> {
-        self.resolve_manager_inner(project, platform, true).await
+        self.resolve_manager_inner(project, platform, true, MANAGER_READY_WAIT)
+            .await
     }
 
+    /// `manager_wait` bounds how long a manager that answers 503 is waited for.
     async fn resolve_manager_inner(
         &self,
         project: &str,
         platform: &str,
         with_artifact_repo: bool,
+        manager_wait: Duration,
     ) -> Result<ManagerContext> {
         match self {
             Self::Standalone {
@@ -614,7 +618,6 @@ impl ExecutionMode {
                 let resolve_url = format!("{}/v1/resolve?{}", http.base_url, query.join("&"));
 
                 // Retry logic: manager might be starting up (503)
-                let max_duration = std::time::Duration::from_secs(60);
                 let start_time = std::time::Instant::now();
                 let mut attempt: u32 = 0;
 
@@ -647,10 +650,15 @@ impl ExecutionMode {
 
                     let is_retryable = status.as_u16() == 503;
 
-                    if is_retryable && start_time.elapsed() < max_duration {
+                    if is_retryable && start_time.elapsed() < manager_wait {
                         let backoff_secs = std::cmp::min(2u64.pow(attempt.saturating_sub(1)), 15);
                         if attempt == 1 {
                             info!("Manager not ready yet, waiting for startup...");
+                            // stderr, so a `--json` command's stdout stays one JSON document.
+                            eprintln!(
+                                "Waiting up to {} seconds for the {platform} manager to become ready...",
+                                manager_wait.as_secs()
+                            );
                         } else {
                             info!("Still waiting for manager (attempt {})...", attempt);
                         }
@@ -678,7 +686,7 @@ impl ExecutionMode {
                     }
 
                     if is_retryable {
-                        return Err(manager_not_ready(platform, max_duration, &body));
+                        return Err(manager_not_ready(platform, start_time.elapsed(), &body));
                     } else {
                         return Err(AlienError::new(ErrorData::ApiRequestFailed {
                             message: format!(
@@ -894,6 +902,14 @@ struct ResolveResponse {
     project_id: String,
 }
 
+/// How long a manager that answers 503 is waited for before the command fails.
+const MANAGER_READY_WAIT: Duration = Duration::from_secs(60);
+
+/// How much of a 503 body that is not the API's JSON error reaches the message. A proxy in front
+/// of the API can answer with a whole HTML page.
+#[cfg(feature = "platform")]
+const UNREADY_BODY_MAX_CHARS: usize = 200;
+
 /// The last 503 `/v1/resolve` answered once the CLI stops waiting. The API's message names the
 /// manager that is not ready, which the user needs to act on.
 #[cfg(feature = "platform")]
@@ -903,12 +919,18 @@ fn manager_not_ready(
     body: &str,
 ) -> alien_error::AlienError<ErrorData> {
     let answer = serde_json::from_str::<ResolveErrorBody>(body).ok();
+    let message = match &answer {
+        Some(answer) => answer.message.clone(),
+        None if body.chars().count() > UNREADY_BODY_MAX_CHARS => {
+            let shown: String = body.chars().take(UNREADY_BODY_MAX_CHARS).collect();
+            format!("{shown}...")
+        }
+        None => body.to_string(),
+    };
     AlienError::new(ErrorData::ManagerNotReady {
         platform: platform.to_string(),
         seconds: waited.as_secs(),
-        message: answer
-            .as_ref()
-            .map_or_else(|| body.to_string(), |answer| answer.message.clone()),
+        message,
         request_id: answer.and_then(|answer| answer.request_id),
     })
 }
@@ -1280,6 +1302,60 @@ mod tests {
             plain.message.ends_with(": upstream unavailable"),
             "{}",
             plain.message
+        );
+    }
+
+    /// The error says how long the CLI actually waited, which the backoff can carry past the
+    /// wait it set out with, and a proxy's HTML page does not fill the message.
+    #[cfg(feature = "platform")]
+    #[tokio::test]
+    async fn a_manager_still_unready_when_the_wait_ends_reports_the_time_waited() {
+        use axum::{http::StatusCode, routing::get, Router};
+
+        let page = format!(
+            "<html><body>{}</body></html>",
+            "503 Service Unavailable ".repeat(40)
+        );
+        let body = page.clone();
+        let app = Router::new().route(
+            "/v1/resolve",
+            get(move || {
+                let body = body.clone();
+                async move { (StatusCode::SERVICE_UNAVAILABLE, body) }
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await });
+        let mode = ExecutionMode::Platform {
+            base_url,
+            api_key: Some("ax_test".to_string()),
+            no_browser: true,
+            workspace: None,
+            project: None,
+        };
+
+        let error = mode
+            .resolve_manager_inner("prj_test", "gcp", true, std::time::Duration::from_secs(2))
+            .await
+            .err()
+            .expect("a manager that never becomes ready fails the resolve");
+        server.abort();
+
+        assert_eq!(error.code, "MANAGER_NOT_READY");
+        // Retries at 0s and 1s fall inside the wait; the one after the 2s backoff lands at 3s.
+        let seconds = error
+            .context
+            .as_ref()
+            .and_then(|context| context["seconds"].as_u64())
+            .expect("the error carries the seconds waited");
+        assert!(seconds > 2, "waited {seconds}s");
+        assert_eq!(
+            error.message,
+            format!(
+                "The gcp manager did not become ready within {seconds} seconds: {}...",
+                page.chars().take(200).collect::<String>()
+            )
         );
     }
 
