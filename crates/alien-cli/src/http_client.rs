@@ -24,6 +24,9 @@ use crate::error::{ErrorData, Result};
 /// overall request timeout a caller sets.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Identifies the CLI version so APIs can preserve contracts for older clients.
+pub const USER_AGENT: &str = concat!("alien-cli/", env!("CARGO_PKG_VERSION"));
+
 /// Extra attempts after a failed connect, on top of the first attempt.
 const MAX_CONNECT_RETRIES: u32 = 2;
 
@@ -45,6 +48,7 @@ pub fn client() -> Result<Client> {
 
 fn builder_with_connect_timeout(connect_timeout: Duration) -> ClientBuilder {
     Client::builder()
+        .user_agent(USER_AGENT)
         .connect_timeout(connect_timeout)
         .retry(connect_retry_policy())
 }
@@ -117,6 +121,39 @@ mod tests {
     };
 
     use super::*;
+
+    #[tokio::test]
+    async fn requests_identify_the_cli_version() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let address = listener.local_addr().expect("local address");
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            let mut request = Vec::new();
+            let mut buffer = [0; 1024];
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                let count = stream.read(&mut buffer).await.expect("read headers");
+                assert!(count > 0, "request ended before its headers");
+                request.extend_from_slice(&buffer[..count]);
+            }
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                .await
+                .expect("respond");
+            String::from_utf8(request).expect("request headers")
+        });
+        client()
+            .expect("client")
+            .get(format!("http://{address}/"))
+            .send()
+            .await
+            .expect("request")
+            .error_for_status()
+            .expect("response");
+        let request = server.await.expect("server task");
+        assert!(request
+            .to_ascii_lowercase()
+            .contains(&format!("user-agent: {USER_AGENT}\r\n")));
+    }
 
     /// A listening socket whose accept queue is full, so the kernel drops
     /// every new SYN: the same symptom as a network that silently drops a

@@ -43,7 +43,7 @@ impl RemoteStackManagement {
 /// Different platforms will provide different outputs based on their implementation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct RemoteStackManagementOutputs {
     /// Platform-specific management resource identifier
     /// For AWS: The ARN of the created cross-account role
