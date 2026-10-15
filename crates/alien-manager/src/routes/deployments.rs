@@ -1364,7 +1364,7 @@ mod tests {
                         .outputs
                         .as_ref()
                         .unwrap()
-                        .downcast_ref::<alien_core::resources::KeyOutputs>()
+                        .downcast_ref::<alien_core::KeyOutputs>()
                         .unwrap();
                     key.available == Some(false)
                 })

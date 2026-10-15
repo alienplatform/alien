@@ -15,14 +15,13 @@ fn deserialize_bool_or_null<'de, D: Deserializer<'de>>(deserializer: D) -> Resul
 }
 
 use alien_core::{
-    resources::KeyOutputs,
     sync::{
         ObservedApplicationReport, OperationsReport, OperatorCapabilityReport, OperatorImageReport,
         TargetDeployment, TargetOperationsBundleSet,
     },
     DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus, EnvironmentVariable,
-    EnvironmentVariablesSnapshot, ObservedInventoryBatch, Platform, ReleaseInfo, ResourceHeartbeat,
-    ResourceOutputs, StackState,
+    EnvironmentVariablesSnapshot, KeyOutputs, ObservedInventoryBatch, Platform, ReleaseInfo,
+    ResourceHeartbeat, ResourceOutputs, StackState,
 };
 use alien_error::{AlienError, Context, GenericError, IntoAlienError};
 
