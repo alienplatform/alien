@@ -9,12 +9,12 @@ use std::fmt::Display;
 use std::time::Duration;
 
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_platform_api::types::{
-    AccessRequestStatus, CreateAccessRequest, CreateAccessRequestMaxRisk, DebugGrantTool,
-    RevokeAccessRequest,
-};
 use alien_platform_api::SdkResultExt as _;
-use chrono::{DateTime, Utc};
+use alien_platform_api::types::{
+    AccessRequestStatus, CreateAccessRequest, CreateAccessRequestMaxRisk,
+    CreateAccessRequestRequestedExpiresAt, DebugGrantTool, RevokeAccessRequest,
+};
+use chrono::{DateTime, SecondsFormat, Utc};
 use clap::{Parser, Subcommand};
 use serde_json::Value;
 
@@ -906,7 +906,7 @@ pub(crate) fn parse_duration_seconds(value: &str) -> Result<u64> {
 pub(crate) fn requested_expiration(
     now: DateTime<Utc>,
     duration: Option<&str>,
-) -> Result<Option<DateTime<Utc>>> {
+) -> Result<Option<CreateAccessRequestRequestedExpiresAt>> {
     let Some(duration) = duration else {
         return Ok(None);
     };
@@ -923,13 +923,22 @@ pub(crate) fn requested_expiration(
             message: "duration is too large".to_string(),
         })
     })?;
-    now.checked_add_signed(chrono::Duration::seconds(seconds))
-        .map(Some)
+    let deadline = now
+        .checked_add_signed(chrono::Duration::seconds(seconds))
         .ok_or_else(|| {
             AlienError::new(ErrorData::ValidationError {
                 field: "duration".to_string(),
                 message: "duration is too large".to_string(),
             })
+        })?;
+    deadline
+        .to_rfc3339_opts(SecondsFormat::AutoSi, true)
+        .parse()
+        .map(Some)
+        .into_alien_error()
+        .context(ErrorData::ValidationError {
+            field: "duration".to_string(),
+            message: "could not encode the UTC deadline".to_string(),
         })
 }
 
@@ -938,11 +947,11 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use axum::{
+        Json, Router,
         extract::{RawQuery, State},
         http::StatusCode,
         response::IntoResponse,
         routing::post,
-        Json, Router,
     };
 
     use super::*;
@@ -1199,9 +1208,11 @@ mod approval_instructions_tests {
         let elsewhere = ApprovalInstructions::Elsewhere;
         assert!(elsewhere.is_final());
         assert_eq!(elsewhere.kubectl_command(), None);
-        assert!(elsewhere
-            .waiting_message()
-            .is_some_and(|message| message.contains("dashboard")));
+        assert!(
+            elsewhere
+                .waiting_message()
+                .is_some_and(|message| message.contains("dashboard"))
+        );
     }
 
     #[test]
@@ -1213,8 +1224,10 @@ mod approval_instructions_tests {
         let ready = ApprovalInstructions::Kubectl(Some("kubectl patch x".to_string()));
         assert!(ready.is_final());
         assert_eq!(ready.kubectl_command(), Some("kubectl patch x"));
-        assert!(ready
-            .waiting_message()
-            .is_some_and(|message| message.contains("kubectl patch x")));
+        assert!(
+            ready
+                .waiting_message()
+                .is_some_and(|message| message.contains("kubectl patch x"))
+        );
     }
 }
