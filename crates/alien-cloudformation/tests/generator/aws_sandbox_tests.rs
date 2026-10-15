@@ -2098,6 +2098,12 @@ fn a_stack_wide_sandbox_grant_is_attached_once() {
         "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:microvm-image:${AWS::StackName}-*";
     const EXECUTE_POLICY: &str = "AgentsExecutionSaRoleSandboxPermission01";
     const EXECUTE: [&str; 2] = ["lambda:CreateMicrovmAuthToken", "lambda:GetMicrovm"];
+    const MANAGEMENT: [&str; 4] = [
+        "lambda:ResumeMicrovm",
+        "lambda:RunMicrovm",
+        "lambda:SuspendMicrovm",
+        "lambda:TerminateMicrovm",
+    ];
     const BOTH: [&str; 6] = [
         "lambda:CreateMicrovmAuthToken",
         "lambda:GetMicrovm",
@@ -2110,17 +2116,17 @@ fn a_stack_wide_sandbox_grant_is_attached_once() {
     let management_only = PermissionProfile::new().global(["sandbox/management"]);
     for lifecycle in [ResourceLifecycle::Frozen, ResourceLifecycle::Live] {
         for (account, stack_level, attached, on_image, policies) in [
-            (&global, vec![STACK_WIDE.to_string()], None, &[][..], vec![]),
+            (&global, &BOTH[..], None, &[][..], vec![]),
             (
                 &PermissionProfile::new(),
-                vec![],
+                &[][..],
                 Some(vec![IMAGE.to_string()]),
                 &BOTH[..],
                 vec![],
             ),
             (
                 &management_only,
-                vec![STACK_WIDE.to_string()],
+                &MANAGEMENT[..],
                 None,
                 &EXECUTE[..],
                 vec![EXECUTE_POLICY],
@@ -2172,33 +2178,45 @@ fn a_stack_wide_sandbox_grant_is_attached_once() {
             );
             let role = serde_json::to_value(&template.resources["ExecutionSaRole"].properties)
                 .expect("serializes");
-            let run_on_the_role: Vec<String> = role["Policies"]
-                .as_array()
+            // A role whose account holds no set has no `Policies` key at all.
+            let statements: Vec<serde_json::Value> = role
+                .get("Policies")
+                .map(|policies| policies.as_array().expect("Policies is a list"))
                 .into_iter()
                 .flatten()
                 .flat_map(|policy| {
                     policy["PolicyDocument"]["Statement"]
                         .as_array()
-                        .cloned()
-                        .unwrap_or_default()
+                        .expect("a policy has statements")
+                        .clone()
                 })
-                .filter(|statement| {
-                    statement["Action"]
-                        .as_array()
-                        .is_some_and(|actions| actions.contains(&"lambda:RunMicrovm".into()))
-                })
-                .flat_map(|statement| {
-                    statement["Resource"]
-                        .as_array()
-                        .cloned()
-                        .unwrap_or_default()
-                })
-                .map(|resource| resource["Fn::Sub"].as_str().expect("Fn::Sub").to_string())
                 .collect();
-            assert_eq!(
-                run_on_the_role, stack_level,
-                "{lifecycle:?} on {account:?}: the account's stack-level policy"
-            );
+            for action in BOTH {
+                let on_the_role: Vec<&str> = statements
+                    .iter()
+                    .filter(|statement| {
+                        statement["Action"]
+                            .as_array()
+                            .expect("a statement lists its actions")
+                            .contains(&action.into())
+                    })
+                    .flat_map(|statement| {
+                        statement["Resource"]
+                            .as_array()
+                            .expect("a statement lists its resources")
+                    })
+                    .map(|resource| resource["Fn::Sub"].as_str().expect("Fn::Sub"))
+                    .collect();
+                let expected: &[&str] = if stack_level.contains(&action) {
+                    &[STACK_WIDE]
+                } else {
+                    &[]
+                };
+                assert_eq!(
+                    on_the_role, expected,
+                    "{lifecycle:?} on {account:?}: {action} in the account's stack-level policy"
+                );
+            }
         }
     }
 }

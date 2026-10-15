@@ -1814,20 +1814,23 @@ fn a_stack_wide_sandbox_grant_is_attached_once() {
                 "{lifecycle:?} {profile:?} on {account:?}"
             );
 
-            let run = granted_actions(&module, "execution_sa")
-                .remove("lambda:RunMicrovm")
-                .unwrap_or_else(|| {
-                    panic!("{lifecycle:?} {profile:?}: the role must be able to start a session")
+            let granted = granted_actions(&module, "execution_sa");
+            for action in [
+                "lambda:RunMicrovm",
+                "lambda:TerminateMicrovm",
+                "lambda:SuspendMicrovm",
+                "lambda:ResumeMicrovm",
+                "lambda:CreateMicrovmAuthToken",
+                "lambda:GetMicrovm",
+            ] {
+                let resources = granted.get(action).unwrap_or_else(|| {
+                    panic!("{lifecycle:?} {profile:?} on {account:?}: the role lacks {action}")
                 });
-            assert_eq!(
-                run.len(),
-                1,
-                "{lifecycle:?} {profile:?}: granted once: {run:?}"
-            );
-            assert!(
-                run[0].ends_with(granted_on.as_str()),
-                "{lifecycle:?} {profile:?} on {account:?}: {run:?}"
-            );
+                assert!(
+                    resources.len() == 1 && resources[0].ends_with(granted_on.as_str()),
+                    "{lifecycle:?} {profile:?} on {account:?}: {action} granted once on {granted_on}: {resources:?}"
+                );
+            }
         }
     }
 }
