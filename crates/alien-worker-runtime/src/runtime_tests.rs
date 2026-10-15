@@ -377,6 +377,49 @@ async fn gateway_runtime_secret_is_required_validated_and_reloaded_from_vault() 
         );
     }
     let mut wrong_transport = config;
+    wrong_transport.env_vars.insert(ENV_ALIEN_RUNTIME_SECRETS.into(), serde_json::json!({
+        "gatewayCredential": "worker-gateway", "previousGatewayCredential": "previous-worker-gateway", "hash": "overlap"
+    }).to_string());
+    assert!(load_runtime_secrets(&wrong_transport, &provider)
+        .await
+        .is_err());
+    vault
+        .set_secret("previous-worker-gateway", "invalid")
+        .await
+        .unwrap();
+    assert!(load_runtime_secrets(&wrong_transport, &provider)
+        .await
+        .is_err());
+    vault
+        .set_secret("previous-worker-gateway", &"c".repeat(64))
+        .await
+        .unwrap();
+    let overlapping = load_runtime_secrets(&wrong_transport, &provider)
+        .await
+        .unwrap();
+    assert_eq!(overlapping["gatewayCredential"], "b".repeat(64));
+    assert_eq!(overlapping["previousGatewayCredential"], "c".repeat(64));
+    wrong_transport.env_vars.insert(
+        ENV_ALIEN_RUNTIME_SECRETS.into(),
+        serde_json::json!({
+            "previousGatewayCredential": "previous-worker-gateway", "hash": "missing-current"
+        })
+        .to_string(),
+    );
+    assert_eq!(
+        load_runtime_secrets(&wrong_transport, &provider)
+            .await
+            .unwrap_err()
+            .code,
+        "CONFIGURATION_INVALID"
+    );
+    wrong_transport.env_vars.insert(
+        ENV_ALIEN_RUNTIME_SECRETS.into(),
+        serde_json::json!({
+            "gatewayCredential": "worker-gateway", "hash": "current-only"
+        })
+        .to_string(),
+    );
     wrong_transport.transport = TransportType::Local;
     assert_eq!(
         load_runtime_secrets(&wrong_transport, &provider)

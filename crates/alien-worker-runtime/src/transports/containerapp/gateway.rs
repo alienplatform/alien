@@ -12,7 +12,10 @@ const ORIGINAL_TARGET: &str = "x-alien-original-target";
 const HEADERS: [&str; 3] = [TOKEN, ORIGINAL_HOST, ORIGINAL_TARGET];
 
 // Deliberately has no Debug implementation: credentials must not enter logs.
-pub(crate) struct GatewayCredential([u8; 64]);
+pub(crate) struct GatewayCredential {
+    current: [u8; 64],
+    previous: [u8; 64],
+}
 
 impl GatewayCredential {
     pub(crate) fn new(value: &str) -> Result<Self> {
@@ -24,7 +27,15 @@ impl GatewayCredential {
         }
         let mut bytes = [0; 64];
         bytes.copy_from_slice(value.as_bytes());
-        Ok(Self(bytes))
+        Ok(Self {
+            current: bytes,
+            previous: bytes,
+        })
+    }
+
+    pub(crate) fn with_previous(mut self, previous: &str) -> Result<Self> {
+        self.previous = Self::new(previous)?.current;
+        Ok(self)
     }
 }
 
@@ -54,7 +65,11 @@ pub(super) fn restore_request<B>(
         return Ok(false);
     }
     let token = one_header(request.headers(), TOKEN)?;
-    if !bool::from(credential.0.as_slice().ct_eq(token.as_bytes())) {
+    // Compare both slots without revealing which generation matched. Without
+    // overlap, both slots hold the current credential.
+    let accepted = credential.current.as_slice().ct_eq(token.as_bytes())
+        | credential.previous.as_slice().ct_eq(token.as_bytes());
+    if !bool::from(accepted) {
         return Err(StatusCode::FORBIDDEN);
     }
     let host = one_header(request.headers(), ORIGINAL_HOST)?;
@@ -142,6 +157,42 @@ mod tests {
         let mut native = Request::new(());
         assert_eq!(restore_request(&mut native, Some(&credential)), Ok(false));
         assert!(GatewayCredential::new("").is_err());
+    }
+
+    #[test]
+    fn rotation_accepts_both_generations_then_rejects_the_retired_credential() {
+        let current = "a".repeat(64);
+        let overlap = GatewayCredential::new(&current)
+            .unwrap()
+            .with_previous(SECRET)
+            .unwrap();
+        let retired = GatewayCredential::new(&current).unwrap();
+        for (token, expected_after_retirement) in [
+            (&current[..], Ok(true)),
+            (SECRET, Err(StatusCode::FORBIDDEN)),
+        ] {
+            let mut during = request();
+            during.headers_mut().insert(TOKEN, token.parse().unwrap());
+            assert_eq!(restore_request(&mut during, Some(&overlap)), Ok(true));
+            let mut after = request();
+            after.headers_mut().insert(TOKEN, token.parse().unwrap());
+            assert_eq!(
+                restore_request(&mut after, Some(&retired)),
+                expected_after_retirement
+            );
+        }
+        let mut unrelated = request();
+        unrelated
+            .headers_mut()
+            .insert(TOKEN, "b".repeat(64).parse().unwrap());
+        assert_eq!(
+            restore_request(&mut unrelated, Some(&overlap)),
+            Err(StatusCode::FORBIDDEN)
+        );
+        assert!(GatewayCredential::new(&current)
+            .unwrap()
+            .with_previous("invalid")
+            .is_err());
     }
 
     #[test]

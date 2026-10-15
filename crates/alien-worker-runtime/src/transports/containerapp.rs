@@ -82,8 +82,22 @@ impl ContainerAppTransport {
 
     /// Enable authenticated gateway metadata using a dedicated runtime credential.
     /// The caller must keep this credential out of application environment variables.
-    pub fn with_gateway_credential(mut self, credential: &str) -> Result<Self> {
-        self.gateway = Some(Arc::new(gateway::GatewayCredential::new(credential)?));
+    pub fn with_gateway_credential(self, credential: &str) -> Result<Self> {
+        self.with_gateway_credentials(credential, None)
+    }
+
+    /// Accept the previous credential while a gateway and its app revisions rotate.
+    /// Both values remain private to the runtime.
+    pub fn with_gateway_credentials(
+        mut self,
+        current: &str,
+        previous: Option<&str>,
+    ) -> Result<Self> {
+        let mut credential = gateway::GatewayCredential::new(current)?;
+        if let Some(previous) = previous {
+            credential = credential.with_previous(previous)?;
+        }
+        self.gateway = Some(Arc::new(credential));
         Ok(self)
     }
 

@@ -13,7 +13,7 @@ fn main() -> std::process::ExitCode {
         println!(
             "{}",
             serde_json::json!({
-                "containerAppGatewayMetadataVersion": if cfg!(feature = "azure") { Some(1) } else { None },
+                "containerAppGatewayMetadataVersion": if cfg!(feature = "azure") { Some(2) } else { None },
             })
         );
         return std::process::ExitCode::SUCCESS;

@@ -49,6 +49,7 @@ struct RuntimeSecretsConfig {
     otlp_logs_auth_header: Option<String>,
     otlp_metrics_auth_header: Option<String>,
     gateway_credential: Option<String>,
+    previous_gateway_credential: Option<String>,
     hash: String,
 }
 
@@ -56,6 +57,7 @@ struct RuntimeSecretsConfig {
 struct TransportCredentials {
     command_push: Option<CommandPushConfig>,
     gateway: Option<String>,
+    previous_gateway: Option<String>,
 }
 
 #[derive(Clone)]
@@ -242,6 +244,7 @@ pub async fn run(
         let credentials = TransportCredentials {
             command_push: command_push_config(&config, &secrets)?,
             gateway: runtime_secrets.remove("gatewayCredential"),
+            previous_gateway: runtime_secrets.remove("previousGatewayCredential"),
         };
         let child = start_application(&config, &secrets, log_exporter).await?;
         Ok((child, credentials))
@@ -444,7 +447,10 @@ fn spawn_transport(
                 ContainerAppTransport::new(transport_port, control_server, shutdown_rx)
                     .with_command_timeout(command_timeout);
             if let Some(credential) = credentials.gateway {
-                transport = transport.with_gateway_credential(&credential)?;
+                transport = transport.with_gateway_credentials(
+                    &credential,
+                    credentials.previous_gateway.as_deref(),
+                )?;
             }
             if let Some(port) = app_http_port {
                 transport = transport.with_app_port(port);
@@ -793,6 +799,13 @@ async fn load_runtime_secrets(
     let logs_auth_secret = runtime_secrets_config.otlp_logs_auth_header;
     let metrics_auth_secret = runtime_secrets_config.otlp_metrics_auth_header;
     let gateway_secret = runtime_secrets_config.gateway_credential;
+    let previous_gateway_secret = runtime_secrets_config.previous_gateway_credential;
+    if previous_gateway_secret.is_some() && gateway_secret.is_none() {
+        return Err(AlienError::new(ErrorData::ConfigurationInvalid {
+            message: "Previous gateway credential requires a current gateway credential".into(),
+            field: Some("previousGatewayCredential".into()),
+        }));
+    }
 
     if logs_auth_secret.is_none() && metrics_auth_secret.is_none() && gateway_secret.is_none() {
         return Ok(HashMap::new());
@@ -845,6 +858,19 @@ async fn load_runtime_secrets(
         #[cfg(feature = "azure")]
         crate::transports::containerapp::gateway::GatewayCredential::new(&value)?;
         runtime_secrets.insert("gatewayCredential".into(), value);
+        if let Some(previous_key) = previous_gateway_secret {
+            let previous =
+                vault
+                    .get_secret(&previous_key)
+                    .await
+                    .context(ErrorData::SecretLoadFailed {
+                        secret_name: previous_key,
+                        message: "Failed to load previous runtime gateway credential".into(),
+                    })?;
+            #[cfg(feature = "azure")]
+            crate::transports::containerapp::gateway::GatewayCredential::new(&previous)?;
+            runtime_secrets.insert("previousGatewayCredential".into(), previous);
+        }
     }
 
     debug!(
