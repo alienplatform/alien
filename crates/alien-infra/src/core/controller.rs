@@ -809,7 +809,8 @@ pub const MIN_SUPPORTED_CONTROLLER_STATE_VERSION: u32 = 1;
 /// Version 3 preserves withdrawn frontend ownership through access updates.
 /// Older readers may drop withdrawal state or delete retained frontends. Upgrade
 /// deployment actors before enabling writers; older actors must reject this state.
-pub const CURRENT_CONTROLLER_STATE_VERSION: u32 = 3;
+/// Version 4 retains disabled TCP proxy graphs; older writers delete them on access updates.
+pub const CURRENT_CONTROLLER_STATE_VERSION: u32 = 4;
 
 /// Serializes a controller to a JSON Value, injecting its type tag.
 pub fn serialize_controller(
@@ -1544,7 +1545,7 @@ mod tests {
     #[test]
     fn controller_state_upgrades_legacy_envelopes_and_rejects_future_versions() {
         let controller = crate::worker::TestWorkerController::default();
-        for version in [1, 2] {
+        for version in MIN_SUPPORTED_CONTROLLER_STATE_VERSION..CURRENT_CONTROLLER_STATE_VERSION {
             let mut legacy = serialize_controller(&controller).unwrap();
             legacy["_controllerStateVersion"] = serde_json::json!(version);
             let restored = deserialize_controller(legacy).expect("prior version remains readable");
