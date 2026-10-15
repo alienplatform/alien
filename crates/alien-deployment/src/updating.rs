@@ -6,7 +6,7 @@ use alien_core::{
     ResourceStatus, SetupScaffolding, Stack, StackState, StackStatus,
 };
 use alien_error::{AlienError, Context};
-use alien_infra::{RunningResourcePolicy, StackExecutor};
+use alien_infra::{RunningResourcePolicy, StackExecutor, StackResourceStateExt};
 use std::collections::{BTreeMap, HashSet};
 use tracing::{debug, info};
 
@@ -300,7 +300,7 @@ pub async fn handle_updating(
     let mut next = current.clone();
 
     // Stack state is required
-    let stack_state = current.stack_state.ok_or_else(|| {
+    let mut stack_state = current.stack_state.ok_or_else(|| {
         AlienError::new(ErrorData::MissingConfiguration {
             message: "Stack state required for updating".to_string(),
         })
@@ -449,6 +449,25 @@ pub async fn handle_updating(
     // Captured before stepping: completion is judged over exactly what this executor
     // reconciles, so the two cannot disagree about which resources are in scope.
     let reconciled_ids = executor.tracked_resource_ids();
+
+    // An interrupted update did not fail its own handler. Finish the recorded flow even
+    // if a newer release changed its config or dependencies, then plan that change.
+    // Leaving it failed while its new dependency settles stops that dependency too.
+    for (resource_id, resource) in &mut stack_state.resources {
+        if reconciled_ids.contains(resource_id.as_str())
+            && resource.status == ResourceStatus::UpdateFailed
+            && resource
+                .error
+                .as_ref()
+                .is_some_and(|error| error.code == "DEPLOYMENT_INTERRUPTED")
+        {
+            resource
+                .retry_failed()
+                .context(ErrorData::StackExecutionFailed {
+                    message: format!("Failed to resume interrupted update for '{resource_id}'"),
+                })?;
+        }
+    }
 
     // Execute one step
     let mut step_result =
@@ -711,10 +730,7 @@ mod tests {
         ResourceLifecycle, ResourceRef, RuntimeMetadata, StackResourceState, StackSettings, Worker,
         WorkerCode,
     };
-    use alien_infra::worker::{
-        test_worker_configs_deployed, TestWorkerController, TestWorkerState,
-    };
-    use alien_infra::StackResourceStateExt;
+    use alien_infra::{test_worker_configs_deployed, TestWorkerController, TestWorkerState};
 
     #[tokio::test]
     async fn retry_new_release_resumes_interrupted_updates_before_dependency_settles() {
@@ -749,7 +765,7 @@ mod tests {
                     worker(api_id, api_image),
                     ResourceLifecycle::Live,
                     if link {
-                        vec![ResourceRef::new("worker", dependency_id)]
+                        vec![ResourceRef::new("worker".into(), dependency_id)]
                     } else {
                         vec![]
                     },
@@ -780,6 +796,13 @@ mod tests {
         }
         for id in [api_id, dependency_id] {
             assert_eq!(state.resources[id].status, ResourceStatus::Updating);
+            assert_eq!(
+                state.resources[id]
+                    .get_internal_controller_typed::<TestWorkerController>()
+                    .unwrap()
+                    .state,
+                TestWorkerState::UpdateCodePolling,
+            );
         }
         crate::helpers::interrupt_in_progress_resources(&mut state, &[("other", "worker")], None);
         let saved = serde_json::to_string(&state).unwrap();
@@ -836,14 +859,15 @@ mod tests {
         }
         let images = test_worker_configs_deployed(&format!("test:worker:{api_id}"));
         assert_eq!(
-            images.iter().map(|w| &w.code).collect::<Vec<_>>(),
+            images
+                .into_iter()
+                .map(|worker| worker.code)
+                .collect::<Vec<_>>(),
             ["v1", "v2", "v3"]
                 .iter()
                 .map(|image| WorkerCode::Image {
                     image: image.to_string()
                 })
-                .collect::<Vec<_>>()
-                .iter()
                 .collect::<Vec<_>>()
         );
     }
