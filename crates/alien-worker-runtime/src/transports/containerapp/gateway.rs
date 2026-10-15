@@ -12,10 +12,10 @@ const ORIGINAL_TARGET: &str = "x-alien-original-target";
 const HEADERS: [&str; 3] = [TOKEN, ORIGINAL_HOST, ORIGINAL_TARGET];
 
 // Deliberately has no Debug implementation: credentials must not enter logs.
-pub(super) struct GatewayCredential([u8; 64]);
+pub(crate) struct GatewayCredential([u8; 64]);
 
 impl GatewayCredential {
-    pub(super) fn new(value: &str) -> Result<Self> {
+    pub(crate) fn new(value: &str) -> Result<Self> {
         if value.len() != 64 || !value.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err(AlienError::new(ErrorData::ConfigurationInvalid {
                 message: "Gateway credential must encode 32 random bytes as hexadecimal".into(),

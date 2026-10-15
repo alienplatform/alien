@@ -48,7 +48,14 @@ const ENV_ALIEN_BINDINGS_MODE: &str = "ALIEN_BINDINGS_MODE";
 struct RuntimeSecretsConfig {
     otlp_logs_auth_header: Option<String>,
     otlp_metrics_auth_header: Option<String>,
+    gateway_credential: Option<String>,
     hash: String,
+}
+
+#[derive(Default)]
+struct TransportCredentials {
+    command_push: Option<CommandPushConfig>,
+    gateway: Option<String>,
 }
 
 #[derive(Clone)]
@@ -103,7 +110,7 @@ fn prestart_lambda_transport(
         config.command_timeout,
         control_server,
         None,
-        None,
+        TransportCredentials::default(),
         shutdown_rx,
     )?;
     Ok(PrestartedTransport {
@@ -218,7 +225,7 @@ pub async fn run(
             std::collections::HashMap::new()
         };
 
-        let runtime_secrets = if let Some(ref provider) = bindings_provider {
+        let mut runtime_secrets = if let Some(ref provider) = bindings_provider {
             load_runtime_secrets(&config, &**provider).await?
         } else {
             HashMap::new()
@@ -232,13 +239,16 @@ pub async fn run(
             init_otlp_logging_from_config(otlp_config)?;
         }
 
-        let command_push = command_push_config(&config, &secrets)?;
+        let credentials = TransportCredentials {
+            command_push: command_push_config(&config, &secrets)?,
+            gateway: runtime_secrets.remove("gatewayCredential"),
+        };
         let child = start_application(&config, &secrets, log_exporter).await?;
-        Ok((child, command_push))
+        Ok((child, credentials))
     }
     .await;
 
-    let (mut child, command_push) = match application_startup {
+    let (mut child, credentials) = match application_startup {
         Ok(started) => started,
         Err(error) => {
             if let Some(transport) = prestarted_transport {
@@ -299,7 +309,7 @@ pub async fn run(
         &config,
         control_server,
         app_http_port,
-        command_push,
+        credentials,
         wait_until_server,
         &mut child,
         shutdown_rx,
@@ -319,7 +329,7 @@ async fn run_transport(
     config: &RuntimeConfig,
     control_server: Arc<ControlGrpcServer>,
     app_http_port: Option<u16>,
-    command_push: Option<CommandPushConfig>,
+    credentials: TransportCredentials,
     wait_until_server: Arc<WaitUntilGrpcServer>,
     child: &mut Child,
     mut shutdown_rx: broadcast::Receiver<()>,
@@ -340,7 +350,7 @@ async fn run_transport(
                 config.command_timeout,
                 control_server,
                 app_http_port,
-                command_push,
+                credentials,
                 shutdown_rx,
             )?;
             (shutdown_tx, handle)
@@ -405,7 +415,7 @@ fn spawn_transport(
     command_timeout: std::time::Duration,
     control_server: Arc<ControlGrpcServer>,
     app_http_port: Option<u16>,
-    command_push: Option<CommandPushConfig>,
+    credentials: TransportCredentials,
     shutdown_rx: broadcast::Receiver<()>,
 ) -> Result<JoinHandle<Result<()>>> {
     #[cfg(not(feature = "aws"))]
@@ -433,6 +443,9 @@ fn spawn_transport(
             let mut transport =
                 ContainerAppTransport::new(transport_port, control_server, shutdown_rx)
                     .with_command_timeout(command_timeout);
+            if let Some(credential) = credentials.gateway {
+                transport = transport.with_gateway_credential(&credential)?;
+            }
             if let Some(port) = app_http_port {
                 transport = transport.with_app_port(port);
             }
@@ -452,7 +465,7 @@ fn spawn_transport(
             if let Some(port) = app_http_port {
                 transport = transport.with_app_port(port);
             }
-            if let Some(config) = command_push {
+            if let Some(config) = credentials.command_push {
                 transport = transport.with_command_push(
                     config.token,
                     config.deployment_id,
@@ -468,7 +481,7 @@ fn spawn_transport(
             if let Some(port) = app_http_port {
                 transport = transport.with_app_port(port);
             }
-            if let Some(config) = command_push {
+            if let Some(config) = credentials.command_push {
                 transport = transport.with_command_push(
                     config.token,
                     config.deployment_id,
@@ -779,8 +792,9 @@ async fn load_runtime_secrets(
 
     let logs_auth_secret = runtime_secrets_config.otlp_logs_auth_header;
     let metrics_auth_secret = runtime_secrets_config.otlp_metrics_auth_header;
+    let gateway_secret = runtime_secrets_config.gateway_credential;
 
-    if logs_auth_secret.is_none() && metrics_auth_secret.is_none() {
+    if logs_auth_secret.is_none() && metrics_auth_secret.is_none() && gateway_secret.is_none() {
         return Ok(HashMap::new());
     }
 
@@ -812,6 +826,25 @@ async fn load_runtime_secrets(
                 message: "Failed to load runtime secret".to_string(),
             })?;
         runtime_secrets.insert("OTEL_EXPORTER_OTLP_METRICS_HEADERS".to_string(), value);
+    }
+
+    if let Some(secret_key) = gateway_secret {
+        if config.transport != TransportType::ContainerApp || !cfg!(feature = "azure") {
+            return Err(AlienError::new(ErrorData::ConfigurationInvalid {
+                message: "Gateway credentials require the Container App transport".into(),
+                field: Some("gatewayCredential".into()),
+            }));
+        }
+        let value = vault
+            .get_secret(&secret_key)
+            .await
+            .context(ErrorData::SecretLoadFailed {
+                secret_name: secret_key,
+                message: "Failed to load runtime gateway credential".into(),
+            })?;
+        #[cfg(feature = "azure")]
+        crate::transports::containerapp::gateway::GatewayCredential::new(&value)?;
+        runtime_secrets.insert("gatewayCredential".into(), value);
     }
 
     debug!(

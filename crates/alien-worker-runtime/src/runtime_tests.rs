@@ -11,9 +11,9 @@ use tokio::process::Command;
 use tokio::sync::broadcast;
 
 use super::{
-    application_runtime_env, command_push_config, run_transport, runtime_only_env,
-    start_application, RuntimeConfig, TransportType, ENV_ALIEN_BINDINGS_GRPC_ADDRESS,
-    ENV_ALIEN_BINDINGS_MODE,
+    application_runtime_env, command_push_config, load_runtime_secrets, run_transport,
+    runtime_only_env, start_application, RuntimeConfig, TransportCredentials, TransportType,
+    ENV_ALIEN_BINDINGS_GRPC_ADDRESS, ENV_ALIEN_BINDINGS_MODE,
 };
 
 const SUBPROCESS_DRIVER: &str = "ALIEN_TEST_RUNTIME_ENV_SUBPROCESS_DRIVER";
@@ -94,7 +94,7 @@ async fn child_exit_stops_and_joins_transport_listener() {
         &config,
         Arc::new(ControlGrpcServer::new()),
         None,
-        None,
+        TransportCredentials::default(),
         Arc::new(WaitUntilGrpcServer::new()),
         &mut child,
         shutdown_rx,
@@ -129,7 +129,7 @@ async fn normal_shutdown_stops_listener_and_child_before_returning() {
         &config,
         Arc::new(ControlGrpcServer::new()),
         None,
-        None,
+        TransportCredentials::default(),
         Arc::new(WaitUntilGrpcServer::new()),
         &mut child,
         shutdown_rx,
@@ -336,4 +336,53 @@ fn application_runtime_env_injects_both_worker_protocol_address_names() {
         assert_eq!(env.get(ENV_ALIEN_TRANSPORT), Some(&expected.to_string()));
         assert_eq!(env.get("PORT"), None);
     }
+}
+
+#[cfg(feature = "azure")]
+#[tokio::test]
+async fn gateway_runtime_secret_is_required_validated_and_reloaded_from_vault() {
+    let temp = tempfile::tempdir().unwrap();
+    let directory = temp.path().to_string_lossy().to_string();
+    let binding =
+        serde_json::to_value(alien_core::VaultBinding::local("secrets", &directory)).unwrap();
+    let provider = alien_bindings::BindingsProvider::new(
+        alien_core::ClientConfig::Local {
+            state_directory: directory,
+        },
+        HashMap::from([("secrets".into(), binding)]),
+    )
+    .unwrap();
+    let vault = alien_bindings::BindingsProviderApi::load_vault(&provider, "secrets")
+        .await
+        .unwrap();
+    let config = RuntimeConfig::builder()
+        .transport(TransportType::ContainerApp)
+        .command(vec!["unused".into()])
+        .env_vars(HashMap::from([(
+            ENV_ALIEN_RUNTIME_SECRETS.into(),
+            serde_json::json!({"gatewayCredential": "worker-gateway", "hash": "generation"})
+                .to_string(),
+        )]))
+        .build();
+    assert!(load_runtime_secrets(&config, &provider).await.is_err());
+    vault.set_secret("worker-gateway", "invalid").await.unwrap();
+    let error = load_runtime_secrets(&config, &provider).await.unwrap_err();
+    assert_eq!(error.code, "CONFIGURATION_INVALID");
+    for secret in ["a".repeat(64), "b".repeat(64)] {
+        vault.set_secret("worker-gateway", &secret).await.unwrap();
+        let loaded = load_runtime_secrets(&config, &provider).await.unwrap();
+        assert_eq!(
+            loaded,
+            HashMap::from([("gatewayCredential".into(), secret)])
+        );
+    }
+    let mut wrong_transport = config;
+    wrong_transport.transport = TransportType::Local;
+    assert_eq!(
+        load_runtime_secrets(&wrong_transport, &provider)
+            .await
+            .unwrap_err()
+            .code,
+        "CONFIGURATION_INVALID"
+    );
 }

@@ -6,7 +6,7 @@
 //! - Service Bus (Dapr) → QueueMessage via gRPC (or Command if command envelope)
 //! - Timer trigger → CronEvent via gRPC
 
-mod gateway;
+pub(crate) mod gateway;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
