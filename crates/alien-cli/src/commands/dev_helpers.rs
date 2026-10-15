@@ -417,6 +417,7 @@ pub async fn build_embedded_dev_manager(
         db_path: Some(state_dir.join("dev-server.db")),
         state_dir: Some(state_dir.clone()),
         enable_local_log_ingest: true,
+        stop_local_containers_on_shutdown: true,
         response_signing_key: b"alien-dev-commands-signing-key".to_vec(),
         ..Default::default()
     };

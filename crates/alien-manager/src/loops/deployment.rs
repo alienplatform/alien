@@ -28,7 +28,7 @@ use alien_deployment::loop_contract::LoopOperation;
 use alien_deployment::runner::{failed_status_for_deployment_error, RunnerPolicy, RunnerResult};
 use alien_error::{AlienError, Context, GenericError};
 use alien_infra::DefaultPlatformServiceProvider;
-use alien_local::LocalBindingsProvider;
+use alien_local::{LocalBindingsProvider, LocalContainerManager};
 
 use crate::auth::Subject;
 use crate::config::ManagerConfig;
@@ -371,66 +371,102 @@ impl DeploymentLoop {
         }
     }
 
+    /// Drains the native runtimes of local deployments loaded by this process.
+    ///
+    /// When `stop_local_containers_on_shutdown` is set (`alien dev`), it also stops the
+    /// Docker containers of local push deployments, including saved deployments this
+    /// process has not reconciled yet. Every stop is attempted before an error returns.
     pub(crate) async fn shutdown_local_runtimes(&self) -> crate::error::Result<()> {
-        // Deferred deployments may have saved containers without a provider in this process.
-        let recovery: crate::error::Result<()> = async {
-            if let Some(state_dir) = &self.config.state_dir {
-                let deployments = self
-                    .deployment_store
-                    .list_deployments(
-                        &Subject::system(),
-                        &DeploymentFilter {
-                            platforms: Some(vec![Platform::Local]),
-                            deployment_model: Some(alien_core::DeploymentModel::Push),
-                            ..Default::default()
-                        },
-                    )
-                    .await
-                    .context(crate::error::ErrorData::InternalError {
-                        message: "Failed to load saved local workloads for shutdown".to_string(),
-                    })?;
-                let results: Vec<_> = deployments
-                    .iter()
-                    .filter(|deployment| {
-                        deployment.stack_settings.as_ref().is_some_and(|settings| {
-                            settings.deployment_model == alien_core::DeploymentModel::Push
-                        })
-                    })
-                    .filter(|deployment| state_dir.join(&deployment.id).join("containers").is_dir())
-                    .map(|deployment| {
-                        get_or_create_local_bindings_provider(
-                            &self.local_bindings_cache,
-                            state_dir,
-                            &deployment.id,
-                        )
-                    })
-                    .collect();
-                for result in results {
-                    result.context(crate::error::ErrorData::InternalError {
-                        message: "Failed to restore saved local workload ownership".to_string(),
-                    })?;
-                }
-            }
-            Ok(())
-        }
-        .await;
-        let providers: Vec<_> = {
+        let providers: Vec<(String, Arc<LocalBindingsProvider>)> = {
             let mut cache = self
                 .local_bindings_cache
                 .lock()
                 .expect("local_bindings_cache poisoned");
-            cache.drain().map(|(_, provider)| provider).collect()
+            cache.drain().collect()
         };
-        let results = futures::future::join_all(providers.into_iter().map(|provider| async move {
-            provider
-                .shutdown()
-                .await
-                .context(crate::error::ErrorData::InternalError {
-                    message: "Failed to drain local container runtimes".to_string(),
-                })
-        }))
+        futures::future::join_all(
+            providers
+                .iter()
+                .map(|(_, provider)| provider.clone().shutdown()),
+        )
         .await;
-        recovery?;
+
+        if !self.config.stop_local_containers_on_shutdown {
+            return Ok(());
+        }
+        let loaded_results = futures::future::join_all(providers.iter().map(
+            |(deployment_id, provider)| async move {
+                provider
+                    .stop_containers()
+                    .await
+                    .context(crate::error::ErrorData::InternalError {
+                        message: format!(
+                            "Failed to stop local containers of deployment '{deployment_id}'"
+                        ),
+                    })
+            },
+        ))
+        .await;
+        let saved_result = self
+            .stop_saved_local_containers(
+                &providers
+                    .iter()
+                    .map(|(deployment_id, _)| deployment_id.as_str())
+                    .collect::<Vec<_>>(),
+            )
+            .await;
+        for result in loaded_results {
+            result?;
+        }
+        saved_result
+    }
+
+    /// Stops containers recorded by saved local push deployments that have no
+    /// provider in this process, e.g. when a resumed session stops before its first
+    /// reconciliation.
+    async fn stop_saved_local_containers(&self, loaded: &[&str]) -> crate::error::Result<()> {
+        let Some(state_dir) = &self.config.state_dir else {
+            return Ok(());
+        };
+        let deployments = self
+            .deployment_store
+            .list_deployments(
+                &Subject::system(),
+                &DeploymentFilter {
+                    platforms: Some(vec![Platform::Local]),
+                    deployment_model: Some(DeploymentModel::Push),
+                    ..Default::default()
+                },
+            )
+            .await
+            .context(crate::error::ErrorData::InternalError {
+                message: "Failed to load saved local workloads for shutdown".to_string(),
+            })?;
+        let results = futures::future::join_all(
+            deployments
+                .iter()
+                .filter(|deployment| !loaded.contains(&deployment.id.as_str()))
+                .map(|deployment| (deployment.id.as_str(), state_dir.join(&deployment.id)))
+                .filter(|(_, directory)| directory.join("containers").is_dir())
+                .map(|(deployment_id, directory)| async move {
+                    let manager = LocalContainerManager::new(directory).context(
+                        crate::error::ErrorData::InternalError {
+                            message: format!(
+                                "Failed to load saved containers of deployment '{deployment_id}'"
+                            ),
+                        },
+                    )?;
+                    manager
+                        .shutdown_all()
+                        .await
+                        .context(crate::error::ErrorData::InternalError {
+                            message: format!(
+                                "Failed to stop saved containers of deployment '{deployment_id}'"
+                            ),
+                        })
+                }),
+        )
+        .await;
         for result in results {
             result?;
         }
@@ -2888,7 +2924,7 @@ mod tests {
 
         assert!(std::sync::Arc::ptr_eq(&provider_a, &provider_b));
 
-        provider_a.shutdown().await.unwrap();
+        provider_a.shutdown().await;
     }
 
     #[tokio::test]
@@ -2906,8 +2942,8 @@ mod tests {
             "Different deployment IDs should get different providers"
         );
 
-        provider_a.shutdown().await.unwrap();
-        provider_b.shutdown().await.unwrap();
+        provider_a.shutdown().await;
+        provider_b.shutdown().await;
     }
 
     #[test]

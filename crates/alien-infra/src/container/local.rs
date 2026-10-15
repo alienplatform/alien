@@ -984,7 +984,7 @@ mod tests {
                     .docker_container_id
             );
             assert!(manager.is_running(&id).await);
-            bindings.clone().shutdown().await.unwrap();
+            bindings.stop_containers().await.unwrap();
             assert!(
                 !manager.is_running(&id).await,
                 "session shutdown must stop its containers"

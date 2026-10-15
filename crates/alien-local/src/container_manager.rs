@@ -1150,7 +1150,8 @@ impl LocalContainerManager {
                 // On Linux: maps to host gateway IP
                 // On Mac/Windows: Docker Desktop provides this automatically, but explicit is fine
                 extra_hosts: Some(vec!["host.docker.internal:host-gateway".to_string()]),
-                // Recover crashes, but preserve a manual stop across Docker daemon restarts.
+                // Docker recovers crashes and keeps a stopped container stopped across daemon
+                // restarts; the container controller restarts it on its next reconciliation.
                 restart_policy: Some(bollard::models::RestartPolicy {
                     name: Some(bollard::models::RestartPolicyNameEnum::UNLESS_STOPPED),
                     maximum_retry_count: None,

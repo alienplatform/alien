@@ -336,6 +336,7 @@ fn record_to_response(
         import_source: r.import_source,
         // Acquisition consumes the queue bit before reconciliation commits its result.
         // Local clients must still see that failed checkpoint as an in-flight retry.
+        // RefreshFailed is excluded: heartbeats lock it without any retry request.
         retry_requested: r.retry_requested
             || (r.platform == Platform::Local
                 && r.locked_by.is_some()
@@ -345,7 +346,6 @@ fn record_to_response(
                         | "initial-setup-failed"
                         | "provisioning-failed"
                         | "update-failed"
-                        | "refresh-failed"
                 )),
         created_at: r.created_at.to_rfc3339(),
         // Platform SDK requires `updatedAt`. Fall back to created_at when
@@ -1293,7 +1293,12 @@ mod tests {
             !record_to_response(&deployment, None).retry_requested,
             "a newly committed failure is terminal"
         );
+        // A heartbeat locks a refresh-failed deployment without a retry request.
+        deployment.status = "refresh-failed".to_string();
+        deployment.locked_by = Some("local-manager".to_string());
+        assert!(!record_to_response(&deployment, None).retry_requested);
         deployment.platform = Platform::Aws;
+        deployment.status = "provisioning-failed".to_string();
         deployment.locked_by = Some("cloud-manager".to_string());
         assert!(!record_to_response(&deployment, None).retry_requested);
     }

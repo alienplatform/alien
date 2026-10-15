@@ -178,7 +178,7 @@ async fn repeated_archive_tag_runs_new_content_and_loopback_pull_uses_host() {
         "second"
     );
     manager.delete_container(&id).await.unwrap();
-    provider.shutdown().await.unwrap();
+    provider.shutdown().await;
     for image in images {
         docker(&["image", "rm", "--force", image.config_digest()]);
     }
@@ -209,7 +209,8 @@ async fn shutdown_stops_owned_ids_and_leaves_a_same_named_replacement_running() 
         "300",
     ]);
     let recovered = alien_local::LocalBindingsProvider::new(directory.path()).unwrap();
-    let result = recovered.shutdown().await;
+    let result = recovered.stop_containers().await;
+    recovered.shutdown().await;
     let foreign_running = docker(&["inspect", "--format", "{{.State.Running}}", &foreign]);
     let owned_running = docker(&[
         "inspect",
