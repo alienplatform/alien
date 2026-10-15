@@ -8,11 +8,12 @@ use crate::{
     base_image_build_retry_delay, is_retryable_dockdash_image_pull_error,
     BASE_IMAGE_BUILD_MAX_ATTEMPTS,
 };
+use alien_core::presigned::redact_url_for_error;
 use alien_core::sandbox_image::{
     gcp_agent_platform_env, AGENT_MODE, AGENT_PATH, EXEC_USER, GCP_AGENT_PLATFORM,
     SESSION_ROOT_MODE,
 };
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_error::{AlienError, Context, GenericError, IntoAlienError};
 use dockdash::{
     Arch, BlobCache, BuildDiagnostics, ClientProtocol, Image, ImageBuilder, Layer, PullPolicy,
     RegistryAuth,
@@ -237,7 +238,7 @@ where
                     attempt,
                     max_attempts = BASE_IMAGE_BUILD_MAX_ATTEMPTS,
                     delay_secs = delay.as_secs(),
-                    error = %error,
+                    error = %redact_urls(&error.to_string()),
                     "Transient image pull failure, retrying"
                 );
                 sleep(delay).await;
@@ -273,12 +274,53 @@ where
                         build_output: None,
                     }
                 };
-                return Err(error).into_alien_error().context(context);
+                return Err(without_signed_urls(&error)).context(context);
             }
         }
     }
 
     unreachable!("image build retry loop always returns")
+}
+
+/// `error` as an Alien error chain whose messages name each URL by scheme, host and path only.
+/// A registry or storage error can carry a signed download URL, whose query string is a
+/// credential, and the CLI prints every message in the chain.
+fn without_signed_urls(error: &dockdash::Error) -> AlienError<GenericError> {
+    let mut chain = AlienError::from_std(error);
+    let mut layer = Some(&mut chain);
+    while let Some(current) = layer {
+        current.message = redact_urls(&current.message);
+        current.error = Some(GenericError {
+            message: current.message.clone(),
+        });
+        layer = current.source.as_deref_mut();
+    }
+    chain
+}
+
+/// `text` with every `http://` or `https://` URL in it passed through [`redact_url_for_error`].
+/// A URL runs to the next whitespace or quote; punctuation that ends a sentence around it is kept.
+fn redact_urls(text: &str) -> String {
+    let mut redacted = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = ["http://", "https://"]
+        .iter()
+        .filter_map(|scheme| rest.find(scheme))
+        .min()
+    {
+        redacted.push_str(&rest[..start]);
+        let from_url = &rest[start..];
+        let end = from_url
+            .find(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>'))
+            .unwrap_or(from_url.len());
+        let token = &from_url[..end];
+        let url = token.trim_end_matches([')', ',', '.', ';', ':']);
+        redacted.push_str(&redact_url_for_error(url));
+        redacted.push_str(&token[url.len()..]);
+        rest = &from_url[end..];
+    }
+    redacted.push_str(rest);
+    redacted
 }
 
 /// The registry answered that the tag or repository does not exist. A platform missing from an
@@ -1039,6 +1081,83 @@ mod tests {
             reason(&error),
             format!("{AGENT_PATH} in the agent image {agent_image} is not a regular file")
         );
+    }
+
+    /// A registry or storage error can name a signed download URL, whose query string is the
+    /// credential. Neither the error the CLI prints nor the retry warning carries the signature,
+    /// and the error still keeps its code, its reason and the chain under it.
+    #[tokio::test]
+    async fn a_failed_pull_never_prints_a_signed_url() {
+        let server = httpmock::MockServer::start_async().await;
+        let signed = format!(
+            "http://{}/signed/blob?X-Goog-Signature=goog-secret&X-Amz-Signature=amz-secret",
+            server.address()
+        );
+        server
+            .mock_async(|when, then| {
+                when.path_contains("/manifests/");
+                then.status(503)
+                    .body(format!("storage unavailable for {signed}"));
+            })
+            .await;
+
+        let logs = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+        let writer = logs.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(move || LogWriter(writer.clone()))
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let error = layering_error(
+            &format!("{}/alien/agent:test", server.address()),
+            "registry.example.com/proj/sandbox:base",
+        )
+        .await;
+
+        // dockdash logs the failure itself; only the lines this crate writes are checked here.
+        let logs = String::from_utf8(logs.lock().expect("logs").clone()).expect("utf-8 logs");
+        let logs = logs
+            .lines()
+            .filter(|line| line.contains("alien_build::"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let rendered = format!(
+            "{error}\n{}",
+            serde_json::to_string(&error).expect("error serializes")
+        );
+        assert!(
+            logs.contains("Transient image pull failure, retrying"),
+            "the pull is retried: {logs}"
+        );
+        for text in [&rendered, &logs] {
+            assert!(!text.contains("goog-secret"), "{text}");
+            assert!(!text.contains("amz-secret"), "{text}");
+            assert!(!text.contains("Signature"), "{text}");
+        }
+        assert_eq!(error.code, "IMAGE_PULL_TEMPORARILY_UNAVAILABLE", "{error}");
+        assert_eq!(reason(&error), Pulled::Agent.purpose());
+        assert!(
+            rendered.contains(&format!(
+                "code: 503, message: storage unavailable for http://{}/signed/blob",
+                server.address()
+            )),
+            "the chain still says what the registry answered: {rendered}"
+        );
+    }
+
+    #[derive(Clone)]
+    struct LogWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for LogWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("logs").extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
     }
 
     /// A request the registry client gives up on without retrying, such as a redirect loop, says
