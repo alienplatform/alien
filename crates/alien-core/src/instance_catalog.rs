@@ -193,7 +193,8 @@ impl InstanceTypeSpec {
             Platform::Gcp => self.name.starts_with("n2-standard-"),
             Platform::Azure => {
                 let name = self.name;
-                (name.starts_with("Standard_D") && name.ends_with("s_v5"))
+                (name.starts_with("Standard_D")
+                    && (name.ends_with("s_v3") || name.ends_with("s_v5")))
                     || (name.starts_with("Standard_E") && name.ends_with("s_v5"))
                     || (name.starts_with("Standard_F") && name.ends_with("s_v2"))
             }
@@ -1044,6 +1045,17 @@ static CATALOG: &[InstanceTypeSpec] = &[
         vcpu: 2,
         memory_bytes: 8 * GI,
         ephemeral_storage_bytes: 20 * GI,
+        gpu: None,
+    },
+    // Keep Dv5 first at equal capacity so automatic selection retains its defaults.
+    InstanceTypeSpec {
+        name: "Standard_D2s_v3",
+        platform: Platform::Azure,
+        family: InstanceFamily::GeneralPurpose,
+        architecture: Architecture::X86_64,
+        vcpu: 2,
+        memory_bytes: 8 * GI,
+        ephemeral_storage_bytes: 16 * GI,
         gpu: None,
     },
     InstanceTypeSpec {

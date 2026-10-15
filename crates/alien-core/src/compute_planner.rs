@@ -1094,6 +1094,39 @@ mod tests {
     }
 
     #[test]
+    fn explicit_azure_dsv3_machine_plans_real_workload_capacity() {
+        let mut stack = stack_with_container();
+        let container = stack
+            .resources
+            .get_mut("api")
+            .unwrap()
+            .config
+            .downcast_mut::<Container>()
+            .unwrap();
+        container.cpu = ResourceSpec {
+            min: "0.5".into(),
+            desired: "0.5".into(),
+        };
+        container.memory = ResourceSpec {
+            min: "1Gi".into(),
+            desired: "1Gi".into(),
+        };
+        let settings: ComputeSettings = serde_json::from_value(serde_json::json!({
+            "pools": {"general":{"mode":"fixed","machines":1,"machine":"Standard_D2s_v3"}}
+        }))
+        .unwrap();
+        let plan = plan_compute(&stack, Platform::Azure, Some(&settings)).unwrap();
+        assert!(
+            plan.pools[0].errors.is_empty(),
+            "{:?}",
+            plan.pools[0].errors
+        );
+        assert_eq!(plan.pools[0].selected.machine(), Some("Standard_D2s_v3"));
+        assert_eq!(plan.pools[0].selected.min_size(), 1);
+        assert_eq!(plan.pools[0].selected.max_size(), 1);
+    }
+
+    #[test]
     fn pin_must_leave_host_capacity_for_one_replica() {
         let mut stack = stack_with_container();
         stack
