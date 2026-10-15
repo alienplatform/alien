@@ -727,6 +727,13 @@ pub trait ResourceController: Send + Sync + Debug {
     /// Returns the new state boxed as a trait object if the transition is valid, otherwise None.
     fn transition_to_update(&mut self) -> Result<()>;
 
+    /// Whether an update is at its entry handler, before any update work has run.
+    /// The executor may stage a failed resource's replacement update here while its
+    /// dependencies converge, but must not step the entry handler before they settle.
+    fn is_update_entry(&self) -> bool {
+        false
+    }
+
     /// Returns whether this controller needs an update even when the resource
     /// config itself is unchanged.
     ///

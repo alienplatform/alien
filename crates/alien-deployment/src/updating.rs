@@ -6,7 +6,7 @@ use alien_core::{
     ResourceStatus, SetupScaffolding, Stack, StackState, StackStatus,
 };
 use alien_error::{AlienError, Context};
-use alien_infra::{RunningResourcePolicy, StackExecutor, StackResourceStateExt};
+use alien_infra::{RunningResourcePolicy, StackExecutor};
 use std::collections::{BTreeMap, HashSet};
 use tracing::{debug, info};
 
@@ -300,7 +300,7 @@ pub async fn handle_updating(
     let mut next = current.clone();
 
     // Stack state is required
-    let mut stack_state = current.stack_state.ok_or_else(|| {
+    let stack_state = current.stack_state.ok_or_else(|| {
         AlienError::new(ErrorData::MissingConfiguration {
             message: "Stack state required for updating".to_string(),
         })
@@ -450,25 +450,6 @@ pub async fn handle_updating(
     // reconciles, so the two cannot disagree about which resources are in scope.
     let reconciled_ids = executor.tracked_resource_ids();
 
-    // An interrupted update did not fail its own handler. Finish the recorded flow even
-    // if a newer release changed its config or dependencies, then plan that change.
-    // Leaving it failed while its new dependency settles stops that dependency too.
-    for (resource_id, resource) in &mut stack_state.resources {
-        if reconciled_ids.contains(resource_id.as_str())
-            && resource.status == ResourceStatus::UpdateFailed
-            && resource
-                .error
-                .as_ref()
-                .is_some_and(|error| error.code == "DEPLOYMENT_INTERRUPTED")
-        {
-            resource
-                .retry_failed()
-                .context(ErrorData::StackExecutionFailed {
-                    message: format!("Failed to resume interrupted update for '{resource_id}'"),
-                })?;
-        }
-    }
-
     // Execute one step
     let mut step_result =
         executor
@@ -596,7 +577,7 @@ pub async fn handle_updating(
             .map(|(id, t)| (id.as_str(), t.as_str()))
             .collect();
 
-        crate::helpers::interrupt_in_progress_resources(&mut next_state, &failed_refs, None);
+        crate::helpers::interrupt_in_progress_resources(&mut next_state, &failed_refs, None)?;
 
         next.status = DeploymentStatus::UpdateFailed;
         next.error =

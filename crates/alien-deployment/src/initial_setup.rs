@@ -282,7 +282,7 @@ pub async fn handle_initial_setup(
             &mut next_state,
             &failed_refs,
             Some(ResourceLifecycle::Frozen),
-        );
+        )?;
 
         let mut next = current_cloned;
         next.status = DeploymentStatus::InitialSetupFailed;

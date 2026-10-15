@@ -2,20 +2,44 @@ use super::*;
 use alien_core::{ResourceRef, ResourceStatus};
 use alien_infra::{
     give_test_worker_setup_grant, test_worker_configs_deployed, test_worker_deletes_issued,
-    withhold_test_worker_setup_grant, TestSetupGrant,
+    withhold_test_worker_setup_grant, StackResourceStateExt, TestSetupGrant,
 };
 
 #[derive(Clone, Copy)]
 enum RecoveryTarget {
     NewRelease,
+    NewDependency,
+    LegacyRejection,
+    NeverConfirm,
+    CurrentWriter,
     SameRelease,
     Removed,
     Denied,
 }
 
 #[tokio::test]
-async fn retry_new_release_resumes_interrupted_updates_before_dependency_settles() {
+async fn retry_new_release_supersedes_legacy_interrupted_update() {
     exercise_recovery(RecoveryTarget::NewRelease).await;
+}
+
+#[tokio::test]
+async fn retry_new_release_waits_for_dependency_before_starting_replacement_update() {
+    exercise_recovery(RecoveryTarget::NewDependency).await;
+}
+
+#[tokio::test]
+async fn retry_recovers_legacy_transition_rejection_without_original_interruption_error() {
+    exercise_recovery(RecoveryTarget::LegacyRejection).await;
+}
+
+#[tokio::test]
+async fn corrective_release_supersedes_an_interrupted_wait_that_can_never_complete() {
+    exercise_recovery(RecoveryTarget::NeverConfirm).await;
+}
+
+#[tokio::test]
+async fn interruption_records_terminal_controller_and_preserves_retry_checkpoint() {
+    exercise_recovery(RecoveryTarget::CurrentWriter).await;
 }
 
 #[tokio::test]
@@ -37,6 +61,10 @@ async fn exercise_recovery(case: RecoveryTarget) {
     let _vault = test_vault_env().await;
     let suffix = match case {
         RecoveryTarget::NewRelease => "new-release",
+        RecoveryTarget::NewDependency => "new-dependency",
+        RecoveryTarget::LegacyRejection => "legacy-rejection",
+        RecoveryTarget::NeverConfirm => "never-confirm",
+        RecoveryTarget::CurrentWriter => "current-writer",
         RecoveryTarget::SameRelease => "same-release",
         RecoveryTarget::Removed => "removed",
         RecoveryTarget::Denied => "denied",
@@ -58,6 +86,17 @@ async fn exercise_recovery(case: RecoveryTarget) {
 
     let mut interrupted = installed;
     add_live_worker(&mut interrupted, image_worker(&api_id, "test:v2", 1024));
+    if matches!(case, RecoveryTarget::NeverConfirm) {
+        interrupted
+            .resources
+            .get_mut(&api_id)
+            .unwrap()
+            .config
+            .downcast_mut::<Worker>()
+            .unwrap()
+            .environment
+            .insert("SIMULATE_UPDATE_PENDING".to_string(), "true".to_string());
+    }
     add_live_worker(
         &mut interrupted,
         image_worker(&dependency_id, "test:v2", 1024),
@@ -78,15 +117,58 @@ async fn exercise_recovery(case: RecoveryTarget) {
     assert_eq!(api.error.as_ref().unwrap().code, "DEPLOYMENT_INTERRUPTED");
     assert_eq!(
         api.last_failed_state.as_ref().unwrap()["state"],
-        "updateConfigPolling"
+        if matches!(case, RecoveryTarget::NeverConfirm) {
+            "updateCodePolling"
+        } else {
+            "updateConfigPolling"
+        }
     );
     give_test_worker_setup_grant(&dependency_id);
+
+    let api = state
+        .stack_state
+        .as_mut()
+        .unwrap()
+        .resources
+        .get_mut(&api_id)
+        .unwrap();
+    if matches!(case, RecoveryTarget::CurrentWriter) {
+        assert_eq!(
+            api.get_internal_controller().unwrap().unwrap().get_status(),
+            ResourceStatus::UpdateFailed
+        );
+    } else {
+        // Older writers saved a failed status over the runnable interrupted checkpoint.
+        api.internal_state = api.last_failed_state.clone();
+    }
+    if matches!(case, RecoveryTarget::LegacyRejection) {
+        api.error = Some(
+            api.get_internal_controller()
+                .unwrap()
+                .unwrap()
+                .transition_to_update()
+                .expect_err("the old in-flight controller rejects a new update")
+                .into_generic(),
+        );
+        assert_ne!(api.error.as_ref().unwrap().code, "DEPLOYMENT_INTERRUPTED");
+    }
 
     // Reload exactly the saved state, including both the actual failure and the interruption.
     state = serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
     let mut target = interrupted;
-    if matches!(case, RecoveryTarget::NewRelease | RecoveryTarget::Denied) {
+    let corrective = matches!(
+        case,
+        RecoveryTarget::NewRelease
+            | RecoveryTarget::NewDependency
+            | RecoveryTarget::LegacyRejection
+            | RecoveryTarget::NeverConfirm
+            | RecoveryTarget::CurrentWriter
+            | RecoveryTarget::Denied
+    );
+    if corrective {
         add_live_worker(&mut target, image_worker(&api_id, "test:v3", 1024));
+    }
+    if matches!(case, RecoveryTarget::NewDependency) {
         target
             .resources
             .get_mut(&api_id)
@@ -145,7 +227,7 @@ async fn exercise_recovery(case: RecoveryTarget) {
         assert!(resources[id].error.is_none());
         assert!(test_worker_deletes_issued(&format!("test:worker:{id}")).is_empty());
     }
-    let expected_images = if matches!(case, RecoveryTarget::NewRelease) {
+    let expected_images = if corrective {
         vec!["test:v1", "test:v2", "test:v3"]
     } else {
         vec!["test:v1", "test:v2"]
@@ -161,7 +243,7 @@ async fn exercise_recovery(case: RecoveryTarget) {
                 image: image.to_string()
             })
             .collect::<Vec<_>>(),
-        "the persisted update finishes once before the newer configuration is applied",
+        "a corrective release supersedes the checkpoint without reissuing the older image",
     );
     assert_eq!(
         test_worker_configs_deployed(&dependency_identifier).len(),

@@ -1114,7 +1114,18 @@ impl StackExecutor {
                                     .iter()
                                     .all(|dep_ref| self.dependency_settled(dep_ref.id(), state));
 
-                                if new_dependencies_ready {
+                                // A failed update must leave its terminal status before waiting
+                                // for a dependency; otherwise it aborts that dependency's recovery.
+                                // Staging the entry is local. Its handler waits below.
+                                let can_wait_at_entry = !new_dependencies_ready
+                                    && status == ResourceStatus::UpdateFailed
+                                    && current_resource_state
+                                        .get_internal_controller()?
+                                        .is_some_and(|mut controller| {
+                                            controller.transition_to_update().is_ok()
+                                                && controller.is_update_entry()
+                                        });
+                                if new_dependencies_ready || can_wait_at_entry {
                                     debug!("Scheduling UPDATE transition for '{}'", resource_id);
 
                                     // Skipped only for an adopted binding: the rules guard
@@ -1626,6 +1637,11 @@ impl StackExecutor {
         validate_stack_controller_state_versions(&state)?;
 
         let mut state = state;
+        // Repair checkpoints written before interrupted controllers were settled, including
+        // ones whose interruption error was overwritten by a rejected update transition.
+        for resource in state.resources.values_mut() {
+            resource.settle_failed_controller()?;
+        }
         if apply_plan && self.resume_unchanged_failed_resources {
             for (resource_id, resource_state) in &mut state.resources {
                 if !matches!(
@@ -2129,6 +2145,10 @@ impl StackExecutor {
 
         // Apply the calculated initial transitions for Creates/Updates
         next_state.resources.extend(initial_transitions);
+        // A rejected transition must not leave a failed record with a runnable controller.
+        for resource in next_state.resources.values_mut() {
+            resource.settle_failed_controller()?;
+        }
         // --- Planning Phase End ---
 
         // --- Execution Phase ---
@@ -2194,7 +2214,14 @@ impl StackExecutor {
                 let replacing = self.resources.contains_key(resource_id);
                 self.deletion_ready(resource_id, &next_state, replacing)
             } else if current_resource_view.status == ResourceStatus::Updating {
-                true
+                let at_entry = current_resource_view
+                    .get_internal_controller()?
+                    .is_some_and(|controller| controller.is_update_entry());
+                !at_entry
+                    || current_resource_view
+                        .dependencies
+                        .iter()
+                        .all(|dependency| self.dependency_settled(dependency.id(), &next_state))
             } else if current_resource_view.status == ResourceStatus::Running {
                 // Running resources should always be stepped to run their Ready handler.
                 // This is important for local platform where ephemeral state (ports, URLs)
@@ -2879,6 +2906,14 @@ impl StackExecutor {
     pub(crate) fn is_resource_synced(&self, resource_id: &str, state: &StackState) -> bool {
         match state.resources.get(resource_id) {
             Some(view) => {
+                if matches!(
+                    view.status,
+                    ResourceStatus::ProvisionFailed
+                        | ResourceStatus::UpdateFailed
+                        | ResourceStatus::DeleteFailed
+                ) {
+                    return true;
+                }
                 if self.is_external_binding_resource(resource_id) {
                     if self.resources.contains_key(resource_id) {
                         return view.status == ResourceStatus::Running;

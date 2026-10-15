@@ -271,7 +271,7 @@ pub async fn handle_provisioning(
             .collect();
 
         // Interrupt all in-progress resources so every resource reflects its true status.
-        crate::helpers::interrupt_in_progress_resources(&mut next_state, &failed_refs, None);
+        crate::helpers::interrupt_in_progress_resources(&mut next_state, &failed_refs, None)?;
 
         // An installed deployment provisions only to continue an update that setup handed
         // back. Its installed release keeps serving, so the failure is an update failure.
