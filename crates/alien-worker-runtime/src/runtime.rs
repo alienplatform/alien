@@ -208,7 +208,7 @@ pub async fn run(
         None
     };
 
-    let application_startup: Result<(Child, Option<CommandPushConfig>)> = async {
+    let application_startup: Result<(Child, TransportCredentials)> = async {
         // 2. Load user secrets from vault if ALIEN_SECRETS is present.
         let secrets = if let Some(ref provider) = bindings_provider {
             if let Some(alien_secrets_json) = config.env_vars.get(ENV_ALIEN_SECRETS) {
