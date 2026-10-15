@@ -1,5 +1,5 @@
 use crate::azure::common::{AzureClientBase, AzureRequestBuilder};
-use crate::azure::long_running_operation::OperationResult;
+use crate::azure::long_running_operation::{LongRunningOperation, OperationResult};
 use crate::azure::models::{
     nat_gateway::NatGateway,
     network_security_group::NetworkSecurityGroup,
@@ -160,8 +160,12 @@ pub trait NetworkApi: Send + Sync + std::fmt::Debug {
         public_ip_address: &PublicIpAddress,
     ) -> Result<PublicIpAddressOperationResult>;
 
-    /// Create a new resource without overwriting an existing generation.
-    async fn create_public_ip_address_if_absent(
+    /// Send one public IP PUT without retries, for a caller-owned fresh name.
+    ///
+    /// This is not an atomic create-only operation. Azure rejects an absent IP
+    /// with `If-None-Match: *`. Callers must use immutable unique names, check
+    /// existing ownership, and recover uncertain replies before another write.
+    async fn create_public_ip_address_once(
         &self,
         resource_group_name: &str,
         public_ip_address_name: &str,
@@ -238,7 +242,7 @@ impl AzureNetworkClient {
         resource_group_name: &str,
         public_ip_address_name: &str,
         public_ip_address: &PublicIpAddress,
-        create_only: bool,
+        single_attempt: bool,
     ) -> Result<PublicIpAddressOperationResult> {
         let bearer_token = self
             .token_cache
@@ -260,16 +264,31 @@ impl AzureNetworkClient {
                 ),
             })?;
 
-        let mut builder = AzureRequestBuilder::new(Method::PUT, url)
+        let builder = AzureRequestBuilder::new(Method::PUT, url)
             .content_type_json()
             .content_length(&body)
             .body(body);
 
-        if create_only {
-            builder = builder.header("If-None-Match", "*");
-        }
         let req = builder.build()?;
         let signed = self.base.sign_request(req, &bearer_token).await?;
+
+        if single_attempt {
+            let response = self
+                .base
+                .execute_request_once(signed, "CreatePublicIpAddress", public_ip_address_name)
+                .await?;
+            if let Some(operation) = LongRunningOperation::from_response_headers(&response)? {
+                return Ok(OperationResult::LongRunning(operation));
+            }
+            return response
+                .json()
+                .await
+                .into_alien_error()
+                .context(ErrorData::HttpRequestFailed {
+                    message: "Decode public IP creation response".to_string(),
+                })
+                .map(OperationResult::Completed);
+        }
 
         self.base
             .execute_request_with_long_running_support(
@@ -638,14 +657,15 @@ impl NetworkApi for AzureNetworkClient {
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
-        let url =
-            self.base.build_url(
-                &format!(
+        let url = self.base.build_url(
+            &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/natGateways/{}",
-                &self.token_cache.config().subscription_id, resource_group_name, nat_gateway_name
+                &self.token_cache.config().subscription_id,
+                resource_group_name,
+                nat_gateway_name
             ),
-                Some(vec![("api-version", Self::API_VERSION.into())]),
-            );
+            Some(vec![("api-version", Self::API_VERSION.into())]),
+        );
 
         let body = serde_json::to_string(nat_gateway)
             .into_alien_error()
@@ -680,14 +700,15 @@ impl NetworkApi for AzureNetworkClient {
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
-        let url =
-            self.base.build_url(
-                &format!(
+        let url = self.base.build_url(
+            &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/natGateways/{}",
-                &self.token_cache.config().subscription_id, resource_group_name, nat_gateway_name
+                &self.token_cache.config().subscription_id,
+                resource_group_name,
+                nat_gateway_name
             ),
-                Some(vec![("api-version", Self::API_VERSION.into())]),
-            );
+            Some(vec![("api-version", Self::API_VERSION.into())]),
+        );
 
         let builder = AzureRequestBuilder::new(Method::GET, url.clone()).content_length("");
 
@@ -739,14 +760,15 @@ impl NetworkApi for AzureNetworkClient {
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
-        let url =
-            self.base.build_url(
-                &format!(
+        let url = self.base.build_url(
+            &format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/natGateways/{}",
-                &self.token_cache.config().subscription_id, resource_group_name, nat_gateway_name
+                &self.token_cache.config().subscription_id,
+                resource_group_name,
+                nat_gateway_name
             ),
-                Some(vec![("api-version", Self::API_VERSION.into())]),
-            );
+            Some(vec![("api-version", Self::API_VERSION.into())]),
+        );
 
         let builder = AzureRequestBuilder::new(Method::DELETE, url).content_length("");
 
@@ -777,7 +799,7 @@ impl NetworkApi for AzureNetworkClient {
         .await
     }
 
-    async fn create_public_ip_address_if_absent(
+    async fn create_public_ip_address_once(
         &self,
         resource_group_name: &str,
         public_ip_address_name: &str,
@@ -1028,12 +1050,6 @@ mod tests {
                 .header("If-Match", "W/\"snapshot\"");
             then.status(412).json_body(json!({"error":{"code":"PreconditionFailed","message":"Snapshot changed"}}));
         }).await;
-        let create = server.mock_async(|when, then| {
-            when.method(PUT).path("/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Network/publicIPAddresses/pip")
-                .query_param("api-version", "2024-05-01").header("If-None-Match", "*")
-                .header("Authorization", "Bearer test-token");
-            then.status(412).json_body(json!({"error":{"code":"PreconditionFailed","message":"Resource already exists"}}));
-        }).await;
         let config = AzureClientConfig {
             subscription_id: "sub".to_string(),
             tenant_id: "tenant".to_string(),
@@ -1058,19 +1074,52 @@ mod tests {
             !error.retryable,
             "Refresh ownership and ETag before retrying"
         );
-        let creation = client
-            .create_public_ip_address_if_absent("rg", "pip", &PublicIpAddress::default())
-            .await
-            .unwrap_err();
-        assert!(
-            matches!(
-                creation.error,
-                Some(ErrorData::RemoteResourceConflict { .. })
-            ),
-            "{creation}"
-        );
-        assert!(!creation.retryable);
-        create.assert_hits_async(1).await;
         delete.assert_hits_async(1).await;
+    }
+    #[tokio::test]
+    async fn fresh_public_ip_creation_is_one_put_without_unsupported_condition() {
+        for status in [201, 404, 500] {
+            let server = MockServer::start_async().await;
+            let create = server.mock_async(|when, then| {
+                when.method(PUT)
+                    .path("/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Network/publicIPAddresses/fresh-generation")
+                    .query_param("api-version", "2024-05-01")
+                    .header("Authorization", "Bearer test-token")
+                    .header_missing("If-None-Match");
+                then.status(status).json_body(if status == 201 {
+                    json!({"name":"fresh-generation","location":"eastus","properties":{"resourceGuid":"owned"}})
+                } else {
+                    json!({"error":{"code":"NotFound","message":"Creation rejected"}})
+                });
+            }).await;
+            let config = AzureClientConfig {
+                subscription_id: "sub".to_string(),
+                tenant_id: "tenant".to_string(),
+                region: Some("eastus".to_string()),
+                credentials: AzureCredentials::AccessToken {
+                    token: "test-token".to_string(),
+                },
+                service_overrides: Some(AzureServiceOverrides {
+                    endpoints: HashMap::from([("management".to_string(), server.base_url())]),
+                }),
+            };
+            let client = AzureNetworkClient::new(Client::new(), AzureTokenCache::new(config));
+            let result = client
+                .create_public_ip_address_once(
+                    "rg",
+                    "fresh-generation",
+                    &PublicIpAddress::default(),
+                )
+                .await;
+            if status == 201 {
+                let OperationResult::Completed(ip) = result.unwrap() else {
+                    panic!("Expected completed creation")
+                };
+                assert_eq!(ip.name.as_deref(), Some("fresh-generation"));
+            } else {
+                assert!(result.is_err(), "Creation HTTP {status} must fail");
+            }
+            create.assert_hits_async(1).await;
+        }
     }
 }
