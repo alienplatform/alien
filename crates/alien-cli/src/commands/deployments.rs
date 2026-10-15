@@ -901,7 +901,10 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
             if json {
                 print_json(&response)?;
             } else if let Some(operation) = response.operation.0 {
-                println!("Endpoint access update requested: {}", operation.id);
+                println!(
+                    "Endpoint access update requested: {}",
+                    String::from(operation.id)
+                );
                 println!("The manager checks setup permissions before applying the update.");
             } else {
                 println!("Endpoint access is unchanged.");
