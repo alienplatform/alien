@@ -98,6 +98,8 @@ async fn state() -> (AppState, String) {
 
 /// The deployment's own token in [`state_with`] fixtures awaiting setup teardown.
 const DEPLOYMENT_SECRET: &str = "deployment-own-secret";
+/// A secret input value in [`state_with`] fixtures awaiting setup teardown.
+const INPUT_SECRET: &str = "deployer-input-secret";
 
 /// [`state`] with another policy. With `awaiting_teardown`, the deployment is
 /// `teardown-required` and holds its own token, as one handed to setup teardown does.
@@ -150,7 +152,11 @@ async fn state_with(authz: Arc<dyn Authz>, awaiting_teardown: bool) -> (AppState
                 setup_target: "test".to_string(),
                 setup_fingerprint: "test".to_string(),
                 setup_fingerprint_version: 1,
-                input_values: Default::default(),
+                input_values: if awaiting_teardown {
+                    HashMap::from([("apiKey".to_string(), serde_json::json!(INPUT_SECRET))])
+                } else {
+                    Default::default()
+                },
                 deployment_token: awaiting_teardown.then(|| DEPLOYMENT_SECRET.to_string()),
                 management_config: None,
             },
@@ -840,7 +846,43 @@ async fn opted_in_teardown_credential_holds_only_a_setup_teardown_lease() {
     assert_eq!(acquired["id"], deployment_id.as_str());
     assert!(acquired.get("deploymentConfig").is_none(), "{body}");
     assert!(!body.contains(DEPLOYMENT_SECRET), "{body}");
+    assert!(!body.contains(INPUT_SECRET), "{body}");
     assert_eq!(locked_by().await.as_deref(), Some("cleanup"));
+
+    // It may report deletion progress under its lease; another deployment's credential may not.
+    let report = serde_json::json!({
+        "deploymentId": deployment_id,
+        "session": "cleanup",
+        "state": alien_core::DeploymentState {
+            status: alien_core::DeploymentStatus::TeardownRequired,
+            platform: Platform::Kubernetes,
+            current_release: None,
+            target_release: None,
+            stack_state: Some(StackState::new(Platform::Kubernetes)),
+            error: None,
+            environment_info: None,
+            runtime_metadata: None,
+            retry_requested: false,
+            protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        },
+    });
+    let (status, body) = post_sync(
+        &router,
+        "foreign-teardown",
+        "/v1/sync/reconcile",
+        report.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    let (status, body) = post_sync(&router, &teardown, "/v1/sync/reconcile", report).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert!(value["nativeImageHost"].is_null(), "{body}");
+    assert!(value["current"]["targetRelease"].is_null(), "{body}");
+    assert!(
+        !body.contains(DEPLOYMENT_SECRET) && !body.contains(INPUT_SECRET),
+        "{body}"
+    );
 
     // Its own lease can be renewed and given back; another deployment's credential cannot.
     let lease = serde_json::json!({ "deploymentId": deployment_id, "session": "cleanup" });

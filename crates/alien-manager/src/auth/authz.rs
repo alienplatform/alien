@@ -110,6 +110,8 @@ pub trait Authz: Send + Sync {
 
     // -- Sync protocol -----------------------------------------------------
     fn can_sync_deployment(&self, subject: &Subject, deployment: &DeploymentRecord) -> bool;
+    /// `deployments` is empty for a workspace-scoped acquire without an ID filter; the store
+    /// then filters what the caller may take, so an implementation decides on the role alone.
     fn can_acquire_deployments(&self, subject: &Subject, deployments: &[DeploymentRecord]) -> bool;
     /// Admit only setup teardown acquire/reconcile/renew/release requests.
     /// An implementation opting in must use an authoritative store that checks

@@ -502,13 +502,16 @@ async fn acquire(
 /// The caller runs teardown from its own saved state and only needs the record
 /// and the lease claim. It gets no `deploymentConfig`, which would carry the
 /// deployment's own token, commands credentials and management config, and no
-/// user environment variables, so a cleanup credential cannot be traded for
-/// workload access. No release is read on its behalf.
+/// user environment variables, input values or setup metadata, so a cleanup
+/// credential cannot be traded for workload access or secrets. No release is
+/// read on its behalf.
 fn restricted_teardown_acquired_response(
     acquired: &crate::traits::deployment_store::AcquiredDeployment,
 ) -> Result<AcquiredDeploymentResponse, AlienError> {
     let mut record = acquired.deployment.clone();
     record.user_environment_variables = None;
+    record.input_values.clear();
+    record.setup_metadata = None;
     let deployment = serde_json::to_value(&record)
         .into_alien_error()
         .context(GenericError {
