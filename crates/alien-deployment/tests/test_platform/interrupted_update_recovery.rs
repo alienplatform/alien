@@ -225,6 +225,27 @@ async fn exercise_recovery(case: RecoveryTarget) {
         .expect("retry transition should succeed")
         .state;
     assert_eq!(state.status, DeploymentStatus::UpdatePending);
+    state = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+        .await
+        .expect("corrective release preflights should succeed")
+        .state;
+    assert_eq!(state.status, DeploymentStatus::Updating);
+    if corrective && !matches!(case, RecoveryTarget::NewDependency) {
+        state = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+            .await
+            .expect("the corrective update should start")
+            .state;
+        assert_eq!(
+            test_worker_configs_deployed(&api_identifier)
+                .last()
+                .unwrap()
+                .code,
+            WorkerCode::Image {
+                image: "test:v3".to_string()
+            },
+            "the newer release must supersede the stale wait on its first update step",
+        );
+    }
     let state = if matches!(case, RecoveryTarget::NewDependency) {
         for _ in 0..MAX_STEPS {
             if matches!(
