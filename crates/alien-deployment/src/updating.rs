@@ -785,11 +785,8 @@ mod tests {
         for _ in 0..10 {
             state = executor.step(state).await.unwrap().next_state;
             if [api_id, dependency_id].iter().all(|id| {
-                state.resources[*id]
-                    .get_internal_controller_typed::<TestWorkerController>()
-                    .unwrap()
-                    .state
-                    == TestWorkerState::UpdateCodePolling
+                state.resources[*id].internal_state.as_ref().unwrap()["state"]
+                    == "updateCodePolling"
             }) {
                 break;
             }
@@ -797,11 +794,8 @@ mod tests {
         for id in [api_id, dependency_id] {
             assert_eq!(state.resources[id].status, ResourceStatus::Updating);
             assert_eq!(
-                state.resources[id]
-                    .get_internal_controller_typed::<TestWorkerController>()
-                    .unwrap()
-                    .state,
-                TestWorkerState::UpdateCodePolling,
+                state.resources[id].internal_state.as_ref().unwrap()["state"],
+                "updateCodePolling",
             );
         }
         crate::helpers::interrupt_in_progress_resources(&mut state, &[("other", "worker")], None);

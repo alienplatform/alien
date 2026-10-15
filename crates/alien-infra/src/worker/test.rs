@@ -491,7 +491,7 @@ impl TestWorkerController {
 
         info!("→ [test-create] CreateWorkerUrl `{}`", identifier);
 
-        self.url = Some(format!("https://test-url/{}", target_func.id));
+        self.url = Some(format!("https://{}.test", target_func.id));
 
         let url = self.url.as_ref().unwrap();
         info!("✓ [test-create] `{}` created at {}", identifier, url);
