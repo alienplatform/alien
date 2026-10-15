@@ -1975,9 +1975,9 @@ fn prebuilt_source_error(resource_type: &str, resource_id: &str) -> AlienError<E
 
 // --- Push cache ---
 //
-// Maps artifact directory names (which include content hashes) to previously
-// pushed remote image URIs. This lets `alien release` skip pushing when the
-// same build artifacts were already pushed in a prior release.
+// Maps each local artifact's `push_cache_key` to the remote image URI it was
+// pushed as. This lets `alien release` skip pushing when the same build
+// artifacts were already pushed in a prior release.
 
 /// Push cache file name, stored at `.alien/build/{platform}/push-cache-v2.json`.
 const PUSH_CACHE_FILE: &str = "push-cache-v2.json";
@@ -1996,10 +1996,15 @@ async fn push_stack_with_cache(
     }
     let platform_str = platform.as_str();
     let mut push_cache = load_push_cache(output_dir, platform_str);
-    drop_images_missing_from_registry(&built_stack, &mut push_cache, push_settings).await;
+    drop_images_missing_from_registry(&built_stack, &mut push_cache, push_settings, platform).await;
     let pre_push_stack = built_stack.clone();
 
-    let cache_hits = apply_push_cache(&mut built_stack, &push_cache, &push_settings.repository);
+    let cache_hits = apply_push_cache(
+        &mut built_stack,
+        &push_cache,
+        &push_settings.repository,
+        platform,
+    );
     if cache_hits > 0 {
         info!(
             "   Skipping push for {} resource(s) (already pushed)",
@@ -2017,7 +2022,7 @@ async fn push_stack_with_cache(
         push_started.elapsed().as_secs_f64()
     );
 
-    collect_push_cache_entries(&pushed, &pre_push_stack, &mut push_cache);
+    collect_push_cache_entries(&pushed, &pre_push_stack, &mut push_cache, platform);
     if let Err(e) = save_push_cache(output_dir, platform_str, &push_cache) {
         warn!(error = %e, "Failed to save push cache");
     }
@@ -2034,13 +2039,14 @@ async fn drop_images_missing_from_registry(
     stack: &Stack,
     cache: &mut HashMap<String, String>,
     push_settings: &PushSettings,
+    platform: Platform,
 ) {
     let mut reused = stack.clone();
-    if apply_push_cache(&mut reused, cache, &push_settings.repository) == 0 {
+    if apply_push_cache(&mut reused, cache, &push_settings.repository, platform) == 0 {
         return;
     }
     let mut hits = HashMap::new();
-    collect_push_cache_entries(&reused, stack, &mut hits);
+    collect_push_cache_entries(&reused, stack, &mut hits, platform);
     for (key, image) in hits {
         match alien_build::registry::manifest_digest(&image, &push_settings.options).await {
             Ok(Some(_)) => {}
@@ -2125,19 +2131,29 @@ fn save_push_cache(
     Ok(())
 }
 
-/// Extract the directory name from a local image path for use as a cache key.
-/// For example, `/path/to/.alien/build/aws/worker-a1b2c3d4` → `worker-a1b2c3d4`.
-fn cache_key_from_path(path: &str) -> Option<String> {
-    PathBuf::from(path)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .map(|s| s.to_string())
+/// The push cache key of a local artifact: its resource kind and directory name, such as
+/// `worker:worker-a1b2c3d4` for `/path/to/.alien/build/aws/worker-a1b2c3d4`. A sandbox's key also
+/// folds in the agent this CLI layers onto it on `platform`, as its artifact hash does at build, so
+/// releasing a `--prebuilt` artifact with a CLI carrying another agent pushes that agent.
+fn push_cache_key(kind: &str, path: &str, platform: Platform) -> Option<String> {
+    let name = PathBuf::from(path).file_name()?.to_str()?.to_string();
+    let name = if kind == Sandbox::RESOURCE_TYPE.as_ref() {
+        alien_build::sandbox_image_hash(name, platform)
+    } else {
+        name
+    };
+    Some(format!("{kind}:{name}"))
 }
 
 /// Apply cached push URIs to a stack, replacing local image paths with
 /// previously-pushed remote URIs where the content hash matches.
 /// Returns the number of cache hits.
-fn apply_push_cache(stack: &mut Stack, cache: &HashMap<String, String>, repository: &str) -> usize {
+fn apply_push_cache(
+    stack: &mut Stack,
+    cache: &HashMap<String, String>,
+    repository: &str,
+    platform: Platform,
+) -> usize {
     if cache.is_empty() {
         return 0;
     }
@@ -2148,9 +2164,7 @@ fn apply_push_cache(stack: &mut Stack, cache: &HashMap<String, String>, reposito
         let cache_kind = resource_entry.config.resource_type().as_ref().to_string();
         if let Some(func) = resource_entry.config.downcast_mut::<Worker>() {
             if let WorkerCode::Image { ref image } = func.code {
-                if let Some(key) =
-                    cache_key_from_path(image).map(|key| format!("{}:{}", cache_kind, key))
-                {
+                if let Some(key) = push_cache_key(&cache_kind, image, platform) {
                     if let Some(cached_uri) = cache
                         .get(&key)
                         .filter(|uri| image_uri_belongs_to_repository(uri, repository))
@@ -2168,9 +2182,7 @@ fn apply_push_cache(stack: &mut Stack, cache: &HashMap<String, String>, reposito
             }
         } else if let Some(container) = resource_entry.config.downcast_mut::<Container>() {
             if let ContainerCode::Image { ref image } = container.code {
-                if let Some(key) =
-                    cache_key_from_path(image).map(|key| format!("{}:{}", cache_kind, key))
-                {
+                if let Some(key) = push_cache_key(&cache_kind, image, platform) {
                     if let Some(cached_uri) = cache
                         .get(&key)
                         .filter(|uri| image_uri_belongs_to_repository(uri, repository))
@@ -2188,9 +2200,7 @@ fn apply_push_cache(stack: &mut Stack, cache: &HashMap<String, String>, reposito
             }
         } else if let Some(daemon) = resource_entry.config.downcast_mut::<Daemon>() {
             if let DaemonCode::Image { ref image } = daemon.code {
-                if let Some(key) =
-                    cache_key_from_path(image).map(|key| format!("{}:{}", cache_kind, key))
-                {
+                if let Some(key) = push_cache_key(&cache_kind, image, platform) {
                     if let Some(cached_uri) = cache
                         .get(&key)
                         .filter(|uri| image_uri_belongs_to_repository(uri, repository))
@@ -2208,9 +2218,7 @@ fn apply_push_cache(stack: &mut Stack, cache: &HashMap<String, String>, reposito
             }
         } else if let Some(sandbox) = resource_entry.config.downcast_mut::<Sandbox>() {
             if let SandboxCode::Image { ref image } = sandbox.code {
-                if let Some(key) =
-                    cache_key_from_path(image).map(|key| format!("{}:{}", cache_kind, key))
-                {
+                if let Some(key) = push_cache_key(&cache_kind, image, platform) {
                     if let Some(cached_uri) = cache
                         .get(&key)
                         .filter(|uri| image_uri_belongs_to_repository(uri, repository))
@@ -2244,6 +2252,7 @@ fn collect_push_cache_entries(
     stack: &Stack,
     pre_push_stack: &Stack,
     cache: &mut HashMap<String, String>,
+    platform: Platform,
 ) {
     // Iterate both stacks together to map original local paths → pushed URIs
     let pre_push_images: HashMap<String, String> = pre_push_stack
@@ -2311,11 +2320,12 @@ fn collect_push_cache_entries(
 
             // Find the original local path for this resource to use as cache key
             if let Some(original_path) = pre_push_images.get(resource_id) {
-                if let Some(key) = cache_key_from_path(original_path) {
-                    cache.insert(
-                        format!("{}:{}", resource_entry.config.resource_type().as_ref(), key),
-                        uri,
-                    );
+                if let Some(key) = push_cache_key(
+                    resource_entry.config.resource_type().as_ref(),
+                    original_path,
+                    platform,
+                ) {
+                    cache.insert(key, uri);
                 }
             }
         }
@@ -2697,7 +2707,12 @@ mod tests {
             "sandbox:sbx-9f8e7d6c".to_string(),
             "registry.example.com/base:tag".to_string(),
         )]);
-        let hits = apply_push_cache(&mut stack, &cache, "registry.example.com/base");
+        let hits = apply_push_cache(
+            &mut stack,
+            &cache,
+            "registry.example.com/base",
+            Platform::Aws,
+        );
         assert_eq!(hits, 1, "sandbox local path should hit the cache");
         let sandbox = stack
             .resources()
@@ -2720,7 +2735,7 @@ mod tests {
             )
             .build();
         let mut collected = HashMap::new();
-        collect_push_cache_entries(&pushed, &pre_push, &mut collected);
+        collect_push_cache_entries(&pushed, &pre_push, &mut collected, Platform::Aws);
         assert_eq!(
             collected.get("sandbox:sbx-9f8e7d6c").map(String::as_str),
             Some("registry.example.com/base:pushed")
@@ -2733,9 +2748,57 @@ mod tests {
             )
             .build();
         assert_eq!(
-            apply_push_cache(&mut bundle_stack, &cache, "registry.example.com/base"),
+            apply_push_cache(
+                &mut bundle_stack,
+                &cache,
+                "registry.example.com/base",
+                Platform::Aws
+            ),
             0,
             "a bundle URI names no artifact the cache could have pushed"
+        );
+    }
+
+    /// A GCP sandbox's image carries the agent layered at push, so an entry pushed under another
+    /// agent (none, as on AWS) is not reused there, and one pushed under this CLI's agent is.
+    #[test]
+    fn a_gcp_sandbox_is_reused_only_under_the_agent_this_cli_layers() {
+        let local_dir = tempfile::tempdir().unwrap();
+        let artifact_dir = local_dir.path().join("sbx-9f8e7d6c");
+        std::fs::create_dir_all(&artifact_dir).unwrap();
+        let local_path = artifact_dir.to_string_lossy().into_owned();
+        let built = Stack::new("cache-test".to_string())
+            .add(sandbox_with_image(&local_path), ResourceLifecycle::Live)
+            .build();
+        let pushed = Stack::new("cache-test".to_string())
+            .add(
+                sandbox_with_image("registry.example.com/base:pushed"),
+                ResourceLifecycle::Live,
+            )
+            .build();
+
+        let mut without_agent = HashMap::new();
+        collect_push_cache_entries(&pushed, &built, &mut without_agent, Platform::Aws);
+        assert_eq!(
+            apply_push_cache(
+                &mut built.clone(),
+                &without_agent,
+                "registry.example.com/base",
+                Platform::Gcp,
+            ),
+            0
+        );
+
+        let mut with_agent = HashMap::new();
+        collect_push_cache_entries(&pushed, &built, &mut with_agent, Platform::Gcp);
+        assert_eq!(
+            apply_push_cache(
+                &mut built.clone(),
+                &with_agent,
+                "registry.example.com/base",
+                Platform::Gcp,
+            ),
+            1
         );
     }
 
@@ -2754,7 +2817,12 @@ mod tests {
             "daemon:operator-a1b2c3d4".to_string(),
             "registry.example.com/operator:tag".to_string(),
         )]);
-        let hits = apply_push_cache(&mut stack, &cache, "registry.example.com/operator");
+        let hits = apply_push_cache(
+            &mut stack,
+            &cache,
+            "registry.example.com/operator",
+            Platform::Aws,
+        );
         assert_eq!(hits, 1, "daemon local path should hit the cache");
         let daemon = stack
             .resources()
@@ -2778,7 +2846,7 @@ mod tests {
             )
             .build();
         let mut collected = HashMap::new();
-        collect_push_cache_entries(&pushed, &pre_push, &mut collected);
+        collect_push_cache_entries(&pushed, &pre_push, &mut collected, Platform::Aws);
         assert_eq!(
             collected
                 .get("daemon:operator-a1b2c3d4")
@@ -2810,7 +2878,12 @@ mod tests {
             "registry.example.com/base:native".to_string(),
         )]);
         assert_eq!(
-            apply_push_cache(&mut stack, &cache, "registry.example.com/base"),
+            apply_push_cache(
+                &mut stack,
+                &cache,
+                "registry.example.com/base",
+                Platform::Aws
+            ),
             1
         );
         let sandbox = stack
@@ -2846,6 +2919,7 @@ mod tests {
             &mut stack,
             &cache,
             "manager.prod.example/artifacts-project-b",
+            Platform::Aws,
         );
 
         assert_eq!(hits, 0);
