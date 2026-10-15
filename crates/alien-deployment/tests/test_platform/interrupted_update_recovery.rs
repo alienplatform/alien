@@ -12,6 +12,7 @@ enum RecoveryTarget {
     LegacyRejection,
     NeverConfirm,
     CurrentWriter,
+    NoRetry,
     SameRelease,
     Removed,
     Denied,
@@ -43,6 +44,11 @@ async fn interruption_records_terminal_controller_and_preserves_retry_checkpoint
 }
 
 #[tokio::test]
+async fn failed_record_never_steps_its_runnable_checkpoint_during_refresh() {
+    exercise_recovery(RecoveryTarget::NoRetry).await;
+}
+
+#[tokio::test]
 async fn retry_same_release_finishes_interrupted_updates_without_duplicate_writes() {
     exercise_recovery(RecoveryTarget::SameRelease).await;
 }
@@ -65,6 +71,7 @@ async fn exercise_recovery(case: RecoveryTarget) {
         RecoveryTarget::LegacyRejection => "legacy-rejection",
         RecoveryTarget::NeverConfirm => "never-confirm",
         RecoveryTarget::CurrentWriter => "current-writer",
+        RecoveryTarget::NoRetry => "no-retry",
         RecoveryTarget::SameRelease => "same-release",
         RecoveryTarget::Removed => "removed",
         RecoveryTarget::Denied => "denied",
@@ -152,6 +159,34 @@ async fn exercise_recovery(case: RecoveryTarget) {
         );
         assert_ne!(api.error.as_ref().unwrap().code, "DEPLOYMENT_INTERRUPTED");
     }
+    if matches!(case, RecoveryTarget::NoRetry) {
+        let mut controller = api.get_internal_controller().unwrap().unwrap();
+        controller.transition_to_failure();
+        controller.transition_to_update().unwrap();
+        api.set_internal_controller(Some(controller)).unwrap();
+        let before = test_worker_configs_deployed(&api_identifier);
+        let checkpoint = api.last_failed_state.clone();
+        let error = api.error.clone();
+        let executor =
+            alien_infra::StackExecutor::new(&interrupted, ClientConfig::Test, None).unwrap();
+        let refreshed = executor
+            .refresh(state.stack_state.unwrap())
+            .await
+            .unwrap()
+            .next_state;
+        assert_eq!(
+            test_worker_configs_deployed(&api_identifier),
+            before,
+            "refresh must not execute a failed record's update entry"
+        );
+        assert_eq!(
+            refreshed.resources[&api_id].status,
+            ResourceStatus::UpdateFailed
+        );
+        assert_eq!(refreshed.resources[&api_id].last_failed_state, checkpoint);
+        assert_eq!(refreshed.resources[&api_id].error, error);
+        return;
+    }
 
     // Reload exactly the saved state, including both the actual failure and the interruption.
     state = serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
@@ -190,7 +225,33 @@ async fn exercise_recovery(case: RecoveryTarget) {
         .expect("retry transition should succeed")
         .state;
     assert_eq!(state.status, DeploymentStatus::UpdatePending);
-    let state = run_to_completion(state, config).await;
+    let state = if matches!(case, RecoveryTarget::NewDependency) {
+        for _ in 0..MAX_STEPS {
+            if matches!(
+                state.status,
+                DeploymentStatus::Running | DeploymentStatus::UpdateFailed
+            ) {
+                break;
+            }
+            let dependency_ready = state.stack_state.as_ref().unwrap().resources[&dependency_id]
+                .status
+                == ResourceStatus::Running;
+            let writes = test_worker_configs_deployed(&api_identifier).len();
+            state = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+                .await
+                .unwrap()
+                .state;
+            if test_worker_configs_deployed(&api_identifier).len() > writes {
+                assert!(
+                    dependency_ready,
+                    "the new update must not run before its dependency is ready"
+                );
+            }
+        }
+        state
+    } else {
+        run_to_completion(state, config).await
+    };
 
     if matches!(case, RecoveryTarget::Denied) {
         assert_eq!(state.status, DeploymentStatus::UpdateFailed);
