@@ -351,6 +351,80 @@ async fn test_azure_infrastructure_mutations() {
     );
 }
 
+/// A sandbox published through a Remote Binding is the whole stack and installs into a resource
+/// group the customer already has, so preflights add no `default-resource-group`. The executor
+/// refuses a stack whose dependencies name a resource it does not define (`DEPENDENCY_NOT_FOUND`).
+#[tokio::test]
+async fn an_azure_sandbox_only_stack_depends_only_on_resources_it_defines() {
+    let sandbox = alien_core::Sandbox::new("agent-sbx".to_string())
+        .code(alien_core::SandboxCode::Image {
+            image: "ubuntu".to_string(),
+        })
+        .egress(alien_core::SandboxEgress::Allow)
+        .lifecycle(alien_core::SandboxLifecyclePolicy {
+            max_lifetime_seconds: None,
+            idle_pause_seconds: Some(1800),
+        })
+        .build();
+    let sandbox_only = Stack::new("test-stack".to_string())
+        .add_with_remote_access(sandbox, ResourceLifecycle::Frozen)
+        .permissions(PermissionsConfig::new())
+        .build();
+    let worker = Worker::new("test-worker".to_string())
+        .code(WorkerCode::Image {
+            image: "test-image:latest".to_string(),
+        })
+        .permissions("test-permissions".to_string())
+        .build();
+    let with_worker = Stack::new("test-stack".to_string())
+        .add(worker, ResourceLifecycle::Live)
+        .permissions(PermissionsConfig::new())
+        .build();
+    let config = DeploymentConfig::builder()
+        .stack_settings(StackSettings::default())
+        .environment_variables(empty_env_snapshot())
+        .allow_frozen_changes(false)
+        .external_bindings(ExternalBindings::default())
+        .build();
+    let stack_state = StackState::new(Platform::Azure);
+    let resource_group = ResourceRef::new(
+        alien_core::AzureResourceGroup::RESOURCE_TYPE,
+        "default-resource-group",
+    );
+
+    let sandbox_only = PreflightRunner::new()
+        .apply_mutations(sandbox_only, &stack_state, &config)
+        .await
+        .expect("mutations apply");
+    assert!(!sandbox_only
+        .resources
+        .contains_key("default-resource-group"));
+    assert!(sandbox_only.resources.contains_key("enable-app"));
+    for (id, entry) in sandbox_only.resources() {
+        for dependency in &entry.dependencies {
+            assert!(
+                sandbox_only.resources.contains_key(dependency.id()),
+                "'{id}' depends on '{}', which the stack does not define",
+                dependency.id()
+            );
+        }
+    }
+
+    // A stack that does get the resource group still orders provider registration after it.
+    let with_worker = PreflightRunner::new()
+        .apply_mutations(with_worker, &stack_state, &config)
+        .await
+        .expect("mutations apply");
+    assert_eq!(
+        with_worker
+            .resources
+            .get("enable-app")
+            .unwrap()
+            .dependencies,
+        vec![resource_group]
+    );
+}
+
 #[tokio::test]
 async fn test_gcp_infrastructure_mutations() {
     // Create a test stack with a function resource
