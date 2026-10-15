@@ -221,6 +221,15 @@ pub trait ComputeApi: Send + Sync + Debug {
         health_check: HealthCheck,
     ) -> Result<Operation>;
 
+    /// Replaces an owned health check, clearing omitted probe fields.
+    /// Unlike merge PATCH, switching to serving-port mode removes an old fixed port.
+    async fn update_region_health_check(
+        &self,
+        region: String,
+        health_check_name: String,
+        health_check: HealthCheck,
+    ) -> Result<Operation>;
+
     /// Regional counterpart; uses region-scoped resources and operations.
     async fn get_region_backend_service(
         &self,
@@ -380,6 +389,14 @@ pub trait ComputeApi: Send + Sync + Debug {
     /// Patches a health check (PATCH update).
     /// See: https://cloud.google.com/compute/docs/reference/rest/v1/healthChecks/patch
     async fn patch_health_check(
+        &self,
+        health_check_name: String,
+        health_check: HealthCheck,
+    ) -> Result<Operation>;
+
+    /// Replaces an owned health check, clearing omitted probe fields.
+    /// Unlike merge PATCH, switching to serving-port mode removes an old fixed port.
+    async fn update_health_check(
         &self,
         health_check_name: String,
         health_check: HealthCheck,
@@ -1302,6 +1319,27 @@ impl ComputeApi for ComputeClient {
             .await
     }
 
+    async fn update_region_health_check(
+        &self,
+        region: String,
+        health_check_name: String,
+        health_check: HealthCheck,
+    ) -> Result<Operation> {
+        let path = format!(
+            "projects/{}/regions/{region}/healthChecks/{}",
+            self.project_id, health_check_name
+        );
+        self.base
+            .execute_request(
+                Method::PUT,
+                &path,
+                None,
+                Some(health_check),
+                &health_check_name,
+            )
+            .await
+    }
+
     async fn get_region_backend_service(
         &self,
         region: String,
@@ -1760,6 +1798,26 @@ impl ComputeApi for ComputeClient {
         self.base
             .execute_request(
                 Method::PATCH,
+                &path,
+                None,
+                Some(health_check),
+                &health_check_name,
+            )
+            .await
+    }
+
+    async fn update_health_check(
+        &self,
+        health_check_name: String,
+        health_check: HealthCheck,
+    ) -> Result<Operation> {
+        let path = format!(
+            "projects/{}/global/healthChecks/{}",
+            self.project_id, health_check_name
+        );
+        self.base
+            .execute_request(
+                Method::PUT,
                 &path,
                 None,
                 Some(health_check),
@@ -7326,6 +7384,54 @@ mod tests {
             serde_json::from_str(body).expect("request JSON")
         };
         (line, body)
+    }
+
+    #[tokio::test]
+    async fn health_check_replacement_uses_put_for_global_and_regional_scopes() {
+        const OPERATION: &str = r#"{"name":"health-update","status":"DONE"}"#;
+        let (endpoint, server) = serve_json_responses(vec![OPERATION, OPERATION]);
+        let client = test_client(endpoint);
+        let health = HealthCheck {
+            r#type: Some(HealthCheckType::Tcp),
+            tcp_health_check: Some(TcpHealthCheck {
+                port_specification: Some(PortSpecification::UseServingPort),
+                ..Default::default()
+            }),
+            check_interval_sec: Some(30),
+            timeout_sec: Some(5),
+            ..Default::default()
+        };
+        let global = client
+            .update_health_check("owned-health".into(), health.clone())
+            .await
+            .expect("replace global health check");
+        let regional = client
+            .update_region_health_check("us-central1".into(), "owned-health".into(), health)
+            .await
+            .expect("replace regional health check");
+        assert_eq!(global.name.as_deref(), Some("health-update"));
+        assert_eq!(regional.name.as_deref(), Some("health-update"));
+        let requests = server.join().expect("HTTP server");
+        assert_eq!(requests.len(), 2);
+        for (request, scope) in requests.iter().zip(["global", "regions/us-central1"]) {
+            let (line, body) = request_line_and_body(request);
+            assert_eq!(
+                line,
+                format!("PUT /projects/example-project/{scope}/healthChecks/owned-health HTTP/1.1")
+            );
+            assert!(
+                request
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer test-token")
+            );
+            assert_eq!(
+                body,
+                serde_json::json!({
+                    "type": "TCP", "tcpHealthCheck": {"portSpecification": "USE_SERVING_PORT"},
+                    "checkIntervalSec": 30, "timeoutSec": 5
+                })
+            );
+        }
     }
 
     #[tokio::test]
