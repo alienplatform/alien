@@ -793,7 +793,7 @@ impl GcpProxyIngressState {
                     return Err(error.context(self.error(
                         plan.resource_id,
                         format!("Read private ingress '{}'", child.name()),
-                    )))
+                    )));
                 }
             };
             let operation = match child {
@@ -817,10 +817,24 @@ impl GcpProxyIngressState {
                     desired.name = Some(name.clone());
                     desired.description = Some(description.clone());
                     if let Some(live) = &live {
-                        if contains_desired(live, &as_json(&desired, plan.resource_id)?) {
+                        if health_check_matches(live, &as_json(&desired, plan.resource_id)?) {
                             continue;
                         }
-                        scoped!(self, client, patch_region_health_check, patch_health_check, name.clone(), desired)
+                        if desired.tcp_health_check.is_some() {
+                            // PATCH leaves omitted TCP fields behind. Replace the probe,
+                            // retaining unrelated provider settings that the plan omits.
+                            let previous: HealthCheck = serde_json::from_value(live.clone())
+                                .into_alien_error()
+                                .context(self.error(plan.resource_id, "Read TCP health check settings"))?;
+                            desired.check_interval_sec = desired.check_interval_sec.or(previous.check_interval_sec);
+                            desired.timeout_sec = desired.timeout_sec.or(previous.timeout_sec);
+                            desired.healthy_threshold = desired.healthy_threshold.or(previous.healthy_threshold);
+                            desired.unhealthy_threshold = desired.unhealthy_threshold.or(previous.unhealthy_threshold);
+                            desired.log_config = desired.log_config.or(previous.log_config);
+                            scoped!(self, client, update_region_health_check, update_health_check, name.clone(), desired)
+                        } else {
+                            scoped!(self, client, patch_region_health_check, patch_health_check, name.clone(), desired)
+                        }
                     } else {
                         scoped!(self, client, insert_region_health_check, insert_health_check, desired)
                     }
@@ -1024,7 +1038,7 @@ impl GcpProxyIngressState {
                 return Err(error.context(self.error(
                     resource_id,
                     format!("Read private ingress '{}' before delete", child.name()),
-                )))
+                )));
             }
         }
         match child.delete(client, self).await {
@@ -1045,7 +1059,7 @@ impl GcpProxyIngressState {
                 return Err(error.context(self.error(
                     resource_id,
                     format!("Delete private ingress '{}'", child.name()),
-                )))
+                )));
             }
         }
         Ok(())
@@ -1095,6 +1109,28 @@ fn as_json(value: &impl Serialize, resource_id: &str) -> Result<Value> {
         .context(ErrorData::CloudPlatformError {
             message: "Serialize private ingress metadata".to_string(),
             resource_id: Some(resource_id.to_string()),
+        })
+}
+
+// An omitted TCP request/response means no content check, not "keep the old
+// content check". Compute may return empty strings for these default values.
+fn health_check_matches(live: &Value, desired: &Value) -> bool {
+    if !contains_desired(live, desired) {
+        return false;
+    }
+    let Some(tcp) = desired.get("tcpHealthCheck") else {
+        return true;
+    };
+    let live_tcp = &live["tcpHealthCheck"];
+    ["port", "portName", "request", "response", "proxyHeader"]
+        .into_iter()
+        .all(|key| {
+            tcp.get(key).is_some()
+                || live_tcp.get(key).is_none_or(|value| {
+                    value.is_null()
+                        || value.as_str() == Some("")
+                        || (key == "proxyHeader" && value.as_str() == Some("NONE"))
+                })
         })
 }
 

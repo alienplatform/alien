@@ -13,6 +13,7 @@ pub(crate) struct Provider {
     pub(crate) deny_backend_recovery_reads: bool,
     fail_certificate_delete: bool,
     lose_tcp_proxy_response: bool,
+    lose_health_update_response: bool,
 }
 
 pub(crate) type Store = Arc<Mutex<Provider>>;
@@ -88,6 +89,30 @@ fn insert(
         store.lose_tcp_proxy_response = false;
         return Err(AlienError::new(ClientErrorData::Timeout {
             message: "lost TCP proxy create response".to_string(),
+        }));
+    }
+    Ok(done())
+}
+
+fn update_health(
+    store: &Store,
+    name: &str,
+    desired: HealthCheck,
+) -> alien_client_core::Result<Operation> {
+    let mut state = store.lock().unwrap();
+    let key = format!("health/{name}");
+    let old = state
+        .objects
+        .get(&key)
+        .expect("update requires existing health check");
+    let mut replacement = serde_json::to_value(desired).unwrap();
+    replacement["id"] = old["id"].clone();
+    state.objects.insert(key, replacement);
+    state.mutations += 1;
+    if state.lose_health_update_response {
+        state.lose_health_update_response = false;
+        return Err(AlienError::new(ClientErrorData::Timeout {
+            message: "lost health update reply".to_string(),
         }));
     }
     Ok(done())
@@ -236,6 +261,14 @@ pub(crate) fn provider(store: &Store) -> MockComputeApi {
         expect_insert_global_forwarding_rule,
         expect_delete_global_forwarding_rule
     );
+    let state = store.clone();
+    client
+        .expect_update_health_check()
+        .returning(move |name, desired| update_health(&state, &name, desired));
+    let state = store.clone();
+    client
+        .expect_update_region_health_check()
+        .returning(move |_, name, desired| update_health(&state, &name, desired));
     client
         .expect_get_global_operation()
         .returning(|_| Ok(done()));
@@ -952,4 +985,88 @@ async fn recorded_tcp_graph_handoff_keeps_ids_and_rejects_proxy_replacement() {
         store.lock().unwrap().objects[&format!("tcpProxy/{name}")]["id"],
         "replacement"
     );
+}
+
+#[tokio::test]
+async fn tcp_health_restore_clears_stale_probe_after_lost_reply_and_preserves_settings() {
+    for scope in [
+        GcpHttpsIngressScope::GlobalPublic,
+        GcpHttpsIngressScope::RegionalPrivate,
+    ] {
+        let store = Arc::new(Mutex::new(Provider::default()));
+        let client = provider(&store);
+        let mut state = GcpProxyIngressState::new(&tcp_plan(scope));
+        let mut ready = false;
+        for _ in 0..40 {
+            state = checkpoint(&state);
+            ready = state.reconcile(&client, tcp_plan(scope)).await.unwrap();
+            if ready {
+                break;
+            }
+        }
+        assert!(ready);
+        let key = format!("health/{}", state.child_name("healthCheck"));
+        let ids = state.provider_ids.clone();
+        let name = state.name();
+        for stale in [
+            json!({"portSpecification":"USE_FIXED_PORT", "port":17080, "request":"GET /health HTTP/1.0\r\n\r\n", "response":"withdrawn"}),
+            json!({"portSpecification":"USE_SERVING_PORT", "response":"withdrawn"}),
+        ] {
+            let before = {
+                let mut provider = store.lock().unwrap();
+                let health = provider.objects.get_mut(&key).unwrap();
+                health["tcpHealthCheck"] = stale;
+                health["checkIntervalSec"] = json!(30);
+                health["timeoutSec"] = json!(5);
+                health["healthyThreshold"] = json!(3);
+                health["unhealthyThreshold"] = json!(4);
+                health["logConfig"] = json!({"enable":true});
+                provider.lose_health_update_response = true;
+                provider.mutations
+            };
+            state = checkpoint(&state);
+            let error = state.reconcile(&client, tcp_plan(scope)).await.unwrap_err();
+            assert!(error.retryable);
+            state = checkpoint(&state);
+            assert!(state.reconcile(&client, tcp_plan(scope)).await.unwrap());
+            assert_eq!(state.provider_ids, ids);
+            assert_eq!(state.name(), name);
+            let provider = store.lock().unwrap();
+            assert_eq!(
+                provider.mutations,
+                before + 1,
+                "lost reply must not repeat replacement"
+            );
+            let health = &provider.objects[&key];
+            assert_eq!(
+                health["tcpHealthCheck"],
+                json!({"portSpecification":"USE_SERVING_PORT"})
+            );
+            assert_eq!(health["checkIntervalSec"], 30);
+            assert_eq!(health["timeoutSec"], 5);
+            assert_eq!(health["healthyThreshold"], 3);
+            assert_eq!(health["unhealthyThreshold"], 4);
+            assert_eq!(health["logConfig"], json!({"enable":true}));
+        }
+        let before = store.lock().unwrap().mutations;
+        {
+            let mut provider = store.lock().unwrap();
+            let tcp = &mut provider.objects.get_mut(&key).unwrap()["tcpHealthCheck"];
+            tcp["request"] = json!("");
+            tcp["response"] = json!("");
+            tcp["proxyHeader"] = json!("NONE");
+        }
+        assert!(state.reconcile(&client, tcp_plan(scope)).await.unwrap());
+        assert_eq!(store.lock().unwrap().mutations, before);
+        let mut deleted = false;
+        for _ in 0..40 {
+            state = checkpoint(&state);
+            deleted = state.delete(&client, "api").await.unwrap();
+            if deleted {
+                break;
+            }
+        }
+        assert!(deleted);
+        assert!(store.lock().unwrap().objects.is_empty());
+    }
 }
