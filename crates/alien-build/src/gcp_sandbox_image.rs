@@ -3,6 +3,7 @@
 //! Nothing runs inside the base, so a base with no shell or no `/etc/passwd` layers the same way.
 
 use crate::error::{ErrorData, Result};
+use crate::registry::{registry_failure, RegistryFailure};
 use crate::{
     base_image_build_retry_delay, is_retryable_dockdash_image_pull_error,
     BASE_IMAGE_BUILD_MAX_ATTEMPTS,
@@ -41,18 +42,19 @@ pub struct GcpSandboxImage {
 
 /// Layers the agent from `agent_image`, the exec identity and the GCP Agent Platform contract
 /// onto `base_image`, a registry reference pulled with `base_auth`. `base` is a local copy of the
-/// same image, read for its `/etc/passwd` and `/etc/group` and dropped before the agent pull. A
-/// pulled `base` owns its archive, which the drop deletes; a `base` opened with
-/// [`Image::from_tarball`] leaves the tarball to its caller, so the drop frees nothing.
-/// `resource_name` is the sandbox the image is for, named in a build failure. `cache` holds the
-/// pulled blobs and the agent layer.
+/// same image, read for its `/etc/passwd` and `/etc/group`. It is dropped before the agent pull,
+/// so a pulled base's archive is off the disk before more is pulled; a base opened with
+/// [`Image::from_tarball`] leaves its tarball to the caller. `resource_name` is the sandbox the
+/// image is for, named in a build failure. `cache` holds the pulled blobs and the agent layer.
 ///
 /// The agent pull and the assembly, which fetches the base again, are each tried up to
 /// `BASE_IMAGE_BUILD_MAX_ATTEMPTS` times when the registry throttles, answers with a server error
-/// or drops the connection. A missing agent tag is not retried here; it is returned as
-/// [`ErrorData::SandboxAgentImageMissing`]. Any other registry refusal is
-/// [`ErrorData::ImageLookupRejected`], and an image that cannot hold the agent is
-/// [`ErrorData::ImageBuildRejected`]; neither is retryable.
+/// or drops the connection. A pull still failing that way, or failing on a connection error that
+/// is not retried here, is [`ErrorData::ImagePullTemporarilyUnavailable`]. A missing agent tag is
+/// not retried here; it is returned as [`ErrorData::SandboxAgentImageMissing`]. Any other registry
+/// refusal is [`ErrorData::ImageLookupRejected`], and an image that cannot hold the agent, or has a
+/// link or directory where a file it needs should be, is [`ErrorData::ImageBuildRejected`];
+/// neither is retryable.
 pub async fn build_gcp_sandbox_image(
     resource_name: &str,
     base: Image,
@@ -94,18 +96,23 @@ pub async fn build_gcp_sandbox_image(
         },
     )
     .await?;
-    let agent_binary = agent
-        .read_file(AGENT_PATH)
-        .await
-        .into_alien_error()
-        .context(failed(format!(
-            "Failed to read {AGENT_PATH} from the agent image {agent_image}"
-        )))?
-        .ok_or_else(|| {
-            AlienError::new(rejected(format!(
-                "The agent image {agent_image} has no file at {AGENT_PATH}"
-            )))
-        })?;
+    let agent_binary = match agent.read_file(AGENT_PATH).await {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            let context = unreadable_file(
+                &error,
+                resource_name,
+                AGENT_PATH,
+                &format!("the agent image {agent_image}"),
+            );
+            return Err(error).into_alien_error().context(context);
+        }
+    }
+    .ok_or_else(|| {
+        AlienError::new(rejected(format!(
+            "The agent image {agent_image} has no file at {AGENT_PATH}"
+        )))
+    })?;
     // Each pulled image holds a full archive on disk; only the agent binary was needed.
     drop(agent);
 
@@ -247,9 +254,17 @@ where
                         version: release_tag(reference),
                     }
                 } else if let Some(answer) = oci_cause(&error) {
-                    ErrorData::ImageLookupRejected {
-                        image: reference.to_string(),
-                        reason: crate::registry::registry_answer(answer),
+                    match registry_failure(answer) {
+                        RegistryFailure::Transient(_) => {
+                            ErrorData::ImagePullTemporarilyUnavailable {
+                                image: reference.to_string(),
+                                reason: pulled.purpose().to_string(),
+                            }
+                        }
+                        RegistryFailure::Rejected(reason) => ErrorData::ImageLookupRejected {
+                            image: reference.to_string(),
+                            reason,
+                        },
                     }
                 } else {
                     ErrorData::ImageBuildFailed {
@@ -296,8 +311,9 @@ fn oci_cause(error: &dockdash::Error) -> Option<&OciDistributionError> {
     None
 }
 
-/// The release `reference` is tagged with, as the hint names it: `v1.2.3` reads as `1.2.3`. A
-/// reference with no tag names itself.
+/// The release `reference` is tagged with, as the hint names it: `v1.2.3` reads as `1.2.3`, and a
+/// reference with neither a tag nor a digest reads as `latest`, the tag a registry resolves it to.
+/// A digest-only reference names itself.
 fn release_tag(reference: &str) -> String {
     Reference::try_from(reference)
         .ok()
@@ -315,16 +331,13 @@ async fn read_identity_file(
     path: &str,
     resource_name: &str,
 ) -> Result<Option<String>> {
-    let failed = |reason: String| ErrorData::ImageBuildFailed {
-        resource_name: resource_name.to_string(),
-        reason,
-        build_output: None,
+    let bytes = match base.read_file(path).await {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            let context = unreadable_file(&error, resource_name, path, "the base image");
+            return Err(error).into_alien_error().context(context);
+        }
     };
-    let bytes = base
-        .read_file(path)
-        .await
-        .into_alien_error()
-        .context(failed(format!("Failed to read {path} from the base image")))?;
     bytes
         .map(|bytes| {
             String::from_utf8(bytes)
@@ -335,6 +348,27 @@ async fn read_identity_file(
                 })
         })
         .transpose()
+}
+
+/// Why `path` could not be read from `image`. A link or a directory where the file should be is the
+/// image's to fix, so a retry would read the same thing; any other failure is on this side.
+fn unreadable_file(
+    error: &dockdash::Error,
+    resource_name: &str,
+    path: &str,
+    image: &str,
+) -> ErrorData {
+    match error {
+        dockdash::Error::InvalidPath { .. } => ErrorData::ImageBuildRejected {
+            resource_name: resource_name.to_string(),
+            reason: format!("{path} in {image} is not a regular file"),
+        },
+        _ => ErrorData::ImageBuildFailed {
+            resource_name: resource_name.to_string(),
+            reason: format!("Failed to read {path} from {image}"),
+            build_output: None,
+        },
+    }
 }
 
 /// Keeps the base's entries except the exec identity's name or id, keeps or adds `root`, and
@@ -936,6 +970,108 @@ mod tests {
         .expect_err("a binary passwd cannot be merged");
         assert_eq!(error.code, "IMAGE_BUILD_REJECTED", "{error}");
         assert!(!error.retryable, "{error}");
+    }
+
+    /// An amd64 image whose only file is a symlink at `path`.
+    async fn image_with_symlink_at(path: &str) -> Image {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let (parent, name) = path.rsplit_once('/').expect("an absolute path");
+        let on_disk = dir.path().join(parent.trim_start_matches('/'));
+        std::fs::create_dir_all(&on_disk).expect("parent directory");
+        std::os::unix::fs::symlink("/elsewhere", on_disk.join(name)).expect("symlink");
+        let layer = Layer::builder()
+            .and_then(|layer| layer.directory(&on_disk, parent))
+            .expect("layer");
+        Image::builder()
+            .platform("linux", &Arch::Amd64)
+            .layer(layer.build().await.expect("layer builds"))
+            .build()
+            .await
+            .expect("image builds")
+            .0
+    }
+
+    /// A link is not followed, so a base whose `/etc/passwd` is one reads the same on every
+    /// attempt.
+    #[tokio::test]
+    async fn a_base_with_a_symlinked_passwd_is_rejected() {
+        let error = build_gcp_sandbox_image(
+            "box",
+            image_with_symlink_at("/etc/passwd").await,
+            "registry.example.com/proj/sandbox:base",
+            "registry.example.com/alien/agent:test",
+            ClientProtocol::Http,
+            RegistryAuth::Anonymous,
+            default_cache(),
+        )
+        .await
+        .expect_err("a symlinked passwd cannot be merged");
+        assert_eq!(error.code, "IMAGE_BUILD_REJECTED", "{error}");
+        assert!(!error.retryable, "{error}");
+        assert_eq!(
+            reason(&error),
+            "/etc/passwd in the base image is not a regular file"
+        );
+    }
+
+    /// An agent image whose agent is a link is a broken release; pulling it again returns the
+    /// same image.
+    #[tokio::test]
+    async fn an_agent_image_with_a_symlinked_agent_is_rejected() {
+        let (_registry, host) = setup_local_registry().await.expect("local registry");
+        let agent_image = format!("{host}/alien/agent:symlink");
+        image_with_symlink_at(AGENT_PATH)
+            .await
+            .push(
+                &agent_image,
+                &PushOptions {
+                    protocol: ClientProtocol::Http,
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("image pushes");
+
+        let error = layering_error(&agent_image, "registry.example.com/proj/sandbox:base").await;
+        assert_eq!(error.code, "IMAGE_BUILD_REJECTED", "{error}");
+        assert!(!error.retryable, "{error}");
+        assert_eq!(
+            reason(&error),
+            format!("{AGENT_PATH} in the agent image {agent_image} is not a regular file")
+        );
+    }
+
+    /// A request the registry client gives up on without retrying, such as a redirect loop, says
+    /// nothing about the image, so it stays retryable rather than reading as a refusal.
+    #[tokio::test]
+    async fn a_connection_failure_that_is_not_retried_here_stays_retryable() {
+        let server = httpmock::MockServer::start_async().await;
+        let manifests = server
+            .mock_async(|when, then| {
+                when.path_contains("/manifests/");
+                then.status(302)
+                    .header("location", "/v2/alien/agent/manifests/test");
+            })
+            .await;
+        server
+            .mock_async(|when, then| {
+                when.any_request();
+                then.status(200);
+            })
+            .await;
+
+        let error = layering_error(
+            &format!("{}/alien/agent:test", server.address()),
+            "registry.example.com/proj/sandbox:base",
+        )
+        .await;
+        assert_eq!(error.code, "IMAGE_PULL_TEMPORARILY_UNAVAILABLE", "{error}");
+        assert!(error.retryable, "{error}");
+        assert_eq!(reason(&error), Pulled::Agent.purpose());
+        assert!(
+            manifests.hits_async().await > crate::BASE_IMAGE_BUILD_MAX_ATTEMPTS,
+            "the redirects were followed"
+        );
     }
 
     #[test]
