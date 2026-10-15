@@ -1270,8 +1270,8 @@ mod management_definition_upgrade_tests {
                 let installed: Stack =
                     serde_json::from_value(serde_json::to_value(installed).unwrap()).unwrap();
                 assert_ne!(
-                    installed.setup_owned_digest(),
-                    prepared.setup_owned_digest()
+                    installed.setup_update_digest(),
+                    prepared.setup_update_digest()
                 );
                 calls.store(0, Ordering::SeqCst);
                 let error = runner
@@ -1294,8 +1294,8 @@ mod management_definition_upgrade_tests {
                 );
                 let mut authorization = alien_core::SetupUpdateAuthorization {
                     nonce: "revision".into(),
-                    baseline_frozen_digest: installed.setup_owned_digest(),
-                    target_frozen_digest: installed.setup_owned_digest(),
+                    baseline_frozen_digest: installed.setup_update_digest(),
+                    target_frozen_digest: installed.setup_update_digest(),
                     release_id: "release".into(),
                     setup_target: "target".into(),
                     setup_fingerprint: "fingerprint".into(),
@@ -1314,7 +1314,7 @@ mod management_definition_upgrade_tests {
                     .await
                     .expect_err("stale setup cannot authorize new grants");
                 assert_eq!(calls.load(Ordering::SeqCst), 0);
-                authorization.target_frozen_digest = prepared.setup_owned_digest();
+                authorization.target_frozen_digest = prepared.setup_update_digest();
                 let (_, _, authorized) = runner
                     .run_deployment_time_preflights(
                         release.clone(),
@@ -1352,15 +1352,15 @@ mod management_definition_upgrade_tests {
                 .await
                 .unwrap();
             assert_ne!(
-                prepared.setup_owned_digest(),
-                prepared_rescoped.setup_owned_digest(),
+                prepared.setup_update_digest(),
+                prepared_rescoped.setup_update_digest(),
                 "setup authorization must bind grant scopes as well as definitions"
             );
             calls.store(0, Ordering::SeqCst);
             let stale_scope_authorization = alien_core::SetupUpdateAuthorization {
                 nonce: "old-scope".into(),
-                baseline_frozen_digest: prepared.setup_owned_digest(),
-                target_frozen_digest: prepared.setup_owned_digest(),
+                baseline_frozen_digest: prepared.setup_update_digest(),
+                target_frozen_digest: prepared.setup_update_digest(),
                 release_id: "release".into(),
                 setup_target: "target".into(),
                 setup_fingerprint: "fingerprint".into(),
