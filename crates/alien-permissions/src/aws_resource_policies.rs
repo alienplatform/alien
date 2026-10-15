@@ -83,7 +83,8 @@ impl AwsResourcePolicyContext<'_> {
         let stack_set = reference
             .resolve(|name| crate::get_permission_set(name).cloned())
             .and_then(|resolved| self.stack_sets.iter().find(|set| **set == resolved));
-        let Some(set) = stack_set else {
+        // A set with no AWS entry renders no policy to compare; callers skip it themselves.
+        let Some(set) = stack_set.filter(|set| set.platforms.aws.is_some()) else {
             return Ok(false);
         };
         let stack =
@@ -403,6 +404,36 @@ mod tests {
         assert_eq!(error.code, "GENERATOR_ERROR");
         assert!(error.message.contains("'storage/data-read'"), "{error}");
         assert!(!error.retryable);
+    }
+
+    /// A multi-cloud profile can grant an Azure-only set under `"*"`; on AWS it is kept for the
+    /// emitter's own skip, not compared.
+    #[test]
+    fn a_set_without_an_aws_entry_is_kept_without_comparing() {
+        let profile = PermissionProfile::new().global(["sandbox/images"]);
+        let stack = Stack::new("q5-azure-only".to_string())
+            .add(
+                ServiceAccount::from_permission_profile(
+                    "execution-sa".to_string(),
+                    &profile,
+                    |name| crate::get_permission_set(name).cloned(),
+                )
+                .unwrap(),
+                alien_core::ResourceLifecycle::Frozen,
+            )
+            .build();
+        let reference = PermissionSetReference::from_name("sandbox/images".to_string());
+        let kept = without_refs_the_stack_policy_grants(
+            &stack,
+            "execution",
+            &profile,
+            "agents",
+            vec![reference.clone()],
+            &AwsRuntimePermissionsGenerator::new(),
+            &PermissionContext::new().with_stack_prefix("q5-azure-only".to_string()),
+        )
+        .unwrap();
+        assert_eq!(kept, vec![reference]);
     }
 
     fn aws_policies(set_id: &str, resource_name: &str) -> (AwsIamPolicy, AwsIamPolicy) {
