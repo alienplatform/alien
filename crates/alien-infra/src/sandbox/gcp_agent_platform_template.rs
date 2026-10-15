@@ -43,7 +43,8 @@ fn last_segment(name: &str) -> &str {
 ///
 /// The template is immutable, so any of these differing between the desired and previous
 /// declaration means the old template cannot be updated in place — it is torn down and rebuilt.
-/// `image` is the reference the spec names, digest or tag, so a re-pushed tag moves nothing here.
+/// `image` is the declared reference, digest or tag, before [`pulled_image`] resolves its host, so
+/// a re-pushed tag moves nothing here.
 /// The whole `SandboxLimits` is compared but only cpu and memory reach the body, so a disk-only
 /// edit replaces a template with a byte-identical one; `max_processes` cannot vary at all, because
 /// `process_limit: false` refuses it at plan time. The `bool` is `internet_access`, which picks
@@ -65,36 +66,62 @@ fn template_identity(sandbox: &Sandbox) -> Result<(String, SandboxLimits, bool)>
     Ok((image, sandbox.resolved_limits(), internet_access))
 }
 
-/// The image Agent Platform pulls. It pulls natively and with no credentials, so a reference on the
-/// manager's registry proxy is named by its native registry path. Any other reference is pulled as
+/// The image Agent Platform pulls. Agent Platform pulls from the registry directly, as its own
+/// service agent, which the manager's registry grant names; it cannot pull through the manager's
+/// proxy. An image in a per-project repository was pushed through the manager, so it is named on the
+/// native registry host, whichever host the release stamped on it. Any other reference is pulled as
 /// declared.
 fn pulled_image(
     image: &str,
     deployment_config: &DeploymentConfig,
     resource_id: &str,
 ) -> Result<String> {
-    let Some(manager_url) = deployment_config.manager_url.as_deref() else {
+    let Some((_, path)) = image.split_once('/') else {
         return Ok(image.to_string());
     };
-    let proxy_host = alien_core::image_rewrite::strip_url_scheme(manager_url);
-    let proxied = image
-        .split_once('/')
-        .is_some_and(|(host, _)| host.eq_ignore_ascii_case(proxy_host));
-    if !proxied {
+    if per_project_image_project_id(path).is_none() {
         return Ok(image.to_string());
     }
-    let refused = |reason: &str| {
-        AlienError::new(ErrorData::ResourceConfigInvalid {
-            message: format!("cannot name '{image}' for Agent Platform to pull: {reason}"),
+    match (
+        deployment_config.native_image_host.as_deref(),
+        deployment_config.manager_url.is_some(),
+    ) {
+        (Some(native_host), _) => Ok(format!("{}/{path}", native_host.trim_end_matches('/'))),
+        // The manager derives the native host from its registry binding each time it hands out
+        // this config, so a binding it could not load is retried, not refused.
+        (None, true) => Err(AlienError::new(ErrorData::DependencyNotReady {
+            resource_id: resource_id.to_string(),
+            dependency_id: "native image registry".to_string(),
+        })),
+        (None, false) => Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+            message: format!(
+                "cannot name '{image}' for Agent Platform to pull: it is in a manager's \
+                 per-project repository, and the deployment has no manager to name that \
+                 registry's native host"
+            ),
             resource_id: Some(resource_id.to_string()),
-        })
+        })),
+    }
+}
+
+/// The Alien project whose per-project repository `path` (a reference without its host) is in:
+/// `{gcpProject}/{repository}/{projectId}/...`, where `repository` is the name
+/// [`alien_core::gar_repository::project_repository`] gives `projectId`. `None` for any other path.
+fn per_project_image_project_id(path: &str) -> Option<&str> {
+    let name = path.split_once('@').map_or(path, |(name, _)| name);
+    let name = match name.rsplit_once(':') {
+        Some((name, tag)) if !tag.contains('/') => name,
+        _ => name,
     };
-    let native_host = deployment_config
-        .native_image_host
-        .as_deref()
-        .ok_or_else(|| refused("the deployment has no native registry host"))?;
-    alien_core::image_rewrite::resolve_native_image_uri(image, native_host)
-        .ok_or_else(|| refused("the reference has no repository path"))
+    let (_, repository_path) = name.split_once('/')?;
+    let (repository, rest) = repository_path.split_once('/')?;
+    let project_id = rest.split('/').next()?;
+    let suffix = match project_id {
+        "default" => "-default".to_string(),
+        id => format!("-prj-{}", id.strip_prefix("prj_")?),
+    };
+    let prefix = repository.strip_suffix(suffix.as_str())?;
+    alien_core::gar_repository::project_id_for_path(repository_path, prefix)
 }
 
 /// The egress switch, or a refusal naming the sandbox and both accepted modes.
@@ -1471,36 +1498,56 @@ mod tests {
         })
     }
 
-    /// Agent Platform pulls with no credentials, so it can never pull through the manager's proxy:
-    /// a release-pushed reference reaches it by its native registry path.
+    const NATIVE_HOST: &str = "us-central1-docker.pkg.dev";
+
+    /// Agent Platform cannot pull through the manager's proxy, so an image a release pushed
+    /// through the manager reaches it by its native registry path, whichever host the release
+    /// stamped. The CLI deploying in push mode reaches the manager on a URL other than the public
+    /// host it stamps on images, so the first case has hosts that differ.
     #[test]
-    fn a_proxied_image_is_sent_by_its_native_registry_path() {
-        let config = deployment_config(
-            Some("https://manager.example.com"),
-            Some("us-central1-docker.pkg.dev"),
-        );
-        assert_eq!(
-            template_image(
-                "manager.example.com/proj/repo/default:sbx-abc-agent",
-                &config
-            )
-            .expect("a proxied image has a native path"),
-            "us-central1-docker.pkg.dev/proj/repo/default:sbx-abc-agent"
-        );
+    fn a_per_project_image_is_sent_by_its_native_registry_path() {
+        for (manager_url, image, native) in [
+            (
+                "http://localhost:8080",
+                "registry.example.com/vendor/artifacts-prj-abc/prj_abc:sbx-agent",
+                "us-central1-docker.pkg.dev/vendor/artifacts-prj-abc/prj_abc:sbx-agent",
+            ),
+            (
+                "https://manager.example.com",
+                "manager.example.com/vendor/artifacts-prj-abc/prj_abc/agent@sha256:0123",
+                "us-central1-docker.pkg.dev/vendor/artifacts-prj-abc/prj_abc/agent@sha256:0123",
+            ),
+            (
+                "https://manager.example.com",
+                "manager.example.com/vendor/artifacts-prj-abc/prj_abc@sha256:0123",
+                "us-central1-docker.pkg.dev/vendor/artifacts-prj-abc/prj_abc@sha256:0123",
+            ),
+            (
+                "https://manager.example.com",
+                "manager.example.com/vendor/artifacts-default/default:sbx-agent",
+                "us-central1-docker.pkg.dev/vendor/artifacts-default/default:sbx-agent",
+            ),
+        ] {
+            let config = deployment_config(Some(manager_url), Some(NATIVE_HOST));
+            assert_eq!(
+                template_image(image, &config).expect("a per-project image has a native path"),
+                native
+            );
+        }
     }
 
-    /// Only the proxy's own host is rewritten: a native or public reference is already pullable,
-    /// and stripping its host would point at a repository that does not exist.
+    /// Only a per-project repository is moved to the native host: any other reference is already
+    /// pullable where it is, including one on the manager's own host, and a repository whose name
+    /// and project path disagree is not a per-project repository.
     #[test]
     fn a_native_or_public_image_is_sent_as_declared() {
-        let config = deployment_config(
-            Some("https://manager.example.com"),
-            Some("us-central1-docker.pkg.dev"),
-        );
+        let config = deployment_config(Some("https://manager.example.com"), Some(NATIVE_HOST));
         for image in [
             "us-central1-docker.pkg.dev/proj/repo/sandbox:v1",
             "ghcr.io/acme/sandbox:v1",
             "ubuntu:24.04",
+            "manager.example.com/proj/repo/default:sbx-abc-agent",
+            "ghcr.io/acme/tools-prj-abc/prj_other:v1",
         ] {
             assert_eq!(
                 template_image(image, &config).expect("a pullable image is accepted"),
@@ -1509,19 +1556,32 @@ mod tests {
         }
     }
 
-    /// A proxied reference with no native host has no name Agent Platform can pull, so creating a
-    /// template from it would only fail later, at the first session.
+    /// The manager fills in the native host from a registry binding it may fail to load once, so a
+    /// per-project image without one waits for the next pass instead of failing the deployment.
     #[test]
-    fn a_proxied_image_without_a_native_host_is_refused() {
+    fn a_per_project_image_without_a_native_host_is_retried() {
         let error = template_image(
-            "manager.example.com/proj/repo/default:sbx-abc-agent",
+            "registry.example.com/vendor/artifacts-prj-abc/prj_abc:sbx-agent",
             &deployment_config(Some("https://manager.example.com"), None),
         )
-        .expect_err("nothing names the proxied image natively");
+        .expect_err("nothing names the image natively yet");
+        assert_eq!(error.code, "DEPENDENCY_NOT_READY", "{error}");
+        assert!(error.retryable, "{error}");
+    }
+
+    /// With no manager, nothing will ever name the native host, so the image is refused.
+    #[test]
+    fn a_per_project_image_without_a_manager_is_refused() {
+        let error = template_image(
+            "registry.example.com/vendor/artifacts-prj-abc/prj_abc:sbx-agent",
+            &deployment_config(None, None),
+        )
+        .expect_err("nothing can name the image natively");
         assert_eq!(error.code, "RESOURCE_CONFIG_INVALID", "{error}");
+        assert!(!error.retryable, "{error}");
         assert!(
-            error.to_string().contains("native registry host"),
-            "says what is missing: {error}"
+            error.to_string().contains("prj_abc:sbx-agent"),
+            "names the image: {error}"
         );
     }
 }
