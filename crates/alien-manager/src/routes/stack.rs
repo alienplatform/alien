@@ -43,14 +43,14 @@ use alien_core::{
     StackSettings, StackState,
     container_resources::keep_volume_sizes_over_setup_source,
     import::{
-        CURRENT_SETUP_IMPORT_FORMAT_VERSION, ImportContext, ImportedResource,
+        ImportContext, ImportedResource,
         MAX_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION, MIN_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION,
         StackImportRequest, StackImportResponse,
     },
     is_valid_resource_prefix,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_infra::core::GcpCustomRoleNaming;
+use alien_infra::GcpCustomRoleNaming;
 use alien_preflights::compatibility::PermissionProfilesUnchangedCheck;
 
 use super::{AppState, auth};
@@ -1717,7 +1717,7 @@ fn import_platform_for_resource(
 #[cfg(test)]
 mod setup_update_authorization_tests {
     use super::*;
-    use alien_core::{Storage, Worker, WorkerCode};
+    use alien_core::{Storage, Worker, WorkerCode, import::CURRENT_SETUP_IMPORT_FORMAT_VERSION};
     use chrono::Utc;
 
     #[test]
