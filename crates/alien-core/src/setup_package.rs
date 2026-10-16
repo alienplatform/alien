@@ -1,6 +1,6 @@
 use crate::{
     ownership_policy_for_resource_type, ErrorData, Key, Platform, ResourceEntry, Result, Sandbox,
-    SetupManagement, Stack,
+    SetupManagement, Stack, Storage,
 };
 use alien_error::AlienError;
 
@@ -15,10 +15,10 @@ pub fn validate_automatic_setup_resources(
         && matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure)
     {
         for (id, entry) in stack.resources() {
-            if entry.config.downcast_ref::<Key>().is_some() {
+            if let Some(resource_type) = automatic_setup_unsupported_resource(entry, platform) {
                 return Err(AlienError::new(
                     ErrorData::AutomaticSetupResourceUnsupported {
-                        resource_type: "key".to_string(),
+                        resource_type,
                         resource_id: id.to_string(),
                         platform,
                     },
@@ -39,6 +39,37 @@ pub fn validate_automatic_setup_resources(
         }
     }
     Ok(())
+}
+
+/// Automatic packages emit only access and secret storage, so every other resource is
+/// created by its runtime controller. Return the resources that controller cannot create
+/// as declared.
+fn automatic_setup_unsupported_resource(
+    entry: &ResourceEntry,
+    platform: Platform,
+) -> Option<String> {
+    if entry.config.downcast_ref::<Key>().is_some() {
+        return Some("key".to_string());
+    }
+    let resource_type = entry.config.resource_type();
+    // These controllers refuse runtime creation: only a setup package can provision them.
+    if matches!(
+        resource_type.as_ref(),
+        "email" | "experimental/aws-opensearch"
+    ) {
+        return Some(resource_type.as_ref().to_string());
+    }
+    // Only the CloudFormation template applies S3 CORS rules. The runtime storage
+    // controller would create the bucket without them, so browser reads would fail.
+    if platform == Platform::Aws
+        && entry
+            .config
+            .downcast_ref::<Storage>()
+            .is_some_and(|storage| !storage.cors_allowed_origins.is_empty())
+    {
+        return Some("storage with CORS origins".to_string());
+    }
+    None
 }
 
 /// Controls configuration exposure, independently of installation authority.

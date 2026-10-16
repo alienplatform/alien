@@ -3,9 +3,9 @@
 use super::helpers::{custom_resource_registration, render_built_ins, render_built_ins_template};
 use alien_cloudformation::{CloudFormationTarget, RegistrationMode};
 use alien_core::{
-    Key, Kv, LifecycleRule, PermissionProfile, PermissionSetReference, Queue, RemoteBindings,
-    RemoteStackManagement, ResourceLifecycle, ResourceRef, ServiceAccount, Stack, StackSettings,
-    Storage, Vault, Worker, WorkerCode, WorkerTrigger,
+    AwsOpenSearch, Email, Key, Kv, LifecycleRule, PermissionProfile, PermissionSetReference, Queue,
+    RemoteBindings, RemoteStackManagement, ResourceLifecycle, ResourceRef, ServiceAccount, Stack,
+    StackSettings, Storage, Vault, Worker, WorkerCode, WorkerTrigger,
 };
 
 #[test]
@@ -810,16 +810,9 @@ fn aws_remote_queue_setup_passes_cloudformation_validation() {
     );
 }
 
-#[test]
-fn automatic_key_packages_are_refused() {
-    let stack = Stack::new("example".to_string())
-        .add(
-            Key::new("customer-key".to_string()).build(),
-            ResourceLifecycle::Frozen,
-        )
-        .build();
-    let error = super::helpers::try_render_built_ins(
-        &stack,
+fn render_automatic(stack: &Stack, description: &str) -> alien_core::Result<()> {
+    super::helpers::try_render_built_ins(
+        stack,
         StackSettings {
             setup_management: alien_core::SetupManagement::Automatic,
             ..StackSettings::default()
@@ -827,8 +820,75 @@ fn automatic_key_packages_are_refused() {
         RegistrationMode::OutputsFallback,
         CloudFormationTarget::Aws,
         "aws",
-        "automatic key setup",
+        description,
     )
-    .expect_err("automatic packages cannot hand off setup-owned keys");
-    assert!(error.to_string().contains("manual setup"), "{error}");
+    .map(|_| ())
+}
+
+/// An automatic package installs only access and secret storage; the runtime creates the
+/// rest. Resources the runtime cannot create as declared must be refused up front, so the
+/// platform offers manual setup instead of a package that fails after installation.
+#[test]
+fn automatic_packages_refuse_resources_the_runtime_cannot_create() {
+    let cases: Vec<(&str, Stack)> = vec![
+        (
+            "key",
+            Stack::new("example".to_string())
+                .add(
+                    Key::new("customer-key".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build(),
+        ),
+        (
+            "email",
+            Stack::new("example".to_string())
+                .add(
+                    Email::new("mailer".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build(),
+        ),
+        (
+            "opensearch",
+            Stack::new("example".to_string())
+                .add(
+                    AwsOpenSearch::new("search".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build(),
+        ),
+        (
+            "storage with CORS",
+            Stack::new("example".to_string())
+                .add(
+                    Storage::new("files".to_string())
+                        .cors_allowed_origins(vec!["https://console.example.com".to_string()])
+                        .build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build(),
+        ),
+    ];
+    for (name, stack) in cases {
+        let error = render_automatic(&stack, name)
+            .expect_err(&format!("automatic package must refuse {name}"));
+        assert_eq!(
+            error.code, "AUTOMATIC_SETUP_RESOURCE_UNSUPPORTED",
+            "{name}: {error}"
+        );
+        assert!(
+            error.to_string().contains("manual setup"),
+            "{name}: {error}"
+        );
+    }
+
+    // Control: the same storage without CORS origins is created by the runtime as declared.
+    let plain = Stack::new("example".to_string())
+        .add(
+            Storage::new("files".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    render_automatic(&plain, "storage without CORS").expect("plain storage is supported");
 }
