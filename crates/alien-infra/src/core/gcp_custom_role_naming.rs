@@ -179,6 +179,62 @@ mod tests {
     const LONG_PREFIX: &str = "customer-acme-prod-eu";
 
     #[test]
+    fn setup_record_can_match_existing_hashed_identities_without_changing_names() {
+        let namespace = custom_role_namespace_for_prefix(LONG_PREFIX);
+        let state = deployment(vec![
+            (
+                "existing",
+                service_account(
+                    Some("one@p.iam.gserviceaccount.com"),
+                    Some(GcpCustomRoleNaming::HashedLongPrefix),
+                ),
+            ),
+            (
+                "imported",
+                service_account(
+                    Some("two@p.iam.gserviceaccount.com"),
+                    Some(GcpCustomRoleNaming::SetupNamespace(namespace.clone())),
+                ),
+            ),
+        ]);
+        assert_eq!(
+            GcpCustomRoleNaming::for_deployment(&state).unwrap(),
+            GcpCustomRoleNaming::SetupNamespace(namespace)
+        );
+    }
+
+    #[test]
+    fn compute_only_setup_supplies_namespace_without_selecting_legacy_for_old_state() {
+        let mut compute = StackResourceState::new_pending(
+            ComputeCluster::RESOURCE_TYPE.to_string(),
+            Resource::new(ComputeCluster::new("compute".into()).build()),
+            None,
+            vec![],
+        );
+        compute.internal_state = Some(serde_json::json!({
+            "serviceAccountEmail": "node@p.iam.gserviceaccount.com"
+        }));
+        let mut state = deployment(vec![("compute", compute)]);
+        assert_eq!(
+            GcpCustomRoleNaming::for_deployment(&state).unwrap(),
+            GcpCustomRoleNaming::HashedLongPrefix
+        );
+        state
+            .resources
+            .get_mut("compute")
+            .unwrap()
+            .internal_state
+            .as_mut()
+            .unwrap()["customRoleNaming"] = serde_json::json!({"setupNamespace":"approved_roles"});
+        assert_eq!(
+            GcpCustomRoleNaming::for_deployment(&state)
+                .unwrap()
+                .execute_namespace(LONG_PREFIX),
+            "approved_roles"
+        );
+    }
+
+    #[test]
     fn setup_namespace_survives_controller_round_trip_and_overrides_execute_names() {
         let naming = GcpCustomRoleNaming::from_setup_namespace("approved_roles".into()).unwrap();
         let state = deployment(vec![(

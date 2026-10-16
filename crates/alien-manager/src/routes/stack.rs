@@ -1716,6 +1716,40 @@ mod setup_update_authorization_tests {
     use chrono::Utc;
 
     #[test]
+    fn old_setup_reimport_cannot_erase_an_explicit_role_namespace() {
+        let mut resource = StackResourceState::new_pending(
+            alien_core::ServiceAccount::RESOURCE_TYPE.to_string(),
+            alien_core::Resource::new(alien_core::ServiceAccount::new("runtime-sa".into()).build()),
+            None,
+            vec![],
+        );
+        resource.internal_state = Some(
+            alien_infra::serialize_controller(&alien_infra::GcpServiceAccountController::default())
+                .unwrap(),
+        );
+        resource.internal_state.as_mut().unwrap()["customRoleNaming"] =
+            serde_json::json!({"setupNamespace":"approved_roles"});
+        let mut previous = StackState::with_resource_prefix(Platform::Gcp, "deployment".into());
+        previous.resources.insert("runtime-sa".into(), resource);
+        assert!(validate_gcp_role_namespace_reimport(&previous, &previous).is_ok());
+        let mut old_package = previous.clone();
+        old_package
+            .resources
+            .get_mut("runtime-sa")
+            .unwrap()
+            .internal_state
+            .as_mut()
+            .unwrap()["customRoleNaming"] = serde_json::json!("hashedLongPrefix");
+        assert_eq!(
+            validate_gcp_role_namespace_reimport(&previous, &old_package)
+                .unwrap_err()
+                .code,
+            "BAD_REQUEST"
+        );
+        assert!(validate_gcp_role_namespace_reimport(&old_package, &previous).is_ok());
+    }
+
+    #[test]
     fn explicit_role_namespace_requires_version_two_and_future_versions_fail() {
         let mut raw = serde_json::to_value(request()).unwrap();
         raw["resources"] = serde_json::json!([{
