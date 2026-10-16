@@ -1154,7 +1154,7 @@ mod tests {
         // group it is assignable at.
         let mut controller = AzureRemoteStackManagementController::mock_ready("test");
         controller.uami_resource_id = Some(
-            "/subscriptions/sub-123/resourceGroups/rg-123/providers/Microsoft.ManagedIdentity/userAssignedIdentities/test-management-identity"
+            "/subscriptions/sub-123/resourceGroups/rg-123/Providers/Microsoft.ManagedIdentity/userAssignedIdentities/test-management-identity"
                 .to_string(),
         );
         controller.scoped_role_definition_ids = BTreeMap::from([
@@ -1877,7 +1877,10 @@ impl AzureRemoteStackManagementController {
     fn reported_role_definition_id(&self) -> Option<String> {
         // The management identity lives in the deployment resource group.
         let deployment_group = self.uami_resource_id.as_deref().and_then(|id| {
-            id.split("/providers/").next().map(str::to_ascii_lowercase)
+            id.to_ascii_lowercase()
+                .split("/providers/")
+                .next()
+                .map(str::to_string)
         });
         self.role_definition_id.clone().or_else(|| {
             self.scoped_role_definition_ids
