@@ -1558,6 +1558,14 @@ mod tests {
                 &Default::default(),
             )
             .unwrap();
+            let roles = management_role_definitions(
+                &grant_plan,
+                "test",
+                "Management role.",
+                "sub-123",
+                "rg-123",
+            )
+            .unwrap();
 
             for (target, action) in [
                 (
@@ -1573,31 +1581,28 @@ mod tests {
                     "Microsoft.ManagedIdentity/userAssignedIdentities/assign/action",
                 ),
             ] {
-                let granting_roles: Vec<_> = grant_plan
-                    .custom_roles
+                // The roles the controller creates: one per scope, each assigned at its scope.
+                let holders: Vec<_> = roles
                     .iter()
-                    .filter(|role| role.role_definition.actions.iter().any(|a| a == action))
+                    .filter(|role| {
+                        role.properties.permissions[0]
+                            .actions
+                            .iter()
+                            .any(|a| a == action)
+                    })
                     .collect();
-                assert!(
-                    !granting_roles.is_empty()
-                        && granting_roles.iter().all(|role| {
-                            role.role_definition.assignable_scopes == [resource_group_scope]
-                        }),
-                    "{workload_set}: {action} must be granted at the deployment resource group only"
+                assert_eq!(
+                    holders.iter().map(|role| role.scope.as_str()).collect::<Vec<_>>(),
+                    [resource_group_scope],
+                    "{workload_set}: {action} must be in the resource-group management role only"
                 );
-                // The role that carries the action (keys alone are not unique, so match its
-                // scope too) must be assigned at a scope covering the linked resource.
+                assert_eq!(
+                    holders[0].properties.assignable_scopes,
+                    [resource_group_scope]
+                );
                 assert!(
-                    granting_roles.iter().any(|role| {
-                        grant_plan.bindings.iter().any(|binding| {
-                            matches!(
-                                &binding.role_definition,
-                                AzureRoleDefinitionRef::Custom { key } if *key == role.key
-                            ) && role.role_definition.assignable_scopes.contains(&binding.scope)
-                                && target.starts_with(&format!("{}/", binding.scope))
-                        })
-                    }),
-                    "{workload_set}: the role granting {action} must be assigned at a scope covering {target}"
+                    target.starts_with(&format!("{}/", holders[0].scope)),
+                    "{workload_set}: the role granting {action} must cover {target}"
                 );
             }
         }
