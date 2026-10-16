@@ -9,7 +9,8 @@ import * as z from "zod";
  * @description GCP ServiceAccount ImportData.
  */
 export const GcpServiceAccountImportDataSchema = z.object({
-    "projectId": z.string().describe("Project ID containing the service account."),
+    "customRoleNamespace": z.string().describe("Exact custom-role namespace selected by setup, independent of resource names.").nullish(),
+"projectId": z.string().describe("Project ID containing the service account."),
 "serviceAccountEmail": z.string().describe("Service account email (`<name>@<project>.iam.gserviceaccount.com`)."),
 "serviceAccountUniqueId": z.string().describe("Stable unique id Google assigns to the service account."),
 "stackPermissionsApplied": z.boolean().describe("Whether stack-level permissions were attached by the generated stack.")

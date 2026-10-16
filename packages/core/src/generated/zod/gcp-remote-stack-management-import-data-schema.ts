@@ -9,7 +9,8 @@ import * as z from "zod";
  * @description GCP RemoteStackManagement ImportData — cross-project service account\nthe manager impersonates.
  */
 export const GcpRemoteStackManagementImportDataSchema = z.object({
-    "installedManagementGrants": z.object({
+    "customRoleNamespace": z.string().describe("Exact custom-role namespace selected by setup, independent of resource names.").nullish(),
+"installedManagementGrants": z.object({
     
     }).catchall(z.array(z.string())).describe("Per-scope revisions of the management grants installed by this setup artifact.").nullish(),
 "managementPermissionsApplied": z.boolean().describe("Whether the management role binding was attached by the\ngenerated stack."),
