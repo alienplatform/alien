@@ -276,7 +276,7 @@ fn emit_management_role(fragment: &mut TfFragment, label: &str, role: AzureScope
         None => format!("${{local.resource_prefix}}-management-{kind}-role"),
         Some(suffix) => format!(
             "${{local.resource_prefix}}-management-{kind}-role-{}",
-            suffix.replace('_', "-")
+            suffix
         ),
     };
     fragment.resource_blocks.push(resource_block(
@@ -320,19 +320,18 @@ const OWN_RESOURCE_GROUP_SCOPE: &str =
     "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}";
 
 /// `None` for the deployment's own subscription and resource group. Any other scope (an inline
-/// permission set may name another resource group) gets a suffix built from the scope, so its
-/// role has its own address and Azure name.
+/// permission set may name another resource group) gets a short, stable hash of the full scope,
+/// so its role has its own address and Azure name even when two group names differ only in
+/// punctuation.
 fn scope_suffix(scope: &str) -> Option<String> {
     if scope == OWN_SUBSCRIPTION_SCOPE || scope == OWN_RESOURCE_GROUP_SCOPE {
         return None;
     }
-    let suffix = scope
-        .split(|c: char| !c.is_ascii_alphanumeric())
-        .filter(|part| !part.is_empty() && !part.eq_ignore_ascii_case("subscriptions"))
-        .collect::<Vec<_>>()
-        .join("_")
-        .to_ascii_lowercase();
-    Some(suffix)
+    // FNV-1a: stable across Rust versions and platforms, unlike the std hasher.
+    let hash = scope.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+    });
+    Some(format!("{:08x}", hash >> 32))
 }
 
 fn management_role_address(label: &str, scope: &str, kind: AzureManagementScopeKind) -> String {
