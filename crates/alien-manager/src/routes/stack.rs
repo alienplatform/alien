@@ -771,7 +771,12 @@ fn validate_gcp_role_namespace_reimport(
     existing: &StackState,
     imported: &StackState,
 ) -> crate::error::Result<()> {
-    if existing.platform != Platform::Gcp {
+    if existing.platform != Platform::Gcp
+        && !existing
+            .resources
+            .values()
+            .any(|resource| resource.controller_platform == Some(Platform::Gcp))
+    {
         return Ok(());
     }
     let previous =
@@ -1630,7 +1635,7 @@ fn build_stack_state(
     let mut stack_state =
         StackState::with_resource_prefix(req.platform, req.resource_prefix.trim().to_string());
     stack_state.resources = resources;
-    if req.platform == Platform::Gcp {
+    if req.platform == Platform::Gcp || req.base_platform == Some(Platform::Gcp) {
         GcpCustomRoleNaming::for_deployment(&stack_state).context(ErrorData::BadRequest {
             reason: "Imported GCP identities must agree on their setup custom-role namespace"
                 .to_string(),

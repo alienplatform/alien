@@ -23,6 +23,7 @@
 //! separately.
 
 use alien_core::import::{
+    ImportContext,
     data::{
         AwsAiImportData, AwsKeyImportData, AwsKvImportData, AwsRemoteBindingsImportData,
         AwsRemoteStackManagementImportData, AwsSandboxImportData, AwsServiceAccountImportData,
@@ -34,7 +35,6 @@ use alien_core::import::{
         GcpRemoteStackManagementImportData, GcpServiceActivationImportData, GcpStorageImportData,
         KubernetesClusterImportData,
     },
-    ImportContext,
 };
 use alien_core::{
     Ai, ArtifactRegistry, AwsManagementConfig, AwsOpenSearch, AwsOpenSearchOutputs,
@@ -52,6 +52,107 @@ use alien_core::{
 use alien_infra::{ImporterRegistry, StackResourceStateExt};
 use serde_json::json;
 use std::collections::HashMap;
+
+#[test]
+fn gcp_import_preserves_exact_role_namespace_for_quota_and_runtime_planning() {
+    let account = ServiceAccount::new("runtime-sa".into())
+        .stack_permission_set(
+            alien_permissions::get_permission_set("storage/data-write")
+                .unwrap()
+                .clone(),
+        )
+        .build();
+    let entry = frozen_entry(account.clone());
+    let registry = ImporterRegistry::built_in();
+    let settings = settings();
+    let ctx = ImportContext {
+        resource_id: "runtime-sa",
+        platform: Platform::Gcp,
+        region: "us-central1",
+        stack_settings: &settings,
+        management_config: None,
+        resource: &entry,
+    };
+    let payload = json!({
+        "projectId":"test", "serviceAccountEmail":"runtime@test.iam.gserviceaccount.com",
+        "serviceAccountUniqueId":"123456789", "stackPermissionsApplied":true,
+        "customRoleNamespace":"approved_roles"
+    });
+    let imported = registry
+        .run(
+            &ServiceAccount::RESOURCE_TYPE,
+            Platform::Gcp,
+            payload.clone(),
+            &ctx,
+        )
+        .unwrap();
+    assert_eq!(imported.lifecycle, ResourceLifecycle::Frozen);
+    assert_eq!(imported.status, ResourceStatus::Running);
+    assert_eq!(internal_state(&imported)["_controllerStateVersion"], 5);
+    let mut state = alien_core::StackState::with_resource_prefix(
+        Platform::Gcp,
+        "different-deployment-prefix".into(),
+    );
+    state.resources.insert("runtime-sa".into(), imported);
+    let naming = alien_infra::core::GcpCustomRoleNaming::for_deployment(&state).unwrap();
+    assert_eq!(naming.namespace(&state.resource_prefix), "approved_roles");
+    assert_eq!(
+        naming.execute_namespace(&state.resource_prefix),
+        "approved_roles"
+    );
+    let stack = alien_core::Stack::new("test".into())
+        .add(account, ResourceLifecycle::Frozen)
+        .build();
+    let config = alien_core::GcpClientConfig {
+        project_id: "test".into(),
+        region: "us-central1".into(),
+        project_number: Some("123456".into()),
+        credentials: alien_core::GcpCredentials::AccessToken {
+            token: "unused".into(),
+        },
+        service_overrides: None,
+    };
+    let roles =
+        alien_preflights::runtime::gcp_iam::desired_custom_role_names(&stack, &state, &config)
+            .unwrap();
+    assert_eq!(roles.len(), 1);
+    assert!(
+        roles
+            .iter()
+            .all(|name| name.starts_with("projects/test/roles/role_approved_roles_"))
+    );
+
+    for invalid in [
+        "",
+        "UPPER",
+        "with-dash",
+        "abcdefghijklmnopqrs",
+        "prefix/escape",
+    ] {
+        let mut bad = payload.clone();
+        bad["customRoleNamespace"] = json!(invalid);
+        let error = registry
+            .run(&ServiceAccount::RESOURCE_TYPE, Platform::Gcp, bad, &ctx)
+            .unwrap_err();
+        assert_eq!(error.code, "IMPORT_DATA_INVALID");
+        assert!(!error.retryable);
+    }
+    let mut legacy = payload;
+    legacy
+        .as_object_mut()
+        .unwrap()
+        .remove("customRoleNamespace");
+    state.resources.insert(
+        "runtime-sa".into(),
+        registry
+            .run(&ServiceAccount::RESOURCE_TYPE, Platform::Gcp, legacy, &ctx)
+            .unwrap(),
+    );
+    assert_eq!(
+        alien_infra::core::GcpCustomRoleNaming::for_deployment(&state).unwrap(),
+        alien_infra::core::GcpCustomRoleNaming::HashedLongPrefix
+    );
+}
 
 #[path = "importers/remote_stack_management.rs"]
 mod remote_stack_management;
@@ -709,7 +810,8 @@ fn gcp_network_import_derives_subnetwork_name() {
     );
     assert_running_with_internal_state(&state);
     assert_eq!(
-        internal_state(&state)["subnetworkName"], "alien-stack-workload",
+        internal_state(&state)["subnetworkName"],
+        "alien-stack-workload",
         "importer must derive subnetwork_name from the subnet self-link, else the worker gets no VPC egress"
     );
     assert_eq!(internal_state(&state)["proxySubnetCidr"], "10.1.0.0/23");

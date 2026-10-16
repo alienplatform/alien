@@ -6,8 +6,8 @@
 use std::collections::HashSet;
 
 use crate::core::{
-    azure_permissions_helper::AzurePermissionsHelper, GcpCustomRoleNaming,
-    ResourceControllerContext,
+    GcpCustomRoleNaming, ResourceControllerContext,
+    azure_permissions_helper::AzurePermissionsHelper,
 };
 use crate::error::{ErrorData, Result};
 use alien_azure_clients::authorization::Scope;
@@ -19,12 +19,12 @@ use alien_gcp_clients::iam::{
     Binding, CreateRoleRequest, IamApi, IamPolicy, Role, RoleLaunchStage,
 };
 use alien_permissions::{
+    BindingTarget, PermissionContext,
     aws_resource_policies::{
         aws_management_resource_policy_name, aws_resource_policy_name, render_aws_resource_policy,
         without_refs_the_stack_policy_grants,
     },
     generators::*,
-    BindingTarget, PermissionContext,
 };
 
 use indexmap::IndexMap;
@@ -44,6 +44,30 @@ fn gcp_custom_role_matches(existing: &Role, desired: &Role) -> bool {
 }
 
 const GCP_CUSTOM_ROLE_UPDATE_MASK: &str = "includedPermissions,title,description,stage";
+
+async fn validate_imported_gcp_custom_role(
+    iam: &dyn IamApi,
+    permission_set_id: &str,
+    desired: &GcpCustomRole,
+) -> Result<()> {
+    let existing = get_gcp_custom_role(iam, permission_set_id, desired).await?;
+    let matches = existing.as_ref().is_some_and(|existing| {
+        !existing.deleted.unwrap_or(false)
+            && existing.stage == Some(RoleLaunchStage::Ga)
+            && existing.included_permissions.iter().collect::<HashSet<_>>()
+                == desired.included_permissions.iter().collect::<HashSet<_>>()
+    });
+    if !matches {
+        return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+            message: format!(
+                "Setup-owned custom role '{}' is missing, deleted or has different permissions; rerun setup with its owner before continuing",
+                desired.role_id,
+            ),
+            resource_id: Some(permission_set_id.to_string()),
+        }));
+    }
+    Ok(())
+}
 
 /// Converge one GCP custom role on `custom_role`, reusing its ID in whatever
 /// state GCP holds it.
@@ -125,7 +149,7 @@ async fn ensure_gcp_custom_role(
             return Err(e.context(ErrorData::CloudPlatformError {
                 message: format!("Failed to create custom role '{}'", custom_role.role_id),
                 resource_id: Some(permission_set_id.to_string()),
-            }))
+            }));
         }
     };
 
@@ -506,14 +530,28 @@ impl ResourcePermissionsHelper {
             return Ok(());
         }
 
+        let imported_roles = matches!(
+            GcpCustomRoleNaming::for_deployment(ctx.state)?,
+            GcpCustomRoleNaming::SetupNamespace(_)
+        );
+
         let gcp_config = ctx.get_gcp_config()?;
         let iam_client = ctx.service_provider.get_gcp_iam_client(gcp_config)?;
 
         let mut seen_role_names = HashSet::new();
         for custom_role in custom_roles {
             if seen_role_names.insert(custom_role.name.clone()) {
-                ensure_gcp_custom_role(iam_client.as_ref(), permission_set_id, &custom_role)
+                if imported_roles {
+                    validate_imported_gcp_custom_role(
+                        iam_client.as_ref(),
+                        permission_set_id,
+                        &custom_role,
+                    )
                     .await?;
+                } else {
+                    ensure_gcp_custom_role(iam_client.as_ref(), permission_set_id, &custom_role)
+                        .await?;
+                }
             }
         }
 
@@ -532,6 +570,14 @@ impl ResourcePermissionsHelper {
     /// Project IAM/resource IAM bindings must be removed before this runs. Missing
     /// roles are tolerated so delete stays idempotent.
     pub async fn delete_gcp_custom_roles(ctx: &ResourceControllerContext<'_>) -> Result<()> {
+        // An imported namespace records definitions owned by the setup package
+        // or its external role owner. Neither ownership transfers on import.
+        if matches!(
+            GcpCustomRoleNaming::for_deployment(ctx.state)?,
+            GcpCustomRoleNaming::SetupNamespace(_)
+        ) {
+            return Ok(());
+        }
         let gcp_config = ctx.get_gcp_config()?;
         let iam_client = ctx.service_provider.get_gcp_iam_client(gcp_config)?;
         let mut namespaces = vec![
@@ -2421,10 +2467,12 @@ mod tests {
         let account_custom_roles = grant_plan.custom_roles_for_bindings(&account_bindings);
 
         assert_eq!(resource_custom_roles.len(), 1);
-        assert!(resource_custom_roles[0]
-            .included_permissions
-            .iter()
-            .any(|permission| permission == "storage.objects.get"));
+        assert!(
+            resource_custom_roles[0]
+                .included_permissions
+                .iter()
+                .any(|permission| permission == "storage.objects.get")
+        );
         assert_eq!(account_custom_roles.len(), 1);
         assert_eq!(
             account_custom_roles[0].included_permissions,
@@ -2564,7 +2612,8 @@ mod tests {
                         continue;
                     }
                     let resource_type = resource.config.resource_type().to_string();
-                    let resource_name = match entry["resourceNames"][resource_id.as_str()].as_str() {
+                    let resource_name = match entry["resourceNames"][resource_id.as_str()].as_str()
+                    {
                         Some(name) => name.to_string(),
                         None => match resource_type.as_str() {
                             "vault" => format!("{prefix}-{resource_id}"),
@@ -2697,9 +2746,11 @@ mod tests {
             .unwrap();
         let project = before.bindings_for_target(GcpBindingTargetScope::Project);
         assert_eq!(project.len(), 1);
-        assert!(after
-            .bindings_for_target(GcpBindingTargetScope::Project)
-            .is_empty());
+        assert!(
+            after
+                .bindings_for_target(GcpBindingTargetScope::Project)
+                .is_empty()
+        );
         assert_eq!(
             before.bindings_for_target(GcpBindingTargetScope::CurrentResource),
             after.bindings_for_target(GcpBindingTargetScope::CurrentResource)
@@ -2816,17 +2867,17 @@ mod tests {
             .iter()
             .find(|binding| binding.role == "roles/viewer")
             .expect("unowned binding remains");
-        assert!(viewer
-            .members
-            .contains(&"serviceAccount:app@p.iam.gserviceaccount.com".to_string()));
+        assert!(
+            viewer
+                .members
+                .contains(&"serviceAccount:app@p.iam.gserviceaccount.com".to_string())
+        );
         assert!(viewer.members.contains(
             &"deleted:serviceAccount:someone-else@p.iam.gserviceaccount.com?uid=456".to_string()
         ));
-        assert!(!viewer
-            .members
-            .iter()
-            .any(|member| member
-                .starts_with("deleted:serviceAccount:app@p.iam.gserviceaccount.com?")));
+        assert!(!viewer.members.iter().any(|member| {
+            member.starts_with("deleted:serviceAccount:app@p.iam.gserviceaccount.com?")
+        }));
 
         let desired = bindings
             .iter()
@@ -2873,9 +2924,11 @@ mod tests {
                     .members
                     .contains(&"serviceAccount:management@p.iam.gserviceaccount.com".to_string())
         }));
-        assert!(!bindings
-            .iter()
-            .any(|binding| binding.role == "projects/p/roles/role_stack_vault_data_write_old"));
+        assert!(
+            !bindings
+                .iter()
+                .any(|binding| binding.role == "projects/p/roles/role_stack_vault_data_write_old")
+        );
         assert!(bindings.iter().any(|binding| {
             binding.role == "projects/p/roles/role_stack_vault_data_write"
                 && binding
@@ -2909,9 +2962,11 @@ mod tests {
         );
 
         assert!(changed);
-        assert!(!bindings
-            .iter()
-            .any(|binding| binding.role == "projects/p/roles/role_stack_worker_management"));
+        assert!(
+            !bindings
+                .iter()
+                .any(|binding| binding.role == "projects/p/roles/role_stack_worker_management")
+        );
         assert!(bindings.iter().any(|binding| {
             binding.role == "projects/p/roles/role_stack_vault_data_write"
                 && binding
@@ -3024,6 +3079,59 @@ mod tests {
             404,
             r#"{"error":{"code":404,"message":"The role named projects/p/roles/role_acme_storage_data_write was not found.","status":"NOT_FOUND"}}"#,
         )
+    }
+
+    #[tokio::test]
+    async fn imported_role_validation_preserves_owner_metadata_without_writes() {
+        let mut iam = MockIamApi::new();
+        iam.expect_get_role()
+            .times(1)
+            .withf(|name| name == PROBE_ROLE_NAME)
+            .returning(|_| {
+                let mut role = gcp_role(&["storage.objects.get", "storage.objects.create"], false);
+                role.title = Some("External owner title".into());
+                role.description = Some("External owner description".into());
+                Ok(role)
+            });
+        iam.expect_create_role().never();
+        iam.expect_patch_role().never();
+        iam.expect_undelete_role().never();
+        validate_imported_gcp_custom_role(&iam, "storage/data-write", &desired_custom_role())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn imported_role_drift_requires_setup_without_creating_or_expanding_roles() {
+        let mut wrong_stage = gcp_role(&["storage.objects.get", "storage.objects.create"], false);
+        wrong_stage.stage = None;
+        for role in [
+            None,
+            Some(gcp_role(
+                &["storage.objects.get", "storage.objects.create"],
+                true,
+            )),
+            Some(gcp_role(&["storage.objects.get"], false)),
+            Some(wrong_stage),
+        ] {
+            let mut iam = MockIamApi::new();
+            iam.expect_get_role()
+                .times(1)
+                .returning(move |_| role.clone().ok_or_else(not_found));
+            iam.expect_create_role().never();
+            iam.expect_patch_role().never();
+            iam.expect_undelete_role().never();
+            let error = validate_imported_gcp_custom_role(
+                &iam,
+                "storage/data-write",
+                &desired_custom_role(),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(error.code, "RESOURCE_CONFIG_INVALID");
+            assert!(!error.retryable);
+            assert!(error.message.contains("rerun setup"));
+        }
     }
 
     fn expect_patch_to_desired(iam: &mut MockIamApi, seq: &mut Sequence) {
@@ -3337,12 +3445,14 @@ mod tests {
             error.source.as_ref().unwrap().code,
             "REMOTE_RESOURCE_CONFLICT"
         );
-        assert!(error
-            .source
-            .as_ref()
-            .unwrap()
-            .message
-            .contains("already exists"));
+        assert!(
+            error
+                .source
+                .as_ref()
+                .unwrap()
+                .message
+                .contains("already exists")
+        );
 
         ensure_gcp_custom_role(&iam, "storage/data-write", &desired_custom_role())
             .await
@@ -3386,12 +3496,14 @@ mod tests {
             .expect_err("a soft-deleted role hidden by a stale read can still be reused");
         assert_eq!(error.code, "CLOUD_PLATFORM_ERROR");
         assert!(error.retryable);
-        assert!(error
-            .source
-            .as_ref()
-            .unwrap()
-            .message
-            .contains("deleted state"));
+        assert!(
+            error
+                .source
+                .as_ref()
+                .unwrap()
+                .message
+                .contains("deleted state")
+        );
 
         ensure_gcp_custom_role(&iam, "storage/data-write", &desired_custom_role())
             .await
@@ -3431,12 +3543,14 @@ mod tests {
             error.source.as_ref().unwrap().code,
             "REMOTE_RESOURCE_CONFLICT"
         );
-        assert!(error
-            .source
-            .as_ref()
-            .unwrap()
-            .message
-            .contains("precondition was not met"));
+        assert!(
+            error
+                .source
+                .as_ref()
+                .unwrap()
+                .message
+                .contains("precondition was not met")
+        );
     }
 
     #[tokio::test]
