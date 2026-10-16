@@ -8824,7 +8824,7 @@ trackedFiles:
     pristine_git_object: ebd394e53a5345476b0684e4eb6699966cd90b1a
   docs/models/deploymentrole.md:
     id: 2a73313effc3
-    last_write_checksum: sha1:04f1277102d3526705af1f750f03c5524e379849
+    last_write_checksum: sha1:7d7cb206e4c5127575e284c8fb23e57352e0e0a3
     pristine_git_object: b717b3384ca17f9a32e2f82970b9e80466fa9fce
   docs/models/deploymentroutegateway1.md:
     id: 4040b021d441
@@ -28300,7 +28300,7 @@ trackedFiles:
     pristine_git_object: 2e4cbee6b1041379b99872408efec2350d1d04c1
   docs/models/role.md:
     id: b694540a5b1e
-    last_write_checksum: sha1:9d4e9a45bd175bc97d9ec598d74d62a61729f753
+    last_write_checksum: sha1:4deeed125274abfa9367d7d61f57f29dfa74419b
     pristine_git_object: a76fd3bfe053e4ad29383da8c6c9367b7b4f39f4
   docs/models/rollout.md:
     id: 630112fd6d17
@@ -36968,7 +36968,7 @@ trackedFiles:
     pristine_git_object: 84b3d92f39f8ef29f1cd2f3f94ef1ba88238d648
   src/models/deploymentrole.ts:
     id: 3b6a590f8d2b
-    last_write_checksum: sha1:da749f5b735787de557e28023b4db45a433d8fd2
+    last_write_checksum: sha1:6cb17a7690047ab108b95f39465af31c98637d06
     pristine_git_object: 227bcd7fc978e253e9202838cc2b516338ca5792
   src/models/deploymentscope.ts:
     id: 23d6f18a4970
