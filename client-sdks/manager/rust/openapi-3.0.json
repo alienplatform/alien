@@ -885,6 +885,46 @@
         ]
       }
     },
+    "/v1/deployments/{id}/quota-warning-overrides": {
+      "patch": {
+        "tags": [
+          "deployments"
+        ],
+        "summary": "Save settings only; retrying a failed deployment remains an explicit operation.",
+        "operationId": "set_quota_warning_overrides",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deployment ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetQuotaWarningOverridesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Overrides saved without scheduling execution"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/v1/deployments/{id}/redeploy": {
       "post": {
         "tags": [
@@ -16749,6 +16789,22 @@
           }
         }
       },
+      "SetQuotaWarningOverridesRequest": {
+        "type": "object",
+        "description": "Replace the saved quota warning overrides. An empty list explicitly clears them.",
+        "required": [
+          "quotaWarningOverrides"
+        ],
+        "properties": {
+          "quotaWarningOverrides": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
       "SetSecretRequest": {
         "type": "object",
         "description": "Request body for setting a secret.",
@@ -17101,6 +17157,13 @@
               }
             },
             "nullable": true
+          },
+          "quotaWarningOverrides": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Provider quota identities whose preflight failures become visible warnings\nfor this deployment. Checks still run; deploy-time provider limits still apply.\nUnknown identities are rejected. An empty list restores normal blocking."
           },
           "setupManagement": {
             "$ref": "#/components/schemas/SetupManagement",
