@@ -86,7 +86,7 @@ fn gcp_import_preserves_exact_role_namespace_for_quota_and_runtime_planning() {
             &ctx,
         )
         .unwrap();
-    assert_eq!(imported.lifecycle, ResourceLifecycle::Frozen);
+    assert_eq!(imported.lifecycle, Some(ResourceLifecycle::Frozen));
     assert_eq!(imported.status, ResourceStatus::Running);
     assert_eq!(internal_state(&imported)["_controllerStateVersion"], 5);
     let mut state = alien_core::StackState::with_resource_prefix(
@@ -94,7 +94,7 @@ fn gcp_import_preserves_exact_role_namespace_for_quota_and_runtime_planning() {
         "different-deployment-prefix".into(),
     );
     state.resources.insert("runtime-sa".into(), imported);
-    let naming = alien_infra::core::GcpCustomRoleNaming::for_deployment(&state).unwrap();
+    let naming = alien_infra::GcpCustomRoleNaming::for_deployment(&state).unwrap();
     assert_eq!(naming.namespace(&state.resource_prefix), "approved_roles");
     assert_eq!(
         naming.execute_namespace(&state.resource_prefix),
@@ -149,8 +149,8 @@ fn gcp_import_preserves_exact_role_namespace_for_quota_and_runtime_planning() {
             .unwrap(),
     );
     assert_eq!(
-        alien_infra::core::GcpCustomRoleNaming::for_deployment(&state).unwrap(),
-        alien_infra::core::GcpCustomRoleNaming::HashedLongPrefix
+        alien_infra::GcpCustomRoleNaming::for_deployment(&state).unwrap(),
+        alien_infra::GcpCustomRoleNaming::HashedLongPrefix
     );
 }
 
