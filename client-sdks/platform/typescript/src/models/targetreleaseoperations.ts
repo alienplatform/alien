@@ -1444,7 +1444,10 @@ export type DeploymentStateSetupScaffolding = {
  */
 export type DeploymentStateSetupUpdateAuthorization = {
   /**
-   * Setup-owned digest (`Stack::setup_owned_digest`) of the last successful deployment.
+   * Setup resources and permissions digest (`Stack::setup_update_digest`) of the last
+   *
+   * @remarks
+   * successful deployment. The field name is retained for serialized compatibility.
    */
   baselineFrozenDigest: string;
   /**
@@ -1468,7 +1471,10 @@ export type DeploymentStateSetupUpdateAuthorization = {
    */
   setupTarget: string;
   /**
-   * Setup-owned digest (`Stack::setup_owned_digest`) of the stack the setup re-import prepared.
+   * Setup resources and permissions digest (`Stack::setup_update_digest`) of the stack
+   *
+   * @remarks
+   * the setup re-import prepared.
    */
   targetFrozenDigest: string;
 };
@@ -1528,9 +1534,10 @@ export type DeploymentStateRuntimeMetadata = {
    */
   lastSyncedSecretNames?: Array<string> | undefined;
   /**
-   * Release `pending_prepared_stack` was prepared from. The target can move
+   * Release the in-flight stack was prepared from: `pending_prepared_stack`
    *
    * @remarks
+   * during updates, or `prepared_stack` during local first startup. The target can move
    * to a newer release while that stack is still being applied; this tells
    * the update which release actually converged.
    */

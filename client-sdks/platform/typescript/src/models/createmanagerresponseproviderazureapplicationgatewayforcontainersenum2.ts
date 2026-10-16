@@ -1015,6 +1015,14 @@ export type CreateManagerResponseStackSettings2 = {
    */
   publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
+   * Provider quota identities whose preflight failures become visible warnings
+   *
+   * @remarks
+   * for this deployment. Checks still run; deploy-time provider limits still apply.
+   * Unknown identities are rejected. An empty list restores normal blocking.
+   */
+  quotaWarningOverrides?: Array<string> | undefined;
+  /**
    * Whether setup remains a separate administrator operation.
    */
   setupManagement?: CreateManagerResponseSetupManagement2 | undefined;
@@ -3322,6 +3330,7 @@ export const CreateManagerResponseStackSettings2$inboundSchema: z.ZodType<
   publicEndpoints: z.nullable(
     z.record(z.string(), z.record(z.string(), z.string())),
   ).optional(),
+  quotaWarningOverrides: z.array(z.string()).optional(),
   setupManagement: CreateManagerResponseSetupManagement2$inboundSchema
     .optional(),
   telemetry: CreateManagerResponseTelemetry2$inboundSchema.optional(),

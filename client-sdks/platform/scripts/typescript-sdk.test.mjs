@@ -19,7 +19,7 @@ import {
 } from "../typescript/esm/models/publishoperationspluginrequest.js";
 import { PublishOperationsPluginResponse$inboundSchema } from "../typescript/esm/models/publishoperationspluginresponse.js";
 import { DeploymentInfoHelm$inboundSchema } from "../typescript/esm/models/deploymentinfo.js";
-import { PackageRule$inboundSchema, packageRuleFromJSON } from "../typescript/esm/models/package.js";
+import { PackageModules$inboundSchema, PackageTargets$inboundSchema, PackageRule$inboundSchema, packageRuleFromJSON } from "../typescript/esm/models/package.js";
 import {
   UpdateProjectBinaryTarget,
   UpdateProjectHelm$outboundSchema,
@@ -59,6 +59,11 @@ test("published package model imports still validate and serialize", () => {
   assert.deepEqual(UpdateProjectHelm$outboundSchema.parse(helm), helm);
   assert.deepEqual(JSON.parse(updateProjectHelmToJSON(helm)), helm);
   assert.equal(UpdateProjectBinaryTarget.LinuxArm64, "linux-arm64");
+  const operationalDefaults = { heartbeats: "on", telemetry: "off", updates: "auto" };
+  const module = { downloadUrl: "https://packages.example/module.zip", filename: "module.zip", shasum: "example", size: 1, source: "registry.example/application/aws", target: "aws", operationalDefaults };
+  const target = { launchStackUrl: "https://console.example/launch", sha256: "example", size: 1, stackPolicyUrl: "https://packages.example/policy.json", target: "aws", templateUrl: "https://packages.example/template.json", operationalDefaults, parameters: ["CustomerKeyArn"] };
+  assert.deepEqual(PackageModules$inboundSchema.parse(module), module);
+  assert.deepEqual(PackageTargets$inboundSchema.parse(target), target);
 });
 
 test("Helm installation routing survives SDK response validation", () => {

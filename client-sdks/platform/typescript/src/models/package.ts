@@ -471,6 +471,69 @@ export type Config =
   | ConfigTerraform;
 
 /**
+ * How heartbeat health checks are handled.
+ */
+export const PackageModulesHeartbeats = {
+  Off: "off",
+  On: "on",
+} as const;
+/**
+ * How heartbeat health checks are handled.
+ */
+export type PackageModulesHeartbeats = ClosedEnum<
+  typeof PackageModulesHeartbeats
+>;
+
+/**
+ * How telemetry (logs, metrics, traces) is handled.
+ */
+export const PackageModulesTelemetry = {
+  Off: "off",
+  Auto: "auto",
+  ApprovalRequired: "approval-required",
+} as const;
+/**
+ * How telemetry (logs, metrics, traces) is handled.
+ */
+export type PackageModulesTelemetry = ClosedEnum<
+  typeof PackageModulesTelemetry
+>;
+
+/**
+ * How updates are delivered to the deployment.
+ */
+export const PackageModulesUpdates = {
+  Auto: "auto",
+  ApprovalRequired: "approval-required",
+} as const;
+/**
+ * How updates are delivered to the deployment.
+ */
+export type PackageModulesUpdates = ClosedEnum<typeof PackageModulesUpdates>;
+
+/**
+ * Operational settings fixed by the Standard configuration profile.
+ */
+export type PackageOperationalDefaultsModules = {
+  /**
+   * How heartbeat health checks are handled.
+   */
+  heartbeats: PackageModulesHeartbeats;
+  /**
+   * How telemetry (logs, metrics, traces) is handled.
+   */
+  telemetry: PackageModulesTelemetry;
+  /**
+   * How updates are delivered to the deployment.
+   */
+  updates: PackageModulesUpdates;
+};
+
+export type PackageModulesOperationalDefaultsUnion =
+  | PackageOperationalDefaultsModules
+  | string;
+
+/**
  * Information about a single Terraform module package for one target.
  */
 export type PackageModules = {
@@ -482,6 +545,11 @@ export type PackageModules = {
    * Filename of the module archive
    */
   filename: string;
+  operationalDefaults?:
+    | PackageOperationalDefaultsModules
+    | string
+    | null
+    | undefined;
   /**
    * SHA256 checksum of the archive
    */
@@ -658,6 +726,69 @@ export type OutputsGcpSandboxImage = {
 };
 
 /**
+ * How heartbeat health checks are handled.
+ */
+export const PackageTargetsHeartbeats = {
+  Off: "off",
+  On: "on",
+} as const;
+/**
+ * How heartbeat health checks are handled.
+ */
+export type PackageTargetsHeartbeats = ClosedEnum<
+  typeof PackageTargetsHeartbeats
+>;
+
+/**
+ * How telemetry (logs, metrics, traces) is handled.
+ */
+export const PackageTargetsTelemetry = {
+  Off: "off",
+  Auto: "auto",
+  ApprovalRequired: "approval-required",
+} as const;
+/**
+ * How telemetry (logs, metrics, traces) is handled.
+ */
+export type PackageTargetsTelemetry = ClosedEnum<
+  typeof PackageTargetsTelemetry
+>;
+
+/**
+ * How updates are delivered to the deployment.
+ */
+export const PackageTargetsUpdates = {
+  Auto: "auto",
+  ApprovalRequired: "approval-required",
+} as const;
+/**
+ * How updates are delivered to the deployment.
+ */
+export type PackageTargetsUpdates = ClosedEnum<typeof PackageTargetsUpdates>;
+
+/**
+ * Operational settings fixed by the Standard configuration profile.
+ */
+export type PackageOperationalDefaultsTargets = {
+  /**
+   * How heartbeat health checks are handled.
+   */
+  heartbeats: PackageTargetsHeartbeats;
+  /**
+   * How telemetry (logs, metrics, traces) is handled.
+   */
+  telemetry: PackageTargetsTelemetry;
+  /**
+   * How updates are delivered to the deployment.
+   */
+  updates: PackageTargetsUpdates;
+};
+
+export type PackageTargetsOperationalDefaultsUnion =
+  | PackageOperationalDefaultsTargets
+  | string;
+
+/**
  * Information about a single CloudFormation template package for one target.
  */
 export type PackageTargets = {
@@ -665,6 +796,15 @@ export type PackageTargets = {
    * AWS Console quick-launch URL
    */
   launchStackUrl: string;
+  operationalDefaults?:
+    | PackageOperationalDefaultsTargets
+    | string
+    | null
+    | undefined;
+  /**
+   * Parameters exposed by this template. Empty for legacy package metadata.
+   */
+  parameters?: Array<string> | undefined;
   /**
    * SHA256 checksum of the template
    */
@@ -1324,10 +1464,71 @@ export function configFromJSON(
 }
 
 /** @internal */
+export const PackageModulesHeartbeats$inboundSchema: z.ZodEnum<
+  typeof PackageModulesHeartbeats
+> = z.enum(PackageModulesHeartbeats);
+
+/** @internal */
+export const PackageModulesTelemetry$inboundSchema: z.ZodEnum<
+  typeof PackageModulesTelemetry
+> = z.enum(PackageModulesTelemetry);
+
+/** @internal */
+export const PackageModulesUpdates$inboundSchema: z.ZodEnum<
+  typeof PackageModulesUpdates
+> = z.enum(PackageModulesUpdates);
+
+/** @internal */
+export const PackageOperationalDefaultsModules$inboundSchema: z.ZodType<
+  PackageOperationalDefaultsModules,
+  unknown
+> = z.object({
+  heartbeats: PackageModulesHeartbeats$inboundSchema,
+  telemetry: PackageModulesTelemetry$inboundSchema,
+  updates: PackageModulesUpdates$inboundSchema,
+});
+
+export function packageOperationalDefaultsModulesFromJSON(
+  jsonString: string,
+): SafeParseResult<PackageOperationalDefaultsModules, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PackageOperationalDefaultsModules$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PackageOperationalDefaultsModules' from JSON`,
+  );
+}
+
+/** @internal */
+export const PackageModulesOperationalDefaultsUnion$inboundSchema: z.ZodType<
+  PackageModulesOperationalDefaultsUnion,
+  unknown
+> = z.union([
+  z.lazy(() => PackageOperationalDefaultsModules$inboundSchema),
+  z.string(),
+]);
+
+export function packageModulesOperationalDefaultsUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<PackageModulesOperationalDefaultsUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      PackageModulesOperationalDefaultsUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PackageModulesOperationalDefaultsUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const PackageModules$inboundSchema: z.ZodType<PackageModules, unknown> =
   z.object({
     downloadUrl: z.string(),
     filename: z.string(),
+    operationalDefaults: z.nullable(
+      z.union([
+        z.lazy(() => PackageOperationalDefaultsModules$inboundSchema),
+        z.string(),
+      ]),
+    ).optional(),
     shasum: z.string(),
     size: z.int(),
     source: z.string(),
@@ -1489,9 +1690,71 @@ export function outputsGcpSandboxImageFromJSON(
 }
 
 /** @internal */
+export const PackageTargetsHeartbeats$inboundSchema: z.ZodEnum<
+  typeof PackageTargetsHeartbeats
+> = z.enum(PackageTargetsHeartbeats);
+
+/** @internal */
+export const PackageTargetsTelemetry$inboundSchema: z.ZodEnum<
+  typeof PackageTargetsTelemetry
+> = z.enum(PackageTargetsTelemetry);
+
+/** @internal */
+export const PackageTargetsUpdates$inboundSchema: z.ZodEnum<
+  typeof PackageTargetsUpdates
+> = z.enum(PackageTargetsUpdates);
+
+/** @internal */
+export const PackageOperationalDefaultsTargets$inboundSchema: z.ZodType<
+  PackageOperationalDefaultsTargets,
+  unknown
+> = z.object({
+  heartbeats: PackageTargetsHeartbeats$inboundSchema,
+  telemetry: PackageTargetsTelemetry$inboundSchema,
+  updates: PackageTargetsUpdates$inboundSchema,
+});
+
+export function packageOperationalDefaultsTargetsFromJSON(
+  jsonString: string,
+): SafeParseResult<PackageOperationalDefaultsTargets, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PackageOperationalDefaultsTargets$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PackageOperationalDefaultsTargets' from JSON`,
+  );
+}
+
+/** @internal */
+export const PackageTargetsOperationalDefaultsUnion$inboundSchema: z.ZodType<
+  PackageTargetsOperationalDefaultsUnion,
+  unknown
+> = z.union([
+  z.lazy(() => PackageOperationalDefaultsTargets$inboundSchema),
+  z.string(),
+]);
+
+export function packageTargetsOperationalDefaultsUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<PackageTargetsOperationalDefaultsUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      PackageTargetsOperationalDefaultsUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PackageTargetsOperationalDefaultsUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const PackageTargets$inboundSchema: z.ZodType<PackageTargets, unknown> =
   z.object({
     launchStackUrl: z.string(),
+    operationalDefaults: z.nullable(
+      z.union([
+        z.lazy(() => PackageOperationalDefaultsTargets$inboundSchema),
+        z.string(),
+      ]),
+    ).optional(),
+    parameters: z.array(z.string()).optional(),
     sha256: z.string(),
     size: z.int(),
     stackPolicyUrl: z.string(),

@@ -516,6 +516,14 @@ export type ManagerRetryResponseStackSettings1 = {
    */
   publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
+   * Provider quota identities whose preflight failures become visible warnings
+   *
+   * @remarks
+   * for this deployment. Checks still run; deploy-time provider limits still apply.
+   * Unknown identities are rejected. An empty list restores normal blocking.
+   */
+  quotaWarningOverrides?: Array<string> | undefined;
+  /**
    * Whether setup remains a separate administrator operation.
    */
   setupManagement?: ManagerRetryResponseSetupManagement1 | undefined;
@@ -1216,6 +1224,7 @@ export const ManagerRetryResponseStackSettings1$inboundSchema: z.ZodType<
   publicEndpoints: z.nullable(
     z.record(z.string(), z.record(z.string(), z.string())),
   ).optional(),
+  quotaWarningOverrides: z.array(z.string()).optional(),
   setupManagement: ManagerRetryResponseSetupManagement1$inboundSchema
     .optional(),
   telemetry: ManagerRetryResponseTelemetry1$inboundSchema.optional(),

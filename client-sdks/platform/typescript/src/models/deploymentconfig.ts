@@ -1926,6 +1926,14 @@ export type DeploymentConfigStackSettings = {
    */
   publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
+   * Provider quota identities whose preflight failures become visible warnings
+   *
+   * @remarks
+   * for this deployment. Checks still run; deploy-time provider limits still apply.
+   * Unknown identities are rejected. An empty list restores normal blocking.
+   */
+  quotaWarningOverrides?: Array<string> | undefined;
+  /**
    * Whether setup remains a separate administrator operation.
    */
   setupManagement?: DeploymentConfigSetupManagement | undefined;
@@ -4845,6 +4853,7 @@ export const DeploymentConfigStackSettings$inboundSchema: z.ZodType<
   publicEndpoints: z.nullable(
     z.record(z.string(), z.record(z.string(), z.string())),
   ).optional(),
+  quotaWarningOverrides: z.array(z.string()).optional(),
   setupManagement: DeploymentConfigSetupManagement$inboundSchema.optional(),
   telemetry: DeploymentConfigTelemetry$inboundSchema.optional(),
   updates: DeploymentConfigUpdates$inboundSchema.optional(),

@@ -1526,7 +1526,10 @@ export type DeploymentDetailResponseSetupScaffolding = {
  */
 export type DeploymentDetailResponseSetupUpdateAuthorization = {
   /**
-   * Setup-owned digest (`Stack::setup_owned_digest`) of the last successful deployment.
+   * Setup resources and permissions digest (`Stack::setup_update_digest`) of the last
+   *
+   * @remarks
+   * successful deployment. The field name is retained for serialized compatibility.
    */
   baselineFrozenDigest: string;
   /**
@@ -1550,7 +1553,10 @@ export type DeploymentDetailResponseSetupUpdateAuthorization = {
    */
   setupTarget: string;
   /**
-   * Setup-owned digest (`Stack::setup_owned_digest`) of the stack the setup re-import prepared.
+   * Setup resources and permissions digest (`Stack::setup_update_digest`) of the stack
+   *
+   * @remarks
+   * the setup re-import prepared.
    */
   targetFrozenDigest: string;
 };
@@ -1608,9 +1614,10 @@ export type DeploymentDetailResponseRuntimeMetadata = {
    */
   lastSyncedSecretNames?: Array<string> | undefined;
   /**
-   * Release `pending_prepared_stack` was prepared from. The target can move
+   * Release the in-flight stack was prepared from: `pending_prepared_stack`
    *
    * @remarks
+   * during updates, or `prepared_stack` during local first startup. The target can move
    * to a newer release while that stack is still being applied; this tells
    * the update which release actually converged.
    */
@@ -1973,6 +1980,10 @@ export type DeploymentDetailResponse = {
    * Unique identifier for the workspace.
    */
   workspaceId: string;
+  /**
+   * A customer encryption key is unavailable. Dependent resources are preserved until access returns.
+   */
+  customerKeyUnavailable?: boolean | undefined;
   release?: DeploymentReleaseInfo | null | undefined;
   deploymentGroup?: DeploymentGroupInfo | undefined;
   project?: DeploymentProjectInfo | undefined;
@@ -4556,6 +4567,7 @@ export const DeploymentDetailResponse$inboundSchema: z.ZodType<
   updatedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   managerId: z.string(),
   workspaceId: z.string(),
+  customerKeyUnavailable: z.boolean().optional(),
   release: z.nullable(DeploymentReleaseInfo$inboundSchema).optional(),
   deploymentGroup: DeploymentGroupInfo$inboundSchema.optional(),
   project: DeploymentProjectInfo$inboundSchema.optional(),
