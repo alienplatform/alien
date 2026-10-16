@@ -3,9 +3,10 @@
 use super::helpers::{custom_resource_registration, render_built_ins, render_built_ins_template};
 use alien_cloudformation::{CloudFormationTarget, RegistrationMode};
 use alien_core::{
-    AwsOpenSearch, Email, Key, Kv, LifecycleRule, PermissionProfile, PermissionSetReference, Queue,
-    RemoteBindings, RemoteStackManagement, ResourceLifecycle, ResourceRef, ServiceAccount, Stack,
-    StackSettings, Storage, Vault, Worker, WorkerCode, WorkerTrigger,
+    permissions::ManagementPermissions, AwsOpenSearch, Email, Key, Kv, LifecycleRule,
+    PermissionProfile, PermissionSetReference, Queue, RemoteBindings, RemoteStackManagement,
+    ResourceLifecycle, ResourceRef, ServiceAccount, Stack, StackSettings, Storage, Vault, Worker,
+    WorkerCode, WorkerTrigger,
 };
 
 #[test]
@@ -869,6 +870,28 @@ fn automatic_packages_refuse_resources_the_runtime_cannot_create() {
                 )
                 .build(),
         ),
+        (
+            "management permission override",
+            Stack::new("example".to_string())
+                .add(
+                    Storage::new("files".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .management(ManagementPermissions::Override(PermissionProfile::new()))
+                .build(),
+        ),
+        (
+            "resource-scoped management permission",
+            Stack::new("example".to_string())
+                .add(
+                    Storage::new("files".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .management(ManagementPermissions::Extend(
+                    PermissionProfile::new().resource("files", ["storage/data-read"]),
+                ))
+                .build(),
+        ),
     ];
     for (name, stack) in cases {
         let error = render_automatic(&stack, name)
@@ -891,4 +914,17 @@ fn automatic_packages_refuse_resources_the_runtime_cannot_create() {
         )
         .build();
     render_automatic(&plain, "storage without CORS").expect("plain storage is supported");
+
+    // Control: a stack-wide management extension is installed by setup like the generated grant.
+    let extended = Stack::new("example".to_string())
+        .add(
+            Storage::new("files".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .management(ManagementPermissions::Extend(
+            PermissionProfile::new().global(["storage/data-read"]),
+        ))
+        .build();
+    render_automatic(&extended, "stack-wide management extension")
+        .expect("stack-wide management extensions are supported");
 }

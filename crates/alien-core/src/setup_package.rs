@@ -1,6 +1,6 @@
 use crate::{
-    ownership_policy_for_resource_type, ErrorData, Key, Platform, ResourceEntry, Result, Sandbox,
-    SetupManagement, Stack, Storage,
+    ownership_policy_for_resource_type, ErrorData, Key, ManagementPermissions, Platform,
+    ResourceEntry, Result, Sandbox, SetupManagement, Stack, Storage,
 };
 use alien_error::AlienError;
 
@@ -14,15 +14,33 @@ pub fn validate_automatic_setup_resources(
     if management == SetupManagement::Automatic
         && matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure)
     {
+        let unsupported = |resource_type: &str, resource_id: &str| {
+            AlienError::new(ErrorData::AutomaticSetupResourceUnsupported {
+                resource_type: resource_type.to_string(),
+                resource_id: resource_id.to_string(),
+                platform,
+            })
+        };
+        match stack.management() {
+            // Setup must be able to grant whatever a later release adds.
+            ManagementPermissions::Override(_) => {
+                return Err(unsupported(
+                    "management permission override",
+                    "permissions.management",
+                ));
+            }
+            // The AWS management role may not change its own policies after setup, so a
+            // grant scoped to one resource could never be attached by the runtime.
+            ManagementPermissions::Extend(profile) if platform == Platform::Aws => {
+                if let Some(scope) = profile.0.keys().find(|scope| scope.as_str() != "*") {
+                    return Err(unsupported("resource-scoped management permission", scope));
+                }
+            }
+            _ => {}
+        }
         for (id, entry) in stack.resources() {
             if let Some(resource_type) = automatic_setup_unsupported_resource(entry, platform) {
-                return Err(AlienError::new(
-                    ErrorData::AutomaticSetupResourceUnsupported {
-                        resource_type,
-                        resource_id: id.to_string(),
-                        platform,
-                    },
-                ));
+                return Err(unsupported(&resource_type, id));
             }
         }
     }
@@ -55,7 +73,7 @@ fn automatic_setup_unsupported_resource(
     // These controllers refuse runtime creation: only a setup package can provision them.
     if matches!(
         resource_type.as_ref(),
-        "email" | "experimental/aws-opensearch"
+        "email" | "experimental/aws-opensearch" | "kubernetes-cluster"
     ) {
         return Some(resource_type.as_ref().to_string());
     }

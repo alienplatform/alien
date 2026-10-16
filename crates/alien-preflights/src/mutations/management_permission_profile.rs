@@ -210,7 +210,8 @@ fn generate_auto_management_profile(
         // A direct setup explicitly grants ongoing infrastructure control for all supported
         // resource types, including ones a later release adds. Reuse the permission registry
         // rather than keeping a second cloud-specific administrator-policy implementation.
-        // Data payload permissions remain explicit, resource-scoped grants.
+        // Data payload permissions stay explicit; on AWS they are stack-scoped (see below)
+        // because the management role cannot receive a resource-scoped grant after setup.
         for id in list_permission_set_ids() {
             let Some((resource_type, operation)) = id.split_once('/') else {
                 continue;
