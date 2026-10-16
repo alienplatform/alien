@@ -180,10 +180,12 @@ impl StackMutation for SecretsVaultMutation {
         // Step 4: Add vault data permissions to management profile for the secrets vault.
         // This allows the control plane to sync secret environment variables without
         // granting access to user-declared vaults.
-        // Automatic setup installs stack-wide vault data access with the management identity;
+        // Automatic AWS setup installs stack-wide vault data access with the management role;
         // see ManagementPermissionProfileMutation. A vault-scoped grant would make the
         // runtime write a policy onto its own management role, which is denied.
-        if config.stack_settings.setup_management != alien_core::SetupManagement::Automatic {
+        if !(stack_state.platform == Platform::Aws
+            && config.stack_settings.setup_management == alien_core::SetupManagement::Automatic)
+        {
             add_vault_permissions_to_management(
                 &mut stack,
                 secrets_vault_id,

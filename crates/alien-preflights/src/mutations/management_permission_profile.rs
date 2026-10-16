@@ -203,6 +203,8 @@ fn generate_auto_management_profile(
     let mut permission_set_ids = BTreeSet::new();
     let mut resource_permission_set_ids: IndexMap<String, BTreeSet<String>> = IndexMap::new();
     let platform = stack_state.platform;
+    let automatic_aws = platform == Platform::Aws
+        && config.stack_settings.setup_management == alien_core::SetupManagement::Automatic;
 
     if config.stack_settings.setup_management == alien_core::SetupManagement::Automatic {
         // A direct setup explicitly grants ongoing infrastructure control for all supported
@@ -222,21 +224,23 @@ fn generate_auto_management_profile(
                 permission_set_ids.insert(id.to_string());
             }
         }
-        // Approved setup also installs data access to this stack's vaults. The secrets
-        // vault is added with the first workload that needs it, often in a later release,
-        // and runtime credentials cannot then attach a vault-scoped policy to their own
-        // management role. The grant is bounded to the stack prefix; on AWS, vault
-        // provisioning already allows the same parameter writes.
-        for id in ["vault/data-read", "vault/data-write"] {
-            if supports_stack_grant(id, platform) {
+        if platform == Platform::Aws {
+            // The AWS management role may not change its own policies
+            // (remote-stack-management/protect-management-role), so after setup no
+            // controller can attach a resource-scoped grant to it. Approved setup installs
+            // the stack-prefixed grants those controllers would otherwise attach:
+            // - command dispatch for this stack's workers, including workers added later;
+            //   Lambda invocation stays bounded to the stack prefix;
+            // - data access to the secrets vault, which usually arrives with a later
+            //   release's first workload; vault provisioning already allows the same
+            //   parameter writes.
+            for id in [
+                "worker/dispatch-command",
+                "vault/data-read",
+                "vault/data-write",
+            ] {
                 permission_set_ids.insert(id.to_string());
             }
-        }
-        if platform == Platform::Aws {
-            // Approved setup also installs command dispatch for this stack's workers,
-            // including workers added later. Lambda invocation is bounded to the stack
-            // prefix; it does not grant invocation of unrelated functions.
-            permission_set_ids.insert("worker/dispatch-command".to_string());
         }
     }
 
@@ -390,12 +394,28 @@ fn generate_auto_management_profile(
                 .insert("kubernetes-public-endpoint/management".to_string());
         }
 
-        add_storage_trigger_source_management_permissions(
-            stack,
-            platform,
-            resource_entry,
-            &mut resource_permission_set_ids,
-        );
+        // Automatic AWS installs configure trigger notifications through storage/provision,
+        // which approved setup installs stack-wide (see above).
+        if !automatic_aws {
+            add_storage_trigger_source_management_permissions(
+                stack,
+                platform,
+                resource_entry,
+                &mut resource_permission_set_ids,
+            );
+        }
+    }
+
+    if automatic_aws {
+        if let Some((resource_id, permission_set_ids)) = resource_permission_set_ids.first() {
+            return Err(AlienError::new(ErrorData::StackMutationFailed {
+                mutation_name: "management permission profile".to_string(),
+                message: format!(
+                    "Automatic infrastructure management cannot grant {permission_set_ids:?} on '{resource_id}': the management role cannot change its own policies after setup; use manual setup"
+                ),
+                resource_id: Some(resource_id.clone()),
+            }));
+        }
     }
 
     if permission_set_ids.is_empty() && resource_permission_set_ids.is_empty() {
@@ -649,8 +669,11 @@ mod tests {
                     continue;
                 };
                 let requested = matches!(operation, "provision" | "management" | "heartbeat")
-                    || matches!(id, "vault/data-read" | "vault/data-write")
-                    || (platform == Platform::Aws && id == "worker/dispatch-command");
+                    || (platform == Platform::Aws
+                        && matches!(
+                            id,
+                            "worker/dispatch-command" | "vault/data-read" | "vault/data-write"
+                        ));
                 if !requested
                     || resource_type == "remote-stack-management"
                     || !supports_stack_grant(id, platform)
@@ -750,6 +773,54 @@ mod tests {
                 .into_iter()
                 .flatten()
                 .any(|grant| grant.id() == "worker/dispatch-command"));
+        }
+    }
+
+    /// The AWS management role may not change its own policies after setup, so an automatic
+    /// grant must hold no resource-scoped entry for a runtime controller to attach. Storage
+    /// triggers on Frozen storage are configured through the installed storage/provision.
+    #[tokio::test]
+    async fn automatic_aws_grant_has_nothing_for_runtime_controllers_to_attach() {
+        let mut config = deployment_config_for_management_permission_test();
+        config.stack_settings.setup_management = alien_core::SetupManagement::Automatic;
+        let state = StackState::new(Platform::Aws);
+        let storage = Storage::new("uploads".to_string()).build();
+        let worker = Worker::new("processor".to_string())
+            .code(WorkerCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .permissions("test".to_string())
+            .commands_enabled(true)
+            .trigger(WorkerTrigger::storage(
+                &storage,
+                vec!["created".to_string()],
+            ))
+            .build();
+        let stack = Stack::new("example".to_string())
+            .add(storage, ResourceLifecycle::Frozen)
+            .add(worker, ResourceLifecycle::Live)
+            .build();
+
+        let prepared = ManagementPermissionProfileMutation
+            .mutate(stack, &state, &config)
+            .await
+            .expect("storage-triggered workers are supported by automatic setup");
+        let profile = prepared.management().profile().expect("management grant");
+        assert_eq!(
+            profile.0.keys().collect::<Vec<_>>(),
+            vec!["*"],
+            "only stack-wide grants: {profile:?}"
+        );
+        for id in [
+            "storage/provision",
+            "worker/dispatch-command",
+            "vault/data-read",
+            "vault/data-write",
+        ] {
+            assert!(
+                profile.0["*"].iter().any(|grant| grant.id() == id),
+                "approved setup installs {id}"
+            );
         }
     }
 
