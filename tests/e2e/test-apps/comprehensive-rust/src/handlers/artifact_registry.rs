@@ -3,6 +3,7 @@ use axum::{
     response::Json,
 };
 use chrono::Utc;
+use dockdash::{Arch, Image, Layer, PullPolicy, PushOptions, RegistryAuth};
 use std::time::Duration;
 use tracing::info;
 use utoipa::path;
@@ -11,7 +12,9 @@ use crate::{
     models::{AppState, ArtifactRegistryTestRequest, ArtifactRegistryTestResponse},
     ErrorData, Result,
 };
-use alien_bindings::{ArtifactRegistryPermissions, ErrorData as BindingsErrorData};
+use alien_bindings::{
+    ArtifactRegistryCredentials, ArtifactRegistryPermissions, ErrorData as BindingsErrorData,
+};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 
 /// Test artifact registry operations
@@ -47,12 +50,16 @@ pub async fn test_artifact_registry(
             binding_name: binding_name.clone(),
         })?;
 
-    // Generate a unique repository name for testing
-    let test_repo_name = request
+    // A unique lowercase name every provider accepts. On GCP it is an image path inside the
+    // binding's one repository, so nothing is created for it.
+    let prefix: String = request
         .as_ref()
-        .and_then(|req| req.repo_name_prefix.as_ref())
-        .map(|prefix| format!("{}-{}", prefix, Utc::now().timestamp_millis()))
-        .unwrap_or_else(|| format!("test-repo-{}", Utc::now().timestamp_millis()));
+        .and_then(|req| req.repo_name_prefix.as_deref())
+        .unwrap_or("test")
+        .chars()
+        .filter(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        .collect();
+    let test_repo_name = format!("prj_{prefix}{}", Utc::now().timestamp_millis());
 
     let skip_docker = request
         .as_ref()
@@ -107,7 +114,7 @@ pub async fn test_artifact_registry(
     }
 
     // 3. Generate pull credentials
-    artifact_registry_instance
+    let pull_credentials = artifact_registry_instance
         .generate_credentials(&repo_id, ArtifactRegistryPermissions::Pull, Some(3600))
         .await
         .context(ErrorData::ArtifactRegistryOperationFailed {
@@ -115,7 +122,7 @@ pub async fn test_artifact_registry(
         })?;
 
     // 4. Generate push-pull credentials
-    artifact_registry_instance
+    let push_credentials = artifact_registry_instance
         .generate_credentials(&repo_id, ArtifactRegistryPermissions::PushPull, Some(3600))
         .await
         .context(ErrorData::ArtifactRegistryOperationFailed {
@@ -124,11 +131,37 @@ pub async fn test_artifact_registry(
 
     // 5. Docker operations (if not skipped)
     if !skip_docker {
-        create_test_image().await.into_alien_error().context(
+        let image = create_test_image().await.into_alien_error().context(
             ErrorData::ArtifactRegistryOperationFailed {
                 operation: "create_test_image".to_string(),
             },
         )?;
+        // GAR names are image paths in the binding's one repository, so a push and a pull
+        // through the binding's own credentials is what proves the name is usable.
+        if artifact_registry_instance
+            .registry_endpoint()
+            .ends_with("-docker.pkg.dev")
+        {
+            let uri = artifact_registry_instance
+                .get_repository(&repo_id)
+                .await
+                .context(ErrorData::ArtifactRegistryOperationFailed {
+                    operation: "get_repository_uri".to_string(),
+                })?
+                .uri
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::ArtifactRegistryOperationFailed {
+                        operation: "get_repository_uri".to_string(),
+                    })
+                })?;
+            push_and_pull(
+                &image,
+                &format!("{uri}:alien-check"),
+                push_credentials,
+                pull_credentials,
+            )
+            .await?;
+        }
     }
 
     // 6. Delete repository operation (cleanup)
@@ -146,10 +179,45 @@ pub async fn test_artifact_registry(
     }))
 }
 
-/// Creates a simple test Docker image with a single text file.
-async fn create_test_image() -> std::result::Result<dockdash::Image, dockdash::Error> {
-    use dockdash::{Arch, Image, Layer};
+/// Pushes `image` with the push credentials, then pulls it back with the pull credentials.
+async fn push_and_pull(
+    image: &Image,
+    reference: &str,
+    push: ArtifactRegistryCredentials,
+    pull: ArtifactRegistryCredentials,
+) -> Result<()> {
+    image
+        .push(
+            reference,
+            &PushOptions {
+                auth: RegistryAuth::Basic(push.username, push.password),
+                ..Default::default()
+            },
+        )
+        .await
+        .into_alien_error()
+        .context(ErrorData::ArtifactRegistryOperationFailed {
+            operation: "push_test_image".to_string(),
+        })?;
+    info!(%reference, "Pushed test image through the binding's push credentials");
 
+    Image::builder()
+        .from(reference)
+        .platform("linux", &Arch::Amd64)
+        .auth(RegistryAuth::Basic(pull.username, pull.password))
+        .pull_policy(PullPolicy::Always)
+        .build()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ArtifactRegistryOperationFailed {
+            operation: "pull_test_image".to_string(),
+        })?;
+    info!(%reference, "Pulled test image through the binding's pull credentials");
+    Ok(())
+}
+
+/// Creates a simple test Docker image with a single text file.
+async fn create_test_image() -> std::result::Result<Image, dockdash::Error> {
     // Create a simple layer with a text file
     let test_content = format!(
         "Hello from Alien test image! Created at: {}",
@@ -161,9 +229,8 @@ async fn create_test_image() -> std::result::Result<dockdash::Image, dockdash::E
         .build()
         .await?;
 
-    // Build a simple image
+    // No base image: the check needs no registry but the one under test.
     let (image, _) = Image::builder()
-        .from("alpine:latest") // Use a small base image
         .platform("linux", &Arch::Amd64) // Use common architecture
         .layer(layer)
         .entrypoint(vec!["cat".to_string(), "/test-file.txt".to_string()])

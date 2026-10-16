@@ -1,8 +1,10 @@
 use crate::config::load_configuration;
 use crate::error::{ErrorData, Result};
+use alien_client_config::ClientConfigExt;
 use alien_core::{
-    AwsManagementConfig, AzureManagementConfig, DeploymentConfig, EnvironmentVariablesSnapshot,
-    ExternalBindings, GcpManagementConfig, ManagementConfig, Platform, StackSettings, StackState,
+    AwsManagementConfig, AzureManagementConfig, ClientConfig, DeploymentConfig,
+    EnvironmentVariablesSnapshot, ExternalBindings, GcpManagementConfig, ManagementConfig,
+    Platform, StackSettings, StackState,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use clap::{Parser, ValueEnum};
@@ -72,6 +74,11 @@ pub struct RenderArgs {
     #[arg(long)]
     pub output: Option<PathBuf>,
 
+    /// Check AWS quotas for a new installation before writing artifacts. Uses target AWS
+    /// credentials and region from the environment; apply must use the same account and region.
+    #[arg(long)]
+    pub check_quotas: bool,
+
     /// CloudFormation registration behavior.
     #[arg(long, value_enum, default_value_t = RenderRegistrationMode::Auto)]
     pub registration_mode: RenderRegistrationMode,
@@ -120,8 +127,14 @@ pub async fn render_task(args: RenderArgs) -> Result<()> {
 
     match args.format {
         RenderFormat::Cloudformation => {
-            let stack =
-                prepare_stack_for_render(stack, Platform::Aws, None, &stack_settings).await?;
+            let stack = prepare_stack_for_render(
+                stack,
+                Platform::Aws,
+                None,
+                &stack_settings,
+                args.check_quotas,
+            )
+            .await?;
             render_cloudformation(&stack, &stack_settings, &args)
         }
         RenderFormat::Terraform => {
@@ -132,13 +145,14 @@ pub async fn render_task(args: RenderArgs) -> Result<()> {
                 terraform_target.deployment_platform(),
                 terraform_target.base_platform(),
                 &stack_settings,
+                args.check_quotas,
             )
             .await?;
             render_terraform(&stack, &stack_settings, &args)
         }
         RenderFormat::Helm => {
             let stack =
-                prepare_stack_for_render(stack, Platform::Kubernetes, None, &stack_settings)
+                prepare_stack_for_render(stack, Platform::Kubernetes, None, &stack_settings, false)
                     .await?;
             render_helm(&stack, &stack_settings, &args)
         }
@@ -150,6 +164,7 @@ async fn prepare_stack_for_render(
     platform: Platform,
     base_platform: Option<Platform>,
     stack_settings: &StackSettings,
+    check_quotas: bool,
 ) -> Result<alien_core::Stack> {
     let runner = alien_preflights::runner::PreflightRunner::new();
     runner
@@ -186,10 +201,55 @@ async fn prepare_stack_for_render(
         volume_restores: Vec::new(),
     };
 
-    runner
+    let stack = runner
         .apply_mutations(stack, &stack_state, &config)
         .await
-        .map_err(preflight_error)
+        .map_err(preflight_error)?;
+    if check_quotas {
+        let client_config =
+            ClientConfig::from_std_env(platform)
+                .await
+                .context(ErrorData::ConfigurationError {
+                    message: "Load target AWS credentials and region before using --check-quotas"
+                        .into(),
+                })?;
+        check_render_quotas(&runner, &stack, &stack_state, &config, &client_config).await?;
+    }
+    Ok(stack)
+}
+
+async fn check_render_quotas(
+    runner: &alien_preflights::runner::PreflightRunner,
+    stack: &alien_core::Stack,
+    stack_state: &StackState,
+    config: &DeploymentConfig,
+    client_config: &ClientConfig,
+) -> Result<()> {
+    let summary = runner
+        .run_runtime_checks(
+            stack,
+            stack_state,
+            config,
+            client_config,
+            stack_state.platform,
+        )
+        .await
+        .map_err(preflight_error)?;
+    for result in &summary.results {
+        for warning in &result.warnings {
+            eprintln!("Quota warning: {warning}");
+        }
+    }
+    if !summary.success {
+        return Err(preflight_error(AlienError::new(
+            alien_preflights::error::ErrorData::ValidationFailed {
+                error_count: summary.failed_checks,
+                warning_count: summary.warning_count,
+                results: summary.results,
+            },
+        )));
+    }
+    Ok(())
 }
 
 fn render_management_config(platform: Platform) -> Option<ManagementConfig> {
@@ -210,6 +270,16 @@ fn render_management_config(platform: Platform) -> Option<ManagementConfig> {
 }
 
 fn validate_args(args: &RenderArgs) -> Result<()> {
+    if args.check_quotas
+        && !matches!(args.format, RenderFormat::Cloudformation)
+        && !(matches!(args.format, RenderFormat::Terraform)
+            && args.target == Some(RenderTarget::Aws))
+    {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "--check-quotas".into(),
+            message: "Quota checking currently supports CloudFormation and Terraform --target aws for new installations".into(),
+        }));
+    }
     match args.format {
         RenderFormat::Terraform if args.target.is_none() => {
             Err(AlienError::new(ErrorData::ValidationError {
@@ -462,6 +532,79 @@ mod tests {
     };
 
     #[tokio::test]
+    async fn render_quota_checks_honor_saved_overrides_and_reject_invalid_identities() {
+        let server = httpmock::MockServer::start_async().await;
+        let quota = server.mock_async(|when, then| {
+            when.method(httpmock::Method::GET).path("/2016-08-19/account-settings");
+            then.status(200).json_body(serde_json::json!({"AccountLimit": {"ConcurrentExecutions": 1000, "UnreservedConcurrentExecutions": 100}}));
+        }).await;
+        let client = ClientConfig::Aws(Box::new(alien_core::AwsClientConfig {
+            account_id: "test".into(),
+            region: "eu-west-1".into(),
+            credentials: alien_core::AwsCredentials::AccessKeys {
+                access_key_id: "test".into(),
+                secret_access_key: "test".into(),
+                session_token: None,
+            },
+            service_overrides: Some(alien_core::AwsServiceOverrides {
+                endpoints: [("lambda".into(), server.base_url())].into(),
+            }),
+        }));
+        let stack = Stack::new("render-quotas".into())
+            .add(
+                alien_core::Worker::new("worker".into())
+                    .permissions("test".into())
+                    .code(alien_core::WorkerCode::Image {
+                        image: "example:latest".into(),
+                    })
+                    .concurrency_limit(60)
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        let runner = alien_preflights::runner::PreflightRunner::new();
+        for overrides in [
+            vec![],
+            vec!["L-B99A9384".to_string()],
+            vec!["L-TYPO".to_string()],
+        ] {
+            let config = DeploymentConfig::builder()
+                .stack_settings(StackSettings {
+                    quota_warning_overrides: overrides.clone(),
+                    ..Default::default()
+                })
+                .environment_variables(EnvironmentVariablesSnapshot {
+                    variables: vec![],
+                    hash: String::new(),
+                    created_at: String::new(),
+                })
+                .allow_frozen_changes(false)
+                .external_bindings(ExternalBindings::default())
+                .build();
+            let result = check_render_quotas(
+                &runner,
+                &stack,
+                &StackState::new(Platform::Aws),
+                &config,
+                &client,
+            )
+            .await;
+            match overrides.first().map(String::as_str) {
+                None => {
+                    let error = result.expect_err("unoverridden shortfall stops render");
+                    let rendered = crate::ui::render_human_error(&error);
+                    assert!(rendered.contains("L-B99A9384"), "{rendered}");
+                }
+                Some("L-B99A9384") => result.expect("saved override permits artifact rendering"),
+                _ => {
+                    assert!(crate::ui::render_human_error(&result.unwrap_err()).contains("L-TYPO"))
+                }
+            }
+        }
+        quota.assert_hits_async(2).await;
+    }
+
+    #[tokio::test]
     async fn failed_render_preflights_list_the_failed_checks() {
         let container = Container::new("api".to_string())
             .code(ContainerCode::Image {
@@ -482,9 +625,10 @@ mod tests {
             .add(container, ResourceLifecycle::Frozen)
             .build();
 
-        let error = prepare_stack_for_render(stack, Platform::Aws, None, &StackSettings::default())
-            .await
-            .expect_err("a Frozen container fails the template preflights");
+        let error =
+            prepare_stack_for_render(stack, Platform::Aws, None, &StackSettings::default(), false)
+                .await
+                .expect_err("a Frozen container fails the template preflights");
         let rendered = crate::ui::render_human_error(&error);
 
         assert!(rendered.contains("Failed checks:"), "{rendered}");
@@ -503,10 +647,15 @@ mod tests {
             )
             .build();
 
-        let stack =
-            prepare_stack_for_render(stack, Platform::Azure, None, &StackSettings::default())
-                .await
-                .expect("render preflights should mutate stack");
+        let stack = prepare_stack_for_render(
+            stack,
+            Platform::Azure,
+            None,
+            &StackSettings::default(),
+            false,
+        )
+        .await
+        .expect("render preflights should mutate stack");
 
         let has_storage_account = stack.resources().any(|(id, entry)| {
             id == "default-storage-account"
@@ -550,6 +699,7 @@ mod tests {
             Platform::Gcp,
             None,
             &StackSettings::default(),
+            false,
         )
         .await
         .expect("render preflights pass");

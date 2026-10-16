@@ -926,7 +926,11 @@
       }
     ],
     "azure": [
-      // Application Gateway / Load Balancer + Public IP for exposed containers
+      // Application Gateway / Load Balancer + Public IP for exposed containers.
+      // Every gateway or load balancer PUT re-checks linked access: join on the network's
+      // App Gateway subnet and on the frontend public IP. The network is setup-owned, so
+      // nothing else gives the management identity these actions.
+      // https://learn.microsoft.com/azure/application-gateway/configuration-infrastructure
       {
         "grant": {
           "actions": [
@@ -947,7 +951,10 @@
             "Microsoft.Network/loadBalancers/delete",
             "Microsoft.Network/publicIPAddresses/write",
             "Microsoft.Network/publicIPAddresses/read",
-            "Microsoft.Network/publicIPAddresses/delete"
+            "Microsoft.Network/publicIPAddresses/delete",
+            "Microsoft.Network/publicIPAddresses/join/action",
+            "Microsoft.Network/virtualNetworks/subnets/read",
+            "Microsoft.Network/virtualNetworks/subnets/join/action"
           ]
         },
         "binding": {
@@ -982,8 +989,9 @@
       // final snapshot taken on delete, and the snapshot of a disk replaced by a restore. The
       // restored disk itself uses the Managed Disks grant above. The vault identity's role
       // assignments (Disk Backup Reader on each disk, Disk Snapshot Contributor on the resource
-      // group) use the roleAssignments grants above. The vault identity reads disk contents;
-      // this identity never does, so no beginGetAccess.
+      // group) use the roleAssignments grants above. Creating a snapshot from a disk makes Azure
+      // check disks/beginGetAccess/action on the source disk as linked access, so the final and
+      // replaced-volume snapshots need it even though this identity never reads disk contents.
       {
         "grant": {
           "actions": [
@@ -1006,7 +1014,8 @@
             "Microsoft.DataProtection/locations/operationResults/read",
             "Microsoft.Compute/snapshots/read",
             "Microsoft.Compute/snapshots/write",
-            "Microsoft.Compute/snapshots/delete"
+            "Microsoft.Compute/snapshots/delete",
+            "Microsoft.Compute/disks/beginGetAccess/action"
           ]
         },
         "binding": {

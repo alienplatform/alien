@@ -113,6 +113,13 @@ impl DeploymentTracker {
         self.deployments.get(name)
     }
 
+    /// Get a tracked deployment by its deployment ID
+    pub fn get_deployment_by_id(&self, deployment_id: &str) -> Option<&TrackedDeployment> {
+        self.deployments
+            .values()
+            .find(|tracked| tracked.deployment_id == deployment_id)
+    }
+
     /// Return the tracked deployment only while the platform still accepts its stored key.
     ///
     /// An entry outlives platform-side deletion, so a dead one is dropped here and
@@ -237,7 +244,10 @@ fn authenticated_client(api_key: &str, base_url: &str) -> Result<SdkClient> {
                 message: "Invalid authorization header value".to_string(),
             })?,
     );
-    headers.insert(USER_AGENT, HeaderValue::from_static("alien-cli"));
+    headers.insert(
+        USER_AGENT,
+        HeaderValue::from_static(crate::http_client::USER_AGENT),
+    );
 
     let reqwest_client = crate::http_client::builder()
         .default_headers(headers)

@@ -7,7 +7,7 @@
 use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
 use alien_core::permissions::PermissionSetReference;
-use alien_core::{AzureSandboxImage, ManagementPermissions, Platform, Sandbox, Stack};
+use alien_core::{AzureSandboxImage, ManagementPermissions, Platform, Sandbox, SandboxCode, Stack};
 
 const IMAGES: &str = "sandbox/images";
 
@@ -79,6 +79,7 @@ impl CompileTimeCheck for SandboxImagePermissionsCheck {
             }
         }
         // Only a registry image is built by the manager, so a catalog-only sandbox needs nothing.
+        // A source sandbox becomes a registry image at `alien build`.
         if matches!(stack.management(), ManagementPermissions::Override(_)) {
             for (resource_id, entry) in stack.resources() {
                 let builds_an_image =
@@ -86,7 +87,11 @@ impl CompileTimeCheck for SandboxImagePermissionsCheck {
                         .config
                         .downcast_ref::<Sandbox>()
                         .is_some_and(|sandbox| {
-                            matches!(sandbox.azure_image(), Ok(AzureSandboxImage::Registry(_)))
+                            matches!(sandbox.code, SandboxCode::Source { .. })
+                                || matches!(
+                                    sandbox.azure_image(),
+                                    Ok(AzureSandboxImage::Registry(_))
+                                )
                         });
                 if builds_an_image && !grants(resource_id) {
                     errors.push(format!(
@@ -110,9 +115,7 @@ impl CompileTimeCheck for SandboxImagePermissionsCheck {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::{
-        PermissionProfile, ResourceLifecycle, SandboxCode, SandboxEgress, SandboxLifecyclePolicy,
-    };
+    use alien_core::{PermissionProfile, ResourceLifecycle, SandboxEgress, SandboxLifecyclePolicy};
 
     fn stack(management: ManagementPermissions) -> Stack {
         let sandbox = |id: &str, image: &str| {
@@ -160,6 +163,60 @@ mod tests {
             PermissionProfile::new().resource("registry-box", [IMAGES]),
         ))
         .await;
+        assert!(granted.is_empty(), "{granted:?}");
+    }
+
+    /// A source sandbox has no image yet, but `alien build` turns it into a registry image the
+    /// manager builds, so an override has to grant the set before setup, not after the build.
+    #[tokio::test]
+    async fn an_override_must_grant_images_on_a_source_sandbox() {
+        let stack = |management| {
+            Stack::new("test".to_string())
+                .add(
+                    Sandbox::new("source-box".to_string())
+                        .code(SandboxCode::Source {
+                            src: "./sandbox".to_string(),
+                            toolchain: alien_core::ToolchainConfig::Docker {
+                                dockerfile: None,
+                                target: None,
+                                build_args: None,
+                            },
+                        })
+                        .egress(SandboxEgress::Deny)
+                        .lifecycle(SandboxLifecyclePolicy {
+                            max_lifetime_seconds: None,
+                            idle_pause_seconds: None,
+                        })
+                        .build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .management(management)
+                .build()
+        };
+
+        let missing = SandboxImagePermissionsCheck
+            .check(
+                &stack(ManagementPermissions::override_(
+                    PermissionProfile::new().global(["sandbox/heartbeat"]),
+                )),
+                Platform::Azure,
+            )
+            .await
+            .expect("the check runs")
+            .errors;
+        assert_eq!(missing.len(), 1, "{missing:?}");
+        assert!(missing[0].contains("'source-box'"), "{missing:?}");
+
+        let granted = SandboxImagePermissionsCheck
+            .check(
+                &stack(ManagementPermissions::override_(
+                    PermissionProfile::new().resource("source-box", [IMAGES]),
+                )),
+                Platform::Azure,
+            )
+            .await
+            .expect("the check runs")
+            .errors;
         assert!(granted.is_empty(), "{granted:?}");
     }
 

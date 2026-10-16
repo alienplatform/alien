@@ -343,6 +343,7 @@ impl ManagerTomlConfig {
             disable_deployment_loop: false,
             disable_heartbeat_loop: false,
             enable_local_log_ingest: false,
+            stop_local_containers_on_shutdown: false,
             allowed_origins: None,
             response_signing_key: Vec::new(), // Set by caller after admin token bootstrap
         }
@@ -386,7 +387,9 @@ impl ManagerTomlConfig {
 #
 # [artifact-registry.gcp]
 # service = "gar"
-# repositoryName = "projects/my-project/locations/us-central1/repositories/alien"
+# # Prefix: each Alien project gets its own repository, alien-artifacts-prj-<id>. The manager
+# # needs artifactregistry.repositories.create/delete/get/list/getIamPolicy/setIamPolicy.
+# repositoryName = "alien-artifacts"
 # pullServiceAccountEmail = "pull@project.iam.gserviceaccount.com"
 # pushServiceAccountEmail = "push@project.iam.gserviceaccount.com"
 

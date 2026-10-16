@@ -33,8 +33,10 @@ use axum::{
     Router,
 };
 use sha2::{Digest, Sha256};
+use tracing::warn;
 
 use alien_core::{
+    container_resources::keep_volume_sizes_over_setup_source,
     import::{
         ImportContext, ImportedResource, StackImportRequest, StackImportResponse,
         CURRENT_SETUP_IMPORT_FORMAT_VERSION, MIN_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION,
@@ -350,6 +352,29 @@ pub async fn stack_import(
                 return ErrorData::bad_request(
                     "Endpoint access cannot change after setup. Create a new deployment to change endpoint access.",
                 ).into_response();
+            }
+            // A compute update can grow a volume without the setup source
+            // learning about it, so its stale lower value keeps the installed
+            // capacity instead of failing the next update as a shrink.
+            if let Some(compute) = req.stack_settings.compute.as_mut() {
+                for kept in keep_volume_sizes_over_setup_source(
+                    compute,
+                    existing.stack_state.as_ref(),
+                    existing
+                        .stack_settings
+                        .as_ref()
+                        .and_then(|settings| settings.compute.as_ref()),
+                ) {
+                    // WARN, not INFO: the stored size silently differs from what the setup
+                    // source says until its parameter or config is updated.
+                    warn!(
+                        deployment_id = %existing.id,
+                        container_id = %kept.container_id,
+                        requested_gib = kept.requested_gib,
+                        kept_gib = kept.kept_gib,
+                        "Setup registration asked for a smaller volume than the deployment has; keeping the larger size. Update the setup source to the kept size"
+                    );
+                }
             }
             // This write replaces the stored map and the request never carries
             // a generated secret, so keep the value the deployment holds.
@@ -1435,7 +1460,8 @@ async fn prepare_import_stack(
         volume_restores: Vec::new(),
     };
 
-    runner
+    let quota_activation_declared = source_stack.resources.contains_key("enable-cloud-quotas");
+    let mut prepared = runner
         .apply_mutations(source_stack, &stack_state, &config)
         .await
         .map_err(|err| {
@@ -1445,7 +1471,20 @@ async fn prepare_import_stack(
                     err.message
                 ),
             })
-        })
+        })?;
+    // Older setup artifacts never enabled the optional quota API. Keep it
+    // absent, rather than fabricate imported Running state or ask a management
+    // identity to perform setup. Disabled quota reads remain non-blocking.
+    if req.base_platform.unwrap_or(req.platform) == Platform::Gcp
+        && !quota_activation_declared
+        && !req
+            .resources
+            .iter()
+            .any(|resource| resource.id == "enable-cloud-quotas")
+    {
+        prepared.resources.shift_remove("enable-cloud-quotas");
+    }
+    Ok(prepared)
 }
 
 fn infer_import_environment_info(req: &StackImportRequest) -> Option<EnvironmentInfo> {
@@ -1789,6 +1828,35 @@ mod setup_update_authorization_tests {
             error.message.contains("api") && !error.message.contains("agents"),
             "only the worker is unowned"
         );
+    }
+
+    #[tokio::test]
+    async fn old_gcp_handoff_only_omits_implicit_quota_activation() {
+        let mut req = request();
+        req.platform = Platform::Gcp;
+        let source = Stack::new("legacy".into()).build();
+        let prepared = prepare_import_stack(source, &req, &req.stack_settings)
+            .await
+            .unwrap();
+        assert!(!prepared.resources.contains_key("enable-cloud-quotas"));
+        validate_import_handoff(&req, &prepared).unwrap();
+
+        // An explicitly requested activation remains required, including this
+        // API. Backwards compatibility must not weaken ordinary setup ownership.
+        for service in ["cloudquotas.googleapis.com", "compute.googleapis.com"] {
+            let source = Stack::new("explicit".into())
+                .add(
+                    alien_core::ServiceActivation::new("enable-cloud-quotas".into())
+                        .service_name(service.into())
+                        .build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build();
+            // Internal setup resources are not legal source-template resources;
+            // exercise the ownership guard directly with the prepared shape.
+            let error = validate_import_handoff(&req, &source).unwrap_err();
+            assert!(error.message.contains("enable-cloud-quotas"));
+        }
     }
 
     fn record(prepared_stack: Stack) -> DeploymentRecord {

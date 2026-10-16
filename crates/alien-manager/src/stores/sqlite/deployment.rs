@@ -1103,6 +1103,48 @@ impl DeploymentStore for SqliteDeploymentStore {
         self.db.execute(&sql).await
     }
 
+    async fn set_quota_warning_overrides(
+        &self,
+        caller: &crate::auth::Subject,
+        id: &str,
+        overrides: &[String],
+    ) -> Result<bool, AlienError> {
+        let Some(deployment) = self.get_deployment(caller, id).await? else {
+            return Ok(false);
+        };
+        alien_preflights::quotas::validate_warning_overrides(deployment.platform, overrides)
+            .map_err(AlienError::into_generic)?;
+        let json = serde_json::to_string(overrides)
+            .into_alien_error()
+            .context(GenericError {
+                message: "Failed to serialize quota warning overrides".to_string(),
+            })?;
+
+        // Patch the current JSON in the same conditional write that checks the
+        // execution lease. A read/replace of StackSettings would lose concurrent
+        // changes (including fields this manager version does not understand).
+        let sql = Query::update()
+            .table(Deployments::Table)
+            .value(
+                Deployments::StackSettings,
+                Expr::cust_with_values(
+                    "json_set(stack_settings, '$.quotaWarningOverrides', json(?))",
+                    [json],
+                ),
+            )
+            .value(Deployments::UpdatedAt, Utc::now().to_rfc3339())
+            .and_where(Expr::col(Deployments::Id).eq(id))
+            .and_where(Expr::col(Deployments::Platform).eq(deployment.platform.as_str()))
+            .and_where(Expr::col(Deployments::LockedBy).is_null())
+            .and_where(Expr::col(Deployments::Status).is_in([
+                "running",
+                "preflights-failed",
+                "update-failed",
+            ]))
+            .to_string(SqliteQueryBuilder);
+        Ok(self.db.execute_returning_rows_affected(&sql).await? == 1)
+    }
+
     async fn set_retry_requested(
         &self,
         _caller: &crate::auth::Subject,
@@ -1154,13 +1196,29 @@ impl DeploymentStore for SqliteDeploymentStore {
     ) -> Result<(), AlienError> {
         // Set desired_release_id on all deployments that are in a state that can receive updates
         let eligible_statuses = ["running", "update-failed", "refresh-failed"];
+        // A new local session must retry the release it just built, not the failed
+        // first release. Keep the failed phase so the explicit retry resumes safely.
+        let local_startup_failures = [
+            "preflights-failed",
+            "initial-setup-failed",
+            "provisioning-failed",
+        ];
 
         let sql = {
             let mut query = Query::update();
             query
                 .table(Deployments::Table)
                 .value(Deployments::DesiredReleaseId, release_id)
-                .value(Deployments::Status, "update-pending")
+                .value(
+                    Deployments::Status,
+                    Expr::case(
+                        sea_query::Cond::all()
+                            .add(Expr::col(Deployments::Platform).eq(Platform::Local.as_str()))
+                            .add(Expr::col(Deployments::Status).is_in(local_startup_failures)),
+                        Expr::col(Deployments::Status),
+                    )
+                    .finally("update-pending"),
+                )
                 .value(Deployments::NextStepAfter, Option::<String>::None)
                 .cond_where(
                     sea_query::Cond::any()
@@ -1173,6 +1231,11 @@ impl DeploymentStore for SqliteDeploymentStore {
                                 .add(Expr::cust(
                                     "json_extract(runtime_metadata, '$.automaticSetup') = 1",
                                 )),
+                        )
+                        .add(
+                            sea_query::Cond::all()
+                                .add(Expr::col(Deployments::Platform).eq(Platform::Local.as_str()))
+                                .add(Expr::col(Deployments::Status).is_in(local_startup_failures)),
                         ),
                 );
 
@@ -1543,22 +1606,26 @@ impl DeploymentStore for SqliteDeploymentStore {
         let status_update: sea_query::SimpleExpr = if Self::is_delete_progress(state.status) {
             status_str.clone().into()
         } else {
-            Expr::case(
+            let mut status = Expr::case(
                 Expr::col(Deployments::Status).is_in(Self::RUNTIME_DELETE_STATUSES),
                 Expr::col(Deployments::Status),
-            )
-            .finally(status_str.clone())
-            .into()
+            );
+            if matches!(
+                state.status,
+                alien_core::DeploymentStatus::Running | alien_core::DeploymentStatus::RefreshFailed
+            ) {
+                let newer_release = match current_release_id.as_deref() {
+                    Some(current) => Expr::col(Deployments::DesiredReleaseId).ne(current),
+                    None => Expr::col(Deployments::Status)
+                        .eq("update-pending")
+                        .and(Expr::col(Deployments::DesiredReleaseId).is_not_null()),
+                };
+                // A heartbeat can finish after a new release queues its update.
+                // Persist its resource observations without consuming that request.
+                status = status.case(newer_release, "update-pending");
+            }
+            status.finally(status_str.clone()).into()
         };
-        let deployment_completed = deployment
-            .as_ref()
-            .and_then(|d| d.desired_release_id.as_ref())
-            .and_then(|desired| {
-                current_release_id
-                    .as_ref()
-                    .map(|current| current == desired)
-            })
-            .unwrap_or(false);
         let preserve_retry_requested = deployment
             .as_ref()
             .is_some_and(|d| Self::should_preserve_retry_requested(d, state));
@@ -1619,17 +1686,18 @@ impl DeploymentStore for SqliteDeploymentStore {
                 None => query.value(Deployments::Error, Option::<String>::None),
             };
 
-            // Clear desired_release_id when deployment completed (current matches desired)
-            if deployment_completed {
-                query.value(Deployments::DesiredReleaseId, Option::<String>::None);
-            } else if let Some(desired) = deployment
-                .as_ref()
-                .and_then(|d| d.desired_release_id.as_ref())
-            {
-                query.value(Deployments::DesiredReleaseId, desired as &str);
-            } else {
-                query.value(Deployments::DesiredReleaseId, Option::<String>::None);
-            }
+            // Compare against the row being updated, not the earlier read: a new
+            // release may arrive while reconciliation serializes its observations.
+            let desired_release: sea_query::SimpleExpr = match current_release_id.as_deref() {
+                Some(current) => Expr::case(
+                    Expr::col(Deployments::DesiredReleaseId).eq(current),
+                    Expr::val(Option::<String>::None),
+                )
+                .finally(Expr::col(Deployments::DesiredReleaseId))
+                .into(),
+                None => Expr::col(Deployments::DesiredReleaseId).into(),
+            };
+            query.value(Deployments::DesiredReleaseId, desired_release);
 
             // Match by `Id` only. Authz at the route layer (`can_sync_deployment`)
             // gates who may call `reconcile`; race protection between competing
@@ -2041,6 +2109,120 @@ mod gcp_project_consumer_tests {
             .id
     }
 
+    #[tokio::test]
+    async fn quota_overrides_patch_only_idle_unlocked_deployments() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("manager.db");
+        let db = Arc::new(SqliteDatabase::new(path.to_str().unwrap()).await.unwrap());
+        let store = SqliteDeploymentStore::new(db.clone());
+        let caller = Subject::system();
+        let group = store
+            .create_deployment_group(
+                &caller,
+                CreateDeploymentGroupParams {
+                    name: "quota-overrides".into(),
+                    max_deployments: 20,
+                    setup: DeploymentGroupSetup::default(),
+                },
+            )
+            .await
+            .unwrap();
+        let overrides = vec!["CPUS".to_string()];
+        for (index, (status, locked, accepted)) in [
+            ("running", false, true),
+            ("preflights-failed", false, true),
+            ("preflights-failed", true, false),
+            ("running", true, false),
+            ("pending", false, false),
+            ("initial-setup", false, false),
+            ("update-pending", false, false),
+            ("provisioning", false, false),
+            ("updating", false, false),
+            ("update-failed", false, true),
+            ("update-failed", true, false),
+            ("deleting", false, false),
+            ("deleted", false, false),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let id = create_gcp_deployment(
+                &store,
+                &group.id,
+                &format!("case-{index}"),
+                SHARED_PROJECT,
+                status,
+            )
+            .await;
+            // Unknown future settings must survive even though StackSettings
+            // would discard them during deserialization.
+            let original = serde_json::json!({
+                "futureSetting": {"keep": true},
+                "quotaWarningOverrides": [],
+            });
+            let sql = sea_query::Query::update()
+                .table(super::Deployments::Table)
+                .value(super::Deployments::StackSettings, original.to_string())
+                .value(super::Deployments::LockedBy, locked.then_some("owner"))
+                .and_where(sea_query::Expr::col(super::Deployments::Id).eq(id.as_str()))
+                .to_string(sea_query::SqliteQueryBuilder);
+            db.execute(&sql).await.unwrap();
+            assert_eq!(
+                store
+                    .set_quota_warning_overrides(&caller, &id, &overrides)
+                    .await
+                    .unwrap(),
+                accepted,
+                "{status}, locked={locked}"
+            );
+            let read_settings = || async {
+                let sql = sea_query::Query::select()
+                    .column(super::Deployments::StackSettings)
+                    .from(super::Deployments::Table)
+                    .and_where(sea_query::Expr::col(super::Deployments::Id).eq(id.as_str()))
+                    .to_string(sea_query::SqliteQueryBuilder);
+                let conn = db.conn().lock().await;
+                let mut rows = conn.query(&sql, ()).await.unwrap();
+                let row = rows.next().await.unwrap().unwrap();
+                serde_json::from_str::<serde_json::Value>(&row.get::<String>(0).unwrap()).unwrap()
+            };
+            let mut expected = original.clone();
+            if accepted {
+                expected["quotaWarningOverrides"] = serde_json::json!(overrides);
+            }
+            assert_eq!(read_settings().await, expected);
+            let error = store
+                .set_quota_warning_overrides(&caller, &id, &["L-1216C47A".into()])
+                .await
+                .unwrap_err();
+            assert_eq!(error.code, "INVALID_QUOTA_OVERRIDE");
+            assert_eq!(
+                read_settings().await,
+                expected,
+                "invalid IDs cannot change settings"
+            );
+            assert_eq!(
+                store
+                    .set_quota_warning_overrides(&caller, &id, &[])
+                    .await
+                    .unwrap(),
+                accepted
+            );
+            assert_eq!(
+                read_settings().await,
+                original,
+                "explicit clear preserves all other settings"
+            );
+            let record = store.get_deployment(&caller, &id).await.unwrap().unwrap();
+            assert_eq!(record.status, status);
+            assert!(!record.retry_requested, "saving must not implicitly retry");
+        }
+        assert!(!store
+            .set_quota_warning_overrides(&caller, "missing", &overrides)
+            .await
+            .unwrap());
+    }
+
     /// The question a GCP revoke asks before removing a project's shared Cloud Run grant.
     #[tokio::test]
     async fn only_another_deployment_in_the_same_project_keeps_the_shared_grant() {
@@ -2070,23 +2252,57 @@ mod gcp_project_consumer_tests {
         // A record a store keeps after deletion (status `deleted`) no longer pulls images.
         create_gcp_deployment(&store, &group.id, "deleted", SHARED_PROJECT, "deleted").await;
 
+        create_gcp_deployment(
+            &store,
+            &group.id,
+            "imported",
+            SHARED_PROJECT,
+            "teardown-required",
+        )
+        .await;
+
         assert!(
             !store
-                .has_other_gcp_project_deployment(&Subject::system(), SHARED_PROJECT, &deleting)
+                .has_other_gcp_project_deployment(&Subject::system(), SHARED_PROJECT, Some("default".to_string()), &deleting)
                 .await
                 .expect("consumer check"),
             "neither the deployment itself, one in another project, nor a deleted one shares the grant"
         );
 
+        assert!(!store
+            .has_other_gcp_project_deployment(
+                &Subject::system(),
+                SHARED_PROJECT,
+                Some("prj_other".to_string()),
+                &deleting
+            )
+            .await
+            .expect("another Alien project has no consumer"));
+
         let sibling =
             create_gcp_deployment(&store, &group.id, "sibling", SHARED_PROJECT, "running").await;
         assert!(
             store
-                .has_other_gcp_project_deployment(&Subject::system(), SHARED_PROJECT, &deleting)
+                .has_other_gcp_project_deployment(
+                    &Subject::system(),
+                    SHARED_PROJECT,
+                    Some("default".to_string()),
+                    &deleting
+                )
                 .await
                 .expect("consumer check"),
             "a sibling in the same project still pulls through the grant"
         );
+
+        assert!(!store
+            .has_other_gcp_project_deployment(
+                &Subject::system(),
+                SHARED_PROJECT,
+                Some("prj_other".to_string()),
+                &deleting
+            )
+            .await
+            .expect("the sibling uses a different Alien repository"));
 
         store
             .delete_deployment(&Subject::system(), &sibling)
@@ -2094,7 +2310,12 @@ mod gcp_project_consumer_tests {
             .expect("delete sibling");
         assert!(
             !store
-                .has_other_gcp_project_deployment(&Subject::system(), SHARED_PROJECT, &deleting)
+                .has_other_gcp_project_deployment(
+                    &Subject::system(),
+                    SHARED_PROJECT,
+                    Some("default".to_string()),
+                    &deleting
+                )
                 .await
                 .expect("consumer check"),
             "a removed sibling no longer shares the grant"

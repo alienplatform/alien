@@ -491,7 +491,7 @@ impl TestWorkerController {
 
         info!("→ [test-create] CreateWorkerUrl `{}`", identifier);
 
-        self.url = Some(format!("https://test-url/{}", target_func.id));
+        self.url = Some(format!("https://{}.test", target_func.id));
 
         let url = self.url.as_ref().unwrap();
         info!("✓ [test-create] `{}` created at {}", identifier, url);
@@ -604,6 +604,16 @@ impl TestWorkerController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let target_func = ctx.desired_resource_config::<Worker>()?;
+        if target_func
+            .environment
+            .get("SIMULATE_UPDATE_PENDING")
+            .is_some_and(|value| value == "true")
+        {
+            return Ok(HandlerAction::Stay {
+                max_times: Some(1000),
+                suggested_delay: Some(Duration::from_millis(POLL_DELAY_MS)),
+            });
+        }
         let identifier = self.identifier.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceControllerConfigError {
                 resource_id: target_func.id.clone(),

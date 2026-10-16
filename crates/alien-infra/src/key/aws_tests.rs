@@ -7,6 +7,7 @@ use std::sync::{
 
 use crate::{
     core::MockPlatformServiceProvider,
+    state_utils::StackStateExt,
     storage::{test_storage_deletes_issued, TestStorageController},
     ResourceRegistry, StackExecutor, StackResourceStateExt,
 };
@@ -282,4 +283,115 @@ async fn revoked_key_suspends_dependents_and_resumes_same_resources() {
         assert_eq!(state.resources[id].status, ResourceStatus::Deleted);
         assert_eq!(test_storage_deletes_issued(id).len(), 1);
     }
+}
+
+/// A CLI setup that reaches a key fails it at create, after the setup-owned
+/// resources before it were created. Tearing that deployment down must delete
+/// those resources and drop the key, which never existed in the cloud.
+#[tokio::test]
+async fn teardown_after_a_key_failed_to_create_drops_the_key() {
+    // No KMS expectations: tearing down a key that was never imported must not
+    // reach AWS.
+    let mut provider = MockPlatformServiceProvider::new();
+    provider.expect_get_aws_kms_client().never();
+    let mut registry = ResourceRegistry::with_built_ins();
+    registry
+        .register::<Storage>(Storage::RESOURCE_TYPE)
+        .with_controller::<TestStorageController>(Platform::Aws);
+    let registry = Arc::new(registry);
+    let provider = Arc::new(provider);
+    let key = Key::new("cli-setup-key".to_string()).build();
+    let created_first = Storage::new("cli-setup-created-first".to_string()).build();
+    let stack = Stack::new("cli-key-setup".to_string())
+        .add(created_first, ResourceLifecycle::Frozen)
+        .add_with_dependencies(
+            key.clone(),
+            ResourceLifecycle::Frozen,
+            vec![ResourceRef::new(
+                Storage::RESOURCE_TYPE,
+                "cli-setup-created-first",
+            )],
+        )
+        .build();
+    let deployment_config = DeploymentConfig::builder()
+        .stack_settings(alien_core::StackSettings::default())
+        .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+            variables: vec![],
+            hash: String::new(),
+            created_at: String::new(),
+        })
+        .external_bindings(alien_core::ExternalBindings::default())
+        .allow_frozen_changes(true)
+        .build();
+    let config = ClientConfig::Aws(Box::new(AwsClientConfig::mock()));
+    let setup = StackExecutor::builder(&stack, config.clone())
+        .deployment_config(&deployment_config)
+        .resource_registry(registry.clone())
+        .service_provider(provider.clone())
+        .build()
+        .unwrap();
+    let mut state = StackState::new(Platform::Aws);
+    for _ in 0..8 {
+        state = setup.step(state).await.unwrap().next_state;
+    }
+    assert_eq!(
+        state.resources["cli-setup-created-first"].status,
+        ResourceStatus::Running
+    );
+    let failed_key = &state.resources[&key.id];
+    assert_eq!(failed_key.status, ResourceStatus::ProvisionFailed);
+    assert!(failed_key
+        .error
+        .as_ref()
+        .unwrap()
+        .to_string()
+        .contains("enter a deployment through stack import"));
+
+    // Setup teardown, as `alien destroy` runs it.
+    let prepared = state
+        .prepare_for_teardown_with_lifecycle_filter(&[ResourceLifecycle::Frozen])
+        .expect("a key that was never created must not block teardown");
+    assert_eq!(prepared, vec![key.id.clone()]);
+    assert_eq!(state.resources[&key.id].status, ResourceStatus::Deleted);
+    let teardown = StackExecutor::builder(&Stack::new("teardown".to_string()).build(), config)
+        .deployment_config(&deployment_config)
+        .resource_registry(registry)
+        .service_provider(provider)
+        .step_out_of_scope_resources(false)
+        .maybe_lifecycle_filter(Some(vec![ResourceLifecycle::Frozen]))
+        .build()
+        .unwrap();
+    for _ in 0..8 {
+        state = teardown.step(state).await.unwrap().next_state;
+    }
+    for (id, resource) in &state.resources {
+        assert_eq!(resource.status, ResourceStatus::Deleted, "{id}");
+    }
+    assert_eq!(
+        test_storage_deletes_issued("cli-setup-created-first").len(),
+        1
+    );
+
+    // A key that was imported keeps refusing a teardown it cannot perform.
+    let mut imported = StackState::new(Platform::Aws);
+    let mut imported_key = state.resources[&key.id].clone();
+    imported_key.status = ResourceStatus::RefreshFailed;
+    imported_key.outputs = Some(ResourceOutputs::new(KeyOutputs {
+        available: Some(true),
+        fingerprint: KeyFingerprint::Aws {
+            key_arn: KEY_ARN.to_string(),
+        },
+        wrapping_key_id: KEY_ARN.to_string(),
+    }));
+    imported_key
+        .set_internal_controller(Some(Box::new(AwsKeyController {
+            state: AwsKeyState::RefreshFailed,
+            key_arn: Some(KEY_ARN.to_string()),
+            ..Default::default()
+        })))
+        .unwrap();
+    imported.resources.insert(key.id.clone(), imported_key);
+    assert!(imported
+        .prepare_for_teardown_with_lifecycle_filter(&[ResourceLifecycle::Frozen])
+        .is_err());
 }

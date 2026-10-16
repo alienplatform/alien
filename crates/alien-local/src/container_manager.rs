@@ -1150,7 +1150,8 @@ impl LocalContainerManager {
                 // On Linux: maps to host gateway IP
                 // On Mac/Windows: Docker Desktop provides this automatically, but explicit is fine
                 extra_hosts: Some(vec!["host.docker.internal:host-gateway".to_string()]),
-                // Recover crashes, but preserve a manual stop across Docker daemon restarts.
+                // Docker recovers crashes and keeps a stopped container stopped across daemon
+                // restarts; the container controller restarts it on its next reconciliation.
                 restart_policy: Some(bollard::models::RestartPolicy {
                     name: Some(bollard::models::RestartPolicyNameEnum::UNLESS_STOPPED),
                     maximum_retry_count: None,
@@ -1434,6 +1435,68 @@ impl LocalContainerManager {
                     reason: "Failed to check whether the container exists".to_string(),
                 }),
         }
+    }
+
+    /// Whether a desired workload is absent or stopped and must enter its start flow.
+    /// Docker-managed crash restarts and paused containers retain normal health handling.
+    pub async fn container_needs_recreation(&self, container_id: &str) -> Result<bool> {
+        match self
+            .docker
+            .inspect_container(&format!("alien-{container_id}"), None)
+            .await
+        {
+            Ok(inspection) => Ok(inspection.state.is_some_and(|state| {
+                !state.running.unwrap_or(false)
+                    && !state.restarting.unwrap_or(false)
+                    && !state.paused.unwrap_or(false)
+            })),
+            Err(bollard::errors::Error::DockerResponseServerError {
+                status_code: 404, ..
+            }) => Ok(true),
+            Err(error) => Err(error)
+                .into_alien_error()
+                .context(ErrorData::DockerContainerError {
+                    container: container_id.to_string(),
+                    operation: "inspect".to_string(),
+                    reason: "Failed to inspect desired container state".to_string(),
+                }),
+        }
+    }
+
+    /// Stop the exact tracked Docker instances, preserving their metadata and data.
+    pub async fn shutdown_all(&self) -> Result<()> {
+        let containers: Vec<_> = self.containers.read().await.values().cloned().collect();
+        let results = futures::future::join_all(containers.iter().map(|container| async move {
+            match self
+                .docker
+                .stop_container(
+                    &container.docker_container_id,
+                    Some(StopContainerOptions { t: 10 }),
+                )
+                .await
+            {
+                Ok(())
+                | Err(bollard::errors::Error::DockerResponseServerError {
+                    status_code: 304 | 404,
+                    ..
+                }) => Ok(()),
+                Err(error) => {
+                    Err(error)
+                        .into_alien_error()
+                        .context(ErrorData::DockerContainerError {
+                            container: container.container_id.clone(),
+                            operation: "stop".to_string(),
+                            reason: "Failed to stop owned Docker container during shutdown"
+                                .to_string(),
+                        })
+                }
+            }
+        }))
+        .await;
+        for result in results {
+            result?;
+        }
+        Ok(())
     }
 
     /// Verifies that the container process is running and, when configured,

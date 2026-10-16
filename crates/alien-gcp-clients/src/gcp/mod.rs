@@ -2,6 +2,7 @@ pub mod agent_platform;
 pub mod api_client;
 pub mod artifactregistry;
 pub mod cloud_kms;
+pub mod cloud_quotas;
 pub mod cloud_sql;
 pub mod cloudasset;
 pub mod cloudbuild;
@@ -20,6 +21,7 @@ pub mod pubsub;
 pub mod resource_manager;
 pub mod secret_manager;
 pub mod service_usage;
+pub mod service_usage_quotas;
 
 use alien_client_core::{ErrorData, Result};
 use alien_error::{AlienError, Context, IntoAlienError};

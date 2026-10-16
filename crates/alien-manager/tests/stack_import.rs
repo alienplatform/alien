@@ -974,6 +974,23 @@ async fn gcp_import_persists_target_environment_info() {
         .unwrap()
         .expect("deployment must persist");
 
+    assert_ne!(persisted.status, "initial-setup");
+    assert!(!persisted
+        .stack_state
+        .as_ref()
+        .unwrap()
+        .resources
+        .contains_key("enable-cloud-quotas"));
+    assert!(!persisted
+        .runtime_metadata
+        .as_ref()
+        .unwrap()
+        .prepared_stack
+        .as_ref()
+        .unwrap()
+        .resources
+        .contains_key("enable-cloud-quotas"));
+
     assert_eq!(
         persisted.environment_info,
         Some(EnvironmentInfo::Gcp(GcpEnvironmentInfo {
@@ -982,6 +999,54 @@ async fn gcp_import_persists_target_environment_info() {
             region: "us-central1".to_string(),
         }))
     );
+}
+
+#[tokio::test]
+async fn gcp_import_retains_delivered_quota_activation() {
+    let fixture =
+        make_fixture_for_platform(Platform::Gcp, Some(source_stack_without_setup_resources()))
+            .await;
+    let mut body = gcp_remote_management_import_request(
+        "quota-enabled",
+        "us-central1",
+        "management",
+        "example-project",
+        Some("123456789012"),
+    );
+    body.resources.push(ImportedResource {
+        id: "enable-cloud-quotas".into(),
+        resource_type: alien_core::ServiceActivation::RESOURCE_TYPE,
+        import_data: serde_json::json!({
+            "projectId": "example-project",
+            "serviceName": "cloudquotas.googleapis.com",
+            "activated": true
+        }),
+    });
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+    assert_eq!(status, StatusCode::CREATED, "body = {json:#}");
+    let parsed: StackImportResponse = serde_json::from_value(json).unwrap();
+    let persisted = fixture
+        .deployment_store
+        .get_deployment(
+            &alien_manager::auth::Subject::system(),
+            &parsed.deployment_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        persisted.stack_state.as_ref().unwrap().resources["enable-cloud-quotas"].status,
+        ResourceStatus::Running
+    );
+    assert!(persisted
+        .runtime_metadata
+        .as_ref()
+        .unwrap()
+        .prepared_stack
+        .as_ref()
+        .unwrap()
+        .resources
+        .contains_key("enable-cloud-quotas"));
 }
 
 #[tokio::test]

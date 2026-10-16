@@ -26,14 +26,21 @@ pub(crate) fn compute_update_status(
     target_stack: &Stack,
     reconciled: &HashSet<&str>,
     pending_deletions: &[&str],
+    pending_recovery_updates: &HashSet<&str>,
 ) -> Result<StackStatus> {
+    // A superseded failure waiting to start is outstanding work, not a new handler failure.
+    // Keep the stored record and its old dependency edges intact until planning can start it.
     let statuses = stack_state
         .resources
         .iter()
         .filter_map(|(resource_id, resource)| {
             (target_stack.resources.contains_key(resource_id)
                 || resource.status != ResourceStatus::Deleted)
-                .then_some(resource.status)
+                .then_some(if pending_recovery_updates.contains(resource_id.as_str()) {
+                    ResourceStatus::Updating
+                } else {
+                    resource.status
+                })
         })
         .collect::<Vec<_>>();
 
@@ -508,11 +515,17 @@ pub async fn handle_updating(
         .context(ErrorData::StackExecutionFailed {
             message: "Failed to determine outstanding deletions".to_string(),
         })?;
+    let pending_recovery_updates = executor
+        .pending_recovery_updates(&step_result.next_state)
+        .context(ErrorData::StackExecutionFailed {
+            message: "Failed to determine outstanding recovery updates".to_string(),
+        })?;
     let stack_status = compute_update_status(
         &step_result.next_state,
         &target_stack,
         &reconciled_ids,
         &pending_deletions,
+        &pending_recovery_updates,
     )?;
 
     // Check if update is complete
@@ -611,7 +624,7 @@ pub async fn handle_updating(
             .map(|(id, t)| (id.as_str(), t.as_str()))
             .collect();
 
-        crate::helpers::interrupt_in_progress_resources(&mut next_state, &failed_refs, None);
+        crate::helpers::interrupt_in_progress_resources(&mut next_state, &failed_refs, None)?;
 
         next.status = DeploymentStatus::UpdateFailed;
         next.error =
@@ -1298,8 +1311,14 @@ mod tests {
         );
 
         let reconciled = HashSet::from(["agent", "cache"]);
-        let status = compute_update_status(&stack_state, &target_stack, &reconciled, &[])
-            .expect("status should compute");
+        let status = compute_update_status(
+            &stack_state,
+            &target_stack,
+            &reconciled,
+            &[],
+            &HashSet::new(),
+        )
+        .expect("status should compute");
 
         assert_eq!(
             status,
@@ -1347,8 +1366,14 @@ mod tests {
         // The declined worker is not in the target, so the executor does not track it; the
         // executor reports it as a deletion it still owes.
         let reconciled = HashSet::from(["agent"]);
-        let status = compute_update_status(&stack_state, &target_stack, &reconciled, &["declined"])
-            .expect("status should compute");
+        let status = compute_update_status(
+            &stack_state,
+            &target_stack,
+            &reconciled,
+            &["declined"],
+            &HashSet::new(),
+        )
+        .expect("status should compute");
 
         assert_eq!(
             status,
@@ -1386,8 +1411,14 @@ mod tests {
         );
 
         let reconciled = HashSet::from(["agent"]);
-        let status = compute_update_status(&stack_state, &target_stack, &reconciled, &[])
-            .expect("status should compute");
+        let status = compute_update_status(
+            &stack_state,
+            &target_stack,
+            &reconciled,
+            &[],
+            &HashSet::new(),
+        )
+        .expect("status should compute");
 
         assert_eq!(
             status,
@@ -1413,8 +1444,14 @@ mod tests {
 
         // The executor reconciles only Live resources, so the frozen store is not in scope.
         let reconciled = HashSet::new();
-        let status = compute_update_status(&stack_state, &target_stack, &reconciled, &[])
-            .expect("status should compute");
+        let status = compute_update_status(
+            &stack_state,
+            &target_stack,
+            &reconciled,
+            &[],
+            &HashSet::new(),
+        )
+        .expect("status should compute");
 
         assert_eq!(
             status,

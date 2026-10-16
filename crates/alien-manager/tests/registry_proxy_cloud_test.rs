@@ -285,6 +285,7 @@ impl CloudProxyTest {
             disable_deployment_loop: true,
             disable_heartbeat_loop: true,
             enable_local_log_ingest: false,
+            stop_local_containers_on_shutdown: false,
             allowed_origins: None,
             response_signing_key: b"test-signing-key".to_vec(),
         };

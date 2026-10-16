@@ -118,7 +118,6 @@ async fn run_setup_teardown_after_handoff_inner(
                 config,
                 transport,
                 None,
-                Vec::new(),
             )
             .await?;
             break;
@@ -148,7 +147,6 @@ async fn run_setup_teardown_after_handoff_inner(
             config,
             transport,
             Some(SCAFFOLDING_TEARDOWN_DELAY_MS),
-            Vec::new(),
         )
         .await?;
         if policy.delay_strategy == DelayStrategy::Yield {
@@ -190,8 +188,7 @@ async fn run_setup_teardown_after_handoff_inner(
     );
 
     state.stack_state = Some(stack_state);
-    checkpoint_setup_teardown_state(deployment_id, state, config, transport, None, Vec::new())
-        .await?;
+    checkpoint_setup_teardown_state(deployment_id, state, config, transport, None).await?;
 
     let executor = StackExecutor::for_deletion_with_service_provider(
         client_config.clone(),
@@ -225,7 +222,6 @@ async fn run_setup_teardown_after_handoff_inner(
                     config,
                     transport,
                     None,
-                    Vec::new(),
                 )
                 .await;
                 if let Err(error) = &checkpoint {
@@ -287,7 +283,6 @@ async fn run_setup_teardown_after_handoff_inner(
             }
         };
         let suggested_delay_ms = step_result.suggested_delay_ms;
-        let heartbeats = step_result.heartbeats.clone();
         state.stack_state = Some(step_result.next_state);
 
         checkpoint_setup_teardown_state(
@@ -296,7 +291,6 @@ async fn run_setup_teardown_after_handoff_inner(
             config,
             transport,
             suggested_delay_ms,
-            heartbeats,
         )
         .await?;
 
@@ -505,7 +499,7 @@ async fn fail_setup_teardown(
 ) -> Result<()> {
     state.status = DeploymentStatus::TeardownFailed;
     state.error = Some(error.into_generic());
-    checkpoint_setup_teardown_state(deployment_id, state, config, transport, None, Vec::new()).await
+    checkpoint_setup_teardown_state(deployment_id, state, config, transport, None).await
 }
 
 async fn checkpoint_setup_teardown_state(
@@ -514,7 +508,6 @@ async fn checkpoint_setup_teardown_state(
     config: &mut DeploymentConfig,
     transport: &dyn DeploymentLoopTransport,
     suggested_delay_ms: Option<u64>,
-    heartbeats: Vec<alien_core::ResourceHeartbeat>,
 ) -> Result<()> {
     match transport
         .reconcile_step(
@@ -523,7 +516,9 @@ async fn checkpoint_setup_teardown_state(
             config,
             false,
             suggested_delay_ms,
-            heartbeats,
+            // Setup teardown checkpoints deletion progress, not runtime telemetry.
+            // Waiting dependencies can emit incidental executor heartbeats.
+            Vec::new(),
             Vec::new(),
         )
         .await
@@ -864,8 +859,12 @@ mod tests {
     /// mark it as this deployment's.
     #[tokio::test]
     async fn direct_teardown_deletes_a_tagged_build_role_the_record_never_held() {
-        teardown_after_a_lost_record(ResourceLifecycle::Live, MockPlatformServiceProvider::new())
-            .await;
+        teardown_after_a_lost_record(
+            ResourceLifecycle::Live,
+            MockPlatformServiceProvider::new(),
+            false,
+        )
+        .await;
     }
 
     /// A Frozen sandbox's image goes with the record: recovery finds it by the name the controller
@@ -889,7 +888,12 @@ mod tests {
             .withf(|image| image == SANDBOX_IMAGE)
             .times(1)
             .returning(|_| Ok(()));
-        teardown_after_a_lost_record(ResourceLifecycle::Frozen, microvms_provider(microvms)).await;
+        teardown_after_a_lost_record(
+            ResourceLifecycle::Frozen,
+            microvms_provider(microvms),
+            false,
+        )
+        .await;
     }
 
     /// Recovery runs on every teardown pass, so an image already deleted must not come back into
@@ -908,7 +912,44 @@ mod tests {
                     },
                 ))
             });
-        teardown_after_a_lost_record(ResourceLifecycle::Frozen, microvms_provider(microvms)).await;
+        teardown_after_a_lost_record(
+            ResourceLifecycle::Frozen,
+            microvms_provider(microvms),
+            false,
+        )
+        .await;
+    }
+
+    /// Cleanup can recover lost checkpoints from identity-only sandbox declarations.
+    /// The workload image and outbound policy are not inputs to tagged-role/image recovery.
+    #[tokio::test]
+    async fn direct_teardown_recovers_from_an_identity_only_manifest() {
+        teardown_after_a_lost_record(
+            ResourceLifecycle::Live,
+            MockPlatformServiceProvider::new(),
+            true,
+        )
+        .await;
+
+        let mut microvms = alien_aws_clients::lambda_microvms::MockLambdaMicrovmsApi::new();
+        microvms
+            .expect_get_microvm_image()
+            .withf(|image| image == SANDBOX_IMAGE)
+            .returning(|image| {
+                Ok(alien_aws_clients::lambda_microvms::MicrovmImage {
+                    image_identifier: Some(image.to_string()),
+                    image_arn: Some(image.to_string()),
+                    image_version: Some("1.0".to_string()),
+                    state: Some("CREATED".to_string()),
+                })
+            });
+        microvms
+            .expect_delete_microvm_image()
+            .withf(|image| image == SANDBOX_IMAGE)
+            .times(1)
+            .returning(|_| Ok(()));
+        teardown_after_a_lost_record(ResourceLifecycle::Frozen, microvms_provider(microvms), true)
+            .await;
     }
 
     fn microvms_provider(
@@ -925,6 +966,7 @@ mod tests {
     async fn teardown_after_a_lost_record(
         lifecycle: ResourceLifecycle,
         mut provider: MockPlatformServiceProvider,
+        identity_only: bool,
     ) {
         let mut iam = MockIamApi::new();
         iam.expect_get_role()
@@ -985,10 +1027,17 @@ mod tests {
                 .add(
                     alien_core::Sandbox::new("agents".to_string())
                         .code(alien_core::SandboxCode::Image {
-                            image: "s3://acme-artifacts/sandbox-bundle/f00dcafe/bundle.zip"
-                                .to_string(),
+                            image: if identity_only {
+                                String::new()
+                            } else {
+                                "s3://acme-artifacts/sandbox-bundle/f00dcafe/bundle.zip".to_string()
+                            },
                         })
-                        .egress(alien_core::SandboxEgress::Allow)
+                        .egress(if identity_only {
+                            alien_core::SandboxEgress::Deny
+                        } else {
+                            alien_core::SandboxEgress::Allow
+                        })
                         .lifecycle(alien_core::SandboxLifecyclePolicy {
                             max_lifetime_seconds: None,
                             idle_pause_seconds: None,
@@ -999,6 +1048,8 @@ mod tests {
                 .build(),
         );
 
+        // Exercise the typed wire roundtrip consumed by setup teardown.
+        state = serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
         run(&mut state, provider, &RecordingTransport::default())
             .await
             .unwrap();
@@ -1368,30 +1419,22 @@ mod tests {
         provider
     }
 
-    /// A Frozen sandbox's runtime cleanup leaves its image alone: the lifecycle check refuses it,
-    /// whatever IAM a Live sibling grants. Setup deletes the image it built, before the role it was
-    /// built with.
-    #[tokio::test]
-    async fn setup_teardown_deletes_the_image_a_frozen_sandbox_was_built_with() {
-        let mut serving = serving_live_sandbox();
-        serving.lifecycle = Some(ResourceLifecycle::Frozen);
-        let mut state = teardown_required(InitialSetupAuthority::DirectSetup);
-        state.status = DeploymentStatus::DeletePending;
-        state
-            .stack_state
-            .as_mut()
-            .unwrap()
-            .resources
-            .insert("agents".to_string(), serving);
-        state.runtime_metadata.as_mut().unwrap().setup_scaffolding = BTreeMap::from([(
-            "agents".to_string(),
-            SetupScaffolding::AwsSandbox {
-                build_role_name: BUILD_ROLE.to_string(),
-                egress: None,
-                image_arn: Some(SANDBOX_IMAGE.to_string()),
-            },
-        )]);
-        let mut config = DeploymentConfig::builder()
+    /// Runtime cleanup leaves a dependency's apply checkpoint intact until its
+    /// dependent has finished, even though both belong to the deletion inventory.
+    #[tokio::test(start_paused = true)]
+    async fn runtime_deletion_reports_unchanged_tagged_dependency_until_dependent_finishes() {
+        let mut dependent = serving_live_sandbox();
+        dependent.dependencies = vec![alien_core::ResourceRef::new("sandbox".into(), "base")];
+        let mut base_wire = serde_json::to_value(serving_live_sandbox()).unwrap();
+        base_wire["config"]["id"] = serde_json::json!("base");
+        let base_image = format!("{SANDBOX_IMAGE}-base");
+        base_wire["_internal"]["imageIdentifier"] = serde_json::json!(base_image);
+        let base: alien_core::StackResourceState = serde_json::from_value(base_wire).unwrap();
+        let base_checkpoint = base.internal_state.clone().unwrap();
+        let mut stack = StackState::with_resource_prefix(Platform::Aws, "test".to_string());
+        stack.resources.insert("agents".to_string(), dependent);
+        stack.resources.insert("base".to_string(), base);
+        let config = DeploymentConfig::builder()
             .stack_settings(StackSettings::default())
             .environment_variables(EnvironmentVariablesSnapshot {
                 variables: vec![],
@@ -1401,46 +1444,248 @@ mod tests {
             .external_bindings(alien_core::ExternalBindings::default())
             .allow_frozen_changes(false)
             .build();
-        let client_config = ClientConfig::Aws(Box::new(AwsClientConfig::mock()));
-
-        let runtime_calls = Arc::new(Mutex::new(Vec::<String>::new()));
-        let mut refused = alien_aws_clients::lambda_microvms::MockLambdaMicrovmsApi::new();
-        let calls = runtime_calls.clone();
-        refused
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let mut microvms = alien_aws_clients::lambda_microvms::MockLambdaMicrovmsApi::new();
+        let expected_base = base_image.clone();
+        microvms
+            .expect_get_microvm_image()
+            .withf(move |image| image == expected_base)
+            .returning(|image| {
+                Ok(alien_aws_clients::lambda_microvms::MicrovmImage {
+                    image_identifier: Some(image.to_string()),
+                    image_arn: None,
+                    image_version: Some("1.0".to_string()),
+                    state: Some("ACTIVE".to_string()),
+                })
+            });
+        let calls = log.clone();
+        microvms
             .expect_delete_microvm_image()
             .returning(move |image| {
-                calls.lock().unwrap().push(image.to_string());
+                calls
+                    .lock()
+                    .unwrap()
+                    .push(format!("lambda:DeleteMicrovmImage {image}"));
+                Ok(())
+            });
+        let microvms = Arc::new(microvms);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider.expect_runtime_setup_authority().return_const(None);
+        provider
+            .expect_get_aws_microvms_client()
+            .returning(move |_| Ok(microvms.clone()));
+        let executor = StackExecutor::for_deletion_with_service_provider(
+            ClientConfig::Aws(Box::new(AwsClientConfig::mock())),
+            &config,
+            Arc::new(provider),
+            None,
+        )
+        .unwrap();
+        let mut waiting_reports = 0;
+        for _ in 0..20 {
+            let dependent_done_before = stack.resources["agents"].status == ResourceStatus::Deleted;
+            stack = executor.step(stack).await.unwrap().next_state;
+            // The next runner sees exactly the JSON report, not in-memory trait objects.
+            stack = serde_json::from_value(serde_json::to_value(&stack).unwrap()).unwrap();
+            if !dependent_done_before {
+                assert_eq!(stack.resources["base"].status, ResourceStatus::Running);
+                let checkpoint = stack.resources["base"].internal_state.as_ref().unwrap();
+                for field in [
+                    "type",
+                    "_controllerStateVersion",
+                    "state",
+                    "imageIdentifier",
+                    "activeVersion",
+                ] {
+                    assert_eq!(
+                        checkpoint[field], base_checkpoint[field],
+                        "waiting dependency's {field}"
+                    );
+                }
+                assert!(stack.resources["base"].last_failed_state.is_none());
+                waiting_reports += 1;
+            }
+            if stack
+                .resources
+                .values()
+                .all(|r| r.status == ResourceStatus::Deleted)
+            {
+                break;
+            }
+        }
+        assert!(waiting_reports >= 2);
+        assert!(stack
+            .resources
+            .values()
+            .all(|r| r.status == ResourceStatus::Deleted));
+        assert_eq!(
+            *log.lock().unwrap(),
+            vec![
+                format!("lambda:DeleteMicrovmImage {SANDBOX_IMAGE}"),
+                format!("lambda:DeleteMicrovmImage {base_image}"),
+            ]
+        );
+    }
+
+    /// Failure and retry reports come from the real executor and tagged serializer,
+    /// with a fresh executor restoring the exact image deletion checkpoint.
+    #[tokio::test(start_paused = true)]
+    async fn runtime_deletion_reports_tagged_failure_and_resumes_exact_delete_checkpoint() {
+        let mut stack = StackState::with_resource_prefix(Platform::Aws, "test".to_string());
+        stack
+            .resources
+            .insert("agents".to_string(), serving_live_sandbox());
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(alien_core::ExternalBindings::default())
+            .allow_frozen_changes(false)
+            .build();
+        let mut microvms = alien_aws_clients::lambda_microvms::MockLambdaMicrovmsApi::new();
+        microvms
+            .expect_delete_microvm_image()
+            .withf(|image| image == SANDBOX_IMAGE)
+            .times(10)
+            .returning(|image| {
                 Err(AlienError::new(
-                    alien_aws_clients::ErrorData::RemoteAccessDenied {
+                    alien_aws_clients::ErrorData::RemoteResourceConflict {
+                        message: "image still in use".to_string(),
                         resource_type: "MicroVM image".to_string(),
                         resource_name: image.to_string(),
                     },
                 ))
             });
-        let refused = Arc::new(refused);
-        let mut management = MockPlatformServiceProvider::new();
-        management
-            .expect_runtime_setup_authority()
-            .return_const(None);
-        management
+        let microvms = Arc::new(microvms);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider.expect_runtime_setup_authority().return_const(None);
+        provider
             .expect_get_aws_microvms_client()
-            .returning(move |_| Ok(refused.clone()));
-        let management: Arc<dyn alien_infra::PlatformServiceProvider> = Arc::new(management);
-
-        state = crate::deleting::handle_delete_pending(
-            state,
-            config.clone(),
-            client_config.clone(),
-            management.clone(),
+            .returning(move |_| Ok(microvms.clone()));
+        let executor = StackExecutor::for_deletion_with_service_provider(
+            ClientConfig::Aws(Box::new(AwsClientConfig::mock())),
+            &config,
+            Arc::new(provider),
+            None,
         )
-        .await
-        .unwrap()
-        .state;
-        for _ in 0..10 {
-            if state.status != DeploymentStatus::Deleting {
+        .unwrap();
+        let mut deleting_reports = 0;
+        for _ in 0..30 {
+            let step = executor.step(stack).await.unwrap();
+            stack = serde_json::from_value(serde_json::to_value(step.next_state).unwrap()).unwrap();
+            if stack.resources["agents"].status == ResourceStatus::DeleteFailed {
                 break;
             }
-            state = crate::deleting::handle_deleting(
+            if stack.resources["agents"].status == ResourceStatus::Deleting {
+                deleting_reports += 1;
+            }
+            if let Some(delay) = step.suggested_delay_ms {
+                sleep(Duration::from_millis(delay)).await;
+            }
+        }
+        assert!(deleting_reports >= 2);
+        assert_eq!(
+            stack.resources["agents"].status,
+            ResourceStatus::DeleteFailed
+        );
+        let wire = serde_json::to_value(&stack).unwrap();
+        let resource = &wire["resources"]["agents"];
+        assert_eq!(resource["_internal"]["type"], "AwsSandboxController");
+        assert_eq!(resource["_internal"]["state"], "deleteFailed");
+        assert_eq!(resource["lastFailedState"]["type"], "AwsSandboxController");
+        assert_eq!(resource["lastFailedState"]["state"], "deletingImage");
+        assert_eq!(
+            resource["lastFailedState"]["imageIdentifier"],
+            SANDBOX_IMAGE
+        );
+        assert_eq!(resource["lastFailedState"]["_controllerStateVersion"], 1);
+        stack = serde_json::from_value(wire).unwrap();
+        stack.prepare_for_destroy().unwrap();
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let restored = StackExecutor::for_deletion_with_service_provider(
+            ClientConfig::Aws(Box::new(AwsClientConfig::mock())),
+            &config,
+            Arc::new(logging_provider(&log)),
+            None,
+        )
+        .unwrap();
+        for _ in 0..10 {
+            stack = restored.step(stack).await.unwrap().next_state;
+            if stack.resources["agents"].status == ResourceStatus::Deleted {
+                break;
+            }
+        }
+        assert_eq!(stack.resources["agents"].status, ResourceStatus::Deleted);
+        assert_eq!(
+            *log.lock().unwrap(),
+            vec![format!("lambda:DeleteMicrovmImage {SANDBOX_IMAGE}")]
+        );
+    }
+
+    /// A Frozen sandbox's runtime cleanup leaves its image alone: the lifecycle check refuses it,
+    /// whatever IAM a Live sibling grants. Setup deletes the image it built, before the role it was
+    /// built with.
+    #[tokio::test]
+    async fn setup_teardown_deletes_the_image_a_frozen_sandbox_was_built_with() {
+        for minimal_config in [false, true] {
+            let mut serving = serving_live_sandbox();
+            serving.lifecycle = Some(ResourceLifecycle::Frozen);
+            let mut state = teardown_required(InitialSetupAuthority::DirectSetup);
+            state.status = DeploymentStatus::DeletePending;
+            state
+                .stack_state
+                .as_mut()
+                .unwrap()
+                .resources
+                .insert("agents".to_string(), serving);
+            state.runtime_metadata.as_mut().unwrap().setup_scaffolding = BTreeMap::from([(
+                "agents".to_string(),
+                SetupScaffolding::AwsSandbox {
+                    build_role_name: BUILD_ROLE.to_string(),
+                    egress: None,
+                    image_arn: Some(SANDBOX_IMAGE.to_string()),
+                },
+            )]);
+            let mut config = DeploymentConfig::builder()
+                .stack_settings(StackSettings::default())
+                .environment_variables(EnvironmentVariablesSnapshot {
+                    variables: vec![],
+                    hash: String::new(),
+                    created_at: String::new(),
+                })
+                .external_bindings(alien_core::ExternalBindings::default())
+                .allow_frozen_changes(false)
+                .build();
+            let client_config = ClientConfig::Aws(Box::new(AwsClientConfig::mock()));
+
+            let runtime_calls = Arc::new(Mutex::new(Vec::<String>::new()));
+            let mut refused = alien_aws_clients::lambda_microvms::MockLambdaMicrovmsApi::new();
+            let calls = runtime_calls.clone();
+            refused
+                .expect_delete_microvm_image()
+                .returning(move |image| {
+                    calls.lock().unwrap().push(image.to_string());
+                    Err(AlienError::new(
+                        alien_aws_clients::ErrorData::RemoteAccessDenied {
+                            resource_type: "MicroVM image".to_string(),
+                            resource_name: image.to_string(),
+                        },
+                    ))
+                });
+            let refused = Arc::new(refused);
+            let mut management = MockPlatformServiceProvider::new();
+            management
+                .expect_runtime_setup_authority()
+                .return_const(None);
+            management
+                .expect_get_aws_microvms_client()
+                .returning(move |_| Ok(refused.clone()));
+            let management: Arc<dyn alien_infra::PlatformServiceProvider> = Arc::new(management);
+
+            state = crate::deleting::handle_delete_pending(
                 state,
                 config.clone(),
                 client_config.clone(),
@@ -1449,41 +1694,149 @@ mod tests {
             .await
             .unwrap()
             .state;
+            for _ in 0..10 {
+                if state.status != DeploymentStatus::Deleting {
+                    break;
+                }
+                state = crate::deleting::handle_deleting(
+                    state,
+                    config.clone(),
+                    client_config.clone(),
+                    management.clone(),
+                )
+                .await
+                .unwrap()
+                .state;
+            }
+            assert_eq!(state.status, DeploymentStatus::TeardownRequired);
+            assert!(
+                runtime_calls.lock().unwrap().is_empty(),
+                "runtime cleanup leaves the image to setup: {:?}",
+                runtime_calls.lock().unwrap()
+            );
+
+            if minimal_config {
+                // Delete uses the typed identity and persisted controller delete IDs,
+                // not the bundle or supervisor configuration used during apply.
+                let resource = state
+                    .stack_state
+                    .as_mut()
+                    .unwrap()
+                    .resources
+                    .get_mut("agents")
+                    .unwrap();
+                resource.config = serde_json::from_value(serde_json::json!({
+                    "type": "sandbox",
+                    "id": "agents",
+                    "code": { "type": "image", "image": "" },
+                    "egress": { "mode": "deny" },
+                    "lifecycle": {}
+                }))
+                .unwrap();
+                let controller = resource.internal_state.as_mut().unwrap();
+                controller.as_object_mut().unwrap().insert(
+                    "supervisorEnvironment".to_string(),
+                    serde_json::json!({ "TOKEN": "workload-secret-sentinel" }),
+                );
+                controller.as_object_mut().unwrap().insert(
+                    "pendingSupervisorEnvironment".to_string(),
+                    serde_json::json!({ "TOKEN": "pending-secret-sentinel" }),
+                );
+                assert!(controller.to_string().contains("secret-sentinel"));
+                controller.as_object_mut().unwrap().retain(|key, _| {
+                    matches!(
+                        key.as_str(),
+                        "type"
+                            | "_controllerStateVersion"
+                            | "state"
+                            | "internalStayCount"
+                            | "imageIdentifier"
+                    )
+                });
+                assert!(!controller.to_string().contains("sentinel"));
+                resource.outputs = None;
+                resource.remote_binding_params = None;
+                state.current_release = None;
+                state.target_release = None;
+                state = serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
+            }
+            let original_controller = state.stack_state.as_ref().unwrap().resources["agents"]
+                .internal_state
+                .clone()
+                .unwrap();
+            let transport = RecordingTransport::default();
+            let log = Arc::new(Mutex::new(Vec::new()));
+            run_setup_teardown_after_handoff(
+                &mut state,
+                &mut config,
+                &client_config,
+                "dep_test",
+                &RunnerPolicy {
+                    operation: LoopOperation::Delete,
+                    delay_strategy: DelayStrategy::Inline,
+                    ..Default::default()
+                },
+                &transport,
+                Some(Arc::new(logging_provider(&log))),
+            )
+            .await
+            .unwrap();
+
+            let reports = transport.checkpoints.into_inner().unwrap();
+            let wire_reports: Vec<serde_json::Value> = reports
+                .iter()
+                .map(|report| serde_json::to_value(report).unwrap())
+                .collect();
+            assert!(wire_reports.len() >= 3);
+            for report in &wire_reports {
+                let resource = &report["stackState"]["resources"]["agents"];
+                assert_eq!(resource["status"], "deleted");
+                assert_eq!(
+                    resource["_internal"], original_controller,
+                    "setup scaffolding teardown must not rewrite a terminal controller"
+                );
+            }
+            let terminal = wire_reports
+                .iter()
+                .find(|report| report["status"] == "deleted")
+                .expect("setup runner checkpoints completed teardown");
+            let terminal_resource = &terminal["stackState"]["resources"]["agents"];
+            assert_eq!(terminal_resource["status"], "deleted");
+            assert_eq!(
+                terminal_resource["_internal"]["type"],
+                "AwsSandboxController"
+            );
+            assert_eq!(terminal_resource["_internal"]["_controllerStateVersion"], 1);
+            assert_eq!(terminal_resource["_internal"]["state"], "deleted");
+            assert_eq!(
+                terminal_resource["_internal"]["imageIdentifier"],
+                SANDBOX_IMAGE
+            );
+            assert!(
+                terminal_resource["_internal"]["activeVersion"].is_null(),
+                "delete withdraws the serving version even when scaffolding owns the image"
+            );
+            let restored: DeploymentState = serde_json::from_value(terminal.clone()).unwrap();
+            assert_eq!(restored.status, DeploymentStatus::Deleted);
+            assert_eq!(
+                restored.stack_state.unwrap().resources["agents"].status,
+                ResourceStatus::Deleted
+            );
+            assert_eq!(state.status, DeploymentStatus::Deleted);
+            assert_eq!(
+                state.stack_state.as_ref().unwrap().resources["agents"].status,
+                alien_core::ResourceStatus::Deleted
+            );
+            assert!(state.runtime_metadata.unwrap().setup_scaffolding.is_empty());
+            assert_eq!(
+                *log.lock().unwrap(),
+                vec![
+                    format!("lambda:DeleteMicrovmImage {SANDBOX_IMAGE}"),
+                    format!("iam:DeleteRolePolicy {BUILD_ROLE}"),
+                    format!("iam:DeleteRole {BUILD_ROLE}"),
+                ]
+            );
         }
-        assert_eq!(state.status, DeploymentStatus::TeardownRequired);
-        assert!(
-            runtime_calls.lock().unwrap().is_empty(),
-            "runtime cleanup leaves the image to setup: {:?}",
-            runtime_calls.lock().unwrap()
-        );
-
-        let log = Arc::new(Mutex::new(Vec::new()));
-        run_setup_teardown_after_handoff(
-            &mut state,
-            &mut config,
-            &client_config,
-            "dep_test",
-            &RunnerPolicy {
-                operation: LoopOperation::Delete,
-                delay_strategy: DelayStrategy::Inline,
-                ..Default::default()
-            },
-            &RecordingTransport::default(),
-            Some(Arc::new(logging_provider(&log))),
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(state.status, DeploymentStatus::Deleted);
-        assert!(state.runtime_metadata.unwrap().setup_scaffolding.is_empty());
-        assert_eq!(
-            *log.lock().unwrap(),
-            vec![
-                format!("lambda:DeleteMicrovmImage {SANDBOX_IMAGE}"),
-                format!("iam:DeleteRolePolicy {BUILD_ROLE}"),
-                format!("iam:DeleteRole {BUILD_ROLE}"),
-            ]
-        );
     }
 
     /// A deny sandbox's sessions place interfaces in the connector's group and its image builds

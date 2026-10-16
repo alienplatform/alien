@@ -404,6 +404,10 @@ fn generate_terraform_module_internal(
         }
     }
 
+    if matches!(platform, alien_core::Platform::Aws) {
+        crate::iam_limits::validate_role_policy_limits(&per_resource)?;
+    }
+
     let gcp_iam_propagation_dependencies = if matches!(platform, alien_core::Platform::Gcp) {
         gcp_iam_resource_addresses(&per_resource)
     } else {

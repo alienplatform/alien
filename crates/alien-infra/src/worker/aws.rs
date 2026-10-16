@@ -47,8 +47,30 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
+use alien_permissions::aws_resource_policies::aws_prefixed_resource_name;
 use chrono::Utc;
 use uuid::Uuid;
+
+/// A reservation race has the same quota identity as the early account check.
+fn lambda_concurrency_error(error: AlienError<CloudClientErrorData>, region: &str) -> AlienError {
+    if let Some(CloudClientErrorData::InvalidInput { message, .. }) = &error.error {
+        if message.contains("UnreservedConcurrentExecution") {
+            let quota = alien_preflights::runtime::aws_lambda::quota_identity(region);
+            let message = format!(
+                "{} ({}, {}): {}. Request an increase: {}",
+                quota.name,
+                quota.provider_id,
+                quota.scope,
+                message.trim_end_matches('.'),
+                quota.increase_url
+            );
+            return error
+                .context(ErrorData::CloudQuotaExceeded { quota, message })
+                .into_generic();
+        }
+    }
+    error.into_generic()
+}
 
 const AWS_LAMBDA_ACTIVE_MAX_POLLS: u32 = 60;
 
@@ -58,7 +80,7 @@ const LAMBDA_LOG_RETENTION_DAYS: i32 = 30;
 
 /// Generates the full, prefixed AWS resource name.
 fn get_aws_worker_name(prefix: &str, name: &str) -> String {
-    format!("{}-{}", prefix, name)
+    aws_prefixed_resource_name(prefix, name)
 }
 
 fn readiness_probe_dns_override(
@@ -2504,6 +2526,7 @@ impl AwsWorkerController {
             client
                 .put_function_concurrency(&aws_worker_name, limit)
                 .await
+                .map_err(|error| lambda_concurrency_error(error, &aws_cfg.region))
                 .context(ErrorData::CloudPlatformError {
                     message: "Failed to set worker reserved concurrency".to_string(),
                     resource_id: Some(config.id.clone()),
@@ -4084,6 +4107,7 @@ impl AwsWorkerController {
                     client
                         .put_function_concurrency(&aws_worker_name, limit)
                         .await
+                        .map_err(|error| lambda_concurrency_error(error, &aws_cfg.region))
                         .context(ErrorData::CloudPlatformError {
                             message: "Failed to update worker reserved concurrency".to_string(),
                             resource_id: Some(config.id.clone()),
@@ -5322,7 +5346,9 @@ mod tests {
     };
     use alien_aws_clients::cloudwatch_logs::MockCloudWatchLogsApi;
     use alien_aws_clients::ec2::{DescribeNetworkInterfacesResponse, MockEc2Api};
+    use alien_aws_clients::eventbridge::MockEventBridgeApi;
     use alien_aws_clients::iam::MockIamApi;
+    use alien_aws_clients::s3::MockS3Api;
     use alien_aws_clients::lambda::{
         AddPermissionResponse, FunctionConfiguration, GetFunctionResponse, MockLambdaApi,
     };
@@ -5333,7 +5359,7 @@ mod tests {
         EnvironmentVariablesSnapshot, ExternalBindings, NetworkSettings, Platform,
         PublicEndpointUrls, Resource, ResourceDefinition, ResourceDomainInfo, ResourceLifecycle,
         ResourceStatus, Stack, StackResourceState, StackSettings, StackState, Worker, WorkerCode,
-        WorkerOutputs, WorkerPublicEndpoint,
+        Storage, WorkerOutputs, WorkerPublicEndpoint, WorkerTrigger,
     };
     use alien_error::AlienError;
     use httpmock::prelude::*;
@@ -5342,7 +5368,9 @@ mod tests {
     use crate::core::controller_test::SingleControllerExecutor;
     use crate::core::{
         serialize_controller, MockPlatformServiceProvider, ResourceController, StackExecutor,
+        StackResourceStateExt,
     };
+    use crate::storage::AwsStorageController;
     use crate::worker::{
         fixtures::*, readiness_probe::test_utils::create_readiness_probe_mock, AwsWorkerController,
         AwsWorkerState,
@@ -5912,22 +5940,26 @@ mod tests {
     #[case::readiness_probe(function_with_readiness_probe(), true)]
     #[case::complete_test(function_complete_test(), true)]
     #[tokio::test]
-    async fn test_create_and_delete_flow_succeeds(#[case] worker: Worker, #[case] _has_url: bool) {
+    async fn test_create_and_delete_flow_succeeds(
+        #[case] worker: Worker,
+        #[case] _has_url: bool,
+        #[values(false, true)] projected: bool,
+    ) {
         let worker_name = format!("test-{}", worker.id);
         let (mock_provider, _mock_server, domain_metadata, public_endpoints) =
             setup_mocks_for_function(&worker, &worker_name, true);
 
         let mut builder = SingleControllerExecutor::builder()
-            .resource(worker)
+            .resource(worker.clone())
             .controller(AwsWorkerController::default())
             .platform(Platform::Aws)
-            .service_provider(mock_provider)
+            .service_provider(mock_provider.clone())
             .with_test_dependencies();
 
-        if let Some(dm) = domain_metadata {
+        if let Some(dm) = domain_metadata.clone() {
             builder = builder.domain_metadata(dm);
         }
-        if let Some(urls) = public_endpoints {
+        if let Some(urls) = public_endpoints.clone() {
             builder = builder.public_endpoints(urls);
         }
 
@@ -5954,6 +5986,28 @@ mod tests {
         assert!(function_outputs.identifier.is_some());
         assert!(function_outputs.worker_name.starts_with("test-"));
 
+        if projected {
+            let mut checkpoint = executor
+                .internal_state::<AwsWorkerController>()
+                .unwrap()
+                .clone();
+            checkpoint._internal_stay_count = Some(3);
+            let checkpoint = worker_cleanup_checkpoint(&checkpoint);
+            drop(executor);
+            let mut builder = SingleControllerExecutor::builder()
+                .resource(worker)
+                .controller(checkpoint)
+                .platform(Platform::Aws)
+                .service_provider(mock_provider)
+                .with_test_dependencies();
+            if let Some(dm) = domain_metadata {
+                builder = builder.domain_metadata(dm);
+            }
+            if let Some(urls) = public_endpoints {
+                builder = builder.public_endpoints(urls);
+            }
+            executor = builder.build().await.unwrap();
+        }
         // Delete the worker
         executor.delete().unwrap();
 
@@ -7382,6 +7436,7 @@ mod tests {
     #[tokio::test]
     async fn teardown_after_a_failed_domain_create_deletes_the_api_and_function(
         #[case] lookup_error: fn() -> AlienError<CloudClientErrorData>,
+        #[values(false, true)] projected: bool,
     ) {
         let calls = Calls::default();
         let (lambda, acm) = delete_mocks(&calls);
@@ -7395,12 +7450,66 @@ mod tests {
         .unwrap();
 
         let mut state = state_after_failed_domain_create();
+        {
+            let resource = state.resources.get_mut("public-func").unwrap();
+            for value in [
+                &mut resource.internal_state,
+                &mut resource.last_failed_state,
+            ] {
+                let controller: AwsWorkerController =
+                    serde_json::from_value(value.take().unwrap()).unwrap();
+                let controller = if projected {
+                    worker_cleanup_checkpoint(&controller)
+                } else {
+                    controller
+                };
+                *value = Some(serialize_controller(&controller).unwrap());
+            }
+        }
+        let original_retry = state.resources["public-func"]
+            .last_failed_state
+            .clone()
+            .unwrap();
+        assert_eq!(original_retry["state"], "creatingApiDomain");
+        assert_eq!(original_retry["type"], "AwsWorkerController");
+        assert_eq!(original_retry["_controllerStateVersion"], 1);
+        let mut saw_deleting_with_prior_apply_retry = false;
         for _ in 0..30 {
             state = executor.step(state).await.unwrap().next_state;
+            // Cross the real tagged resource JSON boundary after every step.
+            // StackExecutor is stateless: its next step decodes this restored
+            // checkpoint, including the retry payload when one is present.
+            let wire = serde_json::to_value(&state).unwrap();
+            let current = &wire["resources"]["public-func"]["_internal"];
+            assert_eq!(current["type"], "AwsWorkerController");
+            assert_eq!(current["_controllerStateVersion"], 1);
+            if current["state"] == "deletingEventSourceMappings" {
+                assert!(current["apiId"].is_null());
+                assert!(current["domainName"].is_null());
+                assert!(current["apiMappingId"].is_null());
+            }
+            if current["state"] == "deletingLogGroup" || current["state"] == "deleted" {
+                assert!(current["arn"].is_null());
+                assert!(current["workerName"].is_null());
+                assert!(current["certificateArn"].is_null());
+                assert_eq!(current["eventSourceMappings"], serde_json::json!([]));
+                assert_eq!(current["eventbridgeRuleNames"], serde_json::json!([]));
+                assert_eq!(current["s3PermissionStatementIds"], serde_json::json!([]));
+            }
+            let resource = &state.resources["public-func"];
+            assert_eq!(resource.last_failed_state.as_ref(), Some(&original_retry));
+            let retry = &wire["resources"]["public-func"]["lastFailedState"];
+            assert_eq!(retry, &original_retry, "serialized retry remains unchanged");
+            if resource.status == ResourceStatus::Deleting {
+                saw_deleting_with_prior_apply_retry = true;
+                assert_ne!(current["state"], "creatingApiDomain");
+            }
+            state = serde_json::from_value(wire).unwrap();
             if state.resources["public-func"].status == ResourceStatus::Deleted {
                 break;
             }
         }
+        assert!(saw_deleting_with_prior_apply_retry);
         assert_eq!(
             state.resources["public-func"].status,
             ResourceStatus::Deleted
@@ -7414,6 +7523,109 @@ mod tests {
                 "DeleteCertificate"
             ]
         );
+    }
+
+    /// A throttled API delete survives the resource report and resumes that same delete,
+    /// without repeating earlier cleanup or losing the remaining function/certificate.
+    #[rstest]
+    #[tokio::test]
+    async fn tagged_worker_delete_failure_restores_the_exact_retry(
+        #[values(false, true)] projected: bool,
+    ) {
+        let calls = Calls::default();
+        let (lambda, acm) = delete_mocks(&calls);
+        let mut apigw = MockApiGatewayV2Api::new();
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let attempt_count = attempts.clone();
+        let recorded = calls.clone();
+        apigw
+            .expect_delete_api()
+            .withf(|id| id == "api-1")
+            .times(11)
+            .returning(move |_| {
+                record(&recorded, "DeleteApi");
+                if attempt_count.fetch_add(1, Ordering::SeqCst) < 10 {
+                    Err(AlienError::new(CloudClientErrorData::RateLimitExceeded {
+                        message: "Rate exceeded".to_string(),
+                    }))
+                } else {
+                    Ok(())
+                }
+            });
+        apigw.expect_get_api().times(0);
+        let services = provider(lambda, acm, apigw);
+        let config = no_network_deployment_config();
+        let executor = StackExecutor::for_deletion_with_service_provider(
+            ClientConfig::Aws(Box::new(AwsClientConfig::mock())),
+            &config,
+            services.clone(),
+            None,
+        )
+        .unwrap();
+        let mut state = state_after_failed_domain_create();
+        let resource = state.resources.get_mut("public-func").unwrap();
+        let mut controller = failed_at_creating_api_domain();
+        controller.state = AwsWorkerState::DeletingApiGateway;
+        controller.domain_name = None;
+        controller.api_mapping_id = None;
+        let controller = if projected {
+            worker_cleanup_checkpoint(&controller)
+        } else {
+            controller
+        };
+        resource.internal_state = Some(serialize_controller(&controller).unwrap());
+        resource.status = ResourceStatus::Deleting;
+        resource.last_failed_state = None;
+
+        for _ in 0..10 {
+            state = executor.step(state).await.unwrap().next_state;
+            state = serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
+        }
+        let failed = &state.resources["public-func"];
+        assert_eq!(failed.status, ResourceStatus::DeleteFailed);
+        assert!(failed.error.is_some());
+        let current = failed.internal_state.as_ref().unwrap();
+        let retry = failed.last_failed_state.as_ref().unwrap();
+        for checkpoint in [current, retry] {
+            assert_eq!(checkpoint["type"], "AwsWorkerController");
+            assert_eq!(checkpoint["_controllerStateVersion"], 1);
+            assert_eq!(checkpoint["apiId"], "api-1");
+            assert_eq!(checkpoint["workerName"], "test-public-func");
+            assert_eq!(checkpoint["certificateArn"], TEST_CERTIFICATE_ARN);
+        }
+        assert_eq!(current["state"], "deleteFailed");
+        assert_eq!(retry["state"], "deletingApiGateway");
+        assert_eq!(*calls.lock().unwrap(), vec!["DeleteApi"; 10]);
+        state = serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
+        assert!(state
+            .resources
+            .get_mut("public-func")
+            .unwrap()
+            .retry_failed()
+            .unwrap());
+        let restored = StackExecutor::for_deletion_with_service_provider(
+            ClientConfig::Aws(Box::new(AwsClientConfig::mock())),
+            &config,
+            services,
+            None,
+        )
+        .unwrap();
+        for _ in 0..30 {
+            state = restored.step(state).await.unwrap().next_state;
+            assert!(state.resources["public-func"].error.is_none());
+            state = serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
+            if state.resources["public-func"].status == ResourceStatus::Deleted {
+                break;
+            }
+        }
+        assert_eq!(
+            state.resources["public-func"].status,
+            ResourceStatus::Deleted
+        );
+        assert_eq!(attempts.load(Ordering::SeqCst), 11);
+        let mut expected_calls = vec!["DeleteApi"; 11];
+        expected_calls.extend(["DeleteFunction", "DeleteCertificate"]);
+        assert_eq!(*calls.lock().unwrap(), expected_calls);
     }
 
     /// The current version: a failed domain create leaves its token and an unconfirmed name,
@@ -7547,8 +7759,12 @@ mod tests {
     /// A streaming (REST) worker that failed in `CreatingRestDomain`: the domain is checked
     /// through the REST API, no base path mapping or domain delete is sent, and the REST API
     /// is deleted.
+    #[rstest]
     #[tokio::test]
-    async fn rest_worker_with_a_never_created_domain_deletes_its_rest_api() {
+    async fn rest_worker_with_a_never_created_domain_deletes_its_rest_api(
+        #[values(false, true)] projected: bool,
+        #[values(false, true)] minimal: bool,
+    ) {
         let mut rest = MockApiGatewayApi::new();
         rest.expect_get_domain_name()
             .withf(|name| name == "stream.example.com")
@@ -7566,7 +7782,7 @@ mod tests {
             .expect_get_aws_apigateway_client()
             .returning(move |_| Ok(rest.clone()));
 
-        let worker = Worker::new("stream-func".to_string())
+        let mut worker = Worker::new("stream-func".to_string())
             .code(WorkerCode::Image {
                 image: "123456789012.dkr.ecr.us-east-1.amazonaws.com/stream:latest".to_string(),
             })
@@ -7581,15 +7797,33 @@ mod tests {
                 wildcard_subdomains: false,
             })
             .build();
+        if minimal {
+            worker.code = WorkerCode::Image {
+                image: String::new(),
+            };
+            worker.permissions = String::new();
+            worker
+                .environment
+                .retain(|key, _| key == "WORKER_RESPONSE_STREAMING");
+            assert_eq!(worker.environment.len(), 1);
+            worker.public_endpoints.clear();
+        }
+        let controller = AwsWorkerController {
+            state: AwsWorkerState::DeletingApiGateway,
+            rest_api_id: Some("rest-1".to_string()),
+            stage_name: Some("prod".to_string()),
+            domain_name: Some("stream.example.com".to_string()),
+            _internal_stay_count: Some(3),
+            ..Default::default()
+        };
+        let controller = if projected {
+            worker_cleanup_checkpoint(&controller)
+        } else {
+            controller
+        };
         let mut executor = SingleControllerExecutor::builder()
             .resource(worker)
-            .controller(AwsWorkerController {
-                state: AwsWorkerState::DeletingApiGateway,
-                rest_api_id: Some("rest-1".to_string()),
-                stage_name: Some("prod".to_string()),
-                domain_name: Some("stream.example.com".to_string()),
-                ..Default::default()
-            })
+            .controller(controller)
             .platform(Platform::Aws)
             .service_provider(Arc::new(provider))
             .build()
@@ -8410,10 +8644,278 @@ mod tests {
         assert_eq!(calls.imports.lock().unwrap().len(), 1);
     }
 
+    /// Round-trip the deletion identifiers through the tagged checkpoint wire format.
+    fn worker_cleanup_checkpoint(controller: &AwsWorkerController) -> AwsWorkerController {
+        let mut value = serialize_controller(controller).unwrap();
+        value.as_object_mut().unwrap().insert(
+            "unknownCredential".to_string(),
+            serde_json::json!("credential-sentinel"),
+        );
+        value.as_object_mut().unwrap().retain(|key, _| {
+            matches!(
+                key.as_str(),
+                "type"
+                    | "_controllerStateVersion"
+                    | "state"
+                    | "internalStayCount"
+                    | "arn"
+                    | "workerName"
+                    | "eventSourceMappings"
+                    | "certificateArn"
+                    | "apiId"
+                    | "integrationId"
+                    | "routeId"
+                    | "stageName"
+                    | "apiMappingId"
+                    | "restApiId"
+                    | "restRootResourceId"
+                    | "restProxyResourceId"
+                    | "restDeploymentId"
+                    | "restBasePath"
+                    | "domainName"
+                    | "domainConfirmed"
+                    | "domainCreateToken"
+                    | "functionCreateToken"
+                    | "certificateImportToken"
+                    | "usesCustomDomain"
+                    | "s3PermissionStatementIds"
+                    | "eventbridgeRuleNames"
+                    | "eventbridgePermissionStatementIds"
+                    | "deleteRemovedSomething"
+            )
+        });
+        assert!(!value.to_string().contains("credential-sentinel"));
+        assert_eq!(value["type"], "AwsWorkerController");
+        assert_eq!(value["_controllerStateVersion"], 1);
+        let restored: AwsWorkerController = serde_json::from_value(value).unwrap();
+        assert_eq!(
+            restored._internal_stay_count,
+            controller._internal_stay_count
+        );
+        restored
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn projected_worker_trigger_graph_survives_checkpoint_restore(
+        #[values(false, true)] projected: bool,
+    ) {
+        let calls = Calls::default();
+        let mut lambda = MockLambdaApi::new();
+        let recorded = calls.clone();
+        lambda
+            .expect_delete_event_source_mapping()
+            .withf(|id| id == "queue-mapping-exact")
+            .times(1)
+            .returning(move |_| {
+                record(&recorded, "queue-mapping");
+                Ok(
+                    serde_json::from_value(serde_json::json!({"UUID": "queue-mapping-exact"}))
+                        .unwrap(),
+                )
+            });
+        let mut events = MockEventBridgeApi::new();
+        let recorded = calls.clone();
+        events
+            .expect_remove_targets()
+            .withf(|rule, targets| rule == "schedule-exact" && targets == &vec!["1".to_string()])
+            .times(1)
+            .returning(move |_, _| {
+                record(&recorded, "targets");
+                Ok(())
+            });
+        let recorded = calls.clone();
+        events
+            .expect_delete_rule()
+            .withf(|rule| rule == "schedule-exact")
+            .times(1)
+            .returning(move |_| {
+                record(&recorded, "rule");
+                Ok(())
+            });
+        let lambda = Arc::new(lambda);
+        let events = Arc::new(events);
+        let mut services = MockPlatformServiceProvider::new();
+        services
+            .expect_get_aws_lambda_client()
+            .returning(move |_| Ok(lambda.clone()));
+        services
+            .expect_get_aws_eventbridge_client()
+            .returning(move |_| Ok(events.clone()));
+        let services = Arc::new(services);
+        let controller = AwsWorkerController {
+            state: AwsWorkerState::DeletingEventSourceMappings,
+            event_source_mappings: vec!["queue-mapping-exact".to_string()],
+            eventbridge_rule_names: vec!["schedule-exact".to_string()],
+            eventbridge_permission_statement_ids: vec!["permission-exact".to_string()],
+            _internal_stay_count: Some(3),
+            ..Default::default()
+        };
+        let controller = if projected {
+            worker_cleanup_checkpoint(&controller)
+        } else {
+            controller
+        };
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(basic_function())
+            .controller(controller)
+            .platform(Platform::Aws)
+            .service_provider(services.clone())
+            .build()
+            .await
+            .unwrap();
+        executor
+            .step()
+            .await
+            .expect("delete the exact queue mapping");
+        let checkpoint = executor.internal_state::<AwsWorkerController>().unwrap();
+        assert!(checkpoint.event_source_mappings.is_empty());
+        assert_eq!(checkpoint.state, AwsWorkerState::DeletingScheduleTriggers);
+        let checkpoint = if projected {
+            worker_cleanup_checkpoint(checkpoint)
+        } else {
+            checkpoint.clone()
+        };
+        drop(executor);
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(basic_function())
+            .controller(checkpoint)
+            .platform(Platform::Aws)
+            .service_provider(services)
+            .build()
+            .await
+            .unwrap();
+        executor
+            .step()
+            .await
+            .expect("delete the exact recorded schedule");
+        assert_eq!(*calls.lock().unwrap(), ["queue-mapping", "targets", "rule"]);
+        let state = executor.internal_state::<AwsWorkerController>().unwrap();
+        assert_eq!(state.state, AwsWorkerState::DetachingVpcConfig);
+        assert!(state.eventbridge_rule_names.is_empty());
+        assert!(state.eventbridge_permission_statement_ids.is_empty());
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn projected_worker_certificate_preserves_customer_ownership(
+        #[values(false, true)] projected: bool,
+        #[values(false, true)] customer_owned: bool,
+    ) {
+        let mut acm = MockAcmApi::new();
+        acm.expect_delete_certificate()
+            .withf(|arn| arn == TEST_CERTIFICATE_ARN)
+            .times(usize::from(!customer_owned))
+            .returning(|_| Ok(()));
+        let controller = AwsWorkerController {
+            state: AwsWorkerState::DeletingCertificate,
+            certificate_arn: Some(TEST_CERTIFICATE_ARN.to_string()),
+            uses_custom_domain: customer_owned,
+            _internal_stay_count: Some(3),
+            ..Default::default()
+        };
+        let controller = if projected {
+            worker_cleanup_checkpoint(&controller)
+        } else {
+            controller
+        };
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(function_public_ingress())
+            .controller(controller)
+            .platform(Platform::Aws)
+            .service_provider(provider(
+                MockLambdaApi::new(),
+                acm,
+                MockApiGatewayV2Api::new(),
+            ))
+            .build()
+            .await
+            .unwrap();
+        executor
+            .step()
+            .await
+            .expect("certificate cleanup preserves ownership");
+        let state = executor.internal_state::<AwsWorkerController>().unwrap();
+        assert_eq!(state.state, AwsWorkerState::DeletingLogGroup);
+        assert!(state.certificate_arn.is_none());
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn projected_worker_gateway_deletes_its_recorded_graph(
+        #[values(false, true)] projected: bool,
+    ) {
+        let calls = Calls::default();
+        let mut gateway = MockApiGatewayV2Api::new();
+        let recorded = calls.clone();
+        gateway
+            .expect_delete_api_mapping()
+            .withf(|domain, mapping| domain == DOMAIN && mapping == "mapping-exact")
+            .times(1)
+            .returning(move |_, _| {
+                record(&recorded, "mapping");
+                Ok(())
+            });
+        let recorded = calls.clone();
+        gateway
+            .expect_delete_domain_name()
+            .withf(|domain| domain == DOMAIN)
+            .times(1)
+            .returning(move |_| {
+                record(&recorded, "domain");
+                Ok(())
+            });
+        let recorded = calls.clone();
+        gateway
+            .expect_delete_api()
+            .withf(|id| id == "api-exact")
+            .times(1)
+            .returning(move |_| {
+                record(&recorded, "api");
+                Ok(())
+            });
+        let controller = AwsWorkerController {
+            state: AwsWorkerState::DeletingApiGateway,
+            api_id: Some("api-exact".to_string()),
+            api_mapping_id: Some("mapping-exact".to_string()),
+            domain_name: Some(DOMAIN.to_string()),
+            domain_confirmed: true,
+            _internal_stay_count: Some(3),
+            ..Default::default()
+        };
+        let controller = if projected {
+            worker_cleanup_checkpoint(&controller)
+        } else {
+            controller
+        };
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(function_public_ingress())
+            .controller(controller)
+            .platform(Platform::Aws)
+            .service_provider(provider(MockLambdaApi::new(), MockAcmApi::new(), gateway))
+            .build()
+            .await
+            .unwrap();
+        executor
+            .step()
+            .await
+            .expect("deletes the recorded gateway graph");
+        assert_eq!(*calls.lock().unwrap(), ["mapping", "domain", "api"]);
+        let state = executor.internal_state::<AwsWorkerController>().unwrap();
+        assert_eq!(state.state, AwsWorkerState::DeletingEventSourceMappings);
+        assert!(
+            state.api_mapping_id.is_none() && state.api_id.is_none() && state.domain_name.is_none()
+        );
+        assert!(state.delete_removed_something);
+    }
+
     /// The import response is lost, then the worker is torn down: the delete finds the
     /// certificate by its token and deletes it, after the function.
+    #[rstest]
     #[tokio::test]
-    async fn teardown_after_a_lost_certificate_import_deletes_the_certificate() {
+    async fn teardown_after_a_lost_certificate_import_deletes_the_certificate(
+        #[values(false, true)] projected: bool,
+    ) {
         let world = CertificateWorld::default();
         let acm_calls = AcmCalls::default();
         let calls = Calls::default();
@@ -8435,15 +8937,16 @@ mod tests {
             .expect_get_domain_name()
             .returning(|_| Err(access_denied()));
         apigw.expect_delete_domain_name().times(0);
+        let services = provider(
+            lambda,
+            certificate_world_acm(world.clone(), acm_calls.clone(), 1, false),
+            apigw,
+        );
         let mut executor = SingleControllerExecutor::builder()
             .resource(function_public_ingress())
             .controller(at_importing_certificate())
             .platform(Platform::Aws)
-            .service_provider(provider(
-                lambda,
-                certificate_world_acm(world.clone(), acm_calls.clone(), 1, false),
-                apigw,
-            ))
+            .service_provider(services.clone())
             .domain_metadata(create_test_domain_metadata("public-func"))
             .build()
             .await
@@ -8453,6 +8956,26 @@ mod tests {
         executor.step().await.expect_err("the response is lost");
         assert_eq!(world.lock().unwrap().len(), 1, "ACM holds the certificate");
 
+        if projected {
+            let mut checkpoint = executor
+                .internal_state::<AwsWorkerController>()
+                .unwrap()
+                .clone();
+            checkpoint._internal_stay_count = Some(3);
+            let checkpoint = worker_cleanup_checkpoint(&checkpoint);
+            assert!(checkpoint.certificate_import_token.is_some());
+            assert!(checkpoint.certificate_arn.is_none());
+            drop(executor);
+            executor = SingleControllerExecutor::builder()
+                .resource(function_public_ingress())
+                .controller(checkpoint)
+                .platform(Platform::Aws)
+                .service_provider(services)
+                .domain_metadata(create_test_domain_metadata("public-func"))
+                .build()
+                .await
+                .unwrap();
+        }
         executor.delete().unwrap();
         executor.run_until_terminal().await.unwrap();
         assert_eq!(executor.status(), ResourceStatus::Deleted);
@@ -8652,6 +9175,128 @@ mod tests {
             .build()
             .await
             .unwrap()
+    }
+
+    /// Typed cleanup configs must retain storage references until their notifications are removed.
+    #[rstest]
+    #[tokio::test]
+    async fn delete_minimal_typed_config_preserves_storage_trigger_cleanup(
+        #[values(false, true)] projected: bool,
+    ) {
+        for minimal in [false, true] {
+            let storage = Storage::new("source".to_string()).build();
+            let mut worker = if minimal {
+                Worker::new("storage-worker".to_string())
+                    .code(WorkerCode::Image {
+                        image: String::new(),
+                    })
+                    .permissions(String::new())
+                    .build()
+            } else {
+                let mut worker = basic_function();
+                worker.id = "storage-worker".to_string();
+                worker
+            };
+            worker.triggers = vec![WorkerTrigger::storage(
+                &storage,
+                if minimal {
+                    vec![]
+                } else {
+                    vec!["created".to_string()]
+                },
+            )];
+            let worker: Worker =
+                serde_json::from_value(serde_json::to_value(worker).unwrap()).unwrap();
+            let storage_controller = AwsStorageController::mock_ready("source");
+            let bucket = storage_controller.bucket_name.clone().unwrap();
+            let mut s3 = MockS3Api::new();
+            s3.expect_put_bucket_notification_configuration()
+                .withf(move |name, config| {
+                    name == bucket && config.lambda_function_configurations.is_empty()
+                })
+                .times(1)
+                .returning(|_, _| Ok(()));
+            let mut lambda = MockLambdaApi::new();
+            lambda
+                .expect_delete_function()
+                .withf(|name, _| name == "test-storage-worker")
+                .times(1)
+                .returning(|_, _| Ok(()));
+            lambda
+                .expect_get_function_configuration()
+                .withf(|name, _| name == "test-storage-worker")
+                .times(1)
+                .returning(|_, _| Err(not_found("Function")));
+            let mut logs = MockCloudWatchLogsApi::new();
+            logs.expect_delete_log_group()
+                .withf(|name| name == "/aws/lambda/test-storage-worker")
+                .times(1)
+                .returning(|_| Ok(()));
+            let s3 = Arc::new(s3);
+            let lambda = Arc::new(lambda);
+            let logs = Arc::new(logs);
+            let mut provider = MockPlatformServiceProvider::new();
+            provider
+                .expect_get_aws_s3_client()
+                .returning(move |_| Ok(s3.clone()));
+            provider
+                .expect_get_aws_lambda_client()
+                .returning(move |_| Ok(lambda.clone()));
+            provider
+                .expect_get_aws_logs_client()
+                .returning(move |_| Ok(logs.clone()));
+            let provider = Arc::new(provider);
+            let controller = AwsWorkerController {
+                state: AwsWorkerState::DeletingEventSourceMappings,
+                _internal_stay_count: Some(3),
+                s3_permission_statement_ids: vec!["recorded-statement".to_string()],
+                ..Default::default()
+            };
+            let controller: AwsWorkerController = if projected {
+                worker_cleanup_checkpoint(&controller)
+            } else {
+                serde_json::from_value(serialize_controller(&controller).unwrap()).unwrap()
+            };
+            let mut executor = SingleControllerExecutor::builder()
+                .resource(worker.clone())
+                .controller(controller)
+                .platform(Platform::Aws)
+                .with_dependency(storage.clone(), storage_controller.clone())
+                .service_provider(provider.clone())
+                .build()
+                .await
+                .unwrap();
+            executor
+                .step()
+                .await
+                .expect("storage trigger cleanup should succeed");
+            let checkpoint = executor.internal_state::<AwsWorkerController>().unwrap();
+            assert!(checkpoint.s3_permission_statement_ids.is_empty());
+            assert_eq!(checkpoint.state, AwsWorkerState::DeletingScheduleTriggers);
+            let checkpoint: AwsWorkerController = if projected {
+                worker_cleanup_checkpoint(&checkpoint)
+            } else {
+                serde_json::from_value(serialize_controller(checkpoint).unwrap()).unwrap()
+            };
+            drop(executor);
+            let mut restored = SingleControllerExecutor::builder()
+                .resource(worker)
+                .controller(checkpoint)
+                .platform(Platform::Aws)
+                .with_dependency(storage, storage_controller)
+                .service_provider(provider)
+                .build()
+                .await
+                .unwrap();
+            restored
+                .run_until_terminal()
+                .await
+                .expect("restored cleanup should finish");
+            assert_eq!(restored.status(), ResourceStatus::Deleted);
+            let terminal = restored.internal_state::<AwsWorkerController>().unwrap();
+            assert_eq!(terminal.state, AwsWorkerState::Deleted);
+            assert!(terminal.s3_permission_statement_ids.is_empty());
+        }
     }
 
     /// Teardown ends by deleting the log group `ensure_log_group` created, by its exact name.

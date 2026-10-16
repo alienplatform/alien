@@ -1,6 +1,5 @@
 use alien_core::Platform;
-use alien_error::AlienErrorData;
-use alien_error::{Context, IntoAlienError};
+use alien_error::{AlienError, AlienErrorData, Context, IntoAlienError};
 use serde::{Deserialize, Serialize};
 
 /// Represents application-specific errors for alien-build.
@@ -107,6 +106,35 @@ pub enum ErrorData {
         build_output: Option<String>,
     },
 
+    /// A container image cannot be built, for a reason a retry does not change.
+    #[error(
+        code = "IMAGE_BUILD_REJECTED",
+        message = "Cannot build container image for resource '{resource_name}': {reason}",
+        retryable = "false",
+        internal = "false"
+    )]
+    ImageBuildRejected {
+        /// Name of the resource being built
+        resource_name: String,
+        /// Reason the image cannot be built
+        reason: String,
+    },
+
+    /// A base image the Dockerfile builds from publishes no variant for the target platform.
+    #[error(
+        code = "BASE_IMAGE_PLATFORM_MISSING",
+        message = "Base image '{image}' has no {platform} variant",
+        retryable = "false",
+        internal = "false",
+        hint = "Use a base with a {platform} variant, such as a multi-arch base, or pick one base per architecture with `FROM my-base-${{TARGETARCH}}`."
+    )]
+    BaseImagePlatformMissing {
+        /// Base image reference as the build resolved it
+        image: String,
+        /// Platform the build targeted, such as linux/amd64
+        platform: String,
+    },
+
     /// Container image push operation failed.
     #[error(
         code = "IMAGE_PUSH_FAILED",
@@ -133,6 +161,38 @@ pub enum ErrorData {
         image: String,
         /// Reason for the lookup failure
         reason: String,
+    },
+
+    /// Pulling an image still failed after its retries, with a cause a later attempt can clear:
+    /// a dropped connection, a timeout, throttling or a registry server error.
+    #[error(
+        code = "IMAGE_PULL_TEMPORARILY_UNAVAILABLE",
+        message = "Container image '{image}', {reason}, could not be pulled yet",
+        retryable = "true",
+        internal = "false"
+    )]
+    ImagePullTemporarilyUnavailable {
+        /// Image reference that was pulled
+        image: String,
+        /// What the pull was for
+        reason: String,
+    },
+
+    /// The sandbox agent tagged with this release is not in its registry. Retryable, as a missing
+    /// versioned Worker base is (`IMAGE_BUILD_FAILED`): a build can run ahead of the release that
+    /// publishes it. A development build's version is never published; the hint names the tag.
+    #[error(
+        code = "SANDBOX_AGENT_IMAGE_MISSING",
+        message = "The sandbox agent image '{image}' is not published",
+        retryable = "true",
+        internal = "false",
+        hint = "The sandbox agent is published with each Alien release. If Alien {version} was released moments ago, retry once its release finishes; otherwise build with a released Alien CLI."
+    )]
+    SandboxAgentImageMissing {
+        /// Agent image reference that was pulled
+        image: String,
+        /// Tag the agent was pulled at, which names the Alien release that publishes it
+        version: String,
     },
 
     /// An image manifest cannot be read from its registry, for a reason a retry does not change.
@@ -306,3 +366,52 @@ impl<T> DockdashResultExt<T> for std::result::Result<T, dockdash::Error> {
 }
 
 pub type Result<T> = alien_error::Result<T, ErrorData>;
+
+/// A build that failed on a base image with no variant for the platform it targeted.
+#[derive(Debug)]
+pub struct MissingBasePlatform<'a> {
+    /// Base image reference as the build resolved it
+    pub image: &'a str,
+    /// Platform the build targeted, such as linux/amd64
+    pub platform: &'a str,
+    /// How to fix the Dockerfile, as the error renders it
+    pub hint: Option<&'a str>,
+}
+
+/// The [`ErrorData::BaseImagePlatformMissing`] in `error` or in an error it wraps.
+pub fn base_image_missing_platform<T>(error: &AlienError<T>) -> Option<MissingBasePlatform<'_>>
+where
+    T: AlienErrorData + Clone + std::fmt::Debug + Serialize,
+{
+    let layers = std::iter::once((
+        error.code.as_str(),
+        error.context.as_ref(),
+        error.hint.as_deref(),
+    ))
+    .chain(
+        std::iter::successors(error.source.as_deref(), |source| source.source.as_deref()).map(
+            |source| {
+                (
+                    source.code.as_str(),
+                    source.context.as_ref(),
+                    source.hint.as_deref(),
+                )
+            },
+        ),
+    );
+    let missing_platform = ErrorData::BaseImagePlatformMissing {
+        image: String::new(),
+        platform: String::new(),
+    }
+    .code();
+    layers
+        .filter(|(code, _, _)| *code == missing_platform)
+        .find_map(|(_, context, hint)| {
+            let context = context?;
+            Some(MissingBasePlatform {
+                image: context.get("image")?.as_str()?,
+                platform: context.get("platform")?.as_str()?,
+                hint,
+            })
+        })
+}

@@ -3,6 +3,15 @@
   "description": "Allows managing the worker fleet inside a setup-owned ComputeCluster boundary.",
   "platforms": {
     "aws": [
+      // Updates run quota preflights with the installed management role.
+      // These reads expose applied quotas and public hardware metadata.
+      {
+        "grant": { "actions": ["servicequotas:GetServiceQuota", "ec2:DescribeInstanceTypes"] },
+        "binding": {
+          "stack": { "resources": ["*"] },
+          "resource": { "resources": ["*"] }
+        }
+      },
       // These EC2 discovery reads require Resource "*". Runtime adopts launch
       // templates after interrupted attempts and inspects existing security-group
       // ingress while reconciling controller-owned groups.
@@ -598,7 +607,8 @@
       // resource-group-scoped role assignment.
       {
         "grant": {
-          "actions": ["Microsoft.Compute/skus/read"]
+          // Applied regional quotas and usage; no VM inventory or telemetry.
+          "actions": ["Microsoft.Compute/skus/read", "Microsoft.Compute/locations/usages/read"]
         },
         "binding": {
           "stack": {
@@ -620,7 +630,29 @@
             "Microsoft.Compute/locations/operations/read",
             "Microsoft.Compute/virtualMachineScaleSets/rollingUpgrades/read",
             "Microsoft.Compute/virtualMachineScaleSets/osRollingUpgrade/action",
-            "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/retrieveBootDiagnosticsData/action"
+            "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/retrieveBootDiagnosticsData/action",
+            // Removing a capacity group, retiring the legacy node cohort, and the
+            // ComputeCluster delete flow all delete scale sets with this role. Without it the
+            // delete is denied and the scale set outlives the cluster.
+            "Microsoft.Compute/virtualMachineScaleSets/delete"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          }
+        }
+      },
+      // The ComputeCluster delete flow removes the cluster's network security group after its
+      // scale sets, with this role.
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.Network/networkSecurityGroups/read",
+            "Microsoft.Network/networkSecurityGroups/delete"
           ]
         },
         "binding": {

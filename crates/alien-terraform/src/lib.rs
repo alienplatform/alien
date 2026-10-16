@@ -20,6 +20,7 @@ pub mod emitters;
 pub mod expr;
 mod gating;
 mod generator;
+mod iam_limits;
 mod k8s_identity;
 mod naming;
 mod registry;

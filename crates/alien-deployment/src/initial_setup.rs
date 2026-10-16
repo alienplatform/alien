@@ -286,7 +286,7 @@ pub async fn handle_initial_setup(
             &mut next_state,
             &failed_refs,
             Some(ResourceLifecycle::Frozen),
-        );
+        )?;
 
         let mut next = current_cloned;
         next.status = DeploymentStatus::InitialSetupFailed;
@@ -577,7 +577,38 @@ pub async fn handle_initial_setup_failed(
         })
     })?;
 
-    let runtime_metadata = current.runtime_metadata.as_ref().ok_or_else(|| {
+    if current.platform == alien_core::Platform::Local
+        && next.runtime_metadata.as_ref().is_some_and(|metadata| {
+            metadata.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
+        })
+    {
+        let metadata = next.runtime_metadata.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::MissingConfiguration {
+                message: "Direct local setup metadata is required for retry".to_string(),
+            })
+        })?;
+        next.runtime_metadata = Some(
+            crate::pending::prepare_direct_setup_update(
+                target_stack,
+                &stack_state,
+                &config,
+                &client_config,
+                metadata,
+            )
+            .await?,
+        );
+    }
+    if current.platform == alien_core::Platform::Local {
+        if let Some(metadata) = next.runtime_metadata.as_mut().filter(|metadata| {
+            metadata.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
+        }) {
+            metadata.pending_prepared_release_id = next
+                .target_release
+                .as_ref()
+                .and_then(|release| release.release_id.clone());
+        }
+    }
+    let runtime_metadata = next.runtime_metadata.as_ref().ok_or_else(|| {
         AlienError::new(ErrorData::MissingConfiguration {
             message: "Runtime metadata with prepared stack required for setup retry".to_string(),
         })

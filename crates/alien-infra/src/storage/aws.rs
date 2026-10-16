@@ -1,4 +1,5 @@
 use alien_error::{AlienError, ContextError};
+use alien_permissions::aws_resource_policies::aws_prefixed_resource_name;
 use std::fmt::Debug;
 use std::time::Duration;
 use tracing::{debug, info, warn};
@@ -18,11 +19,6 @@ use alien_core::{
 use alien_error::{Context, IntoAlienError};
 use alien_macros::controller;
 use chrono::Utc;
-
-/// Generates the full, prefixed AWS bucket name.
-fn get_aws_bucket_name(prefix: &str, name: &str) -> String {
-    format!("{}-{}", prefix, name)
-}
 
 fn is_bucket_already_owned(error: &AlienError<CloudClientErrorData>) -> bool {
     matches!(
@@ -67,7 +63,7 @@ impl AwsStorageController {
         let bucket_name = self
             .bucket_name
             .clone()
-            .unwrap_or_else(|| get_aws_bucket_name(ctx.resource_prefix, &config.id));
+            .unwrap_or_else(|| aws_prefixed_resource_name(ctx.resource_prefix, &config.id));
         self.bucket_name = Some(bucket_name.clone());
 
         info!(name=%config.id, bucket=%bucket_name, "Creating S3 bucket");
@@ -1070,7 +1066,7 @@ impl AwsStorageController {
     pub fn mock_ready(storage_name: &str) -> Self {
         Self {
             state: AwsStorageState::Ready,
-            bucket_name: Some(get_aws_bucket_name("test-stack", storage_name)),
+            bucket_name: Some(aws_prefixed_resource_name("test-stack", storage_name)),
             _internal_stay_count: None,
         }
     }

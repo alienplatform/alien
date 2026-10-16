@@ -87,14 +87,14 @@ fn lookup_error(image: &str, error: &OciDistributionError) -> AlienError<ErrorDa
     }
 }
 
-enum RegistryFailure {
+pub(crate) enum RegistryFailure {
     Transient(String),
     Rejected(String),
 }
 
 /// Registry errors can carry signed URLs, so the source error is never attached or formatted:
 /// only its status and error codes reach the reason.
-fn registry_failure(error: &OciDistributionError) -> RegistryFailure {
+pub(crate) fn registry_failure(error: &OciDistributionError) -> RegistryFailure {
     match error {
         OciDistributionError::RequestError(_) => {
             RegistryFailure::Transient("The registry connection failed".to_string())

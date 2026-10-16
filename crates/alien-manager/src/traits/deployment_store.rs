@@ -553,6 +553,25 @@ pub trait DeploymentStore: Send + Sync {
         id: &str,
     ) -> Result<Option<DeploymentRecord>, AlienError>;
 
+    /// Save quota warning overrides without replacing other stack settings or
+    /// scheduling execution. Callers must authorize deployment updates first.
+    ///
+    /// Implementations must validate identities for the deployment's cloud and
+    /// atomically refuse missing, locked, or non-idle deployments. `false` means
+    /// no write occurred; unsupported stores return an error. A failed preflight
+    /// remains failed until the caller explicitly requests a retry.
+    async fn set_quota_warning_overrides(
+        &self,
+        _caller: &crate::auth::Subject,
+        _id: &str,
+        _overrides: &[String],
+    ) -> Result<bool, AlienError> {
+        Err(crate::error::ErrorData::bad_request(
+            "This manager cannot update saved quota warning overrides",
+        )
+        .into_generic())
+    }
+
     async fn get_deployment_by_name(
         &self,
         caller: &crate::auth::Subject,
@@ -567,13 +586,14 @@ pub trait DeploymentStore: Send + Sync {
     ) -> Result<Vec<DeploymentRecord>, AlienError>;
 
     /// Whether a deployment other than `excluding_deployment_id`, not deleted, runs in the GCP
-    /// project numbered `project_number`.
+    /// project numbered `project_number` using the same Alien `project_id`, or any Alien project
+    /// when `project_id` is `None` (a repository every project shared).
     ///
     /// Cloud Run pulls as a project-scoped service agent, so every deployment in one project
-    /// shares a single registry grant. A revoke asks this before removing that grant, and the
+    /// shares a registry grant for each repository. A revoke asks this before removing that grant, and the
     /// answer must cover every deployment: a missed one loses its image pulls.
     ///
-    /// The answer depends only on each deployment's id, status and environment. A store that
+    /// The answer depends only on each deployment's id, project, status and environment. A store that
     /// can read those without decoding the rest of every record should, so that one record with
     /// stack or runtime state the current types reject does not fail the revoke of every other
     /// deployment.
@@ -581,6 +601,7 @@ pub trait DeploymentStore: Send + Sync {
         &self,
         caller: &crate::auth::Subject,
         project_number: &str,
+        project_id: Option<String>,
         excluding_deployment_id: &str,
     ) -> Result<bool, AlienError> {
         let deployments = self
@@ -594,7 +615,10 @@ pub trait DeploymentStore: Send + Sync {
             .await?;
         Ok(deployments.iter().any(|deployment| {
             deployment.id != excluding_deployment_id
-                && deployment.status != "deleted"
+                && project_id
+                    .as_deref()
+                    .is_none_or(|project_id| deployment.project_id == project_id)
+                && !matches!(deployment.status.as_str(), "deleted" | "teardown-required")
                 && matches!(
                     &deployment.environment_info,
                     Some(EnvironmentInfo::Gcp(GcpEnvironmentInfo {

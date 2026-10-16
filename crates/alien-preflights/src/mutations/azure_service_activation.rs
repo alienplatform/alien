@@ -4,8 +4,8 @@ use crate::error::Result;
 use crate::mutations::runs_on_platform_or_base;
 use crate::StackMutation;
 use alien_core::{
-    DeploymentConfig, Platform, ResourceEntry, ResourceLifecycle, ResourceRef, ServiceActivation,
-    Stack, StackState,
+    DeploymentConfig, Platform, ResourceEntry, ResourceLifecycle, ServiceActivation, Stack,
+    StackState,
 };
 use async_trait::async_trait;
 use std::collections::BTreeMap;
@@ -74,10 +74,6 @@ impl StackMutation for AzureServiceActivationMutation {
         info!("Adding Azure ServiceActivation resources");
 
         let required_services = self.get_required_services(&stack, stack_state.platform);
-        let resource_group_ref = ResourceRef::new(
-            alien_core::AzureResourceGroup::RESOURCE_TYPE,
-            "default-resource-group",
-        );
 
         for (service_id, service_name) in required_services {
             // Check if this service activation already exists
@@ -99,7 +95,10 @@ impl StackMutation for AzureServiceActivationMutation {
                 enabled_when: None,
                 config: alien_core::Resource::new(service_activation),
                 lifecycle: ResourceLifecycle::Frozen,
-                dependencies: vec![resource_group_ref.clone()], // Depend on resource group
+                // Provider registration is subscription-wide. InfrastructureDependenciesMutation
+                // orders it after `default-resource-group` when the stack has one; a sandbox
+                // published alone installs into the customer's existing group and has none.
+                dependencies: Vec::new(),
                 remote_access: false,
             };
 

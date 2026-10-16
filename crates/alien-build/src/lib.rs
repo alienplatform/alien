@@ -2,6 +2,7 @@ pub(crate) mod command_output;
 pub mod dependencies;
 mod dockerignore;
 pub mod error;
+pub mod gcp_sandbox_image;
 mod lambda_image;
 #[cfg(test)]
 mod lambda_tests;
@@ -191,16 +192,16 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                     message: "Failed to run build-time preflights".to_string(),
                 })?;
             if summary.warning_count > 0 {
-                handle
+                if let Err(error) = handle
                     .update(AlienEvent::RunningPreflights {
                         stack: stack.id().to_string(),
                         platform: settings.platform.runtime_platform().as_str().to_string(),
                         warnings: summary.get_warnings(),
                     })
                     .await
-                    .context(ErrorData::StackProcessorFailed {
-                        message: "Failed to report build-time preflight warnings".to_string(),
-                    })?;
+                {
+                    warn!(?error, "Failed to report build-time preflight warnings");
+                }
             }
             Ok::<_, alien_error::AlienError<ErrorData>>(summary)
         }
@@ -692,10 +693,11 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
     }
 
     // A sandbox base image is the root filesystem a session runs in. It is built and pushed like
-    // any other compute image; the bundle layers the sandbox agent on afterwards, and AWS builds
-    // the MicroVM from that bundle inside the customer's account.
+    // any other compute image. On AWS the bundle layers the sandbox agent on afterwards and AWS
+    // builds the MicroVM from that bundle inside the customer's account.
     if !sandboxes_to_build.is_empty() {
-        let build_targets = settings.get_targets();
+        let sandbox_settings = sandbox_base_settings(settings);
+        let build_targets = sandbox_settings.get_targets();
 
         info!(
             "Building {} sandbox base images for {} target(s): {:?}",
@@ -712,7 +714,7 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
             .map(|(resource_id, sandbox, src, toolchain)| {
                 let sandbox_id = sandbox.id.clone();
                 let stack_id = stack_id.clone();
-                let settings = settings.clone();
+                let settings = sandbox_settings.clone();
                 let output_dir = output_dir.clone();
                 let bus = current_bus.clone();
                 let cancel_token = cancel_token.clone();
@@ -1520,10 +1522,7 @@ fn collect_push_targets(stack: &Stack) -> Result<Vec<ResourcePushTarget>> {
                 SandboxCode::Source { .. } => {
                     return Err(AlienError::new(ErrorData::InvalidResourceConfig {
                         resource_id: sandbox.id.clone(),
-                        reason: "Sandbox has source code instead of built image. No sandbox \
-                                 backend builds an image from source; give code.image a prebuilt \
-                                 reference or a local image directory."
-                            .to_string(),
+                        reason: "Sandbox has source code instead of built image. Run 'alien build' first.".to_string(),
                     }));
                 }
             }
@@ -1601,7 +1600,6 @@ pub async fn push_stack(
         .into_iter()
         .map(|target| {
             let resource_name = target.resource_name().to_string();
-            let display_resource_name = target.display_resource_name();
             let resource_names = target.resource_names.clone();
             let platform = platform.clone();
             let repository = push_settings.repository.clone();
@@ -1634,15 +1632,14 @@ pub async fn push_stack(
                     }
 
                     let artifact_push_started = Instant::now();
+                    let agent_image = gcp_sandbox_image::sandbox_agent_image();
                     let result = tokio::select! {
-                        result = push_resource_images(
-                            &display_resource_name,
-                            &resource_name,
-                            target.resource_type,
-                            &target.local_image_dir,
+                        result = push_target(
+                            &target,
                             &platform,
                             &repository,
                             &push_opts,
+                            &agent_image,
                         ) => result,
                         _ = cancel_token.cancelled() => {
                             info!("Push for {} '{}' was cancelled", target.resource_type, resource_name);
@@ -1992,6 +1989,89 @@ async fn push_resource_images(
     Ok(image_uri)
 }
 
+/// Pushes one target's images and returns the reference its resources run. A GCP sandbox runs
+/// with `agent_image` layered onto the pushed base.
+async fn push_target(
+    target: &ResourcePushTarget,
+    platform: &Platform,
+    repository: &str,
+    push_options: &dockdash::PushOptions,
+    agent_image: &str,
+) -> Result<String> {
+    let image_uri = push_resource_images(
+        &target.display_resource_name(),
+        target.resource_name(),
+        target.resource_type,
+        &target.local_image_dir,
+        platform,
+        repository,
+        push_options,
+    )
+    .await?;
+    if *platform == Platform::Gcp && target.resource_type == "sandbox" {
+        push_gcp_sandbox_image(
+            target.resource_name(),
+            &target.local_image_dir,
+            &image_uri,
+            agent_image,
+            push_options,
+        )
+        .await
+    } else {
+        Ok(image_uri)
+    }
+}
+
+/// Layers the sandbox agent onto the GCP sandbox base just pushed to `base_uri`, pushes the result
+/// beside it, and returns that reference: Agent Platform runs the image as pushed.
+async fn push_gcp_sandbox_image(
+    resource_name: &str,
+    images_dir: &Path,
+    base_uri: &str,
+    agent_image: &str,
+    push_options: &dockdash::PushOptions,
+) -> Result<String> {
+    let tarball = images_dir.join(format!(
+        "{}.oci.tar",
+        BinaryTarget::LinuxX64.runtime_platform_id()
+    ));
+    if !tarball.is_file() {
+        return Err(AlienError::new(ErrorData::InvalidResourceConfig {
+            resource_id: resource_name.to_string(),
+            reason: "GCP sandboxes require a Linux x64 OCI archive".to_string(),
+        }));
+    }
+    let base = DockDashImage::from_tarball(&tarball).map_dockdash_err()?;
+    // The agent comes from a public HTTPS registry even when the base goes to a plain-HTTP one.
+    let protocol = match &push_options.protocol {
+        dockdash::ClientProtocol::Http => {
+            let base_ref = Reference::try_from(base_uri).into_alien_error().context(
+                ErrorData::InvalidResourceConfig {
+                    resource_id: resource_name.to_string(),
+                    reason: format!("Invalid image reference '{base_uri}'"),
+                },
+            )?;
+            dockdash::ClientProtocol::HttpsExcept(vec![base_ref.registry().to_string()])
+        }
+        protocol => protocol.clone(),
+    };
+    let image = gcp_sandbox_image::build_gcp_sandbox_image(
+        resource_name,
+        base,
+        base_uri,
+        agent_image,
+        protocol,
+        push_options.auth.clone(),
+        // The default cache, which every other dockdash build here uses by not naming one.
+        dockdash::BlobCache::new().map_dockdash_err()?,
+    )
+    .await?
+    .image;
+    let image_uri = format!("{base_uri}-agent");
+    push_image_with_retry(&image, &image_uri, push_options).await?;
+    Ok(image_uri)
+}
+
 /// Pair each linux OCI tarball with its target, sorted for deterministic ordering.
 /// darwin/windows tarballs are excluded — they are host binaries, not container images.
 fn select_linux_tarballs(oci_files: &[PathBuf]) -> Vec<(BinaryTarget, PathBuf)> {
@@ -2270,7 +2350,10 @@ async fn build_resource(
 
     // Compute content hash of all built tarballs
     // This ensures the executor detects code changes between builds
-    let content_hash = compute_function_content_hash(&resource_dir).await?;
+    let content_hash = artifact_hash(
+        compute_function_content_hash(&resource_dir).await?,
+        layered_sandbox_agent(settings, workload).as_deref(),
+    );
     let short_hash = &content_hash[..8];
 
     // Rename directory to include content hash
@@ -2308,6 +2391,51 @@ async fn build_resource(
         short_hash
     );
     Ok(finalized_dir)
+}
+
+/// The settings a sandbox base is built with. The base boots on the cloud's sandbox runtime (an
+/// arm64 MicroVM on AWS, an amd64 disk image on Azure and GCP), not on the compute the stack's
+/// other targets were chosen for.
+fn sandbox_base_settings(settings: &BuildSettings) -> BuildSettings {
+    let mut sandbox_settings = settings.clone();
+    sandbox_settings.targets = Some(BinaryTarget::defaults_for_platform(
+        settings.platform.runtime_platform(),
+    ));
+    sandbox_settings
+}
+
+/// The agent `alien release` layers onto a GCP sandbox base. It is folded into both the artifact
+/// cache key and the artifact's directory name, which the release push cache keys on, so a new
+/// agent reaches a sandbox whose source did not change.
+fn layered_sandbox_agent(
+    settings: &BuildSettings,
+    workload: toolchain::WorkloadKind,
+) -> Option<String> {
+    (workload == toolchain::WorkloadKind::SandboxBase)
+        .then(|| sandbox_agent_layered_on(settings.platform.runtime_platform()))
+        .flatten()
+}
+
+/// The agent the push layers onto a sandbox image built for `platform`. Only a GCP sandbox
+/// carries its agent inside the image.
+fn sandbox_agent_layered_on(platform: Platform) -> Option<String> {
+    (platform == Platform::Gcp).then(gcp_sandbox_image::sandbox_agent_image)
+}
+
+/// The hash of a sandbox image built for `platform` from inputs that hash to `content_hash`. On
+/// GCP it also covers the agent the push layers onto the image, so the same inputs under a new
+/// agent hash differently.
+pub fn sandbox_image_hash(content_hash: String, platform: Platform) -> String {
+    artifact_hash(content_hash, sandbox_agent_layered_on(platform).as_deref())
+}
+
+/// The hash an artifact directory is named by: its tarballs' content hash, and the layered agent
+/// for a GCP sandbox (see [`layered_sandbox_agent`]).
+fn artifact_hash(content_hash: String, layered_agent: Option<&str>) -> String {
+    match layered_agent {
+        Some(agent) => format!("{:x}", Sha256::digest(format!("{content_hash}\0{agent}"))),
+        None => content_hash,
+    }
 }
 
 async fn compute_source_artifact_cache_key(
@@ -3345,6 +3473,9 @@ fn effective_source_base_images(
     workload: toolchain::WorkloadKind,
     host_process: bool,
 ) -> Vec<String> {
+    if let Some(agent) = layered_sandbox_agent(settings, workload) {
+        return vec![agent];
+    }
     if host_process
         || matches!(
             toolchain_config,
@@ -3504,11 +3635,14 @@ async fn push_image_with_retry(
 
 fn image_push_error(image_uri: &str, error: &dockdash::Error) -> AlienError<ErrorData> {
     if is_retryable_dockdash_transport_error(error) {
+        let cause = if is_rate_limited(error) {
+            "Registry was rate limiting requests"
+        } else {
+            "Registry connection was interrupted"
+        };
         AlienError::new(ErrorData::ImagePushFailed {
             image: image_uri.to_string(),
-            reason: format!(
-                "Registry connection was interrupted after {IMAGE_PUSH_MAX_ATTEMPTS} attempts"
-            ),
+            reason: format!("{cause} after {IMAGE_PUSH_MAX_ATTEMPTS} attempts"),
         })
     } else {
         // Registry errors can contain presigned upload URLs. Do not
@@ -3519,6 +3653,29 @@ fn image_push_error(image_uri: &str, error: &dockdash::Error) -> AlienError<Erro
             reason: nonretryable_push_reason(error),
         })
     }
+}
+
+/// The registry answered 429, as a status or as a `TOOMANYREQUESTS` error envelope.
+fn is_rate_limited(error: &dockdash::Error) -> bool {
+    let mut current = Some(error as &(dyn StdError + 'static));
+    while let Some(error) = current {
+        if let Some(oci_error) = error.downcast_ref::<oci_client::errors::OciDistributionError>() {
+            return match oci_error {
+                oci_client::errors::OciDistributionError::RegistryError { envelope, .. } => {
+                    envelope.errors.iter().any(|entry| {
+                        entry.code == oci_client::errors::OciErrorCode::Toomanyrequests
+                    })
+                }
+                oci_client::errors::OciDistributionError::ServerError { code, .. } => *code == 429,
+                oci_client::errors::OciDistributionError::RequestError(request) => request
+                    .status()
+                    .is_some_and(|status| status.as_u16() == 429),
+                _ => false,
+            };
+        }
+        current = error.source();
+    }
+    false
 }
 
 fn nonretryable_push_reason(error: &dockdash::Error) -> String {
@@ -3552,6 +3709,9 @@ fn nonretryable_push_reason(error: &dockdash::Error) -> String {
     "The upload request was not accepted".to_string()
 }
 
+/// Throttling, a server error or a dropped connection from the registry, whichever dockdash
+/// variant carries it. Under another variant only a registry or network cause in the chain
+/// counts: a local I/O failure says nothing the registry can clear.
 fn is_retryable_dockdash_image_pull_error(error: &dockdash::Error) -> bool {
     match error {
         dockdash::Error::ImagePull { source, .. } => {
@@ -3561,7 +3721,21 @@ fn is_retryable_dockdash_image_pull_error(error: &dockdash::Error) -> bool {
                 .unwrap_or(false)
                 || is_retryable_transport_text(&error.to_string())
         }
-        _ => false,
+        _ => {
+            let mut current = Some(error as &(dyn StdError + 'static));
+            while let Some(cause) = current {
+                if let Some(oci_error) =
+                    cause.downcast_ref::<oci_client::errors::OciDistributionError>()
+                {
+                    return is_retryable_oci_error(oci_error);
+                }
+                if let Some(reqwest_error) = cause.downcast_ref::<reqwest::Error>() {
+                    return is_retryable_reqwest_error(reqwest_error);
+                }
+                current = cause.source();
+            }
+            false
+        }
     }
 }
 
@@ -3609,14 +3783,7 @@ fn is_retryable_transport_source(source: &(dyn StdError + Send + Sync + 'static)
         }
 
         if let Some(reqwest_error) = error.downcast_ref::<reqwest::Error>() {
-            return reqwest_error.is_timeout()
-                || reqwest_error.is_connect()
-                || reqwest_error.is_request()
-                || reqwest_error.is_body()
-                || reqwest_error
-                    .status()
-                    .map(|status| status.is_server_error() || status.as_u16() == 429)
-                    .unwrap_or(false);
+            return is_retryable_reqwest_error(reqwest_error);
         }
 
         if let Some(io_error) = error.downcast_ref::<std::io::Error>() {
@@ -3627,6 +3794,17 @@ fn is_retryable_transport_source(source: &(dyn StdError + Send + Sync + 'static)
     }
 
     false
+}
+
+fn is_retryable_reqwest_error(error: &reqwest::Error) -> bool {
+    error.is_timeout()
+        || error.is_connect()
+        || error.is_request()
+        || error.is_body()
+        || error
+            .status()
+            .map(|status| status.is_server_error() || status.as_u16() == 429)
+            .unwrap_or(false)
 }
 
 fn is_retryable_io_error(error: &std::io::Error) -> bool {
@@ -3646,15 +3824,13 @@ fn is_retryable_oci_error(error: &oci_client::errors::OciDistributionError) -> b
         oci_client::errors::OciDistributionError::ServerError { code, .. } => {
             *code >= 500 || *code == 429
         }
+        // A 429 whose body is an error envelope arrives as a registry error, not a server error.
+        oci_client::errors::OciDistributionError::RegistryError { envelope, .. } => envelope
+            .errors
+            .iter()
+            .any(|entry| entry.code == oci_client::errors::OciErrorCode::Toomanyrequests),
         oci_client::errors::OciDistributionError::RequestError(error) => {
-            error.is_timeout()
-                || error.is_connect()
-                || error.is_request()
-                || error.is_body()
-                || error
-                    .status()
-                    .map(|status| status.is_server_error() || status.as_u16() == 429)
-                    .unwrap_or(false)
+            is_retryable_reqwest_error(error)
         }
         oci_client::errors::OciDistributionError::IoError(error) => matches!(
             error.kind(),
@@ -4063,6 +4239,70 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn warning_handler_failure_does_not_reject_a_valid_build() {
+        struct RejectWarnings(std::sync::atomic::AtomicUsize);
+
+        #[async_trait::async_trait]
+        impl alien_core::events::EventHandler for RejectWarnings {
+            async fn on_event_change(
+                &self,
+                change: alien_core::events::EventChange,
+            ) -> alien_core::Result<()> {
+                if let alien_core::events::EventChange::Updated {
+                    event: AlienEvent::RunningPreflights { warnings, .. },
+                    ..
+                } = change
+                {
+                    assert!(warnings
+                        .iter()
+                        .any(|warning| warning.contains("memory_mb 200")));
+                    self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    return Err(AlienError::new(alien_core::ErrorData::GenericError {
+                        message: "warning display unavailable".to_string(),
+                    }));
+                }
+                Ok(())
+            }
+        }
+
+        let output = tempdir().unwrap();
+        let worker = Worker::new("job".to_string())
+            .permissions("execution".to_string())
+            .memory_mb(200)
+            .code(WorkerCode::Image {
+                image: "registry.example.com/job:latest".to_string(),
+            })
+            .build();
+        let mut stack = Stack::new("warning-delivery".to_string())
+            .add(worker, alien_core::ResourceLifecycle::Live)
+            .build();
+        stack.permissions.profiles.insert(
+            "execution".to_string(),
+            alien_core::permissions::PermissionProfile::new(),
+        );
+        let settings = BuildSettings {
+            output_directory: output.path().display().to_string(),
+            platform: PlatformBuildSettings::Azure {},
+            targets: None,
+            cache_url: None,
+            override_base_image: None,
+            debug_mode: false,
+            rebuild: false,
+            pull_base_images: false,
+        };
+        let handler = Arc::new(RejectWarnings(std::sync::atomic::AtomicUsize::new(0)));
+        let bus = alien_core::EventBus::with_handlers(vec![handler.clone()]);
+        let built = bus.run(|| build_stack(stack, &settings)).await;
+        assert_eq!(
+            handler.0.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "{built:?}"
+        );
+        let built = built.expect("a warning display failure must not stop the build");
+        assert!(built.resources.contains_key("job"));
+    }
+
+    #[tokio::test]
     async fn machines_build_rejects_workers_before_writing_artifacts() {
         let output = tempdir().unwrap();
         let worker = Worker::new("job".to_string())
@@ -4240,6 +4480,89 @@ mod tests {
         assert!(!is_retryable_dockdash_image_pull_error(&missing_error));
     }
 
+    /// A sandbox base is built for its cloud's sandbox runtime whatever targets the stack's other
+    /// workloads build for: the AWS targets here are x86_64 and the MicroVM is arm64.
+    #[test]
+    fn a_sandbox_base_is_built_for_its_backend_architecture() {
+        for (platform, expected) in [
+            (
+                PlatformBuildSettings::Aws {
+                    managing_account_id: None,
+                },
+                BinaryTarget::LinuxArm64,
+            ),
+            (PlatformBuildSettings::Azure {}, BinaryTarget::LinuxX64),
+            (PlatformBuildSettings::Gcp {}, BinaryTarget::LinuxX64),
+        ] {
+            let settings = BuildSettings {
+                output_directory: "out".to_string(),
+                platform,
+                targets: Some(vec![BinaryTarget::LinuxX64, BinaryTarget::LinuxArm64]),
+                cache_url: None,
+                override_base_image: None,
+                debug_mode: false,
+                rebuild: false,
+                pull_base_images: false,
+            };
+            let x86 = BuildSettings {
+                targets: Some(vec![BinaryTarget::LinuxX64]),
+                ..settings.clone()
+            };
+            for settings in [settings, x86] {
+                assert_eq!(
+                    sandbox_base_settings(&settings).get_targets(),
+                    vec![expected],
+                    "{:?} with {:?}",
+                    settings.platform,
+                    settings.targets
+                );
+            }
+        }
+    }
+
+    /// A throttled registry is retryable whichever dockdash variant reports it; a local I/O
+    /// failure is not.
+    #[test]
+    fn retryable_image_pull_follows_the_source_of_any_variant() {
+        let throttled = dockdash::Error::Generic {
+            message: "Failed to assemble the image".to_string(),
+            source: Some(Box::new(
+                oci_client::errors::OciDistributionError::ServerError {
+                    code: 429,
+                    url: "https://ghcr.io/v2/example/base/manifests/tag".to_string(),
+                    message: "Too Many Requests".to_string(),
+                },
+            )),
+        };
+        let refused = dockdash::Error::Generic {
+            message: "Failed to assemble the image".to_string(),
+            source: Some(Box::new(
+                oci_client::errors::OciDistributionError::UnauthorizedError {
+                    url: "https://ghcr.io/v2/example/base/manifests/tag".to_string(),
+                },
+            )),
+        };
+
+        // A local read that ends early or times out is not the registry's to clear.
+        let local = |kind| dockdash::Error::Io {
+            message: "Failed to read the image archive".to_string(),
+            source: std::io::Error::new(kind, "local archive"),
+        };
+
+        assert!(is_retryable_dockdash_image_pull_error(&throttled));
+        assert!(!is_retryable_dockdash_image_pull_error(&refused));
+        for kind in [
+            std::io::ErrorKind::UnexpectedEof,
+            std::io::ErrorKind::TimedOut,
+            std::io::ErrorKind::ConnectionReset,
+        ] {
+            assert!(
+                !is_retryable_dockdash_image_pull_error(&local(kind)),
+                "{kind:?}"
+            );
+        }
+    }
+
     #[test]
     fn retryable_image_push_detects_interrupted_transport() {
         let error = dockdash::Error::Generic {
@@ -4296,6 +4619,43 @@ mod tests {
             ))),
         };
         assert!(!is_retryable_dockdash_transport_error(&local_archive_error));
+    }
+
+    #[test]
+    fn a_push_that_ran_out_of_retries_names_its_cause() {
+        let generic = |source: oci_client::errors::OciDistributionError| dockdash::Error::Generic {
+            message: "push failed".to_string(),
+            source: Some(Box::new(source)),
+        };
+        let throttled = generic(oci_client::errors::OciDistributionError::RegistryError {
+            envelope: oci_client::errors::OciEnvelope {
+                errors: vec![oci_client::errors::OciError {
+                    code: oci_client::errors::OciErrorCode::Toomanyrequests,
+                    message: String::new(),
+                    detail: serde_json::Value::Null,
+                }],
+            },
+            url: "https://registry.example.com/v2/".to_string(),
+        });
+        let unavailable = generic(oci_client::errors::OciDistributionError::ServerError {
+            code: 503,
+            url: "https://registry.example.com/v2/".to_string(),
+            message: String::new(),
+        });
+
+        let reason = |error| match image_push_error("registry.example.com/repo:image", error).error
+        {
+            Some(ErrorData::ImagePushFailed { reason, .. }) => reason,
+            other => panic!("a retried push failure, got {other:?}"),
+        };
+        assert_eq!(
+            reason(&throttled),
+            format!("Registry was rate limiting requests after {IMAGE_PUSH_MAX_ATTEMPTS} attempts")
+        );
+        assert_eq!(
+            reason(&unavailable),
+            format!("Registry connection was interrupted after {IMAGE_PUSH_MAX_ATTEMPTS} attempts")
+        );
     }
 
     #[test]
@@ -4805,6 +5165,81 @@ mod tests {
         // which is exactly why we hash - to detect changes!)
         let tarball_path = path.join("linux-x64.oci.tar");
         assert!(tarball_path.exists(), "Tarball should exist");
+    }
+
+    /// `alien release` reuses a pushed image by the artifact's directory name, and GCP pushes a
+    /// sandbox with the agent layered on. Folding the agent into both the cache key and the name
+    /// is what makes a new agent a new push, even when the rebuilt base is byte-identical.
+    #[tokio::test]
+    async fn a_gcp_sandbox_artifact_is_keyed_and_named_by_its_layered_agent() {
+        let src_dir = tempdir().unwrap();
+        std::fs::write(src_dir.path().join("Dockerfile"), "FROM scratch\n").unwrap();
+        let docker = ToolchainConfig::Docker {
+            dockerfile: None,
+            build_args: None,
+            target: None,
+        };
+        let targets = vec![BinaryTarget::LinuxX64];
+        let gcp = BuildSettings {
+            output_directory: src_dir.path().join("out").to_string_lossy().into_owned(),
+            platform: PlatformBuildSettings::Gcp {},
+            targets: Some(targets.clone()),
+            cache_url: None,
+            override_base_image: None,
+            debug_mode: false,
+            rebuild: false,
+            pull_base_images: false,
+        };
+        let azure = BuildSettings {
+            platform: PlatformBuildSettings::Azure {},
+            ..gcp.clone()
+        };
+        let sandbox = crate::toolchain::WorkloadKind::SandboxBase;
+        let container = crate::toolchain::WorkloadKind::Container;
+        let src = src_dir.path().to_str().unwrap();
+
+        assert_ne!(
+            compute_source_artifact_cache_key(src, &docker, &gcp, &targets, sandbox)
+                .await
+                .unwrap(),
+            compute_source_artifact_cache_key(src, &docker, &azure, &targets, sandbox)
+                .await
+                .unwrap(),
+            "the GCP sandbox artifact folds in the agent its release layers on"
+        );
+        assert_eq!(
+            compute_source_artifact_cache_key(src, &docker, &gcp, &targets, container)
+                .await
+                .unwrap(),
+            compute_source_artifact_cache_key(src, &docker, &azure, &targets, container)
+                .await
+                .unwrap(),
+            "nothing is layered onto other GCP artifacts"
+        );
+
+        let agent = layered_sandbox_agent(&gcp, sandbox);
+        assert_eq!(agent, Some(gcp_sandbox_image::sandbox_agent_image()));
+        assert_eq!(layered_sandbox_agent(&azure, sandbox), None);
+        assert_eq!(layered_sandbox_agent(&gcp, container), None);
+        let tarballs = || "tarballs".to_string();
+        assert_ne!(
+            artifact_hash(tarballs(), Some("registry.example.com/agent:v1")),
+            artifact_hash(tarballs(), Some("registry.example.com/agent:v2")),
+            "identical tarballs under a new agent get a new name"
+        );
+        assert_ne!(artifact_hash(tarballs(), agent.as_deref()), tarballs());
+        assert_eq!(
+            artifact_hash(tarballs(), None),
+            tarballs(),
+            "an artifact nothing is layered onto keeps its content hash"
+        );
+        assert_eq!(
+            sandbox_image_hash(tarballs(), Platform::Gcp),
+            artifact_hash(tarballs(), agent.as_deref())
+        );
+        for platform in [Platform::Aws, Platform::Azure] {
+            assert_eq!(sandbox_image_hash(tarballs(), platform), tarballs());
+        }
     }
 
     #[tokio::test]
@@ -6131,8 +6566,104 @@ mod sandbox_push_tests {
         assert_eq!(types, vec!["sandbox", "worker"]);
     }
 
-    /// No sandbox backend builds from source, so a release says so rather than queueing a push of
-    /// a directory nothing ever wrote.
+    /// A built GCP sandbox is released as the base with the agent layered on, because Agent
+    /// Platform runs the image as pushed; Azure takes the base as built. The agent is a stand-in
+    /// on the base's plain-HTTP registry: the agent pull uses HTTP for that registry's host only,
+    /// and HTTPS for any other.
+    #[tokio::test]
+    async fn a_gcp_sandbox_is_released_with_the_agent_layered_on() {
+        let (_registry, host) = dockdash::test_utils::setup_local_registry()
+            .await
+            .expect("local registry");
+        let options = dockdash::PushOptions {
+            auth: dockdash::RegistryAuth::Anonymous,
+            protocol: dockdash::ClientProtocol::Http,
+            ..Default::default()
+        };
+        let image_with = |path: &'static str| async move {
+            let layer = DockDashLayer::builder()
+                .and_then(|layer| layer.data(path, b"#!/bin/sh\n", Some(0o755)))
+                .expect("layer");
+            DockDashImage::builder()
+                .platform("linux", &dockdash::Arch::Amd64)
+                .layer(layer.build().await.expect("layer builds"))
+                .build()
+                .await
+                .expect("image builds")
+                .0
+        };
+        let agent_image = format!("{host}/alien/agent:test");
+        image_with(alien_core::sandbox_image::AGENT_PATH)
+            .await
+            .push(&agent_image, &options)
+            .await
+            .expect("the stand-in agent pushes");
+        let base = image_with("/marker").await;
+        let built = tempfile::tempdir().expect("temp dir");
+        std::fs::copy(base.path(), built.path().join("linux-x64.oci.tar")).expect("tarball");
+        let stack = Stack::new("sandboxes".to_string())
+            .add(
+                sandbox("box", &built.path().to_string_lossy()),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let targets = collect_push_targets(&stack).expect("collects");
+        let repository = format!("{host}/proj/sandbox");
+
+        for (platform, layered) in [(Platform::Gcp, true), (Platform::Azure, false)] {
+            let image = push_target(&targets[0], &platform, &repository, &options, &agent_image)
+                .await
+                .expect("the sandbox pushes");
+            assert_eq!(image.ends_with("-agent"), layered, "{platform}: {image}");
+            let reference = Reference::try_from(image.as_str()).expect("reference");
+            let (_, _, config) = OciClient::new(OciClientConfig {
+                protocol: dockdash::ClientProtocol::Http,
+                ..Default::default()
+            })
+            .pull_manifest_and_config(&reference, &oci_client::secrets::RegistryAuth::Anonymous)
+            .await
+            .expect("the released image reads back");
+            let config: serde_json::Value = serde_json::from_str(&config).expect("config");
+            assert_eq!(config["architecture"], "amd64", "{platform}");
+            let user = &config["config"]["User"];
+            if layered {
+                assert_eq!(user, "1000:1000", "{platform}");
+                assert_eq!(
+                    config["config"]["Entrypoint"],
+                    serde_json::json!([alien_core::sandbox_image::AGENT_PATH]),
+                    "{platform}"
+                );
+            } else {
+                assert!(user.is_null(), "{platform}: {user}");
+            }
+        }
+
+        // The same registry under another name is outside the exception, so the agent pull
+        // goes over HTTPS and the plain-HTTP registry cannot answer it.
+        let elsewhere = agent_image.replacen("localhost", "127.0.0.1", 1);
+        let error = push_target(
+            &targets[0],
+            &Platform::Gcp,
+            &repository,
+            &options,
+            &elsewhere,
+        )
+        .await
+        .expect_err("an agent outside the base's registry is pulled over HTTPS");
+        assert_eq!(error.code, "IMAGE_PULL_TEMPORARILY_UNAVAILABLE", "{error}");
+        assert_eq!(
+            error
+                .context
+                .as_ref()
+                .and_then(|context| context.get("image"))
+                .and_then(|image| image.as_str()),
+            Some(elsewhere.as_str()),
+            "the failed pull is the agent's: {error}"
+        );
+    }
+
+    /// An unbuilt source sandbox has no directory to push, so a release says so rather than
+    /// queueing a push of a directory nothing ever wrote.
     #[test]
     fn a_source_sandbox_is_refused_at_release() {
         let stack = Stack::new("source".to_string())
@@ -6154,8 +6685,8 @@ mod sandbox_push_tests {
         let error = collect_push_targets(&stack).expect_err("source sandboxes are refused");
         assert_eq!(error.code, "INVALID_RESOURCE_CONFIG");
         assert!(
-            error.to_string().contains("from source"),
-            "the refusal must name the reason, got: {error}"
+            error.to_string().contains("Run 'alien build' first"),
+            "the refusal must name the fix, got: {error}"
         );
     }
 }

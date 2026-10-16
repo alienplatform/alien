@@ -67,8 +67,9 @@ pub use dev_helpers::{
     ensure_server_running_for_dev_session, ensure_server_running_with_env,
     fetch_all_dev_deployment_live_states, fetch_dev_deployment_live_state,
     prepare_dev_session_deployment, start_embedded_dev_manager, start_owned_dev_server,
-    wait_for_dev_deployment_ready, wait_for_dev_deployment_ready_with_progress, write_dev_status,
-    CliEnvVar, DevDeploymentLiveState, DevDeploymentSnapshot,
+    wait_for_dev_deployment_ready, wait_for_dev_deployment_ready_with_progress,
+    wait_for_resumed_dev_deployment, write_dev_status, CliEnvVar, DevDeploymentLiveState,
+    DevDeploymentSnapshot,
 };
 #[cfg(feature = "platform")]
 pub use examples::{examples_task, ExamplesArgs};

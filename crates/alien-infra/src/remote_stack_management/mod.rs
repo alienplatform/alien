@@ -172,6 +172,32 @@ mod tests {
         }
     }
 
+    /// An Azure install from before per-scope roles still has the combined role, which is assigned
+    /// at every binding scope. A direct setup replaces it even when the permissions are unchanged;
+    /// runtime credentials still never touch the management role.
+    #[tokio::test]
+    async fn direct_setup_replaces_the_legacy_combined_azure_role() {
+        for (authority, expected) in [
+            (InitialSetupAuthority::DirectSetup, true),
+            (InitialSetupAuthority::ImportedHandoff, false),
+        ] {
+            // The applied revision is current, so only the legacy role can ask for the update.
+            let (_, current) = needs_update(Platform::Azure, authority, None).await;
+            let mut controller = AzureRemoteStackManagementController::mock_ready("test");
+            controller.management_permissions_revision = Some(current);
+            controller.role_definition_id = Some(
+                "/subscriptions/sub-1234/providers/Microsoft.Authorization/roleDefinitions/legacy"
+                    .to_string(),
+            );
+            let executor = executor(Platform::Azure, controller, authority).await;
+            assert_eq!(
+                executor.needs_update().expect("needs_update"),
+                expected,
+                "{authority:?}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn runtime_credentials_never_refresh_management_permissions() {
         for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {

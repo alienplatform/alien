@@ -94,7 +94,8 @@ pub struct RuntimeMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending_prepared_stack: Option<crate::Stack>,
 
-    /// Release `pending_prepared_stack` was prepared from. The target can move
+    /// Release the in-flight stack was prepared from: `pending_prepared_stack`
+    /// during updates, or `prepared_stack` during local first startup. The target can move
     /// to a newer release while that stack is still being applied; this tells
     /// the update which release actually converged.
     #[serde(default, skip_serializing_if = "Option::is_none")]

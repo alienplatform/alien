@@ -512,9 +512,16 @@ fn normalize_optional_response_bodies(document: &mut Map<String, Value>) {
                 .filter(|(status, _)| status.starts_with('2'))
                 .map(|(_, response)| response)
                 .collect();
-            let has_json = successes
-                .iter()
-                .any(|response| response.pointer("/content/application~1json").is_some());
+            let has_json = successes.iter().any(|response| {
+                response
+                    .get("content")
+                    .and_then(Value::as_object)
+                    .is_some_and(|content| {
+                        content.keys().any(|kind| {
+                            kind == "application/json" || kind.starts_with("application/json;")
+                        })
+                    })
+            });
             let has_empty = successes.iter().any(|response| {
                 response.get("$ref").is_none()
                     && response

@@ -805,6 +805,12 @@ pub struct StackSettings {
     /// an explicit CLI setup grant; changing this setting alone never grants that authority.
     #[serde(default, skip_serializing_if = "is_manual_setup_management")]
     pub setup_management: SetupManagement,
+    /// Provider quota identities whose preflight failures become visible warnings
+    /// for this deployment. Checks still run; deploy-time provider limits still apply.
+    /// Unknown identities are rejected. An empty list restores normal blocking.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub quota_warning_overrides: Vec<String>,
+
     /// Who can reach public endpoints. Private access requires AWS managed containers.
     /// This choice cannot change after setup; create a new deployment to change it.
     #[serde(default)]

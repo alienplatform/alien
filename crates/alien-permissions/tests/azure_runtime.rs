@@ -191,6 +191,87 @@ fn compute_cluster_lifecycle_can_discover_subscription_sku_availability() {
     }
 }
 
+/// The container role takes a final snapshot of each disk on delete, and a snapshot of the disk a
+/// restore replaces. Azure authorizes a snapshot PUT from a disk only if the caller also has
+/// `disks/beginGetAccess/action` on that disk (linked access), so both actions must be granted at
+/// the deployment resource group where the disks and snapshots live.
+#[test]
+fn container_provision_can_snapshot_its_disks() {
+    let generator = AzureRuntimePermissionsGenerator::new();
+    let permission_set = get_permission_set("container/provision").expect("permission set exists");
+    let plan = generator
+        .generate_grant_plan(permission_set, BindingTarget::Stack, &create_test_context())
+        .expect("container grant plan should generate");
+    let resource_group =
+        "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-observability-prod";
+    let actions: Vec<&str> = plan
+        .custom_roles
+        .iter()
+        .filter(|role| role.role_definition.assignable_scopes == [resource_group])
+        .flat_map(|role| role.role_definition.actions.iter().map(String::as_str))
+        .collect();
+    for action in [
+        "Microsoft.Compute/snapshots/write",
+        "Microsoft.Compute/disks/beginGetAccess/action",
+    ] {
+        assert!(
+            actions.contains(&action),
+            "container/provision must grant {action} at the resource group"
+        );
+    }
+}
+
+/// Actions granted at the deployment resource group by `permission_set_id`'s stack plan.
+fn azure_resource_group_actions(permission_set_id: &str) -> Vec<String> {
+    let generator = AzureRuntimePermissionsGenerator::new();
+    let permission_set = get_permission_set(permission_set_id).expect("permission set exists");
+    let plan = generator
+        .generate_grant_plan(permission_set, BindingTarget::Stack, &create_test_context())
+        .expect("compute cluster grant plan should generate");
+    let mut actions = Vec::new();
+    for binding in plan.bindings.iter().filter(|binding| {
+        binding
+            .scope
+            .ends_with("/resourceGroups/rg-observability-prod")
+    }) {
+        let AzureRoleDefinitionRef::Custom { key } = &binding.role_definition else {
+            continue;
+        };
+        // Keys alone are not unique: every all-`Microsoft.Compute` entry gets the same label.
+        let role = plan
+            .custom_roles
+            .iter()
+            .find(|role| {
+                &role.key == key
+                    && role.role_definition.assignable_scopes == vec![binding.scope.clone()]
+            })
+            .expect("bound custom role is generated");
+        actions.extend(role.role_definition.actions.iter().cloned());
+    }
+    actions
+}
+
+/// The manager runs the ComputeCluster delete flow, capacity-group removal and the legacy
+/// node-cohort retirement with the management role. Each deletes Azure scale sets, and the
+/// delete flow then deletes the cluster's network security group. A denied delete ends the
+/// resource as deleted, so a missing grant leaks the scale set (and its VMs, which keep the
+/// subnet in use) instead of failing.
+#[test]
+fn compute_cluster_management_can_delete_what_its_flows_delete() {
+    for permission_set_id in ["compute-cluster/management", "compute-cluster/provision"] {
+        let actions = azure_resource_group_actions(permission_set_id);
+        for action in [
+            "Microsoft.Compute/virtualMachineScaleSets/delete",
+            "Microsoft.Network/networkSecurityGroups/delete",
+        ] {
+            assert!(
+                actions.iter().any(|granted| granted == action),
+                "{permission_set_id} must grant {action} at the resource group: {actions:?}"
+            );
+        }
+    }
+}
+
 #[test]
 fn test_azure_hybrid_grant_plan() {
     let generator = AzureRuntimePermissionsGenerator::new();

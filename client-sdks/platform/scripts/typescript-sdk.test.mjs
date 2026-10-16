@@ -509,3 +509,17 @@ test("import serialization and deployment responses retain selected disk capacit
     assert.deepEqual(model[schema].parse({}), {});
   }
 });
+test("execution and target configs retain saved quota overrides and explicit clear", async () => {
+  const { DeploymentConfig$inboundSchema } = await import("../typescript/esm/models/deploymentconfig.js");
+  const { TargetDeploymentConfig$inboundSchema } = await import("../typescript/esm/models/targetdeploymentconfig.js");
+  for (const schema of [DeploymentConfig$inboundSchema, TargetDeploymentConfig$inboundSchema]) {
+    for (const overrides of [["L-1216C47A"], []]) {
+      const decoded = schema.parse({
+        environmentVariables: { variables: [], hash: "", createdAt: "" },
+        stackSettings: { quotaWarningOverrides: overrides, setupManagement: "automatic" },
+      });
+      assert.deepEqual(decoded.stackSettings.quotaWarningOverrides, overrides);
+      assert.equal(decoded.stackSettings.setupManagement, "automatic");
+    }
+  }
+});

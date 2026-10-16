@@ -81,15 +81,16 @@ pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
         })
     })?;
 
-    let tracked = if args.token.is_none() {
-        DeploymentTracker::new()?
-            .get_deployment(&args.name)
-            .cloned()
+    let tracker = if args.token.is_none() {
+        Some(DeploymentTracker::new()?)
     } else {
         None
     };
+    let tracked = tracker
+        .as_ref()
+        .and_then(|tracker| tracker.get_deployment(&args.name).cloned());
     let (tracked_deployment, manager_ctx) =
-        resolve_destroy_target(&args, &ctx, &platform_name, tracked).await?;
+        resolve_destroy_target(&args, &ctx, &platform_name, tracked, tracker.as_ref()).await?;
     steps.complete(
         0,
         Some(format!(
@@ -105,11 +106,16 @@ pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
 }
 
 /// Resolve cloud cleanup independently of the machine that installed it.
+///
+/// `tracked` is this machine's saved entry for the name the user typed. A deployment
+/// referenced another way still uses the key `tracker` saved for it at deploy time, so
+/// only a deployment this machine did not deploy needs a newly minted token.
 async fn resolve_destroy_target(
     args: &DestroyArgs,
     ctx: &ExecutionMode,
     platform: &str,
     tracked: Option<TrackedDeployment>,
+    tracker: Option<&DeploymentTracker>,
 ) -> Result<(TrackedDeployment, ManagerContext)> {
     if let Some(token) = &args.token {
         let DeploymentToken::Deployment {
@@ -262,8 +268,14 @@ async fn resolve_destroy_target(
             message: format!("Deployment '{}' uses {}", args.name, deployment.platform),
         }));
     }
+    let saved_key = tracker
+        .and_then(|tracker| tracker.get_deployment_by_id(deployment.id.as_str()))
+        .filter(|saved| saved.project_id == project_id)
+        .map(|saved| saved.api_key.clone());
     let api_key = if args.force {
         String::new()
+    } else if let Some(saved_key) = saved_key {
+        saved_key
     } else {
         #[cfg(feature = "platform")]
         {
@@ -482,7 +494,9 @@ async fn destroy_tracked_deployment(
         return Ok(());
     }
 
-    let pre_delete_deployment = manager_client
+    // Discovery uses the operator credential; the scoped cleanup token only
+    // authorizes the deletion sync transport.
+    let pre_delete_deployment = operator_client
         .get_deployment()
         .id(&tracked_deployment.deployment_id)
         .send()
@@ -493,13 +507,10 @@ async fn destroy_tracked_deployment(
         })?
         .into_inner();
 
-    if matches!(
-        pre_delete_deployment.status.as_str(),
-        "teardown-required" | "teardown-failed"
-    ) {
+    if pre_delete_deployment.status.as_str() == "teardown-required" {
         steps.activate(2, Some("Setup teardown required".to_string()));
     } else {
-        // Request deletion
+        // Request deletion, including an explicit retry of failed setup teardown.
         operator_client
             .delete_deployment()
             .id(&tracked_deployment.deployment_id)
@@ -602,8 +613,11 @@ async fn destroy_tracked_deployment(
 
     // Acquire → step loop → reconcile → release
     let session = format!("cli-destroy-{}", Uuid::new_v4());
+    // The deletion this command requested removes the deployment's own token
+    // with its record, so confirm a refused acquire with the operator's access.
     let acquire_outcome = acquire_setup_delete_deployment(
         &manager_client,
+        &operator_client,
         &tracked_deployment.deployment_id,
         &session,
         stack_settings.deployment_model,
@@ -619,7 +633,7 @@ async fn destroy_tracked_deployment(
 
     let preparation: Result<()> = async {
         // Re-fetch under lock
-        let deployment = manager_client
+        let deployment = operator_client
             .get_deployment()
             .id(&tracked_deployment.deployment_id)
             .send()
@@ -636,6 +650,7 @@ async fn destroy_tracked_deployment(
                 .context(ErrorData::ConfigurationError {
                     message: format!("Unknown deployment status: {}", deployment.status),
                 })?;
+        current.retry_requested = deployment.retry_requested;
         current.stack_state = deployment
             .stack_state
             .map(serde_json::from_value)
@@ -674,7 +689,7 @@ async fn destroy_tracked_deployment(
         delay_strategy: alien_deployment::runner::DelayStrategy::Inline,
     };
 
-    let runner_result = match alien_deployment::runner::run_step_loop(
+    let setup_result = alien_deployment::setup_teardown::run_setup_teardown_after_handoff(
         &mut current,
         &mut config,
         &client_config,
@@ -682,15 +697,13 @@ async fn destroy_tracked_deployment(
         &policy,
         &transport,
         None,
-        None,
     )
-    .await
-    {
-        Ok(result)
-            if result.loop_result.outcome == LoopOutcome::Success
-                && current.status == DeploymentStatus::TeardownRequired =>
-        {
-            alien_deployment::setup_teardown::run_setup_teardown_after_handoff(
+    .await;
+    let runner_result = match setup_result {
+        Ok(Some(result)) => Ok(result),
+        Err(error) => Err(error),
+        Ok(None) => {
+            match alien_deployment::runner::run_step_loop(
                 &mut current,
                 &mut config,
                 &client_config,
@@ -698,11 +711,29 @@ async fn destroy_tracked_deployment(
                 &policy,
                 &transport,
                 None,
+                None,
             )
             .await
-            .map(|setup_result| setup_result.unwrap_or(result))
+            {
+                Ok(result)
+                    if result.loop_result.outcome == LoopOutcome::Success
+                        && current.status == DeploymentStatus::TeardownRequired =>
+                {
+                    alien_deployment::setup_teardown::run_setup_teardown_after_handoff(
+                        &mut current,
+                        &mut config,
+                        &client_config,
+                        &tracked_deployment.deployment_id,
+                        &policy,
+                        &transport,
+                        None,
+                    )
+                    .await
+                    .map(|setup_result| setup_result.unwrap_or(result))
+                }
+                other => other,
+            }
         }
-        other => other,
     };
     let semantic_failure_status = runner_result.as_ref().ok().and_then(|result| {
         (result.loop_result.outcome == LoopOutcome::Failure)
@@ -1074,7 +1105,7 @@ mod tests {
             platform: Some("test".to_string()),
             force: false,
         };
-        let (target, manager) = resolve_destroy_target(&args, &ctx, "test", None)
+        let (target, manager) = resolve_destroy_target(&args, &ctx, "test", None, None)
             .await
             .unwrap();
         assert_eq!(target.deployment_id, ID);
@@ -1096,6 +1127,200 @@ mod tests {
             state.acquire_authorizations,
             vec![format!("Bearer {DEPLOYMENT_TOKEN}")]
         );
+    }
+
+    /// A project API key cannot mint a deployment token, so destroying by ID has to find the key
+    /// this machine saved when it deployed, exactly as destroying by name does. A deployment this
+    /// machine did not deploy still asks the platform for a token and reports its refusal.
+    #[cfg(feature = "platform")]
+    #[tokio::test]
+    async fn destroy_by_id_uses_the_key_saved_at_deploy_time() {
+        const ID: &str = "dep_0000000000000000000000000000";
+        const UNTRACKED: &str = "dep_1111111111111111111111111111";
+        const PROJECT: &str = "prj_0000000000000000000000000000";
+        const PROJECT_KEY: &str = "project-key";
+
+        #[derive(Default)]
+        struct Calls {
+            deleted: bool,
+            delete_authorizations: Vec<String>,
+            acquire_authorizations: Vec<String>,
+            token_requests: Vec<String>,
+        }
+        type Recorded = Arc<Mutex<Calls>>;
+
+        fn record(id: &str, status: &str) -> serde_json::Value {
+            serde_json::json!({ "id": id, "name": "example", "platform": "test", "status": status, "deploymentGroupId": "dg_0000000000000000000000000000", "deploymentProtocolVersion": 1, "projectId": PROJECT, "workspaceId": "ws_000000000000000000000000", "managerId":"mgr_0000000000000000000000000000", "purpose":"application", "releaseChannel":"stable", "stackSettings":{}, "updatedAt":"2026-01-01T00:00:00Z", "retryRequested": false, "createdAt": "2026-01-01T00:00:00Z" })
+        }
+        async fn deployment(
+            State(state): State<Recorded>,
+            axum::extract::Path(id): axum::extract::Path<String>,
+        ) -> Response {
+            let state = state.lock().unwrap();
+            if state.deleted {
+                return StatusCode::NOT_FOUND.into_response();
+            }
+            let status = if state.delete_authorizations.is_empty() {
+                "running"
+            } else {
+                "teardown-required"
+            };
+            Json(record(&id, status)).into_response()
+        }
+        async fn request_delete(
+            State(state): State<Recorded>,
+            headers: HeaderMap,
+        ) -> (StatusCode, Json<serde_json::Value>) {
+            state
+                .lock()
+                .unwrap()
+                .delete_authorizations
+                .push(headers["authorization"].to_str().unwrap().to_string());
+            (
+                StatusCode::ACCEPTED,
+                Json(
+                    serde_json::json!({ "action": "cleanup", "cleanupRequired": true, "message": "Deployment deletion accepted" }),
+                ),
+            )
+        }
+        async fn acquire(State(state): State<Recorded>, headers: HeaderMap) -> Response {
+            let authorization = headers["authorization"].to_str().unwrap().to_string();
+            let mut state = state.lock().unwrap();
+            state.acquire_authorizations.push(authorization.clone());
+            if authorization != format!("Bearer {DEPLOYMENT_TOKEN}") {
+                return StatusCode::FORBIDDEN.into_response();
+            }
+            state.deleted = true;
+            Json(serde_json::json!({ "deployments": [] })).into_response()
+        }
+        // The platform refuses to let a project-scoped key hand out a deployment token.
+        async fn token(
+            State(state): State<Recorded>,
+            axum::extract::Path(id): axum::extract::Path<String>,
+        ) -> (StatusCode, Json<serde_json::Value>) {
+            state.lock().unwrap().token_requests.push(id);
+            (
+                StatusCode::FORBIDDEN,
+                Json(
+                    serde_json::json!({ "code": "FORBIDDEN", "message": "Unauthorized", "retryable": false, "internal": false }),
+                ),
+            )
+        }
+
+        let state = Recorded::default();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let server_url = format!("http://{}", listener.local_addr().unwrap());
+        let manager_url = server_url.clone();
+        let app = Router::new()
+            .route(
+                "/v1/projects/{id}",
+                get(|| async {
+                    Json(
+                        serde_json::json!({ "id": PROJECT, "name": "example", "workspaceId": "ws_000000000000000000000000", "createdAt": "2026-01-01T00:00:00Z" }),
+                    )
+                }),
+            )
+            // The project's current manager is not the deployment's; destroy must not use it.
+            .route("/v1/resolve", get(|| async { StatusCode::BAD_GATEWAY }))
+            .route("/v1/managers/{id}", get(move || async move {
+                Json(serde_json::json!({
+                    "id":"mgr_0000000000000000000000000000", "name":"original", "url":manager_url,
+                    "workspaceId":"ws_000000000000000000000000", "createdAt":"2026-01-01T00:00:00Z",
+                    "defaultProjectCount":0, "managedDeploymentCount":1, "managementConfigs":{},
+                    "isSystem":false, "status":"healthy", "targets":["test"]
+                }))
+            }))
+            .route("/v1/deployments/{id}", get(deployment))
+            .route("/v1/deployments/{id}/delete", post(request_delete))
+            .route("/v1/sync/acquire", post(acquire))
+            .route("/v1/deployments/{id}/token", post(token))
+            .with_state(state.clone());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let ctx = ExecutionMode::Platform {
+            base_url: server_url,
+            api_key: Some(PROJECT_KEY.to_string()),
+            workspace: Some("example".to_string()),
+            project: Some("example".to_string()),
+            no_browser: true,
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut tracker =
+            DeploymentTracker::at(dir.path().join("tracked-deployments.json")).unwrap();
+        tracker
+            .track(
+                "example".to_string(),
+                DEPLOYMENT_TOKEN.to_string(),
+                crate::deployment_tracking::ValidatedDeploymentInfo {
+                    deployment_id: ID.to_string(),
+                    workspace_id: "ws_000000000000000000000000".to_string(),
+                    project_id: PROJECT.to_string(),
+                },
+            )
+            .unwrap();
+
+        let args = DestroyArgs {
+            token: None,
+            name: ID.to_string(),
+            platform: Some("test".to_string()),
+            force: false,
+        };
+        let (target, manager) = resolve_destroy_target(
+            &args,
+            &ctx,
+            "test",
+            tracker.get_deployment(&args.name).cloned(),
+            Some(&tracker),
+        )
+        .await
+        .expect("a tracked deployment resolves by ID without minting a token");
+        assert_eq!(target.deployment_id, ID);
+        assert_eq!(target.api_key, DEPLOYMENT_TOKEN);
+        destroy_tracked_deployment(
+            &args,
+            Platform::Test,
+            &target,
+            manager,
+            FixedSteps::new(&["Resolve deployment", "Resolve manager", "Delete resources"]),
+        )
+        .await
+        .expect("the saved deployment key tears the deployment down");
+        {
+            let state = state.lock().unwrap();
+            assert!(state.deleted);
+            assert!(state.token_requests.is_empty());
+            assert_eq!(
+                state.delete_authorizations,
+                vec![format!("Bearer {PROJECT_KEY}")]
+            );
+            assert_eq!(
+                state.acquire_authorizations,
+                vec![format!("Bearer {DEPLOYMENT_TOKEN}")]
+            );
+        }
+
+        state.lock().unwrap().deleted = false;
+        let untracked = DestroyArgs {
+            name: UNTRACKED.to_string(),
+            ..args
+        };
+        let error = resolve_destroy_target(
+            &untracked,
+            &ctx,
+            "test",
+            tracker.get_deployment(&untracked.name).cloned(),
+            Some(&tracker),
+        )
+        .await
+        .err()
+        .expect("another deployment does not borrow the saved key");
+        assert!(
+            error
+                .to_string()
+                .contains("Failed to create a deployment-scoped setup teardown token"),
+            "{error}"
+        );
+        assert_eq!(state.lock().unwrap().token_requests, vec![UNTRACKED]);
     }
 
     /// The project ID a manager reports for every deployment, as its
@@ -1186,7 +1411,7 @@ mod tests {
             platform: Some("test".to_string()),
             force: true,
         };
-        let (target, _) = resolve_destroy_target(&args, &ctx, "test", None)
+        let (target, _) = resolve_destroy_target(&args, &ctx, "test", None, None)
             .await
             .expect("a deployment ID on a single-project manager resolves");
         assert_eq!(target.deployment_id, "dep_test");
@@ -1216,7 +1441,7 @@ mod tests {
             platform: Some("test".to_string()),
             force: false,
         };
-        let (target, manager) = resolve_destroy_target(&args, &ctx, "test", None)
+        let (target, manager) = resolve_destroy_target(&args, &ctx, "test", None, None)
             .await
             .unwrap();
         assert_eq!(target.deployment_id, "dep_test");
@@ -1264,7 +1489,7 @@ mod tests {
                 platform: Some(platform.to_string()),
                 force: false,
             };
-            let error = resolve_destroy_target(&args, &ctx, platform, None)
+            let error = resolve_destroy_target(&args, &ctx, platform, None, None)
                 .await
                 .err()
                 .expect("mismatched target must fail before mutation");
@@ -1347,7 +1572,7 @@ mod tests {
                 platform: Some("test".to_string()),
                 force: false,
             };
-            let (target, _) = resolve_destroy_target(&args, &ctx, "test", None)
+            let (target, _) = resolve_destroy_target(&args, &ctx, "test", None, None)
                 .await
                 .unwrap_or_else(|error| panic!("{name} must resolve: {error}"));
             assert_eq!(target.deployment_id, PLATFORM_DEPLOYMENT, "{name}");
@@ -1368,7 +1593,7 @@ mod tests {
                 platform: Some("test".to_string()),
                 force,
             };
-            let error = resolve_destroy_target(&args, &ctx, "test", None)
+            let error = resolve_destroy_target(&args, &ctx, "test", None, None)
                 .await
                 .err()
                 .expect("a deployment of another project must be rejected before any mutation");

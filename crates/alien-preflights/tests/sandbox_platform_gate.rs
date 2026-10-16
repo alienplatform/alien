@@ -113,14 +113,14 @@ fn source_sandbox() -> Sandbox {
         .build()
 }
 
-/// `alien build` turns a sandbox's source into an image on AWS, and nowhere else. Driven through
+/// `alien build` turns a sandbox's source into an image on AWS, never on Kubernetes. Driven through
 /// the runner rather than the method, because the runtime's empty-image fallback on Kubernetes
 /// rests on this gate being registered, not merely on the method refusing when called.
 ///
 /// Live, because the release pushes a source build to a private repository and a Frozen one is
 /// built before the registry can open it.
 #[tokio::test]
-async fn source_reaches_no_platform_but_aws_through_the_runner() {
+async fn source_reaches_aws_but_not_kubernetes_through_the_runner() {
     let live = alien_core::ResourceLifecycle::Live;
     let summary = PreflightRunner::new()
         .run_compile_time_checks(
@@ -132,7 +132,7 @@ async fn source_reaches_no_platform_but_aws_through_the_runner() {
 
     assert!(
         !summary.success,
-        "source has no builder off AWS: {summary:?}"
+        "source has no builder on Kubernetes: {summary:?}"
     );
     let rendered = format!("{summary:?}");
     assert!(
@@ -146,4 +146,19 @@ async fn source_reaches_no_platform_but_aws_through_the_runner() {
         .expect("compile-time checks run");
 
     assert!(on_aws.success, "AWS builds it: {on_aws:?}");
+}
+
+/// Azure and GCP build a source sandbox too, and Frozen: Azure's controller pulls the pushed image
+/// with the deployment's own credentials, and GCP's template is created by the release, which runs
+/// after the deployment's registry access exists.
+#[tokio::test]
+async fn source_reaches_azure_and_gcp_frozen_through_the_runner() {
+    let frozen = alien_core::ResourceLifecycle::Frozen;
+    for platform in [Platform::Azure, Platform::Gcp] {
+        let summary = PreflightRunner::new()
+            .run_compile_time_checks(&stack_with_lifecycle(source_sandbox(), frozen), platform)
+            .await
+            .expect("compile-time checks run");
+        assert!(summary.success, "{platform} builds it: {summary:?}");
+    }
 }
