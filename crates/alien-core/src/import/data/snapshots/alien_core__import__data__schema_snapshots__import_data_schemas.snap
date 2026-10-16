@@ -1677,6 +1677,13 @@ expression: schemas
         "description": "Cluster identifier used by the controller.",
         "type": "string"
       },
+      "customRoleNamespace": {
+        "description": "Exact custom-role namespace selected by setup for the node identity.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
       "networkTag": {
         "description": "Tag applied to firewall rules targeting cluster nodes.",
         "type": "string"
@@ -1982,6 +1989,13 @@ expression: schemas
     "$schema": "http://json-schema.org/draft-07/schema#",
     "description": "GCP RemoteStackManagement ImportData — cross-project service account the manager impersonates.",
     "properties": {
+      "customRoleNamespace": {
+        "description": "Exact custom-role namespace selected by setup, independent of resource names.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
       "installedManagementGrants": {
         "additionalProperties": {
           "items": {
@@ -2130,6 +2144,13 @@ expression: schemas
     "$schema": "http://json-schema.org/draft-07/schema#",
     "description": "GCP ServiceAccount ImportData.",
     "properties": {
+      "customRoleNamespace": {
+        "description": "Exact custom-role namespace selected by setup, independent of resource names.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
       "projectId": {
         "description": "Project ID containing the service account.",
         "type": "string"
