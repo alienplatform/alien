@@ -741,7 +741,7 @@ pub fn resource_permission_owners(
     owners
 }
 
-fn prefixed_permission_refs(
+pub(crate) fn prefixed_permission_refs(
     profile: &PermissionProfile,
     resource_id: &str,
     permission_set_prefix: &str,

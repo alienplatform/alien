@@ -8,7 +8,7 @@ use crate::{
 };
 use alien_core::{PermissionGrant, PermissionSet};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Azure role definition
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -102,6 +102,91 @@ pub fn dedupe_azure_role_bindings(bindings: Vec<AzureRoleBinding>) -> Vec<AzureR
     }
 
     deduped
+}
+
+/// The custom grants a plan binds at one scope, merged into a single role that is assignable
+/// only there.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AzureScopedCustomRole {
+    /// The scope the role is assignable at and assigned at.
+    pub scope: String,
+    /// Short name for the scope, used in the role's name and in Terraform addresses.
+    pub scope_kind: AzureManagementScopeKind,
+    /// Union of the actions of every custom grant bound at `scope`.
+    pub actions: Vec<String>,
+    /// Union of the data actions of every custom grant bound at `scope`.
+    pub data_actions: Vec<String>,
+}
+
+/// The scopes a stack-level Azure grant can bind at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum AzureManagementScopeKind {
+    Subscription,
+    ResourceGroup,
+}
+
+impl AzureManagementScopeKind {
+    /// Classifies `/subscriptions/{id}` and `/subscriptions/{id}/resourceGroups/{name}` (either
+    /// may be a template). Anything else is not a stack-level scope.
+    pub fn of(scope: &str) -> Option<Self> {
+        let segments: Vec<&str> = scope.split('/').filter(|s| !s.is_empty()).collect();
+        match segments.as_slice() {
+            [subscriptions, _] if subscriptions.eq_ignore_ascii_case("subscriptions") => {
+                Some(Self::Subscription)
+            }
+            [subscriptions, _, groups, _]
+                if subscriptions.eq_ignore_ascii_case("subscriptions")
+                    && groups.eq_ignore_ascii_case("resourceGroups") =>
+            {
+                Some(Self::ResourceGroup)
+            }
+            _ => None,
+        }
+    }
+
+    /// `subscription` or `resource-group`.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Subscription => "subscription",
+            Self::ResourceGroup => "resource-group",
+        }
+    }
+}
+
+/// Merges a plan's custom roles into one role per scope they are bound at.
+///
+/// A role assigned at a scope grants its actions on everything under it. One role holding every
+/// custom grant, assigned at each binding scope, therefore gives a resource-group grant to the
+/// whole subscription as soon as any grant is bound at the subscription. Keeping one role per
+/// scope keeps each action at the scope its permission set names.
+pub fn custom_roles_by_scope(plan: &AzureGrantPlan) -> Result<Vec<AzureScopedCustomRole>> {
+    let mut by_scope: BTreeMap<String, (BTreeSet<String>, BTreeSet<String>)> = BTreeMap::new();
+    for role in &plan.custom_roles {
+        for scope in &role.role_definition.assignable_scopes {
+            let (actions, data_actions) = by_scope.entry(scope.clone()).or_default();
+            actions.extend(role.role_definition.actions.iter().cloned());
+            data_actions.extend(role.role_definition.data_actions.iter().cloned());
+        }
+    }
+    by_scope
+        .into_iter()
+        .map(|(scope, (actions, data_actions))| {
+            let scope_kind = AzureManagementScopeKind::of(&scope).ok_or_else(|| {
+                alien_error::AlienError::new(ErrorData::GeneratorError {
+                    platform: "azure".to_string(),
+                    message: format!(
+                        "custom management grant bound at '{scope}': stack-level grants bind at the subscription or the deployment resource group"
+                    ),
+                })
+            })?;
+            Ok(AzureScopedCustomRole {
+                scope,
+                scope_kind,
+                actions: actions.into_iter().collect(),
+                data_actions: data_actions.into_iter().collect(),
+            })
+        })
+        .collect()
 }
 
 /// Azure runtime permissions generator for role definitions and role assignments

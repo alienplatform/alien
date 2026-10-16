@@ -142,11 +142,92 @@ fn azure_remote_stack_management_emits_uami_with_federated_credential() {
     assert_terraform_valid(&module, "azure_remote_stack_management");
 }
 
+/// Every custom management role assignment in the module, resolved through the role definition it
+/// references: scope -> the actions assigned there.
+fn management_custom_grants_by_scope(
+    module: &alien_terraform::ModuleFiles,
+) -> std::collections::BTreeMap<String, std::collections::BTreeSet<String>> {
+    use hcl::{Body, Expression};
+    let unquote = |expr: &Expression| expr.to_string().trim_matches('"').to_string();
+    let bodies: Vec<Body> = module
+        .iter()
+        .filter(|(path, _)| path.ends_with(".tf"))
+        .map(|(path, contents)| hcl::parse(contents).unwrap_or_else(|e| panic!("{path}: {e}")))
+        .collect();
+    let resources = || {
+        bodies.iter().flat_map(|body| {
+            body.blocks()
+                .filter(|block| block.identifier() == "resource")
+                .map(|block| {
+                    let labels: Vec<String> = block
+                        .labels()
+                        .iter()
+                        .map(|l| l.as_str().to_string())
+                        .collect();
+                    (labels[0].clone(), labels[1].clone(), block.clone())
+                })
+        })
+    };
+    let role_actions: std::collections::BTreeMap<String, std::collections::BTreeSet<String>> =
+        resources()
+            .filter(|(kind, _, _)| kind == "azurerm_role_definition")
+            .map(|(_, name, block)| {
+                let permissions = block
+                    .body()
+                    .blocks()
+                    .find(|b| b.identifier() == "permissions")
+                    .expect("a role definition has permissions");
+                let actions = permissions
+                    .body()
+                    .attributes()
+                    .find(|a| a.key() == "actions")
+                    .expect("permissions have actions");
+                let Expression::Array(actions) = actions.expr() else {
+                    panic!("actions is a list")
+                };
+                (name, actions.iter().map(unquote).collect())
+            })
+            .collect();
+    let mut grants = std::collections::BTreeMap::new();
+    for (kind, _, block) in resources() {
+        if kind != "azurerm_role_assignment" {
+            continue;
+        }
+        let attribute = |key: &str| {
+            block
+                .body()
+                .attributes()
+                .find(|a| a.key() == key)
+                .map(|a| a.expr().clone())
+        };
+        let Some(role) = attribute("role_definition_id") else {
+            continue;
+        };
+        let role = hcl::format::to_string(&role).expect("role reference formats");
+        let Some(name) = role
+            .strip_prefix("azurerm_role_definition.")
+            .and_then(|rest| rest.strip_suffix(".role_definition_resource_id"))
+        else {
+            continue;
+        };
+        let scope = unquote(&attribute("scope").expect("an assignment has a scope"));
+        grants
+            .entry(scope)
+            .or_insert_with(std::collections::BTreeSet::new)
+            .extend(role_actions[name].iter().cloned());
+    }
+    grants
+}
+
+/// A custom role grants its actions on everything under the scope it is assigned at. The
+/// subscription assignment may therefore carry only what the permission sets bind at the
+/// subscription (SKU and usage discovery); scale set and gateway writes stay at the deployment
+/// resource group.
 #[test]
-fn azure_compute_management_emits_subscription_scoped_sku_discovery() {
+fn azure_management_grants_stay_at_the_scope_their_permission_set_names() {
     let stack = Stack::new("acme-compute-zones".to_string())
         .management(ManagementPermissions::extend(
-            PermissionProfile::new().global(["compute-cluster/management"]),
+            PermissionProfile::new().global(["compute-cluster/management", "container/provision"]),
         ))
         .add(resource_group(), ResourceLifecycle::Frozen)
         .add(
@@ -155,15 +236,92 @@ fn azure_compute_management_emits_subscription_scoped_sku_discovery() {
         )
         .build();
     let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
-    let rendered = module
-        .iter()
-        .map(|(_, contents)| contents)
-        .collect::<Vec<_>>()
-        .join("\n");
+    assert_terraform_valid(&module, "azure_compute_management_scopes");
 
-    assert!(rendered.contains("Microsoft.Compute/skus/read"));
-    assert!(rendered.contains("\"/subscriptions/${var.azure_subscription_id}\""));
-    assert_terraform_valid(&module, "azure_compute_management_sku_discovery");
+    let grants = management_custom_grants_by_scope(&module);
+    let subscription = grants
+        .get("/subscriptions/${var.azure_subscription_id}")
+        .expect("SKU discovery is assigned at the subscription");
+    assert_eq!(
+        subscription.iter().map(String::as_str).collect::<Vec<_>>(),
+        [
+            "Microsoft.Compute/locations/usages/read",
+            "Microsoft.Compute/skus/read"
+        ],
+        "the subscription assignment must carry only the subscription grants"
+    );
+    let resource_group = grants
+        .get("/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}")
+        .expect("the management grants are assigned at the deployment resource group");
+    for action in [
+        "Microsoft.Compute/virtualMachineScaleSets/write",
+        "Microsoft.Network/applicationGateways/write",
+    ] {
+        assert!(
+            resource_group.contains(action),
+            "{action} at the resource group"
+        );
+    }
+    assert_eq!(grants.len(), 2, "{grants:?}");
+}
+
+/// An inline permission set can bind its grants at a resource group other than the deployment's.
+/// That scope gets its own role, with its own Terraform address and Azure name, so the module
+/// still validates and each grant stays at the scope it names.
+#[test]
+fn azure_management_grant_at_another_resource_group_gets_its_own_role() {
+    let mut other = alien_permissions::get_permission_set("network/heartbeat")
+        .cloned()
+        .expect("the built-in set is registered");
+    other.id = "custom/other-group-network-read".to_string();
+    let value = serde_json::to_value(&other).expect("permission set serializes");
+    // Two groups whose names differ only in punctuation must still get separate roles.
+    let bound_at = |group: &str, id: &str| {
+        let mut value = value.clone();
+        value["id"] = serde_json::json!(id);
+        for entry in value["platforms"]["azure"]
+            .as_array_mut()
+            .expect("network/heartbeat has Azure grants")
+        {
+            entry["binding"]["stack"]["scope"] =
+                serde_json::json!(format!("/subscriptions/${{subscriptionId}}/resourceGroups/{group}"));
+        }
+        serde_json::from_value::<alien_core::permissions::PermissionSet>(value)
+            .expect("permission set deserializes")
+    };
+    let other = bound_at("shared-network", "custom/other-group-network-read");
+    let similar = bound_at("shared.network", "custom/similar-group-network-read");
+    let stack = Stack::new("acme-other-group".to_string())
+        .management(ManagementPermissions::extend(
+            PermissionProfile::new().global([
+                alien_core::PermissionSetReference::from_name("container/provision"),
+                alien_core::PermissionSetReference::from_inline(other),
+                alien_core::PermissionSetReference::from_inline(similar),
+            ]),
+        ))
+        .add(resource_group(), ResourceLifecycle::Frozen)
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+    assert_terraform_valid(&module, "azure_management_other_group");
+
+    let grants = management_custom_grants_by_scope(&module);
+    let other_group = grants
+        .get("/subscriptions/${var.azure_subscription_id}/resourceGroups/shared-network")
+        .expect("the other group has its own assignment");
+    assert!(
+        !other_group.contains("Microsoft.Network/applicationGateways/write"),
+        "the other group's role holds only its own grants: {other_group:?}"
+    );
+    assert!(grants
+        .contains_key("/subscriptions/${var.azure_subscription_id}/resourceGroups/shared.network"));
+    assert!(grants
+        .get("/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}")
+        .expect("the deployment group keeps its role")
+        .contains("Microsoft.Network/applicationGateways/write"));
 }
 
 /// Azure folds every resource-scoped management permission set into one

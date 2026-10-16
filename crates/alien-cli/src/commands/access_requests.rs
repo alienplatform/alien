@@ -931,9 +931,10 @@ pub(crate) fn requested_expiration(
                 message: "duration is too large".to_string(),
             })
         })?;
+    // The API accepts only a `Z`-suffixed UTC deadline; `to_rfc3339()` would write `+00:00`.
     deadline
         .to_rfc3339_opts(SecondsFormat::AutoSi, true)
-        .parse()
+        .parse::<CreateAccessRequestRequestedExpiresAt>()
         .map(Some)
         .into_alien_error()
         .context(ErrorData::ValidationError {
@@ -972,10 +973,13 @@ mod tests {
     fn requested_duration_becomes_an_absolute_utc_deadline() {
         let now = "2026-09-17T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
         assert_eq!(
-            requested_expiration(now, Some("90s")).unwrap(),
-            Some("2026-09-17T00:01:30Z".parse().unwrap())
+            requested_expiration(now, Some("90s"))
+                .unwrap()
+                .as_deref()
+                .map(String::as_str),
+            Some("2026-09-17T00:01:30Z")
         );
-        assert_eq!(requested_expiration(now, None).unwrap(), None);
+        assert!(requested_expiration(now, None).unwrap().is_none());
         assert!(requested_expiration(now, Some("361m")).is_err());
     }
 

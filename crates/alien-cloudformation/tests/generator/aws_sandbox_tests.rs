@@ -1945,6 +1945,19 @@ fn the_emitted_registration_matches_the_direct_seed() {
 
 /// A deny sandbox whose `execution` profile is granted `sets` on it, next to that profile's role.
 fn granted_sandbox_stack(lifecycle: ResourceLifecycle, sets: &[&str]) -> (Stack, StackSettings) {
+    profile_sandbox_stack(
+        lifecycle,
+        PermissionProfile::new().resource("agents", sets.iter().copied()),
+        ServiceAccount::new("execution-sa".to_string()).build(),
+    )
+}
+
+/// A deny sandbox next to `account`, the role of an `execution` profile holding `profile`.
+fn profile_sandbox_stack(
+    lifecycle: ResourceLifecycle,
+    profile: PermissionProfile,
+    account: ServiceAccount,
+) -> (Stack, StackSettings) {
     let settings = StackSettings {
         network: Some(NetworkSettings::Create {
             cidr: None,
@@ -1953,14 +1966,8 @@ fn granted_sandbox_stack(lifecycle: ResourceLifecycle, sets: &[&str]) -> (Stack,
         ..StackSettings::default()
     };
     let stack = Stack::new("acme-sandbox-grants".to_string())
-        .permission(
-            "execution",
-            PermissionProfile::new().resource("agents", sets.iter().copied()),
-        )
-        .add(
-            ServiceAccount::new("execution-sa".to_string()).build(),
-            ResourceLifecycle::Frozen,
-        )
+        .permission("execution", profile)
+        .add(account, ResourceLifecycle::Frozen)
         .add(
             Network::new("default-network".to_string())
                 .settings(settings.network.clone().expect("network"))
@@ -2074,6 +2081,142 @@ fn a_profile_granted_the_sandbox_reaches_its_image_and_nothing_wider() {
                 && !granted.contains_key("iam:PassRole"),
             "{lifecycle:?}: neither set reaches a shell or a role: {granted:#?}"
         );
+    }
+}
+
+/// A set granted under `"*"` reaches the sandbox through the service account's stack-level policy,
+/// so the sandbox must not attach a second, image-scoped copy: every copy adds to the role's
+/// policies, which IAM caps. A `"*"` set the account's stack-level policy does not hold is attached
+/// by the sandbox, and must still be. The stack mutations build the account from the same profile,
+/// so the last two cases only arise in a hand-built stack like this one. A kept policy keeps the
+/// logical id it has when nothing is left out, so leaving one set out does not rename the others.
+/// Two policies on one role are folded into a managed policy, so only a lone one shows its id.
+#[test]
+fn a_stack_wide_sandbox_grant_is_attached_once() {
+    const IMAGE: &str =
+        "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:microvm-image:${AWS::StackName}-agents";
+    const STACK_WIDE: &str =
+        "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:microvm-image:${AWS::StackName}-*";
+    const EXECUTE_POLICY: &str = "AgentsExecutionSaRoleSandboxPermission01";
+    const EXECUTE: [&str; 2] = ["lambda:CreateMicrovmAuthToken", "lambda:GetMicrovm"];
+    const MANAGEMENT: [&str; 4] = [
+        "lambda:ResumeMicrovm",
+        "lambda:RunMicrovm",
+        "lambda:SuspendMicrovm",
+        "lambda:TerminateMicrovm",
+    ];
+    const BOTH: [&str; 6] = [
+        "lambda:CreateMicrovmAuthToken",
+        "lambda:GetMicrovm",
+        "lambda:ResumeMicrovm",
+        "lambda:RunMicrovm",
+        "lambda:SuspendMicrovm",
+        "lambda:TerminateMicrovm",
+    ];
+    let global = PermissionProfile::new().global(["sandbox/management", "sandbox/execute"]);
+    let management_only = PermissionProfile::new().global(["sandbox/management"]);
+    for lifecycle in [ResourceLifecycle::Frozen, ResourceLifecycle::Live] {
+        for (account, stack_level, on_image, policies) in [
+            (&global, &BOTH[..], &[][..], vec![]),
+            (&PermissionProfile::new(), &[][..], &BOTH[..], vec![]),
+            (
+                &management_only,
+                &MANAGEMENT[..],
+                &EXECUTE[..],
+                vec![EXECUTE_POLICY],
+            ),
+        ] {
+            let service_account = ServiceAccount::from_permission_profile(
+                "execution-sa".to_string(),
+                account,
+                |name| alien_permissions::get_permission_set(name).cloned(),
+            )
+            .expect("every set in the profile is registered");
+            let (stack, settings) =
+                profile_sandbox_stack(lifecycle, global.clone(), service_account);
+            let (template, _yaml) = render_built_ins_template(
+                &stack,
+                settings,
+                custom_resource_registration(),
+                CloudFormationTarget::Aws,
+                "aws",
+                "stack-wide sandbox grant",
+            );
+
+            let sandbox_policies: Vec<&str> = template
+                .resources
+                .iter()
+                .filter(|(id, resource)| {
+                    resource.resource_type == "AWS::IAM::Policy" && id.contains("SandboxPermission")
+                })
+                .map(|(id, _)| id.as_str())
+                .collect();
+            assert_eq!(
+                sandbox_policies, policies,
+                "{lifecycle:?} on {account:?}: the sandbox's own policies"
+            );
+            let granted = granted_actions(&template, "ExecutionSaRole");
+            let granted_on_image: Vec<&str> = granted
+                .iter()
+                .filter(|(_, resources)| resources.iter().any(|resource| resource == IMAGE))
+                .map(|(action, _)| action.as_str())
+                .collect();
+            assert_eq!(
+                granted_on_image, on_image,
+                "{lifecycle:?} on {account:?}: what the sandbox's own policies grant"
+            );
+            for action in BOTH {
+                assert_eq!(
+                    granted.get(action),
+                    on_image
+                        .contains(&action)
+                        .then(|| vec![IMAGE.to_string()])
+                        .as_ref(),
+                    "{lifecycle:?} on {account:?}: {action} in the sandbox's own policies"
+                );
+            }
+            let role = serde_json::to_value(&template.resources["ExecutionSaRole"].properties)
+                .expect("serializes");
+            // A role whose account holds no set has no `Policies` key at all.
+            let statements: Vec<serde_json::Value> = role
+                .get("Policies")
+                .map(|policies| policies.as_array().expect("Policies is a list"))
+                .into_iter()
+                .flatten()
+                .flat_map(|policy| {
+                    policy["PolicyDocument"]["Statement"]
+                        .as_array()
+                        .expect("a policy has statements")
+                        .clone()
+                })
+                .collect();
+            for action in BOTH {
+                let on_the_role: Vec<&str> = statements
+                    .iter()
+                    .filter(|statement| {
+                        statement["Action"]
+                            .as_array()
+                            .expect("a statement lists its actions")
+                            .contains(&action.into())
+                    })
+                    .flat_map(|statement| {
+                        statement["Resource"]
+                            .as_array()
+                            .expect("a statement lists its resources")
+                    })
+                    .map(|resource| resource["Fn::Sub"].as_str().expect("Fn::Sub"))
+                    .collect();
+                let expected: &[&str] = if stack_level.contains(&action) {
+                    &[STACK_WIDE]
+                } else {
+                    &[]
+                };
+                assert_eq!(
+                    on_the_role, expected,
+                    "{lifecycle:?} on {account:?}: {action} in the account's stack-level policy"
+                );
+            }
+        }
     }
 }
 

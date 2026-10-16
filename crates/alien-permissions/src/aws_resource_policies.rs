@@ -7,8 +7,12 @@ use crate::{
     generators::{AwsIamPolicy, AwsIamStatement, AwsRuntimePermissionsGenerator},
     BindingTarget, ErrorData, PermissionContext, Result,
 };
-use alien_core::{PermissionSet, PermissionSetReference, ServiceAccount, Stack, Worker};
+use alien_core::{
+    permissions::PermissionProfile, PermissionSet, PermissionSetReference, ServiceAccount, Stack,
+    Worker,
+};
 use alien_error::{Context, IntoAlienError};
+use tracing::debug;
 
 /// Physical name used by AWS prefixed-resource create controllers.
 pub fn aws_prefixed_resource_name(prefix: &str, resource_id: &str) -> String {
@@ -79,7 +83,9 @@ impl AwsResourcePolicyContext<'_> {
         let stack_set = reference
             .resolve(|name| crate::get_permission_set(name).cloned())
             .and_then(|resolved| self.stack_sets.iter().find(|set| **set == resolved));
-        let Some(set) = stack_set else {
+        // A set with no AWS entry has no policy to compare, so it is kept: the Terraform emitter
+        // skips it, and the runtime and CloudFormation writers refuse it as unsupported on AWS.
+        let Some(set) = stack_set.filter(|set| set.platforms.aws.is_some()) else {
             return Ok(false);
         };
         let stack =
@@ -92,6 +98,66 @@ impl AwsResourcePolicyContext<'_> {
         )?;
         Ok(aws_policy_grants(&stack, &resource))
     }
+}
+
+/// Drops the wildcard sets that the service account's stack-level policy already grants for
+/// this resource.
+///
+/// A profile's `"*"` sets are written once on its role as the stack-level policy, scoped to
+/// the stack prefix. Writing them again per resource duplicates that grant, and IAM caps a
+/// role's inline policies at 10,240 characters in total, so a stack with a handful of
+/// resources fails setup. A set stays when the resource names it, or when the stack-level
+/// grant does not reach this resource (a bring-your-own resource outside the stack prefix).
+/// The runtime, Terraform and CloudFormation all select a resource's policies with this.
+pub fn without_refs_the_stack_policy_grants(
+    stack: &Stack,
+    profile_name: &str,
+    profile: &PermissionProfile,
+    resource_id: &str,
+    refs: Vec<PermissionSetReference>,
+    generator: &AwsRuntimePermissionsGenerator,
+    permission_context: &PermissionContext,
+) -> Result<Vec<PermissionSetReference>> {
+    let stack_sets = stack
+        .resources
+        .get(&format!("{profile_name}-sa"))
+        .and_then(|entry| entry.config.downcast_ref::<ServiceAccount>())
+        .map(|service_account| service_account.stack_permission_sets.as_slice())
+        .unwrap_or_default();
+    let selection = AwsResourcePolicyContext {
+        named_by_resource: profile
+            .0
+            .get(resource_id)
+            .map(Vec::as_slice)
+            .unwrap_or_default(),
+        stack_sets,
+        generator,
+        permission_context,
+    };
+    let mut kept = Vec::new();
+    for reference in refs {
+        let redundant = selection
+            .is_redundant(&reference)
+            .context(ErrorData::GeneratorError {
+                platform: "aws".to_string(),
+                message: format!(
+                    "Failed to compare permission set '{}' on '{resource_id}' with the \
+                     stack-level policy of profile '{profile_name}'",
+                    reference.id()
+                ),
+            })?;
+        if redundant {
+            debug!(
+                resource_id = %resource_id,
+                profile = %profile_name,
+                permission_set = %reference.id(),
+                "Stack-level policy already grants this set for the resource; skipping its resource policy"
+            );
+        } else {
+            kept.push(reference);
+        }
+    }
+    Ok(kept)
 }
 
 /// The exact name and document supplied to IAM's PutRolePolicy operation.
@@ -307,6 +373,68 @@ mod tests {
         let error = selection.is_redundant(&reference).unwrap_err();
         assert_eq!(error.code, "VARIABLE_NOT_FOUND");
         assert!(!error.retryable);
+    }
+
+    /// A failed comparison names the set it was comparing, since a profile grants many.
+    #[test]
+    fn a_failed_comparison_names_the_set() {
+        let profile = PermissionProfile::new().global(["storage/data-read"]);
+        let stack = Stack::new("q5-naming".to_string())
+            .add(
+                ServiceAccount::from_permission_profile(
+                    "execution-sa".to_string(),
+                    &profile,
+                    |name| crate::get_permission_set(name).cloned(),
+                )
+                .unwrap(),
+                alien_core::ResourceLifecycle::Frozen,
+            )
+            .build();
+        let error = without_refs_the_stack_policy_grants(
+            &stack,
+            "execution",
+            &profile,
+            "objects",
+            vec![PermissionSetReference::from_name(
+                "storage/data-read".to_string(),
+            )],
+            &AwsRuntimePermissionsGenerator::new(),
+            &PermissionContext::new(),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "GENERATOR_ERROR");
+        assert!(error.message.contains("'storage/data-read'"), "{error}");
+        assert!(!error.retryable);
+    }
+
+    /// A multi-cloud profile can grant an Azure-only set under `"*"`; on AWS it is kept rather
+    /// than compared, and the AWS policy writer decides what to do with it.
+    #[test]
+    fn a_stack_wide_set_without_an_aws_entry_is_kept() {
+        let profile = PermissionProfile::new().global(["sandbox/images"]);
+        let stack = Stack::new("q5-azure-only".to_string())
+            .add(
+                ServiceAccount::from_permission_profile(
+                    "execution-sa".to_string(),
+                    &profile,
+                    |name| crate::get_permission_set(name).cloned(),
+                )
+                .unwrap(),
+                alien_core::ResourceLifecycle::Frozen,
+            )
+            .build();
+        let reference = PermissionSetReference::from_name("sandbox/images".to_string());
+        let kept = without_refs_the_stack_policy_grants(
+            &stack,
+            "execution",
+            &profile,
+            "agents",
+            vec![reference.clone()],
+            &AwsRuntimePermissionsGenerator::new(),
+            &PermissionContext::new().with_stack_prefix("q5-azure-only".to_string()),
+        )
+        .unwrap();
+        assert_eq!(kept, vec![reference]);
     }
 
     fn aws_policies(set_id: &str, resource_name: &str) -> (AwsIamPolicy, AwsIamPolicy) {

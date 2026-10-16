@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use alien_aws_clients::acm::{
-    find_imported_certificates_by_tag_strict, AcmApi, ImportCertificateRequest, Tag,
+    AcmApi, ImportCertificateRequest, Tag, find_imported_certificates_by_tag_strict,
 };
 use alien_client_core::ErrorData as ClientErrorData;
 use alien_error::{AlienError, ContextError};
@@ -57,7 +57,9 @@ impl AwsAcmImport {
             return Ok(None);
         }
         if self.fingerprint.as_ref() != Some(&fingerprint) || self.ownership_tags != ownership {
-            return Err(invalid("ACM import inputs changed; retain this attempt for cleanup and start a new certificate generation"));
+            return Err(invalid(
+                "ACM import inputs changed; retain this attempt for cleanup and start a new certificate generation",
+            ));
         }
         let token = self.token.as_deref().expect("token initialized above");
         let found = self.discover(acm).await?;
@@ -117,6 +119,16 @@ impl AwsAcmImport {
     /// reads prove all attempt imports absent. A denied discovery/delete must not let the
     /// executor skip the remaining cleanup. Never use this state for a customer-owned ARN.
     pub async fn step_delete(&mut self, acm: &dyn AcmApi) -> Result<bool> {
+        self.step_delete_except(acm, &[]).await
+    }
+
+    // Retire duplicate imports without deleting certificates still used by listeners.
+    // Preserve each receipt until a later ownership read confirms absence.
+    async fn step_delete_except(
+        &mut self,
+        acm: &dyn AcmApi,
+        retained_arns: &[String],
+    ) -> Result<bool> {
         if self.token.is_none() {
             if !self.certificate_arns.is_empty() || self.selected_arn.is_some() {
                 return Err(invalid(
@@ -132,10 +144,16 @@ impl AwsAcmImport {
             }
         }
         for arn in self.certificate_arns.clone() {
+            if retained_arns.contains(&arn) {
+                continue;
+            }
             match self.verify_owned(acm, &arn).await {
                 Ok(true) => {}
                 Ok(false) => {
                     self.certificate_arns.retain(|candidate| candidate != &arn);
+                    if self.selected_arn.as_ref() == Some(&arn) {
+                        self.selected_arn = None;
+                    }
                     continue;
                 }
                 Err(error) => return Err(keep_delete_failure(error)),
@@ -147,16 +165,18 @@ impl AwsAcmImport {
                     if matches!(&error.error, Some(ClientErrorData::RemoteResourceConflict { message, .. })
                     if message.contains("ResourceInUseException")) =>
                 {
-                    return Ok(false)
+                    return Ok(false);
                 }
                 Err(error) => {
-                    return Err(cloud_error(error, "Delete managed TLS certificate", true))
+                    return Err(cloud_error(error, "Delete managed TLS certificate", true));
                 }
             }
             // Keep the ARN until a later read proves absence, including after a lost response.
             return Ok(false);
         }
-        *self = Self::default();
+        if retained_arns.is_empty() {
+            *self = Self::default();
+        }
         Ok(true)
     }
 
@@ -185,7 +205,7 @@ impl AwsAcmImport {
                     error,
                     "Verify managed TLS certificate ownership",
                     false,
-                ))
+                ));
             }
         };
         let matches =
@@ -334,19 +354,23 @@ impl AwsAcmImports {
         acm: &dyn AcmApi,
         retained_arns: &[String],
     ) -> Result<bool> {
-        let index = self.attempts.iter().position(|attempt| {
-            !attempt
-                .selected_arn
-                .as_ref()
-                .is_some_and(|arn| retained_arns.contains(arn))
-        });
-        let Some(index) = index else {
-            return Ok(true);
-        };
-        if self.attempts[index].step_delete(acm).await? {
-            self.attempts.remove(index);
+        for index in 0..self.attempts.len() {
+            if !self.attempts[index]
+                .step_delete_except(acm, retained_arns)
+                .await?
+            {
+                return Ok(false);
+            }
+            if !self.attempts[index]
+                .certificate_arns
+                .iter()
+                .any(|arn| retained_arns.contains(arn))
+            {
+                self.attempts.remove(index);
+                return Ok(false);
+            }
         }
-        Ok(false)
+        Ok(true)
     }
 }
 

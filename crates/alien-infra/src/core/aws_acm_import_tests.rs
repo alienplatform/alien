@@ -1,6 +1,6 @@
 use std::sync::{
-    atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc, Mutex,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
 use alien_aws_clients::acm::{
@@ -150,11 +150,13 @@ async fn checkpoint_recovers_committed_import_and_delete_with_lost_responses() {
     let world = Arc::new(World::default());
     let acm = client(world.clone());
     let mut attempt = AwsAcmImport::default();
-    assert!(attempt
-        .step_import(&acm, request())
-        .await
-        .unwrap()
-        .is_none());
+    assert!(
+        attempt
+            .step_import(&acm, request())
+            .await
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(world.imports.load(Ordering::SeqCst), 0);
     let intent = checkpoint(&attempt);
     world.lose_import.store(true, Ordering::SeqCst);
@@ -164,17 +166,21 @@ async fn checkpoint_recovers_committed_import_and_delete_with_lost_responses() {
         .expect_err("committed import loses response");
     assert_eq!(world.certificates.lock().unwrap().len(), 1);
     let mut restored = intent;
-    assert!(restored
-        .step_import(&acm, request())
-        .await
-        .unwrap()
-        .is_none());
+    assert!(
+        restored
+            .step_import(&acm, request())
+            .await
+            .unwrap()
+            .is_none()
+    );
     let mut restored = checkpoint(&restored);
-    assert!(restored
-        .step_import(&acm, request())
-        .await
-        .unwrap()
-        .is_some());
+    assert!(
+        restored
+            .step_import(&acm, request())
+            .await
+            .unwrap()
+            .is_some()
+    );
     assert_eq!(world.imports.load(Ordering::SeqCst), 1);
     world.lose_delete.store(true, Ordering::SeqCst);
     let before_delete = checkpoint(&restored);
@@ -195,16 +201,20 @@ async fn recorded_import_survives_list_visibility_lag_without_reimport() {
     let world = Arc::new(World::default());
     let acm = client(world.clone());
     let mut attempt = AwsAcmImport::default();
-    assert!(attempt
-        .step_import(&acm, request())
-        .await
-        .unwrap()
-        .is_none());
-    assert!(attempt
-        .step_import(&acm, request())
-        .await
-        .unwrap()
-        .is_none());
+    assert!(
+        attempt
+            .step_import(&acm, request())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        attempt
+            .step_import(&acm, request())
+            .await
+            .unwrap()
+            .is_none()
+    );
     world.hide_list.store(true, Ordering::SeqCst);
     let mut restored = checkpoint(&attempt);
     assert_eq!(
@@ -301,17 +311,21 @@ async fn all_imports_from_the_attempt_are_deleted_one_per_step() {
         .lock()
         .unwrap()
         .insert("duplicate-committed-import".to_string(), tags);
-    assert!(attempt
-        .step_import(&acm, request())
-        .await
-        .unwrap()
-        .is_none());
+    assert!(
+        attempt
+            .step_import(&acm, request())
+            .await
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(attempt.certificate_arns.len(), 2);
-    assert!(attempt
-        .step_import(&acm, request())
-        .await
-        .unwrap()
-        .is_some());
+    assert!(
+        attempt
+            .step_import(&acm, request())
+            .await
+            .unwrap()
+            .is_some()
+    );
     assert!(!attempt.step_delete(&acm).await.unwrap());
     assert_eq!(world.certificates.lock().unwrap().len(), 1);
     let mut restored = checkpoint(&attempt);
@@ -326,24 +340,30 @@ async fn abandoned_lost_response_generation_is_retired_while_serving_certificate
     let world = Arc::new(World::default());
     let acm = client(world.clone());
     let mut imports = AwsAcmImports::default();
-    assert!(imports
-        .step_import(&acm, request())
-        .await
-        .unwrap()
-        .is_none());
-    assert!(imports
-        .step_import(&acm, request())
-        .await
-        .unwrap()
-        .is_none());
+    assert!(
+        imports
+            .step_import(&acm, request())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        imports
+            .step_import(&acm, request())
+            .await
+            .unwrap()
+            .is_none()
+    );
     let serving = imports.step_import(&acm, request()).await.unwrap().unwrap();
     let mut renewal = request();
     renewal.certificate = "new-public-certificate".to_string();
-    assert!(imports
-        .step_import(&acm, renewal.clone())
-        .await
-        .unwrap()
-        .is_none());
+    assert!(
+        imports
+            .step_import(&acm, renewal.clone())
+            .await
+            .unwrap()
+            .is_none()
+    );
     let checkpoint = serde_json::to_string(&imports).unwrap();
     world.lose_import.store(true, Ordering::SeqCst);
     imports
@@ -356,20 +376,26 @@ async fn abandoned_lost_response_generation_is_retired_while_serving_certificate
         restored.step_import(&acm, request()).await.unwrap(),
         Some(serving.clone())
     );
-    assert!(!restored
-        .step_retire(&acm, &[serving.clone()])
-        .await
-        .unwrap());
+    assert!(
+        !restored
+            .step_retire(&acm, &[serving.clone()])
+            .await
+            .unwrap()
+    );
     assert_eq!(world.certificates.lock().unwrap().len(), 1);
     assert!(world.certificates.lock().unwrap().contains_key(&serving));
-    assert!(!restored
-        .step_retire(&acm, &[serving.clone()])
-        .await
-        .unwrap());
-    assert!(restored
-        .step_retire(&acm, &[serving.clone()])
-        .await
-        .unwrap());
+    assert!(
+        !restored
+            .step_retire(&acm, &[serving.clone()])
+            .await
+            .unwrap()
+    );
+    assert!(
+        restored
+            .step_retire(&acm, &[serving.clone()])
+            .await
+            .unwrap()
+    );
     assert_eq!(world.imports.load(Ordering::SeqCst), 2);
     assert_eq!(world.deletes.load(Ordering::SeqCst), 1);
     assert!(!restored.step_retire(&acm, &[]).await.unwrap());
@@ -392,5 +418,118 @@ async fn certificate_association_drain_keeps_ownership_until_deletion_is_confirm
     world.certificate_in_use.store(false, Ordering::SeqCst);
     assert!(!restored.step_delete(&acm).await.unwrap());
     assert!(restored.step_delete(&acm).await.unwrap());
+    assert!(world.certificates.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn retained_generation_retires_duplicates_and_recovers_a_lost_delete_response() {
+    let world = Arc::new(World::default());
+    let acm = client(world.clone());
+    let mut imports = AwsAcmImports::default();
+    imports.step_import(&acm, request()).await.unwrap();
+    imports.step_import(&acm, request()).await.unwrap();
+    let serving = imports.step_import(&acm, request()).await.unwrap().unwrap();
+    let tags = world.certificates.lock().unwrap()[&serving].clone();
+    let duplicate = "duplicate-committed-import".to_string();
+    world
+        .certificates
+        .lock()
+        .unwrap()
+        .insert(duplicate.clone(), tags);
+    world.deny_delete.store(true, Ordering::SeqCst);
+    let error = imports
+        .step_retire(&acm, std::slice::from_ref(&serving))
+        .await
+        .unwrap_err();
+    assert_delete_failure_retained(&error);
+    assert_eq!(world.certificates.lock().unwrap().len(), 2);
+    let mut restored: AwsAcmImports =
+        serde_json::from_str(&serde_json::to_string(&imports).unwrap()).unwrap();
+    world.deny_delete.store(false, Ordering::SeqCst);
+    world.lose_delete.store(true, Ordering::SeqCst);
+    let error = restored
+        .step_retire(&acm, std::slice::from_ref(&serving))
+        .await
+        .unwrap_err();
+    assert_delete_failure_retained(&error);
+    assert!(restored.attempts[0].certificate_arns.contains(&duplicate));
+    let mut restored: AwsAcmImports =
+        serde_json::from_str(&serde_json::to_string(&restored).unwrap()).unwrap();
+    assert!(
+        restored
+            .step_retire(&acm, std::slice::from_ref(&serving))
+            .await
+            .unwrap()
+    );
+    assert_eq!(world.deletes.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        world
+            .certificates
+            .lock()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>(),
+        vec![serving.clone()]
+    );
+    assert_eq!(
+        restored.step_import(&acm, request()).await.unwrap(),
+        Some(serving)
+    );
+    assert_eq!(world.imports.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn retirement_preserves_a_referenced_duplicate_even_if_it_was_not_selected() {
+    let world = Arc::new(World::default());
+    let acm = client(world.clone());
+    let mut imports = AwsAcmImports::default();
+    imports.step_import(&acm, request()).await.unwrap();
+    imports.step_import(&acm, request()).await.unwrap();
+    let selected = imports.step_import(&acm, request()).await.unwrap().unwrap();
+    let tags = world.certificates.lock().unwrap()[&selected].clone();
+    let retained = "referenced-duplicate".to_string();
+    world
+        .certificates
+        .lock()
+        .unwrap()
+        .insert(retained.clone(), tags);
+    // The caller's listener receipt protects the ARN even before discovery adds it.
+    assert!(
+        !imports
+            .step_retire(&acm, std::slice::from_ref(&retained))
+            .await
+            .unwrap()
+    );
+    let mut restored: AwsAcmImports =
+        serde_json::from_str(&serde_json::to_string(&imports).unwrap()).unwrap();
+    assert!(
+        restored
+            .step_retire(&acm, std::slice::from_ref(&retained))
+            .await
+            .unwrap()
+    );
+    assert_eq!(world.deletes.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        world
+            .certificates
+            .lock()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>(),
+        vec![retained.clone()]
+    );
+    assert_eq!(restored.attempts.len(), 1);
+    assert!(restored.attempts[0].certificate_arns.contains(&retained));
+    assert_eq!(restored.step_import(&acm, request()).await.unwrap(), None);
+    assert_eq!(
+        restored.step_import(&acm, request()).await.unwrap(),
+        Some(retained)
+    );
+    assert_eq!(world.imports.load(Ordering::SeqCst), 1);
+    assert!(!restored.step_retire(&acm, &[]).await.unwrap());
+    assert!(!restored.step_retire(&acm, &[]).await.unwrap());
+    assert!(restored.step_retire(&acm, &[]).await.unwrap());
     assert!(world.certificates.lock().unwrap().is_empty());
 }

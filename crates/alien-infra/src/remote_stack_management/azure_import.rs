@@ -47,6 +47,7 @@ impl ResourceImporter for AzureRemoteStackManagementImporter {
             // emitter.
             fic_name: None,
             role_definition_id: None,
+            scoped_role_definition_ids: Default::default(),
             role_assignment_ids: Vec::new(),
             role_assignment_wait_until_epoch_secs: None,
             management_permissions_revision: None,

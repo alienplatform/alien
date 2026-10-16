@@ -631,7 +631,29 @@
             "Microsoft.Compute/locations/operations/read",
             "Microsoft.Compute/virtualMachineScaleSets/rollingUpgrades/read",
             "Microsoft.Compute/virtualMachineScaleSets/osRollingUpgrade/action",
-            "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/retrieveBootDiagnosticsData/action"
+            "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/retrieveBootDiagnosticsData/action",
+            // Removing a capacity group, retiring the legacy node cohort, and the
+            // ComputeCluster delete flow all delete scale sets with this role. Without it the
+            // delete is denied and the scale set outlives the cluster.
+            "Microsoft.Compute/virtualMachineScaleSets/delete"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          }
+        }
+      },
+      // The ComputeCluster delete flow removes the cluster's network security group after its
+      // scale sets, with this role.
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.Network/networkSecurityGroups/read",
+            "Microsoft.Network/networkSecurityGroups/delete"
           ]
         },
         "binding": {

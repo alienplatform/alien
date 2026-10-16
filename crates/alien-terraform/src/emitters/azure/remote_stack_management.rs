@@ -5,9 +5,10 @@
 //!
 //! 1. `azurerm_user_assigned_identity` for the management identity
 //!    living in the customer's subscription / resource group.
-//! 2. Predefined Azure role assignments plus, when needed, one combined
-//!    residual custom management role built from the materialized global
-//!    management permission profile.
+//! 2. Predefined Azure role assignments plus, when needed, residual custom
+//!    management roles built from the materialized global management
+//!    permission profile: one per scope the grants bind at, so a
+//!    resource-group grant is never assigned at the subscription.
 //! 3. Role assignments to the management identity.
 //! 4. `azurerm_federated_identity_credential` trusting the manager OIDC
 //!    issuer and subject.
@@ -25,8 +26,9 @@ use alien_core::{
 use alien_error::Context;
 use alien_permissions::{
     generators::{
-        dedupe_azure_role_bindings, AzureGrantPlan, AzureRoleDefinition, AzureRoleDefinitionRef,
-        AzureRuntimePermissionsGenerator,
+        custom_roles_by_scope, dedupe_azure_role_bindings, AzureGrantPlan,
+        AzureManagementScopeKind, AzureRoleDefinitionRef, AzureRuntimePermissionsGenerator,
+        AzureScopedCustomRole,
     },
     BindingTarget,
 };
@@ -106,7 +108,7 @@ impl TfEmitter for AzureRemoteStackManagementEmitter {
         // the grant — and its resource-group reach — in place. Revoking
         // per-worker needs per-resource assignments, which the permission set
         // already describes but this emitter does not yet render.
-        emit_management_role(&mut fragment, label, &grant_plan.plan);
+        emit_management_roles(&mut fragment, label, &grant_plan.plan)?;
         let merged_gates = merged_grant_gates(ctx, &resource_scoped_refs);
         emit_management_assignments(&mut fragment, label, &grant_plan, merged_gates.as_deref())?;
         // A bindings-only setup has no Live resource that uses the selected
@@ -278,48 +280,95 @@ fn management_permission_refs<'a>(
     (global_refs, resource_scoped_refs)
 }
 
-fn emit_management_role(fragment: &mut TfFragment, label: &str, grant_plan: &AzureGrantPlan) {
-    let Some(role_definition) = combined_management_role_definition(label, grant_plan) else {
-        return;
-    };
+fn emit_management_roles(
+    fragment: &mut TfFragment,
+    label: &str,
+    grant_plan: &AzureGrantPlan,
+) -> Result<()> {
+    let roles = custom_roles_by_scope(grant_plan).context(ErrorData::GenericError {
+        message: "failed to group Azure management grants by scope".to_string(),
+    })?;
+    for role in roles {
+        emit_management_role(fragment, label, role);
+    }
+    Ok(())
+}
 
+fn emit_management_role(fragment: &mut TfFragment, label: &str, role: AzureScopedCustomRole) {
+    let kind = role.scope_kind.as_str();
+    let name = match scope_suffix(&role.scope) {
+        None => format!("${{local.resource_prefix}}-management-{kind}-role"),
+        Some(suffix) => format!(
+            "${{local.resource_prefix}}-management-{kind}-role-{}",
+            suffix
+        ),
+    };
     fragment.resource_blocks.push(resource_block(
         "azurerm_role_definition",
-        &format!("{label}_management_role"),
+        &management_role_address(label, &role.scope, role.scope_kind),
         [
-            attr("name", expr::template(role_definition.name.clone())),
+            attr("name", expr::template(name)),
             attr(
                 "role_definition_id",
-                expr::raw(
-                    "uuidv5(\"oid\", \"deployment:azure:mgmt-role-def:${local.resource_prefix}\")",
-                ),
+                expr::raw(format!(
+                    "uuidv5(\"oid\", \"deployment:azure:mgmt-role-def:${{local.resource_prefix}}:{}\")",
+                    role.scope
+                )),
             ),
-            attr("scope", management_role_definition_scope(&role_definition)),
+            attr("scope", expr::template(role.scope.clone())),
             attr(
                 "description",
-                Expression::String(role_definition.description),
+                Expression::String(format!(
+                    "Management role for Terraform resource '{label}'. Scope: {kind}."
+                )),
             ),
             nested(block(
                 "permissions",
                 [
-                    attr("actions", string_array(role_definition.actions)),
-                    attr("data_actions", string_array(role_definition.data_actions)),
+                    attr("actions", string_array(role.actions)),
+                    attr("data_actions", string_array(role.data_actions)),
                     attr("not_actions", Expression::Array(Vec::new())),
                     attr("not_data_actions", Expression::Array(Vec::new())),
                 ],
             )),
             attr(
                 "assignable_scopes",
-                Expression::Array(
-                    role_definition
-                        .assignable_scopes
-                        .into_iter()
-                        .map(expr::template)
-                        .collect(),
-                ),
+                Expression::Array(vec![expr::template(role.scope)]),
             ),
         ],
     ));
+}
+
+const OWN_SUBSCRIPTION_SCOPE: &str = "/subscriptions/${var.azure_subscription_id}";
+const OWN_RESOURCE_GROUP_SCOPE: &str =
+    "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}";
+
+/// `None` for the deployment's own subscription and resource group. Any other scope (an inline
+/// permission set may name another resource group) gets a short, stable hash of the full scope,
+/// so its role has its own address and Azure name even when two group names differ only in
+/// punctuation.
+fn scope_suffix(scope: &str) -> Option<String> {
+    if scope == OWN_SUBSCRIPTION_SCOPE || scope == OWN_RESOURCE_GROUP_SCOPE {
+        return None;
+    }
+    // FNV-1a: stable across Rust versions and platforms, unlike the std hasher.
+    let hash = scope.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+    });
+    Some(format!("{:08x}", hash >> 32))
+}
+
+fn management_role_address(label: &str, scope: &str, kind: AzureManagementScopeKind) -> String {
+    let base = match kind {
+        AzureManagementScopeKind::Subscription => format!("{label}_management_subscription_role"),
+        AzureManagementScopeKind::ResourceGroup => {
+            format!("{label}_management_resource_group_role")
+        }
+    };
+    match scope_suffix(scope) {
+        None => base,
+        Some(suffix) => format!("{base}_{suffix}"),
+    }
 }
 
 fn emit_management_assignments(
@@ -335,7 +384,8 @@ fn emit_management_assignments(
             continue;
         }
 
-        let role_definition_id = management_role_definition_id(label, &binding.role_definition);
+        let role_definition_id =
+            management_role_definition_id(label, &binding.role_definition, &binding.scope)?;
         let assignment_name = format!(
             "deployment:azure:mgmt-role-assign:${{local.resource_prefix}}:uami:{binding_index}"
         );
@@ -487,44 +537,6 @@ struct ManagementGrants {
     unconditional_bindings: BTreeSet<String>,
 }
 
-fn combined_management_role_definition(
-    label: &str,
-    grant_plan: &AzureGrantPlan,
-) -> Option<AzureRoleDefinition> {
-    if grant_plan.custom_roles.is_empty() {
-        return None;
-    }
-
-    let mut actions = Vec::new();
-    let mut data_actions = Vec::new();
-    let mut assignable_scopes = Vec::new();
-
-    for custom_role in &grant_plan.custom_roles {
-        actions.extend(custom_role.role_definition.actions.clone());
-        data_actions.extend(custom_role.role_definition.data_actions.clone());
-        assignable_scopes.extend(custom_role.role_definition.assignable_scopes.clone());
-    }
-
-    actions.sort();
-    actions.dedup();
-    data_actions.sort();
-    data_actions.dedup();
-    assignable_scopes.sort();
-    assignable_scopes.dedup();
-
-    Some(AzureRoleDefinition {
-        name: "${local.resource_prefix}-management-role".to_string(),
-        id: None,
-        is_custom: true,
-        description: format!("Management role for Terraform resource '{label}'"),
-        actions,
-        not_actions: vec![],
-        data_actions,
-        not_data_actions: vec![],
-        assignable_scopes,
-    })
-}
-
 fn resolve_permission_set(reference: &&PermissionSetReference) -> Option<PermissionSet> {
     reference.resolve(|name| alien_permissions::get_permission_set(name).cloned())
 }
@@ -544,30 +556,29 @@ fn resolve_stack_management_permission_set(
     }
 }
 
-fn management_role_definition_id(label: &str, role_ref: &AzureRoleDefinitionRef) -> Expression {
+fn management_role_definition_id(
+    label: &str,
+    role_ref: &AzureRoleDefinitionRef,
+    scope: &str,
+) -> Result<Expression> {
     match role_ref {
         AzureRoleDefinitionRef::Predefined { role_definition_id } => {
-            expr::template(role_definition_id.clone())
+            Ok(expr::template(role_definition_id.clone()))
         }
-        AzureRoleDefinitionRef::Custom { .. } => expr::traversal([
-            "azurerm_role_definition",
-            &format!("{label}_management_role"),
-            "role_definition_resource_id",
-        ]),
-    }
-}
-
-fn management_role_definition_scope(role_definition: &AzureRoleDefinition) -> Expression {
-    if role_definition
-        .assignable_scopes
-        .iter()
-        .any(|scope| scope == "/subscriptions/${var.azure_subscription_id}")
-    {
-        expr::raw("\"/subscriptions/${var.azure_subscription_id}\"")
-    } else {
-        expr::raw(
-            "\"/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}\"",
-        )
+        AzureRoleDefinitionRef::Custom { .. } => {
+            let kind = AzureManagementScopeKind::of(scope).ok_or_else(|| {
+                alien_error::AlienError::new(ErrorData::GenericError {
+                    message: format!(
+                        "custom management grant bound at '{scope}': stack-level grants bind at the subscription or the deployment resource group"
+                    ),
+                })
+            })?;
+            Ok(expr::traversal([
+                "azurerm_role_definition",
+                &management_role_address(label, scope, kind),
+                "role_definition_resource_id",
+            ]))
+        }
     }
 }
 

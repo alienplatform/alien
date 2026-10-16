@@ -25,8 +25,11 @@ use alien_core::{
     ResourceLifecycle, Result, Sandbox, SandboxCode, SandboxEgress, ServiceAccount,
     ALIEN_MANAGED_BY_TAG_KEY, ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY,
 };
-use alien_error::AlienError;
-use alien_permissions::BindingTarget;
+use alien_error::{AlienError, Context};
+use alien_permissions::{
+    aws_resource_policies::without_refs_the_stack_policy_grants,
+    generators::AwsRuntimePermissionsGenerator, BindingTarget,
+};
 use hcl::expr::Expression;
 
 /// Permission-set id prefix for this resource type.
@@ -632,8 +635,11 @@ fn emit_remote_bindings_policy(ctx: &EmitContext<'_>, fragment: &mut TfFragment)
     )
 }
 
-/// Attaches each profile's granted `sandbox/*` sets to that profile's role, scoped to this
-/// sandbox's image.
+/// Attaches the `sandbox/*` sets a profile grants on this sandbox, by id or under `"*"`, to that
+/// profile's role, scoped to this sandbox's image.
+///
+/// A `"*"` set the service account's stack-level policy already grants for this image is left
+/// out, by the same rule the runtime applies ([`without_refs_the_stack_policy_grants`]).
 ///
 /// Emitted for both lifecycles: a Live image is built after apply, under the same
 /// `${local.resource_prefix}-<id>` name, so a name-scoped grant written now covers it. Without
@@ -647,12 +653,29 @@ fn emit_profile_policies(ctx: &EmitContext<'_>, fragment: &mut TfFragment) -> Re
             continue;
         };
         let mut seen = std::collections::HashSet::new();
-        let granted = [ctx.resource_id, "*"]
+        let granted: Vec<PermissionSetReference> = [ctx.resource_id, "*"]
             .into_iter()
             .filter_map(|key| profile.0.get(key))
             .flatten()
             .filter(|reference| reference.id().starts_with(PERMISSION_SET_PREFIX))
-            .filter(|reference| seen.insert(reference.id().to_string()));
+            .filter(|reference| seen.insert(reference.id().to_string()))
+            .cloned()
+            .collect();
+        let granted = without_refs_the_stack_policy_grants(
+            ctx.stack,
+            profile_name,
+            profile,
+            ctx.resource_id,
+            granted,
+            &AwsRuntimePermissionsGenerator::new(),
+            &context,
+        )
+        .context(ErrorData::GenericError {
+            message: format!(
+                "failed to select profile '{profile_name}' policies for sandbox '{}'",
+                ctx.resource_id
+            ),
+        })?;
         for reference in granted {
             let permission_set = reference
                 .resolve(|name| alien_permissions::get_permission_set(name).cloned())

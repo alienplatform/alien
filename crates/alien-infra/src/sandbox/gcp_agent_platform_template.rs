@@ -20,8 +20,8 @@ use crate::error::{ErrorData, Result};
 use crate::sandbox::GcpAgentPlatformEngineController;
 use alien_core::sandbox_image::GCP_AGENT_PLATFORM;
 use alien_core::{
-    GcpAgentPlatformEngine, ResourceOutputs, ResourceRef, ResourceStatus, Sandbox, SandboxCode,
-    SandboxLimits,
+    DeploymentConfig, GcpAgentPlatformEngine, ResourceOutputs, ResourceRef, ResourceStatus,
+    Sandbox, SandboxCode, SandboxLimits,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_gcp_clients::agent_platform::{
@@ -43,7 +43,8 @@ fn last_segment(name: &str) -> &str {
 ///
 /// The template is immutable, so any of these differing between the desired and previous
 /// declaration means the old template cannot be updated in place — it is torn down and rebuilt.
-/// `image` is the reference the spec names, digest or tag, so a re-pushed tag moves nothing here.
+/// `image` is the declared reference, digest or tag, before [`pulled_image`] resolves its host, so
+/// a re-pushed tag moves nothing here.
 /// The whole `SandboxLimits` is compared but only cpu and memory reach the body, so a disk-only
 /// edit replaces a template with a byte-identical one; `max_processes` cannot vary at all, because
 /// `process_limit: false` refuses it at plan time. The `bool` is `internet_access`, which picks
@@ -55,8 +56,7 @@ fn template_identity(sandbox: &Sandbox) -> Result<(String, SandboxLimits, bool)>
         SandboxCode::Image { image } => image.clone(),
         SandboxCode::Source { .. } => {
             return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: "no sandbox backend builds an image from source; give code.image a \
-                          prebuilt reference"
+                message: "the sandbox still has unbuilt source code. Run 'alien build' first"
                     .to_string(),
                 resource_id: Some(sandbox.id().to_string()),
             }));
@@ -64,6 +64,67 @@ fn template_identity(sandbox: &Sandbox) -> Result<(String, SandboxLimits, bool)>
     };
     let internet_access = internet_access_or_refuse(sandbox)?;
     Ok((image, sandbox.resolved_limits(), internet_access))
+}
+
+/// The image Agent Platform pulls. Agent Platform pulls from the registry directly, as its own
+/// service agent, which the manager's registry grant names; it cannot pull through the manager's
+/// proxy. An image in a per-project repository on any host but Artifact Registry's own was pushed
+/// through the manager, so it is named on the native registry host, whichever host the release
+/// stamped on it. Any other reference is pulled as declared, including one already on an Artifact
+/// Registry host, whose region the native host may not share.
+fn pulled_image(
+    image: &str,
+    deployment_config: &DeploymentConfig,
+    resource_id: &str,
+) -> Result<String> {
+    let Some((host, path)) = image.split_once('/') else {
+        return Ok(image.to_string());
+    };
+    if host.ends_with("-docker.pkg.dev") || per_project_image_project_id(path).is_none() {
+        return Ok(image.to_string());
+    }
+    match (
+        deployment_config.native_image_host.as_deref(),
+        deployment_config.manager_url.is_some(),
+    ) {
+        (Some(native_host), _) => Ok(format!("{}/{path}", native_host.trim_end_matches('/'))),
+        // The manager derives the native host from its registry binding each time it hands out
+        // this config, so a binding it could not load is retried, not refused.
+        (None, true) => Err(AlienError::new(ErrorData::DependencyNotReady {
+            resource_id: resource_id.to_string(),
+            dependency_id: "native image registry".to_string(),
+        })),
+        (None, false) => Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+            message: format!(
+                "cannot name '{image}' for Agent Platform to pull: it is in a manager's \
+                 per-project repository, and the deployment has no manager to name that \
+                 registry's native host"
+            ),
+            resource_id: Some(resource_id.to_string()),
+        })),
+    }
+}
+
+/// The Alien project whose per-project repository `path` (a reference without its host) is in:
+/// `{gcpProject}/{repository}/{projectId}/...`, where `repository` is the name
+/// [`alien_core::gar_repository::project_repository`] gives `projectId`. `None` for any other path.
+fn per_project_image_project_id(path: &str) -> Option<&str> {
+    let name = path.split_once('@').map_or(path, |(name, _)| name);
+    let name = match name.rsplit_once(':') {
+        Some((name, tag)) if !tag.contains('/') => name,
+        _ => name,
+    };
+    let (_, repository_path) = name.split_once('/')?;
+    let (repository, rest) = repository_path.split_once('/')?;
+    let project_id = rest.split('/').next()?;
+    // The deployment does not carry the registry's repository prefix, so it is read back from the
+    // name; `project_id_for_path` then applies the naming rule's character and length checks.
+    let suffix = match project_id {
+        "default" => "-default".to_string(),
+        id => format!("-prj-{}", id.strip_prefix("prj_")?),
+    };
+    let prefix = repository.strip_suffix(suffix.as_str())?;
+    alien_core::gar_repository::project_id_for_path(repository_path, prefix)
 }
 
 /// The egress switch, or a refusal naming the sandbox and both accepted modes.
@@ -98,8 +159,10 @@ fn served_internet_access(template: &SandboxEnvironmentTemplate) -> bool {
 fn build_template_body(
     sandbox: &Sandbox,
     display_name: &str,
+    deployment_config: &DeploymentConfig,
 ) -> Result<SandboxEnvironmentTemplate> {
     let (image, limits, internet_access) = template_identity(sandbox)?;
+    let image = pulled_image(&image, deployment_config, sandbox.id())?;
 
     // cpu and memory are the ceilings the API's resource map expresses; disk and max_processes have
     // no field on this template and are enforced by the runtime tier instead.
@@ -193,7 +256,7 @@ impl GcpAgentPlatformTemplateController {
             .engine_id
             .ok_or_else(|| missing_state(&config.id, "engine id from the engine dependency"))?;
         let display_name = format!("{}-{}", ctx.resource_prefix, config.id);
-        let body = build_template_body(config, &display_name)?;
+        let body = build_template_body(config, &display_name, ctx.deployment_config)?;
 
         self.engine = Some(engine.clone());
         self.project_id = Some(gcp_config.project_id.clone());
@@ -488,7 +551,7 @@ impl GcpAgentPlatformTemplateController {
         })?;
 
         let display_name = format!("{}-{}", ctx.resource_prefix, config.id);
-        let body = build_template_body(config, &display_name)?;
+        let body = build_template_body(config, &display_name, ctx.deployment_config)?;
 
         info!(id=%config.id, "sandbox template body changed; creating a replacement");
         let operation =
@@ -1374,8 +1437,8 @@ mod tests {
     #[test]
     fn build_template_body_declares_the_port_the_agent_image_serves() {
         let sandbox = sandbox_with(SandboxEgress::Allow, "ubuntu:24.04", None, None);
-        let body =
-            build_template_body(&sandbox, "agent-sbx").expect("a valid sandbox builds a body");
+        let body = build_template_body(&sandbox, "agent-sbx", &deployment_config(None, None))
+            .expect("a valid sandbox builds a body");
         let wire = serde_json::to_value(&body).expect("the template body serializes");
         assert_eq!(
             wire["customContainerEnvironment"]["ports"],
@@ -1396,7 +1459,7 @@ mod tests {
             None,
             None,
         );
-        let error = build_template_body(&sandbox, "agent-sbx")
+        let error = build_template_body(&sandbox, "agent-sbx", &deployment_config(None, None))
             .expect_err("a hostname list has no representation on Agent Platform");
         assert_eq!(error.code, "RESOURCE_CONFIG_INVALID", "{error}");
         let rendered = error.to_string();
@@ -1407,6 +1470,125 @@ mod tests {
         assert!(
             rendered.contains("allow") && rendered.contains("deny"),
             "names both accepted modes: {rendered}"
+        );
+    }
+
+    fn deployment_config(
+        manager_url: Option<&str>,
+        native_image_host: Option<&str>,
+    ) -> DeploymentConfig {
+        DeploymentConfig::builder()
+            .stack_settings(Default::default())
+            .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                variables: Vec::new(),
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(Default::default())
+            .allow_frozen_changes(false)
+            .maybe_manager_url(manager_url.map(str::to_string))
+            .maybe_native_image_host(native_image_host.map(str::to_string))
+            .build()
+    }
+
+    fn template_image(image: &str, config: &DeploymentConfig) -> Result<String> {
+        let sandbox = sandbox_with(SandboxEgress::Deny, image, None, None);
+        build_template_body(&sandbox, "agent-sbx", config).map(|body| {
+            body.custom_container_environment
+                .and_then(|environment| environment.custom_container_spec)
+                .expect("the body names an image")
+                .image_uri
+        })
+    }
+
+    const NATIVE_HOST: &str = "us-central1-docker.pkg.dev";
+
+    /// Agent Platform cannot pull through the manager's proxy, so an image a release pushed
+    /// through the manager reaches it by its native registry path, whichever host the release
+    /// stamped. The CLI deploying in push mode reaches the manager on a URL other than the public
+    /// host it stamps on images, so the first case has hosts that differ.
+    #[test]
+    fn a_per_project_image_is_sent_by_its_native_registry_path() {
+        for (manager_url, image, native) in [
+            (
+                "http://localhost:8080",
+                "registry.example.com/vendor/artifacts-prj-abc/prj_abc:sbx-agent",
+                "us-central1-docker.pkg.dev/vendor/artifacts-prj-abc/prj_abc:sbx-agent",
+            ),
+            (
+                "https://manager.example.com",
+                "manager.example.com/vendor/artifacts-prj-abc/prj_abc/agent@sha256:0123",
+                "us-central1-docker.pkg.dev/vendor/artifacts-prj-abc/prj_abc/agent@sha256:0123",
+            ),
+            (
+                "https://manager.example.com",
+                "manager.example.com/vendor/artifacts-prj-abc/prj_abc@sha256:0123",
+                "us-central1-docker.pkg.dev/vendor/artifacts-prj-abc/prj_abc@sha256:0123",
+            ),
+            (
+                "https://manager.example.com",
+                "manager.example.com/vendor/artifacts-default/default:sbx-agent",
+                "us-central1-docker.pkg.dev/vendor/artifacts-default/default:sbx-agent",
+            ),
+        ] {
+            let config = deployment_config(Some(manager_url), Some(NATIVE_HOST));
+            assert_eq!(
+                template_image(image, &config).expect("a per-project image has a native path"),
+                native
+            );
+        }
+    }
+
+    /// Only a per-project repository is moved to the native host: any other reference is already
+    /// pullable where it is, including one on the manager's own host, and a repository whose name
+    /// and project path disagree is not a per-project repository. A per-project path already on an
+    /// Artifact Registry host stays there, because the same path in another region is a different
+    /// repository.
+    #[test]
+    fn a_native_or_public_image_is_sent_as_declared() {
+        let config = deployment_config(Some("https://manager.example.com"), Some(NATIVE_HOST));
+        for image in [
+            "us-central1-docker.pkg.dev/proj/repo/sandbox:v1",
+            "europe-west1-docker.pkg.dev/acme/artifacts-default/default:sbx",
+            "europe-west1-docker.pkg.dev/acme/artifacts-prj-abc/prj_abc/agent@sha256:0123",
+            "ghcr.io/acme/sandbox:v1",
+            "ubuntu:24.04",
+            "manager.example.com/proj/repo/default:sbx-abc-agent",
+            "ghcr.io/acme/tools-prj-abc/prj_other:v1",
+        ] {
+            assert_eq!(
+                template_image(image, &config).expect("a pullable image is accepted"),
+                image
+            );
+        }
+    }
+
+    /// The manager fills in the native host from a registry binding it may fail to load once, so a
+    /// per-project image without one waits for the next pass instead of failing the deployment.
+    #[test]
+    fn a_per_project_image_without_a_native_host_is_retried() {
+        let error = template_image(
+            "registry.example.com/vendor/artifacts-prj-abc/prj_abc:sbx-agent",
+            &deployment_config(Some("https://manager.example.com"), None),
+        )
+        .expect_err("nothing names the image natively yet");
+        assert_eq!(error.code, "DEPENDENCY_NOT_READY", "{error}");
+        assert!(error.retryable, "{error}");
+    }
+
+    /// With no manager, nothing will ever name the native host, so the image is refused.
+    #[test]
+    fn a_per_project_image_without_a_manager_is_refused() {
+        let error = template_image(
+            "registry.example.com/vendor/artifacts-prj-abc/prj_abc:sbx-agent",
+            &deployment_config(None, None),
+        )
+        .expect_err("nothing can name the image natively");
+        assert_eq!(error.code, "RESOURCE_CONFIG_INVALID", "{error}");
+        assert!(!error.retryable, "{error}");
+        assert!(
+            error.to_string().contains("prj_abc:sbx-agent"),
+            "names the image: {error}"
         );
     }
 }
