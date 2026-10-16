@@ -689,35 +689,53 @@ async fn destroy_tracked_deployment(
         delay_strategy: alien_deployment::runner::DelayStrategy::Inline,
     };
 
-    let runner_result = match alien_deployment::runner::run_step_loop(
-        &mut current,
-        &mut config,
-        &client_config,
-        &tracked_deployment.deployment_id,
-        &policy,
-        &transport,
-        None,
-        None,
-    )
-    .await
-    {
-        Ok(result)
-            if result.loop_result.outcome == LoopOutcome::Success
-                && current.status == DeploymentStatus::TeardownRequired =>
+    // A deployment already handed to setup teardown resumes there. The runtime loop
+    // stops at `teardown-failed` as a terminal failure, so running it first would
+    // never retry a failed setup teardown.
+    let resumed_setup_teardown =
+        alien_deployment::setup_teardown::run_setup_teardown_after_handoff(
+            &mut current,
+            &mut config,
+            &client_config,
+            &tracked_deployment.deployment_id,
+            &policy,
+            &transport,
+            None,
+        )
+        .await;
+    let runner_result = match resumed_setup_teardown {
+        Ok(Some(result)) => Ok(result),
+        Err(error) => Err(error),
+        Ok(None) => match alien_deployment::runner::run_step_loop(
+            &mut current,
+            &mut config,
+            &client_config,
+            &tracked_deployment.deployment_id,
+            &policy,
+            &transport,
+            None,
+            None,
+        )
+        .await
         {
-            alien_deployment::setup_teardown::run_setup_teardown_after_handoff(
-                &mut current,
-                &mut config,
-                &client_config,
-                &tracked_deployment.deployment_id,
-                &policy,
-                &transport,
-                None,
-            )
-            .await
-            .map(|setup_result| setup_result.unwrap_or(result))
-        }
-        other => other,
+            Ok(result)
+                if result.loop_result.outcome == LoopOutcome::Success
+                    && current.status == DeploymentStatus::TeardownRequired =>
+            {
+                alien_deployment::setup_teardown::run_setup_teardown_after_handoff(
+                    &mut current,
+                    &mut config,
+                    &client_config,
+                    &tracked_deployment.deployment_id,
+                    &policy,
+                    &transport,
+                    None,
+                )
+                .await
+                .map(|setup_result| setup_result.unwrap_or(result))
+            }
+            other => other,
+        },
     };
     let semantic_failure_status = runner_result.as_ref().ok().and_then(|result| {
         (result.loop_result.outcome == LoopOutcome::Failure)
@@ -1716,5 +1734,131 @@ mod tests {
             state.lock().unwrap().acquire_authorizations,
             vec![format!("Bearer {DEPLOYMENT_TOKEN}")]
         );
+    }
+
+    /// Running `alien destroy` again after setup teardown failed retries setup teardown
+    /// instead of stopping at the failed status.
+    #[tokio::test]
+    async fn destroy_retries_a_failed_setup_teardown() {
+        #[derive(Default)]
+        struct Calls {
+            deleted: bool,
+            acquire_modes: Vec<String>,
+            reported_statuses: Vec<String>,
+            release_count: usize,
+        }
+        type Recorded = Arc<Mutex<Calls>>;
+
+        fn record() -> serde_json::Value {
+            let mut record = deployment_record();
+            record["status"] = serde_json::json!("teardown-failed");
+            record["stackState"] = serde_json::json!({
+                "platform": "test",
+                "resources": {},
+                "resourcePrefix": "a1234567"
+            });
+            record
+        }
+        async fn deployment(State(state): State<Recorded>) -> Response {
+            if state.lock().unwrap().deleted {
+                return StatusCode::NOT_FOUND.into_response();
+            }
+            Json(record()).into_response()
+        }
+        async fn acquire(
+            State(state): State<Recorded>,
+            headers: HeaderMap,
+            Json(body): Json<serde_json::Value>,
+        ) -> Response {
+            assert_eq!(
+                headers["authorization"],
+                format!("Bearer {DEPLOYMENT_TOKEN}").as_str()
+            );
+            state
+                .lock()
+                .unwrap()
+                .acquire_modes
+                .push(body["acquireMode"].as_str().unwrap_or_default().to_string());
+            Json(serde_json::json!({ "deployments": [{ "deployment": record() }] })).into_response()
+        }
+        async fn reconcile(
+            State(state): State<Recorded>,
+            Json(body): Json<serde_json::Value>,
+        ) -> Response {
+            let status = body["state"]["status"].as_str().unwrap().to_string();
+            let mut state = state.lock().unwrap();
+            state.deleted = status == "deleted";
+            state.reported_statuses.push(status);
+            Json(serde_json::json!({ "success": true, "current": body["state"] })).into_response()
+        }
+        async fn release(State(state): State<Recorded>) -> StatusCode {
+            state.lock().unwrap().release_count += 1;
+            StatusCode::OK
+        }
+
+        let state = Recorded::default();
+        // No delete route: retrying setup teardown must not request runtime deletion again.
+        let app = Router::new()
+            .route("/v1/deployments/{id}", get(deployment))
+            .route("/v1/sync/acquire", post(acquire))
+            .route("/v1/sync/reconcile", post(reconcile))
+            .route("/v1/sync/release", post(release))
+            .with_state(state.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind manager");
+        let manager_url = format!("http://{}", listener.local_addr().expect("manager address"));
+        tokio::spawn(async move { axum::serve(listener, app).await.expect("serve manager") });
+
+        let user_http_client =
+            crate::auth::client_with_auth_and_workspace("Bearer user-session", "ws-name")
+                .expect("user client");
+        let manager_ctx = ManagerContext {
+            manager_url: manager_url.clone(),
+            manager_name: None,
+            manager_is_system: None,
+            manager_cloud: None,
+            client: alien_manager_api::Client::new_with_client(
+                &manager_url,
+                user_http_client.clone(),
+            ),
+            http_client: user_http_client,
+            auth_token: Some("user-session".to_string()),
+            repository_name: None,
+            repository_uri: None,
+            workspace: Some("ws-name".to_string()),
+        };
+        let tracked = TrackedDeployment {
+            name: "test".to_string(),
+            deployment_id: "dep_test".to_string(),
+            api_key: DEPLOYMENT_TOKEN.to_string(),
+            workspace_id: "ws_test".to_string(),
+            project_id: "proj_test".to_string(),
+        };
+        let args = DestroyArgs {
+            token: None,
+            name: "test".to_string(),
+            platform: Some("test".to_string()),
+            force: false,
+        };
+
+        destroy_tracked_deployment(
+            &args,
+            Platform::Test,
+            &tracked,
+            manager_ctx,
+            FixedSteps::new(&["Resolve deployment", "Resolve manager", "Delete resources"]),
+        )
+        .await
+        .expect("destroy should retry setup teardown and finish the deletion");
+
+        let state = state.lock().unwrap();
+        assert!(state.deleted);
+        assert_eq!(state.acquire_modes, vec!["setup-teardown"]);
+        assert_eq!(
+            state.reported_statuses,
+            vec!["teardown-required", "teardown-required", "deleted"]
+        );
+        assert_eq!(state.release_count, 1);
     }
 }
