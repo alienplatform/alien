@@ -108,6 +108,14 @@ export type StackSettings = {
    */
   publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
+   * Provider quota identities whose preflight failures become visible warnings
+   *
+   * @remarks
+   * for this deployment. Checks still run; deploy-time provider limits still apply.
+   * Unknown identities are rejected. An empty list restores normal blocking.
+   */
+  quotaWarningOverrides?: Array<string> | undefined;
+  /**
    * Whether setup remains a separate administrator operation.
    */
   setupManagement?: SetupManagement | undefined;
@@ -137,6 +145,7 @@ export const StackSettings$inboundSchema: z.ZodType<StackSettings, unknown> = z
     publicEndpoints: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
+    quotaWarningOverrides: z.array(z.string()).optional(),
     setupManagement: SetupManagement$inboundSchema.optional(),
     telemetry: TelemetryMode$inboundSchema.optional(),
     updates: UpdatesMode$inboundSchema.optional(),
@@ -155,6 +164,7 @@ export type StackSettings$Outbound = {
   kubernetes?: KubernetesSettings$Outbound | null | undefined;
   network?: NetworkSettings$Outbound | null | undefined;
   publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
+  quotaWarningOverrides?: Array<string> | undefined;
   setupManagement?: string | undefined;
   telemetry?: string | undefined;
   updates?: string | undefined;
@@ -178,6 +188,7 @@ export const StackSettings$outboundSchema: z.ZodType<
   publicEndpoints: z.nullable(
     z.record(z.string(), z.record(z.string(), z.string())),
   ).optional(),
+  quotaWarningOverrides: z.array(z.string()).optional(),
   setupManagement: SetupManagement$outboundSchema.optional(),
   telemetry: TelemetryMode$outboundSchema.optional(),
   updates: UpdatesMode$outboundSchema.optional(),
