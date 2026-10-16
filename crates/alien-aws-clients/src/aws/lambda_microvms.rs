@@ -959,9 +959,12 @@ mod tests {
         let path = format!("/{API_VERSION}/microvm-images/test-image/versions");
         let first = server
             .mock_async(|when, then| {
-                when.method(GET)
-                    .path(&path)
-                    .query_param_missing("nextToken");
+                when.method(GET).path(&path).matches(|request| {
+                    request
+                        .query_params
+                        .as_ref()
+                        .is_none_or(|params| params.iter().all(|(key, _)| key != "nextToken"))
+                });
                 then.status(200).json_body(serde_json::json!({
                     "items": [{"imageVersion":"1.0", "state":"SUCCESSFUL"}],
                     "nextToken":"next-page"
@@ -1002,6 +1005,21 @@ mod tests {
         );
         first.assert_async().await;
         second.assert_async().await;
+
+        second.delete_async().await;
+        let unavailable = server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path(&path)
+                    .query_param("nextToken", "next-page");
+                then.status(503).body("inventory temporarily unavailable");
+            })
+            .await;
+        client
+            .list_microvm_image_versions("test-image")
+            .await
+            .expect_err("a failed later page must not return partial inventory");
+        assert!(unavailable.hits_async().await > 0);
     }
 
     /// The declared ceiling has to reach the wire: Lambda is what terminates the MicroVM when it

@@ -2607,11 +2607,14 @@ mod tests {
     async fn a_failed_roll_keeps_the_previous_version_serving() {
         const NEXT_BUNDLE: &str = "s3://alien-bundles-test/sandbox/bundle-v2.zip";
 
+        let failed_token = Arc::new(Mutex::new(None));
+        let captured_token = failed_token.clone();
         let mut client = MockLambdaMicrovmsApi::new();
         client
             .expect_update_microvm_image()
             .times(1)
-            .returning(|_, _| {
+            .returning(move |_, request| {
+                *captured_token.lock().unwrap() = Some(request.client_token);
                 Ok(UpdateMicrovmImageResponse {
                     image_arn: Some(IMAGE_ARN.to_string()),
                     name: Some("test-agents".to_string()),
@@ -2679,6 +2682,51 @@ mod tests {
             .expect("binding params")
             .expect("the previous version keeps its binding");
         assert_eq!(binding["imageVersion"], "1.0");
+        assert_eq!(controller.build_retry_generation, 1);
+        let restored: AwsSandboxController =
+            serde_json::from_value(serde_json::to_value(controller).unwrap()).unwrap();
+        drop(executor);
+        let mut client = MockLambdaMicrovmsApi::new();
+        client
+            .expect_update_microvm_image()
+            .times(1)
+            .returning(move |_, request| {
+                assert_ne!(
+                    Some(request.client_token),
+                    *failed_token.lock().unwrap(),
+                    "retry must not replay the failed build token"
+                );
+                Ok(UpdateMicrovmImageResponse {
+                    image_arn: Some(IMAGE_ARN.to_string()),
+                    image_version: Some("3.0".to_string()),
+                    name: None,
+                    state: None,
+                })
+            });
+        let mut resumed = SingleControllerExecutor::builder()
+            .resource(sandbox_with_bundle(NEXT_BUNDLE))
+            .controller(restored)
+            .platform(Platform::Aws)
+            .service_provider(provider(client))
+            .build()
+            .await
+            .unwrap();
+        resumed
+            .step()
+            .await
+            .expect("failed poll hands off to a fresh build");
+        resumed
+            .step()
+            .await
+            .expect("fresh token submits a replacement");
+        assert_eq!(
+            resumed
+                .internal_state::<AwsSandboxController>()
+                .unwrap()
+                .pending_version
+                .as_deref(),
+            Some("3.0")
+        );
     }
 
     /// An update that changes nothing about the bundle must not rebuild: an image build is

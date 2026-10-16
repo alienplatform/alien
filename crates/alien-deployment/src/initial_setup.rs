@@ -1800,6 +1800,23 @@ mod tests {
 
         let mut lambda = MockLambdaMicrovmsApi::new();
         let c = cloud.clone();
+        lambda
+            .expect_list_microvm_image_versions()
+            .returning(move |_| {
+                Ok(c.lock()
+                    .unwrap()
+                    .version
+                    .iter()
+                    .map(|version| MicrovmImage {
+                        description: None,
+                        image_identifier: None,
+                        image_arn: Some(IMAGE_ARN.to_string()),
+                        image_version: Some(version.clone()),
+                        state: Some("SUCCESSFUL".to_string()),
+                    })
+                    .collect())
+            });
+        let c = cloud.clone();
         lambda.expect_get_microvm_image().returning(move |_| {
             if !c.lock().unwrap().image {
                 return Err(not_found("test-agents"));
