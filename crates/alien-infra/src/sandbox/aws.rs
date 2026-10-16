@@ -45,11 +45,6 @@ const ARCHITECTURE: &str = "ARM_64";
 const BUILD_POLL_INTERVAL: Duration = Duration::from_secs(10);
 const BUILD_MAX_POLLS: u32 = 90;
 
-/// AWS's own ceiling on a MicroVM's life, used as the retention window when a declaration sets
-/// none: a session cannot outlive it, so nothing can still be running on a version older than
-/// this.
-const MAX_SESSION_LIFETIME_SECONDS: i64 = 28_800;
-
 /// A version a roll replaced, and when it stopped serving.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -85,11 +80,17 @@ pub struct AwsSandboxController {
     /// no claim that the new release is serving.
     #[serde(default)]
     pub(crate) pending_bundle_uri: Option<String>,
-    /// Versions rolls replaced, each retained while sessions started from it may still be
-    /// running. A list, not a slot: two rolls inside one retention window would otherwise
-    /// overwrite the first retired version and leak it forever.
+    /// Previously published versions. Retained for checkpoint compatibility and
+    /// explicit recovery; elapsed time since promotion does not prove consumer drain.
     #[serde(default)]
     pub(crate) retired_versions: Vec<RetiredVersion>,
+    /// Accepted deletion, retained until the provider confirms absence.
+    #[serde(default)]
+    pub(crate) deleting_version: Option<String>,
+    /// Changes only after a build is observed failed, so retries do not
+    /// replay an idempotency receipt for a deleted failed build.
+    #[serde(default)]
+    pub(crate) build_retry_generation: u64,
     /// Region the MicroVMs run in. Held here because the binding is built without a context.
     pub(crate) region: Option<String>,
     /// Role passed to `CreateMicrovmImage`. Setup owns it because `sandbox/provision` grants
@@ -186,7 +187,8 @@ impl AwsSandboxController {
             &bundle_uri,
             tier.baseline_memory_mib,
         )
-        .with_supervisor(config);
+        .with_supervisor(config)
+        .with_receipt()?;
 
         // A create whose response never reached state leaves an image under this
         // account-unique name, and a second create would collide with it. Read first and adopt
@@ -228,11 +230,8 @@ impl AwsSandboxController {
                     created.image_version,
                 )
             }
-            // An image under this name already exists: a create whose response was lost. Its
-            // running version cannot be tied to any bundle — the record names none — and a
-            // release may have changed the bundle since, so only the identity is adopted and the
-            // desired bundle is rolled onto it. One extra build in a rare recovery, never a wrong
-            // bundle recorded as deployed.
+            // Recover an accepted request by its exact receipt. Legacy images without
+            // a receipt need a build before we can claim the desired bundle is deployed.
             Some(image) => {
                 let identifier = image.image_arn.clone().ok_or_else(|| {
                     AlienError::new(ErrorData::CloudPlatformError {
@@ -242,29 +241,48 @@ impl AwsSandboxController {
                         resource_id: Some(config.id.clone()),
                     })
                 })?;
-                let rolled = client
-                    .update_microvm_image(&identifier, inputs.update_request())
+                let versions = client
+                    .list_microvm_image_versions(&identifier)
                     .await
                     .context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to roll adopted MicroVM image '{image_name}' onto the desired bundle"
-                        ),
+                        message: format!("Failed to recover MicroVM image '{image_name}' build"),
                         resource_id: Some(config.id.clone()),
                     })?;
-                // The version this roll replaces starts its retention window now. It never
-                // passes through `active_version` — it was never observed ACTIVE here — so
-                // promotion would not retire it, and nothing would ever reap it.
-                if let Some(replaced) = image.image_version.clone() {
-                    self.retired_versions.push(RetiredVersion {
-                        version: replaced,
-                        retired_at: chrono::Utc::now(),
-                    });
+                if let Some(recovered) = versions.into_iter().find(|version| {
+                    version.description.as_deref() == Some(inputs.description.as_str())
+                }) {
+                    (
+                        "CreateMicrovmImage",
+                        Some(identifier),
+                        recovered.image_version,
+                    )
+                } else {
+                    // An older build has no matching receipt. Reconcile failed
+                    // inventory before the create-recovery request, too.
+                    self.image_identifier = Some(identifier.clone());
+                    if self.reconcile_image_inventory(&client, &config.id).await? {
+                        return Ok(HandlerAction::Continue {
+                            state: CreatingImage,
+                            suggested_delay: Some(BUILD_POLL_INTERVAL),
+                        });
+                    }
+                    let rolled = client
+                        .update_microvm_image(&identifier, inputs.update_request())
+                        .await
+                        .context(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Failed to rebuild adopted MicroVM image '{image_name}'"
+                            ),
+                            resource_id: Some(config.id.clone()),
+                        })?;
+                    if let Some(replaced) = image.image_version {
+                        self.retired_versions.push(RetiredVersion {
+                            version: replaced,
+                            retired_at: chrono::Utc::now(),
+                        });
+                    }
+                    ("UpdateMicrovmImage", Some(identifier), rolled.image_version)
                 }
-                (
-                    "UpdateMicrovmImage",
-                    rolled.image_arn.or(Some(identifier)),
-                    rolled.image_version,
-                )
             }
         };
 
@@ -349,6 +367,7 @@ impl AwsSandboxController {
                 // again; the serving version, if any, is untouched.
                 self.pending_version = None;
                 self.pending_bundle_uri = None;
+                self.build_retry_generation += 1;
                 // The version's own reason plus each failed build's — the build reason is the
                 // one that says what actually broke (a bad FROM, a denied pull). A generic
                 // error after 160 seconds is the worst debugging experience this resource can
@@ -447,11 +466,15 @@ impl AwsSandboxController {
             }
             self.region = Some(aws_config.region.clone());
 
-            // A Frozen image is setup's: its retired versions are reaped when setup rolls it again,
-            // or removed with the image at teardown. The lifecycle check, not IAM, keeps them from
-            // the runtime identity, which a Live sibling's provision grant can reach.
+            // A Frozen image belongs to setup. The lifecycle check, not incidental
+            // IAM from a Live sibling, prevents runtime inventory mutations.
             if self.owns_image_deletion(ctx, &config.id) {
-                self.reap_retired_versions(&client, &config.id).await?;
+                if self.reconcile_image_inventory(&client, &config.id).await? {
+                    return Ok(HandlerAction::Continue {
+                        state: Ready,
+                        suggested_delay: Some(BUILD_POLL_INTERVAL),
+                    });
+                }
             }
 
             // Session counts require `lambda:ListMicrovms`, which AWS authorizes against no
@@ -543,16 +566,6 @@ impl AwsSandboxController {
 
         info!(sandbox_id = %config.id, bundle = %desired_bundle, "rolling MicroVM image onto a new bundle");
 
-        // Only setup rolls a Frozen image, and the runtime never reaps one, so setup reaps the
-        // versions earlier rolls retired while it holds the credentials to.
-        if resource_lifecycle(ctx, &config.id) == Some(alien_core::ResourceLifecycle::Frozen) {
-            let client = ctx
-                .service_provider
-                .get_aws_microvms_client(aws_config)
-                .await?;
-            self.reap_retired_versions(&client, &config.id).await?;
-        }
-
         Ok(HandlerAction::Continue {
             state: UpdatingImage,
             suggested_delay: None,
@@ -607,26 +620,53 @@ impl AwsSandboxController {
             .get_aws_microvms_client(aws_config)
             .await?;
 
-        let rolled = client
-            .update_microvm_image(
-                &image_identifier,
-                image_build_inputs(
-                    &aws_config.region,
-                    &config.id,
-                    &sandbox_image_name(ctx.resource_prefix, &config.id),
-                    &build_role_arn,
-                    &desired_bundle,
-                    tier.baseline_memory_mib,
-                )
-                .with_supervisor(config)
-                .for_roll(self.active_version.as_deref())
-                .update_request(),
-            )
+        let request = image_build_inputs(
+            &aws_config.region,
+            &config.id,
+            &sandbox_image_name(ctx.resource_prefix, &config.id),
+            &build_role_arn,
+            &desired_bundle,
+            tier.baseline_memory_mib,
+        )
+        .with_supervisor(config)
+        .for_roll(self.active_version.as_deref())
+        .for_retry(self.build_retry_generation)
+        .with_receipt()?
+        .update_request();
+        let inventory = client
+            .list_microvm_image_versions(&image_identifier)
             .await
             .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to roll MicroVM image '{image_identifier}'"),
+                message: format!("Failed to recover MicroVM build for '{image_identifier}'"),
                 resource_id: Some(config.id.clone()),
             })?;
+        let recovered = inventory
+            .iter()
+            .find(|version| version.description == request.description);
+        let rolled = if let Some(recovered) = recovered {
+            alien_aws_clients::lambda_microvms::UpdateMicrovmImageResponse {
+                image_arn: recovered.image_arn.clone(),
+                image_version: recovered.image_version.clone(),
+                name: None,
+                state: recovered.state.clone(),
+            }
+        } else {
+            // Saved UpdatingImage retries enter here directly. Accepted builds
+            // are recovered above before any failed inventory can be removed.
+            if self.reconcile_image_inventory(&client, &config.id).await? {
+                return Ok(HandlerAction::Continue {
+                    state: UpdatingImage,
+                    suggested_delay: Some(BUILD_POLL_INTERVAL),
+                });
+            }
+            client
+                .update_microvm_image(&image_identifier, request)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to roll MicroVM image '{image_identifier}'"),
+                    resource_id: Some(config.id.clone()),
+                })?
+        };
 
         let image_version = rolled.image_version.ok_or_else(|| {
             AlienError::new(ErrorData::CloudPlatformError {
@@ -871,9 +911,7 @@ impl AwsSandboxController {
         }
     }
 
-    /// Moves the built version into service and starts the retention clock on the one it
-    /// replaced. Both halves happen together: a gap would either unpublish a working binding or
-    /// leave a retired version with no window.
+    /// Publish only a successfully built version, preserving prior explicit pins.
     fn promote_pending_version(&mut self) {
         let Some(pending) = self.pending_version.take() else {
             return;
@@ -890,57 +928,85 @@ impl AwsSandboxController {
         }
     }
 
-    /// Deletes the versions rolls replaced, once nothing started from them can still be running.
-    ///
-    /// Sessions cannot be enumerated (see the module doc), so the only sound signal is time: a
-    /// MicroVM cannot outlive the declared ceiling, and AWS's own 8-hour maximum stands in when
-    /// the declaration sets none.
-    async fn reap_retired_versions(
+    /// Reconcile provider inventory, including builds absent from legacy checkpoints.
+    /// Successful versions remain protected: old pinned consumers can still launch
+    /// sessions, and deleting a backing image can fault a running or resumed VM.
+    /// Neither promotion age nor new-replica readiness establishes safe deletion.
+    /// Return true while cleanup owns this step, including asynchronous deletion.
+    async fn reconcile_image_inventory(
         &mut self,
         client: &std::sync::Arc<dyn alien_aws_clients::lambda_microvms::LambdaMicrovmsApi>,
         resource_id: &str,
-    ) -> Result<()> {
-        let Some(identifier) = self.image_identifier.clone() else {
-            return Ok(());
+    ) -> Result<bool> {
+        let Some(identifier) = self.image_identifier.as_deref() else {
+            return Ok(false);
         };
-        let window = self
-            .max_lifetime_seconds
-            .map(i64::from)
-            .unwrap_or(MAX_SESSION_LIFETIME_SECONDS);
-        let now = chrono::Utc::now();
-
-        let mut kept = Vec::with_capacity(self.retired_versions.len());
-        let mut pending = std::mem::take(&mut self.retired_versions).into_iter();
-        while let Some(retired) = pending.next() {
-            if (now - retired.retired_at).num_seconds() < window {
-                kept.push(retired);
+        if let Some(version) = self.deleting_version.as_deref() {
+            match client.get_microvm_image_version(identifier, version).await {
+                Ok(_) => return Ok(true),
+                Err(error) if is_remote_resource_absent(&error) => {
+                    self.retired_versions
+                        .retain(|entry| entry.version != version);
+                    self.deleting_version = None;
+                    return Ok(true);
+                }
+                Err(error) => {
+                    return Err(error).context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to confirm image version deletion for '{identifier}'"
+                        ),
+                        resource_id: Some(resource_id.to_string()),
+                    })
+                }
+            }
+        }
+        let inventory = client
+            .list_microvm_image_versions(identifier)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to inventory MicroVM image '{identifier}'"),
+                resource_id: Some(resource_id.to_string()),
+            })?;
+        // AWS refuses to delete the last version. Retry a failed initial build
+        // first, then reclaim it once the replacement exists.
+        if inventory.len() == 1 {
+            return Ok(false);
+        }
+        for version in inventory {
+            let failed = version.state.as_deref() == Some("FAILED");
+            if !failed {
+                continue;
+            }
+            let version = version.image_version.ok_or_else(|| {
+                AlienError::new(ErrorData::CloudPlatformError {
+                    message: format!("MicroVM image '{identifier}' inventory omitted a version"),
+                    resource_id: Some(resource_id.to_string()),
+                })
+            })?;
+            if self.active_version.as_ref() == Some(&version)
+                || self.pending_version.as_ref() == Some(&version)
+            {
                 continue;
             }
             match client
-                .delete_microvm_image_version(&identifier, &retired.version)
+                .delete_microvm_image_version(identifier, &version)
                 .await
             {
                 Ok(()) => {}
                 Err(error) if is_remote_resource_absent(&error) => {}
                 Err(error) => {
-                    // Keep this one and every entry not yet visited for the next tick; the ones
-                    // already deleted stay deleted.
-                    kept.push(retired.clone());
-                    kept.extend(pending);
-                    self.retired_versions = kept;
                     return Err(error).context(ErrorData::CloudPlatformError {
                         message: format!(
-                            "Failed to delete retired MicroVM image '{identifier}' version '{}'",
-                            retired.version
-                        ),
+                        "Failed to delete failed MicroVM image '{identifier}' version '{version}'"
+                    ),
                         resource_id: Some(resource_id.to_string()),
-                    });
+                    })
                 }
             }
-            debug!(sandbox_id = %resource_id, version = %retired.version, "retired MicroVM image version deleted");
+            self.deleting_version = Some(version);
+            return Ok(true);
         }
-        self.retired_versions = kept;
-        Ok(())
+        Ok(false)
     }
 
     /// Whether this controller built the image and may therefore rebuild it: a Live sandbox, or a
@@ -1043,6 +1109,7 @@ fn desired_bundle_uri(config: &Sandbox, region: &str) -> Result<String> {
 ///
 /// `UpdateMicrovmImage` has PUT semantics — a field left out of the roll is dropped from the
 /// new version — so the two requests are built from one value rather than assembled twice.
+#[derive(Clone)]
 struct ImageBuildInputs {
     description: String,
     base_image_arn: String,
@@ -1071,6 +1138,26 @@ impl ImageBuildInputs {
     fn for_roll(mut self, previous_version: Option<&str>) -> Self {
         self.client_token = roll_client_token(&self.client_token, previous_version);
         self
+    }
+
+    fn for_retry(mut self, generation: u64) -> Self {
+        if generation != 0 {
+            let digest = Sha256::digest(format!("{}:retry:{generation}", self.client_token));
+            self.client_token = format!("{digest:x}");
+        }
+        self
+    }
+
+    fn with_receipt(mut self) -> Result<Self> {
+        let encoded = serde_json::to_vec(&self.clone().update_request())
+            .into_alien_error()
+            .context(ErrorData::ResourceConfigInvalid {
+                message: "Cannot encode MicroVM build request".to_string(),
+                resource_id: None,
+            })?;
+        self.client_token = format!("{:x}", Sha256::digest(encoded));
+        self.description = format!("{} [build:{}]", self.description, self.client_token);
+        Ok(self)
     }
 
     fn create_request(
@@ -1372,7 +1459,12 @@ mod tests {
         }
     }
 
-    fn provider(client: MockLambdaMicrovmsApi) -> Arc<MockPlatformServiceProvider> {
+    fn provider(mut client: MockLambdaMicrovmsApi) -> Arc<MockPlatformServiceProvider> {
+        // Most flow tests model an image without abandoned builds. Inventory tests
+        // install their own expectations before this catch-all.
+        client
+            .expect_list_microvm_image_versions()
+            .returning(|_| Ok(vec![]));
         let client = Arc::new(client);
         let mut provider = MockPlatformServiceProvider::new();
         provider
@@ -1419,6 +1511,445 @@ mod tests {
             resource_type: "Microvm".to_string(),
             resource_name: "probe".to_string(),
         })
+    }
+
+    #[tokio::test]
+    async fn legacy_empty_retirement_history_reclaims_failed_inventory() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        client.expect_get_microvm_image().returning(|_| {
+            Ok(MicrovmImage {
+                description: None,
+                image_identifier: Some(IMAGE_ARN.to_string()),
+                image_arn: Some(IMAGE_ARN.to_string()),
+                image_version: Some("1.0".to_string()),
+                state: Some("UPDATED".to_string()),
+            })
+        });
+        client
+            .expect_list_microvm_image_versions()
+            .times(1)
+            .returning(|_| {
+                Ok(vec![
+                    MicrovmImage {
+                        description: None,
+                        image_identifier: None,
+                        image_arn: Some(IMAGE_ARN.to_string()),
+                        image_version: Some("1.0".to_string()),
+                        state: Some("SUCCESSFUL".to_string()),
+                    },
+                    MicrovmImage {
+                        description: None,
+                        image_identifier: None,
+                        image_arn: Some(IMAGE_ARN.to_string()),
+                        image_version: Some("2.0".to_string()),
+                        state: Some("FAILED".to_string()),
+                    },
+                ])
+            });
+        client
+            .expect_delete_microvm_image_version()
+            .withf(|image, version| image == IMAGE_ARN && version == "2.0")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let mut executor = executor(ready_controller(), client).await;
+        executor
+            .step()
+            .await
+            .expect("inventory reconciliation should succeed");
+    }
+
+    /// Exercise quota recovery from a persisted request handler. DELETE acceptance
+    /// does not free the slot: the provider reports the version until two reads.
+    #[tokio::test]
+    async fn saved_build_handler_waits_for_failed_version_absence_before_building() {
+        let inventory = Arc::new(Mutex::new(vec![
+            ("1.0".to_string(), "SUCCESSFUL".to_string()),
+            ("2.0".to_string(), "FAILED".to_string()),
+            ("3.0".to_string(), "SUCCESSFUL".to_string()),
+            ("4.0".to_string(), "IN_PROGRESS".to_string()),
+        ]));
+        let mut client = MockLambdaMicrovmsApi::new();
+        let listed = inventory.clone();
+        client
+            .expect_list_microvm_image_versions()
+            .returning(move |_| {
+                Ok(listed
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .map(|(version, state)| MicrovmImage {
+                        description: None,
+                        image_identifier: None,
+                        image_arn: Some(IMAGE_ARN.to_string()),
+                        image_version: Some(version.clone()),
+                        state: Some(state.clone()),
+                    })
+                    .collect())
+            });
+        client
+            .expect_delete_microvm_image_version()
+            .withf(|_, version| version == "2.0")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let checked = inventory.clone();
+        let mut reads = 0;
+        client
+            .expect_get_microvm_image_version()
+            .withf(|_, version| version == "2.0")
+            .times(2)
+            .returning(move |_, _| {
+                reads += 1;
+                if reads == 1 {
+                    Ok(MicrovmImageVersion {
+                        image_version: Some("2.0".to_string()),
+                        state: Some("FAILED".to_string()),
+                        ..active_version()
+                    })
+                } else {
+                    checked
+                        .lock()
+                        .unwrap()
+                        .retain(|(version, _)| version != "2.0");
+                    Err(not_found())
+                }
+            });
+        let built = inventory.clone();
+        client
+            .expect_update_microvm_image()
+            .times(1)
+            .returning(move |_, _| {
+                let versions = built.lock().unwrap();
+                assert_eq!(
+                    versions.len(),
+                    3,
+                    "quota is freed only on confirmed absence"
+                );
+                assert_eq!(
+                    versions.iter().map(|(v, _)| v.as_str()).collect::<Vec<_>>(),
+                    ["1.0", "3.0", "4.0"],
+                    "published and in-flight versions stay protected"
+                );
+                Ok(UpdateMicrovmImageResponse {
+                    image_version: Some("5.0".to_string()),
+                    image_arn: Some(IMAGE_ARN.to_string()),
+                    name: None,
+                    state: None,
+                })
+            });
+        let mut controller = ready_controller();
+        controller.state = AwsSandboxState::UpdatingImage;
+        let provider = provider(client);
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(sandbox())
+            .controller(controller)
+            .platform(Platform::Aws)
+            .service_provider(provider.clone())
+            .build()
+            .await
+            .unwrap();
+        executor.step().await.expect("delete accepted");
+        let saved = executor.internal_state::<AwsSandboxController>().unwrap();
+        assert_eq!(saved.deleting_version.as_deref(), Some("2.0"));
+        let encoded = serde_json::to_value(&saved).unwrap();
+        let restored: AwsSandboxController = serde_json::from_value(encoded).unwrap();
+        assert_eq!(restored.deleting_version.as_deref(), Some("2.0"));
+        drop(executor);
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(sandbox())
+            .controller(restored)
+            .platform(Platform::Aws)
+            .service_provider(provider)
+            .build()
+            .await
+            .unwrap();
+        executor.step().await.expect("deletion still pending");
+        assert!(executor
+            .internal_state::<AwsSandboxController>()
+            .unwrap()
+            .pending_version
+            .is_none());
+        executor
+            .step()
+            .await
+            .expect("absence confirmed and checkpointed");
+        executor.step().await.expect("next build accepted");
+        assert_eq!(
+            executor
+                .internal_state::<AwsSandboxController>()
+                .unwrap()
+                .pending_version
+                .as_deref(),
+            Some("5.0")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_lost_build_response_is_recovered_without_building_or_deleting_again() {
+        let accepted = Arc::new(Mutex::new(None::<MicrovmImage>));
+        let saved_receipt = accepted.clone();
+        let mut client = MockLambdaMicrovmsApi::new();
+        client
+            .expect_update_microvm_image()
+            .times(1)
+            .returning(move |_, request| {
+                *saved_receipt.lock().unwrap() = Some(MicrovmImage {
+                    description: request.description,
+                    image_identifier: None,
+                    image_arn: Some(IMAGE_ARN.to_string()),
+                    image_version: Some("2.0".to_string()),
+                    state: Some("SUCCESSFUL".to_string()),
+                });
+                Err(AlienError::new(CloudClientErrorData::GenericError {
+                    message: "response lost after accepting the build".to_string(),
+                }))
+            });
+        let mut controller = ready_controller();
+        controller.state = AwsSandboxState::UpdatingImage;
+        let mut first = executor(controller, client).await;
+        first
+            .step()
+            .await
+            .expect_err("the transport failure surfaces");
+        let checkpoint =
+            serde_json::to_value(first.internal_state::<AwsSandboxController>().unwrap()).unwrap();
+        drop(first);
+        let restored: AwsSandboxController = serde_json::from_value(checkpoint).unwrap();
+        let mut client = MockLambdaMicrovmsApi::new();
+        client
+            .expect_list_microvm_image_versions()
+            .returning(move |_| {
+                Ok(vec![accepted
+                    .lock()
+                    .unwrap()
+                    .clone()
+                    .expect("accepted receipt")])
+            });
+        client
+            .expect_get_microvm_image_version()
+            .withf(|_, version| version == "2.0")
+            .times(1)
+            .returning(|_, _| {
+                Ok(MicrovmImageVersion {
+                    image_version: Some("2.0".to_string()),
+                    ..active_version()
+                })
+            });
+        let mut resumed = executor(restored, client).await;
+        resumed.step().await.expect("recover exact request receipt");
+        assert_eq!(
+            resumed
+                .internal_state::<AwsSandboxController>()
+                .unwrap()
+                .pending_version
+                .as_deref(),
+            Some("2.0")
+        );
+        resumed
+            .step()
+            .await
+            .expect("observe accepted build readiness");
+        assert_eq!(
+            resumed
+                .internal_state::<AwsSandboxController>()
+                .unwrap()
+                .active_version
+                .as_deref(),
+            Some("2.0")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_lost_create_response_recovers_the_accepted_version() {
+        let accepted = Arc::new(Mutex::new(None::<MicrovmImage>));
+        let saved = accepted.clone();
+        let mut client = MockLambdaMicrovmsApi::new();
+        client
+            .expect_get_microvm_image()
+            .returning(|_| Err(not_found()));
+        client
+            .expect_create_microvm_image()
+            .times(1)
+            .returning(move |request| {
+                *saved.lock().unwrap() = Some(MicrovmImage {
+                    description: request.description,
+                    image_identifier: None,
+                    image_arn: Some(IMAGE_ARN.to_string()),
+                    image_version: Some("1.0".to_string()),
+                    state: Some("SUCCESSFUL".to_string()),
+                });
+                Err(AlienError::new(CloudClientErrorData::GenericError {
+                    message: "create response lost after acceptance".to_string(),
+                }))
+            });
+        let mut first = executor(runtime_seeded_controller(), client).await;
+        first
+            .run_until_terminal()
+            .await
+            .expect_err("transport error surfaces");
+        let checkpoint =
+            serde_json::to_value(first.internal_state::<AwsSandboxController>().unwrap()).unwrap();
+        drop(first);
+        let restored = serde_json::from_value(checkpoint).unwrap();
+        let mut client = MockLambdaMicrovmsApi::new();
+        let found = accepted.clone();
+        client
+            .expect_get_microvm_image()
+            .returning(move |_| Ok(found.lock().unwrap().clone().unwrap()));
+        client
+            .expect_list_microvm_image_versions()
+            .returning(move |_| Ok(vec![accepted.lock().unwrap().clone().unwrap()]));
+        client
+            .expect_get_microvm_image_version()
+            .withf(|_, version| version == "1.0")
+            .returning(|_, _| Ok(active_version()));
+        let mut resumed = executor(restored, client).await;
+        resumed
+            .run_until_terminal()
+            .await
+            .expect("recover without another create or update");
+        let controller = resumed.internal_state::<AwsSandboxController>().unwrap();
+        assert_eq!(controller.active_version.as_deref(), Some("1.0"));
+        assert_eq!(controller.bundle_uri.as_deref(), Some(BUNDLE_URI));
+    }
+
+    #[tokio::test]
+    async fn a_sole_failed_initial_version_is_replaced_before_cleanup() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        client.expect_list_microvm_image_versions().returning(|_| {
+            Ok(vec![MicrovmImage {
+                description: None,
+                image_identifier: None,
+                image_arn: Some(IMAGE_ARN.to_string()),
+                image_version: Some("1.0".to_string()),
+                state: Some("FAILED".to_string()),
+            }])
+        });
+        client
+            .expect_update_microvm_image()
+            .times(1)
+            .returning(|_, _| {
+                Ok(UpdateMicrovmImageResponse {
+                    image_arn: Some(IMAGE_ARN.to_string()),
+                    image_version: Some("2.0".to_string()),
+                    name: None,
+                    state: None,
+                })
+            });
+        let mut controller = ready_controller();
+        controller.state = AwsSandboxState::UpdatingImage;
+        controller.active_version = None;
+        controller.build_retry_generation = 1;
+        let mut executor = executor(controller, client).await;
+        executor
+            .step()
+            .await
+            .expect("replace the failed initial build without forbidden last-version deletion");
+        assert_eq!(
+            executor
+                .internal_state::<AwsSandboxController>()
+                .unwrap()
+                .pending_version
+                .as_deref(),
+            Some("2.0")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_deletion_confirmation_error_preserves_the_receipt_and_blocks_builds() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        client
+            .expect_get_microvm_image_version()
+            .withf(|_, v| v == "2.0")
+            .times(1)
+            .returning(|_, _| {
+                Err(AlienError::new(CloudClientErrorData::GenericError {
+                    message: "inventory unavailable".to_string(),
+                }))
+            });
+        let mut controller = ready_controller();
+        controller.state = AwsSandboxState::UpdatingImage;
+        controller.deleting_version = Some("2.0".to_string());
+        let mut executor = executor(controller, client).await;
+        let error = executor
+            .step()
+            .await
+            .expect_err("confirmation errors must stop the build");
+        assert!(format!("{error:?}").contains("inventory unavailable"));
+        assert_eq!(
+            executor
+                .internal_state::<AwsSandboxController>()
+                .unwrap()
+                .deleting_version
+                .as_deref(),
+            Some("2.0")
+        );
+    }
+
+    #[tokio::test]
+    async fn successful_versions_survive_old_retirement_times_and_failed_inventory_cleanup() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        client.expect_get_microvm_image().returning(|_| {
+            Ok(MicrovmImage {
+                description: None,
+                image_identifier: None,
+                image_arn: Some(IMAGE_ARN.to_string()),
+                image_version: Some("3.0".to_string()),
+                state: Some("UPDATED".to_string()),
+            })
+        });
+        client
+            .expect_list_microvm_image_versions()
+            .times(1)
+            .returning(|_| {
+                Ok([
+                    ("1.0", "SUCCESSFUL"),
+                    ("2.0", "SUCCESSFUL"),
+                    ("3.0", "SUCCESSFUL"),
+                    ("4.0", "IN_PROGRESS"),
+                    ("5.0", "FAILED"),
+                ]
+                .into_iter()
+                .map(|(version, state)| MicrovmImage {
+                    description: None,
+                    image_identifier: None,
+                    image_arn: Some(IMAGE_ARN.to_string()),
+                    image_version: Some(version.to_string()),
+                    state: Some(state.to_string()),
+                })
+                .collect())
+            });
+        client
+            .expect_delete_microvm_image_version()
+            .withf(|_, version| version == "5.0")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let mut controller = ready_controller();
+        controller.active_version = Some("3.0".to_string());
+        controller.pending_version = Some("4.0".to_string());
+        controller.retired_versions = ["1.0", "2.0"]
+            .into_iter()
+            .map(|version| RetiredVersion {
+                version: version.to_string(),
+                retired_at: chrono::Utc::now() - chrono::Duration::days(30),
+            })
+            .collect();
+        let mut executor = executor(controller, client).await;
+        executor
+            .step()
+            .await
+            .expect("reclaim only the failed build");
+        let controller = executor.internal_state::<AwsSandboxController>().unwrap();
+        assert_eq!(
+            controller
+                .retired_versions
+                .iter()
+                .map(|v| v.version.as_str())
+                .collect::<Vec<_>>(),
+            ["1.0", "2.0"]
+        );
+        assert_eq!(controller.active_version.as_deref(), Some("3.0"));
+        assert_eq!(controller.pending_version.as_deref(), Some("4.0"));
+        assert_eq!(controller.deleting_version.as_deref(), Some("5.0"));
     }
 
     // ─────────────── CREATE FLOW ──────────────────────────────────────────
@@ -1469,7 +2000,7 @@ mod tests {
         );
     }
 
-    /// Two rolls inside one retention window must retire two versions, not overwrite the
+    /// Back-to-back rolls must record both previously published versions, not overwrite the
     /// first: a version that leaves the record is a version nothing ever deletes.
     #[test]
     fn back_to_back_rolls_retire_every_replaced_version() {
@@ -1488,7 +2019,7 @@ mod tests {
         assert_eq!(
             retired,
             vec!["1.0", "2.0"],
-            "both replaced versions await their window"
+            "both previously published versions remain recorded"
         );
     }
 
@@ -1532,62 +2063,6 @@ mod tests {
         );
     }
 
-    /// A delete failure mid-sweep must not forget the versions behind it: the failed one and
-    /// every entry not yet visited stay recorded for the next tick.
-    #[tokio::test]
-    async fn a_failed_sweep_keeps_the_unvisited_retired_versions() {
-        let mut client = MockLambdaMicrovmsApi::new();
-        client.expect_get_microvm_image().returning(|_| {
-            Ok(MicrovmImage {
-                image_identifier: None,
-                image_arn: Some(IMAGE_ARN.to_string()),
-                image_version: Some("3.0".to_string()),
-                state: Some("CREATED".to_string()),
-            })
-        });
-        client
-            .expect_delete_microvm_image_version()
-            .withf(|_, version| version == "1.0")
-            .times(1)
-            .returning(|_, _| {
-                Err(AlienError::new(CloudClientErrorData::GenericError {
-                    message: "throttled".to_string(),
-                }))
-            });
-        let mut controller = ready_controller();
-        controller.active_version = Some("3.0".to_string());
-        controller.bundle_uri = Some(BUNDLE_URI.to_string());
-        controller.max_lifetime_seconds = Some(60);
-        controller.retired_versions = vec![
-            RetiredVersion {
-                version: "1.0".to_string(),
-                retired_at: chrono::Utc::now() - chrono::Duration::seconds(3600),
-            },
-            RetiredVersion {
-                version: "2.0".to_string(),
-                retired_at: chrono::Utc::now() - chrono::Duration::seconds(3600),
-            },
-        ];
-        let mut executor = executor(controller, client).await;
-        executor
-            .step()
-            .await
-            .expect_err("the failed delete surfaces");
-        let controller = executor
-            .internal_state::<AwsSandboxController>()
-            .expect("typed controller");
-        let remaining: Vec<&str> = controller
-            .retired_versions
-            .iter()
-            .map(|r| r.version.as_str())
-            .collect();
-        assert_eq!(
-            remaining,
-            vec!["1.0", "2.0"],
-            "nothing behind the failure may be forgotten"
-        );
-    }
-
     /// A create whose response was lost leaves an image under the derived name whose running
     /// version cannot be tied to any bundle. Claiming the desired bundle for it would let a
     /// release that changed in between count as deployed forever, so the probe adopts only the
@@ -1601,6 +2076,7 @@ mod tests {
             .times(1)
             .returning(|_| {
                 Ok(MicrovmImage {
+                    description: None,
                     image_identifier: Some("test-agents".to_string()),
                     image_arn: Some(IMAGE_ARN.to_string()),
                     image_version: Some("1.0".to_string()),
@@ -1628,6 +2104,7 @@ mod tests {
             .returning(|_, _| Ok(active_version()));
         client.expect_get_microvm_image().returning(|_| {
             Ok(MicrovmImage {
+                description: None,
                 image_identifier: None,
                 image_arn: Some(IMAGE_ARN.to_string()),
                 image_version: Some("2.0".to_string()),
@@ -1661,7 +2138,7 @@ mod tests {
                 .map(|r| r.version.as_str())
                 .collect::<Vec<_>>(),
             vec!["1.0"],
-            "the version the roll replaced must be reaped, not left attached forever"
+            "the previous explicit pin remains recorded"
         );
     }
 
@@ -1721,6 +2198,7 @@ mod tests {
             .times(1)
             .returning(|_| {
                 Ok(MicrovmImage {
+                    description: None,
                     image_identifier: Some("test-agents".to_string()),
                     image_arn: Some(IMAGE_ARN.to_string()),
                     image_version: Some("1.0".to_string()),
@@ -1776,7 +2254,7 @@ mod tests {
                 request.name == "test-agents"
                     // Token carries the image name and the bundle, so a new release is a new
                     // logical create and a roll of the same image and bundle sends the same one.
-                    && request.client_token == build_client_token("test-agents", BUNDLE_URI)
+                    && request.description.as_ref().is_some_and(|description| description.ends_with(&format!("[build:{}]", request.client_token)))
                     && request.build_role_arn == BUILD_ROLE_ARN
                     && request.code_artifact.uri == BUNDLE_URI
                     && request.base_image_arn
@@ -1817,6 +2295,7 @@ mod tests {
             .withf(|identifier| identifier == IMAGE_ARN)
             .returning(|_| {
                 Ok(MicrovmImage {
+                    description: None,
                     image_identifier: None,
                     image_arn: Some(IMAGE_ARN.to_string()),
                     image_version: Some("1.0".to_string()),
@@ -2012,7 +2491,7 @@ mod tests {
                         }]
                     // Keyed on this deployment's image, as the create is, not the stack resource
                     // id another deployment in the account shares.
-                    && request.client_token == roll_client_token(&build_client_token("test-agents", NEXT_BUNDLE), Some("1.0"))
+                    && request.description.as_ref().is_some_and(|description| description.ends_with(&format!("[build:{}]", request.client_token)))
                     // PUT semantics: a field left out is dropped, and this is the one that keeps
                     // sandbox contents out of the customer's logs.
                     && request.logging == Some(MicrovmImageLogging::Disabled {})
@@ -2108,7 +2587,7 @@ mod tests {
         );
         assert!(
             !controller.retired_versions.is_empty(),
-            "retention starts at the switch"
+            "the previous explicit pin remains recorded at the switch"
         );
         assert_eq!(
             controller.bundle_uri.as_deref(),
@@ -2280,6 +2759,7 @@ mod tests {
         let mut client = MockLambdaMicrovmsApi::new();
         client.expect_get_microvm_image().returning(|_| {
             Ok(MicrovmImage {
+                description: None,
                 image_identifier: None,
                 image_arn: Some(IMAGE_ARN.to_string()),
                 image_version: Some("1.0".to_string()),
@@ -2367,6 +2847,7 @@ mod tests {
         let mut client = MockLambdaMicrovmsApi::new();
         client.expect_get_microvm_image().returning(|_| {
             Ok(MicrovmImage {
+                description: None,
                 image_identifier: None,
                 image_arn: Some(IMAGE_ARN.to_string()),
                 image_version: Some("1.0".to_string()),
@@ -2415,57 +2896,6 @@ mod tests {
             .await
             .expect_err("the roll must wait for the grant");
         assert_eq!(error.code, "DEPENDENCY_NOT_READY", "{error}");
-    }
-
-    /// Setup's roll is the only time a Frozen image's retired versions can be reaped, so it reaps
-    /// those past their sessions' lifetime and keeps the rest.
-    #[tokio::test]
-    async fn a_setup_roll_reaps_the_versions_earlier_rolls_retired() {
-        let mut client = MockLambdaMicrovmsApi::new();
-        client
-            .expect_delete_microvm_image_version()
-            .withf(|identifier, version| identifier == IMAGE_ARN && version == "1.0")
-            .times(1)
-            .returning(|_, _| Ok(()));
-        let controller = AwsSandboxController {
-            active_version: Some("2.0".to_string()),
-            granted_bundle_uri: Some(NEXT_BUNDLE.to_string()),
-            max_lifetime_seconds: Some(600),
-            retired_versions: vec![
-                RetiredVersion {
-                    version: "1.0".to_string(),
-                    retired_at: chrono::Utc::now() - chrono::Duration::seconds(3600),
-                },
-                RetiredVersion {
-                    version: "1.5".to_string(),
-                    retired_at: chrono::Utc::now(),
-                },
-            ],
-            ..direct_frozen_ready_controller()
-        };
-        let mut executor = direct_frozen_executor(
-            controller,
-            client,
-            alien_core::InitialSetupAuthority::DirectSetup,
-        )
-        .await;
-
-        executor
-            .update(sandbox_with_bundle(NEXT_BUNDLE))
-            .expect("transition to update");
-        executor.step().await.expect("updating_sandbox reaps");
-        let controller = executor
-            .internal_state::<AwsSandboxController>()
-            .expect("typed controller");
-        assert_eq!(
-            controller
-                .retired_versions
-                .iter()
-                .map(|retired| retired.version.as_str())
-                .collect::<Vec<_>>(),
-            ["1.5"],
-            "a version sessions may still run from stays"
-        );
     }
 
     /// A Frozen image is setup's, and carries setup's tags as the templates' does.
@@ -2535,74 +2965,6 @@ mod tests {
         );
     }
 
-    /// The retired version is the only cleanup scope for sessions that cannot be enumerated, so
-    /// it must survive its whole retention window and then actually be deleted.
-    #[tokio::test]
-    async fn a_retired_version_is_deleted_only_after_its_sessions_can_no_longer_run() {
-        // Inside the window: nothing may be deleted. Any delete call panics the mock.
-        let mut client = MockLambdaMicrovmsApi::new();
-        client.expect_get_microvm_image().returning(|_| {
-            Ok(MicrovmImage {
-                image_identifier: None,
-                image_arn: Some(IMAGE_ARN.to_string()),
-                image_version: Some("2.0".to_string()),
-                state: Some("CREATED".to_string()),
-            })
-        });
-        let mut controller = ready_controller();
-        controller.bundle_uri = Some(BUNDLE_URI.to_string());
-        controller.max_lifetime_seconds = Some(1800);
-        controller.retired_versions = vec![RetiredVersion {
-            version: "1.0".to_string(),
-            retired_at: chrono::Utc::now() - chrono::Duration::seconds(60),
-        }];
-        let mut inside_window = executor(controller, client).await;
-        inside_window
-            .step()
-            .await
-            .expect("ready tick inside the window");
-        assert_eq!(
-            inside_window
-                .internal_state::<AwsSandboxController>()
-                .expect("typed controller")
-                .retired_versions
-                .first()
-                .map(|retired| retired.version.as_str()),
-            Some("1.0"),
-            "a version whose sessions may still be running must not be deleted"
-        );
-
-        // Past the declared 1800s ceiling: the version is swept and the fields cleared.
-        let mut client = MockLambdaMicrovmsApi::new();
-        client.expect_get_microvm_image().returning(|_| {
-            Ok(MicrovmImage {
-                image_identifier: None,
-                image_arn: Some(IMAGE_ARN.to_string()),
-                image_version: Some("2.0".to_string()),
-                state: Some("CREATED".to_string()),
-            })
-        });
-        client
-            .expect_delete_microvm_image_version()
-            .withf(|identifier, version| identifier == IMAGE_ARN && version == "1.0")
-            .times(1)
-            .returning(|_, _| Ok(()));
-        let mut controller = ready_controller();
-        controller.bundle_uri = Some(BUNDLE_URI.to_string());
-        controller.max_lifetime_seconds = Some(1800);
-        controller.retired_versions = vec![RetiredVersion {
-            version: "1.0".to_string(),
-            retired_at: chrono::Utc::now() - chrono::Duration::seconds(3600),
-        }];
-        let mut executor = executor(controller, client).await;
-        executor.step().await.expect("ready tick past the window");
-
-        let controller = executor
-            .internal_state::<AwsSandboxController>()
-            .expect("typed controller");
-        assert!(controller.retired_versions.is_empty());
-    }
-
     /// A Frozen sandbox's Ready tick runs as the runtime identity and leaves its retired versions to
     /// setup, whatever IAM a Live sibling grants. Any version delete panics the mock.
     #[tokio::test]
@@ -2610,6 +2972,7 @@ mod tests {
         let mut client = MockLambdaMicrovmsApi::new();
         client.expect_get_microvm_image().returning(|_| {
             Ok(MicrovmImage {
+                description: None,
                 image_identifier: None,
                 image_arn: Some(IMAGE_ARN.to_string()),
                 image_version: Some("2.0".to_string()),

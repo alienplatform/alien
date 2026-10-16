@@ -1477,6 +1477,7 @@ mod tests {
                 ));
             }
             Ok(MicrovmImage {
+                description: None,
                 image_identifier: None,
                 image_arn: Some(IMAGE_ARN.to_string()),
                 image_version: Some("1.0".to_string()),
@@ -1804,6 +1805,7 @@ mod tests {
                 return Err(not_found("test-agents"));
             }
             Ok(MicrovmImage {
+                description: None,
                 image_identifier: None,
                 image_arn: Some(IMAGE_ARN.to_string()),
                 image_version: c.lock().unwrap().version.clone(),
