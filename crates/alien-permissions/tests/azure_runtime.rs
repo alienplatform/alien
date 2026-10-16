@@ -191,6 +191,36 @@ fn compute_cluster_lifecycle_can_discover_subscription_sku_availability() {
     }
 }
 
+/// The container role takes a final snapshot of each disk on delete, and a snapshot of the disk a
+/// restore replaces. Azure authorizes a snapshot PUT from a disk only if the caller also has
+/// `disks/beginGetAccess/action` on that disk (linked access), so both actions must be granted at
+/// the deployment resource group where the disks and snapshots live.
+#[test]
+fn container_provision_can_snapshot_its_disks() {
+    let generator = AzureRuntimePermissionsGenerator::new();
+    let permission_set = get_permission_set("container/provision").expect("permission set exists");
+    let plan = generator
+        .generate_grant_plan(permission_set, BindingTarget::Stack, &create_test_context())
+        .expect("container grant plan should generate");
+    let resource_group =
+        "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-observability-prod";
+    let actions: Vec<&str> = plan
+        .custom_roles
+        .iter()
+        .filter(|role| role.role_definition.assignable_scopes == [resource_group])
+        .flat_map(|role| role.role_definition.actions.iter().map(String::as_str))
+        .collect();
+    for action in [
+        "Microsoft.Compute/snapshots/write",
+        "Microsoft.Compute/disks/beginGetAccess/action",
+    ] {
+        assert!(
+            actions.contains(&action),
+            "container/provision must grant {action} at the resource group"
+        );
+    }
+}
+
 #[test]
 fn test_azure_hybrid_grant_plan() {
     let generator = AzureRuntimePermissionsGenerator::new();
