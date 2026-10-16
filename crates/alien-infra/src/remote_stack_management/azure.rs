@@ -386,7 +386,7 @@ impl AzureRemoteStackManagementController {
             delete_management_role_definition(
                 &client,
                 &legacy_role_id,
-                &resource_group_name,
+                &role_definition_scope_from_id(&legacy_role_id, &resource_group_name),
                 "replaced by per-scope roles",
                 &config.id,
             )
@@ -708,11 +708,13 @@ impl AzureRemoteStackManagementController {
         }
         self.role_assignment_ids.clear();
 
-        for role_def_id in self.management_role_definition_ids() {
+        for (role_def_id, scope) in
+            self.management_role_definition_ids(&azure_cfg.subscription_id, &resource_group_name)
+        {
             delete_management_role_definition(
                 &auth_client,
                 &role_def_id,
-                &resource_group_name,
+                &scope,
                 "for update",
                 &config.id,
             )
@@ -833,18 +835,19 @@ impl AzureRemoteStackManagementController {
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<RemoteStackManagement>()?;
 
-        let role_definition_ids = self.management_role_definition_ids();
-        if !role_definition_ids.is_empty() {
+        if self.role_definition_id.is_some() || !self.scoped_role_definition_ids.is_empty() {
             let resource_group_name = azure_utils::get_resource_group_name(ctx.state)?;
             let azure_cfg = ctx.get_azure_config()?;
+            let role_definition_ids = self
+                .management_role_definition_ids(&azure_cfg.subscription_id, &resource_group_name);
             let client = ctx
                 .service_provider
                 .get_azure_authorization_client(azure_cfg)?;
-            for role_def_id in role_definition_ids {
+            for (role_def_id, scope) in role_definition_ids {
                 delete_management_role_definition(
                     &client,
                     &role_def_id,
-                    &resource_group_name,
+                    &scope,
                     "on delete",
                     &config.id,
                 )
@@ -1145,6 +1148,34 @@ mod tests {
         assert!(matches!(
             role_definition_scope_for("/subscriptions/sub-123", "sub-123"),
             Scope::Subscription
+        ));
+
+        // The heartbeat reports the deployment group's role, and each role is deleted in the
+        // group it is assignable at.
+        let mut controller = AzureRemoteStackManagementController::mock_ready("test");
+        controller.uami_resource_id = Some(
+            "/subscriptions/sub-123/resourceGroups/rg-123/Providers/Microsoft.ManagedIdentity/userAssignedIdentities/test-management-identity"
+                .to_string(),
+        );
+        controller.scoped_role_definition_ids = BTreeMap::from([
+            (
+                "/subscriptions/sub-123/resourceGroups/aks-rg".to_string(),
+                "cluster-role".to_string(),
+            ),
+            (
+                "/subscriptions/sub-123/resourceGroups/rg-123".to_string(),
+                "own-role".to_string(),
+            ),
+        ]);
+        assert_eq!(controller.reported_role_definition_id().as_deref(), Some("own-role"));
+        let cluster_delete_scope = controller
+            .management_role_definition_ids("sub-123", "rg-123")
+            .into_iter()
+            .find(|(id, _)| id == "cluster-role")
+            .map(|(_, scope)| scope);
+        assert!(matches!(
+            cluster_delete_scope,
+            Some(Scope::ResourceGroup { resource_group_name }) if resource_group_name == "aks-rg"
         ));
     }
 
@@ -1763,14 +1794,13 @@ async fn delete_management_role_assignment(
 async fn delete_management_role_definition(
     client: &std::sync::Arc<dyn alien_azure_clients::authorization::AuthorizationApi>,
     role_def_id: &str,
-    resource_group_name: &str,
+    scope: &Scope,
     purpose: &str,
     config_id: &str,
 ) -> Result<()> {
     let role_def_uuid = role_def_id.split('/').last().unwrap_or(role_def_id);
-    let scope = role_definition_scope_from_id(role_def_id, resource_group_name);
     match client
-        .delete_role_definition(&scope, role_def_uuid.to_string())
+        .delete_role_definition(scope, role_def_uuid.to_string())
         .await
     {
         Ok(_) => {
@@ -1845,24 +1875,43 @@ impl AzureRemoteStackManagementController {
     /// The role reported in the heartbeat: a combined role still left from an earlier version,
     /// otherwise the role at the deployment resource group.
     fn reported_role_definition_id(&self) -> Option<String> {
+        // The management identity lives in the deployment resource group.
+        let deployment_group = self.uami_resource_id.as_deref().and_then(|id| {
+            id.to_ascii_lowercase()
+                .split("/providers/")
+                .next()
+                .map(str::to_string)
+        });
         self.role_definition_id.clone().or_else(|| {
             self.scoped_role_definition_ids
                 .iter()
-                .find(|(scope, _)| {
-                    AzureManagementScopeKind::of(scope)
-                        == Some(AzureManagementScopeKind::ResourceGroup)
-                })
+                .find(|(scope, _)| Some(scope.to_ascii_lowercase()) == deployment_group)
                 .map(|(_, id)| id.clone())
         })
     }
 
     /// Every custom management role this controller may own: the per-scope roles and the
     /// single combined role older controllers created.
-    fn management_role_definition_ids(&self) -> Vec<String> {
+    /// Each with the scope to delete it at: the group a per-scope role is assignable at, or the
+    /// scope its ID names for the combined role.
+    fn management_role_definition_ids(
+        &self,
+        subscription_id: &str,
+        resource_group_name: &str,
+    ) -> Vec<(String, Scope)> {
         self.role_definition_id
             .iter()
-            .chain(self.scoped_role_definition_ids.values())
-            .cloned()
+            .map(|id| {
+                (
+                    id.clone(),
+                    role_definition_scope_from_id(id, resource_group_name),
+                )
+            })
+            .chain(
+                self.scoped_role_definition_ids
+                    .iter()
+                    .map(|(scope, id)| (id.clone(), role_definition_scope_for(scope, subscription_id))),
+            )
             .collect()
     }
 
