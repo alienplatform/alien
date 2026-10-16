@@ -878,6 +878,7 @@ mod tests {
             .withf(|image| image == SANDBOX_IMAGE)
             .returning(|image| {
                 Ok(alien_aws_clients::lambda_microvms::MicrovmImage {
+                    description: None,
                     image_identifier: Some(image.to_string()),
                     image_arn: Some(image.to_string()),
                     image_version: Some("1.0".to_string()),

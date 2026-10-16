@@ -1477,6 +1477,7 @@ mod tests {
                 ));
             }
             Ok(MicrovmImage {
+                description: None,
                 image_identifier: None,
                 image_arn: Some(IMAGE_ARN.to_string()),
                 image_version: Some("1.0".to_string()),
@@ -1799,11 +1800,29 @@ mod tests {
 
         let mut lambda = MockLambdaMicrovmsApi::new();
         let c = cloud.clone();
+        lambda
+            .expect_list_microvm_image_versions()
+            .returning(move |_| {
+                Ok(c.lock()
+                    .unwrap()
+                    .version
+                    .iter()
+                    .map(|version| MicrovmImage {
+                        description: None,
+                        image_identifier: None,
+                        image_arn: Some(IMAGE_ARN.to_string()),
+                        image_version: Some(version.clone()),
+                        state: Some("SUCCESSFUL".to_string()),
+                    })
+                    .collect())
+            });
+        let c = cloud.clone();
         lambda.expect_get_microvm_image().returning(move |_| {
             if !c.lock().unwrap().image {
                 return Err(not_found("test-agents"));
             }
             Ok(MicrovmImage {
+                description: None,
                 image_identifier: None,
                 image_arn: Some(IMAGE_ARN.to_string()),
                 image_version: c.lock().unwrap().version.clone(),

@@ -10,6 +10,8 @@ pub mod merge;
 pub mod plan;
 pub mod registry;
 pub mod sandbox_bundle;
+#[cfg(test)]
+mod sandbox_publish_tests;
 pub mod settings;
 mod source_input;
 pub mod toolchain;
@@ -1853,39 +1855,47 @@ async fn push_resource_images(
         resource_name: resource_name.to_string(),
     }));
 
-    // Lambda requires one ARM64 image. Local Workers/Daemons execute host binaries;
+    // Lambda Workers and MicroVM sandboxes require one ARM64 image. Local
+    // Workers/Daemons execute host binaries;
     // other container runtimes can consume Linux multi-architecture indexes.
-    let selected_tarballs = if *platform == Platform::Aws && resource_type == "worker" {
-        let target = BinaryTarget::LinuxArm64;
-        let archive = oci_files
-            .iter()
-            .find(|path| oci_tarball_target(path) == Some(target))
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::InvalidResourceConfig {
-                    resource_id: resource_name.to_string(),
-                    reason: "AWS Workers require a Linux ARM64 OCI archive".to_string(),
-                })
-            })?;
-        lambda_image::validate(archive, resource_name)?;
-        vec![(target, archive.clone())]
-    } else if *platform == Platform::Local && matches!(resource_type, "worker" | "daemon") {
-        let host = BinaryTarget::current_os();
-        let archive = oci_files
-            .iter()
-            .find(|path| oci_tarball_target(path) == Some(host))
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::InvalidResourceConfig {
-                    resource_id: resource_name.to_string(),
-                    reason: format!(
-                        "No OCI archive for local host target '{}'",
-                        host.runtime_platform_id()
-                    ),
-                })
-            })?;
-        vec![(host, archive.clone())]
-    } else {
-        select_linux_tarballs(&oci_files)
-    };
+    let selected_tarballs =
+        if *platform == Platform::Aws && matches!(resource_type, "worker" | "sandbox") {
+            let target = BinaryTarget::LinuxArm64;
+            let archive = oci_files
+                .iter()
+                .find(|path| oci_tarball_target(path) == Some(target))
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::InvalidResourceConfig {
+                        resource_id: resource_name.to_string(),
+                        reason: format!(
+                            "AWS {resource_type} resources require a Linux ARM64 OCI archive"
+                        ),
+                    })
+                })?;
+            if resource_type == "worker" {
+                lambda_image::validate(archive, resource_name)?;
+            } else {
+                lambda_image::validate_sandbox(archive, resource_name)?;
+            }
+            vec![(target, archive.clone())]
+        } else if *platform == Platform::Local && matches!(resource_type, "worker" | "daemon") {
+            let host = BinaryTarget::current_os();
+            let archive = oci_files
+                .iter()
+                .find(|path| oci_tarball_target(path) == Some(host))
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::InvalidResourceConfig {
+                        resource_id: resource_name.to_string(),
+                        reason: format!(
+                            "No OCI archive for local host target '{}'",
+                            host.runtime_platform_id()
+                        ),
+                    })
+                })?;
+            vec![(host, archive.clone())]
+        } else {
+            select_linux_tarballs(&oci_files)
+        };
 
     // No linux image (unusual) — push whatever tarballs are present.
     if selected_tarballs.is_empty() {
@@ -1913,6 +1923,34 @@ async fn push_resource_images(
             push_resource_started.elapsed().as_secs_f64()
         );
 
+        if *platform == Platform::Aws && resource_type == "sandbox" {
+            // Tags are unique per push, not per image. The bundle's FROM and
+            // content key must use the registry's immutable ARM64 manifest so an
+            // unchanged sandbox does not rebuild on every application release.
+            let reference = Reference::try_from(image_uri.as_str())
+                .into_alien_error()
+                .context(ErrorData::InvalidResourceConfig {
+                    resource_id: resource_name.to_string(),
+                    reason: format!("Invalid image reference '{image_uri}'"),
+                })?;
+            let client = OciClient::new(OciClientConfig {
+                protocol: push_options.protocol.clone(),
+                ..Default::default()
+            });
+            let (_, digest) = client
+                .pull_manifest_raw(
+                    &reference,
+                    &push_options.auth,
+                    &[OCI_IMAGE_MEDIA_TYPE, IMAGE_MANIFEST_MEDIA_TYPE],
+                )
+                .await
+                .into_alien_error()
+                .context(ErrorData::ImagePushFailed {
+                    image: image_uri.clone(),
+                    reason: "Failed to resolve the pushed ARM64 manifest".to_string(),
+                })?;
+            return Ok(format!("{repository}@{digest}"));
+        }
         return Ok(image_uri);
     }
 
