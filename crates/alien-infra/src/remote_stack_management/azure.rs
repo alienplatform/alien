@@ -1573,26 +1573,31 @@ mod tests {
                     "Microsoft.ManagedIdentity/userAssignedIdentities/assign/action",
                 ),
             ] {
-                let assignable_scopes: Vec<_> = grant_plan
+                let granting_roles: Vec<_> = grant_plan
                     .custom_roles
                     .iter()
                     .filter(|role| role.role_definition.actions.iter().any(|a| a == action))
-                    .flat_map(|role| role.role_definition.assignable_scopes.iter())
-                    .map(String::as_str)
                     .collect();
                 assert!(
-                    !assignable_scopes.is_empty()
-                        && assignable_scopes
-                            .iter()
-                            .all(|scope| *scope == resource_group_scope),
-                    "{workload_set}: {action} must be granted at the deployment resource group only, got {assignable_scopes:?}"
+                    !granting_roles.is_empty()
+                        && granting_roles.iter().all(|role| {
+                            role.role_definition.assignable_scopes == [resource_group_scope]
+                        }),
+                    "{workload_set}: {action} must be granted at the deployment resource group only"
                 );
+                // The role that carries the action (keys alone are not unique, so match its
+                // scope too) must be assigned at a scope covering the linked resource.
                 assert!(
-                    grant_plan.bindings.iter().any(|binding| {
-                        matches!(binding.role_definition, AzureRoleDefinitionRef::Custom { .. })
-                            && target.starts_with(&format!("{}/", binding.scope))
+                    granting_roles.iter().any(|role| {
+                        grant_plan.bindings.iter().any(|binding| {
+                            matches!(
+                                &binding.role_definition,
+                                AzureRoleDefinitionRef::Custom { key } if *key == role.key
+                            ) && role.role_definition.assignable_scopes.contains(&binding.scope)
+                                && target.starts_with(&format!("{}/", binding.scope))
+                        })
                     }),
-                    "{workload_set}: the management role must be assigned at a scope covering {target}"
+                    "{workload_set}: the role granting {action} must be assigned at a scope covering {target}"
                 );
             }
         }
