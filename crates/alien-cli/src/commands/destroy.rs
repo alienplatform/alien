@@ -494,9 +494,7 @@ async fn destroy_tracked_deployment(
         return Ok(());
     }
 
-    // Discovery uses the operator credential; the scoped cleanup token only
-    // authorizes the deletion sync transport.
-    let pre_delete_deployment = operator_client
+    let pre_delete_deployment = manager_client
         .get_deployment()
         .id(&tracked_deployment.deployment_id)
         .send()
@@ -507,10 +505,13 @@ async fn destroy_tracked_deployment(
         })?
         .into_inner();
 
-    if pre_delete_deployment.status.as_str() == "teardown-required" {
+    if matches!(
+        pre_delete_deployment.status.as_str(),
+        "teardown-required" | "teardown-failed"
+    ) {
         steps.activate(2, Some("Setup teardown required".to_string()));
     } else {
-        // Request deletion, including an explicit retry of failed setup teardown.
+        // Request deletion
         operator_client
             .delete_deployment()
             .id(&tracked_deployment.deployment_id)
@@ -633,7 +634,7 @@ async fn destroy_tracked_deployment(
 
     let preparation: Result<()> = async {
         // Re-fetch under lock
-        let deployment = operator_client
+        let deployment = manager_client
             .get_deployment()
             .id(&tracked_deployment.deployment_id)
             .send()
@@ -650,7 +651,6 @@ async fn destroy_tracked_deployment(
                 .context(ErrorData::ConfigurationError {
                     message: format!("Unknown deployment status: {}", deployment.status),
                 })?;
-        current.retry_requested = deployment.retry_requested;
         current.stack_state = deployment
             .stack_state
             .map(serde_json::from_value)
@@ -689,7 +689,7 @@ async fn destroy_tracked_deployment(
         delay_strategy: alien_deployment::runner::DelayStrategy::Inline,
     };
 
-    let setup_result = alien_deployment::setup_teardown::run_setup_teardown_after_handoff(
+    let runner_result = match alien_deployment::runner::run_step_loop(
         &mut current,
         &mut config,
         &client_config,
@@ -697,13 +697,15 @@ async fn destroy_tracked_deployment(
         &policy,
         &transport,
         None,
+        None,
     )
-    .await;
-    let runner_result = match setup_result {
-        Ok(Some(result)) => Ok(result),
-        Err(error) => Err(error),
-        Ok(None) => {
-            match alien_deployment::runner::run_step_loop(
+    .await
+    {
+        Ok(result)
+            if result.loop_result.outcome == LoopOutcome::Success
+                && current.status == DeploymentStatus::TeardownRequired =>
+        {
+            alien_deployment::setup_teardown::run_setup_teardown_after_handoff(
                 &mut current,
                 &mut config,
                 &client_config,
@@ -711,29 +713,11 @@ async fn destroy_tracked_deployment(
                 &policy,
                 &transport,
                 None,
-                None,
             )
             .await
-            {
-                Ok(result)
-                    if result.loop_result.outcome == LoopOutcome::Success
-                        && current.status == DeploymentStatus::TeardownRequired =>
-                {
-                    alien_deployment::setup_teardown::run_setup_teardown_after_handoff(
-                        &mut current,
-                        &mut config,
-                        &client_config,
-                        &tracked_deployment.deployment_id,
-                        &policy,
-                        &transport,
-                        None,
-                    )
-                    .await
-                    .map(|setup_result| setup_result.unwrap_or(result))
-                }
-                other => other,
-            }
+            .map(|setup_result| setup_result.unwrap_or(result))
         }
+        other => other,
     };
     let semantic_failure_status = runner_result.as_ref().ok().and_then(|result| {
         (result.loop_result.outcome == LoopOutcome::Failure)

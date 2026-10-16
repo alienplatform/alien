@@ -11,7 +11,6 @@ import { ClosedEnum } from "../types/enums.js";
 export const DeploymentRole = {
   DeploymentViewer: "deployment.viewer",
   DeploymentManager: "deployment.manager",
-  DeploymentTeardown: "deployment.teardown",
   DeploymentDynamicContainerManager: "deployment.dynamic-container-manager",
   DeploymentTelemetryWriter: "deployment.telemetry-writer",
 } as const;

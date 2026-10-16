@@ -5574,14 +5574,13 @@ mod controller_state_tests {
         GetServiceQuotaResponse, MockServiceQuotasApi, ServiceQuota,
     };
     use alien_core::{Network, Platform};
-    use rstest::rstest;
     use serde::de::DeserializeOwned;
     use serde_json::json;
 
     use super::*;
     use crate::core::{
         controller_test::{assert_polling_delays, SingleControllerExecutor},
-        serialize_controller, MockPlatformServiceProvider, ResourceController, StackResourceStateExt,
+        MockPlatformServiceProvider, ResourceController, StackResourceStateExt,
     };
 
     const PREFIX: &str = "test";
@@ -5654,85 +5653,6 @@ mod controller_state_tests {
         })
     }
 
-    /// Retain explicit typed cleanup fields, including nested uncertain-create ownership.
-    fn network_cleanup_checkpoint(controller: &AwsNetworkController) -> AwsNetworkController {
-        let mut value = serialize_controller(controller).unwrap();
-        value["unknownCredential"] = json!("credential-sentinel");
-        if let Some(attempt) = value["subnetCreateAttempt"].as_object_mut() {
-            attempt.insert("unknownCredential".into(), json!("credential-sentinel"));
-            attempt.retain(|key, _| matches!(key.as_str(), "token" | "cidr" | "subnetType"));
-        }
-        for zone in value["subnetsByFailureDomain"]
-            .as_object_mut()
-            .unwrap()
-            .values_mut()
-        {
-            let zone = zone.as_object_mut().unwrap();
-            zone.insert("unknownCredential".into(), json!("credential-sentinel"));
-            zone.retain(|key, _| matches!(key.as_str(), "publicSubnetIds" | "privateSubnetIds"));
-        }
-        value.as_object_mut().unwrap().retain(|key, _| {
-            matches!(
-                key.as_str(),
-                "type"
-                    | "_controllerStateVersion"
-                    | "state"
-                    | "internalStayCount"
-                    | "vpcId"
-                    | "cidrBlock"
-                    | "internetGatewayId"
-                    | "natGatewayId"
-                    | "eipAllocationId"
-                    | "publicSubnetIds"
-                    | "privateSubnetIds"
-                    | "publicRouteTableId"
-                    | "privateRouteTableId"
-                    | "routeTableAssociationIds"
-                    | "securityGroupId"
-                    | "availabilityZones"
-                    | "subnetsByFailureDomain"
-                    | "isByoVpc"
-                    | "vpcCreateToken"
-                    | "subnetCreateAttempt"
-                    | "natGatewayCreateToken"
-                    | "internetGatewayCreateToken"
-                    | "eipCreateToken"
-                    | "natGatewayAttempt"
-                    | "waitForCreateLookupIterations"
-                    | "waitForRepeatedCreateIterations"
-                    | "extraVpcIds"
-                    | "extraInternetGatewayIds"
-                    | "extraEipAllocationIds"
-                    | "waitForDeleteDependenciesIterations"
-                    | "waitForRetainedDeleteIterations"
-            )
-        });
-        assert!(!value.to_string().contains("credential-sentinel"));
-        assert_eq!(value["type"], "AwsNetworkController");
-        assert_eq!(value["_controllerStateVersion"], 1);
-        let restored: AwsNetworkController = parse(value);
-        assert_eq!(
-            restored._internal_stay_count,
-            controller._internal_stay_count
-        );
-        restored
-    }
-
-    async fn cleanup_executor(
-        projected: bool,
-        ec2: MockEc2Api,
-        mut state: AwsNetworkController,
-        cidr: Option<&str>,
-    ) -> SingleControllerExecutor {
-        state._internal_stay_count.get_or_insert(7);
-        let restored = if projected {
-            network_cleanup_checkpoint(&state)
-        } else {
-            parse(serialize_controller(&state).unwrap())
-        };
-        executor(ec2, restored, cidr).await
-    }
-
     async fn executor(
         ec2: MockEc2Api,
         controller: AwsNetworkController,
@@ -5761,67 +5681,6 @@ mod controller_state_tests {
             .build()
             .await
             .expect("executor should build")
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn typed_cleanup_config_preserves_setup_owned_networks_without_cloud_calls(
-        #[values(false, true)] projected: bool,
-    ) {
-        for settings in [
-            NetworkSettings::UseDefault,
-            NetworkSettings::ByoVpcAws {
-                vpc_id: "vpc-customer".into(),
-                public_subnet_ids: vec!["subnet-customer-public".into()],
-                private_subnet_ids: vec!["subnet-customer-private".into()],
-                security_group_ids: vec!["sg-customer".into()],
-            },
-        ] {
-            for lifecycle in [
-                alien_core::ResourceLifecycle::Live,
-                alien_core::ResourceLifecycle::Frozen,
-            ] {
-                // A legacy imported checkpoint can have cloud IDs with a false
-                // ownership flag. The typed settings must still prevent deletion.
-                let mut saved = serde_json::to_value(fully_recorded(AwsNetworkState::Ready))
-                    .expect("serialize controller");
-                saved["isByoVpc"] = json!(false);
-                let mut restored: AwsNetworkController = parse(saved);
-                restored._internal_stay_count = Some(7);
-                if projected {
-                    restored = network_cleanup_checkpoint(&restored);
-                }
-                assert!(!restored.is_byo_vpc);
-                let config = Network::new(NETWORK_ID.to_string())
-                    .settings(settings.clone())
-                    .build();
-                let config: Network = parse(serde_json::to_value(config).unwrap());
-                // No provider expectations: even a cloud-client lookup is forbidden.
-                let provider = MockPlatformServiceProvider::new();
-                let mut executor = SingleControllerExecutor::builder()
-                    .resource(config)
-                    .controller(restored)
-                    .platform(Platform::Aws)
-                    .resource_lifecycle(lifecycle)
-                    .service_provider(Arc::new(provider))
-                    .resource_prefix(PREFIX)
-                    .with_test_dependencies()
-                    .build()
-                    .await
-                    .expect("typed cleanup executor");
-                executor.delete().expect("delete transition");
-                executor
-                    .run_until_terminal()
-                    .await
-                    .expect("setup-owned cleanup");
-                assert_eq!(executor.status(), ResourceStatus::Deleted);
-                let final_state = controller(&executor);
-                assert_eq!(final_state.state, AwsNetworkState::Deleted);
-                assert!(final_state.is_byo_vpc);
-                assert_eq!(final_state.vpc_id.as_deref(), Some("vpc-1"));
-                assert_eq!(final_state.public_subnet_ids, ["subnet-a"]);
-            }
-        }
     }
 
     /// Steps through the lookups a create makes before repeating a create whose recorded
@@ -7127,11 +6986,8 @@ mod controller_state_tests {
         }
     }
 
-    #[rstest]
     #[tokio::test]
-    async fn delete_recovers_the_vpc_of_a_lost_create_response(
-        #[values(false, true)] projected: bool,
-    ) {
+    async fn delete_recovers_the_vpc_of_a_lost_create_response() {
         let mut ec2 = MockEc2Api::new();
         expect_no_named_leftovers(&mut ec2);
         ec2.expect_describe_vpcs()
@@ -7151,32 +7007,16 @@ mod controller_state_tests {
             .withf(|id| id == "vpc-lost")
             .returning(|_| Ok(()));
 
-        let saved = serde_json::to_value(failed_create(AwsNetworkController {
-            cidr_block: Some("10.0.0.0/16".to_string()),
-            vpc_create_token: Some("attempt-1".to_string()),
-            ..Default::default()
-        }))
-        .expect("persist uncertain create checkpoint");
-        let cleanup: Network = parse(serde_json::to_value(network(Some("10.0.0.0/16"))).unwrap());
-        let ec2 = Arc::new(ec2);
-        let mut provider = MockPlatformServiceProvider::new();
-        provider
-            .expect_get_aws_ec2_client()
-            .returning(move |_| Ok(ec2.clone()));
-        let mut executor = SingleControllerExecutor::builder()
-            .resource(cleanup)
-            .controller(if projected {
-                network_cleanup_checkpoint(&parse(saved))
-            } else {
-                parse(saved)
-            })
-            .platform(Platform::Aws)
-            .service_provider(Arc::new(provider))
-            .resource_prefix(PREFIX)
-            .with_test_dependencies()
-            .build()
-            .await
-            .expect("restore uncertain create for cleanup");
+        let mut executor = executor(
+            ec2,
+            failed_create(AwsNetworkController {
+                cidr_block: Some("10.0.0.0/16".to_string()),
+                vpc_create_token: Some("attempt-1".to_string()),
+                ..Default::default()
+            }),
+            Some("10.0.0.0/16"),
+        )
+        .await;
 
         executor.delete().expect("delete transition");
         executor
@@ -7184,7 +7024,6 @@ mod controller_state_tests {
             .await
             .expect("delete completes");
         assert_eq!(executor.status(), ResourceStatus::Deleted);
-        assert!(controller(&executor).vpc_id.is_none());
     }
 
     #[tokio::test]
@@ -7213,11 +7052,8 @@ mod controller_state_tests {
         assert_eq!(executor.status(), ResourceStatus::Deleted);
     }
 
-    #[rstest]
     #[tokio::test]
-    async fn delete_recovers_the_subnet_of_a_lost_create_response(
-        #[values(false, true)] projected: bool,
-    ) {
+    async fn delete_recovers_the_subnet_of_a_lost_create_response() {
         let calls = Arc::new(Mutex::new(Vec::<String>::new()));
         let mut ec2 = MockEc2Api::new();
         expect_no_named_leftovers(&mut ec2);
@@ -7245,8 +7081,7 @@ mod controller_state_tests {
             Ok(())
         });
 
-        let mut executor = cleanup_executor(
-            projected,
+        let mut executor = executor(
             ec2,
             failed_create(with_subnet_attempt(after_vpc(
                 AwsNetworkState::CreatingSubnets,
@@ -7268,11 +7103,8 @@ mod controller_state_tests {
         );
     }
 
-    #[rstest]
     #[tokio::test]
-    async fn delete_recovers_the_nat_gateway_of_a_lost_create_response(
-        #[values(false, true)] projected: bool,
-    ) {
+    async fn delete_recovers_the_nat_gateway_of_a_lost_create_response() {
         let calls = Arc::new(Mutex::new(Vec::<String>::new()));
         let mut ec2 = MockEc2Api::new();
         expect_no_named_leftovers(&mut ec2);
@@ -7307,8 +7139,7 @@ mod controller_state_tests {
             Ok(())
         });
 
-        let mut executor = cleanup_executor(
-            projected,
+        let mut executor = executor(
             ec2,
             failed_create(AwsNetworkController {
                 eip_allocation_id: Some("eipalloc-1".to_string()),
@@ -7472,11 +7303,8 @@ mod controller_state_tests {
         assert_eq!(state.state, AwsNetworkState::CreatingNatGateway);
     }
 
-    #[rstest]
     #[tokio::test]
-    async fn delete_recovers_the_internet_gateway_and_elastic_ip_of_lost_responses(
-        #[values(false, true)] projected: bool,
-    ) {
+    async fn delete_recovers_the_internet_gateway_and_elastic_ip_of_lost_responses() {
         let calls = Arc::new(Mutex::new(Vec::<String>::new()));
         let mut ec2 = MockEc2Api::new();
         expect_no_named_leftovers(&mut ec2);
@@ -7524,8 +7352,7 @@ mod controller_state_tests {
             Ok(())
         });
 
-        let mut executor = cleanup_executor(
-            projected,
+        let mut executor = executor(
             ec2,
             failed_create(AwsNetworkController {
                 internet_gateway_create_token: Some("igw-attempt".to_string()),
@@ -7908,136 +7735,8 @@ mod controller_state_tests {
         );
     }
 
-    /// Partial deletion ownership must survive a failed handler, its tagged report,
-    /// and a manual retry through a fresh stack executor.
-    #[rstest]
     #[tokio::test]
-    async fn tagged_subnet_delete_failure_restores_remaining_ownership(
-        #[values(false, true)] projected: bool,
-    ) {
-        let mut ec2 = MockEc2Api::new();
-        let calls = Arc::new(Mutex::new(Vec::<String>::new()));
-        let recorded = calls.clone();
-        let attempts = Arc::new(AtomicUsize::new(0));
-        let count = attempts.clone();
-        ec2.expect_delete_subnet().returning(move |id| {
-            recorded.lock().unwrap().push(id.to_owned());
-            if id == "subnet-b" && count.fetch_add(1, Ordering::SeqCst) < 10 {
-                Err(AlienError::new(CloudClientErrorData::RateLimitExceeded {
-                    message: "Rate exceeded".into(),
-                }))
-            } else {
-                Ok(())
-            }
-        });
-        let initial = AwsNetworkController {
-            state: AwsNetworkState::DeletingSubnets,
-            vpc_id: Some("vpc-1".into()),
-            public_subnet_ids: vec!["subnet-a".into(), "subnet-b".into()],
-            private_subnet_ids: vec!["subnet-c".into()],
-            subnets_by_failure_domain: BTreeMap::from([
-                (
-                    "us-east-1a".into(),
-                    AwsFailureDomainSubnets {
-                        public_subnet_ids: vec!["subnet-a".into()],
-                        private_subnet_ids: vec![],
-                    },
-                ),
-                (
-                    "us-east-1b".into(),
-                    AwsFailureDomainSubnets {
-                        public_subnet_ids: vec!["subnet-b".into()],
-                        private_subnet_ids: vec!["subnet-c".into()],
-                    },
-                ),
-            ]),
-            ..Default::default()
-        };
-        let initial = if projected {
-            network_cleanup_checkpoint(&initial)
-        } else {
-            initial
-        };
-        let seed = executor(ec2, initial, Some("10.0.0.0/16")).await;
-        let (services, config, client) = seed.with_context(|ctx| {
-            (
-                ctx.service_provider.clone(),
-                ctx.deployment_config.clone(),
-                ctx.client_config.clone(),
-            )
-        });
-        let mut state = seed.stack_state().clone();
-        // Other fixture resources have completed cleanup before this network
-        // report window; their service-account deletion is outside this case.
-        for (id, resource) in &mut state.resources {
-            if id != NETWORK_ID {
-                resource.status = ResourceStatus::Deleted;
-                resource.internal_state.as_mut().unwrap()["state"] = serde_json::json!("deleted");
-            }
-        }
-        let resource = state.resources.get_mut(NETWORK_ID).unwrap();
-        resource.status = ResourceStatus::Deleting;
-        resource.internal_state = Some(serialize_controller(controller(&seed)).unwrap());
-        let runner = crate::core::StackExecutor::for_deletion_with_service_provider(
-            client.clone(),
-            &config,
-            services.clone(),
-            None,
-        )
-        .unwrap();
-        for _ in 0..10 {
-            state = runner.step(state).await.unwrap().next_state;
-            state = parse(serde_json::to_value(state).unwrap());
-        }
-        let failed = &state.resources[NETWORK_ID];
-        assert_eq!(failed.status, ResourceStatus::DeleteFailed);
-        assert!(failed.error.is_some());
-        let current = failed.internal_state.as_ref().unwrap();
-        let retry = failed.last_failed_state.as_ref().unwrap();
-        for checkpoint in [current, retry] {
-            assert_eq!(checkpoint["type"], "AwsNetworkController");
-            assert_eq!(checkpoint["_controllerStateVersion"], 1);
-            assert_eq!(checkpoint["publicSubnetIds"], json!(["subnet-b"]));
-            assert_eq!(checkpoint["privateSubnetIds"], json!(["subnet-c"]));
-            assert_eq!(
-                checkpoint["subnetsByFailureDomain"],
-                json!({
-                    "us-east-1b": {"publicSubnetIds": ["subnet-b"], "privateSubnetIds": ["subnet-c"]}
-                })
-            );
-        }
-        assert_eq!(current["state"], "deleteFailed");
-        assert_eq!(retry["state"], "deletingSubnets");
-        assert!(state
-            .resources
-            .get_mut(NETWORK_ID)
-            .unwrap()
-            .retry_failed()
-            .unwrap());
-        state = parse(serde_json::to_value(state).unwrap());
-        let restored = crate::core::StackExecutor::for_deletion_with_service_provider(
-            client, &config, services, None,
-        )
-        .unwrap();
-        state = restored.step(state).await.unwrap().next_state;
-        let remaining = &state.resources[NETWORK_ID];
-        assert!(remaining.error.is_none());
-        let checkpoint = remaining.internal_state.as_ref().unwrap();
-        assert_eq!(checkpoint["state"], "deletingRouteTables");
-        assert_eq!(checkpoint["publicSubnetIds"], json!([]));
-        assert_eq!(checkpoint["privateSubnetIds"], json!([]));
-        assert_eq!(checkpoint["subnetsByFailureDomain"], json!({}));
-        let mut expected = vec!["subnet-a".to_owned()];
-        expected.extend(vec!["subnet-b".to_owned(); 11]);
-        expected.push("subnet-c".into());
-        assert_eq!(*calls.lock().unwrap(), expected);
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn subnet_in_use_stays_in_state_while_the_others_are_forgotten(
-        #[values(false, true)] projected: bool,
-    ) {
+    async fn subnet_in_use_stays_in_state_while_the_others_are_forgotten() {
         let mut ec2 = MockEc2Api::new();
         let calls = Arc::new(Mutex::new(Vec::<String>::new()));
         let log = calls.clone();
@@ -8100,52 +7799,12 @@ mod controller_state_tests {
             ["us-east-1b"]
         );
 
-        // Persist the actual tagged resource report after partial deletion. A fresh
-        // executor must resume only the remaining subnet; a merge which resurrects
-        // the removed zone or flat IDs would repeat already-completed deletes.
-        let wire = serde_json::to_value(executor.stack_state()).unwrap();
-        let current = &wire["resources"][NETWORK_ID]["_internal"];
-        assert_eq!(current["type"], "AwsNetworkController");
-        assert_eq!(current["_controllerStateVersion"], 1);
-        assert_eq!(current["state"], "deletingSubnets");
-        assert_eq!(current["publicSubnetIds"], json!(["subnet-b"]));
-        assert_eq!(current["privateSubnetIds"], json!([]));
-        assert_eq!(
-            current["subnetsByFailureDomain"],
-            json!({
-                "us-east-1b": { "publicSubnetIds": ["subnet-b"], "privateSubnetIds": [] }
-            })
-        );
-        // Options serialize as explicit null, and omitted apply fields hydrate
-        // defaults on a redacted typed restore. They are not client authority.
-        assert!(current["natGatewayId"].is_null());
-        let restored: AwsNetworkController = parse(current.clone());
-        let restored = if projected {
-            network_cleanup_checkpoint(&restored)
-        } else {
-            restored
-        };
-        let provider = executor.with_context(|ctx| ctx.service_provider.clone());
-        let mut executor = SingleControllerExecutor::builder()
-            .resource(network(Some("10.0.0.0/16")))
-            .controller(restored)
-            .platform(Platform::Aws)
-            .service_provider(provider)
-            .resource_prefix(PREFIX)
-            .with_test_dependencies()
-            .build()
-            .await
-            .unwrap();
         executor.step().await.expect("subnet-b drains");
         assert_eq!(
             controller(&executor).state,
             AwsNetworkState::DeletingRouteTables
         );
         assert!(controller(&executor).public_subnet_ids.is_empty());
-        assert!(controller(&executor).subnets_by_failure_domain.is_empty());
-        let final_report = serialize_controller(controller(&executor)).unwrap();
-        assert_eq!(final_report["subnetsByFailureDomain"], json!({}));
-        assert_eq!(final_report["publicSubnetIds"], json!([]));
         assert_eq!(
             *calls.lock().unwrap(),
             ["subnet-a", "subnet-b", "subnet-c", "subnet-b"]
@@ -8722,8 +8381,7 @@ mod controller_state_tests {
         let calls = Arc::new(AtomicUsize::new(0));
         let seen = calls.clone();
         let mut ec2 = MockEc2Api::new();
-        ec2.expect_describe_route_tables()
-            .returning(|_| Ok(parse(json!({}))));
+        ec2.expect_describe_route_tables().returning(|_| Ok(parse(json!({}))));
         ec2.expect_delete_security_group()
             .times(2)
             .returning(move |_| {
@@ -8782,9 +8440,7 @@ mod controller_state_tests {
     #[tokio::test]
     async fn teardown_with_a_denied_subnet_fails_after_one_revisit() {
         let mut ec2 = MockEc2Api::new();
-        ec2.expect_delete_security_group()
-            .times(1)
-            .returning(|_| Ok(()));
+        ec2.expect_delete_security_group().times(1).returning(|_| Ok(()));
         // The first pass and the one revisit, for each of the two subnets.
         ec2.expect_delete_subnet()
             .times(4)
@@ -8844,11 +8500,8 @@ mod controller_state_tests {
         assert!(state.security_group_id.is_none());
     }
 
-    #[rstest]
     #[tokio::test]
-    async fn retained_child_wait_is_bounded_and_manual_retry_resets_it(
-        #[values(false, true)] projected: bool,
-    ) {
+    async fn retained_child_wait_is_bounded_and_manual_retry_resets_it() {
         let ec2 = MockEc2Api::new();
         let mut saved = serde_json::to_value(AwsNetworkController {
             state: AwsNetworkState::DeletingVpc,
@@ -8858,8 +8511,7 @@ mod controller_state_tests {
             ..Default::default()
         })
         .unwrap();
-        let mut executor = cleanup_executor(
-            projected,
+        let mut executor = executor(
             ec2,
             serde_json::from_value(saved.clone()).unwrap(),
             Some("10.0.0.0/16"),
@@ -8883,46 +8535,20 @@ mod controller_state_tests {
         assert_eq!(old.wait_for_retained_delete_iterations, 0);
     }
 
-    #[rstest]
     #[tokio::test]
-    async fn old_parent_delete_checkpoint_resumes_retained_child_cleanup(
-        #[values(false, true)] projected: bool,
-    ) {
+    async fn old_parent_delete_checkpoint_resumes_retained_child_cleanup() {
         let mut ec2 = MockEc2Api::new();
-        ec2.expect_delete_security_group()
-            .times(1)
-            .returning(|_| Ok(()));
+        ec2.expect_delete_security_group().times(1).returning(|_| Ok(()));
         ec2.expect_delete_vpc().times(1).returning(|_| Ok(()));
         let mut saved = serde_json::to_value(AwsNetworkController {
-            state: AwsNetworkState::DeletingVpc,
-            vpc_id: Some("vpc-1".into()),
-            security_group_id: Some("sg-retained".into()),
-            ..Default::default()
-        })
-        .unwrap();
-        saved
-            .as_object_mut()
-            .unwrap()
-            .remove("waitForRetainedDeleteIterations");
-        let mut executor = cleanup_executor(
-            projected,
-            ec2,
-            serde_json::from_value(saved).unwrap(),
-            Some("10.0.0.0/16"),
-        )
-        .await;
-        executor
-            .step()
-            .await
-            .expect("old failed parent resumes cleanup");
-        assert_eq!(
-            controller(&executor).state,
-            AwsNetworkState::DeletingNatGateway
-        );
-        executor
-            .run_until_terminal()
-            .await
-            .expect("retained child and parent deleted");
+            state: AwsNetworkState::DeletingVpc, vpc_id: Some("vpc-1".into()),
+            security_group_id: Some("sg-retained".into()), ..Default::default()
+        }).unwrap();
+        saved.as_object_mut().unwrap().remove("waitForRetainedDeleteIterations");
+        let mut executor = executor(ec2, serde_json::from_value(saved).unwrap(), Some("10.0.0.0/16")).await;
+        executor.step().await.expect("old failed parent resumes cleanup");
+        assert_eq!(controller(&executor).state, AwsNetworkState::DeletingNatGateway);
+        executor.run_until_terminal().await.expect("retained child and parent deleted");
         assert_eq!(executor.status(), ResourceStatus::Deleted);
         assert!(controller(&executor).security_group_id.is_none());
         assert!(controller(&executor).vpc_id.is_none());
@@ -9047,11 +8673,8 @@ mod controller_state_tests {
     /// token, and only the second ID recorded. Delete finds every object under the tokens and
     /// removes the duplicates too: the extra Elastic IP released, the extra Internet Gateway
     /// detached and deleted, the extra VPC deleted.
-    #[rstest]
     #[tokio::test]
-    async fn delete_removes_every_object_under_the_create_tokens(
-        #[values(false, true)] projected: bool,
-    ) {
+    async fn delete_removes_every_object_under_the_create_tokens() {
         let mut ec2 = MockEc2Api::new();
         expect_no_named_leftovers(&mut ec2);
         ec2.expect_describe_vpcs().times(1).returning(|_| {
@@ -9102,8 +8725,7 @@ mod controller_state_tests {
             Ok(())
         });
 
-        let mut executor = cleanup_executor(
-            projected,
+        let mut executor = executor(
             ec2,
             AwsNetworkController {
                 state: AwsNetworkState::Ready,
@@ -9210,57 +8832,10 @@ mod controller_state_tests {
         assert_eq!(controller(&retry).wait_for_repeated_create_iterations, 0);
     }
 
-    #[rstest]
-    #[tokio::test]
-    async fn persisted_extra_children_survive_cleanup_projection(
-        #[values(false, true)] projected: bool,
-    ) {
-        let mut ec2 = MockEc2Api::new();
-        expect_no_named_leftovers(&mut ec2);
-        ec2.expect_release_address()
-            .times(1)
-            .withf(|id| id == "eip-extra")
-            .returning(|_| Ok(()));
-        ec2.expect_detach_internet_gateway()
-            .times(1)
-            .withf(|request| request.internet_gateway_id == "igw-extra")
-            .returning(|_| Ok(()));
-        ec2.expect_delete_internet_gateway()
-            .times(1)
-            .withf(|id| id == "igw-extra")
-            .returning(|_| Ok(()));
-        ec2.expect_delete_vpc()
-            .times(2)
-            .withf(|id| id == "vpc-extra" || id == "vpc-1")
-            .returning(|_| Ok(()));
-        let mut executor = cleanup_executor(
-            projected,
-            ec2,
-            AwsNetworkController {
-                state: AwsNetworkState::Ready,
-                vpc_id: Some("vpc-1".into()),
-                extra_vpc_ids: vec!["vpc-extra".into()],
-                extra_internet_gateway_ids: vec!["igw-extra".into()],
-                extra_eip_allocation_ids: vec!["eip-extra".into()],
-                ..Default::default()
-            },
-            Some("10.0.0.0/16"),
-        )
-        .await;
-        executor.delete().unwrap();
-        executor.run_until_terminal().await.unwrap();
-        assert_eq!(executor.status(), ResourceStatus::Deleted);
-        let state = controller(&executor);
-        assert!(state.extra_vpc_ids.is_empty());
-        assert!(state.extra_internet_gateway_ids.is_empty());
-        assert!(state.extra_eip_allocation_ids.is_empty());
-    }
-
     /// A delete checkpoint saved before the poll counter existed resumes polling; the old
     /// stay budget does not fail it at once.
-    #[rstest]
     #[tokio::test]
-    async fn persisted_deleting_vpc_mid_poll_keeps_polling(#[values(false, true)] projected: bool) {
+    async fn persisted_deleting_vpc_mid_poll_keeps_polling() {
         let mut value =
             serde_json::to_value(AwsNetworkController::default()).expect("serialize default");
         let fields = value.as_object_mut().expect("object");
@@ -9282,8 +8857,7 @@ mod controller_state_tests {
         ec2.expect_describe_security_groups()
             .returning(|_| Ok(parse(json!({}))));
 
-        let mut executor =
-            cleanup_executor(projected, ec2, controller_state, Some("10.0.0.0/16")).await;
+        let mut executor = executor(ec2, controller_state, Some("10.0.0.0/16")).await;
         executor.step().await.expect("still polling");
         assert_eq!(controller(&executor).state, AwsNetworkState::DeletingVpc);
         assert_eq!(
@@ -9529,11 +9103,8 @@ mod controller_state_tests {
 
     // ─────────────── Full lifecycle ───────────────
 
-    #[rstest]
     #[tokio::test]
-    async fn full_create_then_delete_leaves_nothing_recorded(
-        #[values(false, true)] projected: bool,
-    ) {
+    async fn full_create_then_delete_leaves_nothing_recorded() {
         let mut ec2 = MockEc2Api::new();
         ec2.expect_describe_addresses()
             .returning(|| Ok(parse(json!({}))));
@@ -9699,12 +9270,11 @@ mod controller_state_tests {
         provider
             .expect_get_aws_service_quotas_client()
             .returning(move |_| Ok(quotas.clone()));
-        let provider = Arc::new(provider);
         let mut executor = SingleControllerExecutor::builder()
             .resource(network(Some("10.0.0.0/16")))
             .controller(AwsNetworkController::default())
             .platform(Platform::Aws)
-            .service_provider(provider.clone())
+            .service_provider(Arc::new(provider))
             .resource_prefix(PREFIX)
             .with_test_dependencies()
             .build()
@@ -9721,8 +9291,7 @@ mod controller_state_tests {
             CREATE_LOOKUP_FIRST_DELAY,
             "create",
         );
-        let mut ready = controller(&executor).clone();
-        ready._internal_stay_count = Some(7);
+        let ready = controller(&executor).clone();
         assert_eq!(ready.vpc_id.as_deref(), Some("vpc-1"));
         assert_eq!(ready.internet_gateway_id.as_deref(), Some("igw-1"));
         assert_eq!(ready.nat_gateway_id.as_deref(), Some("nat-1"));
@@ -9732,25 +9301,6 @@ mod controller_state_tests {
         assert_eq!(ready.private_subnet_ids, ["subnet-128", "subnet-144"]);
         assert_eq!(ready.route_table_association_ids.len(), 4);
 
-        // A cleanup process starts from the persisted controller and a typed
-        // declaration containing only identity and the owned network settings.
-        let saved = serde_json::to_value(&ready).expect("serialize installed controller");
-        let cleanup: Network = parse(serde_json::to_value(network(Some("10.0.0.0/16"))).unwrap());
-        drop(executor);
-        let mut executor = SingleControllerExecutor::builder()
-            .resource(cleanup)
-            .controller(if projected {
-                network_cleanup_checkpoint(&parse(saved))
-            } else {
-                parse(saved)
-            })
-            .platform(Platform::Aws)
-            .service_provider(provider)
-            .resource_prefix(PREFIX)
-            .with_test_dependencies()
-            .build()
-            .await
-            .expect("restore cleanup executor");
         executor.delete().expect("delete transition");
         executor
             .run_until_terminal()

@@ -30,6 +30,8 @@ pub const MAX_AUTH_TOKEN_MINUTES: u32 = 60;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MicrovmImage {
+    /// Build description, used to recover an accepted request after a lost response.
+    pub description: Option<String>,
     /// Image identifier used in every subsequent path
     pub image_identifier: Option<String>,
     /// Image ARN
@@ -946,6 +948,79 @@ impl LambdaMicrovmsApi for LambdaMicrovmsClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ServiceOverrides;
+    use alien_core::{AwsClientConfig, AwsCredentials};
+    use httpmock::{Method::GET, MockServer};
+    use std::collections::HashMap;
+
+    #[tokio::test]
+    async fn image_inventory_follows_pages_and_preserves_build_receipts() {
+        let server = MockServer::start_async().await;
+        let path = format!("/{API_VERSION}/microvm-images/test-image/versions");
+        let first = server
+            .mock_async(|when, then| {
+                when.method(GET).path(&path).matches(|request| {
+                    request
+                        .query_params
+                        .as_ref()
+                        .is_none_or(|params| params.iter().all(|(key, _)| key != "nextToken"))
+                });
+                then.status(200).json_body(serde_json::json!({
+                    "items": [{"imageVersion":"1.0", "state":"SUCCESSFUL"}],
+                    "nextToken":"next-page"
+                }));
+            })
+            .await;
+        let second = server.mock_async(|when, then| {
+            when.method(GET).path(&path).query_param("nextToken", "next-page");
+            then.status(200).json_body(serde_json::json!({
+                "items": [{"imageVersion":"2.0", "state":"FAILED", "description":"Sandbox test [build:receipt]"}]
+            }));
+        }).await;
+        let client = LambdaMicrovmsClient::new(
+            Client::new(),
+            AwsCredentialProvider::from_config_sync(AwsClientConfig {
+                account_id: "111122223333".to_string(),
+                region: "us-east-1".to_string(),
+                credentials: AwsCredentials::AccessKeys {
+                    access_key_id: "test".to_string(),
+                    secret_access_key: "test".to_string(),
+                    session_token: None,
+                },
+                service_overrides: Some(ServiceOverrides {
+                    endpoints: HashMap::from([("lambda".to_string(), server.base_url())]),
+                }),
+            }),
+        );
+        let versions = client
+            .list_microvm_image_versions("test-image")
+            .await
+            .expect("all pages");
+        assert_eq!(versions.len(), 2);
+        assert_eq!(versions[0].image_version.as_deref(), Some("1.0"));
+        assert_eq!(versions[1].image_version.as_deref(), Some("2.0"));
+        assert_eq!(
+            versions[1].description.as_deref(),
+            Some("Sandbox test [build:receipt]")
+        );
+        first.assert_async().await;
+        second.assert_async().await;
+
+        second.delete_async().await;
+        let unavailable = server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path(&path)
+                    .query_param("nextToken", "next-page");
+                then.status(503).body("inventory temporarily unavailable");
+            })
+            .await;
+        client
+            .list_microvm_image_versions("test-image")
+            .await
+            .expect_err("a failed later page must not return partial inventory");
+        assert!(unavailable.hits_async().await > 0);
+    }
 
     /// The declared ceiling has to reach the wire: Lambda is what terminates the MicroVM when it
     /// elapses, so a value we accept and drop would leave a sandbox running past a limit its

@@ -384,7 +384,10 @@ fn aws_storage_emits_browser_read_cors() {
         cors_rule["AllowedOrigins"],
         serde_json::json!(["https://console.example.com", "http://localhost:3000"])
     );
-    assert_eq!(cors_rule["ExposedHeaders"], serde_json::json!(["ETag"]));
+    assert_eq!(
+        cors_rule["ExposedHeaders"],
+        serde_json::json!(["ETag", "Content-Range", "Accept-Ranges"])
+    );
     assert_eq!(cors_rule["MaxAge"], 3600);
 }
 
