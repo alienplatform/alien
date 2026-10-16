@@ -177,23 +177,25 @@ mod tests {
     /// runtime credentials still never touch the management role.
     #[tokio::test]
     async fn direct_setup_replaces_the_legacy_combined_azure_role() {
-        for (authority, expected) in [
-            (InitialSetupAuthority::DirectSetup, true),
-            (InitialSetupAuthority::ImportedHandoff, false),
+        for (authority, setup_run, expected) in [
+            (InitialSetupAuthority::DirectSetup, true, true),
+            (InitialSetupAuthority::ImportedHandoff, true, false),
+            (InitialSetupAuthority::DirectSetup, false, false),
+            (InitialSetupAuthority::ImportedHandoff, false, false),
         ] {
             // The applied revision is current, so only the legacy role can ask for the update.
-            let (_, current) = needs_update(Platform::Azure, authority, None).await;
+            let (_, current) = needs_update(Platform::Azure, authority, None, setup_run).await;
             let mut controller = AzureRemoteStackManagementController::mock_ready("test");
             controller.management_permissions_revision = Some(current);
             controller.role_definition_id = Some(
                 "/subscriptions/sub-1234/providers/Microsoft.Authorization/roleDefinitions/legacy"
                     .to_string(),
             );
-            let executor = executor(Platform::Azure, controller, authority).await;
+            let executor = executor(Platform::Azure, controller, authority, setup_run).await;
             assert_eq!(
                 executor.needs_update().expect("needs_update"),
                 expected,
-                "{authority:?}"
+                "{authority:?} with setup_run={setup_run}"
             );
         }
     }
