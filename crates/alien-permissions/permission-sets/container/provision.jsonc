@@ -926,7 +926,11 @@
       }
     ],
     "azure": [
-      // Application Gateway / Load Balancer + Public IP for exposed containers
+      // Application Gateway / Load Balancer + Public IP for exposed containers.
+      // Every gateway or load balancer PUT re-checks linked access: join on the network's
+      // App Gateway subnet and on the frontend public IP. The network is setup-owned, so
+      // nothing else gives the management identity these actions.
+      // https://learn.microsoft.com/azure/application-gateway/configuration-infrastructure
       {
         "grant": {
           "actions": [
@@ -947,7 +951,10 @@
             "Microsoft.Network/loadBalancers/delete",
             "Microsoft.Network/publicIPAddresses/write",
             "Microsoft.Network/publicIPAddresses/read",
-            "Microsoft.Network/publicIPAddresses/delete"
+            "Microsoft.Network/publicIPAddresses/delete",
+            "Microsoft.Network/publicIPAddresses/join/action",
+            "Microsoft.Network/virtualNetworks/subnets/read",
+            "Microsoft.Network/virtualNetworks/subnets/join/action"
           ]
         },
         "binding": {

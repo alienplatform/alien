@@ -1454,6 +1454,77 @@ mod tests {
         );
     }
 
+    /// Azure authorizes every Application Gateway or load balancer PUT against the subnet and
+    /// public IP it links to (`.../join/action`). Containers and daemons are Live, so the
+    /// management identity creates their gateways, while the network is setup-owned and only
+    /// contributes `network/heartbeat`. The join grants therefore have to come from the
+    /// container and daemon sets, at a scope that covers the network's App Gateway subnet and
+    /// the gateway's public IP and stops at the deployment resource group.
+    #[test]
+    fn management_role_can_link_gateways_to_the_app_gateway_subnet_and_public_ip() {
+        let resource_group_scope = "/subscriptions/sub-123/resourceGroups/rg-123";
+        let app_gateway_subnet = format!(
+            "{resource_group_scope}/providers/Microsoft.Network/virtualNetworks/e2e-01-azcr-default-network-vnet/subnets/e2e-01-azcr-default-network-appgw-subnet"
+        );
+        let public_ip = format!(
+            "{resource_group_scope}/providers/Microsoft.Network/publicIPAddresses/e2e-01-azcr-web-pip"
+        );
+
+        // `container/management` PUTs the gateway again when it rotates the certificate.
+        for gateway_set in [
+            "container/provision",
+            "daemon/provision",
+            "container/management",
+        ] {
+            // What auto-derivation gives a stack with a public Live container or daemon on a
+            // Frozen default network.
+            let profile = PermissionProfile::new().global([
+                PermissionSetReference::from_name(gateway_set),
+                PermissionSetReference::from_name("network/heartbeat"),
+            ]);
+            let grant_plan = generate_stack_management_grant_plan(
+                &profile,
+                std::iter::empty(),
+                &permission_context(),
+                &Default::default(),
+            )
+            .unwrap();
+
+            for (target, action) in [
+                (
+                    app_gateway_subnet.as_str(),
+                    "Microsoft.Network/virtualNetworks/subnets/join/action",
+                ),
+                (
+                    public_ip.as_str(),
+                    "Microsoft.Network/publicIPAddresses/join/action",
+                ),
+            ] {
+                // Runtime folds every custom role into one management role and assigns it at
+                // each custom binding scope (`generate_management_role_definition`).
+                let assignable_scopes: Vec<_> = grant_plan
+                    .custom_roles
+                    .iter()
+                    .filter(|role| role.role_definition.actions.iter().any(|a| a == action))
+                    .flat_map(|role| role.role_definition.assignable_scopes.iter())
+                    .map(String::as_str)
+                    .collect();
+                assert_eq!(
+                    assignable_scopes,
+                    [resource_group_scope],
+                    "{gateway_set}: {action} must be granted once, at the deployment resource group"
+                );
+                assert!(
+                    grant_plan.bindings.iter().any(|binding| {
+                        matches!(binding.role_definition, AzureRoleDefinitionRef::Custom { .. })
+                            && target.starts_with(&format!("{}/", binding.scope))
+                    }),
+                    "{gateway_set}: the management role must be assigned at a scope covering {target}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn stack_management_grant_plan_includes_worker_dispatch_command_once() {
         let profile = PermissionProfile::new()

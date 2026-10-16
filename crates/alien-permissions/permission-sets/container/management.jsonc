@@ -189,7 +189,7 @@
           }
         }
       },
-      // Read-only inspection of LB and disk resources
+      // Inspect LB and disk resources; update Application Gateways (certificate rotation, backends)
       {
         "grant": {
           "actions": [
@@ -197,6 +197,10 @@
             "Microsoft.Network/publicIPAddresses/read",
             "Microsoft.Network/applicationGateways/read",
             "Microsoft.Network/applicationGateways/write",
+            // A gateway update re-checks join on its App Gateway subnet and frontend public IP.
+            "Microsoft.Network/publicIPAddresses/join/action",
+            "Microsoft.Network/virtualNetworks/subnets/read",
+            "Microsoft.Network/virtualNetworks/subnets/join/action",
             "Microsoft.Network/applicationGateways/backendhealth/action",
             "Microsoft.Network/loadBalancers/loadBalancingRules/health/action",
             "Microsoft.Compute/disks/read"
