@@ -1,21 +1,22 @@
 //! IAM custom-role usage includes soft-deleted roles, not just live roles.
 
-use crate::quotas::{
-    evaluate, gcp_custom_role_quota_identity, QuotaDemand, QuotaObservation, QuotaOutcome,
-    QuotaResult,
-};
 use crate::CheckResult;
+use crate::quotas::{
+    QuotaDemand, QuotaObservation, QuotaOutcome, QuotaResult, evaluate,
+    gcp_custom_role_quota_identity,
+};
 use alien_core::{
     ComputeCluster, GcpClientConfig, Platform, RemoteStackManagement, ServiceAccount, Stack,
     StackState,
 };
-use alien_gcp_clients::{service_usage_quotas::QuotaMetric, IamApi, ServiceUsageQuotasApi};
+use alien_gcp_clients::{IamApi, ServiceUsageQuotasApi, service_usage_quotas::QuotaMetric};
 use alien_permissions::{
+    BindingTarget, PermissionContext,
     generators::{
-        custom_role_namespace_for_prefix, legacy_custom_role_namespace_for_prefix,
-        GcpBindingTargetScope, GcpRuntimePermissionsGenerator,
+        GcpBindingTargetScope, GcpRuntimePermissionsGenerator, custom_role_namespace_for_prefix,
+        legacy_custom_role_namespace_for_prefix,
     },
-    get_permission_set, management_identity_global_refs, BindingTarget, PermissionContext,
+    get_permission_set, management_identity_global_refs,
 };
 use serde::Deserialize;
 use std::collections::BTreeSet;
@@ -31,14 +32,15 @@ struct IdentityNaming {
     custom_role_naming: Option<RoleNaming>,
 }
 
-#[derive(Clone, Copy, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 enum RoleNaming {
     HashedLongPrefix,
     TruncatedPrefix,
+    SetupNamespace(String),
 }
 
-fn role_namespace(state: &StackState) -> Option<String> {
+fn role_namespace(state: &StackState, execute: bool) -> Option<String> {
     let mut ids: Vec<_> = state.resources.keys().collect();
     ids.sort();
     let mut recorded = None;
@@ -59,6 +61,24 @@ fn role_namespace(state: &StackState) -> Option<String> {
         let identity: IdentityNaming = serde_json::from_value(internal.clone()).ok()?;
         match (identity.service_account_email, identity.custom_role_naming) {
             (_, Some(naming)) => {
+                if let RoleNaming::SetupNamespace(namespace) = &naming {
+                    if namespace.is_empty()
+                        || namespace.len() > 18
+                        || !namespace.bytes().all(|byte| {
+                            byte.is_ascii_lowercase()
+                                || byte.is_ascii_digit()
+                                || matches!(byte, b'_' | b'.')
+                        })
+                    {
+                        return None;
+                    }
+                }
+                if recorded
+                    .as_ref()
+                    .is_some_and(|previous| previous != &naming)
+                {
+                    return None;
+                }
                 recorded.get_or_insert(naming);
             }
             (Some(_), None) => legacy = true,
@@ -75,8 +95,13 @@ fn role_namespace(state: &StackState) -> Option<String> {
                 custom_role_namespace_for_prefix(&state.resource_prefix)
             }
             RoleNaming::TruncatedPrefix => {
-                legacy_custom_role_namespace_for_prefix(&state.resource_prefix)
+                if execute {
+                    custom_role_namespace_for_prefix(&state.resource_prefix)
+                } else {
+                    legacy_custom_role_namespace_for_prefix(&state.resource_prefix)
+                }
             }
+            RoleNaming::SetupNamespace(namespace) => namespace,
         },
     )
 }
@@ -94,7 +119,7 @@ pub fn desired_custom_role_names(
         .with_project_name(&config.project_id)
         .with_region(&config.region)
         .with_stack_prefix(&state.resource_prefix)
-        .with_gcp_custom_role_namespace(role_namespace(state)?);
+        .with_gcp_custom_role_namespace(role_namespace(state, false)?);
     let context = if let Some(number) = &config.project_number {
         context.with_project_number(number)
     } else {
@@ -163,12 +188,10 @@ pub fn desired_custom_role_names(
             {
                 return None;
             }
-            // Execute roles use the current namespace even on a legacy deployment.
+            // Legacy execute roles use hashed names; setup can select an exact namespace.
             let execute_context = context
                 .clone()
-                .with_gcp_custom_role_namespace(custom_role_namespace_for_prefix(
-                    &state.resource_prefix,
-                ))
+                .with_gcp_custom_role_namespace(role_namespace(state, true)?)
                 .with_service_account_name(format!("{}-{}", state.resource_prefix, cluster.id))
                 .with_managing_project_id(&config.project_id);
             collect(
@@ -344,8 +367,8 @@ pub async fn custom_role_observation(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::quotas::{evaluate, QuotaDemand, QuotaOutcome};
     use crate::RuntimeCheck;
+    use crate::quotas::{QuotaDemand, QuotaOutcome, evaluate};
     use alien_gcp_clients::iam::{ListRolesResponse, MockIamApi};
     use alien_gcp_clients::service_usage_quotas::MockServiceUsageQuotasApi;
 
@@ -386,9 +409,11 @@ mod tests {
         let names = desired_custom_role_names(&stack, &state, &config()).unwrap();
         // Bucket access is predefined; only service-account signing creates a role.
         assert_eq!(names.len(), 1);
-        assert!(names
-            .iter()
-            .all(|name| name.starts_with("projects/test/roles/role_q5_roles_storage_data_write")));
+        assert!(
+            names.iter().all(
+                |name| name.starts_with("projects/test/roles/role_q5_roles_storage_data_write")
+            )
+        );
         let predefined: alien_core::PermissionSet = serde_json::from_value(serde_json::json!({
             "id":"only-predefined", "description":"No custom roles",
             "platforms":{"gcp":[{"grant":{"predefinedRoles":["roles/iam.serviceAccountTokenCreator"]}, "binding":{"stack":{"scope":"projects/${projectName}"}}}]}
@@ -401,9 +426,60 @@ mod tests {
                 alien_core::ResourceLifecycle::Live,
             )
             .build();
-        assert!(desired_custom_role_names(&stack, &state, &config())
-            .unwrap()
-            .is_empty());
+        assert!(
+            desired_custom_role_names(&stack, &state, &config())
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn setup_namespace_applies_to_identity_and_compute_role_demand() {
+        let mut stack = role_stack();
+        stack.resources.insert(
+            "compute".into(),
+            alien_core::ResourceEntry {
+                config: alien_core::Resource::new(ComputeCluster::new("compute".into()).build()),
+                lifecycle: alien_core::ResourceLifecycle::Frozen,
+                dependencies: vec![],
+                remote_access: false,
+                enabled_when: None,
+            },
+        );
+        let mut state =
+            StackState::with_resource_prefix(Platform::Gcp, "different-deployment".into());
+        let mut identity = alien_core::StackResourceState::new_pending(
+            "service-account".into(),
+            stack.resources["one-sa"].config.clone(),
+            None,
+            vec![],
+        );
+        identity.internal_state = Some(serde_json::json!({
+            "serviceAccountEmail": "sa@test.iam.gserviceaccount.com",
+            "customRoleNaming": {"setupNamespace": "approved_roles"}
+        }));
+        state.resources.insert("one-sa".into(), identity.clone());
+        let names = desired_custom_role_names(&stack, &state, &config()).unwrap();
+        assert!(
+            names
+                .iter()
+                .any(|name| name.contains("_compute_cluster_execute_"))
+        );
+        assert!(
+            names
+                .iter()
+                .any(|name| name.contains("_storage_data_write"))
+        );
+        assert!(
+            names
+                .iter()
+                .all(|name| name.starts_with("projects/test/roles/role_approved_roles_"))
+        );
+
+        identity.internal_state.as_mut().unwrap()["customRoleNaming"] =
+            serde_json::json!("hashedLongPrefix");
+        state.resources.insert("two-sa".into(), identity);
+        assert!(desired_custom_role_names(&stack, &state, &config()).is_none());
     }
 
     #[test]
@@ -412,7 +488,7 @@ mod tests {
         let prefix = "q5-long-deployment-prefix";
         let mut state = StackState::with_resource_prefix(Platform::Gcp, prefix.into());
         assert_eq!(
-            role_namespace(&state),
+            role_namespace(&state, false),
             Some(custom_role_namespace_for_prefix(prefix))
         );
         let mut resource = alien_core::StackResourceState::new_pending(
@@ -425,21 +501,23 @@ mod tests {
             Some(serde_json::json!({"serviceAccountEmail":"sa@test.iam.gserviceaccount.com"}));
         state.resources.insert("a".into(), resource.clone());
         assert_eq!(
-            role_namespace(&state),
+            role_namespace(&state, false),
             Some(legacy_custom_role_namespace_for_prefix(prefix))
         );
-        assert!(desired_custom_role_names(&stack, &state, &config())
-            .unwrap()
-            .iter()
-            .all(|name| name.contains(&format!(
-                "role_{}_",
-                legacy_custom_role_namespace_for_prefix(prefix)
-            ))));
+        assert!(
+            desired_custom_role_names(&stack, &state, &config())
+                .unwrap()
+                .iter()
+                .all(|name| name.contains(&format!(
+                    "role_{}_",
+                    legacy_custom_role_namespace_for_prefix(prefix)
+                )))
+        );
         resource.internal_state.as_mut().unwrap()["customRoleNaming"] =
             serde_json::json!("hashedLongPrefix");
         state.resources.insert("b".into(), resource);
         assert_eq!(
-            role_namespace(&state),
+            role_namespace(&state, false),
             Some(custom_role_namespace_for_prefix(prefix))
         );
         state
@@ -551,9 +629,11 @@ mod tests {
             1,
             "shared quota-metadata role missing from {names:?}"
         );
-        assert!(names
-            .iter()
-            .any(|name| name.contains("_service_account_provision_")));
+        assert!(
+            names
+                .iter()
+                .any(|name| name.contains("_service_account_provision_"))
+        );
         assert!(super::super::cloud_quotas::CloudQuotasCheck.should_run(&stack, Platform::Gcp));
         assert!(!super::super::cloud_quotas::CloudQuotasCheck.should_run(&stack, Platform::Local));
     }
@@ -582,7 +662,7 @@ mod tests {
             Some(serde_json::json!({"serviceAccountEmail":"sa@test.iam.gserviceaccount.com"}));
         state.resources.insert("legacy-sa".into(), legacy);
         assert_eq!(
-            role_namespace(&state),
+            role_namespace(&state, false),
             Some(legacy_custom_role_namespace_for_prefix(prefix))
         );
         let names = desired_custom_role_names(&stack, &state, &config()).unwrap();

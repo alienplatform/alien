@@ -1026,6 +1026,11 @@ impl ResourcePermissionsHelper {
         Ok(GcpCustomRoleNaming::for_deployment(ctx.state)?.namespace(ctx.resource_prefix))
     }
 
+    /// Return setup's exact execute-role namespace, preserving legacy defaults.
+    pub fn gcp_execute_role_namespace(ctx: &ResourceControllerContext<'_>) -> Result<String> {
+        Ok(GcpCustomRoleNaming::for_deployment(ctx.state)?.execute_namespace(ctx.resource_prefix))
+    }
+
     /// Process GCP permissions for a specific profile
     async fn process_gcp_profile_permissions(
         ctx: &ResourceControllerContext<'_>,

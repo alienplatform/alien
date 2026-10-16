@@ -1,7 +1,7 @@
 //! How a GCP deployment's custom role IDs derive from its resource prefix.
 
 use alien_core::{Platform, RemoteStackManagement, ServiceAccount, StackState};
-use alien_error::{Context, IntoAlienError};
+use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::generators::{
     custom_role_namespace_for_prefix, legacy_custom_role_namespace_for_prefix,
 };
@@ -17,7 +17,7 @@ use crate::{ErrorData, Result};
 /// The GCP identity controllers record it when they create their service
 /// account, so every controller of the deployment keeps naming roles the way
 /// they were created.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum GcpCustomRoleNaming {
     /// Prefixes longer than 18 characters keep 9 characters plus a hash, so
@@ -26,15 +26,43 @@ pub enum GcpCustomRoleNaming {
     /// The prefix cut to 18 characters. Runtime setup named roles this way
     /// before long prefixes were hashed; two long prefixes can share it.
     TruncatedPrefix,
+    /// Exact namespace selected by setup, including externally owned roles.
+    SetupNamespace(String),
 }
 
 impl GcpCustomRoleNaming {
     /// The custom role namespace for `resource_prefix` under this rule.
-    pub fn namespace(self, resource_prefix: &str) -> String {
+    pub fn namespace(&self, resource_prefix: &str) -> String {
         match self {
             Self::HashedLongPrefix => custom_role_namespace_for_prefix(resource_prefix),
             Self::TruncatedPrefix => legacy_custom_role_namespace_for_prefix(resource_prefix),
+            Self::SetupNamespace(namespace) => namespace.clone(),
         }
+    }
+
+    /// Execute roles historically used hashed names even for legacy identities.
+    /// An explicit setup namespace overrides that historical default.
+    pub fn execute_namespace(&self, resource_prefix: &str) -> String {
+        match self {
+            Self::SetupNamespace(namespace) => namespace.clone(),
+            _ => custom_role_namespace_for_prefix(resource_prefix),
+        }
+    }
+
+    /// Validate a namespace without normalizing or silently changing role IDs.
+    pub fn from_setup_namespace(namespace: String) -> Result<Self> {
+        if namespace.is_empty()
+            || namespace.len() > 18
+            || !namespace.bytes().all(|byte| {
+                byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'.')
+            })
+        {
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "GCP setup custom role namespace must contain 1–18 lowercase ASCII letters, digits, underscores or periods".to_string(),
+                resource_id: None,
+            }));
+        }
+        Ok(Self::SetupNamespace(namespace))
     }
 
     /// The naming rule of the deployment whose stack state is `state`.
@@ -91,6 +119,18 @@ impl GcpCustomRoleNaming {
             };
             match identity {
                 (_, Some(naming)) => {
+                    if let Self::SetupNamespace(namespace) = &naming {
+                        Self::from_setup_namespace(namespace.clone())?;
+                    }
+                    if recorded_naming
+                        .as_ref()
+                        .is_some_and(|recorded| recorded != &naming)
+                    {
+                        return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                            message: "GCP identities record conflicting custom role namespaces; rerun setup with one role namespace".to_string(),
+                            resource_id: Some(resource_id.clone()),
+                        }));
+                    }
                     recorded_naming.get_or_insert(naming);
                 }
                 (Some(_), None) => created_before_recording = true,
@@ -115,6 +155,73 @@ mod tests {
     use crate::service_account::AwsServiceAccountController;
 
     const LONG_PREFIX: &str = "customer-acme-prod-eu";
+
+    #[test]
+    fn setup_namespace_survives_controller_round_trip_and_overrides_execute_names() {
+        let naming = GcpCustomRoleNaming::from_setup_namespace("approved_roles".into()).unwrap();
+        let state = deployment(vec![(
+            "runtime-sa",
+            service_account(Some("sa@p.iam.gserviceaccount.com"), Some(naming.clone())),
+        )]);
+        let restored = GcpCustomRoleNaming::for_deployment(&state).unwrap();
+        assert_eq!(restored, naming);
+        assert_eq!(restored.namespace(LONG_PREFIX), "approved_roles");
+        assert_eq!(restored.execute_namespace(LONG_PREFIX), "approved_roles");
+        assert_eq!(
+            GcpCustomRoleNaming::TruncatedPrefix.execute_namespace(LONG_PREFIX),
+            custom_role_namespace_for_prefix(LONG_PREFIX)
+        );
+    }
+
+    #[test]
+    fn conflicting_identity_namespaces_fail_before_role_selection() {
+        let state = deployment(vec![
+            (
+                "one",
+                service_account(
+                    Some("one@p.iam.gserviceaccount.com"),
+                    Some(GcpCustomRoleNaming::SetupNamespace("approved_roles".into())),
+                ),
+            ),
+            (
+                "two",
+                service_account(
+                    Some("two@p.iam.gserviceaccount.com"),
+                    Some(GcpCustomRoleNaming::HashedLongPrefix),
+                ),
+            ),
+        ]);
+        let error = GcpCustomRoleNaming::for_deployment(&state).unwrap_err();
+        assert_eq!(error.code, "RESOURCE_CONFIG_INVALID");
+        assert!(!error.retryable);
+    }
+
+    #[test]
+    fn malformed_setup_namespaces_are_rejected_on_import_and_state_read() {
+        for invalid in [
+            "",
+            "UPPER",
+            "space here",
+            "dash-here",
+            "slash/here",
+            "abcdefghijklmnopqrs",
+        ] {
+            assert!(GcpCustomRoleNaming::from_setup_namespace(invalid.into()).is_err());
+            let state = deployment(vec![(
+                "runtime-sa",
+                service_account(
+                    Some("sa@p.iam.gserviceaccount.com"),
+                    Some(GcpCustomRoleNaming::SetupNamespace(invalid.into())),
+                ),
+            )]);
+            assert_eq!(
+                GcpCustomRoleNaming::for_deployment(&state)
+                    .unwrap_err()
+                    .code,
+                "RESOURCE_CONFIG_INVALID"
+            );
+        }
+    }
 
     fn service_account(
         email: Option<&str>,
@@ -192,7 +299,7 @@ mod tests {
                 ("a-sa", service_account_created_before_recording()),
                 (
                     "b-sa",
-                    service_account(Some("b@p.iam.gserviceaccount.com"), Some(recorded)),
+                    service_account(Some("b@p.iam.gserviceaccount.com"), Some(recorded.clone())),
                 ),
             ]);
 
