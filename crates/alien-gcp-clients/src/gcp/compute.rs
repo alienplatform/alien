@@ -2045,7 +2045,7 @@ impl ComputeApi for ComputeClient {
         ssl_certificates: Vec<String>,
     ) -> Result<Operation> {
         let path = format!(
-            "projects/{}/global/targetHttpsProxies/{}/setSslCertificates",
+            "projects/{}/targetHttpsProxies/{}/setSslCertificates",
             self.project_id, target_https_proxy_name
         );
         let request = SetSslCertificatesRequest { ssl_certificates };
@@ -7392,10 +7392,7 @@ mod tests {
         let (endpoint, server) = serve_json_responses(vec![OPERATION]);
         let certificate = "projects/example-project/global/sslCertificates/replacement";
         let operation = test_client(endpoint)
-            .set_target_https_proxy_ssl_certificates(
-                "owned-proxy".into(),
-                vec![certificate.into()],
-            )
+            .set_target_https_proxy_ssl_certificates("owned-proxy".into(), vec![certificate.into()])
             .await
             .expect("replace global proxy certificate");
         assert_eq!(operation.name.as_deref(), Some("certificate-update"));
@@ -7472,11 +7469,9 @@ mod tests {
                 line,
                 format!("PUT /projects/example-project/{scope}/healthChecks/owned-health HTTP/1.1")
             );
-            assert!(
-                request
-                    .to_ascii_lowercase()
-                    .contains("authorization: bearer test-token")
-            );
+            assert!(request
+                .to_ascii_lowercase()
+                .contains("authorization: bearer test-token"));
             assert_eq!(
                 body,
                 serde_json::json!({
