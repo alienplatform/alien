@@ -221,6 +221,12 @@ fn generate_auto_management_profile(
                 permission_set_ids.insert(id.to_string());
             }
         }
+        if platform == Platform::Aws {
+            // Approved setup also installs command dispatch for this stack's workers,
+            // including workers added later. Lambda invocation is bounded to the stack
+            // prefix; it does not grant invocation of unrelated functions.
+            permission_set_ids.insert("worker/dispatch-command".to_string());
+        }
     }
 
     // Iterate through all resources in the stack to determine required management permissions
@@ -331,6 +337,13 @@ fn generate_auto_management_profile(
             if let Some(worker) = resource_entry.config.downcast_ref::<Worker>() {
                 if worker.commands_enabled {
                     match platform {
+                        Platform::Aws
+                            if config.stack_settings.setup_management
+                                == alien_core::SetupManagement::Automatic =>
+                        {
+                            // Already installed by approved setup. Runtime credentials
+                            // cannot attach another policy to their own management role.
+                        }
                         Platform::Aws | Platform::Gcp | Platform::Azure => {
                             // Preflights author the explicit command dispatch grant for
                             // this concrete worker. Each cloud maps it to that worker's
@@ -616,7 +629,9 @@ mod tests {
                 let Some((resource_type, operation)) = id.split_once('/') else {
                     continue;
                 };
-                if !matches!(operation, "provision" | "management" | "heartbeat")
+                let requested = matches!(operation, "provision" | "management" | "heartbeat")
+                    || (platform == Platform::Aws && id == "worker/dispatch-command");
+                if !requested
                     || resource_type == "remote-stack-management"
                     || !supports_stack_grant(id, platform)
                 {
@@ -680,6 +695,42 @@ mod tests {
             .allow_frozen_changes(false)
             .external_bindings(ExternalBindings::default())
             .build()
+    }
+
+    #[tokio::test]
+    async fn automatic_aws_command_workers_reuse_the_installed_stack_grant() {
+        let mut config = deployment_config_for_management_permission_test();
+        config.stack_settings.setup_management = alien_core::SetupManagement::Automatic;
+        let state = StackState::new(Platform::Aws);
+        let initial = Stack::new("example".to_string()).build();
+        let updated = Stack::new("example".to_string())
+            .add(
+                Worker::new("later-worker".to_string())
+                    .code(WorkerCode::Image {
+                        image: "test:latest".to_string(),
+                    })
+                    .permissions("test".to_string())
+                    .commands_enabled(true)
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        for stack in [initial, updated] {
+            let prepared = ManagementPermissionProfileMutation
+                .mutate(stack, &state, &config)
+                .await
+                .expect("automatic command workers are supported");
+            let profile = prepared.management().profile().expect("management grant");
+            assert!(profile.0["*"]
+                .iter()
+                .any(|grant| grant.id() == "worker/dispatch-command"));
+            assert!(!profile
+                .0
+                .get("later-worker")
+                .into_iter()
+                .flatten()
+                .any(|grant| grant.id() == "worker/dispatch-command"));
+        }
     }
 
     #[tokio::test]
