@@ -116,6 +116,10 @@ impl TfEmitter for GcpServiceAccountEmitter {
         Ok(expr::object([
             ("projectId", expr::raw("var.gcp_project")),
             (
+                "customRoleNamespace",
+                expr::raw("local.gcp_custom_role_prefix"),
+            ),
+            (
                 "serviceAccountEmail",
                 expr::traversal(["google_service_account", label, "email"]),
             ),

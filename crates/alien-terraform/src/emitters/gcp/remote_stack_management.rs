@@ -156,6 +156,10 @@ impl TfEmitter for GcpRemoteStackManagementEmitter {
         let mut fields = vec![
             ("projectId", expr::raw("var.gcp_project")),
             (
+                "customRoleNamespace",
+                expr::raw("local.gcp_custom_role_prefix"),
+            ),
+            (
                 "projectNumber",
                 expr::traversal(["data", "google_project", "current", "number"]),
             ),

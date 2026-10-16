@@ -1757,6 +1757,7 @@ mod setup_update_authorization_tests {
     #[test]
     fn explicit_role_namespace_requires_version_two_and_future_versions_fail() {
         let mut raw = serde_json::to_value(request()).unwrap();
+        raw["setupImportFormatVersion"] = serde_json::json!(1);
         raw["resources"] = serde_json::json!([{
             "id": "runtime-sa", "type": "service-account",
             "importData": {"customRoleNamespace": "approved_roles"}
