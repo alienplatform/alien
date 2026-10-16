@@ -135,6 +135,16 @@ pub async fn handle_update_pending(
             .as_ref()
             .and_then(|release| release.release_id.clone());
         crate::initial_setup::retry_failed_setup_resources(&mut stack_state, &metadata, &config)?;
+        // Setup hands back to Provisioning, whose executor does not resume failures. Resume
+        // unchanged failed runtime resources here, as the manual update executor does; changed
+        // ones are left to the planner.
+        let prepared_target =
+            crate::helpers::injected_target_stack(&metadata, &config, stack_state.platform)?;
+        crate::helpers::resume_unchanged_failed_resources(
+            &mut stack_state,
+            &prepared_target,
+            |resource| resource.lifecycle == Some(ResourceLifecycle::Live),
+        )?;
         next.status = DeploymentStatus::InitialSetup;
         next.stack_state = Some(stack_state);
         next.runtime_metadata = Some(metadata);

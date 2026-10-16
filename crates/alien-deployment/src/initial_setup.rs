@@ -2311,6 +2311,56 @@ mod tests {
         }
     }
 
+    /// A later release re-enters an automatic install through setup, which hands back to
+    /// Provisioning. Provisioning never resumes failures, so an unchanged runtime resource
+    /// that failed in the previous update must be resumed while the release is prepared.
+    #[tokio::test]
+    async fn automatic_update_resumes_unchanged_failed_runtime_resources() {
+        let installed = Stack::new("test".to_string())
+            .add(
+                Storage::new("live".to_string()).build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        let mut stack_state = deployed_test_stack(&installed).await;
+        let resource = stack_state.resources.get_mut("live").unwrap();
+        let mut controller = resource.get_internal_controller().unwrap().unwrap();
+        controller.transition_to_update().unwrap();
+        controller.transition_to_failure();
+        resource.status = controller.get_status();
+        resource.last_failed_state = resource.internal_state.clone();
+        resource.set_internal_controller(Some(controller)).unwrap();
+        assert_eq!(
+            stack_state.resources["live"].status,
+            ResourceStatus::UpdateFailed
+        );
+
+        let mut state = resumed_test_setup(stack_state, installed.clone());
+        state.status = DeploymentStatus::UpdatePending;
+        state.runtime_metadata.as_mut().unwrap().automatic_setup = true;
+        let state = crate::updating::handle_update_pending(
+            state,
+            installed,
+            config(),
+            ClientConfig::Test,
+            Arc::new(DefaultPlatformServiceProvider::default()),
+        )
+        .await
+        .expect("prepare the release through the installed grant")
+        .state;
+
+        assert_eq!(state.status, DeploymentStatus::InitialSetup);
+        let live = &state.stack_state.as_ref().unwrap().resources["live"];
+        assert!(
+            !matches!(
+                live.status,
+                ResourceStatus::UpdateFailed | ResourceStatus::ProvisionFailed
+            ),
+            "unchanged failed runtime resource must resume, got {:?}",
+            live.status
+        );
+    }
+
     #[tokio::test]
     async fn automatic_setup_retry_prepares_corrective_release_before_resuming() {
         let installed = Stack::new("test".to_string())

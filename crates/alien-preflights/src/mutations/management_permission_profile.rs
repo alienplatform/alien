@@ -5,7 +5,8 @@ use alien_core::{
     ownership_policy_for_resource_type, Container, DeploymentConfig, KubernetesCertificateMode,
     KubernetesCluster, KubernetesExposureSettings, KubernetesHeartbeatMode,
     KubernetesIngressRouteProfile, KubernetesRouteProfile, KubernetesRouteProviderOptions,
-    Platform, Postgres, ResourceLifecycle, Sandbox, Stack, StackState, Storage, Worker, WorkerTrigger,
+    Platform, Postgres, ResourceLifecycle, Sandbox, Stack, StackState, Storage, Worker,
+    WorkerTrigger,
 };
 use alien_error::{AlienError, Context};
 use alien_permissions::{
@@ -221,6 +222,16 @@ fn generate_auto_management_profile(
                 permission_set_ids.insert(id.to_string());
             }
         }
+        // Approved setup also installs data access to this stack's vaults. The secrets
+        // vault is added with the first workload that needs it, often in a later release,
+        // and runtime credentials cannot then attach a vault-scoped policy to their own
+        // management role. The grant is bounded to the stack prefix; on AWS, vault
+        // provisioning already allows the same parameter writes.
+        for id in ["vault/data-read", "vault/data-write"] {
+            if supports_stack_grant(id, platform) {
+                permission_set_ids.insert(id.to_string());
+            }
+        }
         if platform == Platform::Aws {
             // Approved setup also installs command dispatch for this stack's workers,
             // including workers added later. Lambda invocation is bounded to the stack
@@ -296,19 +307,27 @@ fn generate_auto_management_profile(
         }
 
         if platform == Platform::Aws {
-            if resource_entry.config.downcast_ref::<Postgres>()
+            if resource_entry
+                .config
+                .downcast_ref::<Postgres>()
                 .is_some_and(|postgres| postgres.encryption_key.is_some())
             {
                 // Setup still owns the cluster. Recovery may only start that
                 // existing cluster after its customer key becomes available.
-                resource_permission_set_ids.entry(resource_id.clone()).or_default()
+                resource_permission_set_ids
+                    .entry(resource_id.clone())
+                    .or_default()
                     .insert("postgres/key-recovery".to_string());
             }
-            if let Some(key) = resource_entry.config.downcast_ref::<Container>()
+            if let Some(key) = resource_entry
+                .config
+                .downcast_ref::<Container>()
                 .and_then(|container| container.persistent_storage.as_ref())
                 .and_then(|storage| storage.encryption_key.as_ref())
             {
-                resource_permission_set_ids.entry(key.id().to_string()).or_default()
+                resource_permission_set_ids
+                    .entry(key.id().to_string())
+                    .or_default()
                     .insert("key/native-volume".to_string());
             }
         }
@@ -630,6 +649,7 @@ mod tests {
                     continue;
                 };
                 let requested = matches!(operation, "provision" | "management" | "heartbeat")
+                    || matches!(id, "vault/data-read" | "vault/data-write")
                     || (platform == Platform::Aws && id == "worker/dispatch-command");
                 if !requested
                     || resource_type == "remote-stack-management"
