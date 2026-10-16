@@ -664,6 +664,80 @@ impl GcpProxyIngressState {
         }
     }
 
+    /// Change only the probe of a confirmed VM ingress graph. This keeps TLS
+    /// material out of access withdrawal and preserves all recorded children.
+    /// The caller must separately wait for provider backend health convergence.
+    pub async fn reconcile_health_check(
+        &mut self,
+        client: &dyn ComputeApi,
+        resource_id: &str,
+        mut desired: HealthCheck,
+    ) -> Result<bool> {
+        if self.poll(client, resource_id).await? {
+            return Ok(false);
+        }
+        let child = Child::HealthCheck(self.child_name("healthCheck"));
+        if !self.children.contains(&child) || !self.provider_ids.contains_key(&child.identity()) {
+            return Err(AlienError::new(
+                self.error(resource_id, "Ingress has no confirmed health check"),
+            ));
+        }
+        // Refuse missing/replaced children before changing an existing graph.
+        let mut health = None;
+        for recorded in self.children.clone() {
+            let live = recorded.read(client, self).await.context(self.error(
+                resource_id,
+                format!("Read retained ingress '{}'", recorded.name()),
+            ))?;
+            self.check_owner(&live, resource_id, &recorded)?;
+            if recorded == child {
+                health = Some(live);
+            }
+        }
+        let live = health.ok_or_else(|| {
+            AlienError::new(self.error(resource_id, "Ingress health check is missing"))
+        })?;
+        desired.name = Some(child.name().to_string());
+        desired.description = Some(self.child_owner(&child));
+        if health_check_matches(&live, &as_json(&desired, resource_id)?) {
+            return Ok(true);
+        }
+        let operation = self
+            .replace_health_check(client, resource_id, &child, &live, desired)
+            .await?;
+        self.record_operation(operation, resource_id, &child)?;
+        Ok(false)
+    }
+
+    async fn replace_health_check(
+        &self,
+        client: &dyn ComputeApi,
+        resource_id: &str,
+        child: &Child,
+        live: &Value,
+        mut desired: HealthCheck,
+    ) -> Result<Operation> {
+        // PATCH retains omitted probe fields such as response/request. PUT
+        // restores the serving probe while retaining unrelated provider settings.
+        let previous: HealthCheck = serde_json::from_value(live.clone())
+            .into_alien_error()
+            .context(self.error(resource_id, "Read health check settings"))?;
+        desired.check_interval_sec = desired.check_interval_sec.or(previous.check_interval_sec);
+        desired.timeout_sec = desired.timeout_sec.or(previous.timeout_sec);
+        desired.healthy_threshold = desired.healthy_threshold.or(previous.healthy_threshold);
+        desired.unhealthy_threshold = desired.unhealthy_threshold.or(previous.unhealthy_threshold);
+        desired.log_config = desired.log_config.or(previous.log_config);
+        scoped!(
+            self,
+            client,
+            update_region_health_check,
+            update_health_check,
+            child.name().to_string(),
+            desired
+        )
+        .context(self.error(resource_id, "Update retained ingress health check"))
+    }
+
     /// One mutation at most. False means the caller should return a delay and
     /// step again; true means the private frontend was read and verified.
     pub async fn reconcile(
@@ -820,21 +894,7 @@ impl GcpProxyIngressState {
                         if health_check_matches(live, &as_json(&desired, plan.resource_id)?) {
                             continue;
                         }
-                        if desired.tcp_health_check.is_some() {
-                            // PATCH leaves omitted TCP fields behind. Replace the probe,
-                            // retaining unrelated provider settings that the plan omits.
-                            let previous: HealthCheck = serde_json::from_value(live.clone())
-                                .into_alien_error()
-                                .context(self.error(plan.resource_id, "Read TCP health check settings"))?;
-                            desired.check_interval_sec = desired.check_interval_sec.or(previous.check_interval_sec);
-                            desired.timeout_sec = desired.timeout_sec.or(previous.timeout_sec);
-                            desired.healthy_threshold = desired.healthy_threshold.or(previous.healthy_threshold);
-                            desired.unhealthy_threshold = desired.unhealthy_threshold.or(previous.unhealthy_threshold);
-                            desired.log_config = desired.log_config.or(previous.log_config);
-                            scoped!(self, client, update_region_health_check, update_health_check, name.clone(), desired)
-                        } else {
-                            scoped!(self, client, patch_region_health_check, patch_health_check, name.clone(), desired)
-                        }
+                        Ok(self.replace_health_check(client, plan.resource_id, child, live, desired).await?)
                     } else {
                         scoped!(self, client, insert_region_health_check, insert_health_check, desired)
                     }
@@ -1112,26 +1172,41 @@ fn as_json(value: &impl Serialize, resource_id: &str) -> Result<Value> {
         })
 }
 
-// An omitted TCP request/response means no content check, not "keep the old
-// content check". Compute may return empty strings for these default values.
+// Omitted probe content means no content check, not "keep the old check".
+// Compute may return empty strings for these default values.
 fn health_check_matches(live: &Value, desired: &Value) -> bool {
     if !contains_desired(live, desired) {
         return false;
     }
-    let Some(tcp) = desired.get("tcpHealthCheck") else {
-        return true;
-    };
-    let live_tcp = &live["tcpHealthCheck"];
-    ["port", "portName", "request", "response", "proxyHeader"]
+    [
+        "tcpHealthCheck",
+        "httpHealthCheck",
+        "httpsHealthCheck",
+        "http2HealthCheck",
+    ]
+    .into_iter()
+    .all(|kind| {
+        let Some(probe) = desired.get(kind) else {
+            return true;
+        };
+        [
+            "port",
+            "portName",
+            "request",
+            "response",
+            "proxyHeader",
+            "host",
+        ]
         .into_iter()
         .all(|key| {
-            tcp.get(key).is_some()
-                || live_tcp.get(key).is_none_or(|value| {
+            probe.get(key).is_some()
+                || live[kind].get(key).is_none_or(|value| {
                     value.is_null()
                         || value.as_str() == Some("")
                         || (key == "proxyHeader" && value.as_str() == Some("NONE"))
                 })
         })
+    })
 }
 
 /// Compare only explicitly managed fields; preserve provider defaults and

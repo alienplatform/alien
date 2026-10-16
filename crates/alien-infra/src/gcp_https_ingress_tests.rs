@@ -1,5 +1,7 @@
 use super::*;
-use alien_gcp_clients::gcp::compute::{Backend, MockComputeApi, OperationStatus};
+use alien_gcp_clients::gcp::compute::{
+    Backend, HealthCheckType, HttpHealthCheck, MockComputeApi, OperationStatus, PortSpecification,
+};
 use serde::de::DeserializeOwned;
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -1068,5 +1070,80 @@ async fn tcp_health_restore_clears_stale_probe_after_lost_reply_and_preserves_se
         }
         assert!(deleted);
         assert!(store.lock().unwrap().objects.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn http_health_withdrawal_recovers_lost_reply_and_restores_without_tls_material() {
+    for scope in [
+        GcpHttpsIngressScope::GlobalPublic,
+        GcpHttpsIngressScope::RegionalPrivate,
+    ] {
+        let store = Arc::new(Mutex::new(Provider::default()));
+        let client = provider(&store);
+        let serving = HealthCheck {
+            r#type: Some(HealthCheckType::Http),
+            http_health_check: Some(HttpHealthCheck {
+                port_specification: Some(PortSpecification::UseServingPort),
+                request_path: Some("/health".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mut desired = plan("certificate");
+        desired.scope = scope;
+        desired.health_check = Some(serving.clone());
+        let mut state = GcpHttpsIngressState::new(&desired);
+        let mut complete = false;
+        for _ in 0..60 {
+            let mut desired = plan("certificate");
+            desired.scope = scope;
+            desired.health_check = Some(serving.clone());
+            if state.reconcile(&client, desired).await.unwrap() {
+                complete = true;
+                break;
+            }
+            state = checkpoint(&state);
+        }
+        assert!(complete);
+        let original = store.lock().unwrap().objects.clone();
+        let mut withdrawn = serving.clone();
+        withdrawn.http_health_check.as_mut().unwrap().response = Some("withdrawn".to_string());
+        store.lock().unwrap().lose_health_update_response = true;
+        assert!(state
+            .reconcile_health_check(&client, "api", withdrawn.clone())
+            .await
+            .is_err());
+        state = checkpoint(&state);
+        let writes = store.lock().unwrap().mutations;
+        assert!(state
+            .reconcile_health_check(&client, "api", withdrawn)
+            .await
+            .unwrap());
+        assert_eq!(store.lock().unwrap().mutations, writes);
+        assert!(!state
+            .reconcile_health_check(&client, "api", serving.clone())
+            .await
+            .unwrap());
+        state = checkpoint(&state);
+        assert!(!state
+            .reconcile_health_check(&client, "api", serving.clone())
+            .await
+            .unwrap());
+        assert!(state
+            .reconcile_health_check(&client, "api", serving.clone())
+            .await
+            .unwrap());
+        assert_eq!(store.lock().unwrap().objects, original);
+
+        // A replaced frontend must prevent even a health-only mutation.
+        let key = format!("frontend/{}", state.child_name("frontend"));
+        store.lock().unwrap().objects.get_mut(&key).unwrap()["id"] = json!("replacement");
+        let writes = store.lock().unwrap().mutations;
+        assert!(state
+            .reconcile_health_check(&client, "api", serving)
+            .await
+            .is_err());
+        assert_eq!(store.lock().unwrap().mutations, writes);
     }
 }
