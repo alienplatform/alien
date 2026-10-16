@@ -77,6 +77,7 @@ fn aws_remote_stack_management_import_preserves_setup_ownership() {
 fn gcp_remote_stack_management_import_preserves_setup_ownership() {
     let entry = entry(RemoteStackManagement::new("rsm".to_string()).build());
     let data = GcpRemoteStackManagementImportData {
+        custom_role_namespace: None,
         project_id: "my-project".to_string(),
         project_number: Some("123456789012".to_string()),
         service_account_email: "management@my-project.iam.gserviceaccount.com".to_string(),

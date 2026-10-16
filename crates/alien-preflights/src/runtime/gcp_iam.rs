@@ -40,10 +40,20 @@ enum RoleNaming {
     SetupNamespace(String),
 }
 
+impl RoleNaming {
+    fn namespace(&self, prefix: &str, execute: bool) -> String {
+        match self {
+            Self::SetupNamespace(namespace) => namespace.clone(),
+            Self::TruncatedPrefix if !execute => legacy_custom_role_namespace_for_prefix(prefix),
+            _ => custom_role_namespace_for_prefix(prefix),
+        }
+    }
+}
+
 fn role_namespace(state: &StackState, execute: bool) -> Option<String> {
     let mut ids: Vec<_> = state.resources.keys().collect();
     ids.sort();
-    let mut recorded = None;
+    let mut recorded: Option<RoleNaming> = None;
     let mut legacy = false;
     for id in ids {
         let resource = &state.resources[id];
@@ -51,7 +61,8 @@ fn role_namespace(state: &StackState, execute: bool) -> Option<String> {
             .controller_platform
             .is_some_and(|platform| platform != Platform::Gcp)
             || (resource.resource_type != ServiceAccount::RESOURCE_TYPE.as_ref()
-                && resource.resource_type != RemoteStackManagement::RESOURCE_TYPE.as_ref())
+                && resource.resource_type != RemoteStackManagement::RESOURCE_TYPE.as_ref()
+                && resource.resource_type != ComputeCluster::RESOURCE_TYPE.as_ref())
         {
             continue;
         }
@@ -59,7 +70,13 @@ fn role_namespace(state: &StackState, execute: bool) -> Option<String> {
             continue;
         };
         let identity: IdentityNaming = serde_json::from_value(internal.clone()).ok()?;
-        match (identity.service_account_email, identity.custom_role_naming) {
+        let email = if resource.resource_type == ComputeCluster::RESOURCE_TYPE.as_ref() {
+            // An old compute identity does not select legacy identity-role naming.
+            None
+        } else {
+            identity.service_account_email
+        };
+        match (email, identity.custom_role_naming) {
             (_, Some(naming)) => {
                 if let RoleNaming::SetupNamespace(namespace) = &naming {
                     if namespace.is_empty()
@@ -73,36 +90,32 @@ fn role_namespace(state: &StackState, execute: bool) -> Option<String> {
                         return None;
                     }
                 }
-                if recorded
-                    .as_ref()
-                    .is_some_and(|previous| previous != &naming)
-                {
+                if recorded.as_ref().is_some_and(|previous| {
+                    previous.namespace(&state.resource_prefix, false)
+                        != naming.namespace(&state.resource_prefix, false)
+                        || previous.namespace(&state.resource_prefix, true)
+                            != naming.namespace(&state.resource_prefix, true)
+                }) {
                     return None;
                 }
-                recorded.get_or_insert(naming);
+                if matches!(naming, RoleNaming::SetupNamespace(_)) {
+                    recorded = Some(naming);
+                } else {
+                    recorded.get_or_insert(naming);
+                }
             }
             (Some(_), None) => legacy = true,
             _ => {}
         }
     }
     Some(
-        match recorded.unwrap_or(if legacy {
-            RoleNaming::TruncatedPrefix
-        } else {
-            RoleNaming::HashedLongPrefix
-        }) {
-            RoleNaming::HashedLongPrefix => {
-                custom_role_namespace_for_prefix(&state.resource_prefix)
-            }
-            RoleNaming::TruncatedPrefix => {
-                if execute {
-                    custom_role_namespace_for_prefix(&state.resource_prefix)
-                } else {
-                    legacy_custom_role_namespace_for_prefix(&state.resource_prefix)
-                }
-            }
-            RoleNaming::SetupNamespace(namespace) => namespace,
-        },
+        recorded
+            .unwrap_or(if legacy {
+                RoleNaming::TruncatedPrefix
+            } else {
+                RoleNaming::HashedLongPrefix
+            })
+            .namespace(&state.resource_prefix, execute),
     )
 }
 

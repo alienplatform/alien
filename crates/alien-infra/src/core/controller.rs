@@ -810,7 +810,9 @@ pub const MIN_SUPPORTED_CONTROLLER_STATE_VERSION: u32 = 1;
 /// Older readers may drop withdrawal state or delete retained frontends. Upgrade
 /// deployment actors before enabling writers; older actors must reject this state.
 /// Version 4 retains disabled TCP proxy graphs; older writers delete them on access updates.
-pub const CURRENT_CONTROLLER_STATE_VERSION: u32 = 4;
+/// Version 5 preserves setup-selected GCP custom-role namespaces. Older readers
+/// must reject the deployment before planning cloud changes with different roles.
+pub const CURRENT_CONTROLLER_STATE_VERSION: u32 = 5;
 
 /// Serializes a controller to a JSON Value, injecting its type tag.
 pub fn serialize_controller(
@@ -1550,14 +1552,22 @@ mod tests {
             legacy["_controllerStateVersion"] = serde_json::json!(version);
             let restored = deserialize_controller(legacy).expect("prior version remains readable");
             let upgraded = serialize_controller(restored.as_ref()).unwrap();
-            assert_eq!(upgraded["_controllerStateVersion"], CURRENT_CONTROLLER_STATE_VERSION);
+            assert_eq!(
+                upgraded["_controllerStateVersion"],
+                CURRENT_CONTROLLER_STATE_VERSION
+            );
         }
         let upgraded = serialize_controller(&controller).unwrap();
-        assert_eq!(upgraded["_controllerStateVersion"], CURRENT_CONTROLLER_STATE_VERSION);
+        assert_eq!(
+            upgraded["_controllerStateVersion"],
+            CURRENT_CONTROLLER_STATE_VERSION
+        );
         let mut future = upgraded;
         future["_controllerStateVersion"] = serde_json::json!(CURRENT_CONTROLLER_STATE_VERSION + 1);
         assert_eq!(
-            validate_controller_state_value(&future, Some("worker")).unwrap_err().code,
+            validate_controller_state_value(&future, Some("worker"))
+                .unwrap_err()
+                .code,
             "INCOMPATIBLE_CONTROLLER_STATE"
         );
         assert!(deserialize_controller(future).is_err());
@@ -1598,7 +1608,9 @@ mod tests {
             .expect("binding params serialize")
             .expect("Local controller emits binding params");
         assert!(
-            !serde_json::to_string(&binding_params).unwrap().contains(PASSWORD),
+            !serde_json::to_string(&binding_params)
+                .unwrap()
+                .contains(PASSWORD),
             "binding params (the remote_binding_params channel) must not contain the runtime password"
         );
 

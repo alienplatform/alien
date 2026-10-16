@@ -15,11 +15,26 @@
 //! layers — no `set_internal_controller` boilerplate.
 
 use alien_core::{
-    import::ImportContext, ErrorData as CoreErrorData, ResourceStatus, Result, StackResourceState,
+    ErrorData as CoreErrorData, ResourceStatus, Result, StackResourceState, import::ImportContext,
 };
-use alien_error::AlienError;
+use alien_error::{AlienError, Context};
 
-use crate::core::{serialize_controller, ResourceController};
+use crate::core::{GcpCustomRoleNaming, ResourceController, serialize_controller};
+
+/// Validate setup's exact role namespace before constructing imported state.
+pub fn imported_gcp_role_naming(
+    namespace: Option<String>,
+    ctx: &ImportContext<'_>,
+) -> Result<Option<GcpCustomRoleNaming>> {
+    namespace
+        .map(GcpCustomRoleNaming::from_setup_namespace)
+        .transpose()
+        .context(CoreErrorData::ImportDataInvalid {
+            resource_id: ctx.resource_id.to_string(),
+            resource_type: ctx.resource.config.resource_type(),
+            platform: ctx.platform,
+        })
+}
 
 pub fn make_imported_state<C>(controller: C, ctx: &ImportContext<'_>) -> Result<StackResourceState>
 where

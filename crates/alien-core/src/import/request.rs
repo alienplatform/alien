@@ -8,6 +8,10 @@ pub const MIN_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION: u32 = 1;
 /// Setup import payload format this binary writes.
 pub const CURRENT_SETUP_IMPORT_FORMAT_VERSION: u32 = 1;
 
+/// Newest format accepted by upgraded readers. Version 2 carries exact GCP
+/// custom-role namespaces. Keep package writers at version 1 until readers deploy.
+pub const MAX_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION: u32 = 2;
+
 /// Package source that produced an import request. Observability label
 /// only — the manager does not branch on this value, and any new deployment
 /// pathway can omit it without affecting import behavior.

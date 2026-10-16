@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 #[cfg_attr(feature = "jsonschema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct GcpRemoteStackManagementImportData {
+    /// Exact custom-role namespace selected by setup, independent of resource names.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_role_namespace: Option<String>,
     /// Project ID containing the management service account.
     pub project_id: String,
     /// Numeric project number containing the management service account.

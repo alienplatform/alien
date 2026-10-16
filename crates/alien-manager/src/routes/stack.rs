@@ -26,31 +26,34 @@
 use std::collections::HashMap;
 
 use axum::{
+    Router,
     extract::{Json, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::post,
-    Router,
 };
 use sha2::{Digest, Sha256};
 use tracing::warn;
 
 use alien_core::{
+    AwsEnvironmentInfo, AzureEnvironmentInfo, DeploymentConfig, DeploymentStatus, EnvironmentInfo,
+    EnvironmentVariablesSnapshot, ExternalBindings, GcpEnvironmentInfo, KubernetesCluster,
+    Platform, RESOURCE_PREFIX_ERROR_MESSAGE, RemoteStackManagement, ResourceLifecycle,
+    ResourceStatus, RuntimeMetadata, SetupUpdateAuthorization, Stack, StackResourceState,
+    StackSettings, StackState,
     container_resources::keep_volume_sizes_over_setup_source,
     import::{
-        ImportContext, ImportedResource, StackImportRequest, StackImportResponse,
-        CURRENT_SETUP_IMPORT_FORMAT_VERSION, MIN_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION,
+        CURRENT_SETUP_IMPORT_FORMAT_VERSION, ImportContext, ImportedResource,
+        MAX_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION, MIN_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION,
+        StackImportRequest, StackImportResponse,
     },
-    is_valid_resource_prefix, AwsEnvironmentInfo, AzureEnvironmentInfo, DeploymentConfig,
-    DeploymentStatus, EnvironmentInfo, EnvironmentVariablesSnapshot, ExternalBindings,
-    GcpEnvironmentInfo, KubernetesCluster, Platform, RemoteStackManagement, ResourceLifecycle,
-    ResourceStatus, RuntimeMetadata, SetupUpdateAuthorization, Stack, StackResourceState,
-    StackSettings, StackState, RESOURCE_PREFIX_ERROR_MESSAGE,
+    is_valid_resource_prefix,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
+use alien_infra::core::GcpCustomRoleNaming;
 use alien_preflights::compatibility::PermissionProfilesUnchangedCheck;
 
-use super::{auth, AppState};
+use super::{AppState, auth};
 use crate::auth::{Scope, Subject};
 use crate::error::ErrorData;
 use crate::ids;
@@ -292,6 +295,11 @@ pub async fn stack_import(
             if !state.authz.can_update_deployment(&subject, &existing) {
                 return ErrorData::forbidden("Cannot update imported deployment in this group")
                     .into_response();
+            }
+            if let Some(previous) = existing.stack_state.as_ref() {
+                if let Err(error) = validate_gcp_role_namespace_reimport(previous, &stack_state) {
+                    return error.into_response();
+                }
             }
             if existing.stack_settings.as_ref().is_some_and(|settings| {
                 settings.endpoint_access != req.stack_settings.endpoint_access
@@ -759,6 +767,30 @@ fn migrate_legacy_remote_bindings_handoff(
     Ok(())
 }
 
+fn validate_gcp_role_namespace_reimport(
+    existing: &StackState,
+    imported: &StackState,
+) -> crate::error::Result<()> {
+    if existing.platform != Platform::Gcp {
+        return Ok(());
+    }
+    let previous =
+        GcpCustomRoleNaming::for_deployment(existing).context(ErrorData::BadRequest {
+            reason: "Cannot read the existing GCP custom-role namespace".to_string(),
+        })?;
+    let next = GcpCustomRoleNaming::for_deployment(imported).context(ErrorData::BadRequest {
+        reason: "Cannot read the imported GCP custom-role namespace".to_string(),
+    })?;
+    if matches!(previous, GcpCustomRoleNaming::SetupNamespace(_))
+        && !matches!(next, GcpCustomRoleNaming::SetupNamespace(_))
+    {
+        return Err(ErrorData::bad_request(
+            "This deployment requires a setup package that preserves its explicit GCP custom-role namespace",
+        ));
+    }
+    Ok(())
+}
+
 fn merge_reimported_stack_state(
     state: &AppState,
     req: &StackImportRequest,
@@ -891,22 +923,40 @@ fn parse_stack_import_request(raw: serde_json::Value) -> crate::error::Result<St
             AlienError::new(ErrorData::IncompatibleSetupImport {
                 found_version: 0,
                 min_supported_version: MIN_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION,
-                current_version: CURRENT_SETUP_IMPORT_FORMAT_VERSION,
+                current_version: MAX_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION,
                 repair: "Use a setup package that emits setupImportFormatVersion, or upgrade the setup package."
                     .to_string(),
             })
         })?;
 
-    if !(MIN_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION..=CURRENT_SETUP_IMPORT_FORMAT_VERSION)
+    if !(MIN_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION..=MAX_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION)
         .contains(&found_version)
     {
         return Err(AlienError::new(ErrorData::IncompatibleSetupImport {
             found_version,
             min_supported_version: MIN_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION,
-            current_version: CURRENT_SETUP_IMPORT_FORMAT_VERSION,
+            current_version: MAX_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION,
             repair: "Use a setup package compatible with this manager, or upgrade the manager."
                 .to_string(),
         }));
+    }
+
+    if found_version < 2
+        && raw
+            .get("resources")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|resources| {
+                resources.iter().any(|resource| {
+                    resource
+                        .get("importData")
+                        .and_then(|data| data.get("customRoleNamespace"))
+                        .is_some_and(|namespace| !namespace.is_null())
+                })
+            })
+    {
+        return Err(ErrorData::bad_request(
+            "Explicit GCP custom-role namespaces require setup import format 2",
+        ));
     }
 
     serde_json::from_value(raw).map_err(|err| {
@@ -1580,6 +1630,12 @@ fn build_stack_state(
     let mut stack_state =
         StackState::with_resource_prefix(req.platform, req.resource_prefix.trim().to_string());
     stack_state.resources = resources;
+    if req.platform == Platform::Gcp {
+        GcpCustomRoleNaming::for_deployment(&stack_state).context(ErrorData::BadRequest {
+            reason: "Imported GCP identities must agree on their setup custom-role namespace"
+                .to_string(),
+        })?;
+    }
     Ok(stack_state)
 }
 
@@ -1658,6 +1714,33 @@ mod setup_update_authorization_tests {
     use super::*;
     use alien_core::{Storage, Worker, WorkerCode};
     use chrono::Utc;
+
+    #[test]
+    fn explicit_role_namespace_requires_version_two_and_future_versions_fail() {
+        let mut raw = serde_json::to_value(request()).unwrap();
+        raw["resources"] = serde_json::json!([{
+            "id": "runtime-sa", "type": "service-account",
+            "importData": {"customRoleNamespace": "approved_roles"}
+        }]);
+        assert_eq!(
+            parse_stack_import_request(raw.clone()).unwrap_err().code,
+            "BAD_REQUEST"
+        );
+        raw["setupImportFormatVersion"] = serde_json::json!(2);
+        assert_eq!(
+            parse_stack_import_request(raw.clone())
+                .unwrap()
+                .setup_import_format_version,
+            2
+        );
+        raw["setupImportFormatVersion"] =
+            serde_json::json!(MAX_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION + 1);
+        assert_eq!(
+            parse_stack_import_request(raw).unwrap_err().code,
+            "INCOMPATIBLE_SETUP_IMPORT"
+        );
+        assert!(parse_stack_import_request(serde_json::to_value(request()).unwrap()).is_ok());
+    }
 
     fn request() -> StackImportRequest {
         StackImportRequest {
@@ -2171,12 +2254,14 @@ mod setup_update_authorization_tests {
         ] {
             assert!(reimport(setup_owned).is_some());
         }
-        assert!(reimport(with(
-            "s3://bucket/sandbox-bundle/v2/bundle.zip",
-            "123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base-a:2",
-            alien_core::SandboxEgress::Allow,
-        ))
-        .is_none());
+        assert!(
+            reimport(with(
+                "s3://bucket/sandbox-bundle/v2/bundle.zip",
+                "123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base-a:2",
+                alien_core::SandboxEgress::Allow,
+            ))
+            .is_none()
+        );
     }
 
     #[test]

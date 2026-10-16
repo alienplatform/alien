@@ -1,6 +1,6 @@
 //! How a GCP deployment's custom role IDs derive from its resource prefix.
 
-use alien_core::{Platform, RemoteStackManagement, ServiceAccount, StackState};
+use alien_core::{ComputeCluster, Platform, RemoteStackManagement, ServiceAccount, StackState};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::generators::{
     custom_role_namespace_for_prefix, legacy_custom_role_namespace_for_prefix,
@@ -76,7 +76,7 @@ impl GcpCustomRoleNaming {
         resource_ids.sort();
 
         let mut created_before_recording = false;
-        let mut recorded_naming = None;
+        let mut recorded_naming: Option<Self> = None;
         for resource_id in resource_ids {
             let resource = &state.resources[resource_id];
             if resource
@@ -114,6 +114,22 @@ impl GcpCustomRoleNaming {
                     controller.service_account_email,
                     controller.custom_role_naming,
                 )
+            } else if resource.resource_type == ComputeCluster::RESOURCE_TYPE.as_ref() {
+                // Compute implementations share only this naming metadata with
+                // the identity controllers; their other state stays opaque.
+                let naming: Option<Self> = serde_json::from_value(
+                    internal_state
+                        .get("customRoleNaming")
+                        .cloned()
+                        .unwrap_or_default(),
+                )
+                .into_alien_error()
+                .context(ErrorData::ResourceStateSerializationFailed {
+                    resource_id: resource_id.clone(),
+                    message: "Cannot determine GCP custom role naming from compute identity state"
+                        .to_string(),
+                })?;
+                (None, naming)
             } else {
                 continue;
             };
@@ -122,16 +138,22 @@ impl GcpCustomRoleNaming {
                     if let Self::SetupNamespace(namespace) = &naming {
                         Self::from_setup_namespace(namespace.clone())?;
                     }
-                    if recorded_naming
-                        .as_ref()
-                        .is_some_and(|recorded| recorded != &naming)
-                    {
+                    if recorded_naming.as_ref().is_some_and(|recorded| {
+                        recorded.namespace(&state.resource_prefix)
+                            != naming.namespace(&state.resource_prefix)
+                            || recorded.execute_namespace(&state.resource_prefix)
+                                != naming.execute_namespace(&state.resource_prefix)
+                    }) {
                         return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
                             message: "GCP identities record conflicting custom role namespaces; rerun setup with one role namespace".to_string(),
                             resource_id: Some(resource_id.clone()),
                         }));
                     }
-                    recorded_naming.get_or_insert(naming);
+                    if matches!(naming, Self::SetupNamespace(_)) {
+                        recorded_naming = Some(naming);
+                    } else {
+                        recorded_naming.get_or_insert(naming);
+                    }
                 }
                 (Some(_), None) => created_before_recording = true,
                 _ => {}

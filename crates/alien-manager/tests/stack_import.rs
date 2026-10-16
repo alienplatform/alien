@@ -12,16 +12,16 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use axum::body::{to_bytes, Body};
+use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode};
 use http::header;
 use sha2::{Digest, Sha256};
 use tower::ServiceExt;
 
 use alien_bindings::providers::{kv::local::LocalKv, storage::local::LocalStorage};
+use alien_commands::InMemoryCommandRegistry;
 use alien_commands::dispatchers::NullCommandDispatcher;
 use alien_commands::server::{CommandDispatcher, CommandRegistry, CommandServer};
-use alien_commands::InMemoryCommandRegistry;
 use alien_core::import::{
     ImportSourceKind, ImportedResource, KubernetesClusterImportData, StackImportRequest,
     StackImportResponse,
@@ -41,10 +41,10 @@ use alien_core::{
 use alien_manager::auth::Authz;
 use alien_manager::config::ManagerConfig;
 use alien_manager::providers::{NullTelemetryBackend, OssAuthz};
+use alien_manager::routes::AppState;
 use alien_manager::routes::registry_proxy::{
     CredentialCache, PullValidationCache, RegistryRoutingTable,
 };
-use alien_manager::routes::AppState;
 use alien_manager::stores::sqlite::{
     SqliteDatabase, SqliteDeploymentStore, SqliteReleaseStore, SqliteTokenStore,
 };
@@ -496,6 +496,7 @@ fn gcp_remote_management_import_request(
             id: resource_id.to_string(),
             resource_type: RemoteStackManagement::RESOURCE_TYPE.into(),
             import_data: serde_json::to_value(GcpRemoteStackManagementImportData {
+                custom_role_namespace: None,
                 project_id: project_id.to_string(),
                 project_number: project_number.map(ToString::to_string),
                 service_account_email: format!(
@@ -751,16 +752,18 @@ async fn deployment_token_reimports_only_its_own_setup_without_bootstrap_token()
     other.deployment_name = "another-deployment".to_string();
     let (status, json) = post_import(&fixture, Some(token), &other).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{json:#}");
-    assert!(fixture
-        .deployment_store
-        .get_deployment_by_name(
-            &alien_manager::auth::Subject::system(),
-            &fixture.deployment_group_id,
-            "another-deployment"
-        )
-        .await
-        .unwrap()
-        .is_none());
+    assert!(
+        fixture
+            .deployment_store
+            .get_deployment_by_name(
+                &alien_manager::auth::Subject::system(),
+                &fixture.deployment_group_id,
+                "another-deployment"
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -980,21 +983,25 @@ async fn gcp_import_persists_target_environment_info() {
         .expect("deployment must persist");
 
     assert_ne!(persisted.status, "initial-setup");
-    assert!(!persisted
-        .stack_state
-        .as_ref()
-        .unwrap()
-        .resources
-        .contains_key("enable-cloud-quotas"));
-    assert!(!persisted
-        .runtime_metadata
-        .as_ref()
-        .unwrap()
-        .prepared_stack
-        .as_ref()
-        .unwrap()
-        .resources
-        .contains_key("enable-cloud-quotas"));
+    assert!(
+        !persisted
+            .stack_state
+            .as_ref()
+            .unwrap()
+            .resources
+            .contains_key("enable-cloud-quotas")
+    );
+    assert!(
+        !persisted
+            .runtime_metadata
+            .as_ref()
+            .unwrap()
+            .prepared_stack
+            .as_ref()
+            .unwrap()
+            .resources
+            .contains_key("enable-cloud-quotas")
+    );
 
     assert_eq!(
         persisted.environment_info,
@@ -1043,15 +1050,17 @@ async fn gcp_import_retains_delivered_quota_activation() {
         persisted.stack_state.as_ref().unwrap().resources["enable-cloud-quotas"].status,
         ResourceStatus::Running
     );
-    assert!(persisted
-        .runtime_metadata
-        .as_ref()
-        .unwrap()
-        .prepared_stack
-        .as_ref()
-        .unwrap()
-        .resources
-        .contains_key("enable-cloud-quotas"));
+    assert!(
+        persisted
+            .runtime_metadata
+            .as_ref()
+            .unwrap()
+            .prepared_stack
+            .as_ref()
+            .unwrap()
+            .resources
+            .contains_key("enable-cloud-quotas")
+    );
 }
 
 #[tokio::test]
@@ -1270,10 +1279,12 @@ async fn re_import_repairs_terminal_initial_failures() {
             .and_then(|state| state.resources.get("assets"))
             .and_then(|resource| resource.outputs.as_ref())
             .expect("repaired setup outputs must persist");
-        assert!(serde_json::to_value(outputs)
-            .unwrap()
-            .to_string()
-            .contains("acme-imports-repaired"));
+        assert!(
+            serde_json::to_value(outputs)
+                .unwrap()
+                .to_string()
+                .contains("acme-imports-repaired")
+        );
     }
 }
 

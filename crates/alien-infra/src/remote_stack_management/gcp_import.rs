@@ -1,13 +1,13 @@
 //! Importer for GCP RemoteStackManagement (cross-project SA).
 
 use alien_core::{
-    import::{data::GcpRemoteStackManagementImportData, ImportContext},
     Result, StackResourceState,
+    import::{ImportContext, data::GcpRemoteStackManagementImportData},
 };
 
 use crate::core::GcpCustomRoleNaming;
 use crate::import::ResourceImporter;
-use crate::import_helpers::make_imported_state;
+use crate::import_helpers::{imported_gcp_role_naming, make_imported_state};
 use crate::remote_stack_management::{
     GcpRemoteStackManagementController, GcpRemoteStackManagementState,
 };
@@ -24,6 +24,8 @@ impl ResourceImporter for GcpRemoteStackManagementImporter {
         data: GcpRemoteStackManagementImportData,
         ctx: &ImportContext<'_>,
     ) -> Result<StackResourceState> {
+        let naming = imported_gcp_role_naming(data.custom_role_namespace, ctx)?
+            .unwrap_or(GcpCustomRoleNaming::HashedLongPrefix);
         let _ = data.project_id;
         let controller = GcpRemoteStackManagementController {
             state: GcpRemoteStackManagementState::Ready,
@@ -31,7 +33,7 @@ impl ResourceImporter for GcpRemoteStackManagementImporter {
             service_account_unique_id: Some(data.service_account_unique_id),
             role_bound: data.management_permissions_applied,
             impersonation_granted: data.management_permissions_applied,
-            custom_role_naming: Some(GcpCustomRoleNaming::HashedLongPrefix),
+            custom_role_naming: Some(naming),
             management_permissions_revision: None,
             installed_management_grants: data
                 .installed_management_grants
