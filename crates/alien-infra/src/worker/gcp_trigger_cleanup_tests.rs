@@ -798,3 +798,42 @@ async fn removed_push_trigger_after_checkpoint_retains_intent_and_refuses_advanc
     let controller = executor.internal_state::<GcpWorkerController>().unwrap();
     assert_eq!(controller.storage_topic_intents.len() + controller.push_subscription_intents.len(), 1);
 }
+
+#[rstest]
+#[case(false)]
+#[case(true)]
+#[tokio::test]
+async fn denied_command_child_deletion_retains_receipt_for_retry(#[case] subscription: bool) {
+    let calls = Arc::new(Mutex::new(0)); let writes = calls.clone();
+    let remove = move |name: String| {
+        let mut count = writes.lock().unwrap(); *count += 1;
+        if *count == 1 {
+            Err(AlienError::new(ClientError::RemoteAccessDenied { resource_type: "command child".into(), resource_name: name }))
+        } else {
+            Err(AlienError::new(ClientError::RemoteResourceNotFound { resource_type: "command child".into(), resource_name: name }))
+        }
+    };
+    let mut pubsub = MockPubSubApi::new();
+    if subscription { pubsub.expect_delete_subscription().times(2).returning(remove); }
+    else { pubsub.expect_delete_topic().times(2).returning(remove); }
+    let pubsub = Arc::new(pubsub); let mut services = MockPlatformServiceProvider::new();
+    services.expect_get_gcp_pubsub_client().returning(move |_| Ok(pubsub.clone())); let services = Arc::new(services);
+    let mut controller = GcpWorkerController::mock_ready("test-worker");
+    if subscription { controller.commands_subscription_name = Some("test-worker-rq-sub".into()); }
+    else { controller.commands_topic_name = Some("test-worker-rq".into()); }
+    for retry in [false, true] {
+        controller.state = GcpWorkerState::DeletingCommandsInfrastructure;
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(function_public_ingress()).controller(controller).platform(Platform::Gcp)
+            .service_provider(services.clone()).with_test_dependencies().build().await.unwrap();
+        let result = executor.step().await;
+        if retry { result.unwrap(); } else {
+            let error = result.expect_err("denied command cleanup must not advance or discard its receipt");
+            assert!(format!("{error:?}").contains("RESOURCE_CLEANUP_INCOMPLETE"));
+        }
+        controller = serde_json::from_value(serde_json::to_value(executor.internal_state::<GcpWorkerController>().unwrap()).unwrap()).unwrap();
+        let retained = if subscription { controller.commands_subscription_name.is_some() } else { controller.commands_topic_name.is_some() };
+        assert_eq!(retained, !retry);
+    }
+    assert_eq!(*calls.lock().unwrap(), 2);
+}
