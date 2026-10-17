@@ -696,17 +696,14 @@ pub fn deployer_secret_environment(
         platform,
     )
     .into_iter()
+    // Stored presence selects existing delivery even when plaintext inputs are
+    // omitted. Preflight does not grant these inputs access to the native vault.
+    .filter(|slot| !slot.has_stored_value)
     .filter_map(|slot| {
-        let report = reports
+        reports
             .iter()
-            .find(|report| report.input_id == slot.input.id)?;
-        // Only a concrete legacy value supplies delivery. Presence IDs do
-        // not supply a value for a pure deployer slot.
-        (!values
-            .get(&slot.input.id)
-            .is_some_and(|value| !value.is_null())
-            && (!slot.has_stored_value || report.status == DeployerSecretStatus::Present))
-            .then_some((slot, report))
+            .find(|report| report.input_id == slot.input.id)
+            .map(|report| (slot, report))
     })
     .flat_map(|(slot, report)| {
         slot.input.env.iter().map(move |mapping| {
@@ -1244,7 +1241,7 @@ mod tests {
     }
 
     #[test]
-    fn stored_secret_ids_keep_deployer_only_slots_and_legacy_fallback() {
+    fn stored_secret_ids_keep_deployer_only_slots_on_stored_delivery() {
         let inputs = vec![secret("apiKey", vec![StackInputProvider::Deployer])];
         let values = HashMap::new();
         let present = vec!["apiKey".to_string()];
@@ -1268,8 +1265,10 @@ mod tests {
             Platform::Aws,
             &[report("apiKey", DeployerSecretStatus::Present)],
         );
-        assert_eq!(environment.len(), 1);
-        assert_eq!(environment[0].0.vault_key, "api-key");
+        assert!(
+            environment.is_empty(),
+            "a filled native slot cannot replace stored delivery without its read grant"
+        );
     }
 
     #[test]

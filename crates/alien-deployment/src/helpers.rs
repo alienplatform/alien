@@ -899,7 +899,10 @@ pub async fn check_deployer_secrets(
         config.stored_secret_input_ids.as_deref(),
         &config.environment_variables.variables,
         platform,
-    );
+    )
+    .into_iter()
+    .filter(|slot| !slot.has_stored_value)
+    .collect::<Vec<_>>();
     if slots.is_empty() {
         return Ok(Vec::new());
     }
@@ -908,9 +911,6 @@ pub async fn check_deployer_secrets(
         .resources
         .get(alien_core::DEPLOYER_SECRETS_VAULT_ID)
     else {
-        if slots.iter().all(|slot| slot.has_stored_value) {
-            return Ok(Vec::new());
-        }
         // An existing deployment may still have its original setup. Report the
         // new destination without loading a binding or probing the old values.
         let prefix = format!(
@@ -924,7 +924,7 @@ pub async fn check_deployer_secrets(
             _ => None,
         };
         let mut context = deployer_secret_location_context(stack_state, client_config, config);
-        return slots.into_iter().filter(|slot| !slot.has_stored_value).map(|slot| {
+        return slots.into_iter().map(|slot| {
             context.secret_label = Some(slot.input.label.clone());
             let location = if let Some(binding) = &binding {
                 deployer_secret_location(binding, &slot.vault_key, &context).context(ErrorData::InternalError {
@@ -1675,7 +1675,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stored_dual_secret_presence_skips_vault_checks_but_not_deployer_only_secrets() {
+    async fn stored_secret_presence_skips_vault_checks_for_both_provider_kinds() {
         let mut stack = make_single_function_stack("demo-worker");
         stack.inputs = vec![serde_json::from_value(serde_json::json!({
             "id": "apiKey", "kind": "secret", "providedBy": ["developer", "deployer"],
@@ -1762,10 +1762,11 @@ mod tests {
             Platform::Test
         )
         .await
-        .is_err());
+        .unwrap()
+        .is_empty());
         assert!(
             deployer_secrets_blocking_start(&stack, &config, Platform::Test, &[missing]).is_empty(),
-            "legacy stored presence remains a fallback until the vault is filled"
+            "stored inputs keep their delivery regardless of native vault presence"
         );
     }
 
@@ -2604,7 +2605,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn native_slot_is_missing_until_customer_writes_it() {
+    async fn native_slot_presence_preserves_stored_input_delivery() {
         let temp = tempfile::tempdir().unwrap();
         let directory = temp.path().to_string_lossy().to_string();
         let client = ClientConfig::Local {
@@ -2631,10 +2632,26 @@ mod tests {
         let mut stack = make_single_function_stack("worker");
         stack.inputs = vec![serde_json::from_value(serde_json::json!({
             "id": "apiKey", "kind": "secret", "providedBy": ["deployer"],
-            "required": true, "label": "API key", "description": ""
+            "required": true, "label": "API key", "description": "",
+            "env": [{"name": "API_KEY"}]
         }))
         .unwrap()];
-        let config = make_config(make_snapshot(&[], &[]));
+        stack.inputs.push(
+            serde_json::from_value(serde_json::json!({
+                "id": "storedKey", "kind": "secret", "providedBy": ["deployer"],
+                "required": true, "label": "Stored key", "description": "",
+                "env": [{"name": "STORED_KEY"}]
+            }))
+            .unwrap(),
+        );
+        let mut config = make_config(make_snapshot(&[], &[("STORED_KEY", "stored-value")]));
+        config.stored_secret_input_ids = Some(vec!["storedKey".to_string()]);
+        // A customer following setup outputs may write this extra key. It must
+        // not switch stored delivery to a vault with no corresponding grant.
+        deployer
+            .set_secret("stored-key", "extra-customer-value")
+            .await
+            .unwrap();
         let reports = check_deployer_secrets(&stack, &state, &client, &config, Platform::Local)
             .await
             .unwrap();
@@ -2656,10 +2673,22 @@ mod tests {
         let reports = check_deployer_secrets(&stack, &state, &client, &config, Platform::Local)
             .await
             .unwrap();
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0].input_id, "apiKey");
         assert_eq!(reports[0].status, DeployerSecretStatus::Present);
         assert!(
             deployer_secrets_blocking_start(&stack, &config, Platform::Local, &reports).is_empty()
         );
+        inject_environment_variables(&mut stack, &config, Platform::Aws, &reports).unwrap();
+        let worker = stack.resources["worker"]
+            .config
+            .downcast_ref::<Worker>()
+            .unwrap();
+        let delivery: AlienSecretsConfig =
+            serde_json::from_str(&worker.environment[ENV_ALIEN_SECRETS]).unwrap();
+        assert_eq!(delivery.keys, vec!["STORED_KEY"]);
+        assert_eq!(delivery.deployer_secrets.len(), 1);
+        assert_eq!(delivery.deployer_secrets[0].vault_key, "api-key");
     }
 
     #[tokio::test]
