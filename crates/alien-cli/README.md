@@ -70,6 +70,21 @@ explicit class. These settings do not install a storage driver.
 
 ### Local secrets
 
+`alien dev vault set <vault> <key> --stdin` reads the exact input bytes, including
+any trailing newline. It keeps the value out of command arguments. The same
+option works with `alien vault --deployment <name> set`.
+
+For a hidden prompt in bash or zsh:
+
+```sh
+(
+set +x
+printf 'API token: ' >&2
+IFS= read -rs secret && printf '\n' >&2 && printf '%s' "$secret" | alien dev vault set secrets API_TOKEN --stdin
+)
+```
+
+
 Avoid passing secret values through `--secret`, because command arguments can be visible to other local processes and shell-history tools. `alien dev` can read a secret from a file or an inherited environment variable instead:
 
 ```sh

@@ -15,6 +15,7 @@ use alien_manager_api::SdkResultExt;
 use clap::{Parser, Subcommand};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use tokio::io::AsyncReadExt;
 use tracing::info;
 
 #[derive(Parser, Debug, Clone)]
@@ -26,8 +27,8 @@ Vaults store sensitive data like API keys, tokens, and credentials that your
 functions need at runtime. Each deployment has isolated vault state.
 
 EXAMPLES:
-    # Set a secret in the default deployment
-    alien dev vault set customer-secrets GITHUB_TOKEN ghp_xxx
+    # Set a secret from stdin in the default deployment
+    secret-source | alien dev vault set customer-secrets GITHUB_TOKEN --stdin
     
     # Get a secret
     alien dev vault get customer-secrets GITHUB_TOKEN
@@ -67,8 +68,12 @@ pub enum VaultAction {
         vault_name: String,
         /// Secret name (e.g., "GITHUB_TOKEN")
         secret_name: String,
-        /// Secret value
-        value: String,
+        /// Secret value (prefer --stdin to keep it out of process arguments)
+        #[arg(required_unless_present = "stdin", conflicts_with = "stdin")]
+        value: Option<String>,
+        /// Read the exact secret bytes from stdin, without trimming whitespace
+        #[arg(long)]
+        stdin: bool,
     },
     /// Get a secret value from a vault
     Get {
@@ -89,6 +94,22 @@ pub enum VaultAction {
         /// Vault name
         vault_name: String,
     },
+}
+
+async fn read_secret_value(value: Option<String>) -> Result<String> {
+    if let Some(value) = value {
+        return Ok(value);
+    }
+    let mut value = String::new();
+    tokio::io::stdin()
+        .read_to_string(&mut value)
+        .await
+        .into_alien_error()
+        .context(ErrorData::ValidationError {
+            field: "stdin".to_string(),
+            message: "Failed to read the secret from stdin".to_string(),
+        })?;
+    Ok(value)
 }
 
 /// Validate a vault or secret name to prevent path traversal attacks.
@@ -135,7 +156,9 @@ pub async fn vault_task(args: VaultArgs, port: u16) -> Result<()> {
             vault_name,
             secret_name,
             value,
+            stdin: _,
         } => {
+            let value = read_secret_value(value).await?;
             validate_vault_name(&vault_name)?;
             validate_vault_name(&secret_name)?;
             set_secret(&vault_name, &secret_name, &value, &vault_path).await?;
@@ -388,7 +411,9 @@ pub async fn vault_remote_task(
             vault_name,
             secret_name,
             value,
+            stdin: _,
         } => {
+            let value = read_secret_value(value).await?;
             validate_vault_name(&vault_name)?;
             validate_vault_name(&secret_name)?;
             let url = format!(
@@ -544,6 +569,53 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+
+    #[test]
+    fn set_accepts_exactly_one_value_source() {
+        let piped =
+            VaultArgs::try_parse_from(["vault", "set", "secrets", "key", "--stdin"]).unwrap();
+        assert!(matches!(
+            piped.action,
+            VaultAction::Set {
+                value: None,
+                stdin: true,
+                ..
+            }
+        ));
+        let argument =
+            VaultArgs::try_parse_from(["vault", "set", "secrets", "key", "fake-value"]).unwrap();
+        assert!(
+            matches!(argument.action, VaultAction::Set { value: Some(value), stdin: false, .. } if value == "fake-value")
+        );
+        assert!(VaultArgs::try_parse_from(["vault", "set", "secrets", "key"]).is_err());
+        assert!(VaultArgs::try_parse_from([
+            "vault",
+            "set",
+            "secrets",
+            "key",
+            "fake-value",
+            "--stdin"
+        ])
+        .is_err());
+        let remote = VaultRemoteArgs::try_parse_from([
+            "vault",
+            "--deployment",
+            "test",
+            "set",
+            "secrets",
+            "key",
+            "--stdin",
+        ])
+        .unwrap();
+        assert!(matches!(
+            remote.action,
+            VaultAction::Set {
+                value: None,
+                stdin: true,
+                ..
+            }
+        ));
+    }
 
     #[test]
     fn delete_action_parses_for_local_and_remote_commands() {

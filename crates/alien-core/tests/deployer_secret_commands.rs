@@ -1,0 +1,151 @@
+#![cfg(unix)]
+
+use std::fs;
+use std::io::Write;
+use std::os::unix::fs::PermissionsExt;
+use std::process::{Command, Output, Stdio};
+
+use alien_core::{deployer_secret_location, DeployerSecretLocationContext, VaultBinding};
+use tempfile::TempDir;
+
+const VALUE: &str = "  fake-test-value-1566 '$()\\\"\t ";
+
+struct Shell {
+    directory: TempDir,
+}
+
+impl Shell {
+    fn new() -> Self {
+        let directory = tempfile::tempdir().unwrap();
+        // The executables enforce each CLI's input transport and capture what it receives.
+        let executable = directory.path().join("cli");
+        fs::write(
+            &executable,
+            r#"#!/bin/bash
+printf '%s\0' "$@" >> "$CAPTURE/args"
+case "${0##*/} $1 $2" in
+  'aws sts get-caller-identity') printf '%s\n' "$ACCOUNT"; exit 0;;
+  'gcloud secrets describe') exit 0;;
+esac
+case "${0##*/}" in
+  aws) [[ " $* " == *' --value file:///dev/stdin '* ]] || exit 40;;
+  az) [[ " $* " == *' --file /dev/stdin '* ]] || exit 41;;
+  gcloud) [[ " $* " == *' --data-file=- '* ]] || exit 42;;
+  kubectl)
+    if [[ "$1" == create ]]; then
+      [[ " $* " == *' --from-file=value=/dev/stdin '* ]] || exit 43
+      cat
+      exit 0
+    fi;;
+  alien) [[ " $* " == *' --stdin '* ]] || exit 44;;
+esac
+cat > "$CAPTURE/value"
+"#,
+        )
+        .unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+        for name in ["aws", "gcloud", "az", "kubectl", "alien"] {
+            std::os::unix::fs::symlink(&executable, directory.path().join(name)).unwrap();
+        }
+        Self { directory }
+    }
+
+    fn run(&self, command: &str, account: &str, input: &str) -> Output {
+        let mut child = Command::new("bash")
+            .args(["-x", "-c", command])
+            .env(
+                "PATH",
+                format!("{}:/usr/bin:/bin", self.directory.path().display()),
+            )
+            .env("CAPTURE", self.directory.path())
+            .env("ACCOUNT", account)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+        child.wait_with_output().unwrap()
+    }
+}
+
+fn context() -> DeployerSecretLocationContext {
+    DeployerSecretLocationContext {
+        secret_label: Some("Key's $(printf injected)".to_string()),
+        aws_account_id: Some("123456789012".to_string()),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn hidden_prompts_deliver_exact_bytes_without_exposing_values_in_arguments_or_output() {
+    for binding in [
+        VaultBinding::parameter_store("test-secrets"),
+        VaultBinding::secret_manager("test-secrets"),
+        VaultBinding::key_vault("testvault"),
+        VaultBinding::kubernetes_secret("default", "test-secrets"),
+        VaultBinding::local("secrets", "/tmp/unused"),
+    ] {
+        let shell = Shell::new();
+        let location = deployer_secret_location(&binding, "input-key", &context()).unwrap();
+        let output = shell.run(&location.cli_command, "123456789012", &format!("{VALUE}\n"));
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            fs::read(shell.directory.path().join("value")).unwrap(),
+            VALUE.as_bytes()
+        );
+        let args = fs::read(shell.directory.path().join("args")).unwrap();
+        for bytes in [args, output.stdout, output.stderr.clone()] {
+            assert!(!String::from_utf8_lossy(&bytes).contains(VALUE));
+        }
+        assert!(String::from_utf8_lossy(&output.stderr).contains("Key's $(printf injected): "));
+    }
+}
+
+#[test]
+fn wrong_aws_account_stops_before_prompting_or_writing_and_leaves_the_shell_open() {
+    let shell = Shell::new();
+    let location = deployer_secret_location(
+        &VaultBinding::parameter_store("test-secrets"),
+        "input-key",
+        &context(),
+    )
+    .unwrap();
+    let output = shell.run(
+        &format!(
+            "{}; result=$?; printf 'shell-alive'; exit $result",
+            location.cli_command
+        ),
+        "999999999999",
+        "",
+    );
+    assert!(!output.status.success());
+    assert_eq!(output.stdout, b"shell-alive");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Switch to AWS account 123456789012"));
+    assert!(!stderr.contains("Key's"));
+    assert!(!shell.directory.path().join("value").exists());
+}
+
+#[test]
+fn cancelled_prompt_does_not_write_an_empty_secret() {
+    let shell = Shell::new();
+    let location = deployer_secret_location(
+        &VaultBinding::local("secrets", "/tmp/unused"),
+        "input-key",
+        &context(),
+    )
+    .unwrap();
+    let output = shell.run(&location.cli_command, "123456789012", "");
+    assert!(!output.status.success());
+    assert!(!shell.directory.path().join("value").exists());
+}
