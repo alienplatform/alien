@@ -1,5 +1,5 @@
 use alien_client_core::ErrorData as ClientError;
-use alien_error::{AlienError, Context};
+use alien_error::{AlienError, Context, ContextError};
 use alien_gcp_clients::cloudscheduler::{CloudSchedulerApi, SchedulerJob};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -49,6 +49,46 @@ mod tests {
             resource_type: "scheduler job".into(),
             resource_name: name,
         })
+    }
+
+    #[tokio::test]
+    async fn foreign_conflict_after_absent_read_is_not_adopted() {
+        let intent = intent();
+        let mut foreign = intent.job.clone();
+        foreign.name = Some(NAME.into());
+        foreign.description = Some("another controller".into());
+        let mut calls = mockall::Sequence::new();
+        let mut client = MockCloudSchedulerApi::new();
+        client
+            .expect_get_job()
+            .times(1)
+            .in_sequence(&mut calls)
+            .return_once(|name| Err(absent(name)));
+        client
+            .expect_create_job()
+            .times(1)
+            .in_sequence(&mut calls)
+            .return_once(|_, _, _| {
+                Err(AlienError::new(ClientError::RemoteResourceConflict {
+                    resource_type: "scheduler job".into(),
+                    resource_name: NAME.into(),
+                    message: "foreign create won race".into(),
+                }))
+            });
+        client
+            .expect_get_job()
+            .times(1)
+            .in_sequence(&mut calls)
+            .return_once(move |_| Ok(foreign));
+        client.expect_delete_job().never();
+        assert_eq!(
+            intent
+                .create_or_recover(&client, NAME, "us-central1", "worker")
+                .await
+                .unwrap_err()
+                .code,
+            "RESOURCE_CONFIG_INVALID"
+        );
     }
 
     #[tokio::test]
