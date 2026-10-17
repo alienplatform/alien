@@ -420,27 +420,14 @@ pub fn deployer_secret_location(
         ),
     };
     let windows = windows_secret_commands(binding, vault_key, context)?;
-    // Subshell scope discards the value and preserves the caller's shell options.
-    // EOT finishes terminal input without adding a newline; EOF also accepts pipes.
-    // printf + read works in both bash and zsh; their read prompt flags differ.
-    let prompt = shell_quote(&format!("{label} (Ctrl-D to finish): "));
-    let write = format!(
-        "{prepare}printf '%s' {prompt} >&2\nIFS= read -rs -d $'\\004' secret || [ -n \"$secret\" ]\n[ -n \"$secret\" ] && printf '\\n' >&2 &&\nprintf '%s' \"$secret\" |\n  {}",
-        location.cli_command
+    // Secret inputs have no multiline declaration; Enter completes a hidden single-line read.
+    // A subshell prevents values or shell options from leaking into the caller's session.
+    let prompt = shell_quote(&format!("{label}: "));
+    location.cli_command = format!(
+        "(set +x; set -o pipefail; printf '%s' {prompt} >&2; IFS= read -rs secret || [ -n \"$secret\" ]\n[ -n \"$secret\" ] && printf '\\n' >&2 && {prepare}printf '%s' \"$secret\" | {}\n)",
+        location.cli_command,
+        prepare = prepare.replace('\n', " "),
     );
-    location.cli_command = if location.store == DeployerSecretStore::AwsParameterStore {
-        let account = context
-            .aws_account_id
-            .as_deref()
-            .unwrap_or("<AWS_ACCOUNT_ID>");
-        let expected = shell_quote(account);
-        let message = shell_quote(&format!("Switch to AWS account {account} and try again."));
-        format!(
-            "(\nset +x\nset -o pipefail\nif [ \"$(aws sts get-caller-identity --query Account --output text)\" = {expected} ]; then\n{write}\nelse\n  printf '%s\\n' {message} >&2\n  false\nfi\n)"
-        )
-    } else {
-        format!("(\nset +x\nset -o pipefail\n{write}\n)")
-    };
     let (target, check_command) = match binding {
         VaultBinding::ParameterStore(_) => (
             context.aws_account_id.clone(),
@@ -567,51 +554,11 @@ fn windows_secret_commands(
         }
         VaultBinding::SecretManager(_) => inline,
     };
-    let guard = if matches!(binding, VaultBinding::ParameterStore(_)) {
-        let account = context
-            .aws_account_id
-            .as_deref()
-            .unwrap_or("<AWS_ACCOUNT_ID>");
-        format!(
-            "  if ((aws sts get-caller-identity --query Account --output text) -ne {}) {{ throw {} }}\n",
-            powershell_quote(account),
-            powershell_quote(&format!("Switch to AWS account {account} and try again."))
-        )
-    } else {
-        String::new()
-    };
     let label = powershell_quote(context.secret_label.as_deref().unwrap_or(vault_key));
+    // NetworkCredential unwraps SecureString on both Windows PowerShell 5.1 and PowerShell 7.
+    // Keep the native file transport: Windows string pipelines alter encoding and newlines.
     let prompt = format!(
-        r#"& {{
-{guard}  if ([Console]::IsInputRedirected) {{ throw 'Run this prompt in an interactive terminal.' }}
-  $secret = New-Object Security.SecureString
-  $pointer = [IntPtr]::Zero; $path = $null
-  $controlC = [Console]::TreatControlCAsInput
-  try {{
-    [Console]::TreatControlCAsInput = $true
-    Write-Host ({label} + ' (hidden; Ctrl-D to finish, Ctrl-C to cancel): ' ) -NoNewline
-    while ($true) {{
-      $key = [Console]::ReadKey($true)
-      if ([int]$key.KeyChar -eq 3) {{ throw 'Cancelled' }}
-      if ([int]$key.KeyChar -eq 4) {{ break }}
-      if ([int]$key.KeyChar -eq 8) {{ if ($secret.Length -gt 0) {{ $secret.RemoveAt($secret.Length - 1) }}; continue }}
-      if ([int]$key.KeyChar -eq 13) {{ $secret.AppendChar([char]10); continue }}
-      if ([int]$key.KeyChar -ne 0) {{ $secret.AppendChar($key.KeyChar) }}
-    }}
-    if ($secret.Length -eq 0) {{ throw 'No value entered' }}
-    $pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secret)
-    {file}
-    $value = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer)
-    {save}
-    {prepare}{write}{result}
-  }} finally {{
-    [Console]::TreatControlCAsInput = $controlC
-    Write-Host ''
-    if ($pointer -ne [IntPtr]::Zero) {{ [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer) }}
-    $secret.Dispose(); $value = $null
-    if ($path) {{ Remove-Item -LiteralPath $path -Force }}
-  }}
-}}"#
+        "& {{ $value = [Net.NetworkCredential]::new('', (Read-Host {label} -AsSecureString)).Password; if (!$value) {{ return }}\n{file}; try {{ {save}; {prepare}{write}{result}\n}} finally {{ {cleanup} }} }}"
     );
     Ok(DeployerSecretCommandVariants { inline, prompt })
 }

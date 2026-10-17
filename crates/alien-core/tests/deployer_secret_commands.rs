@@ -99,11 +99,7 @@ fn context() -> DeployerSecretLocationContext {
 #[test]
 fn hidden_prompts_deliver_exact_bytes_without_exposing_values_in_arguments_or_output() {
     for executable in ["bash", "zsh"] {
-        for value in [
-            VALUE,
-            "-----BEGIN FAKE KEY-----\nline two\n-----END FAKE KEY-----",
-            "fake-test-value\n",
-        ] {
+        for value in [VALUE, "fake-test café 漢字"] {
             for binding in [
                 VaultBinding::parameter_store("test-secrets"),
                 VaultBinding::secret_manager("test-secrets"),
@@ -113,7 +109,8 @@ fn hidden_prompts_deliver_exact_bytes_without_exposing_values_in_arguments_or_ou
             ] {
                 let shell = Shell::new(executable);
                 let location = deployer_secret_location(&binding, "input-key", &context()).unwrap();
-                let output = shell.run(&location.cli_command, "123456789012", value);
+                let output =
+                    shell.run(&location.cli_command, "123456789012", &format!("{value}\n"));
                 assert!(
                     output.status.success(),
                     "{}",
@@ -127,37 +124,11 @@ fn hidden_prompts_deliver_exact_bytes_without_exposing_values_in_arguments_or_ou
                 for bytes in [args, output.stdout, output.stderr.clone()] {
                     assert!(!String::from_utf8_lossy(&bytes).contains(value));
                 }
-                assert!(String::from_utf8_lossy(&output.stderr)
-                    .contains("Key's $(printf injected) (Ctrl-D to finish): "));
+                assert!(
+                    String::from_utf8_lossy(&output.stderr).contains("Key's $(printf injected): ")
+                );
             }
         }
-    }
-}
-
-#[test]
-fn wrong_aws_account_stops_before_prompting_or_writing_and_leaves_the_shell_open() {
-    for executable in ["bash", "zsh"] {
-        let shell = Shell::new(executable);
-        let location = deployer_secret_location(
-            &VaultBinding::parameter_store("test-secrets"),
-            "input-key",
-            &context(),
-        )
-        .unwrap();
-        let output = shell.run(
-            &format!(
-                "{}; result=$?; printf 'shell-alive'; exit $result",
-                location.cli_command
-            ),
-            "999999999999",
-            "",
-        );
-        assert!(!output.status.success());
-        assert_eq!(output.stdout, b"shell-alive");
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(stderr.contains("Switch to AWS account 123456789012"));
-        assert!(!stderr.contains("Key's"));
-        assert!(!shell.directory.path().join("value").exists());
     }
 }
 
