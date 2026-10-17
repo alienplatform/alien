@@ -143,6 +143,22 @@ impl LogSource {
             Self::RemoteSandbox => "sandbox-gateway",
         }
     }
+
+    /// The value a user passes to `--source`.
+    fn flag(self) -> &'static str {
+        match self {
+            Self::Application => "application",
+            Self::AiGateway => "ai-gateway",
+            Self::EncryptionGateway => "encryption-gateway",
+            Self::RemoteSandbox => "remote-sandbox",
+        }
+    }
+
+    /// These gateways run only beside the system manager, so their request logs land in its
+    /// logs database whichever manager runs the project's deployments.
+    fn is_stored_on_system_manager(self) -> bool {
+        matches!(self, Self::AiGateway | Self::RemoteSandbox)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize)]
@@ -366,6 +382,20 @@ fn validate_args(args: &LogsArgs) -> Result<()> {
             message: "--model and --provider require `--source ai-gateway`.".to_string(),
         }));
     }
+    if let Some(source) = args
+        .source
+        .filter(|source| source.is_stored_on_system_manager())
+    {
+        if args.manager.is_some() || args.cloud.is_some() {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "source".to_string(),
+                message: format!(
+                    "`--source {}` reads the system manager's logs; drop --manager and --cloud.",
+                    source.flag()
+                ),
+            }));
+        }
+    }
     if args.source != Some(LogSource::EncryptionGateway) && args.operation.is_some() {
         return Err(AlienError::new(ErrorData::ValidationError {
             field: "source".to_string(),
@@ -421,6 +451,7 @@ async fn resolve_logs_target(
         workspace,
         project_override,
         args.cloud,
+        args.source,
         !args.json,
     )
     .await
@@ -500,11 +531,12 @@ async fn resolve_default_manager_target(
     workspace: &str,
     project_override: Option<&str>,
     cloud: Option<LogsCloud>,
+    source: Option<LogSource>,
     allow_prompt: bool,
 ) -> Result<ResolvedLogsTarget> {
     let (project_id, project_name) =
         resolve_project_scope(ctx, project_override, workspace, allow_prompt).await?;
-    let selected = select_logs_manager(client, workspace, cloud).await?;
+    let selected = select_logs_manager(client, workspace, cloud, source).await?;
 
     Ok(ResolvedLogsTarget {
         manager_id: selected.id.to_string(),
@@ -554,7 +586,9 @@ async fn select_logs_manager(
     client: &alien_platform_api::Client,
     workspace: &str,
     cloud: Option<LogsCloud>,
+    source: Option<LogSource>,
 ) -> Result<types::Manager> {
+    let system_source = source.filter(|source| source.is_stored_on_system_manager());
     let workspace_param = types::ListManagersWorkspace::try_from(workspace)
         .into_alien_error()
         .context(ErrorData::ValidationError {
@@ -576,6 +610,9 @@ async fn select_logs_manager(
     managers
         .into_iter()
         .find(|manager| {
+            if system_source.is_some() {
+                return manager.is_system && manager.logs_database_id.is_some();
+            }
             manager.logs_database_id.is_some()
                 && cloud
                     .map(|cloud| {
@@ -587,7 +624,12 @@ async fn select_logs_manager(
                     .unwrap_or(true)
         })
         .ok_or_else(|| {
-            let message = if let Some(cloud) = cloud {
+            let message = if let Some(source) = system_source {
+                format!(
+                    "No system manager with a Deepstore logs database is listed, and --source {} request logs are stored only there.",
+                    source.flag()
+                )
+            } else if let Some(cloud) = cloud {
                 format!(
                     "No manager with a Deepstore logs database is available for {}. Pass --manager <mgr_...> or try without --cloud.",
                     cloud.as_str()
@@ -1239,6 +1281,97 @@ mod tests {
         assert_eq!(output.logs[0].level.as_deref(), Some("INFO"));
         assert_eq!(output.elapsed_time_micros, 123);
         assert!(output.errors.is_empty());
+    }
+
+    fn manager_json(id: &str, is_system: bool) -> serde_json::Value {
+        json!({
+            "id": id, "name": id, "workspaceId": "ws_000000000000000000000000",
+            "createdAt": "2026-01-01T00:00:00Z", "defaultProjectCount": 0,
+            "managedDeploymentCount": 0, "managementConfigs": {}, "isSystem": is_system,
+            "status": "healthy", "targets": ["aws"], "logsDatabaseId": format!("db_{id}")
+        })
+    }
+
+    #[tokio::test]
+    async fn gateway_sources_read_the_system_managers_logs() {
+        const OWN: &str = "mgr_0000000000000000000000000001";
+        const SYSTEM: &str = "mgr_0000000000000000000000000002";
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path("/v1/managers");
+                then.status(200).json_body(json!([
+                    manager_json(OWN, false),
+                    manager_json(SYSTEM, true)
+                ]));
+            })
+            .await;
+        let client = alien_platform_api::Client::new(&server.base_url());
+
+        for (source, expected) in [
+            (Some(LogSource::RemoteSandbox), SYSTEM),
+            (Some(LogSource::AiGateway), SYSTEM),
+            (Some(LogSource::Application), OWN),
+            (None, OWN),
+        ] {
+            let selected = select_logs_manager(&client, "example", None, source)
+                .await
+                .expect("a manager with logs is listed");
+            assert_eq!(selected.id.to_string(), expected, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn source_flags_match_what_clap_accepts() {
+        for source in LogSource::value_variants() {
+            let value = source.to_possible_value().expect("no LogSource is skipped");
+            assert_eq!(source.flag(), value.get_name());
+        }
+    }
+
+    #[test]
+    fn gateway_sources_refuse_a_manager_or_cloud_they_would_ignore() {
+        for extra in [["--manager", "mgr_own"], ["--cloud", "gcp"]] {
+            let args = LogsArgs::try_parse_from(
+                ["logs", "--source", "remote-sandbox"]
+                    .into_iter()
+                    .chain(extra),
+            )
+            .expect("flags parse before semantic validation");
+            let error = validate_args(&args).expect_err("the system manager holds these logs");
+            assert_eq!(error.code, "VALIDATION_ERROR");
+        }
+        let args =
+            LogsArgs::try_parse_from(["logs", "--source", "encryption-gateway", "--cloud", "gcp"])
+                .expect("flags parse");
+        validate_args(&args).expect("encryption gateway logs can live on any manager");
+    }
+
+    #[tokio::test]
+    async fn gateway_sources_never_fall_back_to_another_manager() {
+        const OWN: &str = "mgr_0000000000000000000000000001";
+        const SYSTEM: &str = "mgr_0000000000000000000000000002";
+        let mut system = manager_json(SYSTEM, true);
+        system["logsDatabaseId"] = serde_json::Value::Null;
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path("/v1/managers");
+                then.status(200)
+                    .json_body(json!([manager_json(OWN, false), system]));
+            })
+            .await;
+        let client = alien_platform_api::Client::new(&server.base_url());
+
+        let error = select_logs_manager(&client, "example", None, Some(LogSource::RemoteSandbox))
+            .await
+            .expect_err("only the system manager holds gateway request logs");
+        assert_eq!(error.code, "CONFIGURATION_ERROR");
+        assert!(
+            error.message.contains("--source remote-sandbox"),
+            "{}",
+            error.message
+        );
     }
 
     #[test]
