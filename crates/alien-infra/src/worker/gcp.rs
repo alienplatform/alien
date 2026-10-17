@@ -426,6 +426,60 @@ pub struct GcpWorkerController {
 }
 
 impl GcpWorkerController {
+    async fn delete_command_children(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<()> {
+        let cfg = ctx.desired_resource_config::<Worker>()?;
+        self.validate_service_scope(ctx)?;
+        let gcp_config = ctx.get_gcp_config()?;
+        if self.commands_topic_name.is_none() && self.commands_topic_intent.is_none()
+            && self.commands_subscription_name.is_none() && self.commands_subscription_intent.is_none() {
+            return Ok(());
+        }
+        let pubsub_client = ctx.service_provider.get_gcp_pubsub_client(gcp_config)?;
+        let incomplete = |message: &str| ErrorData::ResourceCleanupIncomplete {
+            message: message.to_string(), resource_id: cfg.id.clone(),
+        };
+        // New uncertain creates have ownership intents; legacy names remain explicit receipts.
+        // Never infer authority to delete from a derived same-name resource.
+        if let Some(intent) = &self.commands_subscription_intent {
+            let name = self.commands_subscription_name.as_ref().ok_or_else(|| {
+                AlienError::new(incomplete("Command subscription intent has no saved name"))
+            })?;
+            intent.validate_scope(&gcp_config.project_id, name, &cfg.id)
+                .context(incomplete("Command subscription ownership scope could not be verified"))?;
+            intent.delete(pubsub_client.as_ref(), name, &cfg.id).await
+                .context(incomplete("Command subscription deletion remains incomplete"))?;
+            self.commands_subscription_intent = None;
+            self.commands_subscription_name = None;
+        } else if let Some(name) = self.commands_subscription_name.clone() {
+            match pubsub_client.delete_subscription(name).await {
+                Ok(()) => {},
+                Err(error) if matches!(error.error, Some(CloudClientErrorData::RemoteResourceNotFound { .. })) => {},
+                Err(error) => return Err(error.context(incomplete("Recorded command subscription deletion remains incomplete"))),
+            }
+            self.commands_subscription_name = None;
+        }
+        if let Some(intent) = &self.commands_topic_intent {
+            let name = self.commands_topic_name.as_ref().ok_or_else(|| {
+                AlienError::new(incomplete("Command topic intent has no saved name"))
+            })?;
+            intent.validate_scope(&gcp_config.project_id, name, &cfg.id)
+                .context(incomplete("Command topic ownership scope could not be verified"))?;
+            intent.delete(pubsub_client.as_ref(), name, &cfg.id).await
+                .context(incomplete("Command topic deletion remains incomplete"))?;
+            self.commands_topic_intent = None;
+            self.commands_topic_name = None;
+        } else if let Some(name) = self.commands_topic_name.clone() {
+            match pubsub_client.delete_topic(name).await {
+                Ok(()) => {},
+                Err(error) if matches!(error.error, Some(CloudClientErrorData::RemoteResourceNotFound { .. })) => {},
+                Err(error) => return Err(error.context(incomplete("Recorded command topic deletion remains incomplete"))),
+            }
+            self.commands_topic_name = None;
+        }
+
+        Ok(())
+    }
+
     fn validate_service_scope(&self, ctx: &ResourceControllerContext<'_>) -> Result<()> {
         let config = ctx.get_gcp_config()?;
         if self.service_name.is_some() && (self.project_id.is_none() || self.region.is_none()) {
@@ -4406,60 +4460,6 @@ impl GcpWorkerController {
             state: DeletingService,
             suggested_delay: None,
         })
-    }
-
-    async fn delete_command_children(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<()> {
-        let cfg = ctx.desired_resource_config::<Worker>()?;
-        self.validate_service_scope(ctx)?;
-        let gcp_config = ctx.get_gcp_config()?;
-        if self.commands_topic_name.is_none() && self.commands_topic_intent.is_none()
-            && self.commands_subscription_name.is_none() && self.commands_subscription_intent.is_none() {
-            return Ok(());
-        }
-        let pubsub_client = ctx.service_provider.get_gcp_pubsub_client(gcp_config)?;
-        let incomplete = |message: &str| ErrorData::ResourceCleanupIncomplete {
-            message: message.to_string(), resource_id: cfg.id.clone(),
-        };
-        // New uncertain creates have ownership intents; legacy names remain explicit receipts.
-        // Never infer authority to delete from a derived same-name resource.
-        if let Some(intent) = &self.commands_subscription_intent {
-            let name = self.commands_subscription_name.as_ref().ok_or_else(|| {
-                AlienError::new(incomplete("Command subscription intent has no saved name"))
-            })?;
-            intent.validate_scope(&gcp_config.project_id, name, &cfg.id)
-                .context(incomplete("Command subscription ownership scope could not be verified"))?;
-            intent.delete(pubsub_client.as_ref(), name, &cfg.id).await
-                .context(incomplete("Command subscription deletion remains incomplete"))?;
-            self.commands_subscription_intent = None;
-            self.commands_subscription_name = None;
-        } else if let Some(name) = self.commands_subscription_name.clone() {
-            match pubsub_client.delete_subscription(name).await {
-                Ok(()) => {},
-                Err(error) if matches!(error.error, Some(CloudClientErrorData::RemoteResourceNotFound { .. })) => {},
-                Err(error) => return Err(error.context(incomplete("Recorded command subscription deletion remains incomplete"))),
-            }
-            self.commands_subscription_name = None;
-        }
-        if let Some(intent) = &self.commands_topic_intent {
-            let name = self.commands_topic_name.as_ref().ok_or_else(|| {
-                AlienError::new(incomplete("Command topic intent has no saved name"))
-            })?;
-            intent.validate_scope(&gcp_config.project_id, name, &cfg.id)
-                .context(incomplete("Command topic ownership scope could not be verified"))?;
-            intent.delete(pubsub_client.as_ref(), name, &cfg.id).await
-                .context(incomplete("Command topic deletion remains incomplete"))?;
-            self.commands_topic_intent = None;
-            self.commands_topic_name = None;
-        } else if let Some(name) = self.commands_topic_name.clone() {
-            match pubsub_client.delete_topic(name).await {
-                Ok(()) => {},
-                Err(error) if matches!(error.error, Some(CloudClientErrorData::RemoteResourceNotFound { .. })) => {},
-                Err(error) => return Err(error.context(incomplete("Recorded command topic deletion remains incomplete"))),
-            }
-            self.commands_topic_name = None;
-        }
-
-        Ok(())
     }
 
     #[handler(
