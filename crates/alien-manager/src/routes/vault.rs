@@ -103,7 +103,6 @@ async fn ensure_manager_vault_access(
     state: &AppState,
     deployment: &DeploymentRecord,
     vault_name: &str,
-    key: &str,
     permission_set_id: &str,
 ) -> Result<()> {
     let normalize = |name: &str| match deployment.platform {
@@ -116,76 +115,44 @@ async fn ensure_manager_vault_access(
             "Deployer secrets cannot be read or changed through the manager. Use your own cloud credentials and the commands in deployment status.",
         ));
     }
-    let shared_vault = normalize(vault_name) == normalize(alien_core::SECRETS_VAULT_ID);
-    // Only former deployer-slot names need release inspection. Ordinary developer
-    // environment secrets retain their shared-vault API behavior.
-    if shared_vault && !normalize(key).starts_with(&normalize("input-")) {
+
+    if vault_name == "secrets" {
         return Ok(());
     }
 
-    let release_ids: Vec<_> = deployment
+    let release_id = deployment
         .desired_release_id
-        .iter()
-        .chain(deployment.current_release_id.iter())
-        .collect();
-    if release_ids.is_empty() {
-        return Err(ErrorData::bad_request(format!(
-            "Deployment {} has no release attached",
-            deployment.id
-        )));
-    }
-    let system = crate::auth::Subject::system();
-    for release_id in release_ids {
-        let release = state
-            .release_store
-            .get_release(&system, release_id)
-            .await
-            .context(ErrorData::InternalError {
-                message: "Failed to load release for vault authorization".to_string(),
-            })?
-            .ok_or_else(|| {
-                alien_error::AlienError::new(ErrorData::ReleaseNotFound {
-                    release_id: release_id.clone(),
-                })
-            })?;
-        let stack = release.stacks.get(&deployment.platform).ok_or_else(|| {
+        .as_ref()
+        .or(deployment.current_release_id.as_ref())
+        .ok_or_else(|| {
             ErrorData::bad_request(format!(
-                "Release {} has no stack for platform {}",
-                release_id, deployment.platform
+                "Deployment {} has no release attached",
+                deployment.id
             ))
         })?;
-        if shared_vault {
-            let config = deployment.deployment_config.as_ref();
-            let values = config
-                .map(|config| &config.input_values)
-                .unwrap_or(&deployment.input_values);
-            let slots = alien_core::deployer_secret_slots(
-                &stack.inputs,
-                values,
-                config.and_then(|config| config.stored_secret_input_ids.as_deref()),
-                config
-                    .map(|config| config.environment_variables.variables.as_slice())
-                    .unwrap_or(&[]),
-                deployment.platform,
-            );
-            if slots.iter().any(|slot| {
-                !slot.has_stored_value
-                    && normalize(key) == normalize(&format!("input-{}", slot.vault_key))
-            }) {
-                return Err(ErrorData::forbidden(
-                    "This is a former deployer-secret location. Move it to deployer-secrets with your own cloud credentials; the manager cannot read or change it.",
-                ));
-            }
-        } else {
-            // Ordinary vault permissions continue to use the desired release, or
-            // the current release when no update is pending.
-            if stack_management_allows_vault_access(stack, vault_name, permission_set_id) {
-                return Ok(());
-            }
-            break;
-        }
-    }
-    if shared_vault {
+
+    let system = crate::auth::Subject::system();
+    let release = state
+        .release_store
+        .get_release(&system, release_id)
+        .await
+        .context(ErrorData::InternalError {
+            message: "Failed to load release for vault authorization".to_string(),
+        })?
+        .ok_or_else(|| {
+            alien_error::AlienError::new(ErrorData::ReleaseNotFound {
+                release_id: release_id.clone(),
+            })
+        })?;
+
+    let stack = release.stacks.get(&deployment.platform).ok_or_else(|| {
+        ErrorData::bad_request(format!(
+            "Release {} has no stack for platform {}",
+            release_id, deployment.platform
+        ))
+    })?;
+
+    if stack_management_allows_vault_access(stack, vault_name, permission_set_id) {
         return Ok(());
     }
 
@@ -286,7 +253,7 @@ async fn set_secret(
             "Access denied: cannot mutate vault for this deployment",
         ));
     }
-    ensure_manager_vault_access(&state, &deployment, &vault_name, &key, "vault/data-write").await?;
+    ensure_manager_vault_access(&state, &deployment, &vault_name, "vault/data-write").await?;
 
     info!(deployment_id = %deployment_id, vault_name = %vault_name, "Setting vault secret");
 
@@ -344,7 +311,7 @@ async fn get_secret(
             "Access denied: cannot read vault for this deployment",
         ));
     }
-    ensure_manager_vault_access(&state, &deployment, &vault_name, &key, "vault/data-read").await?;
+    ensure_manager_vault_access(&state, &deployment, &vault_name, "vault/data-read").await?;
 
     info!(deployment_id = %deployment_id, vault_name = %vault_name, "Getting vault secret");
 
@@ -404,7 +371,7 @@ async fn delete_secret(
             "Access denied: cannot mutate vault for this deployment",
         ));
     }
-    ensure_manager_vault_access(&state, &deployment, &vault_name, &key, "vault/data-write").await?;
+    ensure_manager_vault_access(&state, &deployment, &vault_name, "vault/data-write").await?;
 
     info!(deployment_id = %deployment_id, vault_name = %vault_name, "Deleting vault secret");
 

@@ -201,7 +201,7 @@ fn protect_deployer_secrets(
             "description": "Read and sync only shared deployment secrets",
             "platforms": { "aws": [{
                 "grant": { "actions": ["ssm:GetParameter", "ssm:PutParameter", "ssm:DeleteParameter"] },
-                "binding": { "stack": { "resources": ["arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${stackPrefix}-secrets-*"] } }
+                "binding": { "stack": { "resources": ["arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${stackPrefix}-secrets-*"] }, "resource": { "resources": ["arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${stackPrefix}-secrets-*"] } }
             }] }
         }))?);
     }
@@ -217,11 +217,11 @@ fn protect_deployer_secrets(
             "description": "Management cannot read or modify customer-written deployer secrets",
             "platforms": { "aws": [{
                 "effect": "Deny", "grant": { "actions": ["ssm:GetParameter*", "ssm:PutParameter", "ssm:DeleteParameter*", "ssm:LabelParameterVersion", "ssm:UnlabelParameterVersion", "ssm:AddTagsToResource", "ssm:RemoveTagsFromResource", "ssm:PutResourcePolicy", "ssm:DeleteResourcePolicy"] },
-                "binding": { "stack": { "resources": ["arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${stackPrefix}-deployer-secrets-*"] } }
+                "binding": { "stack": { "resources": ["arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${stackPrefix}-deployer-secrets-*"] }, "resource": { "resources": ["arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${stackPrefix}-deployer-secrets-*"] } }
             }, {
                 "effect": "Deny",
                 "grant": { "actions": ["ssm:GetParametersByPath"] },
-                "binding": { "stack": { "resources": ["*"] } }
+                "binding": { "stack": { "resources": ["*"] }, "resource": { "resources": ["*"] } }
             }] }
         }))?);
     }

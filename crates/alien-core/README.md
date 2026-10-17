@@ -54,8 +54,7 @@ name is reported by the deployment.
 The `secrets` vault remains for shared developer environment secrets and stored
 legacy input values. Management keeps its existing access there. Management
 receives metadata access to deployer slots, with no direct secret-value read,
-write, or delete permission. The manager vault API refuses deployer slots,
-including their former shared-vault names. Explicit management data grants
+write, or delete permission. The manager vault API refuses the deployer vault. Explicit management data grants
 cannot reopen the reserved vault.
 
 AWS and GCP workloads read only their mapped slots. Workloads sharing one
@@ -69,15 +68,13 @@ This separates direct management access from workload access. It does not
 prevent trusted workload code from using its secrets, or an infrastructure
 administrator from changing IAM or workload code.
 
-### Moving an existing vault-native slot
+### Existing deployments
 
-Rerun setup to install the new vault and permissions. With your own cloud
-credentials, write the existing value using the new command in deployment
-status, then delete the former `<prefix>-secrets-input-api-key` value (or
-`input-api-key` in the former Azure Key Vault). Missing-slot reports include the
-write and delete commands. Alien never copies values or reads the old location
-as a fallback; an old-name-only slot remains missing. Stored legacy values
-already shared with the control plane keep their existing delivery.
+Rerun setup to install the new vault and permissions, then rewrite keys at the
+new names using your own cloud credentials. There is no fallback to former
+locations. A missing key has the normal missing-slot report and write command.
+Stored legacy values already shared with the control plane keep their existing
+delivery.
 
 ### Indirect infrastructure privileges
 

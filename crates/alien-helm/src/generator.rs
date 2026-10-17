@@ -1423,6 +1423,9 @@ spec:
 /// does not know, so the notes give the vault key and point to the deployment
 /// status for the full name.
 fn deployer_secret_notes_tpl(stack: &Stack) -> Option<String> {
+    if !stack.resources.contains_key(alien_core::DEPLOYER_SECRETS_VAULT_ID) {
+        return None;
+    }
     let inputs: Vec<_> = stack
         .inputs()
         .iter()
@@ -8913,6 +8916,7 @@ infrastructureExistingSecret: customer-bindings
                 secret("databasePassword", "Database password", true),
                 secret("licenseKey", "License key", false),
             ])
+            .add(alien_core::Vault::new(alien_core::DEPLOYER_SECRETS_VAULT_ID.to_string()).build(), ResourceLifecycle::Frozen)
             .build();
         let registry = HelmRegistry::built_in();
         let chart = generate_helm_chart(
@@ -8940,7 +8944,7 @@ infrastructureExistingSecret: customer-bindings
             "{notes}"
         );
         assert!(
-            notes.contains("License key (optional): secrets vault key input-license-key"),
+            notes.contains("License key (optional): deployer-secrets vault key license-key"),
             "{notes}"
         );
         assert!(

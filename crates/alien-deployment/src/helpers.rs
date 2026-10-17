@@ -903,12 +903,15 @@ pub async fn check_deployer_secrets(
         return Ok(Vec::new());
     }
 
-    let Some(vault) = stack_state.resources.get(alien_core::DEPLOYER_SECRETS_VAULT_ID) else {
+    let Some(vault) = stack_state
+        .resources
+        .get(alien_core::DEPLOYER_SECRETS_VAULT_ID)
+    else {
         if slots.iter().all(|slot| slot.has_stored_value) {
             return Ok(Vec::new());
         }
         return Err(AlienError::new(ErrorData::MissingConfiguration {
-            message: "Missing deployer-secrets vault. Rerun setup to create it and install its permissions, then write each deployer secret at the new location and delete its former secrets/input-<id> copy with your own credentials. Values in the old vault are never read as a fallback.".to_string(),
+            message: "Missing deployer-secrets vault. Rerun setup to create it and install its permissions.".to_string(),
         }));
     };
     let binding = vault.remote_binding_params.clone().ok_or_else(|| {
@@ -962,31 +965,7 @@ pub async fn check_deployer_secrets(
                 })?;
         let (status, message, version) = match presence {
             SecretPresence::Present { version } => (DeployerSecretStatus::Present, None, version),
-            SecretPresence::Missing => {
-                let mut message = format!(
-                    "Write this secret to '{}' using your own credentials. The former secrets/input-{} location is not read. Rerun setup when upgrading an existing deployment.",
-                    location.name, slot.vault_key,
-                );
-                if let Some(old_binding) = stack_state.resources.get(SECRETS_VAULT_ID)
-                    .and_then(|resource| resource.remote_binding_params.as_ref()) {
-                    let old_binding: VaultBinding = serde_json::from_value(old_binding.clone())
-                        .into_alien_error().context(ErrorData::InternalError {
-                            message: "Failed to parse shared vault binding for migration instructions".to_string(),
-                        })?;
-                    let old_location = deployer_secret_location(
-                        &old_binding, &format!("input-{}", slot.vault_key), &context,
-                    ).context(ErrorData::InternalError {
-                        message: "Failed to name the former deployer secret location".to_string(),
-                    })?;
-                    if let Some(delete) = old_location.delete_command {
-                        message.push_str(&format!(
-                            " To move an existing value from '{}', write it at the new location, then delete the old copy:\n{}\n{}",
-                            old_location.name, location.cli_command, delete,
-                        ));
-                    }
-                }
-                (DeployerSecretStatus::Missing, Some(message), None)
-            },
+            SecretPresence::Missing => (DeployerSecretStatus::Missing, None, None),
             SecretPresence::Invalid { reason } => {
                 (DeployerSecretStatus::Invalid, Some(reason), None)
             }
@@ -1699,7 +1678,9 @@ mod tests {
             alien_core::DEPLOYER_SECRETS_VAULT_ID.to_string(),
             StackResourceState::new_pending(
                 Vault::RESOURCE_TYPE.to_string(),
-                Resource::new(Vault::new(alien_core::DEPLOYER_SECRETS_VAULT_ID.to_string()).build()),
+                Resource::new(
+                    Vault::new(alien_core::DEPLOYER_SECRETS_VAULT_ID.to_string()).build(),
+                ),
                 Some(ResourceLifecycle::Frozen),
                 Vec::new(),
             ),
@@ -2526,41 +2507,62 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn old_slot_is_missing_until_customer_writes_the_separate_vault() {
+    async fn native_slot_is_missing_until_customer_writes_it() {
         let temp = tempfile::tempdir().unwrap();
         let directory = temp.path().to_string_lossy().to_string();
-        let client = ClientConfig::Local { state_directory: directory.clone() };
+        let client = ClientConfig::Local {
+            state_directory: directory.clone(),
+        };
         let mut state = StackState::new(Platform::Local);
-        for name in [SECRETS_VAULT_ID, alien_core::DEPLOYER_SECRETS_VAULT_ID] {
-            let mut vault = StackResourceState::new_pending(Vault::RESOURCE_TYPE.to_string(),
-                Resource::new(Vault::new(name.to_string()).build()), Some(ResourceLifecycle::Frozen), Vec::new());
-            vault.remote_binding_params = Some(serde_json::to_value(VaultBinding::local(name, &directory)).unwrap());
+        for name in [alien_core::DEPLOYER_SECRETS_VAULT_ID] {
+            let mut vault = StackResourceState::new_pending(
+                Vault::RESOURCE_TYPE.to_string(),
+                Resource::new(Vault::new(name.to_string()).build()),
+                Some(ResourceLifecycle::Frozen),
+                Vec::new(),
+            );
+            vault.remote_binding_params =
+                Some(serde_json::to_value(VaultBinding::local(name, &directory)).unwrap());
             vault.status = ResourceStatus::Running;
             state.resources.insert(name.to_string(), vault);
         }
         let provider = BindingsProvider::from_stack_state(&state, client.clone()).unwrap();
-        let shared = provider.load_vault(SECRETS_VAULT_ID).await.unwrap();
-        let deployer = provider.load_vault(alien_core::DEPLOYER_SECRETS_VAULT_ID).await.unwrap();
-        shared.set_secret("input-api-key", "fake-old-value").await.unwrap();
+        let deployer = provider
+            .load_vault(alien_core::DEPLOYER_SECRETS_VAULT_ID)
+            .await
+            .unwrap();
         let mut stack = make_single_function_stack("worker");
         stack.inputs = vec![serde_json::from_value(serde_json::json!({
             "id": "apiKey", "kind": "secret", "providedBy": ["deployer"],
             "required": true, "label": "API key", "description": ""
-        })).unwrap()];
+        }))
+        .unwrap()];
         let config = make_config(make_snapshot(&[], &[]));
-        let reports = check_deployer_secrets(&stack, &state, &client, &config, Platform::Local).await.unwrap();
+        let reports = check_deployer_secrets(&stack, &state, &client, &config, Platform::Local)
+            .await
+            .unwrap();
         assert_eq!(reports.len(), 1);
         assert_eq!(reports[0].status, DeployerSecretStatus::Missing);
-        assert_eq!(deployer_secrets_blocking_start(&stack, &config, Platform::Local, &reports).len(), 1);
-        let message = reports[0].message.as_ref().unwrap();
-        assert!(message.contains("set deployer-secrets api-key"), "{message}");
-        assert!(message.contains("delete secrets input-api-key"), "{message}");
-        assert!(!message.contains("fake-old-value"));
-        deployer.set_secret("api-key", "fake-new-value").await.unwrap();
-        let reports = check_deployer_secrets(&stack, &state, &client, &config, Platform::Local).await.unwrap();
+        assert_eq!(
+            deployer_secrets_blocking_start(&stack, &config, Platform::Local, &reports).len(),
+            1
+        );
+        assert!(reports[0].message.is_none());
+        assert!(reports[0]
+            .location
+            .cli_command
+            .contains("set deployer-secrets api-key"));
+        deployer
+            .set_secret("api-key", "fake-new-value")
+            .await
+            .unwrap();
+        let reports = check_deployer_secrets(&stack, &state, &client, &config, Platform::Local)
+            .await
+            .unwrap();
         assert_eq!(reports[0].status, DeployerSecretStatus::Present);
-        assert!(deployer_secrets_blocking_start(&stack, &config, Platform::Local, &reports).is_empty());
-        assert_eq!(shared.get_secret("input-api-key").await.unwrap(), "fake-old-value");
+        assert!(
+            deployer_secrets_blocking_start(&stack, &config, Platform::Local, &reports).is_empty()
+        );
     }
 
     #[tokio::test]
