@@ -95,7 +95,7 @@ impl GcpNotificationIntent {
 }
 
 fn invalid(resource_id: &str, message: &str) -> AlienError<ErrorData> {
-    AlienError::new(ErrorData::CloudPlatformError { message: message.into(), resource_id: Some(resource_id.into()) })
+    AlienError::new(ErrorData::ResourceConfigInvalid { message: message.into(), resource_id: Some(resource_id.into()) })
 }
 fn context(resource_id: &str, operation: &str) -> ErrorData {
     ErrorData::CloudPlatformError { message: format!("Failed to {operation}"), resource_id: Some(resource_id.into()) }

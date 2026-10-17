@@ -9,7 +9,8 @@ use alien_core::{
 use alien_error::AlienError;
 use alien_gcp_clients::GcpClientConfigExt;
 use alien_gcp_clients::cloudscheduler::MockCloudSchedulerApi;
-use alien_gcp_clients::gcs::MockGcsApi;
+use alien_gcp_clients::gcs::{GcsNotification, ListNotificationsResponse, MockGcsApi};
+use crate::worker::gcp_notification_identity::GcpNotificationIntent;
 use alien_gcp_clients::pubsub::MockPubSubApi;
 use rstest::rstest;
 use std::sync::{Arc, Mutex};
@@ -623,10 +624,8 @@ async fn uncertain_queue_subscription_is_retired_after_controller_reload() {
 
 #[tokio::test]
 async fn pending_notification_without_confirmed_id_is_cleaned_after_controller_reload() {
-    use crate::worker::gcp_notification_identity::GcpNotificationIntent;
-    use alien_gcp_clients::gcs::{GcsNotification, ListNotificationsResponse};
     let project = GcpClientConfig::mock().project_id;
-    let topic = "test-test-worker-storage-notif";
+    let topic = "test-public-func-storage-notif";
     let intent = GcpNotificationIntent::new("owned-bucket".into(), GcsNotification {
         topic: Some(format!("//pubsub.googleapis.com/projects/{project}/topics/{topic}")),
         event_types: vec!["OBJECT_FINALIZE".into()], payload_format: Some("JSON_API_V1".into()),
@@ -663,4 +662,37 @@ async fn pending_notification_without_confirmed_id_is_cleaned_after_controller_r
     let controller = executor.internal_state::<GcpWorkerController>().unwrap();
     assert!(controller.storage_notification_intents.is_empty());
     assert!(native.lock().unwrap().is_empty());
+}
+
+#[rstest]
+#[case(false)]
+#[case(true)]
+#[tokio::test]
+async fn changed_schedule_after_intent_checkpoint_refuses_cloud_mutation(#[case] removed: bool) {
+    let mut scheduler = MockCloudSchedulerApi::new();
+    scheduler.expect_get_job().never();
+    scheduler.expect_create_job().never();
+    let scheduler = Arc::new(scheduler);
+    let mut services = MockPlatformServiceProvider::new();
+    services.expect_get_gcp_cloud_scheduler_client().returning(move |_| Ok(scheduler.clone()));
+    let services = Arc::new(services);
+    let mut desired = function_public_ingress();
+    desired.triggers = vec![alien_core::WorkerTrigger::Schedule { cron: "* * * * *".into() }];
+    let mut controller = GcpWorkerController::mock_ready("test-worker");
+    controller.state = GcpWorkerState::CreatingSchedulerJobs;
+    let mut executor = SingleControllerExecutor::builder()
+        .resource(desired.clone()).controller(controller).platform(Platform::Gcp)
+        .service_provider(services.clone()).with_test_dependencies().build().await.unwrap();
+    executor.step().await.unwrap();
+    let controller: GcpWorkerController = serde_json::from_value(serde_json::to_value(executor.internal_state::<GcpWorkerController>().unwrap()).unwrap()).unwrap();
+    assert_eq!(controller.scheduler_job_intents.len(), 1);
+    desired.triggers = if removed { vec![] } else { vec![alien_core::WorkerTrigger::Schedule { cron: "0 * * * *".into() }] };
+    let mut executor = SingleControllerExecutor::builder()
+        .resource(desired).controller(controller).platform(Platform::Gcp)
+        .service_provider(services).with_test_dependencies().build().await.unwrap();
+    let error = executor.step().await.expect_err("stale pending schedule must be refused before cloud mutation");
+    assert!(format!("{error:?}").contains("RESOURCE_CONFIG_INVALID"));
+    let controller = executor.internal_state::<GcpWorkerController>().unwrap();
+    assert_eq!(controller.scheduler_job_intents.len(), 1);
+    assert!(controller.scheduler_job_names.is_empty());
 }
