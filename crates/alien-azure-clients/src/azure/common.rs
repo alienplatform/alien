@@ -295,8 +295,8 @@ impl AzureClientBase {
     /// Executes an HTTP request with support for long-running operations.
     ///
     /// This method handles the common Azure pattern where operations can either:
-    /// - Complete synchronously (200/204, or 201 without async headers) with the result in the response body or no body  
-    /// - Start asynchronously (201/202 with Azure-AsyncOperation or Location headers)
+    /// - Complete synchronously (200/201 without async headers, or 204) with the result in the response body or no body
+    /// - Start asynchronously (200/201/202 with Azure-AsyncOperation or Location headers)
     ///
     /// Returns an OperationResult that can be used to get the final result.
     #[cfg(target_arch = "wasm32")]
@@ -340,7 +340,12 @@ impl AzureClientBase {
 
                 match status {
                     StatusCode::OK => {
-                        // 200 OK - Operation completed synchronously with response body
+                        // Updates can return 200 while their asynchronous operation is still running.
+                        if let Some(operation) = LongRunningOperation::from_response_headers(&resp)?
+                        {
+                            return Ok(OperationResult::LongRunning(operation));
+                        }
+                        // Without async headers, the response contains the completed result.
                         let body = resp.text().await.into_alien_error().context(
                             ErrorData::HttpRequestFailed {
                                 message: format!("Azure {}: failed to read response body", op),
@@ -445,8 +450,8 @@ impl AzureClientBase {
     /// Executes an HTTP request with support for long-running operations.
     ///
     /// This method handles the common Azure pattern where operations can either:
-    /// - Complete synchronously (200/204, or 201 without async headers) with the result in the response body or no body  
-    /// - Start asynchronously (201/202 with Azure-AsyncOperation or Location headers)
+    /// - Complete synchronously (200/201 without async headers, or 204) with the result in the response body or no body
+    /// - Start asynchronously (200/201/202 with Azure-AsyncOperation or Location headers)
     ///
     /// Returns an OperationResult that can be used to get the final result.
     #[cfg(not(target_arch = "wasm32"))]
@@ -490,7 +495,12 @@ impl AzureClientBase {
 
                 match status {
                     StatusCode::OK => {
-                        // 200 OK - Operation completed synchronously with response body
+                        // Updates can return 200 while their asynchronous operation is still running.
+                        if let Some(operation) = LongRunningOperation::from_response_headers(&resp)?
+                        {
+                            return Ok(OperationResult::LongRunning(operation));
+                        }
+                        // Without async headers, the response contains the completed result.
                         let body = resp.text().await.into_alien_error().context(
                             ErrorData::HttpRequestFailed {
                                 message: format!("Azure {}: failed to read response body", op),

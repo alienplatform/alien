@@ -536,6 +536,20 @@ pub enum ErrorData {
         reason: String,
     },
 
+    /// A controller exhausted its bounded retries of terminal cloud operations.
+    #[error(
+        code = "CLOUD_OPERATION_RETRIES_EXHAUSTED",
+        message = "{operation} for resource '{resource_id}' failed after {attempts} terminal operations: {message}",
+        retryable = "false",
+        internal = "inherit"
+    )]
+    CloudOperationRetriesExhausted {
+        resource_id: String,
+        operation: String,
+        attempts: u32,
+        message: String,
+    },
+
     /// Errors originating from cloud platform operations.
     #[error(
         code = "CLOUD_PLATFORM_ERROR",
