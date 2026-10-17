@@ -1,9 +1,9 @@
 use super::{GcpWorkerController, GcpWorkerState, GcsNotificationTracker};
-use crate::core::MockPlatformServiceProvider;
+use crate::core::{MockPlatformServiceProvider, StackExecutor, StackResourceStateExt};
 use crate::core::controller_test::SingleControllerExecutor;
 use crate::worker::fixtures::function_public_ingress;
 use alien_client_core::ErrorData as ClientError;
-use alien_core::Platform;
+use alien_core::{ClientConfig, GcpClientConfig, Platform, ResourceStatus, Stack};
 use alien_error::AlienError;
 use alien_gcp_clients::cloudscheduler::MockCloudSchedulerApi;
 use alien_gcp_clients::gcs::MockGcsApi;
@@ -158,4 +158,59 @@ async fn failed_trigger_delete_preserves_remaining_child_across_reload(
             _ => GcpWorkerState::DeletingSchedulerJobs,
         }
     );
+}
+
+#[rstest]
+#[case(Child::Notification)]
+#[case(Child::Topic)]
+#[case(Child::Scheduler)]
+#[tokio::test]
+async fn ordinary_stack_delete_retains_denied_trigger(#[case] child: Child) {
+    let mut controller = GcpWorkerController::mock_ready("test-worker");
+    controller.state = match child {
+        Child::Scheduler => GcpWorkerState::DeletingSchedulerJobs,
+        _ => GcpWorkerState::DeletingPushSubscriptions,
+    };
+    match child {
+        Child::Notification => controller.gcs_notification_ids.push(GcsNotificationTracker {
+            bucket_name: "owned-bucket".into(), notification_id: "second".into(),
+        }),
+        Child::Topic => controller.storage_notification_topics.push("second".into()),
+        Child::Scheduler => controller.scheduler_job_names.push("second".into()),
+    }
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let services = provider(child, true, false, calls.clone());
+    let fixture = SingleControllerExecutor::builder()
+        .resource(function_public_ingress()).controller(controller)
+        .platform(Platform::Gcp).service_provider(services.clone())
+        .with_test_dependencies().build().await.unwrap();
+    let mut state = fixture.stack_state().clone();
+    state.resources.retain(|id, _| id == "public-func");
+    state.resources.get_mut("public-func").unwrap().dependencies.clear();
+    let empty = Stack::new("remove-worker".into()).build();
+    let executor = StackExecutor::builder(&empty, ClientConfig::Gcp(Box::new(GcpClientConfig::mock())))
+        .service_provider(services).build().unwrap();
+    let next = executor.step(state).await.unwrap().next_state;
+    assert_eq!(*calls.lock().unwrap(), ["second"]);
+    assert_eq!(next.resources["public-func"].status, ResourceStatus::DeleteFailed);
+    let serialized = serde_json::to_vec(&next).unwrap();
+    let mut restored: alien_core::StackState = serde_json::from_slice(&serialized).unwrap();
+    let saved = restored.resources.get_mut("public-func").unwrap();
+    assert!(saved.error.is_some());
+    assert!(saved.retry_failed().unwrap());
+    let controller = saved.get_internal_controller_typed::<GcpWorkerController>().unwrap();
+    match child {
+        Child::Notification => assert_eq!(controller.gcs_notification_ids[0].notification_id, "second"),
+        Child::Topic => assert_eq!(controller.storage_notification_topics, ["second"]),
+        Child::Scheduler => assert_eq!(controller.scheduler_job_names, ["second"]),
+    }
+    let retry_calls = Arc::new(Mutex::new(Vec::new()));
+    let retry = StackExecutor::builder(&empty, ClientConfig::Gcp(Box::new(GcpClientConfig::mock())))
+        .service_provider(provider(child, true, true, retry_calls.clone())).build().unwrap();
+    let next = retry.step(restored).await.unwrap().next_state;
+    assert_eq!(*retry_calls.lock().unwrap(), ["second"]);
+    let controller = next.resources["public-func"].get_internal_controller_typed::<GcpWorkerController>().unwrap();
+    assert!(controller.gcs_notification_ids.is_empty());
+    assert!(controller.storage_notification_topics.is_empty());
+    assert!(controller.scheduler_job_names.is_empty());
 }
