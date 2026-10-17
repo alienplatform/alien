@@ -9,7 +9,8 @@ use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use alien_aws_clients::s3::{
     GetBucketEncryptionOutput, LifecycleConfiguration, LifecycleExpiration, LifecycleRule,
-    LifecycleRuleFilter, LifecycleRuleStatus, PublicAccessBlockConfiguration, VersioningStatus,
+    LifecycleRuleFilter, LifecycleRuleStatus, PublicAccessBlockConfiguration, S3Api,
+    VersioningStatus,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
@@ -44,6 +45,71 @@ fn is_bucket_missing(error: &AlienError<CloudClientErrorData>) -> bool {
 /// hold a bucket with that name that someone else made; only these tags show it is ours.
 fn bucket_is_ours(tags: &HashMap<String, String>, ours: &HashMap<String, String>) -> bool {
     ours.iter().all(|(key, value)| tags.get(key) == Some(value))
+}
+
+/// What already holds a bucket name, as far as this deployment is concerned.
+enum ExistingBucket {
+    Missing,
+    /// Carries this deployment's tags for the resource.
+    Ours,
+    /// Exists with no tags at all.
+    Untagged,
+    /// Exists with other tags, or in another region.
+    Foreign,
+}
+
+async fn inspect_bucket(
+    client: &dyn S3Api,
+    bucket_name: &str,
+    our_tags: &HashMap<String, String>,
+    resource_id: &str,
+) -> Result<ExistingBucket> {
+    match client.get_bucket_tagging(bucket_name).await {
+        Ok(tags) if bucket_is_ours(&tags, our_tags) => Ok(ExistingBucket::Ours),
+        Ok(tags) if tags.is_empty() => Ok(ExistingBucket::Untagged),
+        Ok(_) => Ok(ExistingBucket::Foreign),
+        Err(error) if is_bucket_missing(&error) => Ok(ExistingBucket::Missing),
+        // S3 redirects requests for a bucket that exists in another region. This deployment
+        // only creates buckets in its own region, so that bucket is not ours, and retrying
+        // cannot change that.
+        Err(error) if is_redirect(&error) => Ok(ExistingBucket::Foreign),
+        Err(error) => Err(error.context(ErrorData::CloudPlatformError {
+            message: format!(
+                "Failed to check whether S3 bucket '{}' already exists",
+                bucket_name
+            ),
+            resource_id: Some(resource_id.to_string()),
+        })),
+    }
+}
+
+fn bucket_not_owned(resource_id: &str, bucket_name: &str) -> AlienError<ErrorData> {
+    AlienError::new(ErrorData::ExistingCloudResourceNotOwned {
+        resource_id: resource_id.to_string(),
+        object: format!("S3 bucket '{}'", bucket_name),
+    })
+}
+
+fn is_redirect(error: &AlienError<CloudClientErrorData>) -> bool {
+    matches!(
+        &error.error,
+        Some(CloudClientErrorData::RemoteRequestRejected {
+            http_status: 301,
+            ..
+        })
+    )
+}
+
+/// Whether a failed request may still have been applied: no answer from S3 arrived.
+fn is_outcome_unknown(error: &AlienError<CloudClientErrorData>) -> bool {
+    matches!(
+        &error.error,
+        Some(
+            CloudClientErrorData::HttpRequestFailed { .. }
+                | CloudClientErrorData::Timeout { .. }
+                | CloudClientErrorData::RemoteServiceUnavailable { .. }
+        )
+    )
 }
 
 fn is_missing_optional_bucket_metadata(error: &AlienError<CloudClientErrorData>) -> bool {
@@ -88,10 +154,57 @@ impl AwsStorageController {
         // CreateBucket cannot tell whether a bucket is ours: in us-east-1 it returns 200 for a
         // bucket the account already owns, elsewhere BucketAlreadyOwnedByYou. Check first, and
         // never adopt a bucket this deployment did not create.
-        match client.get_bucket_tagging(&bucket_name).await {
-            Err(error) if is_bucket_missing(&error) => {
-                // Record the request before sending it, so a retry after a lost response
-                // recognizes the untagged bucket it finds as this one.
+        match inspect_bucket(&*client, &bucket_name, &our_tags, &config.id).await? {
+            ExistingBucket::Missing => {
+                // Saved before CreateBucket is sent, so a retry after a lost response knows
+                // the untagged bucket it then finds is the one this controller asked for.
+                self.requested_bucket_name = Some(bucket_name);
+                Ok(HandlerAction::Continue {
+                    state: CreatingBucket,
+                    suggested_delay: None,
+                })
+            }
+            ExistingBucket::Untagged
+                if self.requested_bucket_name.as_deref() == Some(bucket_name.as_str()) =>
+            {
+                Ok(HandlerAction::Continue {
+                    state: CreatingBucket,
+                    suggested_delay: None,
+                })
+            }
+            ExistingBucket::Ours => {
+                info!(
+                    bucket = %bucket_name,
+                    "S3 bucket was already created by this deployment; continuing create flow"
+                );
+                self.finish_bucket_creation(&*client, bucket_name, &our_tags, &config.id)
+                    .await
+            }
+            ExistingBucket::Untagged | ExistingBucket::Foreign => {
+                Err(bucket_not_owned(&config.id, &bucket_name))
+            }
+        }
+    }
+
+    #[handler(
+        state = CreatingBucket,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn creating_bucket(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let aws_cfg = ctx.get_aws_config()?;
+        let client = ctx.service_provider.get_aws_s3_client(aws_cfg).await?;
+        let config = ctx.desired_resource_config::<Storage>()?;
+        let bucket_name = aws_prefixed_resource_name(ctx.resource_prefix, &config.id);
+        let our_tags = standard_resource_tags(ctx.resource_prefix, &config.id);
+
+        // Checked again on every attempt: a retry may follow a CreateBucket whose outcome
+        // was never seen.
+        match inspect_bucket(&*client, &bucket_name, &our_tags, &config.id).await? {
+            ExistingBucket::Missing => {
                 self.requested_bucket_name = Some(bucket_name.clone());
                 info!(name=%config.id, bucket=%bucket_name, "Creating S3 bucket");
                 match client.create_bucket(&bucket_name).await {
@@ -105,6 +218,11 @@ impl AwsStorageController {
                         );
                     }
                     Err(error) => {
+                        if !is_outcome_unknown(&error) {
+                            // S3 answered and created nothing, so an untagged bucket found
+                            // later under this name is not ours.
+                            self.requested_bucket_name = None;
+                        }
                         return Err(error.context(ErrorData::CloudPlatformError {
                             message: format!("Failed to create S3 bucket '{}'", bucket_name),
                             resource_id: Some(config.id.clone()),
@@ -112,55 +230,23 @@ impl AwsStorageController {
                     }
                 }
             }
-            Ok(tags) if bucket_is_ours(&tags, &our_tags) => {
-                info!(
-                    bucket = %bucket_name,
-                    "S3 bucket was already created by this deployment; continuing create flow"
-                );
-            }
-            Ok(tags)
-                if tags.is_empty()
-                    && self.requested_bucket_name.as_deref() == Some(bucket_name.as_str()) =>
+            ExistingBucket::Ours => {}
+            ExistingBucket::Untagged
+                if self.requested_bucket_name.as_deref() == Some(bucket_name.as_str()) =>
             {
                 info!(
                     bucket = %bucket_name,
                     "S3 bucket this controller requested earlier exists; continuing create flow"
                 );
             }
-            Ok(_) => {
-                return Err(AlienError::new(ErrorData::ExistingCloudResourceNotOwned {
-                    resource_id: config.id.clone(),
-                    object: format!("S3 bucket '{}'", bucket_name),
-                }));
-            }
-            Err(error) => {
-                return Err(error.context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to check whether S3 bucket '{}' already exists",
-                        bucket_name
-                    ),
-                    resource_id: Some(config.id.clone()),
-                }));
+            ExistingBucket::Untagged | ExistingBucket::Foreign => {
+                self.requested_bucket_name = None;
+                return Err(bucket_not_owned(&config.id, &bucket_name));
             }
         }
 
-        client
-            .put_bucket_abac_tags(&bucket_name, &our_tags)
+        self.finish_bucket_creation(&*client, bucket_name, &our_tags, &config.id)
             .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to tag S3 bucket '{}'", bucket_name),
-                resource_id: Some(config.id.clone()),
-            })?;
-
-        self.bucket_name = Some(bucket_name.clone());
-        self.requested_bucket_name = None;
-
-        info!(bucket=%bucket_name, "S3 bucket created successfully");
-
-        Ok(HandlerAction::Continue {
-            state: ConfiguringVersioning,
-            suggested_delay: None,
-        })
     }
 
     #[handler(
@@ -931,25 +1017,31 @@ impl AwsStorageController {
     async fn delete_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Storage>()?;
 
-        // No bucket is recorded when creation never proved one ours.
-        let Some(bucket_name) = self.bucket_name.clone() else {
-            info!(resource_id=%config.id, "No S3 bucket to delete");
-            return Ok(HandlerAction::Continue {
-                state: Deleted,
-                suggested_delay: None,
-            });
+        // A bucket is recorded only once creation proved it ours. A requested bucket is one
+        // whose creation was interrupted; it is deleted only if it already carries our tags.
+        let (bucket_name, recorded) = match (&self.bucket_name, &self.requested_bucket_name) {
+            (Some(name), _) => (name.clone(), true),
+            (None, Some(name)) => (name.clone(), false),
+            (None, None) => {
+                info!(resource_id=%config.id, "No S3 bucket to delete");
+                return Ok(HandlerAction::Continue {
+                    state: Deleted,
+                    suggested_delay: None,
+                });
+            }
         };
 
         let aws_cfg = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_s3_client(aws_cfg).await?;
 
-        // Prove the bucket is still the one this deployment created before emptying it: state
+        // Prove the bucket is the one this deployment created before emptying it: state
         // written by earlier versions recorded the name before the bucket was created.
         let tags = match client.get_bucket_tagging(&bucket_name).await {
             Ok(tags) => tags,
             Err(error) if is_bucket_missing(&error) => {
                 info!(bucket=%bucket_name, "S3 bucket already deleted");
                 self.bucket_name = None;
+                self.requested_bucket_name = None;
                 return Ok(HandlerAction::Continue {
                     state: Deleted,
                     suggested_delay: None,
@@ -972,9 +1064,11 @@ impl AwsStorageController {
             warn!(
                 resource_id = %config.id,
                 bucket = %bucket_name,
+                recorded,
                 "S3 bucket is not tagged as created by this deployment; leaving the bucket and its objects in place"
             );
             self.bucket_name = None;
+            self.requested_bucket_name = None;
             return Ok(HandlerAction::Continue {
                 state: Deleted,
                 suggested_delay: None,
@@ -1001,6 +1095,7 @@ impl AwsStorageController {
         }
 
         self.bucket_name = None;
+        self.requested_bucket_name = None;
 
         Ok(HandlerAction::Continue {
             state: Deleted,
@@ -1136,6 +1231,34 @@ fn versioning_status_label(status: VersioningStatus) -> String {
 }
 
 impl AwsStorageController {
+    /// Tags a bucket this controller created or proved its own, then records it.
+    async fn finish_bucket_creation(
+        &mut self,
+        client: &dyn S3Api,
+        bucket_name: String,
+        our_tags: &HashMap<String, String>,
+        resource_id: &str,
+    ) -> Result<AwsStorageHandlerAction> {
+        client
+            .put_bucket_abac_tags(&bucket_name, our_tags)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to tag S3 bucket '{}'", bucket_name),
+                resource_id: Some(resource_id.to_string()),
+            })?;
+
+        info!(bucket=%bucket_name, "S3 bucket created successfully");
+        self.bucket_name = Some(bucket_name);
+        self.requested_bucket_name = None;
+
+        Ok(AwsStorageHandlerAction::Continue {
+            state: AwsStorageState::ConfiguringVersioning,
+            suggested_delay: None,
+        })
+    }
+}
+
+impl AwsStorageController {
     /// Creates a controller in a ready state with mock values for testing purposes.
     #[cfg(feature = "test-utils")]
     pub fn mock_ready(storage_name: &str) -> Self {
@@ -1258,17 +1381,21 @@ mod tests {
         })
     }
 
-    /// Which call applies its change in S3 but loses the response, once.
+    /// A fault the fake injects once.
     #[derive(Debug, Clone, Copy, PartialEq)]
-    enum LoseResponse {
-        Never,
-        CreateBucket,
-        PutBucketTagging,
+    enum Fault {
+        None,
+        /// CreateBucket creates the bucket but its response is lost.
+        LoseCreateResponse,
+        /// PutBucketTagging tags the bucket but its response is lost.
+        LoseTaggingResponse,
+        /// S3 refuses CreateBucket and creates nothing.
+        RejectCreate,
     }
 
     /// An S3 mock that keeps one bucket's existence, tags and object count, with us-east-1
     /// semantics: CreateBucket on a bucket the account already owns returns 200.
-    fn fake_s3(account: FakeAccount, lose: LoseResponse) -> MockS3Api {
+    fn fake_s3(account: FakeAccount, fault: Fault) -> MockS3Api {
         let mut mock_s3 = MockS3Api::new();
 
         let state = account.clone();
@@ -1279,8 +1406,15 @@ mod tests {
             }
         });
         let state = account.clone();
-        let lose_create = Arc::new(Mutex::new(lose == LoseResponse::CreateBucket));
+        let lose_create = Arc::new(Mutex::new(fault == Fault::LoseCreateResponse));
+        let reject_create = Arc::new(Mutex::new(fault == Fault::RejectCreate));
         mock_s3.expect_create_bucket().returning(move |_| {
+            if std::mem::take(&mut *reject_create.lock().unwrap()) {
+                return Err(AlienError::new(CloudClientErrorData::RemoteAccessDenied {
+                    resource_type: "Bucket".to_string(),
+                    resource_name: "test-bucket".to_string(),
+                }));
+            }
             let mut bucket = state.lock().unwrap();
             if bucket.is_none() {
                 *bucket = Some(FakeBucket {
@@ -1294,7 +1428,7 @@ mod tests {
             Ok(())
         });
         let state = account.clone();
-        let lose_tagging = Arc::new(Mutex::new(lose == LoseResponse::PutBucketTagging));
+        let lose_tagging = Arc::new(Mutex::new(fault == Fault::LoseTaggingResponse));
         mock_s3
             .expect_put_bucket_abac_tags()
             .returning(move |_, tags| {
@@ -1460,7 +1594,7 @@ mod tests {
         let storage_id = storage.id.clone();
         let account = account_with(None);
         let mock_provider =
-            setup_mock_service_provider(Arc::new(fake_s3(account.clone(), LoseResponse::Never)));
+            setup_mock_service_provider(Arc::new(fake_s3(account.clone(), Fault::None)));
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(storage)
@@ -1517,7 +1651,7 @@ mod tests {
             .platform(Platform::Aws)
             .service_provider(setup_mock_service_provider(Arc::new(fake_s3(
                 account.clone(),
-                LoseResponse::Never,
+                Fault::None,
             ))))
             .with_test_dependencies()
             .build()
@@ -1561,7 +1695,7 @@ mod tests {
             .platform(Platform::Aws)
             .service_provider(setup_mock_service_provider(Arc::new(fake_s3(
                 account.clone(),
-                LoseResponse::Never,
+                Fault::None,
             ))))
             .with_test_dependencies()
             .build()
@@ -1581,27 +1715,16 @@ mod tests {
     /// A step whose S3 call succeeded but whose response was lost is retried. The retry finds
     /// the bucket this controller just made (untagged, or already tagged) and carries on.
     #[rstest]
-    #[case::create_response_lost(LoseResponse::CreateBucket)]
-    #[case::tagging_response_lost(LoseResponse::PutBucketTagging)]
+    #[case::create_response_lost(Fault::LoseCreateResponse)]
+    #[case::tagging_response_lost(Fault::LoseTaggingResponse)]
     #[tokio::test]
-    async fn retry_after_a_lost_response_resumes_our_bucket(#[case] lose: LoseResponse) {
+    async fn retry_after_a_lost_response_resumes_our_bucket(#[case] fault: Fault) {
         let storage = Storage::new("data".to_string()).build();
         let account = account_with(None);
-        let mut executor = SingleControllerExecutor::builder()
-            .resource(storage)
-            .controller(AwsStorageController::default())
-            .platform(Platform::Aws)
-            .service_provider(setup_mock_service_provider(Arc::new(fake_s3(
-                account.clone(),
-                lose,
-            ))))
-            .with_test_dependencies()
-            .build()
-            .await
-            .unwrap();
+        let mut executor = data_executor(storage, &account, fault).await;
 
         let error = executor
-            .step()
+            .run_until_terminal()
             .await
             .expect_err("the first attempt loses its response");
         assert!(error.retryable, "{error:?}");
@@ -1629,6 +1752,120 @@ mod tests {
         );
         let controller = executor.internal_state::<AwsStorageController>().unwrap();
         assert_eq!(controller.requested_bucket_name, None);
+    }
+
+    /// When S3 refuses CreateBucket, nothing was created, so the request no longer vouches for
+    /// an untagged bucket. One that appears under the name before the retry is refused.
+    #[tokio::test]
+    async fn retry_after_a_refused_create_does_not_adopt_a_new_untagged_bucket() {
+        let storage = Storage::new("data".to_string()).build();
+        let account = account_with(None);
+        let mut executor = data_executor(storage, &account, Fault::RejectCreate).await;
+
+        executor
+            .run_until_terminal()
+            .await
+            .expect_err("S3 refuses the create");
+        assert_eq!(*account.lock().unwrap(), None);
+        let someone_elses = FakeBucket {
+            tags: HashMap::new(),
+            objects: 1,
+        };
+        *account.lock().unwrap() = Some(someone_elses.clone());
+
+        let error = executor
+            .run_until_terminal()
+            .await
+            .expect_err("the untagged bucket is not ours");
+        assert!(matches!(
+            error.error,
+            Some(crate::error::ErrorData::ExistingCloudResourceNotOwned { .. })
+        ));
+        assert_eq!(*account.lock().unwrap(), Some(someone_elses));
+    }
+
+    /// Destroy can follow a create interrupted after the bucket was tagged but before the
+    /// controller recorded it. The bucket carries our tags, so it is deleted, not leaked.
+    #[tokio::test]
+    async fn delete_after_an_interrupted_create_removes_our_tagged_bucket() {
+        let storage = Storage::new("data".to_string()).build();
+        let account = account_with(None);
+        let mut executor = data_executor(storage, &account, Fault::LoseTaggingResponse).await;
+
+        executor
+            .run_until_terminal()
+            .await
+            .expect_err("the tagging response is lost");
+        assert_eq!(
+            account
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|bucket| bucket.tags.clone()),
+            Some(our_tags("data"))
+        );
+
+        executor.delete().unwrap();
+        executor.run_until_terminal().await.unwrap();
+
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+        assert_eq!(*account.lock().unwrap(), None);
+    }
+
+    /// S3 redirects requests for a bucket that exists in another region. That bucket is not
+    /// this deployment's, and retrying the create cannot change it.
+    #[tokio::test]
+    async fn bucket_in_another_region_is_refused_without_retries() {
+        let storage = Storage::new("data".to_string()).build();
+        let mut mock_s3 = MockS3Api::new();
+        mock_s3.expect_get_bucket_tagging().times(1).returning(|_| {
+            Err(AlienError::new(
+                CloudClientErrorData::RemoteRequestRejected {
+                    service: "S3".to_string(),
+                    http_status: 301,
+                    provider_code: "PermanentRedirect".to_string(),
+                    message: "The bucket you are attempting to access must be addressed using the specified endpoint.".to_string(),
+                },
+            ))
+        });
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(storage)
+            .controller(AwsStorageController::default())
+            .platform(Platform::Aws)
+            .service_provider(setup_mock_service_provider(Arc::new(mock_s3)))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+
+        let error = executor
+            .run_until_terminal()
+            .await
+            .expect_err("the bucket elsewhere is refused");
+        assert!(matches!(
+            error.error,
+            Some(crate::error::ErrorData::ExistingCloudResourceNotOwned { .. })
+        ));
+        assert!(!error.retryable);
+    }
+
+    async fn data_executor(
+        storage: Storage,
+        account: &FakeAccount,
+        fault: Fault,
+    ) -> SingleControllerExecutor {
+        SingleControllerExecutor::builder()
+            .resource(storage)
+            .controller(AwsStorageController::default())
+            .platform(Platform::Aws)
+            .service_provider(setup_mock_service_provider(Arc::new(fake_s3(
+                account.clone(),
+                fault,
+            ))))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap()
     }
 
     // ─────────────── UPDATE FLOW TESTS ────────────────────────────────
