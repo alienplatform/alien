@@ -28,6 +28,7 @@ fi
   "$speakeasy_bin" run \
     --target platform-typescript \
     --skip-upload-spec \
+    --skip-compile \
     --skip-versioning
 )
 
@@ -37,6 +38,7 @@ while IFS= read -r -d '' generated_file; do
   fi
 done < <(git -C "$repo_root" ls-files -mo --exclude-standard -z -- "$sdk_dir")
 
+# Compile the complete SDK after restoring the published compatibility exports.
 node "$repo_root/client-sdks/platform/scripts/generate-compatibility-exports.mjs"
 
 NODE_OPTIONS=--max-old-space-size=16384 pnpm -C "$sdk_dir" build

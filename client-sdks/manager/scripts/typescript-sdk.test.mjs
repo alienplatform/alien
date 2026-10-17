@@ -8,6 +8,31 @@ import { computeSettingsFromJSON, computeSettingsToJSON } from "../typescript/es
 import { agentSyncRequestToJSON } from "../typescript/esm/models/agentsyncrequest.js"
 import { createCommandResponseFromJSON } from "../typescript/esm/models/createcommandresponse.js"
 import { healthResponseFromJSON } from "../typescript/esm/models/healthresponse.js"
+import { stackImportRequestToJSON } from "../typescript/esm/models/stackimportrequest.js"
+import { stackSettingsFromJSON } from "../typescript/esm/models/stacksettings.js"
+
+test("setup imports retain explicit authority without elevating omitted settings", () => {
+  for (const setupManagement of [undefined, "manual", "automatic"]) {
+    const stackSettings = setupManagement === undefined ? {} : { setupManagement }
+    const request = JSON.parse(stackImportRequestToJSON({
+      deploymentGroupToken: "synthetic-token",
+      deploymentName: "example",
+      platform: "aws",
+      region: "us-east-1",
+      resourcePrefix: "example",
+      resources: [],
+      setupFingerprint: "synthetic-fingerprint",
+      setupFingerprintVersion: 1,
+      setupImportFormatVersion: 1,
+      setupTarget: "aws",
+      stackSettings,
+    }))
+    assert.deepEqual(request.stackSettings, stackSettings)
+    const response = stackSettingsFromJSON(JSON.stringify(stackSettings))
+    assert.equal(response.ok, true)
+    if (response.ok) assert.deepEqual(response.value, stackSettings)
+  }
+})
 
 for (const scenario of [
   { method: "setDeploymentChannel", suffix: "channel", body: { channel: "stable" } },

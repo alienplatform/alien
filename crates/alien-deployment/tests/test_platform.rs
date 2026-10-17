@@ -2,6 +2,7 @@
 //!
 //! These tests exercise the full alien_deployment::step() lifecycle with no cloud I/O.
 
+use alien_azure_clients::AzureClientConfigExt;
 use alien_bindings::Vault as _;
 use alien_core::{
     ClientConfig, ComputeCluster, ComputeClusterOutputs, DeploymentConfig, DeploymentState,
@@ -270,6 +271,7 @@ fn create_test_config(env_vars_hash: &str, include_secret: bool) -> DeploymentCo
         observe_all_namespaces: false,
         compute_backend: None,
         allow_frozen_changes: false,
+        setup_run: false,
         domain_metadata: None,
         public_endpoints: None,
         monitoring: None,
@@ -4079,4 +4081,319 @@ async fn a_first_install_waiting_for_setup_continues_when_setup_reruns() {
         alien_infra::test_worker_configs_deployed(identifier).len(),
         1
     );
+}
+
+#[tokio::test]
+async fn automatic_setup_reconciles_frozen_addition_and_removal_without_a_second_setup() {
+    let _vault = test_vault_env().await;
+    let mut config = create_test_config("automatic", false);
+    config.stack_settings.setup_management = alien_core::SetupManagement::Automatic;
+    config.setup_run = true;
+    let initial = create_initial_state(Stack::new("automatic".into()).build());
+    let mut state = run_to_completion(initial, config.clone()).await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+    assert!(state.runtime_metadata.as_ref().unwrap().automatic_setup);
+    config.setup_run = false;
+
+    let with_storage = Stack::new("automatic".into())
+        .add(
+            Storage::new("archive".into()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    start_update(&mut state, release_of("with-archive", with_storage));
+    state = run_to_completion(state, config.clone()).await;
+    assert_eq!(state.status, DeploymentStatus::Running, "{:?}", state.error);
+    assert_eq!(
+        state
+            .current_release
+            .as_ref()
+            .unwrap()
+            .release_id
+            .as_deref(),
+        Some("with-archive")
+    );
+    assert_eq!(
+        state.stack_state.as_ref().unwrap().resources["archive"].status,
+        alien_core::ResourceStatus::Running
+    );
+
+    // Reload the checkpoint between releases, as an actual reconciler does.
+    state = serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
+    start_update(
+        &mut state,
+        release_of("without-archive", Stack::new("automatic".into()).build()),
+    );
+    state = run_to_completion(state, config).await;
+    assert_eq!(state.status, DeploymentStatus::Running, "{:?}", state.error);
+    assert_eq!(
+        state
+            .current_release
+            .as_ref()
+            .unwrap()
+            .release_id
+            .as_deref(),
+        Some("without-archive")
+    );
+    assert!(state
+        .stack_state
+        .as_ref()
+        .unwrap()
+        .resources
+        .get("archive")
+        .is_none_or(|resource| resource.status == alien_core::ResourceStatus::Deleted));
+}
+
+#[tokio::test]
+async fn changing_settings_does_not_grant_automatic_setup_to_an_existing_installation() {
+    let _vault = test_vault_env().await;
+    let mut config = create_test_config("manual", false);
+    let mut state = run_to_completion(
+        create_initial_state(Stack::new("manual".into()).build()),
+        config.clone(),
+    )
+    .await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+    assert!(!state.runtime_metadata.as_ref().unwrap().automatic_setup);
+    config.stack_settings.setup_management = alien_core::SetupManagement::Automatic;
+    start_update(
+        &mut state,
+        release_of(
+            "with-archive",
+            Stack::new("manual".into())
+                .add(
+                    Storage::new("archive".into()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build(),
+        ),
+    );
+    let error = alien_deployment::step(state.clone(), config, ClientConfig::Test, None)
+        .await
+        .expect_err("Changing a setting must not authorize setup");
+    assert_eq!(error.code, "PREFLIGHT_CHECKS_FAILED");
+    assert_eq!(
+        error.source.as_ref().unwrap().code,
+        "DEPLOYMENT_SETUP_REQUIRED"
+    );
+    assert!(!state.runtime_metadata.as_ref().unwrap().automatic_setup);
+    assert!(!state
+        .stack_state
+        .as_ref()
+        .unwrap()
+        .resources
+        .contains_key("archive"));
+    assert_eq!(
+        state
+            .current_release
+            .as_ref()
+            .unwrap()
+            .release_id
+            .as_deref(),
+        Some("rel_v1")
+    );
+}
+
+#[tokio::test]
+async fn manual_setup_preserves_existing_gate_and_creates_new_optional_resource() {
+    let _vault = test_vault_env().await;
+    let mut stack = Stack::new("manual-new-gate".into())
+        .add(
+            Storage::new("baseline".into()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Storage::new("old-archive".into()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    stack.resources.get_mut("old-archive").unwrap().enabled_when = Some("oldEnabled".into());
+    stack.inputs = vec![boolean_gate_input(
+        "oldEnabled",
+        "Old archive",
+        "Create old archive.",
+    )];
+    let mut config = create_test_config("manual-new-gate", false);
+    config.setup_run = true;
+    config
+        .input_values
+        .insert("oldEnabled".into(), serde_json::json!(false));
+    let state = run_to_completion(create_initial_state(stack.clone()), config.clone()).await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+    let mut state: DeploymentState =
+        serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
+    let mut new_resource = Stack::new("manual-new-gate".into())
+        .add(
+            Storage::new("new-archive".into()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build()
+        .resources
+        .remove("new-archive")
+        .unwrap();
+    new_resource.enabled_when = Some("newEnabled".into());
+    stack.resources.insert("new-archive".into(), new_resource);
+    stack.inputs.push(boolean_gate_input(
+        "newEnabled",
+        "New archive",
+        "Create new archive.",
+    ));
+    config
+        .input_values
+        .insert("oldEnabled".into(), serde_json::json!(true));
+    config
+        .input_values
+        .insert("newEnabled".into(), serde_json::json!(true));
+    start_update(&mut state, release_of("new-optional", stack));
+    let state = rerun_setup(state, &config).await;
+    let state = run_to_completion(state, config).await;
+    assert_eq!(state.status, DeploymentStatus::Running, "{:?}", state.error);
+    let resources = &state.stack_state.as_ref().unwrap().resources;
+    assert!(!resources.contains_key("old-archive"));
+    assert_eq!(
+        resources.get("new-archive").unwrap().status,
+        alien_core::ResourceStatus::Running
+    );
+    let answers = &state
+        .runtime_metadata
+        .as_ref()
+        .unwrap()
+        .persisted_gate_answers;
+    assert_eq!(answers.get("oldEnabled"), Some(&false));
+    assert_eq!(answers.get("newEnabled"), Some(&true));
+}
+
+#[tokio::test]
+async fn automatic_setup_can_decline_and_reenable_a_frozen_gate_after_checkpoint_reload() {
+    let _vault = test_vault_env().await;
+    let mut stack = Stack::new("automatic-gate".into())
+        .add(
+            Storage::new("archive".into()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    stack.resources.get_mut("archive").unwrap().enabled_when = Some("archiveEnabled".into());
+    stack.inputs = vec![boolean_gate_input(
+        "archiveEnabled",
+        "Archive",
+        "Create archive storage.",
+    )];
+    let mut config = create_test_config("automatic-gate", false);
+    config.stack_settings.setup_management = alien_core::SetupManagement::Automatic;
+    config.setup_run = true;
+    config
+        .input_values
+        .insert("archiveEnabled".into(), serde_json::json!(true));
+    let mut state = run_to_completion(create_initial_state(stack.clone()), config.clone()).await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+    config.setup_run = false;
+
+    for (release, enabled) in [("declined", false), ("reenabled", true)] {
+        state = serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
+        config
+            .input_values
+            .insert("archiveEnabled".into(), serde_json::json!(enabled));
+        start_update(&mut state, release_of(release, stack.clone()));
+        state = run_to_completion(state, config.clone()).await;
+        assert_eq!(state.status, DeploymentStatus::Running, "{:?}", state.error);
+        assert_eq!(
+            state
+                .current_release
+                .as_ref()
+                .unwrap()
+                .release_id
+                .as_deref(),
+            Some(release)
+        );
+        assert_eq!(
+            state
+                .runtime_metadata
+                .as_ref()
+                .unwrap()
+                .persisted_gate_answers
+                .get("archiveEnabled"),
+            Some(&enabled)
+        );
+        let resource = state.stack_state.as_ref().unwrap().resources.get("archive");
+        if enabled {
+            assert_eq!(
+                resource.unwrap().status,
+                alien_core::ResourceStatus::Running
+            );
+        } else {
+            assert!(resource
+                .is_none_or(|resource| resource.status == alien_core::ResourceStatus::Deleted));
+        }
+    }
+}
+
+#[tokio::test]
+async fn automatic_setup_applies_a_superseding_release_before_promoting_it() {
+    let _vault = test_vault_env().await;
+    for superseded_during in [
+        DeploymentStatus::InitialSetup,
+        DeploymentStatus::Provisioning,
+    ] {
+        let mut config = create_test_config("automatic-supersession", false);
+        config.stack_settings.setup_management = alien_core::SetupManagement::Automatic;
+        config.setup_run = true;
+        let empty = Stack::new("automatic-supersession".into()).build();
+        let mut state =
+            run_to_completion(create_initial_state(empty.clone()), config.clone()).await;
+        config.setup_run = false;
+        start_update(&mut state, release_of("release-a", empty));
+        for _ in 0..20 {
+            if state.status == superseded_during {
+                break;
+            }
+            state = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+                .await
+                .unwrap()
+                .state;
+        }
+        assert_eq!(state.status, superseded_during);
+        let newer = Stack::new("automatic-supersession".into())
+            .add(
+                Storage::new("newer-archive".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        state.target_release = Some(release_of("release-b", newer));
+        state = serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
+        state = run_to_completion(state, config.clone()).await;
+        assert_eq!(state.status, DeploymentStatus::Running, "{:?}", state.error);
+        assert_eq!(
+            state
+                .current_release
+                .as_ref()
+                .unwrap()
+                .release_id
+                .as_deref(),
+            Some("release-b")
+        );
+        assert_eq!(
+            state.stack_state.as_ref().unwrap().resources["newer-archive"].status,
+            alien_core::ResourceStatus::Running
+        );
+        assert!(state.target_release.is_none());
+    }
+}
+
+#[tokio::test]
+async fn automatic_azure_setup_rejects_missing_management_before_cloud_access() {
+    let mut state = create_initial_state(Stack::new("automatic-azure".into()).build());
+    state.platform = Platform::Azure;
+    let mut config = create_test_config("automatic-azure", false);
+    config.setup_run = true;
+    config.stack_settings.setup_management = alien_core::SetupManagement::Automatic;
+    let error = alien_deployment::step(
+        state,
+        config,
+        ClientConfig::Azure(Box::new(alien_azure_clients::AzureClientConfig::mock())),
+        None,
+    )
+    .await
+    .expect_err("automatic setup must reject a missing management identity configuration");
+    assert_eq!(error.code, "MISSING_CONFIGURATION");
+    assert!(error.to_string().contains("install its runtime identity"));
 }

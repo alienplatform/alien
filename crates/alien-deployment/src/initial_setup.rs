@@ -234,6 +234,10 @@ pub async fn handle_initial_setup(
         // Note: Cross-account access setup happens in the manager after this step
         // The manager has access to the artifact registry binding
 
+        if config.setup_run {
+            runtime_metadata.automatic_setup =
+                config.stack_settings.setup_management == alien_core::SetupManagement::Automatic;
+        }
         let mut next = current_cloned;
         next.status = DeploymentStatus::Provisioning;
         next.stack_state = Some(step_result.next_state);
@@ -528,7 +532,7 @@ pub async fn handle_initial_setup_failed(
     target_stack: Stack,
     config: DeploymentConfig,
     client_config: alien_core::ClientConfig,
-    _service_provider: std::sync::Arc<dyn alien_infra::PlatformServiceProvider>,
+    service_provider: std::sync::Arc<dyn alien_infra::PlatformServiceProvider>,
 ) -> Result<DeploymentStepResult> {
     info!("Handling InitialSetupFailed status");
 
@@ -545,6 +549,24 @@ pub async fn handle_initial_setup_failed(
             heartbeats: vec![],
             observed_inventory_batches: vec![],
         });
+    }
+
+    // An installed automatic grant permits retrying against a corrective release.
+    // Reprepare it before resetting controllers so changed/removed resources do not
+    // resume the failed release's configuration. Manual setup keeps its saved target.
+    if current
+        .runtime_metadata
+        .as_ref()
+        .is_some_and(|metadata| metadata.automatic_setup)
+    {
+        return crate::updating::handle_update_pending(
+            current,
+            target_stack,
+            config,
+            client_config,
+            service_provider,
+        )
+        .await;
     }
 
     info!("Retrying failed resources");
@@ -2287,6 +2309,120 @@ mod tests {
                 "runtime did not resume {status:?} Live work"
             );
         }
+    }
+
+    /// A later release re-enters an automatic install through setup, which hands back to
+    /// Provisioning. Provisioning never resumes failures, so an unchanged runtime resource
+    /// that failed in the previous update must be resumed while the release is prepared.
+    #[tokio::test]
+    async fn automatic_update_resumes_unchanged_failed_runtime_resources() {
+        let installed = Stack::new("test".to_string())
+            .add(
+                Storage::new("live".to_string()).build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        let mut stack_state = deployed_test_stack(&installed).await;
+        let resource = stack_state.resources.get_mut("live").unwrap();
+        let mut controller = resource.get_internal_controller().unwrap().unwrap();
+        controller.transition_to_update().unwrap();
+        controller.transition_to_failure();
+        resource.status = controller.get_status();
+        resource.last_failed_state = resource.internal_state.clone();
+        resource.set_internal_controller(Some(controller)).unwrap();
+        assert_eq!(
+            stack_state.resources["live"].status,
+            ResourceStatus::UpdateFailed
+        );
+
+        let mut state = resumed_test_setup(stack_state, installed.clone());
+        state.status = DeploymentStatus::UpdatePending;
+        state.runtime_metadata.as_mut().unwrap().automatic_setup = true;
+        let state = crate::updating::handle_update_pending(
+            state,
+            installed,
+            config(),
+            ClientConfig::Test,
+            Arc::new(DefaultPlatformServiceProvider::default()),
+        )
+        .await
+        .expect("prepare the release through the installed grant")
+        .state;
+
+        assert_eq!(state.status, DeploymentStatus::InitialSetup);
+        let live = &state.stack_state.as_ref().unwrap().resources["live"];
+        assert!(
+            !matches!(
+                live.status,
+                ResourceStatus::UpdateFailed | ResourceStatus::ProvisionFailed
+            ),
+            "unchanged failed runtime resource must resume, got {:?}",
+            live.status
+        );
+    }
+
+    #[tokio::test]
+    async fn automatic_setup_retry_prepares_corrective_release_before_resuming() {
+        let installed = Stack::new("test".to_string())
+            .add(
+                Storage::new("removed".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let mut stack_state = deployed_test_stack(&installed).await;
+        let resource = stack_state.resources.get_mut("removed").unwrap();
+        let mut controller = resource.get_internal_controller().unwrap().unwrap();
+        controller.transition_to_delete_start().unwrap();
+        controller.transition_to_failure();
+        resource.status = controller.get_status();
+        resource.last_failed_state = resource.internal_state.clone();
+        resource.set_internal_controller(Some(controller)).unwrap();
+
+        let mut state = resumed_test_setup(stack_state, installed);
+        state.status = DeploymentStatus::InitialSetupFailed;
+        state.retry_requested = true;
+        state.runtime_metadata.as_mut().unwrap().automatic_setup = true;
+        let target = Stack::new("test".to_string()).build();
+        let mut state = handle_initial_setup_failed(
+            state,
+            target,
+            config(),
+            ClientConfig::Test,
+            Arc::new(DefaultPlatformServiceProvider::default()),
+        )
+        .await
+        .expect("prepare corrective release")
+        .state;
+        assert_eq!(state.status, DeploymentStatus::InitialSetup);
+        assert!(!state.retry_requested);
+        assert!(!state
+            .runtime_metadata
+            .as_ref()
+            .unwrap()
+            .prepared_stack
+            .as_ref()
+            .unwrap()
+            .resources
+            .contains_key("removed"));
+        for _ in 0..8 {
+            if state.status == DeploymentStatus::Provisioning {
+                break;
+            }
+            state = handle_initial_setup(
+                state,
+                config(),
+                ClientConfig::Test,
+                Arc::new(DefaultPlatformServiceProvider::default()),
+            )
+            .await
+            .expect("finish corrective setup")
+            .state;
+        }
+        assert_eq!(state.status, DeploymentStatus::Provisioning);
+        assert_eq!(
+            state.stack_state.unwrap().resources["removed"].status,
+            ResourceStatus::Deleted
+        );
     }
 
     #[tokio::test]

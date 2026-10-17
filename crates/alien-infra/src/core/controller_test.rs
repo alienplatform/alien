@@ -335,6 +335,7 @@ pub struct SingleControllerExecutor {
     client_config: ClientConfig,
     // User-provided stack settings
     stack_settings: StackSettings,
+    setup_run: bool,
     // Platform management configuration
     management_config: Option<ManagementConfig>,
     // Compute backend configuration for managed containers
@@ -409,6 +410,7 @@ impl SingleControllerExecutor {
             service_provider: &self.service_provider,
             deployment_config: &DeploymentConfig::builder()
                 .stack_settings(self.stack_settings.clone())
+                .setup_run(self.setup_run)
                 .maybe_management_config(self.management_config.clone())
                 .maybe_compute_backend(self.compute_backend.clone())
                 .environment_variables(self.environment_variables.clone())
@@ -663,6 +665,7 @@ impl SingleControllerExecutor {
             .expect("the resource is in the desired stack");
         let deployment_config = DeploymentConfig::builder()
             .stack_settings(self.stack_settings.clone())
+            .setup_run(self.setup_run)
             .maybe_management_config(self.management_config.clone())
             .maybe_compute_backend(self.compute_backend.clone())
             .environment_variables(self.environment_variables.clone())
@@ -735,6 +738,7 @@ pub struct SingleControllerExecutorBuilder {
     controller: Option<Box<dyn ResourceController>>,
     platform: Option<Platform>,
     stack_settings: StackSettings,
+    setup_run: bool,
     management_config: Option<ManagementConfig>,
     compute_backend: Option<ComputeBackend>,
     environment_variables: EnvironmentVariablesSnapshot,
@@ -763,6 +767,7 @@ impl SingleControllerExecutorBuilder {
             controller: None,
             platform: None,
             stack_settings: StackSettings::default(),
+            setup_run: true,
             management_config: None,
             compute_backend: None,
             environment_variables: EnvironmentVariablesSnapshot {
@@ -825,6 +830,12 @@ impl SingleControllerExecutorBuilder {
     }
 
     /// Sets the stack settings.
+    /// Whether this invocation has the installer's credentials.
+    pub fn setup_run(mut self, setup_run: bool) -> Self {
+        self.setup_run = setup_run;
+        self
+    }
+
     pub fn stack_settings(mut self, settings: StackSettings) -> Self {
         self.stack_settings = settings;
         self
@@ -1264,6 +1275,7 @@ impl SingleControllerExecutorBuilder {
 
         let mut config = DeploymentConfig::builder()
             .stack_settings(self.stack_settings.clone())
+            .setup_run(self.setup_run)
             .maybe_management_config(management_config.clone())
             .maybe_compute_backend(self.compute_backend.clone())
             .environment_variables(self.environment_variables.clone())
@@ -1369,6 +1381,7 @@ impl SingleControllerExecutorBuilder {
             platform,
             client_config,
             stack_settings: self.stack_settings,
+            setup_run: self.setup_run,
             management_config,
             compute_backend: self.compute_backend,
             environment_variables: self.environment_variables,

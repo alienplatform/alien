@@ -26,13 +26,11 @@ import {
   CreateManagerResponseHeartbeats1$inboundSchema,
   CreateManagerResponseModeGenerated1,
   CreateManagerResponseModeGenerated1$inboundSchema,
-  CreateManagerResponseProviderAzureApplicationGatewayForContainers2,
-  CreateManagerResponseProviderAzureApplicationGatewayForContainers2$inboundSchema,
-  CreateManagerResponseProviderGkeGatewayEnum2,
-  CreateManagerResponseProviderGkeGatewayEnum2$inboundSchema,
+  CreateManagerResponseProviderAzureApplicationGatewayForContainersEnum2,
+  CreateManagerResponseProviderAzureApplicationGatewayForContainersEnum2$inboundSchema,
   CreateManagerResponseSetupGoogleOauth,
   CreateManagerResponseSetupGoogleOauth$inboundSchema,
-} from "./createmanagerresponseprovidergkegatewayenum2.js";
+} from "./createmanagerresponseproviderazureapplicationgatewayforcontainersenum2.js";
 import {
   CreateManagerResponseSetupConfig,
   CreateManagerResponseSetupConfig$inboundSchema,
@@ -40,12 +38,37 @@ import {
   CreateManagerResponseSetupStatus$inboundSchema,
   CreateManagerResponseSetupTerraform,
   CreateManagerResponseSetupTerraform$inboundSchema,
-} from "./createmanagerresponsepublicendpointtargetunion2.js";
+} from "./createmanagerresponsepublicendpointtargetmachineaddresses2.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 import {
   ExternalBindingUnion,
   ExternalBindingUnion$inboundSchema,
 } from "./externalbindingunion.js";
+
+export type CreateManagerResponseProviderAzureApplicationGatewayForContainers2 =
+  {
+    /**
+     * Optional ALB name when using BYO Application Gateway resources.
+     */
+    albName?: string | null | undefined;
+    /**
+     * Optional ALB namespace when using BYO Application Gateway resources.
+     */
+    albNamespace?: string | null | undefined;
+    /**
+     * Public or internal frontend exposure.
+     */
+    frontend: string;
+    provider:
+      CreateManagerResponseProviderAzureApplicationGatewayForContainersEnum2;
+  };
+
+export const CreateManagerResponseProviderGkeGatewayEnum2 = {
+  GkeGateway: "gkeGateway",
+} as const;
+export type CreateManagerResponseProviderGkeGatewayEnum2 = ClosedEnum<
+  typeof CreateManagerResponseProviderGkeGatewayEnum2
+>;
 
 export type CreateManagerResponseProviderGkeGateway2 = {
   provider: CreateManagerResponseProviderGkeGatewayEnum2;
@@ -420,6 +443,20 @@ export type CreateManagerResponseNetworkUnion1 =
   | string;
 
 /**
+ * Whether setup remains a separate administrator operation.
+ */
+export const CreateManagerResponseSetupManagement1 = {
+  Manual: "manual",
+  Automatic: "automatic",
+} as const;
+/**
+ * Whether setup remains a separate administrator operation.
+ */
+export type CreateManagerResponseSetupManagement1 = ClosedEnum<
+  typeof CreateManagerResponseSetupManagement1
+>;
+
+/**
  * How telemetry (logs, metrics, traces) is handled.
  */
 export const CreateManagerResponseTelemetry1 = {
@@ -505,6 +542,10 @@ export type CreateManagerResponseStackSettings1 = {
    */
   quotaWarningOverrides?: Array<string> | undefined;
   /**
+   * Whether setup remains a separate administrator operation.
+   */
+  setupManagement?: CreateManagerResponseSetupManagement1 | undefined;
+  /**
    * How telemetry (logs, metrics, traces) is handled.
    */
   telemetry?: CreateManagerResponseTelemetry1 | undefined;
@@ -553,6 +594,40 @@ export type CreateManagerResponse = {
     | CreateManagerResponseSetupGoogleOauth
     | CreateManagerResponseSetupTerraform;
 };
+
+/** @internal */
+export const CreateManagerResponseProviderAzureApplicationGatewayForContainers2$inboundSchema:
+  z.ZodType<
+    CreateManagerResponseProviderAzureApplicationGatewayForContainers2,
+    unknown
+  > = z.object({
+    albName: z.nullable(z.string()).optional(),
+    albNamespace: z.nullable(z.string()).optional(),
+    frontend: z.string(),
+    provider:
+      CreateManagerResponseProviderAzureApplicationGatewayForContainersEnum2$inboundSchema,
+  });
+
+export function createManagerResponseProviderAzureApplicationGatewayForContainers2FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  CreateManagerResponseProviderAzureApplicationGatewayForContainers2,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseProviderAzureApplicationGatewayForContainers2$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseProviderAzureApplicationGatewayForContainers2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseProviderGkeGatewayEnum2$inboundSchema:
+  z.ZodEnum<typeof CreateManagerResponseProviderGkeGatewayEnum2> = z.enum(
+    CreateManagerResponseProviderGkeGatewayEnum2,
+  );
 
 /** @internal */
 export const CreateManagerResponseProviderGkeGateway2$inboundSchema: z.ZodType<
@@ -613,7 +688,9 @@ export const CreateManagerResponseProviderUnion2$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => CreateManagerResponseProviderAwsAlb2$inboundSchema),
-  CreateManagerResponseProviderAzureApplicationGatewayForContainers2$inboundSchema,
+  z.lazy(() =>
+    CreateManagerResponseProviderAzureApplicationGatewayForContainers2$inboundSchema
+  ),
   z.lazy(() => CreateManagerResponseProviderGkeGateway2$inboundSchema),
   z.string(),
 ]);
@@ -642,10 +719,10 @@ export const CreateManagerResponseRouteGateway1$inboundSchema: z.ZodType<
   provider: z.nullable(
     z.union([
       z.lazy(() => CreateManagerResponseProviderAwsAlb2$inboundSchema),
-      CreateManagerResponseProviderAzureApplicationGatewayForContainers2$inboundSchema,
       z.lazy(() =>
-        CreateManagerResponseProviderGkeGateway2$inboundSchema
+        CreateManagerResponseProviderAzureApplicationGatewayForContainers2$inboundSchema
       ),
+      z.lazy(() => CreateManagerResponseProviderGkeGateway2$inboundSchema),
       z.string(),
     ]),
   ).optional(),
@@ -1149,6 +1226,11 @@ export function createManagerResponseNetworkUnion1FromJSON(
 }
 
 /** @internal */
+export const CreateManagerResponseSetupManagement1$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseSetupManagement1
+> = z.enum(CreateManagerResponseSetupManagement1);
+
+/** @internal */
 export const CreateManagerResponseTelemetry1$inboundSchema: z.ZodEnum<
   typeof CreateManagerResponseTelemetry1
 > = z.enum(CreateManagerResponseTelemetry1);
@@ -1194,6 +1276,8 @@ export const CreateManagerResponseStackSettings1$inboundSchema: z.ZodType<
     z.record(z.string(), z.record(z.string(), z.string())),
   ).optional(),
   quotaWarningOverrides: z.array(z.string()).optional(),
+  setupManagement: CreateManagerResponseSetupManagement1$inboundSchema
+    .optional(),
   telemetry: CreateManagerResponseTelemetry1$inboundSchema.optional(),
   updates: CreateManagerResponseUpdates1$inboundSchema.optional(),
 });

@@ -65,6 +65,20 @@ export type DeploymentSetupPolicyAllowedKubernetesBasePlatform = ClosedEnum<
   typeof DeploymentSetupPolicyAllowedKubernetesBasePlatform
 >;
 
+/**
+ * Customer installation form selected by the link creator. Standard uses packaged operational defaults; Advanced exposes operational controls. Omitted on legacy links to preserve their full configuration interface.
+ */
+export const DeploymentSetupPolicyConfigurationProfile = {
+  Standard: "standard",
+  Advanced: "advanced",
+} as const;
+/**
+ * Customer installation form selected by the link creator. Standard uses packaged operational defaults; Advanced exposes operational controls. Omitted on legacy links to preserve their full configuration interface.
+ */
+export type DeploymentSetupPolicyConfigurationProfile = ClosedEnum<
+  typeof DeploymentSetupPolicyConfigurationProfile
+>;
+
 export type DeploymentSetupPolicy = {
   allowedPlatforms: Array<DeploymentSetupPolicyAllowedPlatform>;
   /**
@@ -84,6 +98,10 @@ export type DeploymentSetupPolicy = {
    */
   allowedKubernetesClusterSources?: Array<KubernetesClusterSource> | undefined;
   allowedSetupMethods: Array<DeploymentSetupMethod>;
+  /**
+   * Customer installation form selected by the link creator. Standard uses packaged operational defaults; Advanced exposes operational controls. Omitted on legacy links to preserve their full configuration interface.
+   */
+  configurationProfile?: DeploymentSetupPolicyConfigurationProfile | undefined;
   allowReleasePinning?: boolean | undefined;
   stackSettings?: DeploymentSetupStackSettingsPolicy | undefined;
 };
@@ -117,6 +135,15 @@ export const DeploymentSetupPolicyAllowedKubernetesBasePlatform$outboundSchema:
     DeploymentSetupPolicyAllowedKubernetesBasePlatform$inboundSchema;
 
 /** @internal */
+export const DeploymentSetupPolicyConfigurationProfile$inboundSchema: z.ZodEnum<
+  typeof DeploymentSetupPolicyConfigurationProfile
+> = z.enum(DeploymentSetupPolicyConfigurationProfile);
+/** @internal */
+export const DeploymentSetupPolicyConfigurationProfile$outboundSchema:
+  z.ZodEnum<typeof DeploymentSetupPolicyConfigurationProfile> =
+    DeploymentSetupPolicyConfigurationProfile$inboundSchema;
+
+/** @internal */
 export const DeploymentSetupPolicy$inboundSchema: z.ZodType<
   DeploymentSetupPolicy,
   unknown
@@ -132,6 +159,8 @@ export const DeploymentSetupPolicy$inboundSchema: z.ZodType<
     KubernetesClusterSource$inboundSchema,
   ).optional(),
   allowedSetupMethods: z.array(DeploymentSetupMethod$inboundSchema),
+  configurationProfile: DeploymentSetupPolicyConfigurationProfile$inboundSchema
+    .optional(),
   allowReleasePinning: z.boolean().optional(),
   stackSettings: DeploymentSetupStackSettingsPolicy$inboundSchema.optional(),
 });
@@ -142,6 +171,7 @@ export type DeploymentSetupPolicy$Outbound = {
   allowedKubernetesBasePlatforms?: Array<string> | undefined;
   allowedKubernetesClusterSources?: Array<string> | undefined;
   allowedSetupMethods: Array<string>;
+  configurationProfile?: string | undefined;
   allowReleasePinning?: boolean | undefined;
   stackSettings?: DeploymentSetupStackSettingsPolicy$Outbound | undefined;
 };
@@ -164,6 +194,8 @@ export const DeploymentSetupPolicy$outboundSchema: z.ZodType<
     KubernetesClusterSource$outboundSchema,
   ).optional(),
   allowedSetupMethods: z.array(DeploymentSetupMethod$outboundSchema),
+  configurationProfile: DeploymentSetupPolicyConfigurationProfile$outboundSchema
+    .optional(),
   allowReleasePinning: z.boolean().optional(),
   stackSettings: DeploymentSetupStackSettingsPolicy$outboundSchema.optional(),
 });

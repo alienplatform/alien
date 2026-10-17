@@ -22,8 +22,9 @@ pub mod test_utils;
 
 pub use emitter::CfEmitter;
 pub use generator::{
-    generate_cloudformation_stack_policy, generate_cloudformation_template, to_yaml,
-    CloudFormationOptions, CloudFormationTarget, RegistrationMode,
+    generate_cloudformation_stack_policy, generate_cloudformation_template,
+    generate_cloudformation_template_with_profile, to_yaml, CloudFormationOptions,
+    CloudFormationTarget, RegistrationMode,
 };
 pub use registry::CfRegistry;
 pub use template::{CfExpression, CfOutput, CfParameter, CfResource, CfTemplate};

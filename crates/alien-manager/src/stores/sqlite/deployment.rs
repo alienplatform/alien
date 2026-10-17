@@ -1212,7 +1212,9 @@ impl DeploymentStore for SqliteDeploymentStore {
                 .value(
                     Deployments::Status,
                     Expr::case(
-                        Expr::col(Deployments::Status).is_in(local_startup_failures),
+                        sea_query::Cond::all()
+                            .add(Expr::col(Deployments::Platform).eq(Platform::Local.as_str()))
+                            .add(Expr::col(Deployments::Status).is_in(local_startup_failures)),
                         Expr::col(Deployments::Status),
                     )
                     .finally("update-pending"),
@@ -1221,6 +1223,15 @@ impl DeploymentStore for SqliteDeploymentStore {
                 .cond_where(
                     sea_query::Cond::any()
                         .add(Expr::col(Deployments::Status).is_in(eligible_statuses))
+                        // Only the persisted installed grant permits a release to retry
+                        // setup work. A requested setting must not authorize manual setup.
+                        .add(
+                            sea_query::Cond::all()
+                                .add(Expr::col(Deployments::Status).eq("initial-setup-failed"))
+                                .add(Expr::cust(
+                                    "json_extract(runtime_metadata, '$.automaticSetup') = 1",
+                                )),
+                        )
                         .add(
                             sea_query::Cond::all()
                                 .add(Expr::col(Deployments::Platform).eq(Platform::Local.as_str()))
@@ -1515,8 +1526,36 @@ impl DeploymentStore for SqliteDeploymentStore {
     async fn reconcile(
         &self,
         caller: &crate::auth::Subject,
-        data: ReconcileData,
+        mut data: ReconcileData,
     ) -> Result<ReconcileOutcome, AlienError> {
+        let deployment = self.get_deployment(caller, &data.deployment_id).await?;
+        let installed_grant = deployment
+            .as_ref()
+            .and_then(|deployment| deployment.runtime_metadata.as_ref())
+            .is_some_and(|metadata| metadata.automatic_setup);
+        let may_install_grant = matches!(
+            caller.role,
+            crate::auth::Role::WorkspaceAdmin
+                | crate::auth::Role::ProjectDeveloper
+                | crate::auth::Role::DeploymentGroupDeployer
+        ) && deployment.as_ref().is_some_and(|deployment| {
+            deployment.import_source.is_none()
+                && deployment.stack_settings.as_ref().is_some_and(|settings| {
+                    settings.setup_management == alien_core::SetupManagement::Automatic
+                })
+                && matches!(
+                    deployment.platform,
+                    Platform::Aws | Platform::Gcp | Platform::Azure
+                )
+        });
+        if !may_install_grant {
+            if installed_grant || data.state.runtime_metadata.is_some() {
+                data.state
+                    .runtime_metadata
+                    .get_or_insert_default()
+                    .automatic_setup = installed_grant;
+            }
+        }
         let now = Utc::now();
         let state = &data.state;
         let next_step_after = data.suggested_delay_ms.map(|delay_ms| {
@@ -1564,7 +1603,6 @@ impl DeploymentStore for SqliteDeploymentStore {
             .and_then(|v| Ok(v.as_str().unwrap_or("pending").to_string()))
             .unwrap_or_else(|_| "pending".to_string());
         // Check if deployment completed (current matches desired)
-        let deployment = self.get_deployment(caller, &data.deployment_id).await?;
         let status_update: sea_query::SimpleExpr = if Self::is_delete_progress(state.status) {
             status_str.clone().into()
         } else {

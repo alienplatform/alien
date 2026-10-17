@@ -134,6 +134,41 @@ pub async fn stack_import(
         }
     };
 
+    let automatic = req.stack_settings.setup_management == alien_core::SetupManagement::Automatic;
+    let mut approved_automatic_installation = None;
+    if automatic {
+        let approved = match state
+            .deployment_store
+            .get_deployment_by_name(&subject, &deployment_group_id, req.deployment_name.trim())
+            .await
+        {
+            Ok(Some(existing)) => {
+                let approved = matches!(
+                    req.platform,
+                    Platform::Aws | Platform::Gcp | Platform::Azure
+                ) && existing.import_source.is_some()
+                    && state.authz.can_update_deployment(&subject, &existing)
+                    && existing.stack_settings.as_ref().is_some_and(|settings| {
+                        settings.setup_management == alien_core::SetupManagement::Automatic
+                    })
+                    && (existing.status == "pending"
+                        || existing
+                            .runtime_metadata
+                            .as_ref()
+                            .is_some_and(|metadata| metadata.automatic_setup));
+                if approved {
+                    approved_automatic_installation = Some(existing);
+                }
+                approved
+            }
+            Ok(None) => false,
+            Err(error) => return error.into_response(),
+        };
+        if !approved {
+            return ErrorData::bad_request("Ongoing management registration requires its approved own-environment installation.").into_response();
+        }
+    }
+
     if req.resources.is_empty() {
         return ErrorData::bad_request(
             "Stack import payload must include at least one imported resource",
@@ -214,6 +249,20 @@ pub async fn stack_import(
         })
         .into_response();
     }
+    // Deferred resources cannot answer gates by presence. Recover workspace-managed
+    // non-secret inputs from the approved reservation; deployer secrets stay in cloud storage.
+    if let Some(existing) = &approved_automatic_installation {
+        for input in &stack_inputs {
+            if input.kind != alien_core::StackInputKind::Secret {
+                if let Some(value) = existing.input_values.get(&input.id) {
+                    req.input_values
+                        .entry(input.id.clone())
+                        .or_insert_with(|| value.clone());
+                }
+            }
+        }
+    }
+    let deferred_resource_ids = std::collections::HashSet::new();
     let delivered_resource_ids: std::collections::HashSet<String> = req
         .resources
         .iter()
@@ -221,7 +270,11 @@ pub async fn stack_import(
         .collect();
     let imported_gate_answers = match alien_deployment::resolve_frozen_gate_answers_from_presence(
         source_stack,
-        &delivered_resource_ids,
+        if automatic {
+            &deferred_resource_ids
+        } else {
+            &delivered_resource_ids
+        },
         &req.input_values,
     ) {
         Ok(answers) => answers,
@@ -418,6 +471,10 @@ pub async fn stack_import(
                         &prepared_stack,
                         existing_stack_state,
                         stack_state,
+                        existing
+                            .runtime_metadata
+                            .as_ref()
+                            .is_some_and(|metadata| metadata.automatic_setup),
                     ) {
                         Ok(state) => state,
                         Err(error) => return error.into_response(),
@@ -456,6 +513,9 @@ pub async fn stack_import(
                 .map(|metadata| metadata.persisted_gate_answers.clone())
                 .unwrap_or_default();
             for (input_id, imported_answer) in &imported_gate_answers {
+                if automatic {
+                    continue;
+                }
                 if let Some(persisted) = persisted_answers.get(input_id) {
                     if persisted != imported_answer {
                         return AlienError::new(
@@ -469,7 +529,7 @@ pub async fn stack_import(
                     }
                 }
             }
-            let runtime_metadata = if activates_setup_reservation {
+            let mut runtime_metadata = if activates_setup_reservation {
                 import_runtime_metadata(&prepared_stack, imported_gate_answers)
             } else {
                 match reimport_runtime_metadata(
@@ -483,6 +543,11 @@ pub async fn stack_import(
                     Err(error) => return error.into_response(),
                 }
             };
+            if automatic {
+                runtime_metadata.automatic_setup = true;
+                runtime_metadata.initial_setup_authority =
+                    alien_core::InitialSetupAuthority::DirectSetup;
+            }
             let should_reconcile = !activates_setup_reservation
                 && import_changes_deployment(
                     &existing,
@@ -765,6 +830,7 @@ fn merge_reimported_stack_state(
     stack: &Stack,
     existing: &StackState,
     mut imported: StackState,
+    automatic_setup: bool,
 ) -> crate::error::Result<StackState> {
     for resource in &req.resources {
         let Some(existing_resource) = existing.resources.get(&resource.id) else {
@@ -834,10 +900,25 @@ fn merge_reimported_stack_state(
         imported.resources.insert(resource.id.clone(), merged);
     }
 
-    // The setup payload is authoritative for setup-owned resources: omission
-    // means setup removed one. Runtime-owned resources are not present in that
-    // payload, so carry their current controller state across explicitly.
-    preserve_live_runtime_state(stack, existing, &mut imported);
+    // The package replaces the state of resources it emits. In automatic mode
+    // it omits application infrastructure, including Frozen resources and
+    // resources that a later release is still deleting. Keep those controller
+    // states even when the resource is absent from the current prepared stack.
+    if automatic_setup {
+        for (resource_id, resource) in &existing.resources {
+            if !imported.resources.contains_key(resource_id)
+                && !alien_core::is_automatic_setup_package_resource_type(&resource.resource_type)
+            {
+                imported
+                    .resources
+                    .insert(resource_id.clone(), resource.clone());
+            }
+        }
+    } else {
+        // For manual setup, omission removes setup-owned resources. Only Live
+        // runtime resources survive an incomplete package registration.
+        preserve_live_runtime_state(stack, existing, &mut imported);
+    }
 
     Ok(imported)
 }
@@ -1227,6 +1308,13 @@ fn reimport_runtime_metadata(
     imported_gate_answers: alien_core::GateAnswers,
 ) -> crate::error::Result<RuntimeMetadata> {
     let mut metadata = existing.runtime_metadata.clone().unwrap_or_default();
+    if metadata.automatic_setup {
+        metadata
+            .persisted_gate_answers
+            .extend(imported_gate_answers);
+        metadata.setup_update_authorization = None;
+        return Ok(metadata);
+    }
     metadata.initial_setup_authority = alien_core::InitialSetupAuthority::ImportedHandoff;
     // The route refused conflicting answers before calling this, so what
     // remains is bookkeeping: answers for inputs a new release introduces are
@@ -1356,6 +1444,7 @@ async fn prepare_import_stack(
             created_at: "1970-01-01T00:00:00Z".to_string(),
         },
         allow_frozen_changes: false,
+        setup_run: false,
         compute_backend: None,
         external_bindings: ExternalBindings::default(),
         base_platform: req.base_platform,
@@ -1600,8 +1689,7 @@ fn validate_import_handoff(req: &StackImportRequest, stack: &Stack) -> crate::er
     let expected: std::collections::HashSet<&str> = stack
         .resources()
         .filter(|(_, entry)| {
-            alien_core::ownership_policy_for_resource_type(entry.config.resource_type().as_ref())
-                .emits_setup_scaffolding(entry.lifecycle)
+            alien_core::emits_package_scaffolding(entry, req.stack_settings.setup_management)
         })
         .map(|(resource_id, _)| resource_id.as_str())
         .collect();

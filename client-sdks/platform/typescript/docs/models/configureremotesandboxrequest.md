@@ -15,3 +15,5 @@ let value: ConfigureRemoteSandboxRequest = {};
 | `customImage`             | *string*                  | :heavy_minus_sign:        | N/A                       |
 | `maxLifetimeSeconds`      | *number*                  | :heavy_minus_sign:        | N/A                       |
 | `azureIdleSuspendSeconds` | *number*                  | :heavy_minus_sign:        | N/A                       |
+| `azureImage`              | *string*                  | :heavy_minus_sign:        | N/A                       |
+| `gcpImage`                | *string*                  | :heavy_minus_sign:        | N/A                       |

@@ -11,12 +11,12 @@ use crate::{
 };
 use alien_core::{
     import::{EmitContext, CURRENT_SETUP_IMPORT_FORMAT_VERSION},
-    ownership_policy_for_resource_type, CapacityGroup, CapacityGroupScalePolicy, ComputeCluster,
-    ComputePoolSelection, Container, Daemon, DeploymentModel, DomainSettings, ErrorData,
-    ExposeProtocol, HeartbeatsMode, KubernetesCluster, KubernetesSettings, Network,
-    NetworkSettings, Platform, RemoteBindings, ResourceLifecycle, Result, Sandbox, Stack,
-    StackInputDefaultValue, StackInputDefinition, StackInputKind, StackInputProvider,
-    StackSettings, Storage, TelemetryMode, UpdatesMode, Worker, WorkerCode,
+    CapacityGroup, CapacityGroupScalePolicy, ComputeCluster, ComputePoolSelection, Container,
+    Daemon, DeploymentModel, DomainSettings, ErrorData, ExposeProtocol, HeartbeatsMode,
+    KubernetesCluster, KubernetesSettings, Network, NetworkSettings, Platform, RemoteBindings,
+    ResourceLifecycle, Result, Sandbox, Stack, StackInputDefaultValue, StackInputDefinition,
+    StackInputKind, StackInputProvider, StackSettings, Storage, TelemetryMode, UpdatesMode, Worker,
+    WorkerCode,
 };
 use alien_error::AlienError;
 use indexmap::{indexmap, IndexMap};
@@ -227,8 +227,26 @@ pub fn generate_cloudformation_template(
     stack: &Stack,
     options: CloudFormationOptions<'_>,
 ) -> Result<CfTemplate> {
+    generate_cloudformation_template_with_profile(
+        stack,
+        options,
+        alien_core::SetupConfigurationProfile::Advanced,
+    )
+}
+
+/// Generate a distinct template with the requested configuration surface.
+pub fn generate_cloudformation_template_with_profile(
+    stack: &Stack,
+    options: CloudFormationOptions<'_>,
+    profile: alien_core::SetupConfigurationProfile,
+) -> Result<CfTemplate> {
     validate_stack_for_cloudformation(stack)?;
     validate_stack_settings(&options.stack_settings)?;
+    alien_core::validate_automatic_setup_resources(
+        stack,
+        options.target.cloud_platform(),
+        options.stack_settings.setup_management,
+    )?;
     if options.target.is_kubernetes()
         && (matches!(
             options.stack_settings.network,
@@ -357,10 +375,11 @@ pub fn generate_cloudformation_template(
         }
     }
     let supports_custom_domain = stack_supports_custom_domain(stack, options.target);
-    let access_only = stack
-        .resources
-        .values()
-        .any(|entry| alien_core::remote_bindings::remote_binding_for_entry(entry).is_some())
+    let access_only = stack_settings.setup_management != alien_core::SetupManagement::Automatic
+        && stack
+            .resources
+            .values()
+            .any(|entry| alien_core::remote_bindings::remote_binding_for_entry(entry).is_some())
         && !stack
             .resources
             .values()
@@ -375,6 +394,7 @@ pub fn generate_cloudformation_template(
         access_only,
         !matches!(options.registration, RegistrationMode::OutputsFallback),
         options.target,
+        profile,
     )?;
     add_stack_input_parameters(&mut template, &stack_inputs)?;
     add_supported_region_rule(&mut template, &options.registration);
@@ -398,6 +418,7 @@ pub fn generate_cloudformation_template(
         &stack_inputs,
         access_only,
         !matches!(options.registration, RegistrationMode::OutputsFallback),
+        profile,
     );
 
     let mut registration_resources: Vec<RegistrationEntry> = Vec::new();
@@ -406,8 +427,7 @@ pub fn generate_cloudformation_template(
 
     for (resource_id, resource) in stack.resources() {
         let resource_type = resource.config.resource_type();
-        let ownership = ownership_policy_for_resource_type(resource_type.as_ref());
-        if !ownership.emits_setup_scaffolding(resource.lifecycle) {
+        if !alien_core::emits_package_scaffolding(resource, stack_settings.setup_management) {
             continue;
         }
         // A sandbox on a Kubernetes target is a pod bounded by the chart's NetworkPolicy, not
@@ -531,6 +551,7 @@ pub fn generate_cloudformation_template(
         kubernetes_namespace.clone(),
         supports_custom_domain,
         access_only,
+        profile,
     );
     apply_resource_dependencies(stack, &emitted_resource_ids, &mut template);
     apply_network_iam_dependencies(stack, &emitted_resource_ids, &mut template);
@@ -1318,6 +1339,7 @@ fn add_standard_parameters(
     bindings_only: bool,
     uses_custom_registration: bool,
     target: CloudFormationTarget,
+    profile: alien_core::SetupConfigurationProfile,
 ) -> Result<()> {
     if uses_custom_registration {
         template.parameters.insert(
@@ -1416,36 +1438,38 @@ fn add_standard_parameters(
             false,
         ),
     );
-    template.parameters.insert(
-        PARAM_UPDATES_MODE.to_string(),
-        string_parameter(
-            "How updates are applied after setup registration.",
-            Some(updates_mode(settings.updates).to_string()),
-            Some(vec![
-                CfExpression::from("auto"),
-                CfExpression::from("approval-required"),
-            ]),
-            false,
-        ),
-    );
-    template.parameters.insert(
-        PARAM_TELEMETRY_MODE.to_string(),
-        string_parameter(
-            "Telemetry collection behavior.",
-            Some(telemetry_mode(settings.telemetry).to_string()),
-            Some(vec![CfExpression::from(telemetry_mode(settings.telemetry))]),
-            false,
-        ),
-    );
-    template.parameters.insert(
-        PARAM_HEARTBEATS_MODE.to_string(),
-        string_parameter(
-            "Heartbeat health-check behavior.",
-            Some(heartbeats_mode(settings.heartbeats).to_string()),
-            Some(vec![CfExpression::from("off"), CfExpression::from("on")]),
-            false,
-        ),
-    );
+    if profile == alien_core::SetupConfigurationProfile::Advanced {
+        template.parameters.insert(
+            PARAM_UPDATES_MODE.to_string(),
+            string_parameter(
+                "How updates are applied after setup registration.",
+                Some(updates_mode(settings.updates).to_string()),
+                Some(vec![
+                    CfExpression::from("auto"),
+                    CfExpression::from("approval-required"),
+                ]),
+                false,
+            ),
+        );
+        template.parameters.insert(
+            PARAM_TELEMETRY_MODE.to_string(),
+            string_parameter(
+                "Telemetry collection behavior.",
+                Some(telemetry_mode(settings.telemetry).to_string()),
+                Some(vec![CfExpression::from(telemetry_mode(settings.telemetry))]),
+                false,
+            ),
+        );
+        template.parameters.insert(
+            PARAM_HEARTBEATS_MODE.to_string(),
+            string_parameter(
+                "Heartbeat health-check behavior.",
+                Some(heartbeats_mode(settings.heartbeats).to_string()),
+                Some(vec![CfExpression::from("off"), CfExpression::from("on")]),
+                false,
+            ),
+        );
+    }
     Ok(())
 }
 
@@ -1820,7 +1844,7 @@ fn add_standard_conditions(
             add_list_parameter_condition(template, parameter);
         }
     }
-    let has_created_network = stack_has_created_network(stack);
+    let has_created_network = stack_has_created_network(stack, settings.setup_management);
     if has_dynamic_aws_network_settings(settings.network.as_ref()) || has_created_network {
         template.conditions.insert(
             CONDITION_NETWORK_MODE_CREATE.to_string(),
@@ -1910,12 +1934,13 @@ fn add_standard_conditions(
     }
 }
 
-fn stack_has_created_network(stack: &Stack) -> bool {
+fn stack_has_created_network(stack: &Stack, management: alien_core::SetupManagement) -> bool {
     stack.resources().any(|(_resource_id, resource)| {
-        resource
-            .config
-            .downcast_ref::<Network>()
-            .is_some_and(|network| matches!(network.settings, NetworkSettings::Create { .. }))
+        alien_core::emits_package_scaffolding(resource, management)
+            && resource
+                .config
+                .downcast_ref::<Network>()
+                .is_some_and(|network| matches!(network.settings, NetworkSettings::Create { .. }))
     })
 }
 
@@ -1938,6 +1963,7 @@ fn add_console_interface_metadata(
     stack_inputs: &[StackInputDefinition],
     bindings_only: bool,
     uses_custom_registration: bool,
+    profile: alien_core::SetupConfigurationProfile,
 ) {
     let network_parameters = network_parameter_names(settings.network.as_ref());
     let compute_parameters = compute_parameter_names(stack, settings.compute.as_ref());
@@ -1991,7 +2017,7 @@ fn add_console_interface_metadata(
             "Parameters": compute_parameters
         }));
     }
-    if !bindings_only {
+    if !bindings_only && profile == alien_core::SetupConfigurationProfile::Advanced {
         parameter_groups.push(json!({
             "Label": { "default": "Operations" },
             "Parameters": [
@@ -2054,7 +2080,7 @@ fn add_console_interface_metadata(
     for (parameter, label) in compute_parameter_labels(stack, settings.compute.as_ref()) {
         insert_parameter_label(&mut parameter_labels, &parameter, &label);
     }
-    if !bindings_only {
+    if !bindings_only && profile == alien_core::SetupConfigurationProfile::Advanced {
         insert_parameter_label(&mut parameter_labels, PARAM_UPDATES_MODE, "Updates");
         insert_parameter_label(&mut parameter_labels, PARAM_TELEMETRY_MODE, "Telemetry");
         insert_parameter_label(&mut parameter_labels, PARAM_HEARTBEATS_MODE, "Heartbeats");
@@ -2670,6 +2696,7 @@ fn stack_settings_expression(
     kubernetes_namespace: Option<CfExpression>,
     supports_custom_domain: bool,
     bindings_only: bool,
+    profile: alien_core::SetupConfigurationProfile,
 ) -> CfExpression {
     if bindings_only {
         return CfExpression::object([
@@ -2679,17 +2706,36 @@ fn stack_settings_expression(
             ("heartbeats", CfExpression::from("on")),
         ]);
     }
+    let operation = |parameter, default: &str| {
+        if profile == alien_core::SetupConfigurationProfile::Advanced {
+            CfExpression::ref_(parameter)
+        } else {
+            CfExpression::from(default)
+        }
+    };
     let mut values = vec![
         ("deploymentModel", CfExpression::from("push")),
         ("endpointAccess", CfExpression::ref_(PARAM_ENDPOINT_ACCESS)),
-        ("updates", CfExpression::ref_(PARAM_UPDATES_MODE)),
-        ("telemetry", CfExpression::ref_(PARAM_TELEMETRY_MODE)),
-        ("heartbeats", CfExpression::ref_(PARAM_HEARTBEATS_MODE)),
+        (
+            "updates",
+            operation(PARAM_UPDATES_MODE, updates_mode(settings.updates)),
+        ),
+        (
+            "telemetry",
+            operation(PARAM_TELEMETRY_MODE, telemetry_mode(settings.telemetry)),
+        ),
+        (
+            "heartbeats",
+            operation(PARAM_HEARTBEATS_MODE, heartbeats_mode(settings.heartbeats)),
+        ),
         (
             "network",
             network_expression(stack, settings.network.as_ref(), target),
         ),
     ];
+    if settings.setup_management == alien_core::SetupManagement::Automatic {
+        values.push(("setupManagement", CfExpression::from("automatic")));
+    }
     if supports_custom_domain {
         values.push(("domains", domains_expression(stack, target)));
     }

@@ -2939,6 +2939,7 @@ async fn create_deployment_task(
                 message: "Failed to convert endpoint access to SDK type".to_string(),
             })?,
         compute: None,
+        setup_management: None,
         deployment_model: Some(if no_push {
             alien_platform_api::types::NewDeploymentRequestStackSettingsDeploymentModel::Pull
         } else {

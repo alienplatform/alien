@@ -11,7 +11,9 @@
 //! preflight pipeline is what wires them up at runtime. The tests stay
 //! self-contained.
 
-use super::helpers::{assert_terraform_valid, linter_files, render, snapshot_module, test_utils};
+use super::helpers::{
+    assert_terraform_valid, linter_files, render, snapshot_module, test_utils, try_render,
+};
 use alien_core::{
     Ai, AzureContainerAppsEnvironment, AzureResourceGroup, AzureServiceBusNamespace,
     AzureStorageAccount, Key, Kv, LifecycleRule, PermissionProfile, PermissionSetReference, Queue,
@@ -573,6 +575,14 @@ fn azure_remote_sandbox_grants_the_access_identity_its_own_group_and_nothing_wid
             ResourceLifecycle::Frozen,
         )
         .build();
+
+    let automatic = StackSettings {
+        setup_management: alien_core::SetupManagement::Automatic,
+        ..StackSettings::default()
+    };
+    let error = try_render(&stack, TerraformTarget::Azure, automatic)
+        .expect_err("automatic setup cannot supply the sandbox's imported group");
+    assert!(error.to_string().contains("manual setup"), "{error}");
 
     let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
     let rendered = module

@@ -153,6 +153,11 @@ pub struct DeployArgs {
     #[arg(long)]
     pub no_heartbeat: bool,
 
+    /// Grant ongoing setup permissions for a new deployment in your own AWS, GCP or Azure environment.
+    /// Alien can then add and change infrastructure without a separate setup run.
+    #[arg(long)]
+    pub automatic_setup: bool,
+
     /// Telemetry / monitoring mode.
     /// "auto" (default) uses the parent manager's built-in log store or external OTLP integration.
     /// "off" disables all monitoring.
@@ -201,6 +206,7 @@ struct ResolvedDeployArgs {
     name: String,
     platform: String,
     platform_enum: Platform,
+    setup_management: alien_core::SetupManagement,
     network_settings: Option<NetworkSettings>,
     compute_settings: Option<ComputeSettings>,
     domain_settings: Option<alien_core::DomainSettings>,
@@ -213,6 +219,7 @@ struct ResolvedDeployArgs {
 struct DeployConfigFile {
     name: Option<String>,
     platform: Option<String>,
+    setup_management: Option<alien_core::SetupManagement>,
     network: Option<DeployConfigNetwork>,
     compute: Option<ComputeSettings>,
     domains: Option<alien_core::DomainSettings>,
@@ -325,6 +332,27 @@ fn resolve_deploy_args(args: &DeployArgs) -> Result<ResolvedDeployArgs> {
             message: e,
         })
     })?;
+    let setup_management = if args.automatic_setup {
+        alien_core::SetupManagement::Automatic
+    } else {
+        config
+            .as_ref()
+            .and_then(|config| config.setup_management)
+            .unwrap_or_default()
+    };
+    if setup_management == alien_core::SetupManagement::Automatic
+        && !matches!(
+            platform_enum,
+            Platform::Aws | Platform::Gcp | Platform::Azure
+        )
+    {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "automatic-setup".to_string(),
+            message:
+                "Automatic setup is supported for CLI-installed AWS, GCP and Azure deployments."
+                    .to_string(),
+        }));
+    }
 
     alien_preflights::quotas::validate_warning_overrides(
         platform_enum,
@@ -377,6 +405,7 @@ fn resolve_deploy_args(args: &DeployArgs) -> Result<ResolvedDeployArgs> {
         name,
         platform,
         platform_enum,
+        setup_management,
         network_settings,
         compute_settings,
         domain_settings: config.as_ref().and_then(|config| config.domains.clone()),
@@ -398,25 +427,6 @@ fn validate_compute_settings(compute: Option<&ComputeSettings>) -> Result<()> {
         })?;
     }
     Ok(())
-}
-
-fn to_sdk_compute_settings(
-    compute: Option<ComputeSettings>,
-) -> Result<Option<alien_platform_api::types::NewDeploymentRequestStackSettingsCompute>> {
-    compute
-        .map(|compute_settings| {
-            let json = serde_json::to_value(&compute_settings)
-                .into_alien_error()
-                .context(ErrorData::ConfigurationError {
-                    message: "Failed to serialize compute settings".to_string(),
-                })?;
-            serde_json::from_value(json)
-                .into_alien_error()
-                .context(ErrorData::ConfigurationError {
-                    message: "Failed to convert compute settings to SDK type".to_string(),
-                })
-        })
-        .transpose()
 }
 
 fn read_deploy_config(path: &Path) -> Result<DeployConfigFile> {
@@ -1110,6 +1120,7 @@ fn deployment_stack_settings_json(
             MonitoringMode::Auto => "auto",
         },
         "updates": "auto",
+        "setupManagement": resolved_args.setup_management,
     });
 
     if args.clear_quota_warning_overrides || !args.quota_warning_overrides.is_empty() {
@@ -1466,6 +1477,9 @@ async fn deploy_task_with_environment(
     }
 
     info!("Starting deploy command");
+    if resolved_args.setup_management == alien_core::SetupManagement::Automatic {
+        println!("Infrastructure management: Alien can create, change, and remove infrastructure for this installation, including resources added by future releases. New cloud permissions can require an explicit setup update.");
+    }
     println!(
         "{}",
         contextual_heading(
@@ -1580,11 +1594,13 @@ async fn deploy_task_with_environment(
                             })?
                     }
                     DeploymentToken::DeploymentGroup {
+                        deployment_group_id,
                         deployment_group_name,
                         workspace_name,
                         project_id,
                         ..
                     } => {
+                        supplied_group_token = Some((deployment_group_id, token.clone()));
                         info!(
                             "   Using deployment group token for group '{}'",
                             deployment_group_name
@@ -1593,66 +1609,14 @@ async fn deploy_task_with_environment(
 
                         let sdk_client = create_platform_client(token, &base_url)?;
 
-                        let sdk_network = resolved_args
-                            .network_settings
-                            .clone()
-                            .map(|network_settings| {
-                                let json = serde_json::to_value(&network_settings)
-                                    .into_alien_error()
-                                    .context(ErrorData::ConfigurationError {
-                                        message: "Failed to serialize network settings".to_string(),
-                                    })?;
-                                serde_json::from_value(json).into_alien_error().context(
-                                    ErrorData::ConfigurationError {
-                                        message: "Failed to convert network settings to SDK type"
-                                            .to_string(),
-                                    },
-                                )
-                            })
-                            .transpose()?;
-
-                        let sdk_compute =
-                            to_sdk_compute_settings(resolved_args.compute_settings.clone())?;
-
-                        let deployment_model = if uses_push_deployment_model(
-                            resolved_args.platform_enum,
-                        ) {
-                            alien_platform_api::types::NewDeploymentRequestStackSettingsDeploymentModel::Push
-                        } else {
-                            alien_platform_api::types::NewDeploymentRequestStackSettingsDeploymentModel::Pull
-                        };
-                        let stack_settings = alien_platform_api::types::NewDeploymentRequestStackSettings {
-                        endpoint_access: args.network.endpoint_access
-                            .map(|access| serde_json::from_value(serde_json::json!(access)))
-                            .transpose()
-                            .into_alien_error()
-                            .context(ErrorData::ConfigurationError {
-                                message: "Failed to convert endpoint access to SDK type".to_string(),
-                            })?,
-                        compute: sdk_compute,
-                        deployment_model: Some(deployment_model),
-                        heartbeats: Some(if args.no_heartbeat {
-                            alien_platform_api::types::NewDeploymentRequestStackSettingsHeartbeats::Off
-                        } else {
-                            alien_platform_api::types::NewDeploymentRequestStackSettingsHeartbeats::On
-                        }),
-                        telemetry: Some(match args.monitoring {
-                            MonitoringMode::Off => alien_platform_api::types::NewDeploymentRequestStackSettingsTelemetry::Off,
-                            MonitoringMode::Auto => alien_platform_api::types::NewDeploymentRequestStackSettingsTelemetry::Auto,
-                        }),
-                        updates: Some(alien_platform_api::types::NewDeploymentRequestStackSettingsUpdates::Auto),
-                        network: sdk_network,
-                        domains: resolved_args.domain_settings.clone().map(|domains| {
-                            let value = serde_json::to_value(domains).into_alien_error()
-                                .context(ErrorData::ConfigurationError { message: "Failed to serialize domain settings".to_string() })?;
-                            serde_json::from_value(value).into_alien_error()
-                                .context(ErrorData::ConfigurationError { message: "Failed to convert domain settings to SDK type".to_string() })
-                        }).transpose()?,
-                        external_bindings: None,
-                        kubernetes: None,
-                        public_endpoints: None,
-                        quota_warning_overrides: args.quota_warning_overrides.clone(),
-                    };
+                        let stack_settings = serde_json::from_value(
+                            deployment_stack_settings_json(&resolved_args, &args)?,
+                        )
+                        .into_alien_error()
+                        .context(ErrorData::ConfigurationError {
+                            message: "Failed to convert deployment settings to SDK type"
+                                .to_string(),
+                        })?;
 
                         let parsed_setup_item = match args.setup_item {
                             Some(item) => Some(
@@ -2059,17 +2023,25 @@ async fn deploy_task_with_environment(
     let initial_setup =
         existing_deployment_plan(&status, None, ctx.is_platform(), has_installed_release)
             == ExistingDeploymentPlan::InitialSetup;
-    let (deployment_group_id, active_update) = if ctx.is_platform() && !initial_setup {
-        let (group, active_update) = platform_deployment_progress(
-            &base_url,
-            &tracked_deployment.api_key,
-            &tracked_deployment.deployment_id,
-        )
-        .await?;
-        (Some(group), active_update)
-    } else {
-        (None, None)
-    };
+    let initial_automatic_setup = initial_setup
+        && deployment.stack_settings.as_ref().is_some_and(|settings| {
+            settings
+                .get("setupManagement")
+                .and_then(serde_json::Value::as_str)
+                == Some("automatic")
+        });
+    let (deployment_group_id, active_update) =
+        if ctx.is_platform() && (!initial_setup || initial_automatic_setup) {
+            let (group, active_update) = platform_deployment_progress(
+                &base_url,
+                &tracked_deployment.api_key,
+                &tracked_deployment.deployment_id,
+            )
+            .await?;
+            (Some(group), active_update)
+        } else {
+            (None, None)
+        };
     let plan = existing_deployment_plan(
         &status,
         active_update,
@@ -2106,7 +2078,11 @@ async fn deploy_task_with_environment(
     // Setup runs with setup authority for the deployment group; the
     // deployment token keeps configuring the runtime.
     let (setup_client, setup_token) = match plan {
-        ExistingDeploymentPlan::SetupUpdate { .. } => {
+        ExistingDeploymentPlan::SetupUpdate { .. } | ExistingDeploymentPlan::InitialSetup
+            if ctx.is_platform()
+                && (initial_automatic_setup
+                    || matches!(plan, ExistingDeploymentPlan::SetupUpdate { .. })) =>
+        {
             let deployment_group_id = deployment_group_id.as_deref().ok_or_else(|| {
                 AlienError::new(ErrorData::ConfigurationError {
                     message: "A setup update needs the deployment's group from the platform"
@@ -2148,6 +2124,10 @@ async fn deploy_task_with_environment(
             );
             (Some(client), Some(setup_token))
         }
+        ExistingDeploymentPlan::InitialSetup if initial_automatic_setup => (
+            Some(manager_ctx.client.clone()),
+            manager_ctx.auth_token.clone(),
+        ),
         _ => (None, None),
     };
     // The client that holds the lock: setup authority for a setup update.
@@ -2381,6 +2361,7 @@ async fn deploy_task_with_environment(
                 message: "Failed to deserialize stored deployment inputs".to_string(),
             })?;
     }
+    config.setup_run = setup_owned_status;
     config.manager_url = Some(manager_ctx.manager_url.clone());
     config.deployment_token = Some(tracked_deployment.api_key.clone());
 
@@ -4964,6 +4945,7 @@ mod tests {
                 name: "test".to_string(),
                 platform: "aws".to_string(),
                 platform_enum: Platform::Aws,
+                setup_management: alien_core::SetupManagement::Manual,
                 network_settings: None,
                 compute_settings: None,
                 domain_settings: None,
@@ -5018,6 +5000,7 @@ machine = "m8i.2xlarge"
             name: config.name.expect("name"),
             platform: config.platform.expect("platform"),
             platform_enum: Platform::Aws,
+            setup_management: alien_core::SetupManagement::Manual,
             network_settings: None,
             compute_settings: config.compute,
             domain_settings: config.domains,
@@ -5093,35 +5076,6 @@ max = 1
         assert!(error.message.contains("minimum"));
     }
 
-    #[test]
-    fn fixed_and_autoscale_compute_convert_to_generated_sdk_contract() {
-        let compute: ComputeSettings = serde_json::from_value(serde_json::json!({
-            "pools": {
-                "fixed": {
-                    "mode": "fixed",
-                    "machines": 2,
-                    "machine": "m8i.2xlarge"
-                },
-                "elastic": {
-                    "mode": "autoscale",
-                    "min": 1,
-                    "max": 4,
-                    "machine": "n2-standard-8"
-                }
-            }
-        }))
-        .expect("core compute settings should parse");
-
-        let sdk = to_sdk_compute_settings(Some(compute))
-            .expect("core settings must match the generated SDK schema")
-            .expect("compute should be present");
-        let json = serde_json::to_value(sdk).expect("SDK compute should serialize");
-
-        assert_eq!(json["pools"]["fixed"]["machines"], 2);
-        assert_eq!(json["pools"]["elastic"]["min"], 1);
-        assert_eq!(json["pools"]["elastic"]["max"], 4);
-    }
-
     #[tokio::test]
     async fn standalone_creation_forwards_resolved_inputs() {
         let server = httpmock::MockServer::start_async().await;
@@ -5149,6 +5103,7 @@ max = 1
             name: "test".to_string(),
             platform: "aws".to_string(),
             platform_enum: Platform::Aws,
+            setup_management: alien_core::SetupManagement::Manual,
             network_settings: None,
             compute_settings: None,
             domain_settings: None,
@@ -5234,6 +5189,7 @@ max = 1
             name: "preview".to_string(),
             platform: "aws".to_string(),
             platform_enum: Platform::Aws,
+            setup_management: alien_core::SetupManagement::Manual,
             network_settings: None,
             compute_settings: None,
             domain_settings: None,

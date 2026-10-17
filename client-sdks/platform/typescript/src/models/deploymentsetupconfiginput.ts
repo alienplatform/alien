@@ -63,6 +63,20 @@ export const DeploymentSetupConfigInputAllowedKubernetesBasePlatform = {
 export type DeploymentSetupConfigInputAllowedKubernetesBasePlatform =
   ClosedEnum<typeof DeploymentSetupConfigInputAllowedKubernetesBasePlatform>;
 
+/**
+ * Customer installation form selected by the link creator. Standard uses packaged operational defaults; Advanced exposes operational controls. Omitted on legacy links to preserve their full configuration interface.
+ */
+export const DeploymentSetupConfigInputConfigurationProfile = {
+  Standard: "standard",
+  Advanced: "advanced",
+} as const;
+/**
+ * Customer installation form selected by the link creator. Standard uses packaged operational defaults; Advanced exposes operational controls. Omitted on legacy links to preserve their full configuration interface.
+ */
+export type DeploymentSetupConfigInputConfigurationProfile = ClosedEnum<
+  typeof DeploymentSetupConfigInputConfigurationProfile
+>;
+
 export type Policy = {
   allowedPlatforms?:
     | Array<DeploymentSetupConfigInputAllowedPlatform>
@@ -84,6 +98,12 @@ export type Policy = {
    */
   allowedKubernetesClusterSources?: Array<KubernetesClusterSource> | undefined;
   allowedSetupMethods?: Array<DeploymentSetupMethod> | undefined;
+  /**
+   * Customer installation form selected by the link creator. Standard uses packaged operational defaults; Advanced exposes operational controls. Omitted on legacy links to preserve their full configuration interface.
+   */
+  configurationProfile?:
+    | DeploymentSetupConfigInputConfigurationProfile
+    | undefined;
   allowReleasePinning?: boolean | undefined;
   stackSettings?: DeploymentSetupStackSettingsPolicy | undefined;
 };
@@ -156,12 +176,19 @@ export const DeploymentSetupConfigInputAllowedKubernetesBasePlatform$outboundSch
     .enum(DeploymentSetupConfigInputAllowedKubernetesBasePlatform);
 
 /** @internal */
+export const DeploymentSetupConfigInputConfigurationProfile$outboundSchema:
+  z.ZodEnum<typeof DeploymentSetupConfigInputConfigurationProfile> = z.enum(
+    DeploymentSetupConfigInputConfigurationProfile,
+  );
+
+/** @internal */
 export type Policy$Outbound = {
   allowedPlatforms?: Array<string> | undefined;
   allowedAIProviders?: Array<string> | undefined;
   allowedKubernetesBasePlatforms?: Array<string> | undefined;
   allowedKubernetesClusterSources?: Array<string> | undefined;
   allowedSetupMethods?: Array<string> | undefined;
+  configurationProfile?: string | undefined;
   allowReleasePinning?: boolean | undefined;
   stackSettings?: DeploymentSetupStackSettingsPolicy$Outbound | undefined;
 };
@@ -183,6 +210,8 @@ export const Policy$outboundSchema: z.ZodType<Policy$Outbound, Policy> = z
     ).optional(),
     allowedSetupMethods: z.array(DeploymentSetupMethod$outboundSchema)
       .optional(),
+    configurationProfile:
+      DeploymentSetupConfigInputConfigurationProfile$outboundSchema.optional(),
     allowReleasePinning: z.boolean().optional(),
     stackSettings: DeploymentSetupStackSettingsPolicy$outboundSchema.optional(),
   });

@@ -195,3 +195,36 @@ async fn push_azure_comprehensive_ts(ctx: &mut AzurePushTypeScript) {
 // Note: Local push tests are not included because the local platform only
 // supports pull (container) model through the manager pipeline. Push (worker)
 // model on local requires `alien dev` which bypasses the deployment pipeline.
+
+macro_rules! automatic_setup_test {
+    ($context:ident, $test:ident, $platform:expr) => {
+        struct $context(common::automatic_setup::AutomaticSetup);
+        impl test_context::AsyncTestContext for $context {
+            async fn setup() -> Self {
+                Self(
+                    common::automatic_setup::AutomaticSetup::new($platform)
+                        .await
+                        .expect("create automatic setup test"),
+                )
+            }
+            async fn teardown(self) {
+                self.0
+                    .cleanup()
+                    .await
+                    .expect("automatic setup cleanup must finish");
+            }
+        }
+        #[test_context($context)]
+        #[tokio::test]
+        async fn $test(ctx: &mut $context) {
+            ctx.0.run().await.expect("automatic setup cloud lifecycle");
+        }
+    };
+}
+automatic_setup_test!(AwsAutomaticSetup, push_aws_automatic_setup, Platform::Aws);
+automatic_setup_test!(GcpAutomaticSetup, push_gcp_automatic_setup, Platform::Gcp);
+automatic_setup_test!(
+    AzureAutomaticSetup,
+    push_azure_automatic_setup,
+    Platform::Azure
+);

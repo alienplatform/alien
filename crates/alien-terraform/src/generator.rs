@@ -24,11 +24,11 @@ use crate::{
 };
 use alien_core::{
     import::{EmitContext, CURRENT_SETUP_IMPORT_FORMAT_VERSION},
-    ownership_policy_for_resource_type, ComputeCluster, DeploymentModel, ErrorData, HeartbeatsMode,
-    Key, KubernetesCertificateMode, KubernetesExposureSettings, KubernetesSettings, Network,
-    NetworkSettings, RemoteBindings, RemoteStackManagement, ResourceLifecycle, Result, Sandbox,
-    SandboxEgress, Stack, StackInputDefaultValue, StackInputDefinition, StackInputKind,
-    StackInputProvider, StackInputValidation, StackSettings, TelemetryMode, UpdatesMode,
+    ComputeCluster, DeploymentModel, ErrorData, HeartbeatsMode, Key, KubernetesCertificateMode,
+    KubernetesExposureSettings, KubernetesSettings, Network, NetworkSettings, RemoteBindings,
+    RemoteStackManagement, ResourceLifecycle, Result, Sandbox, SandboxEgress, Stack,
+    StackInputDefaultValue, StackInputDefinition, StackInputKind, StackInputProvider,
+    StackInputValidation, StackSettings, TelemetryMode, UpdatesMode,
 };
 use alien_error::{AlienError, IntoAlienError};
 use hcl::{
@@ -175,7 +175,14 @@ pub fn generate_terraform_module(
     target: TerraformTarget,
     options: TerraformOptions<'_>,
 ) -> Result<ModuleFiles> {
-    generate_terraform_module_internal(stack, target, options, false, false)
+    generate_terraform_module_internal(
+        stack,
+        target,
+        options,
+        false,
+        false,
+        alien_core::SetupConfigurationProfile::Advanced,
+    )
 }
 
 /// Generate a product module that can enable the embedded Remote Operator.
@@ -191,6 +198,25 @@ pub fn generate_product_terraform_module(
         options,
         true,
         requires_remote_operator_collector_token,
+        alien_core::SetupConfigurationProfile::Advanced,
+    )
+}
+
+/// Generate a product module with a distinct public configuration interface.
+pub fn generate_product_terraform_module_with_profile(
+    stack: &Stack,
+    target: TerraformTarget,
+    options: TerraformOptions<'_>,
+    requires_remote_operator_collector_token: bool,
+    profile: alien_core::SetupConfigurationProfile,
+) -> Result<ModuleFiles> {
+    generate_terraform_module_internal(
+        stack,
+        target,
+        options,
+        true,
+        requires_remote_operator_collector_token,
+        profile,
     )
 }
 
@@ -200,10 +226,18 @@ fn generate_terraform_module_internal(
     options: TerraformOptions<'_>,
     product_remote_operator: bool,
     requires_remote_operator_collector_token: bool,
+    profile: alien_core::SetupConfigurationProfile,
 ) -> Result<ModuleFiles> {
     let labels = resource_labels(stack)?;
     let platform = target.cloud_platform();
     let mut stack_settings = options.stack_settings.clone();
+    if !target.is_kubernetes() {
+        alien_core::validate_automatic_setup_resources(
+            stack,
+            platform,
+            stack_settings.setup_management,
+        )?;
+    }
     if target.is_kubernetes() {
         // Logical compute pools use the cluster's existing nodes. Cloud fleet
         // selections must not become Kubernetes setup inputs or import data.
@@ -239,8 +273,7 @@ fn generate_terraform_module_internal(
 
     for (resource_id, resource) in stack.resources() {
         let resource_type = resource.config.resource_type();
-        let ownership = ownership_policy_for_resource_type(resource_type.as_ref());
-        if !ownership.emits_setup_scaffolding(resource.lifecycle) {
+        if !alien_core::emits_package_scaffolding(resource, stack_settings.setup_management) {
             continue;
         }
 
@@ -427,10 +460,11 @@ fn generate_terraform_module_internal(
             &per_resource,
             crate::emitters::aws::sandbox::PROPAGATION_BARRIER_RESOURCE,
         );
-    let setup_only = stack
-        .resources
-        .values()
-        .any(|entry| alien_core::remote_bindings::remote_binding_for_entry(entry).is_some())
+    let setup_only = stack_settings.setup_management != alien_core::SetupManagement::Automatic
+        && stack
+            .resources
+            .values()
+            .any(|entry| alien_core::remote_bindings::remote_binding_for_entry(entry).is_some())
         && !stack
             .resources
             .values()
@@ -477,6 +511,7 @@ fn generate_terraform_module_internal(
             &options.supported_aws_regions,
             &stack_inputs,
             alien_core::restricts_network_mode(stack, target.is_kubernetes()),
+            profile,
         )?)?,
     );
     files.insert(
@@ -503,6 +538,7 @@ fn generate_terraform_module_internal(
             &shared_locals,
             has_remote_management,
             setup_only,
+            profile,
         )?)?,
     );
 
@@ -573,6 +609,7 @@ fn generate_terraform_module_internal(
             &stack_inputs,
             retained_key_detach.is_some(),
             emits_azapi_resource,
+            profile,
         ),
     );
 
@@ -868,13 +905,17 @@ fn dedupe_gcp_support_resources(per_resource: &mut IndexMap<String, TfFragment>)
             };
 
             let address = format!("{provider_type}.{label}");
-            if let Some(existing) = seen_resource_addresses.get(&address) {
+            if let Some(existing) = seen_resource_addresses.get_mut(&address) {
                 if existing != &resource {
-                    return Err(AlienError::new(ErrorData::GenericError {
-                        message: format!(
-                            "generated conflicting Terraform resources for GCP support resource '{address}'"
-                        ),
-                    }));
+                    if provider_type == "google_project_iam_custom_role" {
+                        merge_gcp_custom_role_permissions(existing, &resource)?;
+                    } else {
+                        return Err(AlienError::new(ErrorData::GenericError {
+                            message: format!(
+                                "generated conflicting Terraform resources for GCP support resource '{address}'"
+                            ),
+                        }));
+                    }
                 }
                 continue;
             }
@@ -899,6 +940,92 @@ fn dedupe_gcp_support_resources(per_resource: &mut IndexMap<String, TfFragment>)
         fragment.resource_blocks = retained;
     }
 
+    // Each permission set can contribute actions to the same project custom role. The first
+    // fragment owns the Terraform block; replace it with the complete union after every
+    // contributor has been visited.
+    for fragment in per_resource.values_mut() {
+        for resource in &mut fragment.resource_blocks {
+            if resource
+                .labels
+                .first()
+                .is_some_and(|label| label.as_str() == "google_project_iam_custom_role")
+            {
+                if let Some(label) = resource.labels.get(1) {
+                    if let Some(merged) = seen_resource_addresses.get(&format!(
+                        "google_project_iam_custom_role.{}",
+                        label.as_str()
+                    )) {
+                        *resource = merged.clone();
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn merge_gcp_custom_role_permissions(existing: &mut Block, incoming: &Block) -> Result<()> {
+    // Several permission sets can share a cloud role ID. Their human labels may differ,
+    // while the role identity and creation settings must agree. Keep the first label and
+    // combine the effective permissions before Terraform sees the role.
+    let without_permission_details = |resource: &Block| {
+        let mut resource = resource.clone();
+        resource.body.0.retain(|structure| {
+            !matches!(
+                structure,
+                Structure::Attribute(attribute)
+                    if matches!(attribute.key.as_str(), "permissions" | "title" | "description")
+            )
+        });
+        resource
+    };
+    if without_permission_details(existing) != without_permission_details(incoming) {
+        return Err(AlienError::new(ErrorData::GenericError {
+            message: format!(
+                "generated conflicting Terraform definitions for GCP custom role {:?}",
+                existing.labels
+            ),
+        }));
+    }
+    let permissions = |resource: &Block| -> Result<Vec<String>> {
+        let Some(Expression::Array(values)) = resource.body.0.iter().find_map(|structure| {
+            if let Structure::Attribute(attribute) = structure {
+                (attribute.key.as_str() == "permissions").then_some(&attribute.expr)
+            } else {
+                None
+            }
+        }) else {
+            return Err(AlienError::new(ErrorData::GenericError {
+                message: "generated GCP custom role has no permissions array".into(),
+            }));
+        };
+        values
+            .iter()
+            .map(|value| match value {
+                Expression::String(permission) => Ok(permission.clone()),
+                _ => Err(AlienError::new(ErrorData::GenericError {
+                    message: "generated GCP custom role permission is not a string".into(),
+                })),
+            })
+            .collect()
+    };
+    let mut merged = permissions(existing)?;
+    for permission in permissions(incoming)? {
+        if !merged.contains(&permission) {
+            merged.push(permission);
+        }
+    }
+    merged.sort();
+    for structure in &mut existing.body.0 {
+        if let Structure::Attribute(attribute) = structure {
+            if attribute.key.as_str() == "permissions" {
+                attribute.expr =
+                    Expression::Array(merged.into_iter().map(Expression::String).collect());
+                break;
+            }
+        }
+    }
     Ok(())
 }
 
@@ -1731,6 +1858,7 @@ fn variables_body(
     supported_aws_regions: &[String],
     stack_inputs: &[StackInputDefinition],
     needs_named_subnets: bool,
+    profile: alien_core::SetupConfigurationProfile,
 ) -> Result<Body> {
     let mut blocks: Vec<Structure> = Vec::new();
     let advanced_settings_default = advanced_settings_default_json(target, stack_settings)?;
@@ -1768,42 +1896,46 @@ fn variables_body(
             deployment_model(stack_settings.deployment_model),
             &["push", "pull"],
         )));
-        blocks.push(nested(variable_block(
+        if profile == alien_core::SetupConfigurationProfile::Advanced {
+            blocks.push(nested(variable_block(
             "advanced_settings_json",
             "Advanced JSON-encoded deployment settings. Most installations should use the typed variables in this module instead.",
             Some(Expression::String(advanced_settings_default)),
             true,
         )));
-        blocks.push(nested(variable_block(
+            blocks.push(nested(variable_block(
             "advanced_settings_overlay_json",
             "JSON-encoded deployment settings merged over the package defaults. Use this for partial advanced-setting overrides that must preserve generated defaults such as compute selections.",
             Some(Expression::String("{}".to_string())),
             true,
         )));
+        }
         blocks.push(nested(string_enum_variable_block(
             "endpoint_access",
             "Who can reach this deployment's endpoints. Private access requires AWS managed containers and cannot change after setup.",
             stack_settings.endpoint_access.as_str(),
             &["internet", "private"],
         )));
-        blocks.push(nested(string_enum_variable_block(
-            "updates_mode",
-            "How application updates are delivered after setup.",
-            updates_mode(stack_settings.updates),
-            &["auto", "approval-required"],
-        )));
-        blocks.push(nested(string_enum_variable_block(
-            "telemetry_mode",
-            "How logs, metrics, and traces are collected.",
-            telemetry_mode(stack_settings.telemetry),
-            &["off", "auto", "approval-required"],
-        )));
-        blocks.push(nested(string_enum_variable_block(
-            "heartbeats_mode",
-            "Whether runtime health checks are enabled.",
-            heartbeats_mode(stack_settings.heartbeats),
-            &["off", "on"],
-        )));
+        if profile == alien_core::SetupConfigurationProfile::Advanced {
+            blocks.push(nested(string_enum_variable_block(
+                "updates_mode",
+                "How application updates are delivered after setup.",
+                updates_mode(stack_settings.updates),
+                &["auto", "approval-required"],
+            )));
+            blocks.push(nested(string_enum_variable_block(
+                "telemetry_mode",
+                "How logs, metrics, and traces are collected.",
+                telemetry_mode(stack_settings.telemetry),
+                &["off", "auto", "approval-required"],
+            )));
+            blocks.push(nested(string_enum_variable_block(
+                "heartbeats_mode",
+                "Whether runtime health checks are enabled.",
+                heartbeats_mode(stack_settings.heartbeats),
+                &["off", "on"],
+            )));
+        }
     }
 
     if matches!(target.cloud_platform(), alien_core::Platform::Aws) {
@@ -3002,6 +3134,7 @@ fn locals_body(
     extra: &IndexMap<String, Expression>,
     has_remote_management: bool,
     setup_only: bool,
+    profile: alien_core::SetupConfigurationProfile,
 ) -> Result<Body> {
     let mut body: Vec<Structure> = Vec::new();
 
@@ -3044,12 +3177,33 @@ fn locals_body(
         },
     ));
     if !setup_only {
-        body.push(attr(
-            "advanced_settings",
-            expr::raw(
-                "merge(jsondecode(var.advanced_settings_json), jsondecode(var.advanced_settings_overlay_json))",
-            ),
-        ));
+        let advanced_settings = if profile == alien_core::SetupConfigurationProfile::Advanced {
+            expr::raw("merge(jsondecode(var.advanced_settings_json), jsondecode(var.advanced_settings_overlay_json))")
+        } else {
+            body.extend([
+                attr(
+                    "updates_mode",
+                    Expression::String(updates_mode(stack_settings.updates).to_string()),
+                ),
+                attr(
+                    "telemetry_mode",
+                    Expression::String(telemetry_mode(stack_settings.telemetry).to_string()),
+                ),
+                attr(
+                    "heartbeats_mode",
+                    Expression::String(heartbeats_mode(stack_settings.heartbeats).to_string()),
+                ),
+            ]);
+            Expression::FuncCall(Box::new(
+                hcl::expr::FuncCall::builder(hcl::Identifier::sanitized("jsondecode"))
+                    .arg(Expression::String(advanced_settings_default_json(
+                        target,
+                        stack_settings,
+                    )?))
+                    .build(),
+            ))
+        };
+        body.push(attr("advanced_settings", advanced_settings));
     }
     if target.is_kubernetes() {
         let generated_kubernetes_exposure = extra
@@ -3101,7 +3255,7 @@ fn locals_body(
                 ("heartbeats", Expression::String("on".to_string())),
             ])
         } else {
-            stack_settings_expression(target, stack_settings)
+            stack_settings_expression(target, stack_settings, profile)
         },
     ));
     body.push(attr(
@@ -3193,7 +3347,13 @@ fn management_config_expression(target: TerraformTarget, setup_only: bool) -> Ex
 fn stack_settings_expression(
     target: TerraformTarget,
     stack_settings: &StackSettings,
+    profile: alien_core::SetupConfigurationProfile,
 ) -> Expression {
+    let operational = if profile == alien_core::SetupConfigurationProfile::Advanced {
+        "var"
+    } else {
+        "local"
+    };
     match target.cloud_platform() {
         alien_core::Platform::Aws
             if has_dynamic_aws_network_settings(stack_settings.network.as_ref()) =>
@@ -3206,9 +3366,9 @@ fn stack_settings_expression(
             return expr::raw(format!(
                 r#"merge(local.advanced_settings, {{
   deploymentModel = var.deployment_model
-  updates    = var.updates_mode
-  telemetry  = var.telemetry_mode
-  heartbeats = var.heartbeats_mode
+  updates    = {operational}.updates_mode
+  telemetry  = {operational}.telemetry_mode
+  heartbeats = {operational}.heartbeats_mode
   endpointAccess = var.endpoint_access
   network = jsondecode(
     var.network_mode == "create-new" ? jsonencode({{
@@ -3240,9 +3400,9 @@ fn stack_settings_expression(
             return expr::raw(format!(
                 r#"merge(local.advanced_settings, {{
   deploymentModel = var.deployment_model
-  updates    = var.updates_mode
-  telemetry  = var.telemetry_mode
-  heartbeats = var.heartbeats_mode
+  updates    = {operational}.updates_mode
+  telemetry  = {operational}.telemetry_mode
+  heartbeats = {operational}.heartbeats_mode
   endpointAccess = var.endpoint_access
   network = jsondecode(
     var.network_mode == "create-new" ? jsonencode({{
@@ -3263,27 +3423,27 @@ fn stack_settings_expression(
             ));
         }
         _ if target.is_kubernetes() => {
-            return expr::raw(
-                r#"merge(local.advanced_settings, {
+            return expr::raw(format!(
+                r#"merge(local.advanced_settings, {{
   deploymentModel = var.deployment_model
-  updates    = var.updates_mode
-  telemetry  = var.telemetry_mode
-  heartbeats = var.heartbeats_mode
+  updates    = {operational}.updates_mode
+  telemetry  = {operational}.telemetry_mode
+  heartbeats = {operational}.heartbeats_mode
   endpointAccess = var.endpoint_access
   kubernetes = local.deployment_kubernetes_settings
-})"#,
-            );
+}})"#,
+            ));
         }
         _ => {
-            return expr::raw(
-                r#"merge(local.advanced_settings, {
+            return expr::raw(format!(
+                r#"merge(local.advanced_settings, {{
   deploymentModel = var.deployment_model
-  updates    = var.updates_mode
-  telemetry  = var.telemetry_mode
-  heartbeats = var.heartbeats_mode
+  updates    = {operational}.updates_mode
+  telemetry  = {operational}.telemetry_mode
+  heartbeats = {operational}.heartbeats_mode
   endpointAccess = var.endpoint_access
-})"#,
-            );
+}})"#,
+            ));
         }
     }
 }
@@ -4070,6 +4230,7 @@ fn readme_md(
     stack_inputs: &[StackInputDefinition],
     has_retained_keys: bool,
     emits_azapi_resource: bool,
+    profile: alien_core::SetupConfigurationProfile,
 ) -> String {
     let required_env = if registration.is_some() {
         "export TF_VAR_token=\"...\"".to_string()
@@ -4124,15 +4285,16 @@ fn readme_md(
 
     let display_name = display_name.unwrap_or_else(|| stack.id());
     let mut input_sections = vec![readme_required_inputs(registration.is_some())];
-    let setup_only = stack
-        .resources
-        .values()
-        .any(|entry| alien_core::remote_bindings::remote_binding_for_entry(entry).is_some())
+    let setup_only = stack_settings.setup_management != alien_core::SetupManagement::Automatic
+        && stack
+            .resources
+            .values()
+            .any(|entry| alien_core::remote_bindings::remote_binding_for_entry(entry).is_some())
         && !stack
             .resources
             .values()
             .any(|entry| entry.lifecycle == ResourceLifecycle::Live);
-    input_sections.push(readme_common_inputs(setup_only));
+    input_sections.push(readme_common_inputs(setup_only, profile, stack_settings));
     if matches!(target.cloud_platform(), alien_core::Platform::Aws) {
         input_sections.push(readme_aws_inputs());
     }
@@ -4227,10 +4389,17 @@ fn readme_required_inputs(has_registration: bool) -> String {
     format!("Required:\n\n- `token`: install token from the setup page.\n{name}")
 }
 
-fn readme_common_inputs(setup_only: bool) -> String {
+fn readme_common_inputs(
+    setup_only: bool,
+    profile: alien_core::SetupConfigurationProfile,
+    settings: &StackSettings,
+) -> String {
     if setup_only {
         return "Common optional settings:\n\n- `resource_prefix`: stable physical-name prefix. Leave empty to generate one.\n- `management_url`: management endpoint used to register this deployment. The generated installation snippet supplies the endpoint selected for the deployment target."
             .to_string();
+    }
+    if profile == alien_core::SetupConfigurationProfile::Standard {
+        return format!("Standard configuration exposes compute, network, endpoint access, and application inputs.\n\nOperational defaults: updates `{}`, telemetry `{}`, heartbeats `{}`. Use the Advanced package to customize these settings.\n\n- `resource_prefix`: stable physical-name prefix. Leave empty to generate one.\n- `management_url`: management endpoint for registration.\n- `deployment_model`: `push` or `pull`.", updates_mode(settings.updates), telemetry_mode(settings.telemetry), heartbeats_mode(settings.heartbeats));
     }
     "Common optional settings:\n\n- `resource_prefix`: stable physical-name prefix. Leave empty to generate one.\n- `management_url`: optional management endpoint used by pull-style runtimes.\n- `deployment_model`: `push` or `pull`.\n- `updates_mode`: `auto` or `approval-required`.\n- `telemetry_mode`: `off`, `auto`, or `approval-required`.\n- `heartbeats_mode`: `off` or `on`.\n- `advanced_settings_json`: complete advanced deployment settings JSON. Most installs should keep the generated default.\n- `advanced_settings_overlay_json`: partial advanced settings merged over package defaults, preserving generated values such as compute selections.".to_string()
 }
