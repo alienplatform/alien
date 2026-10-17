@@ -318,6 +318,14 @@ fn is_best_effort_delete_error(
     err: &AlienError<ErrorData>,
     access_denied_ends_delete: bool,
 ) -> bool {
+    // A child refusal does not establish absence of the whole resource. Keep
+    // the provider cause for diagnostics without discarding unfinished cleanup.
+    if err.code == "RESOURCE_CLEANUP_INCOMPLETE"
+        || std::iter::successors(err.source.as_deref(), |source| source.source.as_deref())
+            .any(|source| source.code == "RESOURCE_CLEANUP_INCOMPLETE")
+    {
+        return false;
+    }
     is_best_effort_delete_code(&err.code, err.http_status_code, access_denied_ends_delete)
         || err
             .source

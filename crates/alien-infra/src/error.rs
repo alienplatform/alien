@@ -273,6 +273,20 @@ pub enum ErrorData {
         message: String,
     },
 
+    /// Child cleanup failed while other owned objects still require deletion.
+    #[error(
+        code = "RESOURCE_CLEANUP_INCOMPLETE",
+        message = "Cleanup of resource '{resource_id}' is incomplete: {message}",
+        retryable = "inherit",
+        internal = "inherit"
+    )]
+    ResourceCleanupIncomplete {
+        /// The resource whose remaining children must be retained for retry.
+        resource_id: String,
+        /// The cleanup operation that failed.
+        message: String,
+    },
+
     /// A delete step gave up on a cloud object that other objects still depend on.
     #[error(
         code = "RESOURCE_DELETE_BLOCKED",

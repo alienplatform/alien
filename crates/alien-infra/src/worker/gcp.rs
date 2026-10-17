@@ -125,11 +125,9 @@ fn fail_delete_on_denied(error: AlienError<ErrorData>, resource_id: &str) -> Ali
         cause = current.source.as_deref();
     }
     if denied {
-        // A nested denial makes the executor skip remaining cleanup. Fail this
-        // phase without that signal while preserving every remote identifier.
-        AlienError::new(ErrorData::CloudPlatformError {
-            message: error.message,
-            resource_id: Some(resource_id.to_string()),
+        error.context(ErrorData::ResourceCleanupIncomplete {
+            message: "Deletion of an owned child was denied".to_string(),
+            resource_id: resource_id.to_string(),
         })
     } else {
         error
@@ -6153,12 +6151,12 @@ impl GcpWorkerController {
                         Some(CloudClientErrorData::RemoteResourceNotFound { .. })
                     ) => {}
                 Err(error) => {
-                    return Err(error.context(ErrorData::CloudPlatformError {
+                    return Err(error.context(ErrorData::ResourceCleanupIncomplete {
                         message: format!(
                             "Failed to delete notification '{}' from bucket '{}'",
                             tracker.notification_id, tracker.bucket_name
                         ),
-                        resource_id: Some(ctx.desired_config.id().to_string()),
+                        resource_id: ctx.desired_config.id().to_string(),
                     }));
                 }
             }
@@ -6186,9 +6184,9 @@ impl GcpWorkerController {
                         Some(CloudClientErrorData::RemoteResourceNotFound { .. })
                     ) => {}
                 Err(error) => {
-                    return Err(error.context(ErrorData::CloudPlatformError {
+                    return Err(error.context(ErrorData::ResourceCleanupIncomplete {
                         message: format!("Failed to delete storage notification topic '{name}'"),
-                        resource_id: Some(ctx.desired_config.id().to_string()),
+                        resource_id: ctx.desired_config.id().to_string(),
                     }));
                 }
             }
@@ -6218,9 +6216,9 @@ impl GcpWorkerController {
                         Some(CloudClientErrorData::RemoteResourceNotFound { .. })
                     ) => {}
                 Err(error) => {
-                    return Err(error.context(ErrorData::CloudPlatformError {
+                    return Err(error.context(ErrorData::ResourceCleanupIncomplete {
                         message: format!("Failed to delete scheduler job '{name}'"),
-                        resource_id: Some(ctx.desired_config.id().to_string()),
+                        resource_id: ctx.desired_config.id().to_string(),
                     }));
                 }
             }
@@ -6789,10 +6787,9 @@ mod tests {
         cloud.lock().unwrap().deny_delete = true;
         executor = neg_executor(controller.clone(), provider.clone()).await;
         let error = executor.step().await.unwrap_err();
-        assert!(
-            error.source.is_none(),
-            "denied cleanup must not let the executor skip later children"
-        );
+        assert_eq!(error.code, "RESOURCE_CLEANUP_INCOMPLETE");
+        assert!(std::iter::successors(error.source.as_deref(), |source| source.source.as_deref())
+            .any(|source| source.code == "REMOTE_ACCESS_DENIED"));
         assert!(!matches!(error.http_status_code, Some(401 | 403 | 404)));
         controller = restore_worker(&executor);
         assert_eq!(controller.ingress_negs.names.len(), 1);
