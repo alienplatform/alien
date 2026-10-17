@@ -23,6 +23,9 @@ pub trait S3Api: Send + Sync + std::fmt::Debug {
         bucket: &str,
         tags: &HashMap<String, String>,
     ) -> Result<()>;
+    /// Returns the bucket's tags, or an empty map when the bucket exists without tags. A missing
+    /// bucket is `RemoteResourceNotFound`.
+    async fn get_bucket_tagging(&self, bucket: &str) -> Result<HashMap<String, String>>;
     async fn head_bucket(&self, bucket: &str) -> Result<()>;
     async fn get_bucket_versioning(&self, bucket: &str) -> Result<GetBucketVersioningOutput>;
     async fn get_bucket_lifecycle_configuration(
@@ -230,10 +233,28 @@ impl S3Client {
         operation: &str,
         resource: &str,
     ) -> Result<String> {
+        let (status, body) = self
+            .send_for_text(method, &url, host_header, operation, resource)
+            .await?;
+        if !status.is_success() {
+            return Err(Self::response_error(status, body, url, operation, resource));
+        }
+        Ok(body)
+    }
+
+    /// Sends a body-less request and returns the status and body, whatever the status.
+    async fn send_for_text(
+        &self,
+        method: Method,
+        url: &str,
+        host_header: String,
+        operation: &str,
+        resource: &str,
+    ) -> Result<(StatusCode, String)> {
         self.credentials.ensure_fresh().await?;
         let builder = self
             .client
-            .request(method, &url)
+            .request(method, url)
             .host(&host_header)
             .content_sha256("");
 
@@ -248,29 +269,34 @@ impl S3Client {
 
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
+        Ok((status, body))
+    }
 
-        if !status.is_success() {
-            if let Some(mapped) = Self::map_s3_error(status, &body, operation, resource) {
-                return Err(AlienError::new(ErrorData::HttpResponseError {
-                    message: format!("{} failed: {}", operation, body),
-                    url,
-                    http_status: status.as_u16(),
-                    http_request_text: None,
-                    http_response_text: Some(body),
-                })
-                .context(mapped));
-            }
-
-            return Err(AlienError::new(ErrorData::HttpResponseError {
-                message: format!("{} failed with status: {}", operation, status),
+    fn response_error(
+        status: StatusCode,
+        body: String,
+        url: String,
+        operation: &str,
+        resource: &str,
+    ) -> AlienError<ErrorData> {
+        if let Some(mapped) = Self::map_s3_error(status, &body, operation, resource) {
+            return AlienError::new(ErrorData::HttpResponseError {
+                message: format!("{} failed: {}", operation, body),
                 url,
                 http_status: status.as_u16(),
                 http_request_text: None,
                 http_response_text: Some(body),
-            }));
+            })
+            .context(mapped);
         }
 
-        Ok(body)
+        AlienError::new(ErrorData::HttpResponseError {
+            message: format!("{} failed with status: {}", operation, status),
+            url,
+            http_status: status.as_u16(),
+            http_request_text: None,
+            http_response_text: Some(body),
+        })
     }
 
     fn map_result<T>(result: Result<T>, operation: &str, resource_name: &str) -> Result<T> {
@@ -517,6 +543,53 @@ impl S3Api for S3Client {
                 .await;
 
         Self::map_result(result, "PutBucketTagging", bucket)
+    }
+
+    async fn get_bucket_tagging(&self, bucket: &str) -> Result<HashMap<String, String>> {
+        let url = self.url(bucket, "?tagging");
+        let (status, body) = self
+            .send_for_text(
+                Method::GET,
+                &url,
+                self.host(bucket),
+                "GetBucketTagging",
+                bucket,
+            )
+            .await?;
+
+        if status.is_success() {
+            let tagging: BucketTagging = quick_xml::de::from_str(&body)
+                .into_alien_error()
+                .context(ErrorData::SerializationError {
+                    message: format!(
+                        "Failed to parse the GetBucketTagging response for '{}'",
+                        bucket
+                    ),
+                })?;
+            return Ok(tagging
+                .tag_set
+                .tags
+                .into_iter()
+                .map(|tag| (tag.key, tag.value))
+                .collect());
+        }
+
+        // S3 answers 404 both for a missing bucket (`NoSuchBucket`) and for an existing bucket
+        // with no tags (`NoSuchTagSet`). Only the first one means the bucket is gone.
+        let no_tag_set = status == StatusCode::NOT_FOUND
+            && quick_xml::de::from_str::<S3ErrorResponse>(&body)
+                .is_ok_and(|error| error.code == "NoSuchTagSet");
+        if no_tag_set {
+            return Ok(HashMap::new());
+        }
+
+        Err(Self::response_error(
+            status,
+            body,
+            url,
+            "GetBucketTagging",
+            bucket,
+        ))
     }
 
     async fn head_bucket(&self, bucket: &str) -> Result<()> {
@@ -1396,6 +1469,27 @@ struct S3ErrorResponse {
     pub message: String,
 }
 
+/// `GetBucketTagging` response body.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct BucketTagging {
+    #[serde(default)]
+    tag_set: BucketTagSet,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct BucketTagSet {
+    #[serde(rename = "Tag", default)]
+    tags: Vec<BucketTag>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct BucketTag {
+    key: String,
+    value: String,
+}
+
 // -------------------------------------------------------------------------
 // Public data types copied from legacy implementation (unchanged)
 // -------------------------------------------------------------------------
@@ -1935,5 +2029,67 @@ mod tests {
 
         assert!(versions.hits_async().await >= 1);
         objects.assert_hits_async(1).await;
+    }
+
+    async fn tagging_response(status: u16, body: &'static str) -> Result<HashMap<String, String>> {
+        let server = MockServer::start_async().await;
+        let tagging = server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path("/bucket-st")
+                    .query_param_exists("tagging");
+                then.status(status).body(body);
+            })
+            .await;
+        let result = client(&server).get_bucket_tagging("bucket-st").await;
+        assert!(tagging.hits_async().await >= 1);
+        result
+    }
+
+    #[tokio::test]
+    async fn bucket_tags_are_read_from_the_tag_set() {
+        let tags = tagging_response(
+            200,
+            r#"<?xml version="1.0" encoding="UTF-8"?><Tagging xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><TagSet><Tag><Key>deployment</Key><Value>acme</Value></Tag><Tag><Key>resource</Key><Value>data</Value></Tag></TagSet></Tagging>"#,
+        )
+        .await
+        .expect("tags are read");
+
+        assert_eq!(
+            tags,
+            HashMap::from([
+                ("deployment".to_string(), "acme".to_string()),
+                ("resource".to_string(), "data".to_string()),
+            ])
+        );
+    }
+
+    /// A bucket without tags must read as "exists, no tags", not as a missing bucket: callers
+    /// decide from this whether a bucket with their name was made by someone else.
+    #[tokio::test]
+    async fn untagged_bucket_reads_as_empty_tags_not_missing() {
+        let tags = tagging_response(
+            404,
+            "<Error><Code>NoSuchTagSet</Code><Message>The TagSet does not exist</Message><BucketName>bucket-st</BucketName></Error>",
+        )
+        .await
+        .expect("an untagged bucket exists");
+
+        assert!(tags.is_empty());
+    }
+
+    #[tokio::test]
+    async fn missing_bucket_tagging_is_not_found() {
+        let error = tagging_response(
+            404,
+            "<Error><Code>NoSuchBucket</Code><Message>The specified bucket does not exist</Message><BucketName>bucket-st</BucketName></Error>",
+        )
+        .await
+        .expect_err("the bucket does not exist");
+
+        assert!(matches!(
+            error.error,
+            Some(ErrorData::RemoteResourceNotFound { .. })
+        ));
     }
 }
