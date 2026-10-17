@@ -559,12 +559,23 @@ async fn uncertain_storage_topic_create_is_retired_after_controller_reload() {
     }
 }
 
+#[rstest]
+#[case(Child::Subscription)]
+#[case(Child::Notification)]
+#[case(Child::Topic)]
+#[case(Child::Scheduler)]
 #[tokio::test]
-async fn absent_service_does_not_discard_retained_trigger_cleanup() {
+async fn absent_service_does_not_discard_retained_trigger_cleanup(#[case] child: Child) {
     let mut controller = GcpWorkerController::mock_ready("test-worker");
     controller.state = GcpWorkerState::DeleteStart;
     controller.service_name = None;
-    controller.scheduler_job_names = vec!["recorded-job".into()];
+    match child {
+        Child::Subscription => controller.push_subscriptions.push("recorded-subscription".into()),
+        Child::Notification => controller.gcs_notification_ids.push(GcsNotificationTracker { bucket_name: "recorded-bucket".into(), notification_id: "recorded-id".into() }),
+        Child::Topic => controller.storage_notification_topics.push("recorded-topic".into()),
+        Child::Scheduler => controller.scheduler_job_names.push("recorded-job".into()),
+    }
+    let original = serde_json::to_value(&controller).unwrap();
     let mut executor = SingleControllerExecutor::builder()
         .resource(function_public_ingress()).controller(controller).platform(Platform::Gcp)
         .service_provider(Arc::new(MockPlatformServiceProvider::new()))
@@ -572,5 +583,8 @@ async fn absent_service_does_not_discard_retained_trigger_cleanup() {
     executor.step().await.unwrap();
     let restored: GcpWorkerController = serde_json::from_value(serde_json::to_value(executor.internal_state::<GcpWorkerController>().unwrap()).unwrap()).unwrap();
     assert_eq!(restored.state, GcpWorkerState::DeletingPushSubscriptions);
-    assert_eq!(restored.scheduler_job_names, ["recorded-job"]);
+    let restored = serde_json::to_value(restored).unwrap();
+    for field in ["pushSubscriptions", "gcsNotificationIds", "storageNotificationTopics", "schedulerJobNames"] {
+        assert_eq!(restored[field], original[field]);
+    }
 }

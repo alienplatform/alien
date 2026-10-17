@@ -3761,31 +3761,36 @@ impl GcpWorkerController {
     async fn delete_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let _gcp_config = ctx.get_gcp_config()?;
 
-        // Handle case where service_name is not set (e.g., creation failed early)
-        let service_name = match self.service_name.as_ref() {
-            Some(name) => name,
-            None => {
-                // No service was created, nothing to delete
-                info!(resource_id=%ctx.desired_config.id(), "No Cloud Run service to delete - creation failed early");
+        // An absent parent does not establish that its separately owned children are gone.
+        let has_children = !self.push_subscriptions.is_empty()
+            || !self.storage_notification_topics.is_empty()
+            || !self.storage_topic_intents.is_empty()
+            || !self.gcs_notification_ids.is_empty()
+            || !self.scheduler_job_names.is_empty()
+            || !self.scheduler_job_intents.is_empty()
+            || self.commands_topic_name.is_some()
+            || self.commands_subscription_name.is_some()
+            || self.ingress.public.is_some()
+            || self.ingress.private.is_some()
+            || self.ingress_negs.initialized()
+            || self.serverless_neg_name.is_some()
+            || self.forwarding_rule_name.is_some()
+            || self.target_https_proxy_name.is_some()
+            || self.url_map_name.is_some()
+            || self.backend_service_name.is_some()
+            || self.global_address_name.is_some()
+            || self.ssl_certificate_name.is_some();
+        if self.service_name.is_none() && !has_children {
+            self.service_uri = None;
+            self.url = None;
+            self.operation_name = None;
+            return Ok(HandlerAction::Continue {
+                state: Deleted,
+                suggested_delay: None,
+            });
+        }
 
-                // Clear any remaining state and mark as deleted
-                self.service_name = None;
-                self.service_uri = None;
-                self.url = None;
-                self.operation_name = None;
-                self.push_subscriptions.clear();
-                self.storage_notification_topics.clear();
-                self.gcs_notification_ids.clear();
-                self.scheduler_job_names.clear();
-
-                return Ok(HandlerAction::Continue {
-                    state: Deleted,
-                    suggested_delay: None,
-                });
-            }
-        };
-
-        info!(name=%service_name, "Initiating Cloud Run service deletion");
+        info!(name=?self.service_name, "Initiating worker resource deletion");
 
         // If we have load balancer resources, delete them first
         // Otherwise, skip directly to deleting push subscriptions
