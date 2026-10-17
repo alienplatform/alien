@@ -15,9 +15,9 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    BindingValue, EnvironmentVariable, EnvironmentVariableType, Platform, StackInputDefinition,
-    StackInputEnvironmentVariableType, StackInputKind, StackInputProvider, VaultBinding,
-    vault_naming,
+    vault_naming, BindingValue, EnvironmentVariable, EnvironmentVariableType, Platform,
+    StackInputDefinition, StackInputEnvironmentVariableType, StackInputKind, StackInputProvider,
+    VaultBinding,
 };
 
 /// Prefix of every vault key that holds a deployer secret, so these keys
@@ -409,7 +409,10 @@ pub fn deployer_secret_location(
             "--from-file=value=/dev/stdin",
             "--from-literal=value='<VALUE>'",
         ),
-        DeployerSecretStore::LocalVault => location.cli_command.replace("--stdin", "'<VALUE>'"),
+        DeployerSecretStore::LocalVault => format!(
+            "{} '<VALUE>'",
+            location.cli_command.trim_end_matches(" --stdin")
+        ),
         DeployerSecretStore::GcpSecretManager => format!(
             "{}printf '%s' '<VALUE>' | {}",
             prepare.replace('\n', " "),
@@ -579,7 +582,36 @@ fn windows_secret_commands(
     };
     let label = powershell_quote(context.secret_label.as_deref().unwrap_or(vault_key));
     let prompt = format!(
-        "& {{\n{guard}  $secret = Read-Host {label} -AsSecureString\n  if ($secret.Length -eq 0) {{ throw 'No value entered' }}\n  $pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secret)\n  {file}\n  try {{\n    $value = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer)\n    {save}\n    {prepare}{write}{result}\n  }} finally {{\n    [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer); $secret.Dispose()\n    {cleanup}\n  }}\n}}"
+        r#"& {{
+{guard}  if ([Console]::IsInputRedirected) {{ throw 'Run this prompt in an interactive terminal.' }}
+  $secret = New-Object Security.SecureString
+  $pointer = [IntPtr]::Zero; $path = $null
+  $controlC = [Console]::TreatControlCAsInput
+  try {{
+    [Console]::TreatControlCAsInput = $true
+    Write-Host ({label} + ' (hidden; Ctrl-D to finish, Ctrl-C to cancel): ' ) -NoNewline
+    while ($true) {{
+      $key = [Console]::ReadKey($true)
+      if ([int]$key.KeyChar -eq 3) {{ throw 'Cancelled' }}
+      if ([int]$key.KeyChar -eq 4) {{ break }}
+      if ([int]$key.KeyChar -eq 8) {{ if ($secret.Length -gt 0) {{ $secret.RemoveAt($secret.Length - 1) }}; continue }}
+      if ([int]$key.KeyChar -eq 13) {{ $secret.AppendChar([char]10); continue }}
+      if ([int]$key.KeyChar -ne 0) {{ $secret.AppendChar($key.KeyChar) }}
+    }}
+    if ($secret.Length -eq 0) {{ throw 'No value entered' }}
+    $pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secret)
+    {file}
+    $value = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer)
+    {save}
+    {prepare}{write}{result}
+  }} finally {{
+    [Console]::TreatControlCAsInput = $controlC
+    Write-Host ''
+    if ($pointer -ne [IntPtr]::Zero) {{ [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer) }}
+    $secret.Dispose(); $value = $null
+    if ($path) {{ Remove-Item -LiteralPath $path -Force }}
+  }}
+}}"#
     );
     Ok(DeployerSecretCommandVariants { inline, prompt })
 }
@@ -934,16 +966,14 @@ mod tests {
         let with_developer_value =
             HashMap::from([("databasePassword".to_string(), serde_json::json!("dev"))]);
 
-        assert!(
-            deployer_secret_slots(
-                &inputs,
-                &with_developer_value,
-                Some(&[]),
-                &[],
-                Platform::Aws
-            )
-            .is_empty()
-        );
+        assert!(deployer_secret_slots(
+            &inputs,
+            &with_developer_value,
+            Some(&[]),
+            &[],
+            Platform::Aws
+        )
+        .is_empty());
         assert_eq!(
             deployer_secret_slots(&inputs, &HashMap::new(), Some(&[]), &[], Platform::Aws).len(),
             1
@@ -1049,14 +1079,12 @@ mod tests {
         let binding = VaultBinding::ParameterStore(crate::ParameterStoreVaultBinding {
             vault_prefix: BindingValue::expression(serde_json::json!({"Ref": "Prefix"})),
         });
-        assert!(
-            deployer_secret_location(
-                &binding,
-                "input-x",
-                &DeployerSecretLocationContext::default()
-            )
-            .is_err()
-        );
+        assert!(deployer_secret_location(
+            &binding,
+            "input-x",
+            &DeployerSecretLocationContext::default()
+        )
+        .is_err());
     }
 
     #[test]
@@ -1115,10 +1143,15 @@ mod tests {
         )];
         let no_values = HashMap::new();
 
-        assert!(
-            deployer_secret_environment(&inputs, &no_values, Some(&[]), &[], Platform::Aws, &[])
-                .is_empty()
-        );
+        assert!(deployer_secret_environment(
+            &inputs,
+            &no_values,
+            Some(&[]),
+            &[],
+            Platform::Aws,
+            &[]
+        )
+        .is_empty());
 
         let env = deployer_secret_environment(
             &inputs,
@@ -1181,17 +1214,15 @@ mod tests {
             serde_json::json!("from-before"),
         )]);
 
-        assert!(
-            deployer_secret_environment(
-                &inputs,
-                &stored,
-                Some(&[]),
-                &[],
-                Platform::Aws,
-                &[report("databasePassword", DeployerSecretStatus::Missing)],
-            )
-            .is_empty()
-        );
+        assert!(deployer_secret_environment(
+            &inputs,
+            &stored,
+            Some(&[]),
+            &[],
+            Platform::Aws,
+            &[report("databasePassword", DeployerSecretStatus::Missing)],
+        )
+        .is_empty());
         assert!(
             deployer_secret_environment(
                 &inputs,
@@ -1239,26 +1270,28 @@ mod tests {
                 assert_eq!(slots[0].input.required, required);
             }
             let null_value = HashMap::from([("apiKey".to_string(), serde_json::Value::Null)]);
-            assert!(
-                deployer_secret_slots(&inputs, &null_value, Some(&present), &[], Platform::Aws)
-                    .is_empty()
-            );
+            assert!(deployer_secret_slots(
+                &inputs,
+                &null_value,
+                Some(&present),
+                &[],
+                Platform::Aws
+            )
+            .is_empty());
             assert_eq!(
                 deployer_secret_slots(&inputs, &null_value, Some(&[]), &[], Platform::Aws).len(),
                 1
             );
             for status in [DeployerSecretStatus::Missing, DeployerSecretStatus::Present] {
-                assert!(
-                    deployer_secret_environment(
-                        &inputs,
-                        &values,
-                        Some(&present),
-                        &[],
-                        Platform::Aws,
-                        &[report("apiKey", status)]
-                    )
-                    .is_empty()
-                );
+                assert!(deployer_secret_environment(
+                    &inputs,
+                    &values,
+                    Some(&present),
+                    &[],
+                    Platform::Aws,
+                    &[report("apiKey", status)]
+                )
+                .is_empty());
             }
             assert!(
                 values.is_empty(),
@@ -1275,17 +1308,15 @@ mod tests {
         let slots = deployer_secret_slots(&inputs, &values, Some(&present), &[], Platform::Aws);
         assert_eq!(slots.len(), 1);
         assert!(slots[0].has_stored_value);
-        assert!(
-            deployer_secret_environment(
-                &inputs,
-                &values,
-                Some(&present),
-                &[],
-                Platform::Aws,
-                &[report("apiKey", DeployerSecretStatus::Missing)]
-            )
-            .is_empty()
-        );
+        assert!(deployer_secret_environment(
+            &inputs,
+            &values,
+            Some(&present),
+            &[],
+            Platform::Aws,
+            &[report("apiKey", DeployerSecretStatus::Missing)]
+        )
+        .is_empty());
         let environment = deployer_secret_environment(
             &inputs,
             &values,
@@ -1304,20 +1335,22 @@ mod tests {
         input.platforms = Some(vec![Platform::Aws]);
         let inputs = vec![input.clone()];
         let present = vec!["apiKey".to_string()];
-        assert!(
-            deployer_secret_slots(&inputs, &HashMap::new(), Some(&present), &[], Platform::Gcp)
-                .is_empty()
-        );
+        assert!(deployer_secret_slots(
+            &inputs,
+            &HashMap::new(),
+            Some(&present),
+            &[],
+            Platform::Gcp
+        )
+        .is_empty());
         input.kind = StackInputKind::String;
-        assert!(
-            deployer_secret_slots(
-                &[input],
-                &HashMap::new(),
-                Some(&present),
-                &[],
-                Platform::Aws
-            )
-            .is_empty()
-        );
+        assert!(deployer_secret_slots(
+            &[input],
+            &HashMap::new(),
+            Some(&present),
+            &[],
+            Platform::Aws
+        )
+        .is_empty());
     }
 }

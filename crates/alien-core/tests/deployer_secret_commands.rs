@@ -210,3 +210,35 @@ fn inline_variants_preserve_shell_quoted_values() {
         }
     }
 }
+
+#[test]
+fn inline_local_vault_keeps_flag_like_names() {
+    for executable in ["bash", "zsh"] {
+        let shell = Shell::new(executable);
+        let location = deployer_secret_location(
+            &VaultBinding::local("app--stdin", "/tmp/unused"),
+            "key--stdin",
+            &DeployerSecretLocationContext {
+                deployment_name: Some("deployment--stdin".to_string()),
+                ..context()
+            },
+        )
+        .unwrap();
+        let command = location
+            .commands
+            .unwrap()
+            .unix
+            .inline
+            .replace("'<VALUE>'", "'fake-value'");
+        assert!(shell.run(&command, "123456789012", "").status.success());
+        let arguments = fs::read(shell.directory.path().join("args")).unwrap();
+        let arguments: Vec<&[u8]> = arguments.split(|byte| *byte == 0).collect();
+        for expected in ["app--stdin", "key--stdin", "deployment--stdin"] {
+            assert!(arguments.contains(&expected.as_bytes()));
+        }
+        assert_eq!(
+            fs::read(shell.directory.path().join("value")).unwrap(),
+            b"fake-value"
+        );
+    }
+}
