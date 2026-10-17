@@ -33,6 +33,9 @@
             "pubsub.topics.delete",
             "pubsub.topics.get",
             "pubsub.topics.update",
+            // Queue creation binds the publisher/consumer roles on the new topic. Pub/Sub
+            // does not support IAM Conditions resource attributes, so this cannot be limited
+            // to ${stackPrefix}- names; the project is the boundary, as for storage buckets.
             "pubsub.topics.setIamPolicy",
             "pubsub.topics.attachSubscription"
           ]
@@ -51,6 +54,7 @@
             "pubsub.subscriptions.delete",
             "pubsub.subscriptions.get",
             "pubsub.subscriptions.update",
+            // Same as topics: no resource-attribute conditions on Pub/Sub subscriptions.
             "pubsub.subscriptions.setIamPolicy"
           ]
         },
