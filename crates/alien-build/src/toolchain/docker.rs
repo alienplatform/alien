@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fs::File;
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
 use tokio::process::Command;
 use tracing::{info, warn};
@@ -711,6 +711,7 @@ fn convert_docker_archive(path: &Path, target_arch: &str, saved: &Value) -> Resu
         .map(|layer| layer.as_str().ok_or_else(|| AlienError::new(failure())))
         .collect::<Result<Vec<_>>>()?;
     let mut descriptors = HashMap::new();
+    let mut layer_links = HashMap::new();
     let source = File::open(path).into_alien_error().context(failure())?;
     let mut archive = tar::Archive::new(source);
     for entry in archive.entries().into_alien_error().context(failure())? {
@@ -724,7 +725,27 @@ fn convert_docker_archive(path: &Path, target_arch: &str, saved: &Value) -> Resu
         if name != config_path && !layers.contains(&name.as_str()) {
             continue;
         }
-        if !entry.header().entry_type().is_file() || descriptors.contains_key(&name) {
+        if descriptors.contains_key(&name) || layer_links.contains_key(&name) {
+            return Err(AlienError::new(failure()));
+        }
+        // Docker's classic store deduplicates repeated layers with relative symlinks.
+        // Resolve only manifest-listed layers, without extracting or following host paths.
+        if name != config_path && entry.header().entry_type().is_symlink() {
+            let target = entry
+                .link_name()
+                .into_alien_error()
+                .context(failure())?
+                .ok_or_else(|| AlienError::new(failure()))?;
+            let target = docker_layer_link_target(Path::new(&name), &target)
+                .filter(|target| layers.contains(&target.as_str()))
+                .ok_or_else(|| AlienError::new(failure()))?;
+            if entry.size() != 0 {
+                return Err(AlienError::new(failure()));
+            }
+            layer_links.insert(name, target);
+            continue;
+        }
+        if !entry.header().entry_type().is_file() {
             return Err(AlienError::new(failure()));
         }
         let size = entry.size();
@@ -763,10 +784,20 @@ fn convert_docker_archive(path: &Path, target_arch: &str, saved: &Value) -> Resu
     let layer_descriptors = layers
         .iter()
         .map(|name| {
-            descriptors
-                .get(*name)
-                .cloned()
-                .ok_or_else(|| AlienError::new(failure()))
+            let mut target = *name;
+            // A valid chain reaches a regular layer before visiting every link.
+            for _ in 0..=layer_links.len() {
+                if let Some(descriptor) = descriptors.get(target) {
+                    return Ok(descriptor.clone());
+                }
+                target = layer_links
+                    .get(target)
+                    .map(String::as_str)
+                    .ok_or_else(|| AlienError::new(failure()))?;
+            }
+            Err(AlienError::new(docker_read_error(
+                "Docker archive contains a cyclic layer link",
+            )))
         })
         .collect::<Result<Vec<_>>>()?;
     let manifest = serde_json::to_vec(&json!({
@@ -846,6 +877,23 @@ fn convert_docker_archive(path: &Path, target_arch: &str, saved: &Value) -> Resu
     std::fs::rename(temporary, path)
         .into_alien_error()
         .context(failure())
+}
+
+fn docker_layer_link_target(name: &Path, target: &Path) -> Option<String> {
+    let mut resolved = name.parent()?.to_path_buf();
+    for component in target.components() {
+        match component {
+            Component::Normal(part) => resolved.push(part),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !resolved.pop() {
+                    return None;
+                }
+            }
+            Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+    resolved.into_os_string().into_string().ok()
 }
 
 /// Build the read-side error variant used while normalizing the OCI archive.
@@ -1125,6 +1173,112 @@ mod tests {
             ),
             None
         );
+    }
+
+    fn saved_image_with_layer_links(path: &Path, links: &[(&str, &str)]) -> Vec<u8> {
+        let layer = vec![0_u8; 1024]; // A valid empty layer tar.
+        let digest = format!("sha256:{:x}", Sha256::digest(&layer));
+        let mut layers: Vec<_> = links.iter().map(|(name, _)| *name).collect();
+        layers.push("original/layer.tar");
+        let config = serde_json::to_vec(&json!({
+            "architecture": "arm64", "os": "linux",
+            "config": {"Cmd": ["/app"], "OnBuild": ["RUN false"]},
+            "rootfs": {"type": "layers", "diff_ids": vec![digest; layers.len()]},
+            "history": vec![json!({"created_by": "RUN true"}); layers.len()],
+        }))
+        .unwrap();
+        let manifest = serde_json::to_vec(&json!([{
+            "Config": "config.json", "RepoTags": ["archive-links:test"], "Layers": layers,
+        }]))
+        .unwrap();
+        let mut builder = tar::Builder::new(File::create(path).unwrap());
+        // Put links before their targets, as docker save can do.
+        for (name, target) in links {
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(tar::EntryType::Symlink);
+            header.set_mode(0o777);
+            header.set_size(0);
+            builder.append_link(&mut header, name, target).unwrap();
+        }
+        for (name, bytes) in [
+            ("config.json", config.as_slice()),
+            ("original/layer.tar", layer.as_slice()),
+            ("manifest.json", manifest.as_slice()),
+        ] {
+            let mut header = tar::Header::new_gnu();
+            header.set_mode(0o644);
+            header.set_size(bytes.len() as u64);
+            header.set_cksum();
+            builder.append_data(&mut header, name, bytes).unwrap();
+        }
+        builder.finish().unwrap();
+        config
+    }
+
+    #[test]
+    fn saved_image_resolves_repeated_layers_without_changing_image_content() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("image.tar");
+        let config = saved_image_with_layer_links(
+            &path,
+            &[
+                ("first/layer.tar", "../second/layer.tar"),
+                ("second/layer.tar", "../original/layer.tar"),
+            ],
+        );
+        DockerToolchain::normalize_oci_archive(&path, "arm64").unwrap();
+        let metadata = Image::from_tarball(&path).unwrap().get_metadata().unwrap();
+        assert_eq!(metadata.cmd.unwrap(), vec!["/app"]);
+        let mut archive = tar::Archive::new(File::open(&path).unwrap());
+        let mut contents = HashMap::new();
+        for entry in archive.entries().unwrap() {
+            let mut entry = entry.unwrap();
+            assert!(entry.header().entry_type().is_file());
+            let name = entry.path().unwrap().to_string_lossy().into_owned();
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).unwrap();
+            assert!(contents.insert(name, bytes).is_none());
+        }
+        let manifest: Value = serde_json::from_slice(&contents["manifest.json"]).unwrap();
+        assert_eq!(contents[manifest[0]["Config"].as_str().unwrap()], config);
+        let layers = manifest[0]["Layers"].as_array().unwrap();
+        assert_eq!(layers.len(), 3);
+        for layer in layers {
+            assert_eq!(layer, &layers[0]);
+            assert_eq!(contents[layer.as_str().unwrap()], vec![0_u8; 1024]);
+        }
+    }
+
+    #[test]
+    fn saved_image_rejects_invalid_layer_links_without_replacing_source() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("image.tar");
+        for target in [
+            "../missing/layer.tar",
+            "../config.json",
+            "/original/layer.tar",
+            "../../original/layer.tar",
+            "layer.tar",
+        ] {
+            saved_image_with_layer_links(&path, &[("linked/layer.tar", target)]);
+            let original = std::fs::read(&path).unwrap();
+            assert!(
+                DockerToolchain::normalize_oci_archive(&path, "arm64").is_err(),
+                "accepted invalid layer link {target}",
+            );
+            assert_eq!(std::fs::read(&path).unwrap(), original);
+        }
+        saved_image_with_layer_links(
+            &path,
+            &[
+                ("first/layer.tar", "../second/layer.tar"),
+                ("second/layer.tar", "../first/layer.tar"),
+            ],
+        );
+        let original = std::fs::read(&path).unwrap();
+        let error = DockerToolchain::normalize_oci_archive(&path, "arm64").unwrap_err();
+        assert!(error.to_string().contains("cyclic layer link"));
+        assert_eq!(std::fs::read(&path).unwrap(), original);
     }
 
     #[test]
