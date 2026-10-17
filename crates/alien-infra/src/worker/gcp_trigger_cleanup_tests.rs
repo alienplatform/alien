@@ -454,3 +454,55 @@ fn trigger_update_checkpoint_envelope_preserves_phase_and_receipts(
     assert_eq!(restored.push_subscriptions, controller.push_subscriptions);
     assert_eq!(restored.scheduler_job_names, controller.scheduler_job_names);
 }
+
+#[tokio::test]
+async fn uncertain_scheduler_create_is_retired_after_controller_reload() {
+    let native = Arc::new(Mutex::new(None::<alien_gcp_clients::cloudscheduler::SchedulerJob>));
+    let reads = native.clone();
+    let writes = native.clone();
+    let deletes = native.clone();
+    let mut scheduler = MockCloudSchedulerApi::new();
+    scheduler.expect_get_job().returning(move |name| {
+        match reads.lock().unwrap().clone() {
+            Some(job) => { assert_eq!(job.name.as_deref(), Some(name.as_str())); Ok(job) }
+            None => Err(AlienError::new(ClientError::RemoteResourceNotFound {
+                resource_type: "scheduler job".into(), resource_name: name,
+            })),
+        }
+    });
+    scheduler.expect_create_job().times(1).returning(move |region, name, mut job| {
+        job.name = Some(format!("projects/{}/locations/{region}/jobs/{name}", GcpClientConfig::mock().project_id));
+        *writes.lock().unwrap() = Some(job);
+        Err(AlienError::new(ClientError::RemoteServiceUnavailable {
+            message: "accepted create with lost reply".into(),
+        }))
+    });
+    scheduler.expect_delete_job().times(1).returning(move |name| {
+        let job = deletes.lock().unwrap().take().unwrap();
+        assert_eq!(job.name.as_deref(), Some(name.as_str()));
+        Ok(())
+    });
+    let scheduler = Arc::new(scheduler);
+    let mut services = MockPlatformServiceProvider::new();
+    services.expect_get_gcp_cloud_scheduler_client().returning(move |_| Ok(scheduler.clone()));
+    let services = Arc::new(services);
+    let mut desired = function_public_ingress();
+    desired.triggers = vec![alien_core::WorkerTrigger::Schedule { cron: "* * * * *".into() }];
+    let mut controller = GcpWorkerController::mock_ready("test-worker");
+    controller.state = GcpWorkerState::CreatingSchedulerJobs;
+    for step in 0..3 {
+        if step == 2 { controller.state = GcpWorkerState::DeletingSchedulerJobs; }
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(desired.clone()).controller(controller).platform(Platform::Gcp)
+            .service_provider(services.clone()).with_test_dependencies().build().await.unwrap();
+        let result = executor.step().await;
+        if step == 1 { assert!(result.is_err()); } else { result.unwrap(); }
+        controller = serde_json::from_value(serde_json::to_value(executor.internal_state::<GcpWorkerController>().unwrap()).unwrap()).unwrap();
+        assert!(controller.scheduler_job_names.is_empty());
+        match step {
+            0 => { assert!(native.lock().unwrap().is_none()); assert_eq!(controller.scheduler_job_intents.len(), 1); }
+            1 => { assert!(native.lock().unwrap().is_some()); assert_eq!(controller.scheduler_job_intents.len(), 1); }
+            _ => { assert!(native.lock().unwrap().is_none(), "uncertain accepted create must be retired"); assert!(controller.scheduler_job_intents.is_empty()); }
+        }
+    }
+}
