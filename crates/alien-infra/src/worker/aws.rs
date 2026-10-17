@@ -5390,8 +5390,8 @@ mod tests {
         CertificateStatus, ClientConfig, DeploymentConfig, DnsRecordStatus, DomainMetadata,
         EnvironmentVariablesSnapshot, ExternalBindings, NetworkSettings, Platform,
         PublicEndpointUrls, Resource, ResourceDefinition, ResourceDomainInfo, ResourceLifecycle,
-        ResourceStatus, Stack, StackResourceState, StackSettings, StackState, Worker, WorkerCode,
-        WorkerOutputs, WorkerPublicEndpoint,
+        ResourceStatus, ServiceAccount, Stack, StackResourceState, StackSettings, StackState,
+        Worker, WorkerCode, WorkerOutputs, WorkerPublicEndpoint,
     };
     use alien_error::AlienError;
     use httpmock::prelude::*;
@@ -5407,7 +5407,6 @@ mod tests {
         AwsWorkerState,
     };
     use alien_core::standard_resource_tags;
-    use alien_core::ServiceAccount;
 
     fn create_successful_function_response(worker_name: &str) -> FunctionConfiguration {
         FunctionConfiguration {
@@ -6324,8 +6323,13 @@ mod tests {
         );
     }
 
+    #[rstest]
+    #[case::interfaces_released(false)]
+    #[case::shared_interfaces_outlive_deadline(true)]
     #[tokio::test]
-    async fn existing_vpc_wait_keeps_execution_role_permissions_until_release() {
+    async fn existing_vpc_wait_keeps_execution_role_permissions_until_wait_finishes(
+        #[case] reaches_deadline: bool,
+    ) {
         let released = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let observed = released.clone();
         let mut ec2 = MockEc2Api::new();
@@ -6402,6 +6406,16 @@ mod tests {
                 )
                 .build(),
         );
+        state
+            .resources
+            .get_mut("basic-func")
+            .unwrap()
+            .internal_state
+            .as_mut()
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .remove("vpcEniWaitStartedAt");
         let mut role_controller =
             AwsServiceAccountController::mock_ready("test-default-profile-sa");
         role_controller.transition_to_delete_start().unwrap();
@@ -6446,7 +6460,16 @@ mod tests {
             );
             assert_eq!(iam_calls.load(Ordering::SeqCst), 0);
         }
-        released.store(true, Ordering::SeqCst);
+        if reaches_deadline {
+            let resource = state.resources.get_mut("basic-func").unwrap();
+            let mut controller: AwsWorkerController =
+                serde_json::from_value(resource.internal_state.clone().unwrap()).unwrap();
+            controller.vpc_eni_wait_started_at =
+                Some(chrono::Utc::now() - chrono::Duration::seconds(20 * 60));
+            resource.internal_state = Some(serialize_controller(&controller).unwrap());
+        } else {
+            released.store(true, Ordering::SeqCst);
+        }
         for _ in 0..20 {
             state = executor.step(state).await.unwrap().next_state;
             if state.resources["default-profile-sa"].status == ResourceStatus::Deleted {
