@@ -723,7 +723,7 @@ resource "google_project_iam_member" "secretmanager_secretversionadder_managemen
   condition {
     title       = "ResourceVaultSecrets"
     description = "Limit to ResourceVaultSecrets"
-    expression  = "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && resource.name.startsWith(\"projects/${data.google_project.current.number}/secrets/${local.resource_prefix}-secrets-\")"
+    expression  = "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && resource.name.startsWith(\"projects/${data.google_project.current.number}/secrets/${local.resource_prefix}-secrets-\") && !resource.name.startsWith(\"projects/${data.google_project.current.number}/secrets/${local.resource_prefix}-deployer-secrets-\")"
   }
 }
 
@@ -735,7 +735,7 @@ resource "google_project_iam_member" "gcp_role_write_secret_manager_values_manag
   condition {
     title       = "ResourceVaultSecrets"
     description = "Limit to ResourceVaultSecrets"
-    expression  = "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && resource.name.startsWith(\"projects/${data.google_project.current.number}/secrets/${local.resource_prefix}-secrets-\")"
+    expression  = "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && resource.name.startsWith(\"projects/${data.google_project.current.number}/secrets/${local.resource_prefix}-secrets-\") && !resource.name.startsWith(\"projects/${data.google_project.current.number}/secrets/${local.resource_prefix}-deployer-secrets-\")"
   }
 }
 
