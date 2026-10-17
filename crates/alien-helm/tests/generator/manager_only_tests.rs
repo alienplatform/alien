@@ -7,14 +7,44 @@ use super::{
     test_utils::{self, LinterStatus},
 };
 use alien_core::{
-    Container, ContainerCode, Daemon, DaemonCode, KubernetesCertificateMode,
+    Container, ContainerCode, Daemon, DaemonCode, HeartbeatsMode, KubernetesCertificateMode,
     KubernetesExposureSettings, KubernetesGatewayRouteProfile, KubernetesIngressRouteProfile,
     KubernetesRouteProfile, KubernetesSettings, PermissionProfile, ResourceLifecycle, ResourceSpec,
-    Stack, StackSettings, ToolchainConfig, Vault, Worker, WorkerCode,
+    Stack, StackSettings, TelemetryMode, ToolchainConfig, Vault, Worker, WorkerCode,
 };
 use alien_helm::{generate_helm_chart, HelmOptions, HelmRegistry};
 use serde::Deserialize;
 use serde_json::{json, Value};
+
+#[test]
+fn generated_stack_modes_survive_helm_values_parsing() {
+    for (telemetry, heartbeats) in [
+        (TelemetryMode::Off, HeartbeatsMode::Off),
+        (TelemetryMode::Off, HeartbeatsMode::On),
+        (TelemetryMode::Auto, HeartbeatsMode::Off),
+    ] {
+        let settings = StackSettings {
+            telemetry,
+            heartbeats,
+            ..StackSettings::default()
+        };
+        let chart = render(&Stack::new("mode-values".to_string()).build(), settings);
+        assert_helm_valid(&chart, "generated stack modes");
+        let rendered = test_utils::helm_template(&chart.files, None);
+        rendered.assert_ok("generated stack modes without overrides");
+        let documents: Vec<Value> = serde_yaml::Deserializer::from_str(&rendered.stdout)
+            .map(|document| Value::deserialize(document).expect("rendered manifest"))
+            .collect();
+        let serialized = documents
+            .iter()
+            .find_map(|document| document.pointer("/data/stack-settings.json"))
+            .and_then(Value::as_str)
+            .expect("operator stack settings");
+        let actual: StackSettings = serde_json::from_str(serialized).unwrap();
+        assert_eq!(actual.telemetry, telemetry);
+        assert_eq!(actual.heartbeats, heartbeats);
+    }
+}
 
 #[test]
 fn pure_worker_chart_leaves_runtime_service_to_operator() {
@@ -211,7 +241,11 @@ fn chart_role_rbac_allows_every_cleanup_route_resource() {
     let role = chart.files.get("templates/role.yaml").expect("role");
     let values = chart.files.get("values.yaml").expect("values.yaml");
 
-    assert!(values.contains("routeApi: gateway"));
+    let values: Value = serde_yaml::from_str(values).expect("chart values");
+    assert_eq!(
+        values.pointer("/stackSettings/kubernetes/exposure/route/routeApi"),
+        Some(&json!("gateway"))
+    );
     assert!(role.contains("resources: [\"networkpolicies\"]"));
     assert!(role.contains("resources: [\"ingresses\"]"));
     assert!(role.contains("gateway.networking.k8s.io"));
