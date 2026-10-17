@@ -688,7 +688,7 @@ fn many_resource_grants_use_quota_safe_managed_policies() {
     assert!(!policies.is_empty());
     assert!(
         policies.len() <= 10,
-        "AWS allows ten managed policies per role"
+        "per-resource grants should pack into a handful of managed policies"
     );
     assert!(policies
         .iter()
