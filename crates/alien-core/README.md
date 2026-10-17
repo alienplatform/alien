@@ -45,8 +45,8 @@ Rust types (alien-core)
 
 A secret input provided by the deployer is stored in the reserved, setup-owned
 `deployer-secrets` vault. Its key is the input ID in kebab case: `apiKey` becomes
-`api-key`. User vault IDs cannot use `deployer-secrets` or the
-`deployer-secrets-` prefix. The deployer writes it with their own cloud credentials using the
+`api-key`. User vault IDs cannot overlap `deployer-secrets`: this reserves the exact ID,
+its `deployer-secrets-` descendants, and the ancestor `deployer` (including normalized aliases). The deployer writes it with their own cloud credentials using the
 command in deployment status. AWS SSM and GCP Secret Manager names are
 `<prefix>-deployer-secrets-api-key`; Kubernetes uses that Secret name with data
 key `value`. Azure uses secret `api-key` in a separate Key Vault whose generated
@@ -58,18 +58,35 @@ receives metadata access to deployer slots, with no direct secret-value read,
 write, or delete permission. The manager vault API refuses the deployer vault. Explicit management data grants
 cannot reopen the reserved vault.
 
-AWS and GCP workloads read only their mapped slots. Workloads sharing one
+For declared deployer inputs, AWS and GCP workloads receive only their mapped reads. Workloads sharing one
 permission profile must receive the same slots. Stack-wide workload
 `vault/data-read`, `vault/data-write`, and `vault/provision` grants remain
-supported. On AWS each such profile receives an explicit deny on the exact
-slots it is not mapped to, plus a deny on recursive parameter-path reads. GCP
-ordinary vault grants exclude the dedicated prefix. Explicit workload grants
-on overlapping vault prefixes are rejected; use input mappings for slot access.
+supported. On AWS each such profile is denied all writes, deletion, version labels,
+tags, and resource-policy changes under the entire deployer-slot prefix, including
+future slots. This guard is installed even before the first native slot is declared.
+Read denies cover every declared deployer input not mapped into the profile,
+including stored-value inputs. Parameters left behind by removed or renamed inputs
+are outside this exact read deny; customers must delete those old parameters.
+Root-path `GetParametersByPath` requests are denied because they can return these
+root-level slots; reads of other hierarchies such as `/myapp/config` remain available
+when otherwise granted. [AWS authorizes path reads against the requested path](https://docs.aws.amazon.com/systems-manager/latest/userguide/ps-retrieval-authorization.html).
+
+GCP ordinary version-read, version-write and delete grants exclude the dedicated
+prefix. Secret creation is checked on the parent project and can create an empty
+secret under any name; it does not include a payload. Adding a version separately
+requires permission on that secret, so the ordinary data-write grant cannot fill
+an existing or future deployer slot. A workload with `vault/provision` also has
+project IAM-change powers and can grant itself broader access; that existing grant is an
+infrastructure-administrator capability, not a payload-access boundary. [Create](https://docs.cloud.google.com/secret-manager/docs/reference/rest/v1/projects.secrets/create)
+and [addVersion](https://docs.cloud.google.com/secret-manager/docs/reference/rest/v1/projects.secrets/addVersion)
+use these separate authorization checks. Explicit workload grants on overlapping
+vault prefixes are rejected; use input mappings for slot access.
 
 Azure grants mapped workloads read access to the entire dedicated vault:
 per-secret RBAC cannot be installed before the secret exists. A workload with
 stack-wide vault data permissions can also reach this vault on Azure, even
-without a mapped slot. Scope ordinary Azure workload grants to a specific vault
+without a mapped slot, including writing a future slot when granted data-write.
+Scope ordinary Azure workload grants to a specific vault
 when that access is unwanted. Kubernetes workloads use `secretKeyRef`; the
 in-cluster Operator needs Secret `get` for presence checks, and Kubernetes has
 no metadata-only Secret permission. Azure certificate imports and deletion are

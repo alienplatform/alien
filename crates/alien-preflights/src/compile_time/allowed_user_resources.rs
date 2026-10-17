@@ -69,11 +69,14 @@ impl CompileTimeCheck for AllowedUserResourcesCheck {
                 continue;
             }
 
+            let normalized_id = resource_id.replace('_', "-").to_ascii_lowercase();
             if resource_type == "vault"
-                && resource_id.starts_with(&format!("{DEPLOYER_SECRETS_VAULT_ID}-"))
+                && (normalized_id == DEPLOYER_SECRETS_VAULT_ID
+                    || normalized_id.starts_with(&format!("{DEPLOYER_SECRETS_VAULT_ID}-"))
+                    || DEPLOYER_SECRETS_VAULT_ID.starts_with(&format!("{normalized_id}-")))
             {
                 errors.push(format!(
-                    "Vault ID '{resource_id}' uses the reserved 'deployer-secrets-' prefix. Choose a different ID so its values do not overlap customer deployer slots"
+                    "Vault ID '{resource_id}' overlaps the reserved 'deployer-secrets' vault prefix. Choose a different ID so its values do not overlap customer deployer slots"
                 ));
                 continue;
             }
@@ -316,7 +319,14 @@ mod tests {
 
     #[tokio::test]
     async fn user_vaults_cannot_overlap_the_deployer_slot_prefix() {
-        for id in ["deployer-secrets-api", "deployer-secrets-api-key"] {
+        for id in [
+            "deployer",
+            "Deployer",
+            "deployer_secrets",
+            "deployer_secrets_api",
+            "deployer-secrets-api",
+            "deployer-secrets-api-key",
+        ] {
             let stack = Stack::new("test".into())
                 .add(
                     alien_core::Vault::new(id.into()).build(),
@@ -328,21 +338,27 @@ mod tests {
                 .await
                 .unwrap();
             assert!(!result.success);
-            assert!(result.errors[0].contains("reserved 'deployer-secrets-' prefix"));
+            assert!(result.errors[0].contains("reserved 'deployer-secrets' vault prefix"));
         }
-        let stack = Stack::new("test".into())
-            .add(
-                alien_core::Vault::new("application-secrets".into()).build(),
-                ResourceLifecycle::Frozen,
-            )
-            .build();
-        assert!(
-            AllowedUserResourcesCheck
-                .check(&stack, Platform::Aws)
-                .await
-                .unwrap()
-                .success
-        );
+        for id in [
+            "application-secrets",
+            "deployer-backup",
+            "deployer-secrets2",
+        ] {
+            let stack = Stack::new("test".into())
+                .add(
+                    alien_core::Vault::new(id.into()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build();
+            assert!(
+                AllowedUserResourcesCheck
+                    .check(&stack, Platform::Aws)
+                    .await
+                    .unwrap()
+                    .success
+            );
+        }
     }
 
     #[tokio::test]

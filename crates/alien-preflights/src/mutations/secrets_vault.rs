@@ -165,6 +165,12 @@ impl StackMutation for DeployerSecretsVaultMutation {
         )
         .iter()
         .any(|slot| !slot.has_stored_value)
+            || (state.platform == Platform::Aws
+                && stack
+                    .permissions
+                    .profiles
+                    .values()
+                    .any(has_stack_wide_vault_grant))
     }
 
     async fn mutate(
@@ -173,7 +179,21 @@ impl StackMutation for DeployerSecretsVaultMutation {
         state: &StackState,
         config: &DeploymentConfig,
     ) -> Result<Stack> {
-        if !self.should_run(&stack, state, config) {
+        let has_native_slots = alien_core::deployer_secret_slots(
+            &stack.inputs,
+            &config.input_values,
+            config.stored_secret_input_ids.as_deref(),
+            &config.environment_variables.variables,
+            state.platform,
+        )
+        .iter()
+        .any(|slot| !slot.has_stored_value);
+        if !has_native_slots {
+            if state.platform == Platform::Aws {
+                // Install future-slot protection even before the first native
+                // input is declared, without creating an unnecessary vault.
+                protect_unmapped_deployer_secrets(&mut stack, &BTreeMap::new())?;
+            }
             return Ok(stack);
         }
         validate_workload_vault_grants(&stack)?;
@@ -202,7 +222,7 @@ impl StackMutation for DeployerSecretsVaultMutation {
             Platform::Aws | Platform::Gcp | Platform::Azure
         ) {
             if state.platform == Platform::Aws {
-                protect_unmapped_deployer_secrets(&mut stack, config, &keys)?;
+                protect_unmapped_deployer_secrets(&mut stack, &keys)?;
             }
             add_deployer_secret_read_permissions(&mut stack, DEPLOYER_SECRETS_VAULT_ID, keys)?;
         }
@@ -268,63 +288,72 @@ fn validate_workload_vault_grants(stack: &Stack) -> Result<()> {
     Ok(())
 }
 
+fn has_stack_wide_vault_grant(profile: &PermissionProfile) -> bool {
+    profile.0.get("*").is_some_and(|permissions| {
+        permissions.iter().any(|permission| {
+            let canonical = match permission {
+                PermissionSetReference::Name(name) => alien_permissions::get_permission_set(name)
+                    .map(|set| set.id.as_str())
+                    .unwrap_or(name.as_str()),
+                PermissionSetReference::Inline(set) => set.id.as_str(),
+            };
+            matches!(
+                canonical,
+                "vault/data-read" | "vault/data-write" | "vault/provision"
+            )
+        })
+    })
+}
+
 /// Stack-wide AWS vault grants remain useful for ordinary application vaults.
 /// Explicit denies keep those grants from exposing another workload's slots.
 fn protect_unmapped_deployer_secrets(
     stack: &mut Stack,
-    config: &DeploymentConfig,
     keys_by_profile: &BTreeMap<String, BTreeSet<String>>,
 ) -> Result<()> {
-    let all_keys: BTreeSet<_> = alien_core::deployer_secret_slots(
-        &stack.inputs,
-        &config.input_values,
-        config.stored_secret_input_ids.as_deref(),
-        &config.environment_variables.variables,
-        Platform::Aws,
-    )
-    .into_iter()
-    .filter(|slot| !slot.has_stored_value)
-    .map(|slot| slot.vault_key)
-    .collect();
+    // Include stored inputs too: a leftover native key must not become readable
+    // merely because its current delivery uses a stored value.
+    let all_keys: BTreeSet<_> = stack
+        .inputs
+        .iter()
+        .filter(|input| alien_core::is_deployer_secret_input(input))
+        .map(|input| alien_core::deployer_secret_vault_key(&input.id))
+        .collect();
     for (name, profile) in &mut stack.permissions.profiles {
-        let broad = profile.0.get("*").is_some_and(|permissions| {
-            permissions.iter().any(|permission| {
-                let canonical = match permission {
-                    PermissionSetReference::Name(name) => {
-                        alien_permissions::get_permission_set(name)
-                            .map(|set| set.id.as_str())
-                            .unwrap_or(name.as_str())
-                    }
-                    PermissionSetReference::Inline(set) => set.id.as_str(),
-                };
-                matches!(
-                    canonical,
-                    "vault/data-read" | "vault/data-write" | "vault/provision"
-                )
-            })
-        });
-        if !broad {
+        if !has_stack_wide_vault_grant(profile) {
             continue;
         }
         let denied: Vec<_> = all_keys.iter()
             .filter(|key| !keys_by_profile.get(name).is_some_and(|keys| keys.contains(*key)))
             .map(|key| format!("arn:aws:ssm:${{awsRegion}}:${{awsAccountId}}:parameter/${{stackPrefix}}-{DEPLOYER_SECRETS_VAULT_ID}-{key}"))
             .collect();
-        if denied.is_empty() {
-            continue;
+        let prefix = format!("arn:aws:ssm:${{awsRegion}}:${{awsAccountId}}:parameter/${{stackPrefix}}-{DEPLOYER_SECRETS_VAULT_ID}-*");
+        let root_path = "arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/";
+        let mut aws = vec![
+            serde_json::json!({
+                // Workloads never write customer slots, including slots introduced
+                // by a later release that are not in the current input definitions.
+                "effect": "Deny",
+                "grant": { "actions": ["ssm:PutParameter", "ssm:DeleteParameter*", "ssm:LabelParameterVersion", "ssm:UnlabelParameterVersion", "ssm:AddTagsToResource", "ssm:RemoveTagsFromResource", "ssm:PutResourcePolicy", "ssm:DeleteResourcePolicy"] },
+                "binding": { "stack": { "resources": [prefix] }, "resource": { "resources": [prefix] } }
+            }),
+            serde_json::json!({
+                // Path queries authorize the requested path, not returned keys.
+                // Slots have no slash, so only the root path can include them.
+                "effect": "Deny", "grant": { "actions": ["ssm:GetParametersByPath"] },
+                "binding": { "stack": { "resources": [root_path] }, "resource": { "resources": [root_path] } }
+            }),
+        ];
+        if !denied.is_empty() {
+            aws.push(serde_json::json!({
+                "effect": "Deny", "grant": { "actions": ["ssm:GetParameter*"] },
+                "binding": { "stack": { "resources": denied }, "resource": { "resources": denied } }
+            }));
         }
         let guard: PermissionSet = serde_json::from_value(serde_json::json!({
             "id": "vault/protect-unmapped-deployer-secrets",
-            "description": "Deny access to deployer slots not mapped into this workload profile",
-            "platforms": { "aws": [{
-                "effect": "Deny",
-                "grant": { "actions": ["ssm:GetParameter*", "ssm:PutParameter", "ssm:DeleteParameter*", "ssm:LabelParameterVersion", "ssm:UnlabelParameterVersion", "ssm:AddTagsToResource", "ssm:RemoveTagsFromResource", "ssm:PutResourcePolicy", "ssm:DeleteResourcePolicy"] },
-                "binding": { "stack": { "resources": denied }, "resource": { "resources": denied } }
-            }, {
-                // An ancestor-path query ignores a descendant parameter deny.
-                "effect": "Deny", "grant": { "actions": ["ssm:GetParametersByPath"] },
-                "binding": { "stack": { "resources": ["*"] }, "resource": { "resources": ["*"] } }
-            }] }
+            "description": "Deny workload writes to customer slots and reads of unmapped declared slots",
+            "platforms": { "aws": aws }
         })).into_alien_error().context(ErrorData::StackMutationFailed {
             mutation_name: "DeployerSecretsVaultMutation".to_string(),
             message: "Failed to build unmapped deployer secret protection".to_string(),
@@ -1918,6 +1947,24 @@ mod tests {
                     other.id = "webKey".to_string();
                     other.env[0].target_resources = Some(vec!["web".to_string()]);
                     stack.inputs.push(other);
+                    for (id, providers) in [
+                        ("storedKey", vec![alien_core::StackInputProvider::Deployer]),
+                        (
+                            "storedDual",
+                            vec![
+                                alien_core::StackInputProvider::Developer,
+                                alien_core::StackInputProvider::Deployer,
+                            ],
+                        ),
+                    ] {
+                        let mut stored = stack.inputs[0].clone();
+                        stored.id = id.to_string();
+                        stored.provided_by = providers;
+                        stack.inputs.push(stored);
+                    }
+                    let mut config = deployer_secret_config();
+                    config.stored_secret_input_ids =
+                        Some(vec!["storedKey".into(), "storedDual".into()]);
                     // Also protect a profile that has no mapped slots.
                     for name in ["api-profile", "web-profile", "unmapped"] {
                         let grant = if inline {
@@ -1935,13 +1982,16 @@ mod tests {
                             .insert(name.into(), PermissionProfile::new().global([grant]));
                     }
                     let prepared = DeployerSecretsVaultMutation
-                        .mutate(stack, &StackState::new(platform), &deployer_secret_config())
+                        .mutate(stack, &StackState::new(platform), &config)
                         .await
                         .unwrap();
                     for (name, denied_keys) in [
-                        ("api-profile", vec!["web-key"]),
-                        ("web-profile", vec!["api-key"]),
-                        ("unmapped", vec!["api-key", "web-key"]),
+                        ("api-profile", vec!["stored-dual", "stored-key", "web-key"]),
+                        ("web-profile", vec!["api-key", "stored-dual", "stored-key"]),
+                        (
+                            "unmapped",
+                            vec!["api-key", "stored-dual", "stored-key", "web-key"],
+                        ),
                     ] {
                         let grants = &prepared.permissions.profiles[name].0["*"];
                         let guard = grants
@@ -1963,25 +2013,90 @@ mod tests {
                                         .with_stack_prefix("acme"),
                                 )
                                 .unwrap();
-                        assert_eq!(policy.statement.len(), 2);
+                        assert_eq!(policy.statement.len(), 3);
                         assert!(policy
                             .statement
                             .iter()
                             .all(|statement| statement.effect == "Deny"));
-                        let slots = &policy.statement[0];
+                        let slots = &policy.statement[2];
                         assert_eq!(slots.resource, denied_keys.iter().map(|key| format!("arn:aws:ssm:us-east-1:123456789012:parameter/acme-deployer-secrets-{key}")).collect::<Vec<_>>());
-                        for action in [
-                            "ssm:GetParameter*",
-                            "ssm:PutParameter",
-                            "ssm:DeleteParameter*",
-                        ] {
-                            assert!(slots.action.contains(&action.to_string()));
-                        }
+                        assert_eq!(slots.action, ["ssm:GetParameter*"]);
+                        let writes = &policy.statement[0];
+                        assert_eq!(writes.resource, ["arn:aws:ssm:us-east-1:123456789012:parameter/acme-deployer-secrets-*"]);
+                        assert_eq!(
+                            writes.action,
+                            [
+                                "ssm:PutParameter",
+                                "ssm:DeleteParameter*",
+                                "ssm:LabelParameterVersion",
+                                "ssm:UnlabelParameterVersion",
+                                "ssm:AddTagsToResource",
+                                "ssm:RemoveTagsFromResource",
+                                "ssm:PutResourcePolicy",
+                                "ssm:DeleteResourcePolicy"
+                            ]
+                        );
                         assert_eq!(policy.statement[1].action, ["ssm:GetParametersByPath"]);
-                        assert_eq!(policy.statement[1].resource, ["*"]);
+                        assert_eq!(
+                            policy.statement[1].resource,
+                            ["arn:aws:ssm:us-east-1:123456789012:parameter/"]
+                        );
                     }
                 }
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn broad_profiles_protect_future_slots_before_and_after_native_inputs() {
+        for has_input in [false, true] {
+            let mut stack = deployer_secret_stack(&[("api", "api-profile")], &["api"]);
+            if !has_input {
+                stack.inputs.clear();
+            }
+            stack.permissions.profiles.insert(
+                "api-profile".into(),
+                PermissionProfile::new().global(["vault/data-write"]),
+            );
+            let state = StackState::new(Platform::Aws);
+            let config = deployer_secret_config();
+            assert!(DeployerSecretsVaultMutation.should_run(&stack, &state, &config));
+            let prepared = DeployerSecretsVaultMutation
+                .mutate(stack, &state, &config)
+                .await
+                .unwrap();
+            assert_eq!(
+                prepared.resources.contains_key(DEPLOYER_SECRETS_VAULT_ID),
+                has_input
+            );
+            let guard = prepared.permissions.profiles["api-profile"].0["*"]
+                .iter()
+                .find(|grant| grant.id() == "vault/protect-unmapped-deployer-secrets")
+                .unwrap()
+                .resolve(|_| None)
+                .unwrap();
+            let policy = alien_permissions::generators::AwsRuntimePermissionsGenerator::new()
+                .generate_policy(
+                    &guard,
+                    alien_permissions::BindingTarget::Stack,
+                    &alien_permissions::PermissionContext::new()
+                        .with_aws_account_id("123456789012")
+                        .with_aws_region("us-east-1")
+                        .with_stack_prefix("acme"),
+                )
+                .unwrap();
+            assert_eq!(
+                policy.statement.len(),
+                2,
+                "no current key needs a read deny"
+            );
+            assert!(policy.statement[0]
+                .action
+                .contains(&"ssm:PutParameter".to_string()));
+            assert_eq!(
+                policy.statement[0].resource,
+                ["arn:aws:ssm:us-east-1:123456789012:parameter/acme-deployer-secrets-*"]
+            );
         }
     }
 
