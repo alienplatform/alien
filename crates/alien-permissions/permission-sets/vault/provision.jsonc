@@ -22,8 +22,27 @@
     ],
     "gcp": [
       {
+        "grant": { "permissions": ["secretmanager.secrets.delete"] },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "PreserveDeployerSecrets",
+              "expression": "resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-\") && !resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-deployer-secrets-\")"
+            }
+          },
+          "resource": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "DeleteResourceVaultSecrets",
+              "expression": "resource.name.startsWith(\"projects/${projectNumber}/secrets/${resourceName}-\") && !resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-deployer-secrets-\")"
+            }
+          }
+        }
+      },
+      {
         "grant": {
-          "permissions": ["secretmanager.secrets.create", "secretmanager.secrets.delete"]
+          "permissions": ["secretmanager.secrets.create"]
         },
         "binding": {
           "stack": {

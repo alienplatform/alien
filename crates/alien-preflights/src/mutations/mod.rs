@@ -50,6 +50,6 @@ pub use network::NetworkMutation;
 pub use remote_bindings::RemoteBindingsMutation;
 pub use remote_stack_management::RemoteStackManagementMutation;
 pub use resource_link_permissions::ResourceLinkPermissionsMutation;
-pub use secrets_vault::SecretsVaultMutation;
+pub use secrets_vault::{DeployerSecretsVaultMutation, SecretsVaultMutation};
 pub use service_account::ServiceAccountMutation;
 pub use service_account_dependencies::ServiceAccountDependenciesMutation;

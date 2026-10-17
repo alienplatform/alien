@@ -1,6 +1,6 @@
 use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
-use alien_core::{Platform, Stack, SECRETS_VAULT_ID};
+use alien_core::{Platform, Stack, DEPLOYER_SECRETS_VAULT_ID, SECRETS_VAULT_ID};
 use std::collections::HashSet;
 
 /// Ensures the stack contains only allowed user-defined resource types and IDs.
@@ -59,9 +59,12 @@ impl CompileTimeCheck for AllowedUserResourcesCheck {
                 continue;
             }
 
-            if resource_id == SECRETS_VAULT_ID {
+            if matches!(
+                resource_id.as_str(),
+                SECRETS_VAULT_ID | DEPLOYER_SECRETS_VAULT_ID
+            ) {
                 errors.push(format!(
-                    "Resource ID '{SECRETS_VAULT_ID}' is reserved for deployment secret delivery. Choose a different ID for the application resource"
+                    "Resource ID '{resource_id}' is reserved for deployment secret delivery. Choose a different ID for the application resource"
                 ));
                 continue;
             }
