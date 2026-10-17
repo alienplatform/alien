@@ -202,11 +202,11 @@ fn protect_deployer_secrets(
         && config.stack_settings.setup_management == alien_core::SetupManagement::Automatic
     {
         grants.push(inline_vault_permission(serde_json::json!({
-            "id": "vault/shared-secrets-data",
-            "description": "Read and sync only shared deployment secrets",
+            "id": "vault/stack-secrets-data",
+            "description": "Read and sync stack vaults except protected deployer secrets",
             "platforms": { "aws": [{
                 "grant": { "actions": ["ssm:GetParameter", "ssm:PutParameter", "ssm:DeleteParameter"] },
-                "binding": { "stack": { "resources": ["arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${stackPrefix}-secrets-*"] }, "resource": { "resources": ["arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${stackPrefix}-secrets-*"] } }
+                "binding": { "stack": { "resources": ["arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${stackPrefix}-*"] }, "resource": { "resources": ["arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${stackPrefix}-*"] } }
             }] }
         }))?);
     }
@@ -227,6 +227,10 @@ fn protect_deployer_secrets(
                 "effect": "Deny",
                 "grant": { "actions": ["ssm:GetParametersByPath"] },
                 "binding": { "stack": { "resources": ["*"] }, "resource": { "resources": ["*"] } }
+            }, {
+                "effect": "Deny",
+                "grant": { "actions": ["sts:AssumeRole"] },
+                "binding": { "stack": { "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"] }, "resource": { "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"] } }
             }] }
         }))?);
     }
@@ -753,6 +757,9 @@ pub(crate) fn permission_resource_type(resource_type: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_permissions::{
+        generators::AwsRuntimePermissionsGenerator, BindingTarget, PermissionContext,
+    };
 
     #[tokio::test]
     async fn deployer_vault_management_is_metadata_only_in_each_setup_mode() {
@@ -793,6 +800,102 @@ mod tests {
                         permission.id(),
                         "vault/heartbeat" | "vault/management"
                     ))));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn aws_management_guards_apply_in_every_setup_and_profile_mode() {
+        let context = PermissionContext::new()
+            .with_aws_account_id("123456789012")
+            .with_aws_region("us-east-1")
+            .with_stack_prefix("acme");
+        for automatic in [false, true] {
+            for slots in [false, true] {
+                for mode in ["auto", "extend", "override"] {
+                    let mut config = deployment_config_for_management_permission_test();
+                    if automatic {
+                        config.stack_settings.setup_management =
+                            alien_core::SetupManagement::Automatic;
+                    }
+                    let builder = Stack::new("test".into());
+                    let mut stack = if slots {
+                        builder
+                            .add(
+                                alien_core::Vault::new(
+                                    alien_core::DEPLOYER_SECRETS_VAULT_ID.into(),
+                                )
+                                .build(),
+                                ResourceLifecycle::Frozen,
+                            )
+                            .build()
+                    } else {
+                        builder.build()
+                    };
+                    stack.permissions.management = management_permissions_for_test(mode);
+                    let result = ManagementPermissionProfileMutation
+                        .mutate(stack, &StackState::new(Platform::Aws), &config)
+                        .await;
+                    if automatic && mode == "override" {
+                        assert!(
+                            result.is_err(),
+                            "automatic setup does not support overrides"
+                        );
+                        continue;
+                    }
+                    let prepared = result.unwrap();
+                    let profile = prepared.management().profile().unwrap();
+                    let grants = &profile.0["*"];
+                    let guard = grants
+                        .iter()
+                        .find(|grant| grant.id() == "vault/protect-deployer-secrets");
+                    assert_eq!(guard.is_some(), automatic || slots);
+                    if let Some(guard) = guard {
+                        let policy = AwsRuntimePermissionsGenerator::new()
+                            .generate_policy(
+                                &guard.resolve(|_| None).unwrap(),
+                                BindingTarget::Stack,
+                                &context,
+                            )
+                            .unwrap();
+                        assert!(policy
+                            .statement
+                            .iter()
+                            .all(|statement| statement.effect == "Deny"));
+                        let assume = policy
+                            .statement
+                            .iter()
+                            .find(|statement| statement.action.contains(&"sts:AssumeRole".into()))
+                            .unwrap();
+                        assert_eq!(assume.resource, ["arn:aws:iam::123456789012:role/acme-*"]);
+                        let values = policy
+                            .statement
+                            .iter()
+                            .find(|statement| {
+                                statement.action.contains(&"ssm:GetParameter*".into())
+                            })
+                            .unwrap();
+                        assert_eq!(values.resource, ["arn:aws:ssm:us-east-1:123456789012:parameter/acme-deployer-secrets-*"]);
+                    }
+                    if automatic {
+                        let grant = grants
+                            .iter()
+                            .find(|grant| grant.id() == "vault/stack-secrets-data")
+                            .unwrap();
+                        let policy = AwsRuntimePermissionsGenerator::new()
+                            .generate_policy(
+                                &grant.resolve(|_| None).unwrap(),
+                                BindingTarget::Stack,
+                                &context,
+                            )
+                            .unwrap();
+                        assert_eq!(policy.statement[0].effect, "Allow");
+                        assert_eq!(
+                            policy.statement[0].resource,
+                            ["arn:aws:ssm:us-east-1:123456789012:parameter/acme-*"]
+                        );
+                    }
+                }
             }
         }
     }
@@ -1027,7 +1130,7 @@ mod tests {
         for id in [
             "storage/provision",
             "worker/dispatch-command",
-            "vault/shared-secrets-data",
+            "vault/stack-secrets-data",
             "vault/protect-deployer-secrets",
         ] {
             assert!(

@@ -122,7 +122,7 @@ impl StackMutation for SecretsVaultMutation {
         // Step 4: Add vault data permissions to management profile for the secrets vault.
         // This allows the control plane to sync secret environment variables without
         // granting access to user-declared vaults. Automatic AWS setup installs the
-        // shared-vault prefix grant with the management role;
+        // stack-wide vault grant with the management role;
         // see ManagementPermissionProfileMutation. A vault-scoped grant would make the
         // runtime write a policy onto its own management role, which is denied.
         if !(stack_state.platform == Platform::Aws
@@ -201,6 +201,9 @@ impl StackMutation for DeployerSecretsVaultMutation {
             state.platform,
             Platform::Aws | Platform::Gcp | Platform::Azure
         ) {
+            if state.platform == Platform::Aws {
+                protect_unmapped_deployer_secrets(&mut stack, config, &keys)?;
+            }
             add_deployer_secret_read_permissions(&mut stack, DEPLOYER_SECRETS_VAULT_ID, keys)?;
         }
         if !SecretDelivery::resolve(state.platform, ComputeKind::Worker).is_native_projection() {
@@ -235,8 +238,7 @@ fn validate_workload_vault_grants(stack: &Stack) -> Result<()> {
     for (profile_name, profile) in &stack.permissions.profiles {
         for (scope, permissions) in &profile.0 {
             let normalized_scope = scope.replace('_', "-").to_ascii_lowercase();
-            let overlaps = scope == "*"
-                || normalized_scope == DEPLOYER_SECRETS_VAULT_ID
+            let overlaps = normalized_scope == DEPLOYER_SECRETS_VAULT_ID
                 || DEPLOYER_SECRETS_VAULT_ID.starts_with(&format!("{normalized_scope}-"));
             if !overlaps {
                 continue;
@@ -262,6 +264,75 @@ fn validate_workload_vault_grants(stack: &Stack) -> Result<()> {
                 }
             }
         }
+    }
+    Ok(())
+}
+
+/// Stack-wide AWS vault grants remain useful for ordinary application vaults.
+/// Explicit denies keep those grants from exposing another workload's slots.
+fn protect_unmapped_deployer_secrets(
+    stack: &mut Stack,
+    config: &DeploymentConfig,
+    keys_by_profile: &BTreeMap<String, BTreeSet<String>>,
+) -> Result<()> {
+    let all_keys: BTreeSet<_> = alien_core::deployer_secret_slots(
+        &stack.inputs,
+        &config.input_values,
+        config.stored_secret_input_ids.as_deref(),
+        &config.environment_variables.variables,
+        Platform::Aws,
+    )
+    .into_iter()
+    .filter(|slot| !slot.has_stored_value)
+    .map(|slot| slot.vault_key)
+    .collect();
+    for (name, profile) in &mut stack.permissions.profiles {
+        let broad = profile.0.get("*").is_some_and(|permissions| {
+            permissions.iter().any(|permission| {
+                let canonical = match permission {
+                    PermissionSetReference::Name(name) => {
+                        alien_permissions::get_permission_set(name)
+                            .map(|set| set.id.as_str())
+                            .unwrap_or(name.as_str())
+                    }
+                    PermissionSetReference::Inline(set) => set.id.as_str(),
+                };
+                matches!(
+                    canonical,
+                    "vault/data-read" | "vault/data-write" | "vault/provision"
+                )
+            })
+        });
+        if !broad {
+            continue;
+        }
+        let denied: Vec<_> = all_keys.iter()
+            .filter(|key| !keys_by_profile.get(name).is_some_and(|keys| keys.contains(*key)))
+            .map(|key| format!("arn:aws:ssm:${{awsRegion}}:${{awsAccountId}}:parameter/${{stackPrefix}}-{DEPLOYER_SECRETS_VAULT_ID}-{key}"))
+            .collect();
+        if denied.is_empty() {
+            continue;
+        }
+        let guard: PermissionSet = serde_json::from_value(serde_json::json!({
+            "id": "vault/protect-unmapped-deployer-secrets",
+            "description": "Deny access to deployer slots not mapped into this workload profile",
+            "platforms": { "aws": [{
+                "effect": "Deny",
+                "grant": { "actions": ["ssm:GetParameter*", "ssm:PutParameter", "ssm:DeleteParameter*", "ssm:LabelParameterVersion", "ssm:UnlabelParameterVersion", "ssm:AddTagsToResource", "ssm:RemoveTagsFromResource", "ssm:PutResourcePolicy", "ssm:DeleteResourcePolicy"] },
+                "binding": { "stack": { "resources": denied }, "resource": { "resources": denied } }
+            }, {
+                // An ancestor-path query ignores a descendant parameter deny.
+                "effect": "Deny", "grant": { "actions": ["ssm:GetParametersByPath"] },
+                "binding": { "stack": { "resources": ["*"] }, "resource": { "resources": ["*"] } }
+            }] }
+        })).into_alien_error().context(ErrorData::StackMutationFailed {
+            mutation_name: "DeployerSecretsVaultMutation".to_string(),
+            message: "Failed to build unmapped deployer secret protection".to_string(),
+            resource_id: None,
+        })?;
+        let global = profile.0.entry("*".to_string()).or_default();
+        global.retain(|permission| permission.id() != guard.id);
+        global.push(PermissionSetReference::from_inline(guard));
     }
     Ok(())
 }
@@ -1785,7 +1856,7 @@ mod tests {
     /// two that receive different deployer secrets cannot share a profile.
     #[tokio::test]
     async fn broad_workload_vault_grants_cannot_reopen_other_slots() {
-        for scope in ["*", "deployer", DEPLOYER_SECRETS_VAULT_ID] {
+        for scope in ["deployer", DEPLOYER_SECRETS_VAULT_ID] {
             for permission in [
                 "vault/data-read",
                 "vault/data-write",
@@ -1826,6 +1897,92 @@ mod tests {
             )
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn stack_wide_workload_grants_keep_only_mapped_aws_slots() {
+        for permission in [
+            "vault/data-read",
+            "vault/data_read",
+            "vault/data-write",
+            "vault/data_write",
+            "vault/provision",
+        ] {
+            for inline in [false, true] {
+                for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+                    let mut stack = deployer_secret_stack(
+                        &[("api", "api-profile"), ("web", "web-profile")],
+                        &["api"],
+                    );
+                    let mut other = stack.inputs[0].clone();
+                    other.id = "webKey".to_string();
+                    other.env[0].target_resources = Some(vec!["web".to_string()]);
+                    stack.inputs.push(other);
+                    // Also protect a profile that has no mapped slots.
+                    for name in ["api-profile", "web-profile", "unmapped"] {
+                        let grant = if inline {
+                            PermissionSetReference::from_inline(
+                                alien_permissions::get_permission_set(permission)
+                                    .unwrap()
+                                    .clone(),
+                            )
+                        } else {
+                            PermissionSetReference::from_name(permission)
+                        };
+                        stack
+                            .permissions
+                            .profiles
+                            .insert(name.into(), PermissionProfile::new().global([grant]));
+                    }
+                    let prepared = DeployerSecretsVaultMutation
+                        .mutate(stack, &StackState::new(platform), &deployer_secret_config())
+                        .await
+                        .unwrap();
+                    for (name, denied_keys) in [
+                        ("api-profile", vec!["web-key"]),
+                        ("web-profile", vec!["api-key"]),
+                        ("unmapped", vec!["api-key", "web-key"]),
+                    ] {
+                        let grants = &prepared.permissions.profiles[name].0["*"];
+                        let guard = grants
+                            .iter()
+                            .find(|grant| grant.id() == "vault/protect-unmapped-deployer-secrets");
+                        if platform != Platform::Aws {
+                            assert!(guard.is_none());
+                            continue;
+                        }
+                        let set = guard.unwrap().resolve(|_| None).unwrap();
+                        let policy =
+                            alien_permissions::generators::AwsRuntimePermissionsGenerator::new()
+                                .generate_policy(
+                                    &set,
+                                    alien_permissions::BindingTarget::Stack,
+                                    &alien_permissions::PermissionContext::new()
+                                        .with_aws_account_id("123456789012")
+                                        .with_aws_region("us-east-1")
+                                        .with_stack_prefix("acme"),
+                                )
+                                .unwrap();
+                        assert_eq!(policy.statement.len(), 2);
+                        assert!(policy
+                            .statement
+                            .iter()
+                            .all(|statement| statement.effect == "Deny"));
+                        let slots = &policy.statement[0];
+                        assert_eq!(slots.resource, denied_keys.iter().map(|key| format!("arn:aws:ssm:us-east-1:123456789012:parameter/acme-deployer-secrets-{key}")).collect::<Vec<_>>());
+                        for action in [
+                            "ssm:GetParameter*",
+                            "ssm:PutParameter",
+                            "ssm:DeleteParameter*",
+                        ] {
+                            assert!(slots.action.contains(&action.to_string()));
+                        }
+                        assert_eq!(policy.statement[1].action, ["ssm:GetParametersByPath"]);
+                        assert_eq!(policy.statement[1].resource, ["*"]);
+                    }
+                }
+            }
+        }
     }
 
     #[tokio::test]
@@ -2236,10 +2393,7 @@ mod tests {
                 .profile()
                 .expect("automatic management grant")
                 .clone();
-            for id in [
-                "vault/shared-secrets-data",
-                "vault/protect-deployer-secrets",
-            ] {
+            for id in ["vault/stack-secrets-data", "vault/protect-deployer-secrets"] {
                 assert!(
                     profile.0["*"].iter().any(|grant| grant.id() == id),
                     "approved setup installs stack-wide {id}"

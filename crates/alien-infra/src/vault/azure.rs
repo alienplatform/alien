@@ -123,7 +123,10 @@ impl AzureVaultController {
             self.vault_name = Some(if config.id == alien_core::DEPLOYER_SECRETS_VAULT_ID {
                 // A fresh suffix avoids globally reserved soft-deleted vault names.
                 let suffix = Uuid::new_v4().simple().to_string();
-                alien_core::vault_naming::azure_deployer_vault_name(ctx.resource_prefix, &suffix[..6])
+                alien_core::vault_naming::azure_deployer_vault_name(
+                    ctx.resource_prefix,
+                    &suffix[..6],
+                )
             } else {
                 format!("{}-{}", ctx.resource_prefix, config.id)
             });
@@ -482,7 +485,7 @@ impl AzureVaultController {
         let vault_properties = VaultProperties {
             access_policies: vec![],
             create_mode: None,
-            enable_purge_protection: None,
+            enable_purge_protection: Some(true),
             enable_rbac_authorization: true,
             enable_soft_delete: true,
             enabled_for_deployment: false,

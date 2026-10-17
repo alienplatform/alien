@@ -223,14 +223,13 @@ pub async fn step(
                 .await?
         }
         DeploymentStatus::WaitingForMachines | DeploymentStatus::WaitingForSecrets => {
-            // An update can replace the initial target before any release has settled.
+            // A prepared target identifies an update. Initial setup can already have
+            // a current release after import, before its workloads finish provisioning.
             let has_pending_target = current
                 .runtime_metadata
                 .as_ref()
                 .is_some_and(|metadata| metadata.pending_prepared_stack.is_some());
-            if has_pending_target
-                || (current.current_release.is_some() && current.target_release.is_some())
-            {
+            if has_pending_target {
                 updating::handle_updating(current, config, client_config, service_provider).await?
             } else {
                 provisioning::handle_provisioning(current, config, client_config, service_provider)

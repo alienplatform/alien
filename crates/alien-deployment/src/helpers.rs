@@ -884,7 +884,8 @@ pub async fn sync_secrets_to_vault(
 /// safe to run from a control plane that must never see the customer's secret.
 ///
 /// Returns one report per slot with where the deployer writes it. A deployment
-/// without a secrets vault keeps its pre-vault delivery until setup adds one.
+/// without the dedicated vault reports setup guidance without failing health checks.
+/// Stored input values keep their existing delivery.
 pub async fn check_deployer_secrets(
     stack: &Stack,
     stack_state: &StackState,
@@ -910,9 +911,56 @@ pub async fn check_deployer_secrets(
         if slots.iter().all(|slot| slot.has_stored_value) {
             return Ok(Vec::new());
         }
-        return Err(AlienError::new(ErrorData::MissingConfiguration {
-            message: "Missing deployer-secrets vault. Rerun setup to create it and install its permissions.".to_string(),
-        }));
+        // An existing deployment may still have its original setup. Report the
+        // new destination without loading a binding or probing the old values.
+        let prefix = format!(
+            "{}-{}",
+            stack_state.resource_prefix,
+            alien_core::DEPLOYER_SECRETS_VAULT_ID
+        );
+        let binding = match platform {
+            Platform::Aws => Some(VaultBinding::parameter_store(&prefix)),
+            Platform::Gcp => Some(VaultBinding::secret_manager(&prefix)),
+            _ => None,
+        };
+        let mut context = deployer_secret_location_context(stack_state, client_config, config);
+        return slots.into_iter().filter(|slot| !slot.has_stored_value).map(|slot| {
+            context.secret_label = Some(slot.input.label.clone());
+            let location = if let Some(binding) = &binding {
+                deployer_secret_location(binding, &slot.vault_key, &context).context(ErrorData::InternalError {
+                    message: format!("Failed to name deployer secret '{}' before setup", slot.input.id),
+                })?
+            } else {
+                // Azure's globally unique vault name is chosen by setup. Never
+                // fabricate a destination or a write command before it exists.
+                alien_core::DeployerSecretLocation {
+                    store: match platform {
+                        Platform::Azure => alien_core::DeployerSecretStore::AzureKeyVault,
+                        Platform::Kubernetes => alien_core::DeployerSecretStore::KubernetesSecret,
+                        _ => alien_core::DeployerSecretStore::LocalVault,
+                    },
+                    name: slot.vault_key.clone(),
+                    vault_name: None,
+                    console_url: None,
+                    cli_command: String::new(),
+                    commands: None,
+                    delete_command: None,
+                }
+            };
+            Ok(DeployerSecretReport {
+                input_id: slot.input.id.clone(),
+                label: slot.input.label.clone(),
+                required: slot.input.required,
+                status: DeployerSecretStatus::Missing,
+                message: Some(if matches!(platform, Platform::Aws | Platform::Gcp) {
+                    "Setup required: write the key at the new deployer-secrets location using the command shown, then rerun setup to install its permissions. Existing workloads keep running until you update the deployment."
+                } else {
+                    "Setup required: rerun setup to create the deployer-secrets vault, then write the key using the command shown after setup. Existing workloads keep running until you update the deployment."
+                }.to_string()),
+                version: None,
+                location,
+            })
+        }).collect();
     };
     let binding = vault.remote_binding_params.clone().ok_or_else(|| {
         AlienError::new(ErrorData::MissingConfiguration {
@@ -1668,12 +1716,17 @@ mod tests {
         )
         .is_empty());
         config.stored_secret_input_ids = Some(Vec::new());
-        assert!(
+        let reports =
             check_deployer_secrets(&stack, &state, &ClientConfig::Test, &config, Platform::Test)
                 .await
-                .is_err(),
-            "unstored slots require setup of the separate vault"
-        );
+                .unwrap();
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0].status, DeployerSecretStatus::Missing);
+        assert!(reports[0]
+            .message
+            .as_deref()
+            .unwrap()
+            .contains("Setup required"));
         state.resources.insert(
             alien_core::DEPLOYER_SECRETS_VAULT_ID.to_string(),
             StackResourceState::new_pending(
@@ -2504,6 +2557,50 @@ mod tests {
         throttled.code = "CLOUD_PLATFORM_ERROR".to_string();
         throttled.http_status_code = Some(429);
         assert!(!is_access_denied(&throttled));
+    }
+
+    #[tokio::test]
+    async fn missing_setup_reports_the_cloud_specific_customer_order_without_io() {
+        let mut stack = make_single_function_stack("worker");
+        stack.inputs = vec![serde_json::from_value(serde_json::json!({
+            "id": "apiKey", "kind": "secret", "providedBy": ["deployer"],
+            "required": true, "label": "API key", "description": ""
+        }))
+        .unwrap()];
+        let config = make_config(make_snapshot(&[], &[]));
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            let state = StackState::with_resource_prefix(platform, "acme".into());
+            // Test credentials cannot call a cloud API: this path needs none.
+            let reports =
+                check_deployer_secrets(&stack, &state, &ClientConfig::Test, &config, platform)
+                    .await
+                    .unwrap();
+            assert_eq!(reports.len(), 1);
+            assert_eq!(reports[0].status, DeployerSecretStatus::Missing);
+            assert_eq!(
+                deployer_secrets_blocking_start(&stack, &config, platform, &reports).len(),
+                1
+            );
+            let message = reports[0].message.as_deref().unwrap();
+            let location = &reports[0].location;
+            if platform == Platform::Azure {
+                assert!(message.contains("rerun setup to create"));
+                assert!(location.vault_name.is_none());
+                assert!(location.cli_command.is_empty());
+                assert!(location.commands.is_none());
+            } else {
+                assert!(message.contains("then rerun setup"));
+                assert_eq!(location.name, "acme-deployer-secrets-api-key");
+                assert!(location.cli_command.contains(&location.name));
+                assert!(location
+                    .commands
+                    .as_ref()
+                    .unwrap()
+                    .windows
+                    .prompt
+                    .contains(&location.name));
+            }
+        }
     }
 
     #[tokio::test]
