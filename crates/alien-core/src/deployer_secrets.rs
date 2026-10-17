@@ -558,7 +558,7 @@ fn windows_secret_commands(
     // NetworkCredential unwraps SecureString on both Windows PowerShell 5.1 and PowerShell 7.
     // Keep the native file transport: Windows string pipelines alter encoding and newlines.
     let prompt = format!(
-        "& {{ $value = [Net.NetworkCredential]::new('', (Read-Host {label} -AsSecureString)).Password; if (!$value) {{ return }}\n{file}; try {{ {save}; {prepare}{write}{result}\n}} finally {{ {cleanup} }} }}"
+        "& {{ $value = [Net.NetworkCredential]::new('', (Read-Host {label} -AsSecureString)).Password\nif (!$value) {{ return }}\n{file}\ntry {{ {save}\n{prepare}{write}{result}\n}} finally {{ {cleanup} }} }}"
     );
     Ok(DeployerSecretCommandVariants { inline, prompt })
 }
