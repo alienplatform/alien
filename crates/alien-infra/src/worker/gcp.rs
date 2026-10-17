@@ -29,7 +29,7 @@ use alien_gcp_clients::compute::{
 use alien_gcp_clients::gcs::GcsNotification;
 use alien_gcp_clients::iam::{Binding, IamPolicy};
 use alien_gcp_clients::longrunning::OperationResult;
-use alien_gcp_clients::pubsub::{OidcToken, PushConfig, Subscription, Topic};
+use alien_gcp_clients::pubsub::{OidcToken, PushConfig, Subscription};
 #[cfg(feature = "test-utils")]
 use alien_gcp_clients::GcpClientConfigExt as _;
 // Note: Role controller removed - workers now use ServiceAccount and permission profiles
@@ -413,10 +413,16 @@ pub struct GcpWorkerController {
     pub(crate) region: Option<String>,
 
     // Commands infrastructure
-    /// Pub/Sub topic short name for commands delivery (without project prefix)
+    /// Planned or legacy-confirmed command topic name (without project prefix)
     pub(crate) commands_topic_name: Option<String>,
-    /// Pub/Sub subscription name for commands delivery
+    /// Owner of a new command topic, persisted before its creation.
+    #[serde(default)]
+    pub(super) commands_topic_intent: Option<GcpTopicIntent>,
+    /// Planned or legacy-confirmed command subscription name
     pub(crate) commands_subscription_name: Option<String>,
+    /// Owner and original configuration of a new command subscription.
+    #[serde(default)]
+    pub(super) commands_subscription_intent: Option<GcpSubscriptionIntent>,
 }
 
 impl GcpWorkerController {
@@ -2198,6 +2204,12 @@ impl GcpWorkerController {
         let cfg = ctx.desired_resource_config::<Worker>()?;
 
         if !cfg.commands_enabled {
+            if self.commands_topic_intent.is_some() || self.commands_subscription_intent.is_some() {
+                return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                    resource_id: Some(cfg.id.clone()),
+                    message: "Commands disabled during creation; retire saved command intents before continuing".into(),
+                }));
+            }
             debug!(worker=%cfg.id, "Commands not enabled, skipping commands infrastructure");
             return Ok(HandlerAction::Continue {
                 state: SettingIamPolicy,
@@ -2223,38 +2235,19 @@ impl GcpWorkerController {
             gcp_config.project_id, topic_short_name
         );
 
-        if self.commands_topic_name.is_none() {
-            info!(
-                worker=%cfg.id,
-                topic=%topic_full_name,
-                "Creating commands Pub/Sub topic"
-            );
-
-            match pubsub_client
-                .create_topic(topic_short_name.clone(), Topic::default())
-                .await
-            {
-                Ok(_) => {
-                    self.commands_topic_name = Some(topic_short_name.clone());
-                }
-                Err(e) if is_remote_resource_conflict(&e) => {
-                    info!(
-                        worker=%cfg.id,
-                        topic=%topic_short_name,
-                        "Commands Pub/Sub topic already exists, adopting it"
-                    );
-                    self.commands_topic_name = Some(topic_short_name.clone());
-                }
-                Err(e) => {
-                    return Err(e.context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to create commands Pub/Sub topic '{}'",
-                            topic_short_name
-                        ),
-                        resource_id: Some(cfg.id.clone()),
-                    }));
-                }
-            }
+        if self.commands_topic_name.as_ref().is_some_and(|name| name != &topic_short_name) {
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                resource_id: Some(cfg.id.clone()), message: "Recorded command topic does not match the original service".into(),
+            }));
+        }
+        if self.commands_topic_name.is_none() && self.commands_topic_intent.is_none() {
+            self.commands_topic_name = Some(topic_short_name.clone());
+            self.commands_topic_intent = Some(GcpTopicIntent::new(&gcp_config.project_id, &topic_short_name));
+            return Ok(HandlerAction::Continue { state: CreatingCommandsInfrastructure, suggested_delay: None });
+        }
+        if let Some(intent) = &self.commands_topic_intent {
+            intent.validate_scope(&gcp_config.project_id, &topic_short_name, &cfg.id)?;
+            intent.create_or_recover(pubsub_client.as_ref(), &topic_short_name, &cfg.id).await?;
         }
 
         // Create push subscription that delivers to the Cloud Run service
@@ -2331,40 +2324,20 @@ impl GcpWorkerController {
             cloud_storage_config: None,
         };
 
-        if self.commands_subscription_name.is_none() {
-            info!(
-                worker=%cfg.id,
-                topic=%topic_full_name,
-                subscription=%subscription_name,
-                endpoint=%push_endpoint,
-                "Creating commands Pub/Sub push subscription"
-            );
-
-            match pubsub_client
-                .create_subscription(subscription_name.clone(), subscription)
-                .await
-            {
-                Ok(_) => {
-                    self.commands_subscription_name = Some(subscription_name.clone());
-                }
-                Err(e) if is_remote_resource_conflict(&e) => {
-                    info!(
-                        worker=%cfg.id,
-                        subscription=%subscription_name,
-                        "Commands Pub/Sub push subscription already exists, adopting it"
-                    );
-                    self.commands_subscription_name = Some(subscription_name.clone());
-                }
-                Err(e) => {
-                    return Err(e.context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to create commands push subscription '{}'",
-                            subscription_name
-                        ),
-                        resource_id: Some(cfg.id.clone()),
-                    }));
-                }
-            }
+        if self.commands_subscription_name.as_ref().is_some_and(|name| name != &subscription_name) {
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                resource_id: Some(cfg.id.clone()), message: "Recorded command subscription does not match the original service".into(),
+            }));
+        }
+        if self.commands_subscription_name.is_none() && self.commands_subscription_intent.is_none() {
+            self.commands_subscription_name = Some(subscription_name.clone());
+            self.commands_subscription_intent = Some(GcpSubscriptionIntent::new(&gcp_config.project_id, &subscription_name, subscription));
+            return Ok(HandlerAction::Continue { state: CreatingCommandsInfrastructure, suggested_delay: None });
+        }
+        if let Some(intent) = &self.commands_subscription_intent {
+            intent.validate_scope(&gcp_config.project_id, &subscription_name, &cfg.id)?;
+            intent.validate_request(&subscription, &cfg.id)?;
+            intent.create_or_recover(pubsub_client.as_ref(), &subscription_name, &cfg.id).await?;
         }
 
         self.apply_command_topic_management_permissions(ctx, &topic_short_name)
@@ -3820,7 +3793,9 @@ impl GcpWorkerController {
             || !self.scheduler_job_names.is_empty()
             || !self.scheduler_job_intents.is_empty()
             || self.commands_topic_name.is_some()
+            || self.commands_topic_intent.is_some()
             || self.commands_subscription_name.is_some()
+            || self.commands_subscription_intent.is_some()
             || self.ingress.public.is_some()
             || self.ingress.private.is_some()
             || self.ingress_negs.initialized()
@@ -4397,62 +4372,46 @@ impl GcpWorkerController {
         self.validate_service_scope(ctx)?;
         let gcp_config = ctx.get_gcp_config()?;
         let pubsub_client = ctx.service_provider.get_gcp_pubsub_client(gcp_config)?;
-        let derived_topic_name = cfg
-            .commands_enabled
-            .then(|| {
-                self.service_name
-                    .as_ref()
-                    .map(|service_name| format!("{service_name}-rq"))
-            })
-            .flatten();
-        let derived_subscription_name = cfg
-            .commands_enabled
-            .then(|| {
-                self.service_name
-                    .as_ref()
-                    .map(|service_name| format!("{service_name}-rq-sub"))
-            })
-            .flatten();
-
-        // Delete commands subscription (best-effort)
-        if let Some(subscription_name) = self
-            .commands_subscription_name
-            .take()
-            .or(derived_subscription_name)
-        {
-            info!(subscription=%subscription_name, "Deleting commands push subscription");
-            match pubsub_client
-                .delete_subscription(subscription_name.clone())
-                .await
-            {
-                Ok(_) => {
-                    info!(subscription=%subscription_name, "Commands push subscription deleted");
-                }
-                Err(e) => {
-                    warn!(
-                        subscription=%subscription_name,
-                        error=%e,
-                        "Failed to delete commands push subscription (may already be deleted)"
-                    );
-                }
+        let incomplete = |message: &str| ErrorData::ResourceCleanupIncomplete {
+            message: message.to_string(), resource_id: cfg.id.clone(),
+        };
+        // New uncertain creates have ownership intents; legacy names remain explicit receipts.
+        // Never infer authority to delete from a derived same-name resource.
+        if let Some(intent) = &self.commands_subscription_intent {
+            let name = self.commands_subscription_name.as_ref().ok_or_else(|| {
+                AlienError::new(incomplete("Command subscription intent has no saved name"))
+            })?;
+            intent.validate_scope(&gcp_config.project_id, name, &cfg.id)
+                .context(incomplete("Command subscription ownership scope could not be verified"))?;
+            intent.delete(pubsub_client.as_ref(), name, &cfg.id).await
+                .context(incomplete("Command subscription deletion remains incomplete"))?;
+            self.commands_subscription_intent = None;
+            self.commands_subscription_name = None;
+        } else if let Some(name) = self.commands_subscription_name.clone() {
+            match pubsub_client.delete_subscription(name).await {
+                Ok(()) => {},
+                Err(error) if matches!(error.error, Some(CloudClientErrorData::RemoteResourceNotFound { .. })) => {},
+                Err(error) => return Err(error.context(incomplete("Recorded command subscription deletion remains incomplete"))),
             }
+            self.commands_subscription_name = None;
         }
-
-        // Delete commands topic (best-effort)
-        if let Some(topic_name) = self.commands_topic_name.take().or(derived_topic_name) {
-            info!(topic=%topic_name, "Deleting commands Pub/Sub topic");
-            match pubsub_client.delete_topic(topic_name.clone()).await {
-                Ok(_) => {
-                    info!(topic=%topic_name, "Commands Pub/Sub topic deleted");
-                }
-                Err(e) => {
-                    warn!(
-                        topic=%topic_name,
-                        error=%e,
-                        "Failed to delete commands Pub/Sub topic (may already be deleted)"
-                    );
-                }
+        if let Some(intent) = &self.commands_topic_intent {
+            let name = self.commands_topic_name.as_ref().ok_or_else(|| {
+                AlienError::new(incomplete("Command topic intent has no saved name"))
+            })?;
+            intent.validate_scope(&gcp_config.project_id, name, &cfg.id)
+                .context(incomplete("Command topic ownership scope could not be verified"))?;
+            intent.delete(pubsub_client.as_ref(), name, &cfg.id).await
+                .context(incomplete("Command topic deletion remains incomplete"))?;
+            self.commands_topic_intent = None;
+            self.commands_topic_name = None;
+        } else if let Some(name) = self.commands_topic_name.clone() {
+            match pubsub_client.delete_topic(name).await {
+                Ok(()) => {},
+                Err(error) if matches!(error.error, Some(CloudClientErrorData::RemoteResourceNotFound { .. })) => {},
+                Err(error) => return Err(error.context(incomplete("Recorded command topic deletion remains incomplete"))),
             }
+            self.commands_topic_name = None;
         }
 
         Ok(HandlerAction::Continue {
@@ -6236,7 +6195,9 @@ impl GcpWorkerController {
             project_id: Some(config.project_id),
             region: Some(config.region),
             commands_topic_name: None,
+            commands_topic_intent: None,
             commands_subscription_name: None,
+            commands_subscription_intent: None,
             _internal_stay_count: None,
         }
     }
@@ -8297,7 +8258,9 @@ mod tests {
             global_address_ip: None,
             forwarding_rule_name: None,
             commands_topic_name: None,
+            commands_topic_intent: None,
             commands_subscription_name: None,
+            commands_subscription_intent: None,
             storage_notification_topics: Vec::new(),
             storage_topic_intents: Default::default(),
             storage_notification_intents: Default::default(),

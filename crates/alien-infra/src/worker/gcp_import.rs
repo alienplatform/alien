@@ -67,7 +67,9 @@ impl ResourceImporter for GcpWorkerImporter {
             project_id: Some(data.project_id),
             region: Some(data.region),
             commands_topic_name: data.commands_topic_name,
+            commands_topic_intent: None,
             commands_subscription_name: data.commands_subscription_name,
+            commands_subscription_intent: None,
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)

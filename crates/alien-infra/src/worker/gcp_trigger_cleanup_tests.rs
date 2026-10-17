@@ -837,3 +837,72 @@ async fn denied_command_child_deletion_retains_receipt_for_retry(#[case] subscri
     }
     assert_eq!(*calls.lock().unwrap(), 2);
 }
+
+#[rstest]
+#[case(false)]
+#[case(true)]
+#[tokio::test]
+async fn command_creation_checkpoints_and_cleans_uncertain_child_after_reload(#[case] subscription: bool) {
+    let native = Arc::new(Mutex::new(None::<serde_json::Value>));
+    let reads = native.clone(); let writes = native.clone(); let deletes = native.clone();
+    let project = GcpClientConfig::mock().project_id;
+    let mut pubsub = MockPubSubApi::new();
+    if subscription {
+        pubsub.expect_get_subscription().returning(move |name| {
+            reads.lock().unwrap().clone().map(|value| serde_json::from_value(value).unwrap()).ok_or_else(|| AlienError::new(ClientError::RemoteResourceNotFound { resource_type: "subscription".into(), resource_name: name }))
+        });
+        pubsub.expect_create_subscription().times(1).returning(move |name, mut value| {
+            assert!(value.push_config.as_ref().unwrap().oidc_token.is_none());
+            value.name = Some(format!("projects/{project}/subscriptions/{name}"));
+            *writes.lock().unwrap() = Some(serde_json::to_value(value).unwrap());
+            Err(AlienError::new(ClientError::RemoteServiceUnavailable { message: "accepted command subscription, lost reply".into() }))
+        });
+        pubsub.expect_delete_subscription().times(1).returning(move |name| {
+            assert_eq!(name, "test-worker-rq-sub"); assert!(deletes.lock().unwrap().take().is_some()); Ok(())
+        });
+        pubsub.expect_delete_topic().times(1).returning(|name| { assert_eq!(name, "test-worker-rq"); Ok(()) });
+    } else {
+        pubsub.expect_get_topic().returning(move |name| {
+            reads.lock().unwrap().clone().map(|value| serde_json::from_value(value).unwrap()).ok_or_else(|| AlienError::new(ClientError::RemoteResourceNotFound { resource_type: "topic".into(), resource_name: name }))
+        });
+        pubsub.expect_create_topic().times(1).returning(move |name, mut value| {
+            value.name = Some(format!("projects/{project}/topics/{name}"));
+            *writes.lock().unwrap() = Some(serde_json::to_value(value).unwrap());
+            Err(AlienError::new(ClientError::RemoteServiceUnavailable { message: "accepted command topic, lost reply".into() }))
+        });
+        pubsub.expect_delete_topic().times(1).returning(move |name| {
+            assert_eq!(name, "test-worker-rq"); assert!(deletes.lock().unwrap().take().is_some()); Ok(())
+        });
+    }
+    let pubsub = Arc::new(pubsub); let mut services = MockPlatformServiceProvider::new();
+    services.expect_get_gcp_pubsub_client().returning(move |_| Ok(pubsub.clone())); let services = Arc::new(services);
+    let mut desired = function_public_ingress(); desired.commands_enabled = true;
+    let mut controller = GcpWorkerController::mock_ready("test-worker"); controller.state = GcpWorkerState::CreatingCommandsInfrastructure;
+    if subscription { controller.commands_topic_name = Some("test-worker-rq".into()); }
+    for step in 0..3 {
+        if step == 2 { controller.state = GcpWorkerState::DeletingCommandsInfrastructure; }
+        let mut executor = SingleControllerExecutor::builder().resource(desired.clone()).controller(controller).platform(Platform::Gcp)
+            .service_provider(services.clone()).with_test_dependencies().build().await.unwrap();
+        let result = executor.step().await;
+        if step == 1 { assert!(result.is_err()); } else { result.unwrap(); }
+        controller = serde_json::from_value(serde_json::to_value(executor.internal_state::<GcpWorkerController>().unwrap()).unwrap()).unwrap();
+        let intent = if subscription { controller.commands_subscription_intent.is_some() } else { controller.commands_topic_intent.is_some() };
+        assert_eq!(intent, step != 2);
+        assert_eq!(native.lock().unwrap().is_some(), step == 1);
+        if step == 2 { assert!(controller.commands_topic_name.is_none()); assert!(controller.commands_subscription_name.is_none()); }
+    }
+}
+
+#[tokio::test]
+async fn command_cleanup_does_not_infer_ownership_from_service_name() {
+    let mut pubsub = MockPubSubApi::new();
+    pubsub.expect_delete_topic().never(); pubsub.expect_delete_subscription().never();
+    let pubsub = Arc::new(pubsub); let mut services = MockPlatformServiceProvider::new();
+    services.expect_get_gcp_pubsub_client().returning(move |_| Ok(pubsub.clone()));
+    let mut desired = function_public_ingress(); desired.commands_enabled = true;
+    let mut controller = GcpWorkerController::mock_ready("test-worker"); controller.state = GcpWorkerState::DeletingCommandsInfrastructure;
+    let mut executor = SingleControllerExecutor::builder().resource(desired).controller(controller).platform(Platform::Gcp)
+        .service_provider(Arc::new(services)).with_test_dependencies().build().await.unwrap();
+    executor.step().await.unwrap();
+    assert_eq!(executor.internal_state::<GcpWorkerController>().unwrap().state, GcpWorkerState::DeletingService);
+}

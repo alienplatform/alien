@@ -52,6 +52,7 @@ impl GcpSubscriptionIntent {
                             expected.service_account_email == actual.service_account_email
                                 && expected.audience == actual.audience
                         }
+                        (None, None) => true,
                         _ => false,
                     }
             }
