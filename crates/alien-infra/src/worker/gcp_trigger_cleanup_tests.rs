@@ -609,7 +609,7 @@ async fn uncertain_queue_subscription_is_retired_after_controller_reload() {
         if step == 2 { controller.state = GcpWorkerState::DeletingPushSubscriptions; }
         let queue = crate::queue::gcp::GcpQueueController { state: crate::queue::gcp::GcpQueueState::Ready, topic_name: Some("test-test-queue".into()), subscription_name: Some("test-test-queue-sub".into()), _internal_stay_count: None };
         let mut executor = SingleControllerExecutor::builder().resource(desired.clone()).controller(controller).platform(Platform::Gcp)
-            .service_provider(services.clone()).with_test_dependencies().with_dependency(crate::core::controller_test::test_queue(), queue).build().await.unwrap();
+            .service_provider(services.clone()).with_test_dependencies().with_dependency(crate::worker::fixtures::test_queue(), queue).build().await.unwrap();
         let result = executor.step().await; if step == 1 { assert!(result.is_err()); } else { result.unwrap(); }
         controller = serde_json::from_value(serde_json::to_value(executor.internal_state::<GcpWorkerController>().unwrap()).unwrap()).unwrap();
         assert!(controller.push_subscriptions.is_empty());
