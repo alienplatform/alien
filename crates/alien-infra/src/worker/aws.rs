@@ -74,6 +74,10 @@ fn lambda_concurrency_error(error: AlienError<CloudClientErrorData>, region: &st
 
 const AWS_LAMBDA_ACTIVE_MAX_POLLS: u32 = 60;
 
+// Lambda can take 20 minutes to release Hyperplane ENIs after VPC detachment.
+// Shared ENIs in customer networks may remain in use by other functions indefinitely.
+const EXTERNAL_VPC_ENI_WAIT_SECONDS: i64 = 20 * 60;
+
 /// Days a worker's CloudWatch log group keeps events. Matches the log group
 /// the CloudFormation template declares for the same worker.
 const LAMBDA_LOG_RETENTION_DAYS: i32 = 30;
@@ -146,6 +150,11 @@ fn replace_lambda_notification_config(
 
 impl AwsWorkerController {
     fn should_wait_for_lambda_vpc_enis(ctx: &ResourceControllerContext<'_>) -> bool {
+        ctx.deployment_config.stack_settings.network.is_some()
+            || ctx.state.resources.contains_key("default-network")
+    }
+
+    fn owns_network(ctx: &ResourceControllerContext<'_>) -> bool {
         matches!(
             ctx.deployment_config.stack_settings.network,
             Some(NetworkSettings::Create { .. })
@@ -448,6 +457,10 @@ pub struct AwsWorkerController {
     /// denied after that does not put the failed create back.
     #[serde(default)]
     pub(crate) delete_removed_something: bool,
+    /// Wall-clock start of the external-network ENI wait, preserved across checkpoints.
+    /// The execution role must retain its VPC permissions until this wait finishes.
+    #[serde(default)]
+    pub(crate) vpc_eni_wait_started_at: Option<chrono::DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -4696,15 +4709,13 @@ impl AwsWorkerController {
     ) -> Result<HandlerAction> {
         let worker_config = ctx.desired_resource_config::<Worker>()?;
         if !Self::should_wait_for_lambda_vpc_enis(ctx) {
-            info!(
-                worker=%worker_config.id,
-                "Skipping Lambda VPC network interface wait for externally managed network"
-            );
             return Ok(HandlerAction::Continue {
                 state: DeletingCertificate,
                 suggested_delay: None,
             });
         }
+        let owns_network = Self::owns_network(ctx);
+        let wait_started_at = *self.vpc_eni_wait_started_at.get_or_insert_with(Utc::now);
 
         let aws_worker_name = get_aws_worker_name(ctx.resource_prefix, &worker_config.id);
         let aws_cfg = ctx.get_aws_config()?;
@@ -4731,6 +4742,7 @@ impl AwsWorkerController {
             .unwrap_or_default();
 
         if network_interfaces.is_empty() {
+            self.vpc_eni_wait_started_at = None;
             return Ok(HandlerAction::Continue {
                 state: DeletingCertificate,
                 suggested_delay: None,
@@ -4742,6 +4754,25 @@ impl AwsWorkerController {
             .filter_map(|eni| eni.network_interface_id.as_deref())
             .collect::<Vec<_>>();
 
+        if !owns_network
+            && Utc::now()
+                .signed_duration_since(wait_started_at)
+                .num_seconds()
+                >= EXTERNAL_VPC_ENI_WAIT_SECONDS
+        {
+            warn!(
+                worker=%worker_config.id,
+                network_interfaces=?network_interface_ids,
+                wait_seconds=EXTERNAL_VPC_ENI_WAIT_SECONDS,
+                "Lambda VPC interfaces remain after the cleanup wait; they may be shared with other functions. Continuing deletion in the externally managed network; unshared interfaces may require manual cleanup after the execution role is removed"
+            );
+            self.vpc_eni_wait_started_at = None;
+            return Ok(HandlerAction::Continue {
+                state: DeletingCertificate,
+                suggested_delay: None,
+            });
+        }
+
         info!(
             worker=%worker_config.id,
             network_interfaces=?network_interface_ids,
@@ -4749,7 +4780,9 @@ impl AwsWorkerController {
         );
 
         Ok(HandlerAction::Stay {
-            max_times: Some(90),
+            // Keep the owned-network failure behavior. External networks use the persisted
+            // deadline: reconcile frequency must not turn a 20-minute wait into seconds.
+            max_times: if owns_network { Some(90) } else { None },
             suggested_delay: Some(Duration::from_secs(10)),
         })
     }
@@ -5319,6 +5352,7 @@ impl AwsWorkerController {
             eventbridge_rule_names: Vec::new(),
             eventbridge_permission_statement_ids: Vec::new(),
             delete_removed_something: false,
+            vpc_eni_wait_started_at: None,
             _internal_stay_count: None,
         }
     }
@@ -5367,11 +5401,13 @@ mod tests {
     use crate::core::{
         serialize_controller, MockPlatformServiceProvider, ResourceController, StackExecutor,
     };
+    use crate::service_account::AwsServiceAccountController;
     use crate::worker::{
         fixtures::*, readiness_probe::test_utils::create_readiness_probe_mock, AwsWorkerController,
         AwsWorkerState,
     };
     use alien_core::standard_resource_tags;
+    use alien_core::ServiceAccount;
 
     fn create_successful_function_response(worker_name: &str) -> FunctionConfiguration {
         FunctionConfiguration {
@@ -5781,6 +5817,18 @@ mod tests {
             .expect_get_aws_logs_client()
             .returning(move |_| Ok(mock_logs.clone()));
 
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_describe_network_interfaces().returning(|_| {
+            Ok(DescribeNetworkInterfacesResponse {
+                network_interface_set: None,
+                next_token: None,
+            })
+        });
+        let ec2 = Arc::new(ec2);
+        mock_provider
+            .expect_get_aws_ec2_client()
+            .returning(move |_| Ok(ec2.clone()));
+
         // Mock IAM client for resource-scoped permissions (ApplyingResourcePermissions state)
         let mock_iam = create_aws_iam_mock_for_resource_permissions();
         mock_provider
@@ -5890,7 +5938,10 @@ mod tests {
                 worker.id.clone(),
                 HashMap::from([
                     ("api".to_string(), "https://api.example.test".to_string()),
-                    ("admin".to_string(), "https://admin.example.test".to_string()),
+                    (
+                        "admin".to_string(),
+                        "https://admin.example.test".to_string(),
+                    ),
                 ]),
             )]);
             let mut executor = SingleControllerExecutor::builder()
@@ -6186,6 +6237,231 @@ mod tests {
 
         // Verify outputs are no longer available
         assert!(executor.outputs().is_none());
+    }
+
+    fn existing_vpc_settings() -> StackSettings {
+        StackSettings {
+            network: Some(NetworkSettings::ByoVpcAws {
+                vpc_id: "vpc-test".into(),
+                public_subnet_ids: vec![],
+                private_subnet_ids: vec!["subnet-test".into()],
+                security_group_ids: vec!["sg-test".into()],
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[rstest]
+    #[case::existing_wait(false, 1199, true)]
+    #[case::existing_timeout(false, 1200, true)]
+    #[case::existing_released(false, 0, false)]
+    #[case::created_wait(true, 1200, true)]
+    #[case::created_released(true, 0, false)]
+    #[tokio::test]
+    async fn eni_wait_respects_network_ownership_and_wall_clock(
+        #[case] owns_network: bool,
+        #[case] elapsed_seconds: i64,
+        #[case] interfaces_remain: bool,
+    ) {
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_describe_network_interfaces().times(1)
+            .withf(|request| request.filters.as_ref().unwrap()[0].values
+                == ["AWS Lambda VPC ENI-test-basic-func*"])
+            .returning(move |_| Ok(serde_json::from_value(serde_json::json!({
+                "networkInterfaceSet": { "item": if interfaces_remain {
+                    vec![serde_json::json!({"networkInterfaceId": "eni-shared", "status": "in-use"})]
+                } else { vec![] } }
+            })).unwrap()));
+        let ec2 = Arc::new(ec2);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_ec2_client()
+            .returning(move |_| Ok(ec2.clone()));
+        let started = chrono::Utc::now() - chrono::Duration::seconds(elapsed_seconds);
+        let controller = AwsWorkerController {
+            state: AwsWorkerState::WaitingForVpcEnisReleased,
+            vpc_eni_wait_started_at: Some(started),
+            ..Default::default()
+        };
+        // Persist and reload the deadline just as a later reconcile does.
+        let controller: AwsWorkerController =
+            serde_json::from_value(serde_json::to_value(controller).unwrap()).unwrap();
+        let settings = if owns_network {
+            StackSettings {
+                network: Some(NetworkSettings::Create {
+                    cidr: None,
+                    availability_zones: 2,
+                }),
+                ..Default::default()
+            }
+        } else {
+            existing_vpc_settings()
+        };
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(basic_function())
+            .controller(controller)
+            .platform(Platform::Aws)
+            .stack_settings(settings)
+            .service_provider(Arc::new(provider))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        executor.step().await.unwrap();
+        let controller = executor.internal_state::<AwsWorkerController>().unwrap();
+        let waiting = interfaces_remain && (owns_network || elapsed_seconds < 1200);
+        assert_eq!(
+            controller.state,
+            if waiting {
+                AwsWorkerState::WaitingForVpcEnisReleased
+            } else {
+                AwsWorkerState::DeletingCertificate
+            }
+        );
+        assert_eq!(
+            controller.vpc_eni_wait_started_at,
+            if waiting { Some(started) } else { None }
+        );
+    }
+
+    #[tokio::test]
+    async fn existing_vpc_wait_keeps_execution_role_permissions_until_release() {
+        let released = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let observed = released.clone();
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_describe_network_interfaces()
+            .returning(move |_| {
+                Ok(
+                    serde_json::from_value(serde_json::json!({"networkInterfaceSet": {"item":
+                        if observed.load(Ordering::SeqCst) { vec![] }
+                        else { vec![serde_json::json!({"networkInterfaceId": "eni-test"})] }
+                    }}))
+                    .unwrap(),
+                )
+            });
+        let iam_calls = Arc::new(AtomicUsize::new(0));
+        let mut iam = MockIamApi::new();
+        let calls = iam_calls.clone();
+        iam.expect_list_attached_role_policies()
+            .times(1)
+            .returning(move |_| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(serde_json::from_value(
+                    serde_json::json!({"ListAttachedRolePoliciesResult": {}}),
+                )
+                .unwrap())
+            });
+        iam.expect_list_role_policies().times(1).returning(|_| {
+            Ok(
+                serde_json::from_value(serde_json::json!({"ListRolePoliciesResult": {
+                    "PolicyNames": {"member": ["vpc-access"]}
+                }}))
+                .unwrap(),
+            )
+        });
+        iam.expect_delete_role_policy()
+            .times(1)
+            .withf(|_, policy| policy == "vpc-access")
+            .returning(|_, _| Ok(()));
+        iam.expect_delete_role().times(1).returning(|_| Ok(()));
+        let mut logs = MockCloudWatchLogsApi::new();
+        logs.expect_delete_log_group().returning(|_| Ok(()));
+        let ec2 = Arc::new(ec2);
+        let iam = Arc::new(iam);
+        let logs = Arc::new(logs);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_ec2_client()
+            .returning(move |_| Ok(ec2.clone()));
+        provider
+            .expect_get_aws_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        provider
+            .expect_get_aws_logs_client()
+            .returning(move |_| Ok(logs.clone()));
+        let worker = basic_function();
+        let mut state = StackState::new(Platform::Aws);
+        state.resource_prefix = "test".into();
+        state.resources.insert(
+            worker.id.clone(),
+            StackResourceState::builder()
+                .resource_type(Worker::RESOURCE_TYPE.to_string())
+                .status(ResourceStatus::Deleting)
+                .config(Resource::new(worker))
+                .lifecycle(ResourceLifecycle::Live)
+                .dependencies(vec![alien_core::ResourceRef::new(
+                    ServiceAccount::RESOURCE_TYPE,
+                    "default-profile-sa",
+                )])
+                .internal_state(
+                    serialize_controller(&AwsWorkerController {
+                        state: AwsWorkerState::WaitingForVpcEnisReleased,
+                        ..Default::default()
+                    })
+                    .unwrap(),
+                )
+                .build(),
+        );
+        let mut role_controller =
+            AwsServiceAccountController::mock_ready("test-default-profile-sa");
+        role_controller.transition_to_delete_start().unwrap();
+        state.resources.insert(
+            "default-profile-sa".into(),
+            StackResourceState::builder()
+                .resource_type(ServiceAccount::RESOURCE_TYPE.to_string())
+                .status(ResourceStatus::Deleting)
+                .config(Resource::new(
+                    ServiceAccount::new("default-profile-sa".into()).build(),
+                ))
+                .lifecycle(ResourceLifecycle::Frozen)
+                .dependencies(vec![])
+                .internal_state(serialize_controller(&role_controller).unwrap())
+                .build(),
+        );
+        let config = DeploymentConfig::builder()
+            .stack_settings(existing_vpc_settings())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(ExternalBindings::default())
+            .allow_frozen_changes(false)
+            .build();
+        let executor = StackExecutor::for_deletion_with_service_provider(
+            ClientConfig::Aws(Box::new(AwsClientConfig::mock())),
+            &config,
+            Arc::new(provider),
+            None,
+        )
+        .unwrap();
+        // More than the old 90-poll limit, without advancing wall time. A scheduler
+        // that reconciles quickly must neither fail deletion nor remove permissions.
+        for _ in 0..125 {
+            state = executor.step(state).await.unwrap().next_state;
+            state = serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
+            assert_eq!(
+                state.resources["basic-func"].status,
+                ResourceStatus::Deleting
+            );
+            assert_eq!(iam_calls.load(Ordering::SeqCst), 0);
+        }
+        released.store(true, Ordering::SeqCst);
+        for _ in 0..20 {
+            state = executor.step(state).await.unwrap().next_state;
+            if state.resources["default-profile-sa"].status == ResourceStatus::Deleted {
+                break;
+            }
+        }
+        assert_eq!(
+            state.resources["basic-func"].status,
+            ResourceStatus::Deleted
+        );
+        assert_eq!(
+            state.resources["default-profile-sa"].status,
+            ResourceStatus::Deleted
+        );
+        assert_eq!(iam_calls.load(Ordering::SeqCst), 1);
     }
 
     // ─────────────── DELETE WITH TAG-CONDITIONED READS ────────────────
