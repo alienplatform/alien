@@ -421,6 +421,7 @@ async fn resolve_logs_target(
         workspace,
         project_override,
         args.cloud,
+        args.source,
         !args.json,
     )
     .await
@@ -500,11 +501,12 @@ async fn resolve_default_manager_target(
     workspace: &str,
     project_override: Option<&str>,
     cloud: Option<LogsCloud>,
+    source: Option<LogSource>,
     allow_prompt: bool,
 ) -> Result<ResolvedLogsTarget> {
     let (project_id, project_name) =
         resolve_project_scope(ctx, project_override, workspace, allow_prompt).await?;
-    let selected = select_logs_manager(client, workspace, cloud).await?;
+    let selected = select_logs_manager(client, workspace, cloud, source).await?;
 
     Ok(ResolvedLogsTarget {
         manager_id: selected.id.to_string(),
@@ -554,6 +556,7 @@ async fn select_logs_manager(
     client: &alien_platform_api::Client,
     workspace: &str,
     cloud: Option<LogsCloud>,
+    _source: Option<LogSource>,
 ) -> Result<types::Manager> {
     let workspace_param = types::ListManagersWorkspace::try_from(workspace)
         .into_alien_error()
@@ -1239,6 +1242,44 @@ mod tests {
         assert_eq!(output.logs[0].level.as_deref(), Some("INFO"));
         assert_eq!(output.elapsed_time_micros, 123);
         assert!(output.errors.is_empty());
+    }
+
+    fn manager_json(id: &str, is_system: bool) -> serde_json::Value {
+        json!({
+            "id": id, "name": id, "workspaceId": "ws_000000000000000000000000",
+            "createdAt": "2026-01-01T00:00:00Z", "defaultProjectCount": 0,
+            "managedDeploymentCount": 0, "managementConfigs": {}, "isSystem": is_system,
+            "status": "healthy", "targets": ["aws"], "logsDatabaseId": format!("db_{id}")
+        })
+    }
+
+    #[tokio::test]
+    async fn gateway_sources_read_the_system_managers_logs() {
+        const OWN: &str = "mgr_0000000000000000000000000001";
+        const SYSTEM: &str = "mgr_0000000000000000000000000002";
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path("/v1/managers");
+                then.status(200).json_body(json!([
+                    manager_json(OWN, false),
+                    manager_json(SYSTEM, true)
+                ]));
+            })
+            .await;
+        let client = alien_platform_api::Client::new(&server.base_url());
+
+        for (source, expected) in [
+            (Some(LogSource::RemoteSandbox), SYSTEM),
+            (Some(LogSource::AiGateway), SYSTEM),
+            (Some(LogSource::Application), OWN),
+            (None, OWN),
+        ] {
+            let selected = select_logs_manager(&client, "example", None, source)
+                .await
+                .expect("a manager with logs is listed");
+            assert_eq!(selected.id.to_string(), expected, "{source:?}");
+        }
     }
 
     #[test]
