@@ -141,8 +141,9 @@ pub trait LongRunningOperationApi: Send + Sync + Debug {
     /// Returns:
     /// - `Ok(Some(body))` if the operation is complete (200 OK)
     /// - `Ok(None)` if the operation is still running (202 Accepted)
-    /// - A non-retryable `RemoteOperationFailed` error for a terminal Failed/Canceled status.
-    ///   Retrying requires reissuing the original operation, not polling this handle.
+    /// - A distinct `RemoteOperationFailed` error for a terminal Failed/Canceled status.
+    ///   It stays retryable so issuing handlers can reissue the operation within their budget;
+    ///   callers that save handles must recognize it and stop polling this handle.
     /// - Other errors retain their transport/polling retry semantics.
     async fn check_status(
         &self,

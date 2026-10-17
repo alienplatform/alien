@@ -54,7 +54,7 @@ async fn poll(status: u16, body: &str) -> Result<Option<String>> {
 }
 
 #[tokio::test]
-async fn terminal_operation_status_is_not_retryable() {
+async fn terminal_operation_status_is_distinct_and_allows_reissue() {
     for status in ["Failed", "Canceled", "fAiLeD", "cAnCeLeD"] {
         let body = json!({"status": status, "error": {
             "code": "VMExtensionProvisioningError", "message": "Extension exited with code 1"
@@ -64,8 +64,8 @@ async fn terminal_operation_status_is_not_retryable() {
             .await
             .expect_err("terminal operation must fail");
         assert!(
-            !error.retryable,
-            "polling a terminal operation cannot recover it"
+            error.retryable,
+            "the issuing handler must retain its executor retry budget"
         );
         assert_eq!(error.code, "REMOTE_OPERATION_FAILED");
         assert!(matches!(
@@ -90,7 +90,7 @@ async fn terminal_operation_status_is_not_retryable() {
 }
 
 #[tokio::test]
-async fn terminal_resource_provisioning_state_is_not_retryable() {
+async fn terminal_resource_provisioning_state_is_distinct() {
     for status in ["Failed", "Canceled"] {
         for error_at_root in [false, true] {
             let detail =
@@ -104,7 +104,7 @@ async fn terminal_resource_provisioning_state_is_not_retryable() {
             let error = poll(200, &body.to_string())
                 .await
                 .expect_err("terminal resource must fail");
-            assert!(!error.retryable);
+            assert!(error.retryable);
             assert_eq!(error.code, "REMOTE_OPERATION_FAILED");
             assert!(error.to_string().contains(status));
             assert!(error.to_string().contains("ProvisioningFailed"));
@@ -114,7 +114,7 @@ async fn terminal_resource_provisioning_state_is_not_retryable() {
 }
 
 #[tokio::test]
-async fn terminal_failure_without_provider_details_is_not_retryable() {
+async fn terminal_failure_without_provider_details_is_distinct() {
     for body in [
         r#"{"status":"Failed"}"#,
         r#"{"properties":{"provisioningState":"Failed"}}"#,
@@ -122,7 +122,7 @@ async fn terminal_failure_without_provider_details_is_not_retryable() {
         let error = poll(200, body)
             .await
             .expect_err("terminal status must fail without details");
-        assert!(!error.retryable);
+        assert!(error.retryable);
         assert_eq!(error.code, "REMOTE_OPERATION_FAILED");
         assert!(error.to_string().contains("Failed"));
     }
@@ -193,4 +193,70 @@ async fn transport_failure_remains_retryable() {
         .expect_err("connection should fail");
     assert!(error.retryable);
     assert_eq!(error.code, "HTTP_REQUEST_FAILED");
+}
+
+#[tokio::test]
+async fn accepted_vmss_update_with_http_200_keeps_its_operation_handle() {
+    use alien_azure_clients::azure::compute::VirtualMachineScaleSetsApi;
+    use alien_azure_clients::azure::models::compute_rp::VirtualMachineScaleSet;
+    use alien_azure_clients::long_running_operation::OperationResult;
+    use alien_azure_clients::AzureVmssClient;
+
+    for header in ["azure-asyncoperation", "location"] {
+        let server = MockServer::start_async().await;
+        let update = server.mock(|when, then| {
+            when.method(PUT)
+                .path("/subscriptions/test-subscription/resourceGroups/test-rg/providers/Microsoft.Compute/virtualMachineScaleSets/test-scale-set");
+            then.status(200)
+                .header(header, server.url("/operation"))
+                .header("retry-after", "10")
+                .json_body(json!({"location": "eastus", "properties": {"provisioningState": "Updating"}}));
+        });
+        let failed = server.mock(|when, then| {
+            when.method(GET).path("/operation");
+            then.status(200).json_body(json!({"status": "Failed", "error": {
+                "code": "VMExtensionProvisioningError", "message": "Extension exited with code 1"
+            }}));
+        });
+        let config = AzureClientConfig {
+            subscription_id: "test-subscription".into(),
+            tenant_id: "test-tenant".into(),
+            region: Some("eastus".into()),
+            credentials: AzureCredentials::AccessToken {
+                token: "test-token".into(),
+            },
+            service_overrides: Some(alien_azure_clients::azure::ServiceOverrides {
+                endpoints: std::collections::HashMap::from([(
+                    "management".into(),
+                    server.base_url(),
+                )]),
+            }),
+        };
+        let vmss =
+            AzureVmssClient::new(reqwest::Client::new(), AzureTokenCache::new(config.clone()));
+        let model: VirtualMachineScaleSet =
+            serde_json::from_value(json!({"location": "eastus"})).unwrap();
+        let result = vmss
+            .create_or_update_vmss("test-rg", "test-scale-set", &model)
+            .await
+            .unwrap();
+        let OperationResult::LongRunning(operation) = result else {
+            panic!("HTTP 200 with {header} is an accepted update, not completion");
+        };
+        assert_eq!(operation.url, server.url("/operation"));
+        assert_eq!(
+            operation.retry_after,
+            Some(std::time::Duration::from_secs(10))
+        );
+        let lro =
+            LongRunningOperationClient::new(reqwest::Client::new(), AzureTokenCache::new(config));
+        let error = lro
+            .check_status(&operation, "CreateOrUpdateVmss", "test-scale-set")
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "REMOTE_OPERATION_FAILED");
+        assert!(error.message.contains("VMExtensionProvisioningError"));
+        update.assert();
+        failed.assert();
+    }
 }

@@ -124,11 +124,13 @@ pub enum ErrorData {
         message: String,
     },
 
-    /// A remote asynchronous operation finished unsuccessfully; polling it again cannot recover it.
+    /// A remote asynchronous operation finished unsuccessfully; its handle cannot recover.
+    /// Retrying the issuing handler can reissue the operation, so preserve executor retries.
+    /// Callers that persist handles must recognize this variant and stop polling the old handle.
     #[error(
         code = "REMOTE_OPERATION_FAILED",
         message = "{operation} for '{resource_name}' finished with status {status}: {message}",
-        retryable = "false",
+        retryable = "true",
         internal = "true"
     )]
     RemoteOperationFailed {

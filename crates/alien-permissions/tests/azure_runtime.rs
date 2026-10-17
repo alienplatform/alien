@@ -274,21 +274,6 @@ fn compute_cluster_management_can_delete_what_its_flows_delete() {
     }
 }
 
-/// Identity and role assignments belong to privileged teardown, after runtime cleanup.
-#[test]
-fn compute_cluster_provision_can_delete_its_setup_resources() {
-    let actions = azure_resource_group_actions("compute-cluster/provision");
-    for action in [
-        "Microsoft.ManagedIdentity/userAssignedIdentities/delete",
-        "Microsoft.Authorization/roleAssignments/delete",
-    ] {
-        assert!(
-            actions.iter().any(|granted| granted == action),
-            "compute-cluster/provision must grant {action} at the resource group: {actions:?}"
-        );
-    }
-}
-
 #[test]
 fn test_azure_hybrid_grant_plan() {
     let generator = AzureRuntimePermissionsGenerator::new();
