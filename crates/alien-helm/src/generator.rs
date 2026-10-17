@@ -1423,9 +1423,9 @@ spec:
 /// does not know, so the notes give the vault key and point to the deployment
 /// status for the full name.
 fn deployer_secret_notes_tpl(stack: &Stack) -> Option<String> {
-    if !stack.resources.contains_key(alien_core::DEPLOYER_SECRETS_VAULT_ID) {
-        return None;
-    }
+    // Manager-served charts use the original release stack, before preflights.
+    // Its input definitions describe possible slots; deployment status determines
+    // which still need a value.
     let inputs: Vec<_> = stack
         .inputs()
         .iter()
@@ -1458,7 +1458,7 @@ fn deployer_secret_notes_tpl(stack: &Stack) -> Option<String> {
         ));
     }
     notes.push_str(&format!(
-        "The deployment status shows each Secret's name. Create one with:\n  kubectl create \
+        "The deployment status shows which inputs need values and each Secret's name. Create one with:\n  kubectl create \
          secret generic <name> --namespace {{{{ .Release.Namespace }}}} --from-literal={}='{}'\n",
         alien_core::vault_naming::KUBERNETES_SECRET_VALUE_KEY,
         alien_core::DEPLOYER_SECRET_VALUE_PLACEHOLDER,
@@ -8916,7 +8916,6 @@ infrastructureExistingSecret: customer-bindings
                 secret("databasePassword", "Database password", true),
                 secret("licenseKey", "License key", false),
             ])
-            .add(alien_core::Vault::new(alien_core::DEPLOYER_SECRETS_VAULT_ID.to_string()).build(), ResourceLifecycle::Frozen)
             .build();
         let registry = HelmRegistry::built_in();
         let chart = generate_helm_chart(
