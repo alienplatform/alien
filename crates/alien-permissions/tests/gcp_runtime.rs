@@ -167,6 +167,33 @@ fn gcp_compute_cluster_execute_keeps_distinct_generated_role_permissions() {
 }
 
 #[rstest]
+#[case::stack(BindingTarget::Stack)]
+#[case::resource(BindingTarget::Resource)]
+fn gcp_compute_management_can_discover_failure_domains(#[case] target: BindingTarget) {
+    let generator = GcpRuntimePermissionsGenerator::new();
+    let permission_set =
+        get_permission_set("compute-cluster/management").expect("permission set exists");
+    let context = create_test_context();
+    let plan = generator
+        .generate_grant_plan(permission_set, target, &context)
+        .expect("compute management grant plan should generate");
+    let bindings = plan.bindings_for_target(GcpBindingTargetScope::Project);
+    let roles = plan.custom_roles_for_bindings(&bindings);
+
+    // A managed fleet selects zones before creating its instance groups, even
+    // when no workload contributes additional provisioning permissions.
+    for permission in ["compute.zones.list", "compute.instanceGroupManagers.create"] {
+        assert!(
+            roles.iter().any(|role| role
+                .included_permissions
+                .iter()
+                .any(|value| value == permission)),
+            "compute management is missing {permission} at project scope"
+        );
+    }
+}
+
+#[rstest]
 #[case::stack_binding(BindingTarget::Stack, GcpBindingTargetScope::Project)]
 #[case::resource_binding(BindingTarget::Resource, GcpBindingTargetScope::CurrentResource)]
 fn gcp_storage_heartbeat_custom_role_omits_object_permissions(

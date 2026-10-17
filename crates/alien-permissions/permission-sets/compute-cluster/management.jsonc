@@ -554,6 +554,8 @@
             "compute.instanceGroupManagers.list",
             "compute.globalOperations.get",
             "compute.zoneOperations.get",
+            // Fleet creation and reconciliation discover available failure domains.
+            "compute.zones.list",
             "compute.instanceTemplates.create",
             "compute.instanceTemplates.delete",
             "compute.instanceTemplates.get",
