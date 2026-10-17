@@ -585,10 +585,7 @@ async fn access_changes_preserve_service_revision_and_retained_frontends(
             }
             let saved = executor.internal_state::<GcpWorkerController>().unwrap();
             assert!(!saved.ingress.private_endpoints.is_empty());
-            assert!(matches!(
-                saved.state,
-                GcpWorkerState::ReconcilingWorkerIngress
-            ));
+            assert!(matches!(saved.state, GcpWorkerState::UpdateStart));
             assert_eq!(services.lock().unwrap().patches, 0);
             for (name, frontend) in &retained {
                 assert_eq!(graphs.lock().unwrap().objects.get(name), Some(frontend));
