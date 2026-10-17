@@ -379,7 +379,7 @@ async fn trigger_update_restart_does_not_retire_newly_created_jobs() {
     let mut controller = GcpWorkerController::mock_ready("test-worker");
     controller.state = GcpWorkerState::UpdatePushSubscriptions;
     controller.scheduler_job_names = vec!["old-job".into()];
-    for step in 0..5 {
+    for step in 0..6 {
         let mut executor = SingleControllerExecutor::builder()
             .resource(desired.clone())
             .previous_resource(function_public_ingress())
@@ -423,6 +423,10 @@ async fn trigger_update_restart_does_not_retire_newly_created_jobs() {
                     controller.state,
                     GcpWorkerState::UpdateCreatingSchedulerJobs
                 );
+            }
+            4 => {
+                assert_eq!(controller.scheduler_job_names.len(), 2);
+                assert_eq!(controller.state, GcpWorkerState::UpdateCreatingCommandsInfrastructure);
             }
             _ => {
                 assert_eq!(controller.scheduler_job_names.len(), 2);
@@ -950,4 +954,34 @@ async fn delivery_timeout_update_retires_old_subscription_before_recreation() {
     let controller = executor.internal_state::<GcpWorkerController>().unwrap();
     assert!(controller.push_subscriptions.is_empty());
     assert_eq!(controller.state, GcpWorkerState::UpdateCreatingPushSubscriptions);
+}
+
+#[rstest]
+#[case(false)]
+#[case(true)]
+#[tokio::test]
+async fn unchanged_delivery_preserves_trigger_and_command_identities(#[case] capped_timeout: bool) {
+    let mut previous = crate::worker::fixtures::function_with_queue_trigger();
+    previous.commands_enabled = true;
+    if capped_timeout { previous.timeout_seconds = 600; }
+    let mut desired = previous.clone();
+    if capped_timeout { desired.timeout_seconds = 3600; }
+    else {
+        desired.code = alien_core::WorkerCode::Image { image: "registry.example.test/worker:updated".into() };
+        desired.environment.insert("RELEASE".into(), "updated".into());
+    }
+    let mut controller = GcpWorkerController::mock_ready("test-worker"); controller.state = GcpWorkerState::UpdatePushSubscriptions;
+    controller.push_subscriptions = vec!["retained-queue-sub".into()];
+    controller.commands_topic_name = Some("retained-command-topic".into());
+    controller.commands_subscription_name = Some("retained-command-sub".into());
+    let mut executor = SingleControllerExecutor::builder().resource(desired).previous_resource(previous)
+        .controller(controller).platform(Platform::Gcp)
+        .service_provider(Arc::new(MockPlatformServiceProvider::new()))
+        .with_test_dependencies().build().await.unwrap();
+    executor.step().await.unwrap();
+    let controller = executor.internal_state::<GcpWorkerController>().unwrap();
+    assert_eq!(controller.state, GcpWorkerState::UpdateSettingIamPolicy);
+    assert_eq!(controller.push_subscriptions, ["retained-queue-sub"]);
+    assert_eq!(controller.commands_topic_name.as_deref(), Some("retained-command-topic"));
+    assert_eq!(controller.commands_subscription_name.as_deref(), Some("retained-command-sub"));
 }

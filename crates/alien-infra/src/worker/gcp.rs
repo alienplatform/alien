@@ -3616,18 +3616,29 @@ impl GcpWorkerController {
         let current_config = ctx.desired_resource_config::<Worker>()?;
         let previous_config = ctx.previous_resource_config::<Worker>()?;
         self.validate_service_scope(ctx)?;
-        if current_config.triggers == previous_config.triggers {
+        let delivery_changed = current_config.get_permissions() != previous_config.get_permissions()
+            || pubsub_ack_deadline_seconds(current_config.timeout_seconds)
+                != pubsub_ack_deadline_seconds(previous_config.timeout_seconds);
+        let triggers_changed = current_config.triggers != previous_config.triggers
+            || (delivery_changed && (!current_config.triggers.is_empty() || !previous_config.triggers.is_empty()));
+        let commands_changed = current_config.commands_enabled != previous_config.commands_enabled
+            || (current_config.commands_enabled && (delivery_changed
+                || current_config.public_endpoints.is_empty() != previous_config.public_endpoints.is_empty()));
+        if !triggers_changed && !commands_changed {
             return Ok(HandlerAction::Continue {
-                state: UpdateSettingIamPolicy,
-                suggested_delay: None,
+                state: UpdateSettingIamPolicy, suggested_delay: None,
             });
         }
-
-        let gcp_config = ctx.get_gcp_config()?;
-        self.delete_all_push_subscriptions(ctx, gcp_config).await?;
-        self.delete_all_storage_notifications(ctx, gcp_config).await?;
-        self.delete_all_storage_notification_topics(ctx, gcp_config).await?;
-        self.delete_all_scheduler_jobs(ctx, gcp_config).await?;
+        if triggers_changed {
+            let gcp_config = ctx.get_gcp_config()?;
+            self.delete_all_push_subscriptions(ctx, gcp_config).await?;
+            self.delete_all_storage_notifications(ctx, gcp_config).await?;
+            self.delete_all_storage_notification_topics(ctx, gcp_config).await?;
+            self.delete_all_scheduler_jobs(ctx, gcp_config).await?;
+        }
+        if commands_changed {
+            self.delete_command_children(ctx).await?;
+        }
         // Persist completed retirement before any replacement create. A restart
         // in the next phase must not delete children it has just created.
         Ok(HandlerAction::Continue {
@@ -3676,7 +3687,7 @@ impl GcpWorkerController {
         match self.creating_scheduler_jobs(ctx).await? {
             HandlerAction::Continue { state: CreatingCommandsInfrastructure, suggested_delay } => {
                 Ok(HandlerAction::Continue {
-                    state: UpdateSettingIamPolicy,
+                    state: UpdateCreatingCommandsInfrastructure,
                     suggested_delay,
                 })
             }
@@ -3691,6 +3702,28 @@ impl GcpWorkerController {
             }
             HandlerAction::Continue { state, .. } => Err(Self::unexpected_update_wrapper_state(
                 ctx.desired_config.id(), "creating_scheduler_jobs", state,
+            )),
+        }
+    }
+
+    #[handler(
+        state = UpdateCreatingCommandsInfrastructure,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn update_creating_commands_infrastructure(
+        &mut self, ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        match self.creating_commands_infrastructure(ctx).await? {
+            HandlerAction::Continue { state: CreatingCommandsInfrastructure, suggested_delay } => {
+                Ok(HandlerAction::Continue { state: UpdateCreatingCommandsInfrastructure, suggested_delay })
+            }
+            HandlerAction::Continue { state: SettingIamPolicy, suggested_delay } => {
+                Ok(HandlerAction::Continue { state: UpdateSettingIamPolicy, suggested_delay })
+            }
+            HandlerAction::Stay { max_times, suggested_delay } => Ok(HandlerAction::Stay { max_times, suggested_delay }),
+            HandlerAction::Continue { state, .. } => Err(Self::unexpected_update_wrapper_state(
+                ctx.desired_config.id(), "creating_commands_infrastructure", state,
             )),
         }
     }
@@ -4368,9 +4401,21 @@ impl GcpWorkerController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
+        self.delete_command_children(ctx).await?;
+        Ok(HandlerAction::Continue {
+            state: DeletingService,
+            suggested_delay: None,
+        })
+    }
+
+    async fn delete_command_children(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<()> {
         let cfg = ctx.desired_resource_config::<Worker>()?;
         self.validate_service_scope(ctx)?;
         let gcp_config = ctx.get_gcp_config()?;
+        if self.commands_topic_name.is_none() && self.commands_topic_intent.is_none()
+            && self.commands_subscription_name.is_none() && self.commands_subscription_intent.is_none() {
+            return Ok(());
+        }
         let pubsub_client = ctx.service_provider.get_gcp_pubsub_client(gcp_config)?;
         let incomplete = |message: &str| ErrorData::ResourceCleanupIncomplete {
             message: message.to_string(), resource_id: cfg.id.clone(),
@@ -4414,10 +4459,7 @@ impl GcpWorkerController {
             self.commands_topic_name = None;
         }
 
-        Ok(HandlerAction::Continue {
-            state: DeletingService,
-            suggested_delay: None,
-        })
+        Ok(())
     }
 
     #[handler(
@@ -7722,15 +7764,18 @@ mod tests {
     }
 
     #[rstest]
-    #[case::initial_creation(false, false)]
-    #[case::customer_url_checkpoint(true, false)]
-    #[case::legacy_customer_url_checkpoint(true, true)]
+    #[case::initial_creation(false, false, false)]
+    #[case::customer_url_checkpoint(true, false, false)]
+    #[case::legacy_customer_url_checkpoint(true, true, false)]
+    #[case::enable_commands_update(true, false, true)]
     #[tokio::test]
     async fn commands_push_subscription_uses_canonical_cloud_run_oidc_audience(
         #[case] resumed: bool,
         #[case] legacy: bool,
+        #[case] update: bool,
     ) {
         let mut worker = function_private_ingress();
+        let previous_worker = worker.clone();
         worker.commands_enabled = true;
         let function_name = format!("test-{}", worker.id);
         let mock_cloudrun =
@@ -7792,7 +7837,7 @@ mod tests {
             setup_mock_service_provider_with_pubsub(mock_cloudrun, None, Arc::new(mock_pubsub));
         let mut controller = if resumed {
             let mut controller = GcpWorkerController::mock_ready(&function_name);
-            controller.state = GcpWorkerState::CreatingCommandsInfrastructure;
+            controller.state = if update { GcpWorkerState::UpdatePushSubscriptions } else { GcpWorkerState::CreatingCommandsInfrastructure };
             controller.url = Some("https://private-api.example.com".to_string());
             if legacy {
                 controller.service_uri = None;
@@ -7808,6 +7853,7 @@ mod tests {
         controller = serde_json::from_value(saved).unwrap();
         let mut executor = SingleControllerExecutor::builder()
             .resource(worker)
+            .previous_resource(previous_worker)
             .controller(controller)
             .platform(Platform::Gcp)
             .service_provider(mock_provider)
