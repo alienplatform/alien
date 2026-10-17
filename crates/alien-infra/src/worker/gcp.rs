@@ -4302,7 +4302,7 @@ impl GcpWorkerController {
         let gcp_config = ctx.get_gcp_config()?;
         let worker_config = ctx.desired_resource_config::<Worker>()?;
 
-        if self.scheduler_job_names.is_empty() {
+        if self.scheduler_job_names.is_empty() && self.scheduler_job_intents.is_empty() {
             return Ok(HandlerAction::Continue {
                 state: DeletingCommandsInfrastructure,
                 suggested_delay: None,
