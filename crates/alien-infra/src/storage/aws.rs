@@ -17,6 +17,7 @@ use alien_core::{
     standard_resource_tags, AwsS3StorageHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
     ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
     ResourceStatus, Storage, StorageHeartbeatData, StorageHeartbeatStatus, StorageOutputs,
+    ALIEN_MANAGED_BY_TAG_KEY,
 };
 use alien_error::{Context, IntoAlienError};
 use alien_macros::controller;
@@ -40,12 +41,20 @@ fn is_bucket_missing(error: &AlienError<CloudClientErrorData>) -> bool {
     )
 }
 
-/// Whether a bucket carries every tag this controller writes on the buckets it creates. A bucket
+/// Whether a bucket carries the tags this controller writes on the buckets it creates. A bucket
 /// name is derived from the deployment prefix and resource ID, so the same account can already
 /// hold a bucket with that name that someone else made; only these tags show it is ours.
+/// Versions before the `runtime` value wrote `managed-by=deployment`, which is accepted too.
 fn bucket_is_ours(tags: &HashMap<String, String>, ours: &HashMap<String, String>) -> bool {
-    ours.iter().all(|(key, value)| tags.get(key) == Some(value))
+    ours.iter().all(|(key, value)| {
+        let found = tags.get(key).map(String::as_str);
+        found == Some(value.as_str())
+            || (key == ALIEN_MANAGED_BY_TAG_KEY && found == Some(LEGACY_MANAGED_BY_TAG_VALUE))
+    })
 }
+
+/// The `managed-by` value older versions wrote on the buckets they created.
+const LEGACY_MANAGED_BY_TAG_VALUE: &str = "deployment";
 
 /// What already holds a bucket name, as far as this deployment is concerned.
 enum ExistingBucket {
@@ -93,10 +102,22 @@ fn bucket_not_owned(resource_id: &str, bucket_name: &str) -> AlienError<ErrorDat
 fn is_redirect(error: &AlienError<CloudClientErrorData>) -> bool {
     matches!(
         &error.error,
-        Some(CloudClientErrorData::RemoteRequestRejected {
-            http_status: 301,
-            ..
-        })
+        Some(
+            CloudClientErrorData::RemoteRequestRejected {
+                http_status: 301,
+                ..
+            } | CloudClientErrorData::HttpResponseError {
+                http_status: 301,
+                ..
+            }
+        )
+    )
+}
+
+fn is_access_denied(error: &AlienError<CloudClientErrorData>) -> bool {
+    matches!(
+        &error.error,
+        Some(CloudClientErrorData::RemoteAccessDenied { .. })
     )
 }
 
@@ -137,6 +158,11 @@ pub struct AwsStorageController {
     /// it is the one this controller created, whose CreateBucket response was lost.
     #[serde(default)]
     pub(crate) requested_bucket_name: Option<String>,
+    /// Whether `bucket_name` was recorded after its tags proved it ours. Earlier versions
+    /// recorded the name before CreateBucket, so state they wrote can name a bucket in another
+    /// region or another account.
+    #[serde(default)]
+    pub(crate) ownership_verified: bool,
 }
 
 #[controller]
@@ -155,6 +181,7 @@ impl AwsStorageController {
 
         // Ownership is proven again below; until then deletion must not touch the bucket.
         self.bucket_name = None;
+        self.ownership_verified = false;
         let bucket_name = aws_prefixed_resource_name(ctx.resource_prefix, &config.id);
         let our_tags = standard_resource_tags(ctx.resource_prefix, &config.id);
 
@@ -212,6 +239,11 @@ impl AwsStorageController {
         // was never seen.
         match inspect_bucket(&*client, &bucket_name, &our_tags, &config.id).await? {
             ExistingBucket::Missing => {
+                // Between this check and CreateBucket, someone else in the same account could
+                // create a bucket with this name; in us-east-1 our CreateBucket would then return
+                // 200 and we would tag that bucket as ours. The window is one round trip, and the
+                // name starts with this deployment's own prefix. Closing it fully would need tags
+                // on CreateBucket itself, which requires s3:TagResource.
                 self.requested_bucket_name = Some(bucket_name.clone());
                 info!(name=%config.id, bucket=%bucket_name, "Creating S3 bucket");
                 match client.create_bucket(&bucket_name).await {
@@ -1061,6 +1093,25 @@ impl AwsStorageController {
                     suggested_delay: None,
                 });
             }
+            // A bucket in another region was never created by this deployment, whose buckets
+            // are all in its own region. Only state from earlier versions can name one.
+            Err(error) if is_redirect(&error) => {
+                return Ok(self.keep_bucket(
+                    &config.id,
+                    &bucket_name,
+                    "it is in another region, so this deployment did not create it",
+                ));
+            }
+            // State from earlier versions can name another account's bucket (CreateBucket
+            // failed with BucketAlreadyExists after the name was recorded). Access to a bucket
+            // whose ownership was proven is expected, so there a denial is an error.
+            Err(error) if is_access_denied(&error) && !self.ownership_verified => {
+                return Ok(self.keep_bucket(
+                    &config.id,
+                    &bucket_name,
+                    "access to it is denied and this deployment never proved it created it",
+                ));
+            }
             Err(error) => {
                 return Err(error.context(ErrorData::CloudPlatformError {
                     message: format!(
@@ -1075,18 +1126,14 @@ impl AwsStorageController {
             &tags,
             &standard_resource_tags(ctx.resource_prefix, &config.id),
         ) {
-            warn!(
-                resource_id = %config.id,
-                bucket = %bucket_name,
-                recorded,
-                "S3 bucket is not tagged as created by this deployment; leaving the bucket and its objects in place"
-            );
-            self.bucket_name = None;
-            self.requested_bucket_name = None;
-            return Ok(HandlerAction::Continue {
-                state: Deleted,
-                suggested_delay: None,
-            });
+            // Versions that predate bucket tags created untagged buckets. Such a bucket may be
+            // ours, but nothing proves it, so it is kept rather than emptied.
+            let reason = if tags.is_empty() && recorded && !self.ownership_verified {
+                "it has no tags; it may have been created by a version that predates bucket tags. Delete it by hand if it is no longer needed"
+            } else {
+                "it is not tagged as created by this deployment"
+            };
+            return Ok(self.keep_bucket(&config.id, &bucket_name, reason));
         }
 
         info!(bucket=%bucket_name, "Starting bucket deletion");
@@ -1110,6 +1157,7 @@ impl AwsStorageController {
 
         self.bucket_name = None;
         self.requested_bucket_name = None;
+        self.ownership_verified = false;
 
         Ok(HandlerAction::Continue {
             state: Deleted,
@@ -1245,6 +1293,29 @@ fn versioning_status_label(status: VersioningStatus) -> String {
 }
 
 impl AwsStorageController {
+    /// Finishes deletion without touching a bucket this deployment cannot prove it created.
+    fn keep_bucket(
+        &mut self,
+        resource_id: &str,
+        bucket_name: &str,
+        reason: &str,
+    ) -> AwsStorageHandlerAction {
+        warn!(
+            resource_id = %resource_id,
+            bucket = %bucket_name,
+            "Keeping S3 bucket '{}' and its objects: {}",
+            bucket_name,
+            reason
+        );
+        self.bucket_name = None;
+        self.requested_bucket_name = None;
+        self.ownership_verified = false;
+        AwsStorageHandlerAction::Continue {
+            state: AwsStorageState::Deleted,
+            suggested_delay: None,
+        }
+    }
+
     /// Tags a bucket this controller created or proved its own, then records it.
     async fn finish_bucket_creation(
         &mut self,
@@ -1264,6 +1335,7 @@ impl AwsStorageController {
         info!(bucket=%bucket_name, "S3 bucket created successfully");
         self.bucket_name = Some(bucket_name);
         self.requested_bucket_name = None;
+        self.ownership_verified = true;
 
         Ok(AwsStorageHandlerAction::Continue {
             state: AwsStorageState::ConfiguringVersioning,
@@ -1280,6 +1352,7 @@ impl AwsStorageController {
             state: AwsStorageState::Ready,
             bucket_name: Some(aws_prefixed_resource_name("test-stack", storage_name)),
             requested_bucket_name: None,
+            ownership_verified: true,
             _internal_stay_count: None,
         }
     }
@@ -1891,6 +1964,136 @@ mod tests {
         assert!(!error.retryable);
     }
 
+    /// State written by versions that recorded the bucket name before CreateBucket.
+    fn legacy_recorded(storage_id: &str) -> AwsStorageController {
+        AwsStorageController {
+            state: AwsStorageState::Ready,
+            bucket_name: Some(format!("test-{storage_id}")),
+            requested_bucket_name: None,
+            ownership_verified: false,
+            _internal_stay_count: None,
+        }
+    }
+
+    async fn delete_with(
+        controller: AwsStorageController,
+        mock_s3: MockS3Api,
+    ) -> (
+        SingleControllerExecutor,
+        alien_error::Result<(), crate::error::ErrorData>,
+    ) {
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(Storage::new("data".to_string()).build())
+            .controller(controller)
+            .platform(Platform::Aws)
+            .service_provider(setup_mock_service_provider(Arc::new(mock_s3)))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        executor.delete().unwrap();
+        let result = executor.run_until_terminal().await;
+        (executor, result)
+    }
+
+    fn tagging_fails_with(error: CloudClientErrorData) -> MockS3Api {
+        // No empty or delete expectations: any attempt to remove the bucket fails the test.
+        let mut mock_s3 = MockS3Api::new();
+        mock_s3
+            .expect_get_bucket_tagging()
+            .returning(move |_| Err(AlienError::new(error.clone())));
+        mock_s3
+    }
+
+    /// Earlier versions could record a bucket in another region (CreateBucket answered
+    /// BucketAlreadyOwnedByYou there). Destroy keeps it instead of failing forever.
+    #[tokio::test]
+    async fn delete_keeps_a_recorded_bucket_in_another_region() {
+        let (executor, result) = delete_with(
+            legacy_recorded("data"),
+            tagging_fails_with(CloudClientErrorData::RemoteRequestRejected {
+                service: "S3".to_string(),
+                http_status: 301,
+                provider_code: "PermanentRedirect".to_string(),
+                message: "use the specified endpoint".to_string(),
+            }),
+        )
+        .await;
+
+        result.expect("a bucket in another region is kept, not an error");
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+    }
+
+    /// Earlier versions could record another account's bucket (CreateBucket failed with
+    /// BucketAlreadyExists). Access is denied; destroy keeps it. Once ownership was proven,
+    /// the same denial is a real failure.
+    #[rstest]
+    #[case::recorded_by_an_earlier_version(false, true)]
+    #[case::ownership_proven(true, false)]
+    #[tokio::test]
+    async fn access_denied_on_delete_depends_on_proven_ownership(
+        #[case] ownership_verified: bool,
+        #[case] kept: bool,
+    ) {
+        let mut controller = legacy_recorded("data");
+        controller.ownership_verified = ownership_verified;
+        let (executor, result) = delete_with(
+            controller,
+            tagging_fails_with(CloudClientErrorData::RemoteAccessDenied {
+                resource_type: "Bucket".to_string(),
+                resource_name: "test-data".to_string(),
+            }),
+        )
+        .await;
+
+        if kept {
+            result.expect("another account's bucket is kept");
+            assert_eq!(executor.status(), ResourceStatus::Deleted);
+        } else {
+            let error = result.expect_err("a denial on our own bucket fails the delete");
+            assert!(error.retryable, "{error:?}");
+            assert_eq!(executor.status(), ResourceStatus::Deleting);
+        }
+    }
+
+    /// Versions before the `runtime` tag value wrote `managed-by=deployment`. Their buckets are
+    /// still recognized and deleted.
+    #[tokio::test]
+    async fn delete_removes_a_bucket_tagged_by_an_earlier_version() {
+        let mut tags = our_tags("data");
+        tags.insert("managed-by".to_string(), "deployment".to_string());
+        let account = account_with(Some(FakeBucket { tags, objects: 2 }));
+        let (executor, result) = delete_with(
+            legacy_recorded("data"),
+            fake_s3(account.clone(), Fault::None),
+        )
+        .await;
+
+        result.unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+        assert_eq!(*account.lock().unwrap(), None);
+    }
+
+    /// Versions that predate bucket tags left untagged buckets. Nothing proves such a bucket is
+    /// ours, so destroy keeps it with its objects rather than emptying it.
+    #[tokio::test]
+    async fn delete_keeps_an_untagged_bucket_recorded_by_an_earlier_version() {
+        let untagged = FakeBucket {
+            tags: HashMap::new(),
+            objects: 2,
+        };
+        let account = account_with(Some(untagged.clone()));
+        let (executor, result) = delete_with(
+            legacy_recorded("data"),
+            fake_s3(account.clone(), Fault::None),
+        )
+        .await;
+
+        result.unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+        assert_eq!(*account.lock().unwrap(), Some(untagged));
+    }
+
     async fn data_executor(
         storage: Storage,
         account: &FakeAccount,
@@ -2433,6 +2636,7 @@ mod tests {
             state: AwsStorageState::CreateFailed,
             bucket_name: None, // This is the key - no bucket name set
             requested_bucket_name: None,
+            ownership_verified: false,
             _internal_stay_count: None,
         };
 
@@ -2511,6 +2715,7 @@ mod tests {
                 state: AwsStorageState::ConfiguringLifecycle,
                 bucket_name: Some("test-lifecycle-storage".to_string()),
                 requested_bucket_name: None,
+                ownership_verified: true,
                 _internal_stay_count: None,
             })
             .platform(Platform::Aws)

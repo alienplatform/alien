@@ -236,13 +236,15 @@ impl S3Client {
         let (status, body) = self
             .send_for_text(method, &url, host_header, operation, resource)
             .await?;
+        let body = body.unwrap_or_default();
         if !status.is_success() {
             return Err(Self::response_error(status, body, url, operation, resource));
         }
         Ok(body)
     }
 
-    /// Sends a body-less request and returns the status and body, whatever the status.
+    /// Sends a body-less request and returns the status and body, whatever the status. The
+    /// body is `None` when it could not be read.
     async fn send_for_text(
         &self,
         method: Method,
@@ -250,7 +252,7 @@ impl S3Client {
         host_header: String,
         operation: &str,
         resource: &str,
-    ) -> Result<(StatusCode, String)> {
+    ) -> Result<(StatusCode, Option<String>)> {
         self.credentials.ensure_fresh().await?;
         let builder = self
             .client
@@ -268,7 +270,7 @@ impl S3Client {
             })?;
 
         let status = response.status();
-        let body = response.text().await.unwrap_or_default();
+        let body = response.text().await.ok();
         Ok((status, body))
     }
 
@@ -557,6 +559,17 @@ impl S3Api for S3Client {
             )
             .await?;
 
+        // Callers decide from this answer whether a bucket with their name already exists, so
+        // a response that cannot be read must never look like "no such bucket".
+        let Some(body) = body else {
+            return Err(AlienError::new(ErrorData::HttpRequestFailed {
+                message: format!(
+                    "GetBucketTagging for '{}' returned HTTP {} with an unreadable body",
+                    bucket, status
+                ),
+            }));
+        };
+
         if status.is_success() {
             let tagging: BucketTagging = quick_xml::de::from_str(&body)
                 .into_alien_error()
@@ -575,12 +588,28 @@ impl S3Api for S3Client {
         }
 
         // S3 answers 404 both for a missing bucket (`NoSuchBucket`) and for an existing bucket
-        // with no tags (`NoSuchTagSet`). Only the first one means the bucket is gone.
-        let no_tag_set = status == StatusCode::NOT_FOUND
-            && quick_xml::de::from_str::<S3ErrorResponse>(&body)
-                .is_ok_and(|error| error.code == "NoSuchTagSet");
-        if no_tag_set {
-            return Ok(HashMap::new());
+        // with no tags (`NoSuchTagSet`). Only an explicit `NoSuchBucket` means the bucket is
+        // gone; a 404 S3 did not explain is an error to retry, not a missing bucket.
+        if status == StatusCode::NOT_FOUND {
+            let code = quick_xml::de::from_str::<S3ErrorResponse>(&body)
+                .ok()
+                .map(|error| error.code);
+            match code.as_deref() {
+                Some("NoSuchTagSet") => return Ok(HashMap::new()),
+                Some("NoSuchBucket") => {}
+                _ => {
+                    return Err(AlienError::new(ErrorData::HttpResponseError {
+                        message: format!(
+                            "GetBucketTagging for '{}' returned 404 without NoSuchBucket or NoSuchTagSet",
+                            bucket
+                        ),
+                        url,
+                        http_status: status.as_u16(),
+                        http_request_text: None,
+                        http_response_text: Some(body),
+                    }));
+                }
+            }
         }
 
         Err(Self::response_error(
@@ -2076,6 +2105,27 @@ mod tests {
         .expect("an untagged bucket exists");
 
         assert!(tags.is_empty());
+    }
+
+    /// A 404 without S3's explanation could be an untagged bucket, so it must not read as a
+    /// missing one: that would let a caller create (and so adopt) the existing bucket.
+    #[tokio::test]
+    async fn unexplained_404_is_a_retryable_error_not_a_missing_bucket() {
+        for body in [
+            "",
+            "not found",
+            "<Error><Code>SomethingElse</Code><Message>?</Message></Error>",
+        ] {
+            let error = tagging_response(404, body)
+                .await
+                .expect_err("an unexplained 404 is an error");
+
+            assert!(
+                !matches!(error.error, Some(ErrorData::RemoteResourceNotFound { .. })),
+                "body {body:?}: {error:?}"
+            );
+            assert!(error.retryable, "body {body:?}: {error:?}");
+        }
     }
 
     #[tokio::test]

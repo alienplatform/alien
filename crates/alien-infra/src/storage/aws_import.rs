@@ -29,6 +29,8 @@ impl ResourceImporter for AwsStorageImporter {
             state: AwsStorageState::Ready,
             bucket_name: Some(data.bucket_name),
             requested_bucket_name: None,
+            // Setup created this bucket; its tags (set by the template) were not checked here.
+            ownership_verified: false,
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)
