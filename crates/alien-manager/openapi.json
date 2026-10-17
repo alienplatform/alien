@@ -14289,6 +14289,13 @@
               }
             ]
           },
+          "image": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Image this replica runs."
+          },
           "ip": {
             "type": [
               "string",
