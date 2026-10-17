@@ -1317,7 +1317,6 @@ mod tests {
             .downcast_mut::<Container>()
             .unwrap()
             .persistent_storage = Some(crate::PersistentStorage {
-            allow_unencrypted_existing: false,
             size: "20Gi".into(),
             mount_path: "/data".into(),
             backups: crate::VolumeBackups::default(),
@@ -1462,7 +1461,6 @@ mod tests {
             .downcast_mut::<Container>()
             .unwrap()
             .persistent_storage = Some(crate::PersistentStorage {
-            allow_unencrypted_existing: false,
             size: size.into(),
             mount_path: "/data".into(),
             backups: crate::VolumeBackups::default(),
@@ -1662,7 +1660,6 @@ mod tests {
                 .downcast_mut::<Container>()
                 .unwrap()
                 .persistent_storage = Some(crate::PersistentStorage {
-                allow_unencrypted_existing: false,
                 size: "20Gi".into(),
                 mount_path: "/data".into(),
                 backups: crate::VolumeBackups::default(),
@@ -1720,7 +1717,6 @@ mod tests {
                 .downcast_mut::<Container>()
                 .unwrap()
                 .persistent_storage = Some(crate::PersistentStorage {
-                allow_unencrypted_existing: false,
                 size: size.into(),
                 mount_path: "/data".into(),
                 backups: crate::VolumeBackups::default(),

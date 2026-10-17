@@ -65,7 +65,6 @@ mod tests {
             .port(5432)
             .replicas(1)
             .persistent_storage(PersistentStorage {
-                allow_unencrypted_existing: false,
                 encryption_key: None,
                 size: "20Gi".to_string(),
                 mount_path: "/data".to_string(),

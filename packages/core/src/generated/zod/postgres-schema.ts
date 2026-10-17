@@ -11,8 +11,7 @@ import { ResourceRefSchema } from "./resource-ref-schema.js";
  * @description A managed PostgreSQL database. The target platform decides the backend\n(AWS Aurora Serverless v2, GCP Cloud SQL, Azure Flexible Server, or an\nembedded native process on Local); the database is never publicly reachable.
  */
 export const PostgresSchema = z.object({
-    "allowUnencryptedExisting": z.optional(z.boolean().describe("When adding encryption, keep an installed database with no customer-managed key\nunchanged. New databases use encryption_key; existing keys cannot be changed.")),
-get "backend"(){
+    get "backend"(){
                 return z.union([PostgresBackendSchema, z.null()]).optional()
               },
 "cpu": z.string().describe("Requested vCPUs (e.g. \"0.5\", \"2\"). None = smallest available tier.").nullish(),
