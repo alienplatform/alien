@@ -46,7 +46,7 @@ alien-manager-api = { path = "../../client-sdks/manager/rust" }
 alien-commands-client = { workspace = true }
 object_store = { workspace = true, features = ["fs", "aws", "gcp", "azure", "tls-webpki-roots"] }
 clap = { workspace = true, features = ["derive", "env"] }
-tokio = { workspace = true, features = ["sync", "macros", "io-util", "rt", "time", "net", "fs", "process"] }
+tokio = { workspace = true, features = ["sync", "macros", "io-util", "io-std", "rt", "time", "net", "fs", "process"] }
 tracing = { workspace = true }
 tracing-appender = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }

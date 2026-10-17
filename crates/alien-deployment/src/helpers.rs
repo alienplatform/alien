@@ -925,7 +925,7 @@ pub async fn check_deployer_secrets(
             .context(ErrorData::InternalError {
                 message: format!("Failed to parse the '{SECRETS_VAULT_ID}' vault binding"),
             })?;
-    let context = deployer_secret_location_context(stack_state, client_config, config);
+    let mut context = deployer_secret_location_context(stack_state, client_config, config);
 
     let provider = BindingsProvider::from_stack_state(stack_state, client_config.clone()).context(
         ErrorData::InternalError {
@@ -943,6 +943,7 @@ pub async fn check_deployer_secrets(
 
     let mut reports = Vec::with_capacity(slots.len());
     for slot in slots {
+        context.secret_label = Some(slot.input.label.clone());
         let location = deployer_secret_location(&binding, &slot.vault_key, &context).context(
             ErrorData::InternalError {
                 message: format!(
@@ -1020,7 +1021,10 @@ fn deployer_secret_location_context(
         other => other,
     };
     match cloud {
-        ClientConfig::Aws(aws) => context.aws_region = Some(aws.region.clone()),
+        ClientConfig::Aws(aws) => {
+            context.aws_region = Some(aws.region.clone());
+            context.aws_account_id = Some(aws.account_id.clone());
+        }
         ClientConfig::Gcp(gcp) => context.gcp_project_id = Some(gcp.project_id.clone()),
         ClientConfig::Azure(azure) => {
             context.azure_subscription_id = Some(azure.subscription_id.clone());
@@ -1644,6 +1648,7 @@ mod tests {
             message: None,
             version: None,
             location: alien_core::DeployerSecretLocation {
+                commands: None,
                 store: alien_core::DeployerSecretStore::LocalVault,
                 name: "input-api-key".to_string(),
                 vault_name: None,

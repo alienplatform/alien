@@ -668,6 +668,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "tempfile",
  "thiserror 2.0.20",
  "tokio",
  "tracing",
@@ -1116,6 +1117,7 @@ name = "alien-operator"
 version = "3.3.33"
 dependencies = [
  "aegis",
+ "alien-bindings",
  "alien-client-config",
  "alien-commands",
  "alien-core",
@@ -1212,6 +1214,7 @@ dependencies = [
  "serde_json",
  "syn 2.0.119",
  "tokio",
+ "uuid",
 ]
 
 [[package]]

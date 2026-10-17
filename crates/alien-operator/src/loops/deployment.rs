@@ -25,7 +25,10 @@ use alien_deployment::transport::{DeploymentLoopTransport, StepReconcileResult};
 use alien_error::{AlienError, Context};
 use alien_infra::ClientConfigExt;
 use async_trait::async_trait;
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+};
 use std::time::Duration;
 use tracing::{debug, error, info};
 
@@ -37,6 +40,7 @@ struct OperatorTransport {
     db: Arc<OperatorDb>,
     operator_config: OperatorConfig,
     platform: Platform,
+    suggested_delay_ms: AtomicU64,
 }
 
 #[async_trait]
@@ -47,10 +51,25 @@ impl DeploymentLoopTransport for OperatorTransport {
         state: &DeploymentState,
         _config: &alien_core::DeploymentConfig,
         _update_heartbeat: bool,
-        _suggested_delay_ms: Option<u64>,
+        suggested_delay_ms: Option<u64>,
         heartbeats: Vec<ResourceHeartbeat>,
         observed_inventory_batches: Vec<ObservedInventoryBatch>,
     ) -> std::result::Result<StepReconcileResult, AlienError> {
+        self.suggested_delay_ms
+            .store(suggested_delay_ms.unwrap_or(0), Ordering::Relaxed);
+        let previous = self
+            .db
+            .get_deployment_state()
+            .await
+            .map_err(|e| e.into_generic())?;
+        let reports_changed = previous
+            .as_ref()
+            .and_then(|state| state.runtime_metadata.as_ref())
+            .map(|metadata| &metadata.deployer_secrets)
+            != state
+                .runtime_metadata
+                .as_ref()
+                .map(|metadata| &metadata.deployer_secrets);
         // Persist state to local DB after each step
         self.db
             .set_deployment_state(state)
@@ -68,6 +87,10 @@ impl DeploymentLoopTransport for OperatorTransport {
                 .set_pending_observed_inventory_batches(&observed_inventory_batches)
                 .await
                 .map_err(|e| e.into_generic())?;
+        }
+
+        if reports_changed {
+            self.db.request_sync();
         }
 
         // Re-read config from DB (sync loop may have updated it)
@@ -122,8 +145,10 @@ pub async fn run_deployment_loop(state: Arc<OperatorState>) {
     );
 
     loop {
+        let mut delay = interval;
         match run_deployment_continuously(&state).await {
-            Ok(steps) => {
+            Ok((steps, suggested_delay)) => {
+                delay = delay.max(suggested_delay);
                 if steps > 0 {
                     info!(steps = steps, "Deployment completed");
                 }
@@ -134,7 +159,7 @@ pub async fn run_deployment_loop(state: Arc<OperatorState>) {
         }
 
         tokio::select! {
-            _ = tokio::time::sleep(interval) => {},
+            _ = tokio::time::sleep(delay) => {},
             _ = state.cancel.cancelled() => {
                 info!("Deployment loop shutting down");
                 return;
@@ -144,18 +169,18 @@ pub async fn run_deployment_loop(state: Arc<OperatorState>) {
 }
 
 /// Run deployment steps continuously until synced or long delay.
-/// Returns the number of steps executed.
-async fn run_deployment_continuously(state: &OperatorState) -> Result<usize> {
+/// Returns the number of steps executed and the delay before resuming.
+async fn run_deployment_continuously(state: &OperatorState) -> Result<(usize, Duration)> {
     // Get deployment state and config
     let mut current = match state.db.get_deployment_state().await? {
         Some(s) => s,
-        None => return Ok(0),
+        None => return Ok((0, Duration::ZERO)),
     };
 
     // Check if there's a target to deploy
     let target_release = match &current.target_release {
         Some(r) => r,
-        None => return Ok(0),
+        None => return Ok((0, Duration::ZERO)),
     };
     // A pushed target always carries an Alien release id (observe deployments never
     // receive a target), so an empty fallback is unreachable in practice.
@@ -170,14 +195,14 @@ async fn run_deployment_continuously(state: &OperatorState) -> Result<usize> {
         {
             Some(crate::db::ApprovalStatus::Pending) => {
                 debug!("Target release pending approval, skipping deployment");
-                return Ok(0);
+                return Ok((0, Duration::ZERO));
             }
             Some(crate::db::ApprovalStatus::Rejected) => {
                 info!("Target release was rejected, clearing target");
                 current.target_release = None;
                 state.db.set_deployment_state(&current).await?;
                 state.db.clear_deployment_config().await?;
-                return Ok(0);
+                return Ok((0, Duration::ZERO));
             }
             Some(crate::db::ApprovalStatus::Auto)
             | Some(crate::db::ApprovalStatus::Approved)
@@ -215,7 +240,7 @@ async fn run_deployment_continuously(state: &OperatorState) -> Result<usize> {
         Some(c) => c,
         None => {
             debug!("No deployment config found, skipping");
-            return Ok(0);
+            return Ok((0, Duration::ZERO));
         }
     };
     let mut enriched_config = enrich_config(
@@ -247,6 +272,7 @@ async fn run_deployment_continuously(state: &OperatorState) -> Result<usize> {
         db: Arc::clone(&state.db),
         operator_config: state.config.clone(),
         platform: current.platform,
+        suggested_delay_ms: AtomicU64::new(0),
     };
 
     let result = alien_deployment::runner::run_step_loop(
@@ -292,7 +318,19 @@ async fn run_deployment_continuously(state: &OperatorState) -> Result<usize> {
         );
     }
 
-    Ok(steps_executed)
+    // Only waits on the deployer (keys, machines) honor the step's delay; resource
+    // waits during setup or updates keep the loop's short polling interval.
+    let waiting_on_deployer = matches!(
+        loop_result.final_status,
+        alien_core::DeploymentStatus::WaitingForSecrets
+            | alien_core::DeploymentStatus::WaitingForMachines
+    );
+    let delay = if loop_result.stop_reason == LoopStopReason::Delayed && waiting_on_deployer {
+        Duration::from_millis(transport.suggested_delay_ms.load(Ordering::Relaxed))
+    } else {
+        Duration::ZERO
+    };
+    Ok((steps_executed, delay))
 }
 
 /// Enrich a deployment config with operator-specific settings.
@@ -510,6 +548,166 @@ mod tests {
             native_image_host: None,
             volume_restores: Vec::new(),
         }
+    }
+
+    #[tokio::test]
+    async fn secret_wait_yields_for_the_requested_delay_and_wakes_sync_only_on_change() {
+        use alien_bindings::{BindingsProvider, BindingsProviderApi};
+        use alien_core::{
+            DeploymentStatus, Resource, ResourceLifecycle, ResourceStatus, RuntimeMetadata, Stack,
+            StackResourceState, StackState, Vault, VaultBinding,
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let data_dir = directory.path().to_str().unwrap();
+        let db = Arc::new(
+            OperatorDb::new(
+                data_dir,
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            )
+            .await
+            .unwrap(),
+        );
+        let mut stack = Stack::new("secret-test".into()).build();
+        stack.inputs = vec![serde_json::from_value(serde_json::json!({
+            "id": "key", "kind": "secret", "providedBy": ["deployer"],
+            "required": true, "label": "Test key", "description": ""
+        }))
+        .unwrap()];
+        let mut vault = StackResourceState::new_pending(
+            "vault".into(),
+            Resource::new(Vault::new("secrets".into()).build()),
+            Some(ResourceLifecycle::Frozen),
+            Vec::new(),
+        );
+        vault.status = ResourceStatus::Running;
+        vault.remote_binding_params =
+            Some(serde_json::to_value(VaultBinding::local("secrets", data_dir)).unwrap());
+        let mut stack_state = StackState::new(Platform::Local);
+        stack_state.resources.insert("secrets".into(), vault);
+        let provider = BindingsProvider::from_stack_state(
+            &stack_state,
+            ClientConfig::Local {
+                state_directory: data_dir.into(),
+            },
+        )
+        .unwrap();
+        let vault = provider.load_vault("secrets").await.unwrap();
+        let release = alien_core::ReleaseInfo {
+            release_id: Some("rel_test".into()),
+            version: None,
+            description: None,
+            stack: stack.clone(),
+        };
+        let current = DeploymentState {
+            platform: Platform::Local,
+            status: DeploymentStatus::WaitingForSecrets,
+            current_release: None,
+            target_release: Some(release.clone()),
+            stack_state: Some(stack_state),
+            runtime_metadata: Some(RuntimeMetadata {
+                prepared_stack: Some(stack),
+                ..Default::default()
+            }),
+            error: None,
+            environment_info: None,
+            retry_requested: false,
+            protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+        };
+        db.set_deployment_state(&current).await.unwrap();
+        db.set_deployment_config(&test_deployment_config())
+            .await
+            .unwrap();
+        let state = OperatorState {
+            config: OperatorConfig::builder()
+                .platform(Platform::Local)
+                .data_dir(data_dir)
+                .encryption_key("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+                .build(),
+            db,
+            service_provider: None,
+            operations_sync_handler: None,
+            cancel: tokio_util::sync::CancellationToken::new(),
+        };
+        let (steps, delay) = run_deployment_continuously(&state).await.unwrap();
+        assert_eq!(steps, 1);
+        assert_eq!(delay, Duration::from_secs(30));
+        tokio::time::timeout(Duration::from_secs(1), state.db.wait_for_sync())
+            .await
+            .unwrap();
+        let (_, delay) = run_deployment_continuously(&state).await.unwrap();
+        assert_eq!(delay, Duration::from_secs(30));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), state.db.wait_for_sync())
+                .await
+                .is_err()
+        );
+
+        // A completed deployment drops its installation config. Refresh still
+        // observes a changed slot without starting any resource controllers.
+        let mut running = state.db.get_deployment_state().await.unwrap().unwrap();
+        running.status = DeploymentStatus::Running;
+        running.error = None;
+        running.target_release = None;
+        running.current_release = Some(release);
+        // An input supplied at install time must not become a new deployer slot.
+        let metadata = running.runtime_metadata.as_mut().unwrap();
+        let mut supplied = metadata.prepared_stack.as_ref().unwrap().inputs[0].clone();
+        supplied.id = "supplied".into();
+        supplied
+            .provided_by
+            .push(alien_core::StackInputProvider::Developer);
+        metadata
+            .prepared_stack
+            .as_mut()
+            .unwrap()
+            .inputs
+            .push(supplied);
+        // Read-back can reorder resource HashMaps without changing the checkpoint.
+        let resources = &mut running.stack_state.as_mut().unwrap().resources;
+        let vault_resource = resources["secrets"].clone();
+        for index in 0..32 {
+            resources.insert(format!("unchanged-{index}"), vault_resource.clone());
+        }
+        state.db.set_deployment_state(&running).await.unwrap();
+        running = state.db.get_deployment_state().await.unwrap().unwrap();
+        state.db.clear_deployment_config().await.unwrap();
+        vault
+            .set_secret("input-key", "fake-test-value-1566")
+            .await
+            .unwrap();
+        super::super::sync::refresh_running_secrets(&state, &mut running)
+            .await
+            .unwrap();
+        let reports = &running.runtime_metadata.as_ref().unwrap().deployer_secrets;
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0].status, alien_core::DeployerSecretStatus::Present);
+        let stale = running.clone();
+        vault.delete_secret("input-key").await.unwrap();
+        super::super::sync::refresh_running_secrets(&state, &mut running)
+            .await
+            .unwrap();
+        assert_eq!(
+            running.runtime_metadata.as_ref().unwrap().deployer_secrets[0].status,
+            alien_core::DeployerSecretStatus::Missing
+        );
+        let persisted = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(persisted.runtime_metadata, running.runtime_metadata);
+        // An older observation cannot overwrite a newer deployment checkpoint.
+        assert!(!state
+            .db
+            .compare_and_set_deployment_state(&stale, &current)
+            .await
+            .unwrap());
+        assert_eq!(
+            state
+                .db
+                .get_deployment_state()
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            DeploymentStatus::Running
+        );
     }
 
     #[tokio::test]

@@ -49,6 +49,7 @@ tracing = { workspace = true }
 url = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
+tempfile = { workspace = true }
 insta = { workspace = true, features = ["yaml", "json"] }
 rstest = { workspace = true }
 axum = { workspace = true, features = ["tokio", "http2"] }

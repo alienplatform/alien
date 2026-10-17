@@ -96,6 +96,7 @@ pub(crate) async fn run_sync_loop_with_command_address_support(
 
         tokio::select! {
             _ = tokio::time::sleep(interval) => {},
+            _ = state.db.wait_for_sync() => {},
             _ = state.cancel.cancelled() => {
                 info!("Sync loop shutting down");
                 return;
@@ -129,6 +130,90 @@ fn create_authenticated_client(token: &str) -> crate::error::Result<Client> {
         })
 }
 
+/// Refresh only established secret slots; completed deployments no longer retain
+/// the input values and credentials from their installation configuration.
+pub(super) async fn refresh_running_secrets(
+    state: &OperatorState,
+    current: &mut alien_core::DeploymentState,
+) -> crate::error::Result<()> {
+    if current.status != DeploymentStatus::Running || current.target_release.is_some() {
+        return Ok(());
+    }
+    let Some(metadata) = &current.runtime_metadata else {
+        return Ok(());
+    };
+    if metadata.deployer_secrets.is_empty() {
+        return Ok(());
+    }
+    let (Some(prepared), Some(stack_state)) = (&metadata.prepared_stack, &current.stack_state)
+    else {
+        return Ok(());
+    };
+    let mut stack = prepared.clone();
+    stack.inputs.retain(|input| {
+        metadata
+            .deployer_secrets
+            .iter()
+            .any(|report| report.input_id == input.id)
+    });
+    // Setup records the effective cloud here, including a manager-supplied base
+    // platform. That observation survives clearing the installation config.
+    let base_platform = current
+        .environment_info
+        .as_ref()
+        .map(alien_core::EnvironmentInfo::platform)
+        .or(state.config.base_platform);
+    let client_config = super::deployment::resolve_client_config(
+        current.platform,
+        base_platform,
+        &state.config.data_dir,
+        state.config.namespace.clone(),
+        state.config.sync.as_ref(),
+    )
+    .await?;
+    let config = alien_core::DeploymentConfig::builder()
+        .maybe_deployment_name(state.config.agent_name.clone())
+        .stack_settings(Default::default())
+        .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+            variables: Vec::new(),
+            hash: String::new(),
+            created_at: String::new(),
+        })
+        .stored_secret_input_ids(Vec::new())
+        .allow_frozen_changes(false)
+        .external_bindings(Default::default())
+        .build();
+    let reports = alien_deployment::check_deployer_secrets(
+        &stack,
+        stack_state,
+        &client_config,
+        &config,
+        current.platform,
+    )
+    .await
+    .context(crate::error::ErrorData::DeploymentFailed {
+        message: "Failed to refresh deployer secrets".to_string(),
+    })?;
+    if reports == metadata.deployer_secrets {
+        return Ok(());
+    }
+    let mut next = current.clone();
+    next.runtime_metadata
+        .as_mut()
+        .expect("metadata checked above")
+        .deployer_secrets = reports;
+    if state
+        .db
+        .compare_and_set_deployment_state(current, &next)
+        .await?
+    {
+        *current = next;
+    } else if let Some(latest) = state.db.get_deployment_state().await? {
+        *current = latest;
+    }
+    Ok(())
+}
+
 async fn sync_with_manager(
     state: &OperatorState,
     client: &Client,
@@ -154,6 +239,10 @@ async fn sync_with_manager(
                 retry_requested: false,
                 protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
             });
+
+    // A vault outage must not prevent receiving a new target or deletion request.
+    // Preserve the last observation and surface the refresh error after syncing.
+    let secret_refresh = refresh_running_secrets(state, &mut deployment_state).await;
 
     // Build the sync request with full deployment state
     // Deployment ID is stored in SQLite (from initialization)
@@ -409,6 +498,7 @@ async fn sync_with_manager(
         }
     }
 
+    secret_refresh?;
     Ok(has_update || state_hydrated)
 }
 
@@ -701,7 +791,10 @@ fn local_state_is_delete_or_deleted(state: &alien_core::DeploymentState) -> bool
 mod tests {
     use std::{
         collections::{BTreeMap, HashMap},
-        sync::{Arc, Mutex},
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc, Mutex,
+        },
     };
 
     use alien_core::{
@@ -814,6 +907,269 @@ mod tests {
             .runtime_metadata
             .as_ref()
             .is_some_and(|metadata| metadata.pending_prepared_stack.is_none()));
+    }
+
+    #[tokio::test]
+    async fn running_cloud_secret_refresh_survives_config_cleanup_and_restart() {
+        const CHILD: &str = "ALIEN_TEST_RUNNING_CLOUD_SECRET_REFRESH";
+        if std::env::var_os(CHILD).is_none() {
+            // Isolate credential environment changes from other tests. Only the
+            // real metadata client in this child can reach this localhost stub.
+            let calls = Arc::new(AtomicUsize::new(0));
+            let request_calls = calls.clone();
+            let app = Router::new().route("/", post(move |headers: axum::http::HeaderMap, body: axum::body::Bytes| {
+                let body: Value = serde_json::from_slice(&body).unwrap();
+                assert_eq!(headers["x-amz-target"], "AmazonSSM.DescribeParameters");
+                assert_eq!(body["ParameterFilters"][0]["Values"][0], "test-secrets-input-key");
+                let call = request_calls.fetch_add(1, Ordering::SeqCst);
+                async move { Json(if call == 0 {
+                    json!({"Parameters": [{"Name": "test-secrets-input-key", "Type": "SecureString", "Version": 7}]})
+                } else { json!({"Parameters": []}) }) }
+            }));
+            let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+                .await
+                .unwrap();
+            let endpoint = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move { axum::serve(listener, app).await });
+            let result = tokio::task::spawn_blocking(move || { std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "loops::sync::tests::running_cloud_secret_refresh_survives_config_cleanup_and_restart", "--nocapture"])
+                .env_clear()
+                .env(CHILD, "1")
+                .env("RUST_MIN_STACK", "8388608")
+                .env("AWS_ACCOUNT_ID", "123456789012")
+                .env("AWS_REGION", "us-east-1")
+                .env("AWS_ACCESS_KEY_ID", "fake-test-access-key")
+                .env("AWS_SECRET_ACCESS_KEY", "fake-test-secret-key")
+                .env("AWS_SERVICE_OVERRIDES_ENDPOINTS", json!({"ssm": endpoint}).to_string())
+                .output().unwrap() }).await.unwrap();
+            server.abort();
+            assert!(
+                result.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&result.stdout),
+                String::from_utf8_lossy(&result.stderr)
+            );
+            assert_eq!(calls.load(Ordering::SeqCst), 2);
+            return;
+        }
+
+        let data_dir = tempfile::tempdir().unwrap();
+        let directory = data_dir.path().to_str().unwrap();
+        let db = OperatorDb::new(directory, TEST_ENCRYPTION_KEY)
+            .await
+            .unwrap();
+        let config = alien_core::DeploymentConfig::builder()
+            .base_platform(Platform::Aws)
+            .stack_settings(Default::default())
+            .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                variables: Vec::new(),
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .allow_frozen_changes(false)
+            .external_bindings(Default::default())
+            .build();
+        db.set_deployment_config(&config).await.unwrap();
+        let mut stack = Stack::new("cloud-secrets".into()).build();
+        stack.inputs = vec![serde_json::from_value(json!({
+            "id": "key", "kind": "secret", "providedBy": ["deployer"],
+            "required": true, "label": "Test key", "description": ""
+        }))
+        .unwrap()];
+        let mut vault = alien_core::StackResourceState::new_pending(
+            "vault".into(),
+            alien_core::Resource::new(alien_core::Vault::new("secrets".into()).build()),
+            Some(alien_core::ResourceLifecycle::Frozen),
+            Vec::new(),
+        );
+        vault.status = alien_core::ResourceStatus::Running;
+        vault.remote_binding_params = Some(
+            serde_json::to_value(alien_core::VaultBinding::parameter_store("test-secrets"))
+                .unwrap(),
+        );
+        let mut stack_state = alien_core::StackState::new(Platform::Kubernetes);
+        stack_state.resources.insert("secrets".into(), vault);
+        let running = DeploymentState {
+            platform: Platform::Kubernetes, status: DeploymentStatus::Running,
+            current_release: None, target_release: None, stack_state: Some(stack_state),
+            environment_info: Some(alien_core::EnvironmentInfo::Aws(alien_core::AwsEnvironmentInfo {
+                account_id: "123456789012".into(), region: "us-east-1".into(),
+            })),
+            runtime_metadata: Some(alien_core::RuntimeMetadata {
+                prepared_stack: Some(stack),
+                deployer_secrets: vec![serde_json::from_value(json!({
+                    "inputId": "key", "label": "Test key", "required": true, "status": "missing",
+                    "location": {"store": "aws-parameter-store", "name": "test-secrets-input-key", "cliCommand": "unused"}
+                })).unwrap()],
+                ..Default::default()
+            }),
+            error: None, retry_requested: false, protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        };
+        db.set_deployment_state(&running).await.unwrap();
+        db.clear_deployment_config().await.unwrap();
+        drop(db);
+        let db = Arc::new(
+            OperatorDb::new(directory, TEST_ENCRYPTION_KEY)
+                .await
+                .unwrap(),
+        );
+        assert!(db.get_deployment_config().await.unwrap().is_none());
+        let mut running = db.get_deployment_state().await.unwrap().unwrap();
+        let state = OperatorState {
+            config: OperatorConfig::builder()
+                .platform(Platform::Kubernetes)
+                .data_dir(directory)
+                .encryption_key(TEST_ENCRYPTION_KEY)
+                .build(),
+            db,
+            service_provider: None,
+            operations_sync_handler: None,
+            cancel: CancellationToken::new(),
+        };
+        assert!(state.config.base_platform.is_none());
+        for expected in [
+            alien_core::DeployerSecretStatus::Present,
+            alien_core::DeployerSecretStatus::Missing,
+        ] {
+            super::refresh_running_secrets(&state, &mut running)
+                .await
+                .unwrap();
+            let persisted = state.db.get_deployment_state().await.unwrap().unwrap();
+            assert_eq!(
+                persisted
+                    .runtime_metadata
+                    .as_ref()
+                    .unwrap()
+                    .deployer_secrets[0]
+                    .status,
+                expected
+            );
+            if expected == alien_core::DeployerSecretStatus::Present {
+                assert_eq!(
+                    persisted
+                        .runtime_metadata
+                        .as_ref()
+                        .unwrap()
+                        .deployer_secrets[0]
+                        .version
+                        .as_deref(),
+                    Some("7")
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn secret_refresh_failure_still_receives_delete_and_reports_the_error() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            OperatorDb::new(data_dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+                .await
+                .unwrap(),
+        );
+        db.set_deployment_id("dep_secret_failure").await.unwrap();
+        let mut stack = Stack::new("secret-check".into()).build();
+        stack.inputs = vec![serde_json::from_value(json!({
+            "id": "key", "kind": "secret", "providedBy": ["deployer"],
+            "required": true, "label": "Test key", "description": ""
+        }))
+        .unwrap()];
+        let report = serde_json::from_value(json!({
+            "inputId": "key", "label": "Test key", "required": true, "status": "present",
+            "location": {"store": "local-vault", "name": "input-key", "cliCommand": "unused"}
+        }))
+        .unwrap();
+        let mut stack_state = alien_core::StackState::new(Platform::Local);
+        stack_state.resources.insert(
+            "secrets".into(),
+            alien_core::StackResourceState::new_pending(
+                "vault".into(),
+                alien_core::Resource::new(alien_core::Vault::new("secrets".into()).build()),
+                Some(alien_core::ResourceLifecycle::Frozen),
+                Vec::new(),
+            ),
+        );
+        let running = DeploymentState {
+            platform: Platform::Local,
+            status: DeploymentStatus::Running,
+            current_release: None,
+            target_release: None,
+            // The vault binding is unavailable: refreshing this established slot must fail.
+            stack_state: Some(stack_state),
+            runtime_metadata: Some(alien_core::RuntimeMetadata {
+                prepared_stack: Some(stack),
+                deployer_secrets: vec![report],
+                ..Default::default()
+            }),
+            error: None,
+            environment_info: None,
+            retry_requested: false,
+            protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        };
+        db.set_deployment_state(&running).await.unwrap();
+        let deletion = DeploymentState {
+            status: DeploymentStatus::DeletePending,
+            ..running.clone()
+        };
+        let captured = Arc::new(Mutex::new(None));
+        let request_capture = captured.clone();
+        let app = Router::new().route(
+            "/v1/sync",
+            post(move |Json(body): Json<Value>| {
+                *request_capture.lock().unwrap() = Some(body);
+                let response = json!({"currentState": deletion});
+                async move { Json(response) }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await });
+        let state = OperatorState {
+            config: OperatorConfig::builder()
+                .platform(Platform::Local)
+                .data_dir(data_dir.path().to_str().unwrap())
+                .encryption_key(TEST_ENCRYPTION_KEY)
+                .build(),
+            db,
+            service_provider: None,
+            operations_sync_handler: None,
+            cancel: CancellationToken::new(),
+        };
+        let error = sync_with_manager(
+            &state,
+            &create_authenticated_client("fake-token").unwrap(),
+            &url,
+            false,
+            None,
+        )
+        .await
+        .expect_err("failed secret observation remains an error");
+        assert!(error
+            .to_string()
+            .contains("Failed to refresh deployer secrets"));
+        let request = captured
+            .lock()
+            .unwrap()
+            .take()
+            .expect("manager was contacted");
+        assert_eq!(
+            request["currentState"]["runtimeMetadata"]["deployerSecrets"],
+            serde_json::to_value(&running.runtime_metadata.as_ref().unwrap().deployer_secrets)
+                .unwrap()
+        );
+        assert_eq!(
+            state
+                .db
+                .get_deployment_state()
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            DeploymentStatus::DeletePending
+        );
+        server.abort();
     }
 
     struct SyncFixture {

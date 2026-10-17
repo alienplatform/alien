@@ -35,7 +35,7 @@ pub use alien_core::{
 };
 
 // Re-export helper functions
-pub use helpers::collect_environment_info;
+pub use helpers::{check_deployer_secrets, collect_environment_info};
 pub use helpers::create_aggregated_error_from_stack_state;
 pub use helpers::deployment_headline_error_from_state;
 pub use helpers::deployment_state_error_from_headline;
