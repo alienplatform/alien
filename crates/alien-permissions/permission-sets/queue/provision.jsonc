@@ -33,6 +33,7 @@
             "pubsub.topics.delete",
             "pubsub.topics.get",
             "pubsub.topics.update",
+            "pubsub.topics.setIamPolicy",
             "pubsub.topics.attachSubscription"
           ]
         },
@@ -49,7 +50,8 @@
             "pubsub.subscriptions.create",
             "pubsub.subscriptions.delete",
             "pubsub.subscriptions.get",
-            "pubsub.subscriptions.update"
+            "pubsub.subscriptions.update",
+            "pubsub.subscriptions.setIamPolicy"
           ]
         },
         "binding": {
