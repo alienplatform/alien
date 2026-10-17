@@ -333,6 +333,15 @@ fn is_best_effort_delete_error(
             .is_some_and(|source| is_best_effort_delete_source(source, access_denied_ends_delete))
 }
 
+fn is_access_denied_error(err: &AlienError<ErrorData>) -> bool {
+    let denied = |code: &str, status: Option<u16>| {
+        code == "REMOTE_ACCESS_DENIED" || matches!(status, Some(401 | 403))
+    };
+    denied(&err.code, err.http_status_code)
+        || std::iter::successors(err.source.as_deref(), |source| source.source.as_deref())
+            .any(|source| denied(&source.code, source.http_status_code))
+}
+
 /// Clears the denial of every replace that waits for an explicit retry, so the planner plans
 /// it again. Callers handling a user's retry call this; returns the resources it cleared.
 pub fn allow_denied_replaces_to_retry(state: &mut StackState) -> Vec<String> {
@@ -2487,7 +2496,7 @@ impl StackExecutor {
                         (0, None, None, false, true)
                     } else if current_resource_state.status == ResourceStatus::Deleting
                         && replacing
-                        && is_best_effort_delete_error(&err, true)
+                        && is_access_denied_error(&err)
                     {
                         // Access denied while deleting to replace. Below, the failed create is
                         // restored if nothing was deleted yet, including by this step before its
@@ -2509,6 +2518,12 @@ impl StackExecutor {
                         });
                         warn!(resource_id = %resource_id, error = %denial, "Replace delete denied");
                         (0, Some(denial.into_generic()), None, true, false)
+                    } else if current_resource_state.status == ResourceStatus::Deleting
+                        && is_access_denied_error(&err)
+                    {
+                        // Composite cleanup explicitly retained this denial. Retry only
+                        // after permission repair, keeping its full cause and checkpoint.
+                        (0, Some(err.into_generic()), None, true, false)
                     } else if is_dependency_not_ready_error(&err) {
                         let delay = Duration::from_secs(10);
                         info!(

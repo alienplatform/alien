@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 #[derive(Clone, Copy, Debug)]
 enum Child {
     Notification,
+    Subscription,
     Topic,
     Scheduler,
 }
@@ -62,6 +63,14 @@ fn provider(
                 .expect_get_gcp_gcs_client()
                 .returning(move |_| Ok(client.clone()));
         }
+        Child::Subscription => {
+            let mut client = MockPubSubApi::new();
+            client.expect_delete_subscription().returning(remove);
+            let client = Arc::new(client);
+            provider
+                .expect_get_gcp_pubsub_client()
+                .returning(move |_| Ok(client.clone()));
+        }
         Child::Topic => {
             let mut client = MockPubSubApi::new();
             client.expect_delete_topic().returning(remove);
@@ -83,6 +92,8 @@ fn provider(
 }
 
 #[rstest]
+#[case(Child::Subscription, false)]
+#[case(Child::Subscription, true)]
 #[case(Child::Notification, false)]
 #[case(Child::Notification, true)]
 #[case(Child::Topic, false)]
@@ -107,6 +118,7 @@ async fn failed_trigger_delete_preserves_remaining_child_across_reload(
                     bucket_name: "owned-bucket".into(),
                     notification_id: name.into(),
                 }),
+            Child::Subscription => controller.push_subscriptions.push(name.into()),
             Child::Topic => controller.storage_notification_topics.push(name.into()),
             Child::Scheduler => controller.scheduler_job_names.push(name.into()),
         }
@@ -132,6 +144,7 @@ async fn failed_trigger_delete_preserves_remaining_child_across_reload(
             .iter()
             .map(|v| v.notification_id.clone())
             .collect::<Vec<_>>(),
+        Child::Subscription => controller.push_subscriptions.clone(),
         Child::Topic => controller.storage_notification_topics.clone(),
         Child::Scheduler => controller.scheduler_job_names.clone(),
     };
@@ -149,6 +162,7 @@ async fn failed_trigger_delete_preserves_remaining_child_across_reload(
     resumed.step().await.unwrap();
     assert_eq!(*retry_calls.lock().unwrap(), ["second"]);
     let controller = resumed.internal_state::<GcpWorkerController>().unwrap();
+    assert!(controller.push_subscriptions.is_empty());
     assert!(controller.gcs_notification_ids.is_empty());
     assert!(controller.storage_notification_topics.is_empty());
     assert!(controller.scheduler_job_names.is_empty());
@@ -162,6 +176,7 @@ async fn failed_trigger_delete_preserves_remaining_child_across_reload(
 }
 
 #[rstest]
+#[case(Child::Subscription)]
 #[case(Child::Notification)]
 #[case(Child::Topic)]
 #[case(Child::Scheduler)]
@@ -179,6 +194,7 @@ async fn ordinary_stack_delete_retains_denied_trigger(#[case] child: Child) {
                 bucket_name: "owned-bucket".into(),
                 notification_id: "second".into(),
             }),
+        Child::Subscription => controller.push_subscriptions.push("second".into()),
         Child::Topic => controller.storage_notification_topics.push("second".into()),
         Child::Scheduler => controller.scheduler_job_names.push("second".into()),
     }
@@ -236,6 +252,7 @@ async fn ordinary_stack_delete_retains_denied_trigger(#[case] child: Child) {
         Child::Notification => {
             assert_eq!(controller.gcs_notification_ids[0].notification_id, "second")
         }
+        Child::Subscription => assert_eq!(controller.push_subscriptions, ["second"]),
         Child::Topic => assert_eq!(controller.storage_notification_topics, ["second"]),
         Child::Scheduler => assert_eq!(controller.scheduler_job_names, ["second"]),
     }
@@ -251,6 +268,7 @@ async fn ordinary_stack_delete_retains_denied_trigger(#[case] child: Child) {
     let controller = next.resources["public-func"]
         .get_internal_controller_typed::<GcpWorkerController>()
         .unwrap();
+    assert!(controller.push_subscriptions.is_empty());
     assert!(controller.gcs_notification_ids.is_empty());
     assert!(controller.storage_notification_topics.is_empty());
     assert!(controller.scheduler_job_names.is_empty());
