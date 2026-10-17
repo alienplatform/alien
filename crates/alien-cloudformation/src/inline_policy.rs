@@ -8,7 +8,10 @@ use indexmap::IndexMap;
 
 const IAM_POLICY_RESOURCE_TYPE: &str = "AWS::IAM::Policy";
 const IAM_MANAGED_POLICY_RESOURCE_TYPE: &str = "AWS::IAM::ManagedPolicy";
-const IAM_MANAGED_POLICIES_PER_ROLE: usize = 10;
+/// AWS's default "Managed policies per role" quota (L-0DA4ABF3). An account can raise it to
+/// 25, but a generated template must fit an account that never asked.
+/// <https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_iam-quotas.html>
+const IAM_MANAGED_POLICIES_PER_ROLE: usize = 20;
 
 #[derive(PartialEq)]
 struct PolicyGroupKey {
@@ -584,6 +587,18 @@ mod tests {
 
     #[test]
     fn consolidation_counts_managed_policies_already_attached_to_the_role() {
+        let mut fits = template_with_attached_managed_policies(19);
+        consolidate_role_inline_policies(&mut fits)
+            .expect("the twentieth managed-policy attachment fits AWS's default quota");
+
+        let mut exceeds = template_with_attached_managed_policies(20);
+        let error = consolidate_role_inline_policies(&mut exceeds)
+            .expect_err("the twenty-first managed-policy attachment must be rejected");
+        assert!(error.to_string().contains("requires 21 managed policies"));
+    }
+
+    /// The two inline grants consolidate into one managed policy on top of these.
+    fn template_with_attached_managed_policies(count: usize) -> CfTemplate {
         let mut template = template_with_inline_grants();
         let role = template
             .resources
@@ -591,14 +606,11 @@ mod tests {
             .expect("role should exist");
         role.properties.insert(
             "ManagedPolicyArns".to_string(),
-            CfExpression::list((0..10).map(|index| {
+            CfExpression::list((0..count).map(|index| {
                 CfExpression::from(format!("arn:aws:iam::aws:policy/Existing{index}"))
             })),
         );
-
-        let error = consolidate_role_inline_policies(&mut template)
-            .expect_err("the eleventh managed-policy attachment must be rejected");
-        assert!(error.to_string().contains("requires 11 managed policies"));
+        template
     }
 
     #[test]
