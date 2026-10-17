@@ -696,3 +696,98 @@ async fn changed_schedule_after_intent_checkpoint_refuses_cloud_mutation(#[case]
     assert_eq!(controller.scheduler_job_intents.len(), 1);
     assert!(controller.scheduler_job_names.is_empty());
 }
+
+#[tokio::test]
+async fn notification_creation_checkpoints_before_insert_and_cleans_lost_reply() {
+    let storage = crate::core::controller_test::test_storage_1();
+    let mut desired = function_public_ingress();
+    let topic = format!("test-{}-{}-notif", desired.id, storage.id);
+    desired.triggers = vec![alien_core::WorkerTrigger::Storage {
+        storage: (&storage).into(), events: vec!["created".into()],
+    }];
+    let native = Arc::new(Mutex::new(Vec::<GcsNotification>::new()));
+    let reads = native.clone(); let writes = native.clone(); let deletes = native.clone();
+    let mut gcs = MockGcsApi::new();
+    gcs.expect_get_project_service_account().times(2).returning(|| Ok(alien_gcp_clients::gcs::ProjectServiceAccount {
+        email_address: "storage@test.iam.gserviceaccount.com".into(), kind: None,
+    }));
+    gcs.expect_list_notifications().returning(move |_| Ok(ListNotificationsResponse {
+        items: reads.lock().unwrap().clone(), ..Default::default()
+    }));
+    gcs.expect_insert_notification().times(1).returning(move |_, mut notification| {
+        assert_eq!(notification.custom_attributes.len(), 1);
+        assert!(notification.topic.as_deref().unwrap().starts_with("//pubsub.googleapis.com/projects/"));
+        notification.id = Some("123".into()); writes.lock().unwrap().push(notification);
+        Err(AlienError::new(ClientError::RemoteServiceUnavailable { message: "accepted create, reply lost".into() }))
+    });
+    gcs.expect_delete_notification().times(1).returning(move |_, id| {
+        assert_eq!(id, "123"); deletes.lock().unwrap().clear(); Ok(())
+    });
+    let mut pubsub = MockPubSubApi::new();
+    pubsub.expect_get_topic_iam_policy().times(2).returning(|_| Ok(alien_gcp_clients::iam::IamPolicy {
+        bindings: vec![alien_gcp_clients::iam::Binding {
+            role: "roles/pubsub.publisher".into(), members: vec!["serviceAccount:storage@test.iam.gserviceaccount.com".into()], condition: None,
+        }], ..Default::default()
+    }));
+    pubsub.expect_create_topic().never(); pubsub.expect_set_topic_iam_policy().never();
+    let deleted_topic = topic.clone();
+    pubsub.expect_delete_topic().times(1).returning(move |name| { assert_eq!(name, deleted_topic); Ok(()) });
+    let gcs = Arc::new(gcs); let pubsub = Arc::new(pubsub);
+    let mut services = MockPlatformServiceProvider::new();
+    services.expect_get_gcp_gcs_client().returning(move |_| Ok(gcs.clone()));
+    services.expect_get_gcp_pubsub_client().returning(move |_| Ok(pubsub.clone()));
+    let services = Arc::new(services);
+    let mut controller = GcpWorkerController::mock_ready("test-worker");
+    controller.state = GcpWorkerState::CreatingPushSubscriptions;
+    controller.storage_notification_topics = vec![topic];
+    for step in 0..3 {
+        if step == 2 { controller.state = GcpWorkerState::DeletingPushSubscriptions; }
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(desired.clone()).controller(controller).platform(Platform::Gcp)
+            .service_provider(services.clone()).with_test_dependencies().build().await.unwrap();
+        let result = executor.step().await;
+        if step == 1 { assert!(result.is_err()); } else { result.unwrap(); }
+        controller = serde_json::from_value(serde_json::to_value(executor.internal_state::<GcpWorkerController>().unwrap()).unwrap()).unwrap();
+        assert!(controller.gcs_notification_ids.is_empty());
+        match step {
+            0 => { assert!(native.lock().unwrap().is_empty()); assert_eq!(controller.storage_notification_intents.len(), 1); }
+            1 => { assert_eq!(native.lock().unwrap().len(), 1); assert_eq!(controller.storage_notification_intents.len(), 1); }
+            _ => { assert!(native.lock().unwrap().is_empty()); assert!(controller.storage_notification_intents.is_empty()); assert!(controller.storage_notification_topics.is_empty()); }
+        }
+    }
+}
+
+#[rstest]
+#[case(false)]
+#[case(true)]
+#[tokio::test]
+async fn removed_push_trigger_after_checkpoint_retains_intent_and_refuses_advancement(#[case] storage: bool) {
+    let pubsub = Arc::new(MockPubSubApi::new());
+    let gcs = Arc::new(MockGcsApi::new());
+    let mut services = MockPlatformServiceProvider::new();
+    services.expect_get_gcp_pubsub_client().returning(move |_| Ok(pubsub.clone()));
+    services.expect_get_gcp_gcs_client().returning(move |_| Ok(gcs.clone()));
+    let services = Arc::new(services);
+    let mut desired = function_public_ingress();
+    desired.triggers = if storage {
+        vec![alien_core::WorkerTrigger::Storage { storage: (&crate::core::controller_test::test_storage_1()).into(), events: vec!["created".into()] }]
+    } else {
+        vec![alien_core::WorkerTrigger::Queue { queue: (&crate::worker::fixtures::test_queue()).into() }]
+    };
+    let mut controller = GcpWorkerController::mock_ready("test-worker");
+    controller.state = GcpWorkerState::CreatingPushSubscriptions;
+    let mut executor = SingleControllerExecutor::builder()
+        .resource(desired.clone()).controller(controller).platform(Platform::Gcp)
+        .service_provider(services.clone()).with_test_dependencies().build().await.unwrap();
+    executor.step().await.unwrap();
+    let controller: GcpWorkerController = serde_json::from_value(serde_json::to_value(executor.internal_state::<GcpWorkerController>().unwrap()).unwrap()).unwrap();
+    assert_eq!(controller.storage_topic_intents.len() + controller.push_subscription_intents.len(), 1);
+    desired.triggers.clear();
+    let mut executor = SingleControllerExecutor::builder()
+        .resource(desired).controller(controller).platform(Platform::Gcp)
+        .service_provider(services).with_test_dependencies().build().await.unwrap();
+    let error = executor.step().await.expect_err("removed trigger must retain its unresolved ownership intent");
+    assert!(format!("{error:?}").contains("RESOURCE_CONFIG_INVALID"));
+    let controller = executor.internal_state::<GcpWorkerController>().unwrap();
+    assert_eq!(controller.storage_topic_intents.len() + controller.push_subscription_intents.len(), 1);
+}

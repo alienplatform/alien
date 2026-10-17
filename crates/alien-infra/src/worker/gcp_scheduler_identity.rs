@@ -214,6 +214,13 @@ impl GcpSchedulerJobIntent {
         Self { job }
     }
 
+    pub fn validate_request(&self, name: &str, desired: &SchedulerJob, resource_id: &str) -> Result<()> {
+        let mut desired = desired.clone();
+        desired.name = Some(name.to_string());
+        desired.description = self.job.description.clone();
+        self.confirm(name, &desired, resource_id)
+    }
+
     fn confirm(&self, name: &str, job: &SchedulerJob, resource_id: &str) -> Result<()> {
         let target_matches = match (&self.job.http_target, &job.http_target) {
             (Some(expected), Some(actual)) => {

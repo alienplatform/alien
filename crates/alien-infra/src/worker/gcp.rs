@@ -2011,6 +2011,31 @@ impl GcpWorkerController {
             })
         })?;
 
+        let mut desired_subscriptions = HashSet::new();
+        let mut desired_topics = HashSet::new();
+        for trigger in &cfg.triggers {
+            match trigger {
+                alien_core::WorkerTrigger::Queue { queue } => {
+                    desired_subscriptions.insert(format!("{}-{}-{}", ctx.resource_prefix, cfg.id, queue.id));
+                }
+                alien_core::WorkerTrigger::Storage { storage, .. } => {
+                    let topic = format!("{}-{}-{}-notif", ctx.resource_prefix, cfg.id, storage.id);
+                    desired_subscriptions.insert(format!("{topic}-sub"));
+                    desired_topics.insert(topic);
+                }
+                _ => {}
+            }
+        }
+        if self.push_subscription_intents.keys().any(|name| !desired_subscriptions.contains(name))
+            || self.storage_topic_intents.keys().any(|name| !desired_topics.contains(name))
+            || self.storage_notification_intents.keys().any(|name| !desired_topics.contains(name))
+        {
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                resource_id: Some(cfg.id.clone()),
+                message: "Trigger removed during creation; retire the saved intent before replacing it".into(),
+            }));
+        }
+
         info!(name=%service_name, "Creating Pub/Sub push subscriptions for queue triggers");
 
         // Create push subscriptions for queue triggers
@@ -2074,6 +2099,17 @@ impl GcpWorkerController {
             })
             .collect();
 
+        let desired_names: HashSet<String> = schedule_triggers.iter().map(|(index, _)| {
+            format!("projects/{}/locations/{}/jobs/{}-{}-cron-{}",
+                gcp_config.project_id, gcp_config.region, ctx.resource_prefix, cfg.id, index)
+        }).collect();
+        if self.scheduler_job_intents.keys().any(|name| !desired_names.contains(name)) {
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                resource_id: Some(cfg.id.clone()),
+                message: "Schedule removed or moved during creation; retire the saved intent before replacing it".into(),
+            }));
+        }
+
         if schedule_triggers.is_empty() {
             info!(worker=%cfg.id, "No schedule triggers found, skipping scheduler job creation");
             return Ok(HandlerAction::Continue {
@@ -2099,11 +2135,6 @@ impl GcpWorkerController {
                 "projects/{}/locations/{}/jobs/{}",
                 gcp_config.project_id, gcp_config.region, job_id
             );
-            if self.scheduler_job_names.contains(&job_full_name)
-                || self.scheduler_job_intents.contains_key(&job_full_name)
-            {
-                continue;
-            }
             let job = SchedulerJob {
                 name: None,
                 description: Some(format!(
@@ -2125,6 +2156,13 @@ impl GcpWorkerController {
                 state: None,
             };
 
+            if let Some(intent) = self.scheduler_job_intents.get(&job_full_name) {
+                intent.validate_request(&job_full_name, &job, &cfg.id)?;
+                continue;
+            }
+            if self.scheduler_job_names.contains(&job_full_name) {
+                continue;
+            }
             self.scheduler_job_intents.insert(job_full_name, GcpSchedulerJobIntent::new(job));
             planned = true;
         }
