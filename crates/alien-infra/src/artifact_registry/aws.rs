@@ -1,10 +1,11 @@
 use alien_error::{AlienError, Context, ContextError, IntoAlienError, IntoAlienErrorDirect};
 use alien_macros::controller;
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::time::Duration;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
-use crate::core::ResourceControllerContext;
+use crate::core::{aws_ownership::is_tagged_as_ours, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
 use alien_aws_clients::iam::{CreateRoleRequest, CreateRoleTag, IamApi};
 use alien_core::{
@@ -30,6 +31,74 @@ fn role_name_from_arn(arn: &str) -> Option<&str> {
 
 fn fallback_role_name(resource_prefix: &str, resource_id: &str, suffix: &str) -> String {
     format!("{}-{}-{}", resource_prefix, resource_id, suffix)
+}
+
+fn is_conflict(error: &AlienError<alien_client_core::ErrorData>) -> bool {
+    matches!(
+        error.error,
+        Some(alien_client_core::ErrorData::RemoteResourceConflict { .. })
+    )
+}
+
+fn is_not_found(error: &AlienError<alien_client_core::ErrorData>) -> bool {
+    matches!(
+        error.error,
+        Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+    )
+}
+
+/// The name of a role recorded by its ARN. Roles this controller creates have no path.
+fn recorded_role_name(arn: &str, resource_id: &str) -> Result<String> {
+    role_name_from_arn(arn).map(str::to_string).ok_or_else(|| {
+        AlienError::new(ErrorData::ResourceStateSerializationFailed {
+            resource_id: resource_id.to_string(),
+            message: format!("Recorded IAM role ARN '{}' has no role name", arn),
+        })
+    })
+}
+
+/// What holds an IAM role name, as far as this deployment is concerned.
+enum ExistingRole {
+    Missing,
+    /// Carries this deployment's tags for the resource.
+    Ours {
+        arn: String,
+    },
+    /// Exists without them: someone else made it.
+    Foreign,
+}
+
+/// Finds the role named `role_name` and tells whether this deployment created it. The name is
+/// derived from the deployment prefix and resource ID, so the account can already hold a role
+/// with it that someone else made; only our tags show it is ours. GetRole returns the tags.
+async fn inspect_role(
+    iam_client: &dyn IamApi,
+    role_name: &str,
+    our_tags: &HashMap<String, String>,
+    resource_id: &str,
+) -> Result<ExistingRole> {
+    let role = match iam_client.get_role(role_name).await {
+        Ok(response) => response.get_role_result.role,
+        Err(error) if is_not_found(&error) => return Ok(ExistingRole::Missing),
+        Err(error) => {
+            return Err(error.context(ErrorData::CloudPlatformError {
+                message: format!("Failed to read IAM role '{}'", role_name),
+                resource_id: Some(resource_id.to_string()),
+            }));
+        }
+    };
+    let tags: HashMap<String, String> = role
+        .tags
+        .map(|tags| tags.member)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|tag| (tag.key, tag.value))
+        .collect();
+    if is_tagged_as_ours(&tags, our_tags) {
+        Ok(ExistingRole::Ours { arn: role.arn })
+    } else {
+        Ok(ExistingRole::Foreign)
+    }
 }
 
 /// AWS Artifact Registry controller.
@@ -111,31 +180,11 @@ impl AwsArtifactRegistryController {
             "Creating pull role for artifact registry"
         );
 
-        // Create assume role policy that allows service account roles to assume this role
-        let assume_role_policy = self.generate_service_account_assume_role_policy(ctx)?;
-
-        let request = CreateRoleRequest::builder()
-            .role_name(pull_role_name.clone())
-            .assume_role_policy_document(assume_role_policy)
-            .description(format!("Runtime ECR pull role for registry {}", config.id))
-            .tags(
-                standard_resource_tags(ctx.resource_prefix, &config.id)
-                    .into_iter()
-                    .map(|(key, value)| CreateRoleTag { key, value })
-                    .collect(),
-            )
-            .build();
-
-        let response =
-            iam_client
-                .create_role(request)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to create pull role '{}'", pull_role_name),
-                    resource_id: Some(config.id.clone()),
-                })?;
-
-        self.pull_role_arn = Some(response.create_role_result.role.arn);
+        let description = format!("Runtime ECR pull role for registry {}", config.id);
+        self.pull_role_arn = Some(
+            self.create_or_resume_role(ctx, &*iam_client, &pull_role_name, description, &config.id)
+                .await?,
+        );
 
         info!(
             role_name = %pull_role_name,
@@ -207,31 +256,11 @@ impl AwsArtifactRegistryController {
             "Creating push role for artifact registry"
         );
 
-        // Create assume role policy that allows service account roles to assume this role
-        let assume_role_policy = self.generate_service_account_assume_role_policy(ctx)?;
-
-        let request = CreateRoleRequest::builder()
-            .role_name(push_role_name.clone())
-            .assume_role_policy_document(assume_role_policy)
-            .description(format!("Runtime ECR push role for registry {}", config.id))
-            .tags(
-                standard_resource_tags(ctx.resource_prefix, &config.id)
-                    .into_iter()
-                    .map(|(key, value)| CreateRoleTag { key, value })
-                    .collect(),
-            )
-            .build();
-
-        let response =
-            iam_client
-                .create_role(request)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to create push role '{}'", push_role_name),
-                    resource_id: Some(config.id.clone()),
-                })?;
-
-        self.push_role_arn = Some(response.create_role_result.role.arn);
+        let description = format!("Runtime ECR push role for registry {}", config.id);
+        self.push_role_arn = Some(
+            self.create_or_resume_role(ctx, &*iam_client, &push_role_name, description, &config.id)
+                .await?,
+        );
 
         info!(
             role_name = %push_role_name,
@@ -614,12 +643,21 @@ impl AwsArtifactRegistryController {
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
         let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg).await?;
 
-        let pull_role_name = self
-            .pull_role_arn
-            .as_deref()
-            .and_then(role_name_from_arn)
-            .map(str::to_string)
-            .unwrap_or_else(|| fallback_role_name(ctx.resource_prefix, &config.id, "pull"));
+        self.pull_role_arn = owned_role_arn(
+            &*iam_client,
+            self.pull_role_arn.clone(),
+            ctx.resource_prefix,
+            &config.id,
+            "pull",
+        )
+        .await?;
+        let Some(pull_role_arn) = self.pull_role_arn.as_deref() else {
+            return Ok(HandlerAction::Continue {
+                state: DeletingPushRolePolicy,
+                suggested_delay: None,
+            });
+        };
+        let pull_role_name = recorded_role_name(pull_role_arn, &config.id)?;
 
         self.cleanup_role_policies(&*iam_client, &pull_role_name, "pull", &config.id)
             .await?;
@@ -643,12 +681,21 @@ impl AwsArtifactRegistryController {
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
         let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg).await?;
 
-        let pull_role_name = self
-            .pull_role_arn
-            .as_deref()
-            .and_then(role_name_from_arn)
-            .map(str::to_string)
-            .unwrap_or_else(|| fallback_role_name(ctx.resource_prefix, &config.id, "pull"));
+        self.pull_role_arn = owned_role_arn(
+            &*iam_client,
+            self.pull_role_arn.clone(),
+            ctx.resource_prefix,
+            &config.id,
+            "pull",
+        )
+        .await?;
+        let Some(pull_role_arn) = self.pull_role_arn.as_deref() else {
+            return Ok(HandlerAction::Continue {
+                state: DeletingPushRolePolicy,
+                suggested_delay: None,
+            });
+        };
+        let pull_role_name = recorded_role_name(pull_role_arn, &config.id)?;
 
         // Delete pull role - treat NotFound as success for idempotent deletion
         match iam_client.delete_role(&pull_role_name).await {
@@ -707,12 +754,21 @@ impl AwsArtifactRegistryController {
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
         let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg).await?;
 
-        let push_role_name = self
-            .push_role_arn
-            .as_deref()
-            .and_then(role_name_from_arn)
-            .map(str::to_string)
-            .unwrap_or_else(|| fallback_role_name(ctx.resource_prefix, &config.id, "push"));
+        self.push_role_arn = owned_role_arn(
+            &*iam_client,
+            self.push_role_arn.clone(),
+            ctx.resource_prefix,
+            &config.id,
+            "push",
+        )
+        .await?;
+        let Some(push_role_arn) = self.push_role_arn.as_deref() else {
+            return Ok(HandlerAction::Continue {
+                state: Deleted,
+                suggested_delay: None,
+            });
+        };
+        let push_role_name = recorded_role_name(push_role_arn, &config.id)?;
 
         self.cleanup_role_policies(&*iam_client, &push_role_name, "push", &config.id)
             .await?;
@@ -736,12 +792,21 @@ impl AwsArtifactRegistryController {
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
         let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg).await?;
 
-        let push_role_name = self
-            .push_role_arn
-            .as_deref()
-            .and_then(role_name_from_arn)
-            .map(str::to_string)
-            .unwrap_or_else(|| fallback_role_name(ctx.resource_prefix, &config.id, "push"));
+        self.push_role_arn = owned_role_arn(
+            &*iam_client,
+            self.push_role_arn.clone(),
+            ctx.resource_prefix,
+            &config.id,
+            "push",
+        )
+        .await?;
+        let Some(push_role_arn) = self.push_role_arn.as_deref() else {
+            return Ok(HandlerAction::Continue {
+                state: Deleted,
+                suggested_delay: None,
+            });
+        };
+        let push_role_name = recorded_role_name(push_role_arn, &config.id)?;
 
         // Delete push role - treat NotFound as success for idempotent deletion
         match iam_client.delete_role(&push_role_name).await {
@@ -917,7 +982,98 @@ impl AwsArtifactRegistryController {
     }
 }
 
+/// The ARN of the role to delete, or `None` when there is nothing this deployment may delete.
+///
+/// A role is recorded only once CreateRole succeeded, in this and every earlier version (or
+/// when an import recorded what setup created). Without one, the role with the derived name is
+/// deleted only if it carries our tags (a create whose response was lost); a role someone else
+/// made is kept, and its policies are left alone.
+async fn owned_role_arn(
+    iam_client: &dyn IamApi,
+    recorded_arn: Option<String>,
+    resource_prefix: &str,
+    resource_id: &str,
+    role_label: &str,
+) -> Result<Option<String>> {
+    if recorded_arn.is_some() {
+        return Ok(recorded_arn);
+    }
+    let role_name = fallback_role_name(resource_prefix, resource_id, role_label);
+    let our_tags = standard_resource_tags(resource_prefix, resource_id);
+    match inspect_role(iam_client, &role_name, &our_tags, resource_id).await? {
+        ExistingRole::Ours { arn } => Ok(Some(arn)),
+        ExistingRole::Missing => {
+            info!(role_name = %role_name, role_label = %role_label, "No artifact registry role to delete");
+            Ok(None)
+        }
+        ExistingRole::Foreign => {
+            warn!(
+                role_name = %role_name,
+                role_label = %role_label,
+                "Keeping IAM role and its policies: it is not tagged as created by this deployment"
+            );
+            Ok(None)
+        }
+    }
+}
+
 impl AwsArtifactRegistryController {
+    /// Creates a role with this deployment's tags and returns its ARN. A role that already has
+    /// the name is used only if it carries those tags: an earlier attempt created it and its
+    /// response was lost. Any other role is refused and left untouched.
+    async fn create_or_resume_role(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        iam_client: &dyn IamApi,
+        role_name: &str,
+        description: String,
+        resource_id: &str,
+    ) -> Result<String> {
+        let our_tags = standard_resource_tags(ctx.resource_prefix, resource_id);
+        let request = CreateRoleRequest::builder()
+            .role_name(role_name.to_string())
+            .assume_role_policy_document(self.generate_service_account_assume_role_policy(ctx)?)
+            .description(description)
+            .tags(
+                our_tags
+                    .iter()
+                    .map(|(key, value)| CreateRoleTag {
+                        key: key.clone(),
+                        value: value.clone(),
+                    })
+                    .collect(),
+            )
+            .build();
+
+        let error = match iam_client.create_role(request).await {
+            Ok(response) => return Ok(response.create_role_result.role.arn),
+            Err(error) => error,
+        };
+        let create_failed = |error: AlienError<alien_client_core::ErrorData>| {
+            error.context(ErrorData::CloudPlatformError {
+                message: format!("Failed to create role '{}'", role_name),
+                resource_id: Some(resource_id.to_string()),
+            })
+        };
+        if !is_conflict(&error) {
+            return Err(create_failed(error));
+        }
+        match inspect_role(iam_client, role_name, &our_tags, resource_id).await? {
+            ExistingRole::Ours { arn } => {
+                info!(role_name = %role_name, "Role was created by an earlier attempt; resuming");
+                Ok(arn)
+            }
+            ExistingRole::Foreign => {
+                Err(AlienError::new(ErrorData::ExistingCloudResourceNotOwned {
+                    resource_id: resource_id.to_string(),
+                    object: format!("IAM role '{}'", role_name),
+                }))
+            }
+            // Deleted since CreateRole answered; the retry creates it.
+            ExistingRole::Missing => Err(create_failed(error)),
+        }
+    }
+
     async fn cleanup_role_policies(
         &self,
         iam_client: &dyn IamApi,
@@ -1369,12 +1525,14 @@ mod tests {
     use crate::core::controller_test::SingleControllerExecutor;
     use crate::MockPlatformServiceProvider;
     use alien_aws_clients::iam::{
-        AttachedPolicies, CreateRoleResponse, CreateRoleResult, ListAttachedRolePoliciesResponse,
-        ListAttachedRolePoliciesResult, ListRolePoliciesResponse, ListRolePoliciesResult,
-        MockIamApi, PolicyNames, Role,
+        AttachedPolicies, AttachedPolicy, CreateRoleResponse, CreateRoleResult, GetRoleResponse,
+        GetRoleResult, ListAttachedRolePoliciesResponse, ListAttachedRolePoliciesResult,
+        ListRolePoliciesResponse, ListRolePoliciesResult, MockIamApi, PolicyNames, Role, Tag, Tags,
     };
     use alien_core::Platform;
-    use std::sync::Arc;
+    use rstest::rstest;
+    use std::collections::BTreeSet;
+    use std::sync::{Arc, Mutex};
 
     fn basic_artifact_registry() -> ArtifactRegistry {
         ArtifactRegistry::new("my-registry".to_string()).build()
@@ -1626,5 +1784,401 @@ mod tests {
         executor.update(registry).unwrap();
         executor.run_until_terminal().await.unwrap();
         assert_eq!(executor.status(), ResourceStatus::Running);
+    }
+
+    // ─────────────── OWNERSHIP TESTS ──────────────────────────────────
+
+    /// One IAM role as the account sees it.
+    #[derive(Debug, Clone, PartialEq)]
+    struct FakeRole {
+        tags: HashMap<String, String>,
+        inline_policies: BTreeSet<String>,
+        attached_policies: BTreeSet<String>,
+    }
+
+    /// The IAM roles in the account, by name.
+    type FakeAccount = Arc<Mutex<HashMap<String, FakeRole>>>;
+
+    fn no_such_role(role_name: &str) -> AlienError<alien_client_core::ErrorData> {
+        AlienError::new(alien_client_core::ErrorData::RemoteResourceNotFound {
+            resource_type: "IAM Resource".to_string(),
+            resource_name: role_name.to_string(),
+        })
+    }
+
+    fn role_named(role_name: &str, tags: &HashMap<String, String>) -> Role {
+        let mut role = create_successful_role_response(role_name)
+            .create_role_result
+            .role;
+        role.tags = Some(Tags {
+            member: tags
+                .iter()
+                .map(|(key, value)| Tag {
+                    key: key.clone(),
+                    value: value.clone(),
+                })
+                .collect(),
+        });
+        role
+    }
+
+    /// An IAM mock that keeps the account's roles, their tags and policies. CreateRole fails
+    /// with EntityAlreadyExists on a taken name and DeleteRole with DeleteConflict while
+    /// policies remain, like AWS. With `lose_create_response` the first CreateRole creates the
+    /// role but its response is lost.
+    fn fake_iam(account: FakeAccount, lose_create_response: bool) -> MockIamApi {
+        let mut mock = MockIamApi::new();
+
+        let state = account.clone();
+        let lose = Arc::new(Mutex::new(lose_create_response));
+        mock.expect_create_role().returning(move |request| {
+            let mut roles = state.lock().unwrap();
+            if roles.contains_key(&request.role_name) {
+                return Err(AlienError::new(
+                    alien_client_core::ErrorData::RemoteResourceConflict {
+                        message: format!("Role with name {} already exists.", request.role_name),
+                        resource_type: "IAM Resource".to_string(),
+                        resource_name: request.role_name.clone(),
+                    },
+                ));
+            }
+            let tags = request
+                .tags
+                .unwrap_or_default()
+                .into_iter()
+                .map(|tag| (tag.key, tag.value))
+                .collect();
+            roles.insert(
+                request.role_name.clone(),
+                FakeRole {
+                    tags,
+                    inline_policies: BTreeSet::new(),
+                    attached_policies: BTreeSet::new(),
+                },
+            );
+            if std::mem::take(&mut *lose.lock().unwrap()) {
+                return Err(AlienError::new(
+                    alien_client_core::ErrorData::HttpRequestFailed {
+                        message: "connection reset before the response arrived".to_string(),
+                    },
+                ));
+            }
+            Ok(create_successful_role_response(&request.role_name))
+        });
+
+        let state = account.clone();
+        mock.expect_get_role().returning(move |role_name| {
+            let roles = state.lock().unwrap();
+            let role = roles
+                .get(role_name)
+                .ok_or_else(|| no_such_role(role_name))?;
+            Ok(GetRoleResponse {
+                get_role_result: GetRoleResult {
+                    role: role_named(role_name, &role.tags),
+                },
+            })
+        });
+
+        let state = account.clone();
+        mock.expect_put_role_policy()
+            .returning(move |role_name, policy_name, _| {
+                let mut roles = state.lock().unwrap();
+                let role = roles
+                    .get_mut(role_name)
+                    .ok_or_else(|| no_such_role(role_name))?;
+                role.inline_policies.insert(policy_name.to_string());
+                Ok(())
+            });
+
+        let state = account.clone();
+        mock.expect_list_attached_role_policies()
+            .returning(move |role_name| {
+                let roles = state.lock().unwrap();
+                let role = roles
+                    .get(role_name)
+                    .ok_or_else(|| no_such_role(role_name))?;
+                Ok(ListAttachedRolePoliciesResponse {
+                    list_attached_role_policies_result: ListAttachedRolePoliciesResult {
+                        attached_policies: Some(AttachedPolicies {
+                            member: role
+                                .attached_policies
+                                .iter()
+                                .map(|arn| AttachedPolicy {
+                                    policy_name: arn.rsplit('/').next().unwrap().to_string(),
+                                    policy_arn: arn.clone(),
+                                })
+                                .collect(),
+                        }),
+                        is_truncated: Some(false),
+                        marker: None,
+                    },
+                })
+            });
+
+        let state = account.clone();
+        mock.expect_detach_role_policy()
+            .returning(move |role_name, policy_arn| {
+                let mut roles = state.lock().unwrap();
+                let role = roles
+                    .get_mut(role_name)
+                    .ok_or_else(|| no_such_role(role_name))?;
+                role.attached_policies.remove(policy_arn);
+                Ok(())
+            });
+
+        let state = account.clone();
+        mock.expect_list_role_policies()
+            .returning(move |role_name| {
+                let roles = state.lock().unwrap();
+                let role = roles
+                    .get(role_name)
+                    .ok_or_else(|| no_such_role(role_name))?;
+                Ok(ListRolePoliciesResponse {
+                    list_role_policies_result: ListRolePoliciesResult {
+                        policy_names: Some(PolicyNames {
+                            member: role.inline_policies.iter().cloned().collect(),
+                        }),
+                        is_truncated: Some(false),
+                        marker: None,
+                    },
+                })
+            });
+
+        let state = account.clone();
+        mock.expect_delete_role_policy()
+            .returning(move |role_name, policy_name| {
+                let mut roles = state.lock().unwrap();
+                let role = roles
+                    .get_mut(role_name)
+                    .ok_or_else(|| no_such_role(role_name))?;
+                role.inline_policies.remove(policy_name);
+                Ok(())
+            });
+
+        let state = account.clone();
+        mock.expect_delete_role().returning(move |role_name| {
+            let mut roles = state.lock().unwrap();
+            let role = roles
+                .get(role_name)
+                .ok_or_else(|| no_such_role(role_name))?;
+            if !role.inline_policies.is_empty() || !role.attached_policies.is_empty() {
+                return Err(AlienError::new(
+                    alien_client_core::ErrorData::RemoteResourceConflict {
+                        message: "Cannot delete entity, must delete policies first.".to_string(),
+                        resource_type: "IAM Resource".to_string(),
+                        resource_name: role_name.to_string(),
+                    },
+                ));
+            }
+            roles.remove(role_name);
+            Ok(())
+        });
+
+        mock
+    }
+
+    /// A role someone made by hand in the same account, with its own policies.
+    fn handmade_role() -> FakeRole {
+        FakeRole {
+            tags: HashMap::from([("owner".to_string(), "handmade".to_string())]),
+            inline_policies: BTreeSet::from(["HandmadeInline".to_string()]),
+            attached_policies: BTreeSet::from([
+                "arn:aws:iam::aws:policy/ReadOnlyAccess".to_string()
+            ]),
+        }
+    }
+
+    fn our_role() -> FakeRole {
+        FakeRole {
+            tags: standard_resource_tags("test", "my-registry"),
+            inline_policies: BTreeSet::from(["ECRPullPolicy".to_string()]),
+            attached_policies: BTreeSet::new(),
+        }
+    }
+
+    fn account_with(roles: &[(&str, FakeRole)]) -> FakeAccount {
+        Arc::new(Mutex::new(
+            roles
+                .iter()
+                .map(|(name, role)| (name.to_string(), role.clone()))
+                .collect(),
+        ))
+    }
+
+    async fn registry_executor(
+        controller: AwsArtifactRegistryController,
+        account: &FakeAccount,
+        lose_create_response: bool,
+    ) -> SingleControllerExecutor {
+        SingleControllerExecutor::builder()
+            .resource(basic_artifact_registry())
+            .controller(controller)
+            .platform(Platform::Aws)
+            .service_provider(setup_mock_service_provider(Arc::new(fake_iam(
+                account.clone(),
+                lose_create_response,
+            ))))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap()
+    }
+
+    /// State an earlier version left after creation failed before recording a role.
+    fn failed_create_state() -> AwsArtifactRegistryController {
+        AwsArtifactRegistryController {
+            state: AwsArtifactRegistryState::CreateFailed,
+            account_id: Some("123456789012".to_string()),
+            region: Some("us-east-1".to_string()),
+            pull_role_arn: None,
+            push_role_arn: None,
+            repository_prefix: Some("test-my-registry".to_string()),
+            _internal_stay_count: None,
+        }
+    }
+
+    /// Normal create and delete: both roles are created with our tags and policies, then
+    /// deleted with their policies.
+    #[tokio::test]
+    async fn create_then_delete_removes_our_roles() {
+        let account = account_with(&[]);
+        let mut executor =
+            registry_executor(AwsArtifactRegistryController::default(), &account, false).await;
+
+        executor.run_until_terminal().await.unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        {
+            let roles = account.lock().unwrap();
+            assert_eq!(
+                roles.keys().cloned().collect::<BTreeSet<_>>(),
+                BTreeSet::from([
+                    "test-my-registry-pull".to_string(),
+                    "test-my-registry-push".to_string()
+                ])
+            );
+            for role in roles.values() {
+                assert_eq!(role.tags, standard_resource_tags("test", "my-registry"));
+                assert_eq!(role.inline_policies.len(), 1);
+            }
+        }
+
+        executor.delete().unwrap();
+        executor.run_until_terminal().await.unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+        assert!(account.lock().unwrap().is_empty());
+    }
+
+    /// A same-account role that already has the pull or push role's name was made by someone
+    /// else. Creating refuses it, and removing the resource afterwards leaves it and its
+    /// policies in place; only the role this deployment did create is deleted.
+    #[rstest]
+    #[case::pull("test-my-registry-pull", None)]
+    #[case::push("test-my-registry-push", Some("test-my-registry-pull"))]
+    #[tokio::test]
+    async fn existing_role_without_our_tags_is_never_adopted_or_deleted(
+        #[case] taken_name: &str,
+        #[case] created_before_refusal: Option<&str>,
+    ) {
+        let account = account_with(&[(taken_name, handmade_role())]);
+        let mut executor =
+            registry_executor(AwsArtifactRegistryController::default(), &account, false).await;
+
+        let error = executor
+            .run_until_terminal()
+            .await
+            .expect_err("a role this deployment did not create is refused");
+        let expected_object = format!("IAM role '{taken_name}'");
+        assert!(
+            matches!(
+                &error.error,
+                Some(crate::error::ErrorData::ExistingCloudResourceNotOwned { resource_id, object })
+                    if resource_id == "my-registry" && *object == expected_object
+            ),
+            "{error:?}"
+        );
+        assert!(!error.retryable, "retrying cannot make the role ours");
+        assert_eq!(
+            account.lock().unwrap().get(taken_name),
+            Some(&handmade_role())
+        );
+        if let Some(created) = created_before_refusal {
+            assert_eq!(
+                account
+                    .lock()
+                    .unwrap()
+                    .get(created)
+                    .map(|role| role.tags.clone()),
+                Some(standard_resource_tags("test", "my-registry"))
+            );
+        }
+
+        // The release that drops the resource deletes only what this deployment created.
+        executor.delete().unwrap();
+        executor.run_until_terminal().await.unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+        assert_eq!(
+            *account.lock().unwrap(),
+            HashMap::from([(taken_name.to_string(), handmade_role())])
+        );
+    }
+
+    /// State written by earlier versions after CreateRole failed on the name: no role
+    /// recorded. Deleting it must neither get stuck nor touch the foreign roles.
+    #[tokio::test]
+    async fn delete_after_a_failed_create_keeps_foreign_roles() {
+        let account = account_with(&[
+            ("test-my-registry-pull", handmade_role()),
+            ("test-my-registry-push", handmade_role()),
+        ]);
+        let before = account.lock().unwrap().clone();
+        let mut executor = registry_executor(failed_create_state(), &account, false).await;
+
+        executor.delete().unwrap();
+        executor.run_until_terminal().await.unwrap();
+
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+        assert_eq!(*account.lock().unwrap(), before);
+    }
+
+    /// A create whose response was lost left an unrecorded role carrying our tags. A delete
+    /// removes it with its policies.
+    #[tokio::test]
+    async fn delete_after_an_interrupted_create_removes_our_tagged_role() {
+        let account = account_with(&[("test-my-registry-pull", our_role())]);
+        let mut executor = registry_executor(failed_create_state(), &account, false).await;
+
+        executor.delete().unwrap();
+        executor.run_until_terminal().await.unwrap();
+
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+        assert!(account.lock().unwrap().is_empty());
+    }
+
+    /// A retry after a lost CreateRole response resumes the role it created.
+    #[tokio::test]
+    async fn retry_after_a_lost_create_response_resumes_our_role() {
+        let account = account_with(&[]);
+        let mut executor =
+            registry_executor(AwsArtifactRegistryController::default(), &account, true).await;
+
+        let error = executor
+            .run_until_terminal()
+            .await
+            .expect_err("the first attempt loses its response");
+        assert!(error.retryable, "{error:?}");
+
+        executor.run_until_terminal().await.unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        let controller = executor
+            .internal_state::<AwsArtifactRegistryController>()
+            .unwrap();
+        assert_eq!(
+            controller.pull_role_arn.as_deref(),
+            Some("arn:aws:iam::123456789012:role/test-my-registry-pull")
+        );
+        assert_eq!(
+            controller.push_role_arn.as_deref(),
+            Some("arn:aws:iam::123456789012:role/test-my-registry-push")
+        );
     }
 }

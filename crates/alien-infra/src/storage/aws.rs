@@ -5,7 +5,7 @@ use std::fmt::Debug;
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
-use crate::core::ResourceControllerContext;
+use crate::core::{aws_ownership::is_tagged_as_ours, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
 use alien_aws_clients::s3::{
     GetBucketEncryptionOutput, LifecycleConfiguration, LifecycleExpiration, LifecycleRule,
@@ -17,7 +17,6 @@ use alien_core::{
     standard_resource_tags, AwsS3StorageHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
     ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
     ResourceStatus, Storage, StorageHeartbeatData, StorageHeartbeatStatus, StorageOutputs,
-    ALIEN_MANAGED_BY_TAG_KEY,
 };
 use alien_error::{Context, IntoAlienError};
 use alien_macros::controller;
@@ -41,21 +40,6 @@ fn is_bucket_missing(error: &AlienError<CloudClientErrorData>) -> bool {
     )
 }
 
-/// Whether a bucket carries the tags this controller writes on the buckets it creates. A bucket
-/// name is derived from the deployment prefix and resource ID, so the same account can already
-/// hold a bucket with that name that someone else made; only these tags show it is ours.
-/// Versions before the `runtime` value wrote `managed-by=deployment`, which is accepted too.
-fn bucket_is_ours(tags: &HashMap<String, String>, ours: &HashMap<String, String>) -> bool {
-    ours.iter().all(|(key, value)| {
-        let found = tags.get(key).map(String::as_str);
-        found == Some(value.as_str())
-            || (key == ALIEN_MANAGED_BY_TAG_KEY && found == Some(LEGACY_MANAGED_BY_TAG_VALUE))
-    })
-}
-
-/// The `managed-by` value older versions wrote on the buckets they created.
-const LEGACY_MANAGED_BY_TAG_VALUE: &str = "deployment";
-
 /// What already holds a bucket name, as far as this deployment is concerned.
 enum ExistingBucket {
     Missing,
@@ -74,7 +58,7 @@ async fn inspect_bucket(
     resource_id: &str,
 ) -> Result<ExistingBucket> {
     match client.get_bucket_tagging(bucket_name).await {
-        Ok(tags) if bucket_is_ours(&tags, our_tags) => Ok(ExistingBucket::Ours),
+        Ok(tags) if is_tagged_as_ours(&tags, our_tags) => Ok(ExistingBucket::Ours),
         Ok(tags) if tags.is_empty() => Ok(ExistingBucket::Untagged),
         Ok(_) => Ok(ExistingBucket::Foreign),
         Err(error) if is_bucket_missing(&error) => Ok(ExistingBucket::Missing),
@@ -1122,7 +1106,7 @@ impl AwsStorageController {
                 }));
             }
         };
-        if !bucket_is_ours(
+        if !is_tagged_as_ours(
             &tags,
             &standard_resource_tags(ctx.resource_prefix, &config.id),
         ) {
