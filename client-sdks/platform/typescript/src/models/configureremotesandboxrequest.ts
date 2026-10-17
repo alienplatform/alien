@@ -8,6 +8,8 @@ export type ConfigureRemoteSandboxRequest = {
   customImage?: string | undefined;
   maxLifetimeSeconds?: number | undefined;
   azureIdleSuspendSeconds?: number | undefined;
+  azureImage?: string | undefined;
+  gcpImage?: string | undefined;
 };
 
 /** @internal */
@@ -15,6 +17,8 @@ export type ConfigureRemoteSandboxRequest$Outbound = {
   customImage?: string | undefined;
   maxLifetimeSeconds?: number | undefined;
   azureIdleSuspendSeconds?: number | undefined;
+  azureImage?: string | undefined;
+  gcpImage?: string | undefined;
 };
 
 /** @internal */
@@ -25,6 +29,8 @@ export const ConfigureRemoteSandboxRequest$outboundSchema: z.ZodType<
   customImage: z.string().optional(),
   maxLifetimeSeconds: z.int().optional(),
   azureIdleSuspendSeconds: z.int().optional(),
+  azureImage: z.string().optional(),
+  gcpImage: z.string().optional(),
 });
 
 export function configureRemoteSandboxRequestToJSON(

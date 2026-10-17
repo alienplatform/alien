@@ -47,15 +47,31 @@ import {
   SyncListResponseStackState$inboundSchema,
   SyncListResponseStatus,
   SyncListResponseStatus$inboundSchema,
-} from "./synclistresponsependingpreparedstacktypeenvenum.js";
+} from "./synclistresponsependingpreparedstackdefaultunion.js";
 import {
   SyncListResponsePendingPreparedStackUnion,
   SyncListResponsePendingPreparedStackUnion$inboundSchema,
+  SyncListResponsePreparedStackCustom,
+  SyncListResponsePreparedStackCustom$inboundSchema,
   SyncListResponsePreparedStackInput,
   SyncListResponsePreparedStackInput$inboundSchema,
-  SyncListResponsePreparedStackOperations,
-  SyncListResponsePreparedStackOperations$inboundSchema,
-} from "./synclistresponsepreparedstackoperations.js";
+  SyncListResponsePreparedStackPlugins,
+  SyncListResponsePreparedStackPlugins$inboundSchema,
+} from "./synclistresponsepreparedstackplugins.js";
+
+/**
+ * Operations declared by a stack, or by an Operator installed on its own.
+ */
+export type SyncListResponsePreparedStackOperations = {
+  /**
+   * Published custom plugins, pinned to exact versions.
+   */
+  custom?: Array<SyncListResponsePreparedStackCustom> | undefined;
+  /**
+   * Built-in plugins, by plugin name.
+   */
+  plugins?: { [k: string]: SyncListResponsePreparedStackPlugins } | undefined;
+};
 
 export type SyncListResponsePreparedStackOperationsUnion =
   | SyncListResponsePreparedStackOperations
@@ -1448,7 +1464,10 @@ export type SyncListResponseSetupScaffolding = {
  */
 export type SyncListResponseSetupUpdateAuthorization = {
   /**
-   * Setup-owned digest (`Stack::setup_owned_digest`) of the last successful deployment.
+   * Setup resources and permissions digest (`Stack::setup_update_digest`) of the last
+   *
+   * @remarks
+   * successful deployment. The field name is retained for serialized compatibility.
    */
   baselineFrozenDigest: string;
   /**
@@ -1472,7 +1491,10 @@ export type SyncListResponseSetupUpdateAuthorization = {
    */
   setupTarget: string;
   /**
-   * Setup-owned digest (`Stack::setup_owned_digest`) of the stack the setup re-import prepared.
+   * Setup resources and permissions digest (`Stack::setup_update_digest`) of the stack
+   *
+   * @remarks
+   * the setup re-import prepared.
    */
   targetFrozenDigest: string;
 };
@@ -1485,6 +1507,13 @@ export type SyncListResponseSetupUpdateAuthorizationUnion =
  * Runtime metadata for deployment state persistence
  */
 export type SyncListResponseRuntimeMetadata = {
+  /**
+   * Setup-owned grant to keep using the direct setup executor for updates.
+   *
+   * @remarks
+   * Runtime settings and release contents must never create or change this grant.
+   */
+  automaticSetup?: boolean | undefined;
   /**
    * Whether each vault-native deployer secret is in the customer's secret
    *
@@ -1521,9 +1550,10 @@ export type SyncListResponseRuntimeMetadata = {
    */
   lastSyncedSecretNames?: Array<string> | undefined;
   /**
-   * Release `pending_prepared_stack` was prepared from. The target can move
+   * Release the in-flight stack was prepared from: `pending_prepared_stack`
    *
    * @remarks
+   * during updates, or `prepared_stack` during local first startup. The target can move
    * to a newer release while that stack is still being applied; this tells
    * the update which release actually converged.
    */
@@ -1539,9 +1569,9 @@ export type SyncListResponseRuntimeMetadata = {
    * keyed by input id, recorded when the deployment is created or its
    * setup import registers.
    *
-   * A frozen gate's answer is fixed for the deployment's lifetime: the
-   * update path refuses input values that conflict with these, and a Live
-   * resource sharing such an input resolves the persisted answer forever.
+   * Manual installations keep these answers fixed. An installation with an
+   * ongoing-management grant refreshes them when preparing a release. Live
+   * resources sharing a gate use the same recorded answer as Frozen resources.
    */
   persistedGateAnswers?: { [k: string]: boolean } | undefined;
   preparedStack?: SyncListResponsePreparedStack | string | null | undefined;
@@ -1962,9 +1992,37 @@ export type SyncListResponse = {
 };
 
 /** @internal */
+export const SyncListResponsePreparedStackOperations$inboundSchema: z.ZodType<
+  SyncListResponsePreparedStackOperations,
+  unknown
+> = z.object({
+  custom: z.array(SyncListResponsePreparedStackCustom$inboundSchema).optional(),
+  plugins: z.record(
+    z.string(),
+    SyncListResponsePreparedStackPlugins$inboundSchema,
+  ).optional(),
+});
+
+export function syncListResponsePreparedStackOperationsFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackOperations,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackOperations$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackOperations' from JSON`,
+  );
+}
+
+/** @internal */
 export const SyncListResponsePreparedStackOperationsUnion$inboundSchema:
   z.ZodType<SyncListResponsePreparedStackOperationsUnion, unknown> = z.union([
-    SyncListResponsePreparedStackOperations$inboundSchema,
+    z.lazy(() => SyncListResponsePreparedStackOperations$inboundSchema),
     z.string(),
   ]);
 
@@ -4002,7 +4060,7 @@ export const SyncListResponsePreparedStack$inboundSchema: z.ZodType<
   inputs: z.array(SyncListResponsePreparedStackInput$inboundSchema).optional(),
   operations: z.nullable(
     z.union([
-      SyncListResponsePreparedStackOperations$inboundSchema,
+      z.lazy(() => SyncListResponsePreparedStackOperations$inboundSchema),
       z.string(),
     ]),
   ).optional(),
@@ -4210,6 +4268,7 @@ export const SyncListResponseRuntimeMetadata$inboundSchema: z.ZodType<
   SyncListResponseRuntimeMetadata,
   unknown
 > = z.object({
+  automaticSetup: z.boolean().optional(),
   deployerSecrets: z.array(SyncListResponseDeployerSecret$inboundSchema)
     .optional(),
   directSetupRevision: z.nullable(z.string()).optional(),

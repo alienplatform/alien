@@ -1172,6 +1172,20 @@ export type DeploymentSetupStackSettingsPolicyNetworkUnion =
   | string;
 
 /**
+ * Whether setup remains a separate administrator operation.
+ */
+export const DeploymentSetupStackSettingsPolicySetupManagement = {
+  Manual: "manual",
+  Automatic: "automatic",
+} as const;
+/**
+ * Whether setup remains a separate administrator operation.
+ */
+export type DeploymentSetupStackSettingsPolicySetupManagement = ClosedEnum<
+  typeof DeploymentSetupStackSettingsPolicySetupManagement
+>;
+
+/**
  * How telemetry (logs, metrics, traces) is handled.
  */
 export const DeploymentSetupStackSettingsPolicyTelemetry = {
@@ -1270,6 +1284,12 @@ export type Defaults = {
    * Unknown identities are rejected. An empty list restores normal blocking.
    */
   quotaWarningOverrides?: Array<string> | undefined;
+  /**
+   * Whether setup remains a separate administrator operation.
+   */
+  setupManagement?:
+    | DeploymentSetupStackSettingsPolicySetupManagement
+    | undefined;
   /**
    * How telemetry (logs, metrics, traces) is handled.
    */
@@ -6255,6 +6275,16 @@ export function deploymentSetupStackSettingsPolicyNetworkUnionFromJSON(
 }
 
 /** @internal */
+export const DeploymentSetupStackSettingsPolicySetupManagement$inboundSchema:
+  z.ZodEnum<typeof DeploymentSetupStackSettingsPolicySetupManagement> = z.enum(
+    DeploymentSetupStackSettingsPolicySetupManagement,
+  );
+/** @internal */
+export const DeploymentSetupStackSettingsPolicySetupManagement$outboundSchema:
+  z.ZodEnum<typeof DeploymentSetupStackSettingsPolicySetupManagement> =
+    DeploymentSetupStackSettingsPolicySetupManagement$inboundSchema;
+
+/** @internal */
 export const DeploymentSetupStackSettingsPolicyTelemetry$inboundSchema:
   z.ZodEnum<typeof DeploymentSetupStackSettingsPolicyTelemetry> = z.enum(
     DeploymentSetupStackSettingsPolicyTelemetry,
@@ -6326,6 +6356,8 @@ export const Defaults$inboundSchema: z.ZodType<Defaults, unknown> = z.object({
     z.record(z.string(), z.record(z.string(), z.string())),
   ).optional(),
   quotaWarningOverrides: z.array(z.string()).optional(),
+  setupManagement:
+    DeploymentSetupStackSettingsPolicySetupManagement$inboundSchema.optional(),
   telemetry: DeploymentSetupStackSettingsPolicyTelemetry$inboundSchema
     .optional(),
   updates: DeploymentSetupStackSettingsPolicyUpdates$inboundSchema.optional(),
@@ -6365,6 +6397,7 @@ export type Defaults$Outbound = {
     | undefined;
   publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
   quotaWarningOverrides?: Array<string> | undefined;
+  setupManagement?: string | undefined;
   telemetry?: string | undefined;
   updates?: string | undefined;
 };
@@ -6427,6 +6460,9 @@ export const Defaults$outboundSchema: z.ZodType<Defaults$Outbound, Defaults> = z
       z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
     quotaWarningOverrides: z.array(z.string()).optional(),
+    setupManagement:
+      DeploymentSetupStackSettingsPolicySetupManagement$outboundSchema
+        .optional(),
     telemetry: DeploymentSetupStackSettingsPolicyTelemetry$outboundSchema
       .optional(),
     updates: DeploymentSetupStackSettingsPolicyUpdates$outboundSchema

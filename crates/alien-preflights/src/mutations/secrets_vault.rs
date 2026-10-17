@@ -179,8 +179,20 @@ impl StackMutation for SecretsVaultMutation {
 
         // Step 4: Add vault data permissions to management profile for the secrets vault.
         // This allows the control plane to sync secret environment variables without
-        // granting access to user-declared vaults.
-        add_vault_permissions_to_management(&mut stack, secrets_vault_id, !infrastructure_only)?;
+        // granting access to user-declared vaults. Automatic AWS installs are the exception:
+        // their stack-wide vault data grant also covers user-declared vaults in the stack.
+        // Automatic AWS setup installs stack-wide vault data access with the management role;
+        // see ManagementPermissionProfileMutation. A vault-scoped grant would make the
+        // runtime write a policy onto its own management role, which is denied.
+        if !(stack_state.platform == Platform::Aws
+            && config.stack_settings.setup_management == alien_core::SetupManagement::Automatic)
+        {
+            add_vault_permissions_to_management(
+                &mut stack,
+                secrets_vault_id,
+                !infrastructure_only,
+            )?;
+        }
 
         Ok(stack)
     }
@@ -2005,6 +2017,99 @@ mod tests {
                 );
             }
             _ => panic!("Expected Extend management permissions"),
+        }
+    }
+
+    /// The secrets vault usually arrives with a later release's first worker. In an automatic
+    /// install the runtime applies that release as the management identity, which cannot attach
+    /// a vault-scoped policy to its own role, so approved setup must already cover the vault.
+    #[tokio::test]
+    async fn automatic_setup_covers_a_later_secrets_vault_with_the_installed_grant() {
+        let worker = Worker::new("later-worker".to_string())
+            .code(WorkerCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .permissions("test-profile".to_string())
+            .build();
+        let mut profiles = IndexMap::new();
+        profiles.insert("test-profile".to_string(), PermissionProfile::new());
+        let mut resources = IndexMap::new();
+        resources.insert("management".to_string(), remote_stack_management_entry());
+        let initial = Stack {
+            dynamic_container_repositories: Vec::new(),
+            dynamic_container_image_resources: Vec::new(),
+            operations: None,
+            id: "test-stack".to_string(),
+            resources: resources.clone(),
+            permissions: PermissionsConfig {
+                profiles: profiles.clone(),
+                management: ManagementPermissions::Auto,
+            },
+            supported_platforms: None,
+            inputs: vec![],
+        };
+        resources.insert(
+            "later-worker".to_string(),
+            ResourceEntry {
+                config: alien_core::Resource::new(worker),
+                lifecycle: ResourceLifecycle::Live,
+                dependencies: Vec::new(),
+                remote_access: false,
+                enabled_when: None,
+            },
+        );
+        let later = Stack {
+            resources,
+            ..initial.clone()
+        };
+
+        let stack_state = StackState::new(Platform::Aws);
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings {
+                setup_management: alien_core::SetupManagement::Automatic,
+                ..StackSettings::default()
+            })
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+
+        let mut installed_grant = None;
+        for stack in [initial, later] {
+            let stack = if SecretsVaultMutation.should_run(&stack, &stack_state, &config) {
+                SecretsVaultMutation
+                    .mutate(stack, &stack_state, &config)
+                    .await
+                    .expect("secrets vault mutation")
+            } else {
+                stack
+            };
+            let prepared = crate::mutations::ManagementPermissionProfileMutation
+                .mutate(stack, &stack_state, &config)
+                .await
+                .expect("management profile");
+            let profile = prepared
+                .management()
+                .profile()
+                .expect("automatic management grant")
+                .clone();
+            for id in ["vault/data-read", "vault/data-write"] {
+                assert!(
+                    profile.0["*"].iter().any(|grant| grant.id() == id),
+                    "approved setup installs stack-wide {id}"
+                );
+            }
+            assert!(
+                profile.0.get(SECRETS_VAULT_ID).is_none(),
+                "no vault-scoped management grant for the runtime to apply: {profile:?}"
+            );
+            if let Some(installed) = &installed_grant {
+                assert_eq!(
+                    installed, &profile.0["*"],
+                    "a later worker needs no new grant"
+                );
+            }
+            installed_grant = Some(profile.0["*"].clone());
         }
     }
 

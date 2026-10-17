@@ -15,6 +15,12 @@ use super::{is_false, ComputeBackend, DomainMetadata, EnvironmentVariablesSnapsh
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct DeploymentConfig {
+    /// This invocation is an explicit setup run using the installer's credentials.
+    /// Not serialized: a release or stored configuration cannot request an identity refresh.
+    #[serde(skip)]
+    #[cfg_attr(feature = "openapi", schema(ignore))]
+    #[builder(default)]
+    pub setup_run: bool,
     /// Human-readable deployment name for cloud console metadata.
     ///
     /// This is separate from the physical resource prefix in StackState. It is

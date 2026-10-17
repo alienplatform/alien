@@ -147,7 +147,11 @@ impl CfEmitter for AwsStorageEmitter {
                         ),
                         (
                             "ExposedHeaders",
-                            CfExpression::list([CfExpression::from("ETag")]),
+                            CfExpression::list([
+                                CfExpression::from("ETag"),
+                                CfExpression::from("Content-Range"),
+                                CfExpression::from("Accept-Ranges"),
+                            ]),
                         ),
                         ("MaxAge", CfExpression::Integer(3600)),
                     ])]),

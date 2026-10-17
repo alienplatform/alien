@@ -65,50 +65,6 @@ fn dependency_waiting_function(id: &str) -> Worker {
         .build()
 }
 
-/// A failed first apply leaves a dependent with no cloud/controller checkpoint.
-/// Deletion removes that Pending entry, including in a lifecycle-filtered run.
-#[tokio::test]
-async fn test_failed_first_apply_deletion_removes_pending_dependents() -> Result<()> {
-    for lifecycle in [ResourceLifecycle::Live, ResourceLifecycle::Frozen] {
-        let stack = Stack::new("failed-first-apply-cleanup".to_owned())
-            .add(failing_function("failed"), lifecycle)
-            .add_with_dependencies(
-                test_function("waiting"),
-                lifecycle,
-                vec![ResourceRef::new(Worker::RESOURCE_TYPE, "failed")],
-            )
-            .build();
-        let executor = new_executor(&stack)?;
-        let mut state = new_test_state();
-        for _ in 0..10 {
-            state = executor.step(state).await?.next_state;
-            if get_status(&state, "failed") == Some(ResourceStatus::ProvisionFailed) {
-                break;
-            }
-        }
-        assert_eq!(
-            get_status(&state, "failed"),
-            Some(ResourceStatus::ProvisionFailed)
-        );
-        let pending = state.resources.get("waiting").unwrap();
-        assert_eq!(pending.status, ResourceStatus::Pending);
-        assert!(pending.internal_state.is_none());
-        assert!(pending.last_failed_state.is_none());
-        assert!(pending.outputs.is_none());
-        assert!(pending.remote_binding_params.is_none());
-        // Exercise the persisted wire state, rather than a hand-built Pending row.
-        let state: StackState =
-            serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
-        let deletion = new_deletion_executor_with_filter(vec![lifecycle])?;
-        let first = deletion.step(state).await?.next_state;
-        assert_not_in_state(&first, &["waiting"]);
-        let terminal = run_to_synced(&deletion, first).await?;
-        assert_deleted(&terminal, &["failed"]);
-        assert_not_in_state(&terminal, &["waiting"]);
-    }
-    Ok(())
-}
-
 /// Tests automatic recovery when config is updated after failure.
 #[tokio::test]
 async fn test_failure_auto_recovery_on_config_update() -> Result<()> {

@@ -720,3 +720,29 @@ run "disabled_existing_key" {
     super::helpers::test_utils::terraform_test(&files)
         .assert_ok("gated native and existing encryption key plans");
 }
+
+#[test]
+fn automatic_key_packages_are_refused_on_all_clouds() {
+    let stack = Stack::new("example".to_string())
+        .add(
+            Key::new("customer-key".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    for target in [
+        TerraformTarget::Aws,
+        TerraformTarget::Gcp,
+        TerraformTarget::Azure,
+    ] {
+        let error = super::helpers::try_render(
+            &stack,
+            target,
+            StackSettings {
+                setup_management: alien_core::SetupManagement::Automatic,
+                ..StackSettings::default()
+            },
+        )
+        .expect_err("automatic packages cannot hand off setup-owned keys");
+        assert!(error.to_string().contains("manual setup"), "{error}");
+    }
+}

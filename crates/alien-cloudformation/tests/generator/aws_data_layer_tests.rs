@@ -1,11 +1,12 @@
 //! AWS data-layer scenarios — storage / kv / queue / vault.
 
 use super::helpers::{custom_resource_registration, render_built_ins, render_built_ins_template};
-use alien_cloudformation::RegistrationMode;
+use alien_cloudformation::{CloudFormationTarget, RegistrationMode};
 use alien_core::{
-    Key, Kv, LifecycleRule, PermissionProfile, PermissionSetReference, Queue, RemoteBindings,
-    RemoteStackManagement, ResourceLifecycle, ResourceRef, ServiceAccount, Stack, StackSettings,
-    Storage, Vault, Worker, WorkerCode, WorkerTrigger,
+    permissions::ManagementPermissions, AwsOpenSearch, Email, Key, Kv, LifecycleRule,
+    PermissionProfile, PermissionSetReference, Queue, RemoteBindings, RemoteStackManagement,
+    ResourceLifecycle, ResourceRef, ServiceAccount, Stack, StackSettings, Storage, Vault, Worker,
+    WorkerCode, WorkerTrigger,
 };
 
 #[test]
@@ -384,7 +385,10 @@ fn aws_storage_emits_browser_read_cors() {
         cors_rule["AllowedOrigins"],
         serde_json::json!(["https://console.example.com", "http://localhost:3000"])
     );
-    assert_eq!(cors_rule["ExposedHeaders"], serde_json::json!(["ETag"]));
+    assert_eq!(
+        cors_rule["ExposedHeaders"],
+        serde_json::json!(["ETag", "Content-Range", "Accept-Ranges"])
+    );
     assert_eq!(cors_rule["MaxAge"], 3600);
 }
 
@@ -805,4 +809,122 @@ fn aws_remote_queue_setup_passes_cloudformation_validation() {
         RegistrationMode::OutputsFallback,
         "remote Queue setup",
     );
+}
+
+fn render_automatic(stack: &Stack, description: &str) -> alien_core::Result<()> {
+    super::helpers::try_render_built_ins(
+        stack,
+        StackSettings {
+            setup_management: alien_core::SetupManagement::Automatic,
+            ..StackSettings::default()
+        },
+        RegistrationMode::OutputsFallback,
+        CloudFormationTarget::Aws,
+        "aws",
+        description,
+    )
+    .map(|_| ())
+}
+
+/// An automatic package installs only access and secret storage; the runtime creates the
+/// rest. Resources the runtime cannot create as declared must be refused up front, so the
+/// platform offers manual setup instead of a package that fails after installation.
+#[test]
+fn automatic_packages_refuse_resources_the_runtime_cannot_create() {
+    let cases: Vec<(&str, Stack)> = vec![
+        (
+            "key",
+            Stack::new("example".to_string())
+                .add(
+                    Key::new("customer-key".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build(),
+        ),
+        (
+            "email",
+            Stack::new("example".to_string())
+                .add(
+                    Email::new("mailer".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build(),
+        ),
+        (
+            "opensearch",
+            Stack::new("example".to_string())
+                .add(
+                    AwsOpenSearch::new("search".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build(),
+        ),
+        (
+            "storage with CORS",
+            Stack::new("example".to_string())
+                .add(
+                    Storage::new("files".to_string())
+                        .cors_allowed_origins(vec!["https://console.example.com".to_string()])
+                        .build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build(),
+        ),
+        (
+            "management permission override",
+            Stack::new("example".to_string())
+                .add(
+                    Storage::new("files".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .management(ManagementPermissions::Override(PermissionProfile::new()))
+                .build(),
+        ),
+        (
+            "resource-scoped management permission",
+            Stack::new("example".to_string())
+                .add(
+                    Storage::new("files".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .management(ManagementPermissions::Extend(
+                    PermissionProfile::new().resource("files", ["storage/data-read"]),
+                ))
+                .build(),
+        ),
+    ];
+    for (name, stack) in cases {
+        let error = render_automatic(&stack, name)
+            .expect_err(&format!("automatic package must refuse {name}"));
+        assert_eq!(
+            error.code, "AUTOMATIC_SETUP_RESOURCE_UNSUPPORTED",
+            "{name}: {error}"
+        );
+        assert!(
+            error.to_string().contains("manual setup"),
+            "{name}: {error}"
+        );
+    }
+
+    // Control: the same storage without CORS origins is created by the runtime as declared.
+    let plain = Stack::new("example".to_string())
+        .add(
+            Storage::new("files".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    render_automatic(&plain, "storage without CORS").expect("plain storage is supported");
+
+    // Control: a stack-wide management extension is installed by setup like the generated grant.
+    let extended = Stack::new("example".to_string())
+        .add(
+            Storage::new("files".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .management(ManagementPermissions::Extend(
+            PermissionProfile::new().global(["storage/data-read"]),
+        ))
+        .build();
+    render_automatic(&extended, "stack-wide management extension")
+        .expect("stack-wide management extensions are supported");
 }

@@ -6,6 +6,10 @@ import { HTTPClient } from "../typescript/esm/lib/http.js";
 import { Alien } from "../typescript/esm/sdk/sdk.js";
 import { deploymentGroupsCreateToken } from "../typescript/esm/funcs/deploymentGroupsCreateToken.js";
 import { OperationsPermissionDiff$inboundSchema } from "../typescript/esm/models/index.js";
+import { deploymentSetupConfigInputToJSON } from "../typescript/esm/models/deploymentsetupconfiginput.js";
+import { deploymentSetupPolicyFromJSON, deploymentSetupPolicyToJSON } from "../typescript/esm/models/deploymentsetuppolicy.js";
+import { newDeploymentRequestToJSON } from "../typescript/esm/models/newdeploymentrequest.js";
+import { deploymentInfoStackSettingsFromJSON } from "../typescript/esm/models/deploymentinfo.js";
 import {
   KubernetesPermissions$outboundSchema,
   Rule$outboundSchema,
@@ -15,12 +19,37 @@ import {
 } from "../typescript/esm/models/publishoperationspluginrequest.js";
 import { PublishOperationsPluginResponse$inboundSchema } from "../typescript/esm/models/publishoperationspluginresponse.js";
 import { DeploymentInfoHelm$inboundSchema } from "../typescript/esm/models/deploymentinfo.js";
-import { PackageRule$inboundSchema, packageRuleFromJSON } from "../typescript/esm/models/package.js";
+import { PackageModules$inboundSchema, PackageTargets$inboundSchema, PackageRule$inboundSchema, packageRuleFromJSON } from "../typescript/esm/models/package.js";
 import {
   UpdateProjectBinaryTarget,
   UpdateProjectHelm$outboundSchema,
   updateProjectHelmToJSON,
 } from "../typescript/esm/models/updateproject.js";
+
+test("deployment requests retain explicit authority without elevating omitted settings", () => {
+  for (const setupManagement of [undefined, "manual", "automatic"]) {
+    const stackSettings = setupManagement === undefined ? {} : { setupManagement };
+    const request = JSON.parse(newDeploymentRequestToJSON({ name: "example", project: "example", platform: "aws", stackSettings }));
+    assert.deepEqual(request.stackSettings, stackSettings);
+    const response = deploymentInfoStackSettingsFromJSON(JSON.stringify(stackSettings));
+    assert.equal(response.ok, true);
+    if (response.ok) assert.deepEqual(response.value, stackSettings);
+  }
+});
+
+test("link configuration profiles survive request and response serialization without a legacy default", () => {
+  for (const configurationProfile of [undefined, "standard", "advanced"]) {
+    const policy = {
+      allowedPlatforms: ["aws"],
+      allowedSetupMethods: ["cloudformation"],
+      ...(configurationProfile === undefined ? {} : { configurationProfile }),
+    };
+    const request = JSON.parse(deploymentSetupConfigInputToJSON({ policy }));
+    assert.deepEqual(request.policy, policy);
+    assert.deepEqual(JSON.parse(deploymentSetupPolicyToJSON(policy)), policy);
+    assert.deepEqual(deploymentSetupPolicyFromJSON(JSON.stringify(policy)), { ok: true, value: policy });
+  }
+});
 
 test("published package model imports still validate and serialize", () => {
   const rule = { apiGroup: "apps", resource: "deployments", verbs: ["get"], reason: "Read workload state" };
@@ -30,6 +59,11 @@ test("published package model imports still validate and serialize", () => {
   assert.deepEqual(UpdateProjectHelm$outboundSchema.parse(helm), helm);
   assert.deepEqual(JSON.parse(updateProjectHelmToJSON(helm)), helm);
   assert.equal(UpdateProjectBinaryTarget.LinuxArm64, "linux-arm64");
+  const operationalDefaults = { heartbeats: "on", telemetry: "off", updates: "auto" };
+  const module = { downloadUrl: "https://packages.example/module.zip", filename: "module.zip", shasum: "example", size: 1, source: "registry.example/application/aws", target: "aws", operationalDefaults };
+  const target = { launchStackUrl: "https://console.example/launch", sha256: "example", size: 1, stackPolicyUrl: "https://packages.example/policy.json", target: "aws", templateUrl: "https://packages.example/template.json", operationalDefaults, parameters: ["CustomerKeyArn"] };
+  assert.deepEqual(PackageModules$inboundSchema.parse(module), module);
+  assert.deepEqual(PackageTargets$inboundSchema.parse(target), target);
 });
 
 test("Helm installation routing survives SDK response validation", () => {
@@ -444,6 +478,42 @@ test("published deep imports retain moved enums and response parsers", async () 
   assert.deepEqual(manager.CreateManagerResponseProviderAwsAlb2$inboundSchema.parse(provider), provider);
 });
 
+test("target settings preserve setup authority through published model paths", async () => {
+  for (const path of ["targetdeploymentconfig", "releaseinfotypestringlist"]) {
+    const { targetDeploymentStackSettingsFromJSON } = await import(`../typescript/esm/models/${path}.js`);
+    for (const settings of [{}, { setupManagement: "manual" }, { setupManagement: "automatic" }]) {
+      assert.deepEqual(targetDeploymentStackSettingsFromJSON(JSON.stringify(settings)), { ok: true, value: settings });
+    }
+  }
+});
+
+test("published deployment-info operational enums retain root and deep imports", async () => {
+  for (const path of ["index", "deploymentinfo"]) {
+    const models = await import(`../typescript/esm/models/${path}.js`);
+    for (const name of ["Heartbeats", "Telemetry", "Updates"]) {
+      const values = Object.values(models[`DeploymentInfo${name}`]);
+      assert.ok(values.length > 0);
+      for (const value of values) {
+        assert.equal(models[`DeploymentInfo${name}$inboundSchema`].parse(value), value);
+      }
+    }
+  }
+});
+
+
+test("import serialization and deployment responses retain selected disk capacity", async () => {
+  const selection = { cpu: 1.5, memory: "2Gi", volumeSizeGib: 128 };
+  for (const [path, schema] of [
+    ["persistimporteddeploymentrequestpendingpreparedstacksettingscustom2", "PersistImportedDeploymentRequestContainers$outboundSchema"],
+    ["deploymentdetailresponsependingpreparedstackdefaultunion", "DeploymentDetailResponseContainers$inboundSchema"],
+    ["synclistresponsependingpreparedstackdefaultunion", "SyncListResponseContainers$inboundSchema"],
+    ["targetdeploymentvolumerestore", "TargetDeploymentContainers$inboundSchema"],
+  ]) {
+    const model = await import(`../typescript/esm/models/${path}.js`);
+    assert.deepEqual(model[schema].parse(selection), selection);
+    assert.deepEqual(model[schema].parse({}), {});
+  }
+});
 test("execution and target configs retain saved quota overrides and explicit clear", async () => {
   const { DeploymentConfig$inboundSchema } = await import("../typescript/esm/models/deploymentconfig.js");
   const { TargetDeploymentConfig$inboundSchema } = await import("../typescript/esm/models/targetdeploymentconfig.js");
@@ -451,9 +521,10 @@ test("execution and target configs retain saved quota overrides and explicit cle
     for (const overrides of [["L-1216C47A"], []]) {
       const decoded = schema.parse({
         environmentVariables: { variables: [], hash: "", createdAt: "" },
-        stackSettings: { quotaWarningOverrides: overrides },
+        stackSettings: { quotaWarningOverrides: overrides, setupManagement: "automatic" },
       });
       assert.deepEqual(decoded.stackSettings.quotaWarningOverrides, overrides);
+      assert.equal(decoded.stackSettings.setupManagement, "automatic");
     }
   }
 });

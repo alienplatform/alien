@@ -109,11 +109,55 @@ pub async fn handle_update_pending(
     let mut next = current.clone();
 
     // Stack state is required
-    let stack_state = current.stack_state.clone().ok_or_else(|| {
+    let mut stack_state = current.stack_state.clone().ok_or_else(|| {
         AlienError::new(ErrorData::MissingConfiguration {
             message: "Stack state required for update".to_string(),
         })
     })?;
+
+    // This grant is written by direct setup and retained by the store as setup-owned
+    // metadata. A release or a mutable runtime setting cannot confer setup authority.
+    if let Some(metadata) = current
+        .runtime_metadata
+        .as_ref()
+        .filter(|metadata| metadata.automatic_setup)
+    {
+        let mut metadata = crate::pending::prepare_direct_setup_update(
+            target_stack,
+            &stack_state,
+            &config,
+            &client_config,
+            metadata,
+        )
+        .await?;
+        metadata.pending_prepared_release_id = current
+            .target_release
+            .as_ref()
+            .and_then(|release| release.release_id.clone());
+        crate::initial_setup::retry_failed_setup_resources(&mut stack_state, &metadata, &config)?;
+        // Setup hands back to Provisioning, whose executor does not resume failures. Resume
+        // unchanged failed runtime resources here, as the manual update executor does; changed
+        // ones are left to the planner.
+        let prepared_target =
+            crate::helpers::injected_target_stack(&metadata, &config, stack_state.platform)?;
+        crate::helpers::resume_unchanged_failed_resources(
+            &mut stack_state,
+            &prepared_target,
+            |resource| resource.lifecycle == Some(ResourceLifecycle::Live),
+        )?;
+        next.status = DeploymentStatus::InitialSetup;
+        next.stack_state = Some(stack_state);
+        next.runtime_metadata = Some(metadata);
+        next.error = None;
+        next.retry_requested = false;
+        return Ok(DeploymentStepResult {
+            state: next,
+            suggested_delay_ms: None,
+            update_heartbeat: false,
+            heartbeats: vec![],
+            observed_inventory_batches: vec![],
+        });
+    }
 
     // A frozen gate is answered once: the answers recorded at creation are
     // what every later input value is held against. A gate with no recorded

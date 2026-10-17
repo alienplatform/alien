@@ -28,7 +28,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Update deployment-time compute pool selections and request reconciliation by the hosted manager.
+ * Update deployment-time compute selections or quota warning overrides and request reconciliation by the hosted manager.
  */
 export function deploymentsUpdateCompute(
   client: AlienCore,

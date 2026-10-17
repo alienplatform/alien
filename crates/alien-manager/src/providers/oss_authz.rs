@@ -63,10 +63,7 @@ impl OssAuthz {
     fn project_reader(s: &Subject) -> bool {
         !matches!(
             s.role,
-            Role::ImageRepositoryProvisioner
-                | Role::SandboxImagePusher
-                | Role::TunnelCaller
-                | Role::DeploymentTeardown
+            Role::ImageRepositoryProvisioner | Role::SandboxImagePusher | Role::TunnelCaller
         )
     }
 
@@ -135,9 +132,6 @@ impl Authz for OssAuthz {
     }
 
     fn can_read_deployment(&self, s: &Subject, deployment: &DeploymentRecord) -> bool {
-        if s.role == Role::DeploymentTeardown {
-            return false;
-        }
         match &s.scope {
             Scope::Workspace => true,
             Scope::Project { project_id } => {
@@ -211,9 +205,6 @@ impl Authz for OssAuthz {
     }
 
     fn can_read_deployment_group(&self, s: &Subject, dg: &DeploymentGroupRecord) -> bool {
-        if s.role == Role::DeploymentTeardown {
-            return false;
-        }
         match &s.scope {
             Scope::Workspace => true,
             Scope::Project { project_id } => {
@@ -272,9 +263,6 @@ impl Authz for OssAuthz {
         s: &Subject,
         command: &alien_commands::server::CommandAccessContext,
     ) -> bool {
-        if s.role == Role::DeploymentTeardown {
-            return false;
-        }
         if let Some(allowed) = crate::auth::command_capability::sender_context_decision(s, command)
         {
             return allowed;
@@ -320,9 +308,6 @@ impl Authz for OssAuthz {
     // -- Sync protocol -----------------------------------------------------
 
     fn can_sync_deployment(&self, s: &Subject, deployment: &DeploymentRecord) -> bool {
-        if s.role == Role::DeploymentTeardown {
-            return false;
-        }
         match &s.scope {
             Scope::Deployment { deployment_id, .. } => {
                 deployment_id == &deployment.id && s.role == Role::DeploymentManager
@@ -342,9 +327,6 @@ impl Authz for OssAuthz {
     }
 
     fn can_acquire_deployments(&self, s: &Subject, deployments: &[DeploymentRecord]) -> bool {
-        if s.role == Role::DeploymentTeardown {
-            return false;
-        }
         deployments.iter().all(|d| self.can_sync_deployment(s, d))
     }
 

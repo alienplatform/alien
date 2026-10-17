@@ -1,13 +1,13 @@
-# DeploymentInfoTelemetry
+# TerraformTelemetry
 
 How telemetry (logs, metrics, traces) is handled.
 
 ## Example Usage
 
 ```typescript
-import { DeploymentInfoTelemetry } from "@alienplatform/platform-api/models";
+import { TerraformTelemetry } from "@alienplatform/platform-api/models";
 
-let value: DeploymentInfoTelemetry = "off";
+let value: TerraformTelemetry = "off";
 ```
 
 ## Values

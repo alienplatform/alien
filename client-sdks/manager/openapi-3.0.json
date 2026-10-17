@@ -16822,6 +16822,14 @@
           }
         }
       },
+      "SetupManagement": {
+        "type": "string",
+        "description": "Whether setup remains a separate administrator operation.",
+        "enum": [
+          "manual",
+          "automatic"
+        ]
+      },
       "SourceCredentials": {
         "type": "string",
         "enum": [
@@ -17161,6 +17169,10 @@
               "type": "string"
             },
             "description": "Provider quota identities whose preflight failures become visible warnings\nfor this deployment. Checks still run; deploy-time provider limits still apply.\nUnknown identities are rejected. An empty list restores normal blocking."
+          },
+          "setupManagement": {
+            "$ref": "#/components/schemas/SetupManagement",
+            "description": "Ongoing authority over infrastructure normally owned by setup. Automatic requires\nan explicit CLI setup grant; changing this setting alone never grants that authority."
           },
           "telemetry": {
             "$ref": "#/components/schemas/TelemetryMode",
