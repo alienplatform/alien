@@ -94,14 +94,15 @@ impl StackMutation for ComputeClusterMutation {
         let daemon_cluster_ids =
             referenced_daemon_clusters_for_platform(stack, stack_state.platform);
         let has_daemon_cluster_ref = !daemon_cluster_ids.is_empty();
-        if !has_containers && !has_daemon_cluster_ref {
-            return false;
-        }
-
         let has_cluster = stack
             .resources
             .values()
             .any(|entry| entry.config.resource_type().as_ref() == "compute-cluster");
+        // Explicit clusters need their selected machines even when no workload
+        // references them, for example a pool reserved for remote commands.
+        if !has_containers && !has_daemon_cluster_ref && !has_cluster {
+            return false;
+        }
 
         if !has_cluster {
             return true;
