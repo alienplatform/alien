@@ -12,6 +12,7 @@ pub(crate) struct Provider {
     pub(crate) objects: BTreeMap<String, Value>,
     pub(crate) mutations: usize,
     pub(crate) pending_regional_operations: bool,
+    pub(crate) lose_public_certificate_response: bool,
     pub(crate) lose_backend_response: bool,
     pub(crate) deny_backend_recovery_reads: bool,
     fail_certificate_delete: bool,
@@ -82,6 +83,12 @@ fn insert(
     value["id"] = json!((store.mutations + 1).to_string());
     store.objects.insert(key, value);
     store.mutations += 1;
+    if kind == "certificate" && name.starts_with("public-") && store.lose_public_certificate_response {
+        store.lose_public_certificate_response = false;
+        return Err(AlienError::new(ClientErrorData::Timeout {
+            message: "lost public certificate create response".to_string(),
+        }));
+    }
     if kind == "backend" && store.lose_backend_response {
         store.lose_backend_response = false;
         return Err(AlienError::new(ClientErrorData::AuthenticationError {

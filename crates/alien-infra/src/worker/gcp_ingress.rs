@@ -473,3 +473,7 @@ fn worker_endpoints(worker: &Worker) -> Vec<PublicEndpoint> {
         })
         .collect()
 }
+
+#[cfg(test)]
+#[path = "gcp_ingress_tests.rs"]
+mod tests;
