@@ -1156,6 +1156,7 @@ async fn list_models(
                     "object": "model",
                     "provider": model.provider(),
                     "displayName": model.display_name(),
+                    "capabilities": model.capabilities(),
                 })
             })
             .collect(),
@@ -1174,6 +1175,7 @@ async fn list_models(
                     "object": "model",
                     "provider": "anthropic",
                     "displayName": model.display_name(),
+                    "capabilities": ai_catalog::unverified_model_capabilities(),
                 })
             })
             .collect(),
@@ -1195,6 +1197,7 @@ async fn list_models(
                         "object": "model",
                         "provider": "openai",
                         "displayName": model,
+                        "capabilities": ai_catalog::unverified_model_capabilities(),
                     })
                 })
                 .collect()
@@ -1217,6 +1220,7 @@ async fn list_models(
                         "object": "model",
                         "provider": "databricks",
                         "displayName": model,
+                        "capabilities": ai_catalog::unverified_model_capabilities(),
                     })
                 })
                 .collect()
@@ -3317,6 +3321,24 @@ mod tests {
             .expect("byo/gpt-oss-20b entry");
         assert_eq!(gpt["provider"], "openai");
         assert_eq!(gpt["displayName"], "GPT-OSS 20B");
+        let capabilities = gpt["capabilities"].as_array().expect("capability matrix");
+        assert_eq!(capabilities.len(), ClientApi::ALL.len());
+        let responses = capabilities
+            .iter()
+            .find(|entry| entry["api"] == "open-ai-responses")
+            .expect("Responses capabilities");
+        assert_eq!(responses["functionTools"], "supported");
+        assert_eq!(responses["serverManagedContinuation"], "supported");
+        assert_eq!(responses["statelessReplay"], "unsupported");
+        assert_eq!(responses["imageInput"], "unverified");
+        assert_eq!(responses["reasoningControls"], "unverified");
+        assert_eq!(responses["qualifiedOn"], "2026-09-22");
+        let chat = capabilities
+            .iter()
+            .find(|entry| entry["api"] == "open-ai-chat-completions")
+            .expect("Chat Completions capabilities");
+        assert_eq!(chat["functionTools"], "unverified");
+        assert!(chat.get("qualifiedOn").is_none());
         assert_eq!(
             openai.hits_async().await,
             0,

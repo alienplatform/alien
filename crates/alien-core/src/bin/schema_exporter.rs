@@ -1,3 +1,4 @@
+use alien_core::ai_catalog::{ModelApiCapabilities, ModelCapabilitySupport};
 use alien_core::sync::{
     DynamicContainerHealthCheck, DynamicContainerReport, DynamicContainerStatus,
     ObservedApplicationImage, ObservedApplicationReport, ObservedApplicationSource,
@@ -134,6 +135,8 @@ use utoipa::OpenApi;
     PostgresOutputs,
     Ai,
     AiOutputs,
+    ModelApiCapabilities,
+    ModelCapabilitySupport,
     Queue,
     QueueOutputs,
     Sandbox,
