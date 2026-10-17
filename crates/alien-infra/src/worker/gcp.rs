@@ -7736,12 +7736,29 @@ mod tests {
         let mock_cloudrun =
             setup_mock_client_for_creation_and_update(&function_name, false, resumed);
 
+        let topic_state = Arc::new(std::sync::Mutex::new(None::<alien_gcp_clients::pubsub::Topic>));
+        let topic_read = topic_state.clone();
+        let topic_write = topic_state.clone();
         let mut mock_pubsub = MockPubSubApi::new();
+        mock_pubsub.expect_get_topic().returning(move |name| {
+            topic_read.lock().unwrap().clone().ok_or_else(|| AlienError::new(CloudClientErrorData::RemoteResourceNotFound {
+                resource_type: "topic".into(), resource_name: name,
+            }))
+        });
+        mock_pubsub.expect_get_subscription().times(1).returning(|name| {
+            Err(AlienError::new(CloudClientErrorData::RemoteResourceNotFound {
+                resource_type: "subscription".into(), resource_name: name,
+            }))
+        });
         mock_pubsub
             .expect_create_topic()
             .withf(|topic_id, _| topic_id == "test-private-func-rq")
             .times(1)
-            .returning(|_, topic| Ok(topic));
+            .returning(move |name, mut topic| {
+                topic.name = Some(format!("projects/test-project-123/topics/{name}"));
+                *topic_write.lock().unwrap() = Some(topic.clone());
+                Ok(topic)
+            });
         mock_pubsub
             .expect_create_subscription()
             .withf(|subscription_id, subscription| {
@@ -7761,7 +7778,10 @@ mod tests {
                         })
             })
             .times(1)
-            .returning(|_, subscription| Ok(subscription));
+            .returning(|name, mut subscription| {
+                subscription.name = Some(format!("projects/test-project-123/subscriptions/{name}"));
+                Ok(subscription)
+            });
         mock_pubsub
             .expect_set_topic_iam_policy()
             .withf(|topic_id, _| topic_id == "test-private-func-rq")
