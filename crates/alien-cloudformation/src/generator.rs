@@ -663,6 +663,10 @@ fn add_deployer_secret_outputs(
     target: CloudFormationTarget,
     deployer_secrets_vault_binding: Option<&CfExpression>,
 ) -> Result<()> {
+    // Preflights omit this vault when every deployer input retains a stored value.
+    if !stack.resources.contains_key(alien_core::DEPLOYER_SECRETS_VAULT_ID) {
+        return Ok(());
+    }
     let platform = target.deployment_platform();
     let inputs: Vec<&StackInputDefinition> = stack
         .inputs()

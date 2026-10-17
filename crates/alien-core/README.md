@@ -78,3 +78,37 @@ status, then delete the former `<prefix>-secrets-input-api-key` value (or
 write and delete commands. Alien never copies values or reads the old location
 as a fallback; an old-name-only slot remains missing. Stored legacy values
 already shared with the control plane keep their existing delivery.
+
+### Indirect infrastructure privileges
+
+This boundary covers direct value access. Infrastructure management still has
+powers that can change IAM or deploy code using a workload identity:
+
+- AWS management can create/update compute using stack roles and `iam:PassRole`.
+  The reserved-vault deny applies to management itself, including parameter
+  tags and resource policies; it does not follow a workload role. CloudTrail
+  records `CreateFunction`, `UpdateFunctionCode`, `UpdateFunctionConfiguration`,
+  `RunInstances`, and IAM `PutRolePolicy` / `UpdateAssumeRolePolicy` changes.
+  `PassRole` is a permission check, not a separate CloudTrail event; inspect the
+  role in the compute API event. KMS decrypt alone does not authorize SSM reads.
+- GCP management retains project `setIamPolicy`, custom-role updates, and
+  project-level secret creation. Secret creation checks the parent project,
+  so IAM cannot exclude a requested slot name using a resource-name condition.
+  IAM changes can grant subsequent payload access. Admin Activity logs record
+  `SetIamPolicy`, `google.iam.admin.v1.UpdateRole`, and
+  `google.cloud.secretmanager.v1.SecretManagerService.CreateSecret`.
+- Azure management retains resource-group role-assignment writes and vault
+  configuration powers. Those can grant payload access or change the vault's
+  authorization model; infrastructure teardown can also delete the containing
+  vault/resource group. Activity Log operations include
+  `Microsoft.Authorization/roleAssignments/write`,
+  `Microsoft.Authorization/roleDefinitions/write`,
+  `Microsoft.KeyVault/vaults/write`, `Microsoft.KeyVault/vaults/accessPolicies/write`,
+  and `Microsoft.KeyVault/vaults/delete`.
+
+These are accepted infrastructure privileges, not a hard boundary against a
+compromised infrastructure manager. Customer-owned deny policies (for example,
+GCP IAM deny policies) and separately controlled provisioning identities are
+possible follow-up work. On GCP/Azure, custom inline management permissions are
+refused while native slots exist because they can embed arbitrary payload roles
+or scopes; use reviewed named permission sets on concrete shared resources.

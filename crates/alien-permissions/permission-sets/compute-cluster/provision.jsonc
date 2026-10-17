@@ -446,11 +446,19 @@
         }
       },
       // Secret Manager for worker runtime secrets
+      // Creating a secret is authorized on the parent project. This cannot
+      // restrict the requested secret id; creation is an indirect trust limit.
+      {
+        "grant": { "permissions": ["secretmanager.secrets.create"] },
+        "binding": {
+          "stack": { "scope": "projects/${projectName}" },
+          "resource": { "scope": "projects/${projectName}" }
+        }
+      },
       {
         "grant": {
           "permissions": [
             "secretmanager.secrets.get",
-            "secretmanager.secrets.create",
             "secretmanager.secrets.delete",
             "secretmanager.versions.add",
             "secretmanager.secrets.getIamPolicy",
@@ -459,10 +467,18 @@
         },
         "binding": {
           "stack": {
-            "scope": "projects/${projectName}"
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "SharedRuntimeSecretsOnly",
+              "expression": "resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-\") && !resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-deployer-secrets-\")"
+            }
           },
           "resource": {
-            "scope": "projects/${projectName}"
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "SharedRuntimeSecretsOnly",
+              "expression": "resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-\") && !resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-deployer-secrets-\")"
+            }
           }
         }
       }

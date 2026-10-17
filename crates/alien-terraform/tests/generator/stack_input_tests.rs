@@ -183,25 +183,6 @@ fn deployer_secrets_never_reach_terraform_variables_or_state() {
     }
 }
 
-#[test]
-fn deployer_secrets_need_the_secrets_vault() {
-    let stack = Stack::new("secret-input-stack".to_string())
-        .inputs(deployer_secret_stack(vec![StackInputProvider::Deployer]).inputs)
-        .add(
-            Storage::new("data".to_string()).build(),
-            ResourceLifecycle::Frozen,
-        )
-        .build();
-
-    let error = try_render(&stack, TerraformTarget::Aws, StackSettings::default())
-        .expect_err("a deployer secret without the secrets vault is refused");
-    assert!(
-        error.message.contains("'deployer-secrets' vault"),
-        "{}",
-        error.message
-    );
-}
-
 /// Distinct ids can normalize to the same Terraform variable; a silent shadow
 /// would make both inputs read one variable, so generation must refuse.
 #[test]

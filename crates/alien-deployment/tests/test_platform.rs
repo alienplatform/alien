@@ -3100,7 +3100,8 @@ fn deployer_reports(state: &DeploymentState) -> Vec<alien_core::DeployerSecretRe
 async fn initial_update_resumes_prepared_target_after_waiting_for_secrets() {
     let vault_env = test_vault_env().await;
     let config = create_test_config("target-env", false);
-    let old_stack = create_test_stack_with_storage("test-stack", "archive", "old-worker");
+    let mut old_stack = create_test_stack_with_storage("test-stack", "archive", "old-worker");
+    old_stack.inputs = vec![database_password_input()];
     let mut state = run_until_status(
         create_initial_state(old_stack),
         config.clone(),
@@ -3408,7 +3409,7 @@ async fn test_stored_dual_secret_presence_starts_without_vault_slots() {
 }
 
 #[tokio::test]
-async fn test_stored_deployer_secret_keeps_working_until_the_slot_is_filled() {
+async fn test_stored_deployer_secret_keeps_legacy_delivery_without_a_native_vault() {
     use alien_bindings::Vault as _;
 
     let vault_env = test_vault_env().await;
@@ -3432,10 +3433,13 @@ async fn test_stored_deployer_secret_keeps_working_until_the_slot_is_filled() {
     .await;
 
     assert_eq!(running.status, DeploymentStatus::Running);
-    assert_eq!(
-        deployer_reports(&running)[0].status,
-        alien_core::DeployerSecretStatus::Missing
-    );
+    assert!(deployer_reports(&running).is_empty());
+    assert!(!running
+        .stack_state
+        .as_ref()
+        .unwrap()
+        .resources
+        .contains_key(alien_core::DEPLOYER_SECRETS_VAULT_ID));
     assert!(
         !worker_environment(&running, "test-function").contains_key(alien_core::ENV_ALIEN_SECRETS),
         "the stored value keeps today's path until the slot is filled"
@@ -3451,11 +3455,7 @@ async fn test_stored_deployer_secret_keeps_working_until_the_slot_is_filled() {
         .unwrap();
 
     assert_eq!(result.state.status, DeploymentStatus::Running);
-    assert_eq!(
-        deployer_reports(&result.state)[0].status,
-        alien_core::DeployerSecretStatus::Present,
-        "a running deployment reports the slot once it is filled"
-    );
+    assert!(deployer_reports(&result.state).is_empty(), "stored values keep their existing delivery even if a customer writes an unrelated native slot");
 }
 
 /// A config built the way a manager builds one on every step (and after a restart): new

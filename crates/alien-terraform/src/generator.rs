@@ -1674,6 +1674,10 @@ fn deployer_secret_outputs(
     target: TerraformTarget,
     deployer_secrets_vault_binding: Option<&Expression>,
 ) -> Result<Vec<(String, Expression, String)>> {
+    // Preflights omit this vault when every deployer input retains a stored value.
+    if !stack.resources.contains_key(alien_core::DEPLOYER_SECRETS_VAULT_ID) {
+        return Ok(Vec::new());
+    }
     let platform = target.deployment_platform();
     let inputs: Vec<&StackInputDefinition> = stack
         .inputs()

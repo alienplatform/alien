@@ -198,39 +198,3 @@ fn deployer_secrets_never_pass_through_the_template() {
         assert_eq!(evaluate(&output.value, stack_name), expected.name);
     }
 }
-
-#[test]
-fn deployer_secrets_need_the_secrets_vault() {
-    let stack = Stack::new("inputs".to_string())
-        .inputs(vec![deployer_secret_input(vec![
-            StackInputProvider::Deployer,
-        ])])
-        .add(
-            SampleResource {
-                id: "logs-bucket".to_string(),
-            },
-            ResourceLifecycle::Frozen,
-        )
-        .build();
-    let registry = sample_registry();
-
-    let error = generate_cloudformation_template(
-        &stack,
-        CloudFormationOptions {
-            registry: &registry,
-            target: CloudFormationTarget::Aws,
-            stack_settings: StackSettings::default(),
-            setup_target: "aws".to_string(),
-            setup_fingerprint: "test".to_string(),
-            setup_fingerprint_version: 1,
-            registration: RegistrationMode::OutputsFallback,
-            description: None,
-        },
-    )
-    .expect_err("a deployer secret without the secrets vault is refused");
-    assert!(
-        error.message.contains("'deployer-secrets' vault"),
-        "{}",
-        error.message
-    );
-}

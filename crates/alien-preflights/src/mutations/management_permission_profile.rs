@@ -138,6 +138,12 @@ impl StackMutation for ManagementPermissionProfileMutation {
 
 /// Reject explicit grants that could bypass the reserved deployer-vault boundary.
 fn validate_deployer_secret_management(stack: &Stack) -> Result<()> {
+    if !stack
+        .resources
+        .contains_key(alien_core::DEPLOYER_SECRETS_VAULT_ID)
+    {
+        return Ok(());
+    }
     let profile = match stack.management() {
         ManagementPermissions::Auto => return Ok(()),
         ManagementPermissions::Extend(profile) | ManagementPermissions::Override(profile) => {
@@ -146,8 +152,14 @@ fn validate_deployer_secret_management(stack: &Stack) -> Result<()> {
     };
     for (scope, permissions) in &profile.0 {
         for permission in permissions {
-            let forbidden = (scope == alien_core::DEPLOYER_SECRETS_VAULT_ID
-                && !matches!(permission, PermissionSetReference::Name(name) if matches!(name.as_str(), "vault/heartbeat" | "vault/management")))
+            // Inline cloud roles can embed arbitrary scopes or predefined payload roles.
+            // Keep them out of management when native slots are active: named, scoped
+            // registry permissions are the reviewable path on clouds without an IAM deny.
+            let unreviewed_inline = matches!(permission, PermissionSetReference::Inline(set)
+                if set.platforms.gcp.is_some() || set.platforms.azure.is_some());
+            let forbidden = unreviewed_inline
+                || (scope == alien_core::DEPLOYER_SECRETS_VAULT_ID
+                    && !matches!(permission, PermissionSetReference::Name(name) if matches!(name.as_str(), "vault/heartbeat" | "vault/management")))
                 || (scope == "*"
                     && matches!(permission.id(), "vault/data-read" | "vault/data-write"));
             if forbidden {
@@ -194,13 +206,22 @@ fn protect_deployer_secrets(
         }))?);
     }
     // The deny also covers stack-wide provision writes and user-supplied AWS grants.
-    if platform == Platform::Aws {
+    if platform == Platform::Aws
+        && (config.stack_settings.setup_management == alien_core::SetupManagement::Automatic
+            || stack
+                .resources
+                .contains_key(alien_core::DEPLOYER_SECRETS_VAULT_ID))
+    {
         grants.push(inline_vault_permission(serde_json::json!({
             "id": "vault/protect-deployer-secrets",
             "description": "Management cannot read or modify customer-written deployer secrets",
             "platforms": { "aws": [{
-                "effect": "Deny", "grant": { "actions": ["ssm:GetParameter*", "ssm:PutParameter", "ssm:DeleteParameter*", "ssm:LabelParameterVersion", "ssm:UnlabelParameterVersion"] },
+                "effect": "Deny", "grant": { "actions": ["ssm:GetParameter*", "ssm:PutParameter", "ssm:DeleteParameter*", "ssm:LabelParameterVersion", "ssm:UnlabelParameterVersion", "ssm:AddTagsToResource", "ssm:RemoveTagsFromResource", "ssm:PutResourcePolicy", "ssm:DeleteResourcePolicy"] },
                 "binding": { "stack": { "resources": ["arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${stackPrefix}-deployer-secrets-*"] } }
+            }, {
+                "effect": "Deny",
+                "grant": { "actions": ["ssm:GetParametersByPath"] },
+                "binding": { "stack": { "resources": ["*"] } }
             }] }
         }))?);
     }
@@ -228,9 +249,9 @@ fn protect_deployer_secrets(
     };
     let global = profile.0.entry("*".to_string()).or_default();
     for grant in grants {
-        if !global.iter().any(|existing| existing.id() == grant.id()) {
-            global.push(grant);
-        }
+        // A user-authored inline permission cannot shadow a reserved guard by id.
+        global.retain(|existing| existing.id() != grant.id());
+        global.push(grant);
     }
     Ok(())
 }
@@ -727,6 +748,93 @@ pub(crate) fn permission_resource_type(resource_type: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn deployer_vault_management_is_metadata_only_in_each_setup_mode() {
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            for automatic in [false, true] {
+                let mut config = DeploymentConfig::builder()
+                    .stack_settings(alien_core::StackSettings::default())
+                    .environment_variables(empty_env_snapshot())
+                    .allow_frozen_changes(false)
+                    .external_bindings(alien_core::ExternalBindings::default())
+                    .build();
+                if automatic {
+                    config.stack_settings.setup_management = alien_core::SetupManagement::Automatic;
+                }
+                let stack = Stack::new("test".to_string())
+                    .add(
+                        alien_core::Vault::new(alien_core::DEPLOYER_SECRETS_VAULT_ID.to_string())
+                            .build(),
+                        ResourceLifecycle::Frozen,
+                    )
+                    .build();
+                let prepared = ManagementPermissionProfileMutation
+                    .mutate(stack, &StackState::new(platform), &config)
+                    .await
+                    .unwrap();
+                let profile = prepared.management().profile().unwrap();
+                assert!(profile.0["*"]
+                    .iter()
+                    .any(|permission| permission.id() == "vault/management"));
+                assert!(!profile.0["*"].iter().any(|permission| matches!(
+                    permission.id(),
+                    "vault/data-read" | "vault/data-write"
+                )));
+                assert!(profile
+                    .0
+                    .get(alien_core::DEPLOYER_SECRETS_VAULT_ID)
+                    .is_none_or(|permissions| permissions.iter().all(|permission| matches!(
+                        permission.id(),
+                        "vault/heartbeat" | "vault/management"
+                    ))));
+            }
+        }
+    }
+
+    #[test]
+    fn explicit_management_data_grants_cannot_reopen_deployer_vault() {
+        for scope in ["*", alien_core::DEPLOYER_SECRETS_VAULT_ID] {
+            for id in ["vault/data-read", "vault/data-write"] {
+                for override_profile in [false, true] {
+                    let profile = PermissionProfile::new().resource(scope, [id]);
+                    let stack = Stack::new("test".to_string())
+                        .add(
+                            alien_core::Vault::new(
+                                alien_core::DEPLOYER_SECRETS_VAULT_ID.to_string(),
+                            )
+                            .build(),
+                            ResourceLifecycle::Frozen,
+                        )
+                        .management(if override_profile {
+                            ManagementPermissions::Override(profile)
+                        } else {
+                            ManagementPermissions::Extend(profile)
+                        })
+                        .build();
+                    assert!(
+                        validate_deployer_secret_management(&stack).is_err(),
+                        "{scope} {id}"
+                    );
+                }
+            }
+        }
+        let shared = Stack::new("test".to_string())
+            .management(ManagementPermissions::Extend(
+                PermissionProfile::new().resource(
+                    alien_core::SECRETS_VAULT_ID,
+                    ["vault/data-read", "vault/data-write"],
+                ),
+            ))
+            .build();
+        assert!(validate_deployer_secret_management(&shared).is_ok());
+        let no_slots = Stack::new("test".to_string())
+            .management(ManagementPermissions::Extend(
+                PermissionProfile::new().resource("*", ["vault/data-read", "vault/data-write"]),
+            ))
+            .build();
+        assert!(validate_deployer_secret_management(&no_slots).is_ok());
+    }
 
     #[test]
     fn automatic_stack_grants_render_on_each_cloud() {
@@ -1872,7 +1980,7 @@ mod tests {
         match result_stack.management() {
             ManagementPermissions::Override(profile) => {
                 let global_permissions = profile.0.get("*").unwrap();
-                assert_eq!(global_permissions.len(), 4);
+                assert_eq!(global_permissions.len(), 3);
 
                 let permission_names: Vec<String> = global_permissions
                     .iter()

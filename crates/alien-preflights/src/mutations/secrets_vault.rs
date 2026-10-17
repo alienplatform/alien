@@ -121,9 +121,8 @@ impl StackMutation for SecretsVaultMutation {
 
         // Step 4: Add vault data permissions to management profile for the secrets vault.
         // This allows the control plane to sync secret environment variables without
-        // granting access to user-declared vaults. Automatic AWS installs are the exception:
-        // their stack-wide vault data grant also covers user-declared vaults in the stack.
-        // Automatic AWS setup installs stack-wide vault data access with the management role;
+        // granting access to user-declared vaults. Automatic AWS setup installs the
+        // shared-vault prefix grant with the management role;
         // see ManagementPermissionProfileMutation. A vault-scoped grant would make the
         // runtime write a policy onto its own management role, which is denied.
         if !(stack_state.platform == Platform::Aws
@@ -171,7 +170,9 @@ impl StackMutation for DeployerSecretsVaultMutation {
             return Ok(stack);
         }
         let keys = if [Platform::Aws, Platform::Gcp, Platform::Azure]
-            .into_iter().any(|platform| runs_on_platform_or_base(state, config, platform)) {
+            .into_iter()
+            .any(|platform| runs_on_platform_or_base(state, config, platform))
+        {
             deployer_secret_keys_by_profile(&stack, config, state.platform)?
         } else {
             BTreeMap::new()
@@ -1663,7 +1664,9 @@ mod tests {
                 .downcast_ref::<Container>()
                 .unwrap();
             assert!(
-                api.links.iter().all(|link| link.id() != DEPLOYER_SECRETS_VAULT_ID),
+                api.links
+                    .iter()
+                    .all(|link| link.id() != DEPLOYER_SECRETS_VAULT_ID),
                 "the hosting layer reads the slot; the container needs no vault binding"
             );
             assert!(
@@ -2096,7 +2099,10 @@ mod tests {
                 .profile()
                 .expect("automatic management grant")
                 .clone();
-            for id in ["vault/shared-secrets-data", "vault/protect-deployer-secrets"] {
+            for id in [
+                "vault/shared-secrets-data",
+                "vault/protect-deployer-secrets",
+            ] {
                 assert!(
                     profile.0["*"].iter().any(|grant| grant.id() == id),
                     "approved setup installs stack-wide {id}"
