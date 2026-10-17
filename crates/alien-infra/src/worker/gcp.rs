@@ -4343,11 +4343,11 @@ impl GcpWorkerController {
         // Delete all push subscriptions using best-effort approach (ignore NotFound)
         self.delete_all_push_subscriptions(ctx, gcp_config).await?;
 
-        // Delete GCS notifications (best-effort)
+        // Retire notifications before their topics.
         self.delete_all_storage_notifications(ctx, gcp_config)
             .await?;
 
-        // Delete storage notification topics (best-effort)
+        // Retain unfinished topic identities when deletion fails.
         self.delete_all_storage_notification_topics(ctx, gcp_config)
             .await?;
 
@@ -4380,43 +4380,7 @@ impl GcpWorkerController {
 
         info!(worker=%worker_config.id, jobs=?self.scheduler_job_names, "Deleting Cloud Scheduler jobs");
 
-        let scheduler_client = ctx
-            .service_provider
-            .get_gcp_cloud_scheduler_client(gcp_config)?;
-
-        for job_name in &self.scheduler_job_names.clone() {
-            match scheduler_client.delete_job(job_name.clone()).await {
-                Ok(_) => {
-                    info!(
-                        worker=%worker_config.id,
-                        job=%job_name,
-                        "Cloud Scheduler job deleted successfully"
-                    );
-                }
-                Err(e)
-                    if matches!(
-                        e.error,
-                        Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
-                    info!(
-                        worker=%worker_config.id,
-                        job=%job_name,
-                        "Cloud Scheduler job was already deleted (not found)"
-                    );
-                }
-                Err(e) => {
-                    warn!(
-                        worker=%worker_config.id,
-                        job=%job_name,
-                        error=%e,
-                        "Failed to delete Cloud Scheduler job (best-effort, continuing)"
-                    );
-                }
-            }
-        }
-
-        self.scheduler_job_names.clear();
+        self.delete_all_scheduler_jobs(ctx, gcp_config).await?;
 
         Ok(HandlerAction::Continue {
             state: DeletingCommandsInfrastructure,
@@ -6176,40 +6140,34 @@ impl GcpWorkerController {
         if self.gcs_notification_ids.is_empty() {
             return Ok(());
         }
-
-        let gcs_client = ctx.service_provider.get_gcp_gcs_client(gcp_config)?;
-        let worker_config = ctx.desired_resource_config::<Worker>()?;
-
-        for tracker in &self.gcs_notification_ids.clone() {
-            match gcs_client
+        let client = ctx.service_provider.get_gcp_gcs_client(gcp_config)?;
+        while let Some(tracker) = self.gcs_notification_ids.first().cloned() {
+            match client
                 .delete_notification(tracker.bucket_name.clone(), tracker.notification_id.clone())
                 .await
             {
-                Ok(_) => {
-                    info!(
-                        worker=%worker_config.id,
-                        bucket=%tracker.bucket_name,
-                        notification_id=%tracker.notification_id,
-                        "GCS notification deleted successfully"
-                    );
-                }
-                Err(e) => {
-                    warn!(
-                        worker=%worker_config.id,
-                        bucket=%tracker.bucket_name,
-                        notification_id=%tracker.notification_id,
-                        error=%e,
-                        "Failed to delete GCS notification (best-effort, continuing)"
-                    );
+                Ok(()) => {}
+                Err(error)
+                    if matches!(
+                        error.error,
+                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                    ) => {}
+                Err(error) => {
+                    return Err(error.context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to delete notification '{}' from bucket '{}'",
+                            tracker.notification_id, tracker.bucket_name
+                        ),
+                        resource_id: Some(ctx.desired_config.id().to_string()),
+                    }));
                 }
             }
+            self.gcs_notification_ids.remove(0);
         }
-
-        self.gcs_notification_ids.clear();
         Ok(())
     }
 
-    /// Deletes all storage notification Pub/Sub topics (best-effort)
+    /// Retire recorded notification topics, preserving unfinished children for retry.
     async fn delete_all_storage_notification_topics(
         &mut self,
         ctx: &ResourceControllerContext<'_>,
@@ -6218,35 +6176,28 @@ impl GcpWorkerController {
         if self.storage_notification_topics.is_empty() {
             return Ok(());
         }
-
-        let pubsub_client = ctx.service_provider.get_gcp_pubsub_client(gcp_config)?;
-        let worker_config = ctx.desired_resource_config::<Worker>()?;
-
-        for topic_name in &self.storage_notification_topics.clone() {
-            match pubsub_client.delete_topic(topic_name.clone()).await {
-                Ok(_) => {
-                    info!(
-                        worker=%worker_config.id,
-                        topic=%topic_name,
-                        "Storage notification topic deleted successfully"
-                    );
-                }
-                Err(e) => {
-                    warn!(
-                        worker=%worker_config.id,
-                        topic=%topic_name,
-                        error=%e,
-                        "Failed to delete storage notification topic (best-effort, continuing)"
-                    );
+        let client = ctx.service_provider.get_gcp_pubsub_client(gcp_config)?;
+        while let Some(name) = self.storage_notification_topics.first().cloned() {
+            match client.delete_topic(name.clone()).await {
+                Ok(()) => {}
+                Err(error)
+                    if matches!(
+                        error.error,
+                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                    ) => {}
+                Err(error) => {
+                    return Err(error.context(ErrorData::CloudPlatformError {
+                        message: format!("Failed to delete storage notification topic '{name}'"),
+                        resource_id: Some(ctx.desired_config.id().to_string()),
+                    }));
                 }
             }
+            self.storage_notification_topics.remove(0);
         }
-
-        self.storage_notification_topics.clear();
         Ok(())
     }
 
-    /// Deletes all Cloud Scheduler jobs (best-effort)
+    /// Retire recorded scheduler jobs, preserving unfinished children for retry.
     async fn delete_all_scheduler_jobs(
         &mut self,
         ctx: &ResourceControllerContext<'_>,
@@ -6255,33 +6206,26 @@ impl GcpWorkerController {
         if self.scheduler_job_names.is_empty() {
             return Ok(());
         }
-
-        let scheduler_client = ctx
+        let client = ctx
             .service_provider
             .get_gcp_cloud_scheduler_client(gcp_config)?;
-        let worker_config = ctx.desired_resource_config::<Worker>()?;
-
-        for job_name in &self.scheduler_job_names.clone() {
-            match scheduler_client.delete_job(job_name.clone()).await {
-                Ok(_) => {
-                    info!(
-                        worker=%worker_config.id,
-                        job=%job_name,
-                        "Cloud Scheduler job deleted successfully"
-                    );
-                }
-                Err(e) => {
-                    warn!(
-                        worker=%worker_config.id,
-                        job=%job_name,
-                        error=%e,
-                        "Failed to delete Cloud Scheduler job (best-effort, continuing)"
-                    );
+        while let Some(name) = self.scheduler_job_names.first().cloned() {
+            match client.delete_job(name.clone()).await {
+                Ok(()) => {}
+                Err(error)
+                    if matches!(
+                        error.error,
+                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                    ) => {}
+                Err(error) => {
+                    return Err(error.context(ErrorData::CloudPlatformError {
+                        message: format!("Failed to delete scheduler job '{name}'"),
+                        resource_id: Some(ctx.desired_config.id().to_string()),
+                    }));
                 }
             }
+            self.scheduler_job_names.remove(0);
         }
-
-        self.scheduler_job_names.clear();
         Ok(())
     }
 
@@ -8418,3 +8362,7 @@ mod tests {
 #[cfg(test)]
 #[path = "gcp_ingress_controller_tests.rs"]
 mod ingress_controller_tests;
+
+#[cfg(test)]
+#[path = "gcp_trigger_cleanup_tests.rs"]
+mod trigger_cleanup_tests;
