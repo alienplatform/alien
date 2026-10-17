@@ -88,7 +88,10 @@ fn gcp_import_preserves_exact_role_namespace_for_quota_and_runtime_planning() {
         .unwrap();
     assert_eq!(imported.lifecycle, Some(ResourceLifecycle::Frozen));
     assert_eq!(imported.status, ResourceStatus::Running);
-    assert_eq!(internal_state(&imported)["_controllerStateVersion"], 5);
+    assert_eq!(
+        internal_state(&imported)["_controllerStateVersion"],
+        alien_infra::CURRENT_CONTROLLER_STATE_VERSION
+    );
     let mut state = alien_core::StackState::with_resource_prefix(
         Platform::Gcp,
         "different-deployment-prefix".into(),

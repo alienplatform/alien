@@ -812,7 +812,9 @@ pub const MIN_SUPPORTED_CONTROLLER_STATE_VERSION: u32 = 1;
 /// Version 4 retains disabled TCP proxy graphs; older writers delete them on access updates.
 /// Version 5 preserves setup-selected GCP custom-role namespaces. Older readers
 /// must reject the deployment before planning cloud changes with different roles.
-pub const CURRENT_CONTROLLER_STATE_VERSION: u32 = 5;
+/// Version 6 preserves GCP worker trigger update checkpoints. Upgrade readers
+/// before writing these phases; older actors must reject them before planning.
+pub const CURRENT_CONTROLLER_STATE_VERSION: u32 = 6;
 
 /// Serializes a controller to a JSON Value, injecting its type tag.
 pub fn serialize_controller(

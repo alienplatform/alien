@@ -425,3 +425,22 @@ async fn trigger_update_restart_does_not_retire_newly_created_jobs() {
     assert!(calls[1].ends_with("-cron-1"));
     assert_eq!(calls[1], calls[2]);
 }
+
+#[rstest]
+#[case(GcpWorkerState::UpdateCreatingPushSubscriptions)]
+#[case(GcpWorkerState::UpdateCreatingSchedulerJobs)]
+fn trigger_update_checkpoint_envelope_preserves_phase_and_receipts(
+    #[case] state: GcpWorkerState,
+) {
+    let mut controller = GcpWorkerController::mock_ready("test-worker");
+    controller.state = state;
+    controller.push_subscriptions = vec!["projects/test/subscriptions/confirmed".into()];
+    controller.scheduler_job_names = vec!["projects/test/locations/us-central1/jobs/confirmed".into()];
+    let saved = crate::serialize_controller(&controller).unwrap();
+    assert_eq!(saved["_controllerStateVersion"], 6);
+    let restored = crate::deserialize_controller(saved).unwrap();
+    let restored = restored.as_any().downcast_ref::<GcpWorkerController>().unwrap();
+    assert_eq!(restored.state, controller.state);
+    assert_eq!(restored.push_subscriptions, controller.push_subscriptions);
+    assert_eq!(restored.scheduler_job_names, controller.scheduler_job_names);
+}
