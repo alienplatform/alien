@@ -3,7 +3,9 @@ use crate::core::controller_test::SingleControllerExecutor;
 use crate::core::{MockPlatformServiceProvider, StackExecutor, StackResourceStateExt};
 use crate::worker::fixtures::function_public_ingress;
 use alien_client_core::ErrorData as ClientError;
-use alien_core::{ClientConfig, GcpClientConfig, Platform, ResourceStatus, Stack};
+use alien_core::{
+    ClientConfig, GcpClientConfig, Platform, ResourceLifecycle, ResourceStatus, Stack,
+};
 use alien_error::AlienError;
 use alien_gcp_clients::GcpClientConfigExt;
 use alien_gcp_clients::cloudscheduler::MockCloudSchedulerApi;
@@ -176,12 +178,16 @@ async fn failed_trigger_delete_preserves_remaining_child_across_reload(
 }
 
 #[rstest]
-#[case(Child::Subscription)]
-#[case(Child::Notification)]
-#[case(Child::Topic)]
-#[case(Child::Scheduler)]
+#[case(Child::Subscription, false)]
+#[case(Child::Subscription, true)]
+#[case(Child::Notification, false)]
+#[case(Child::Notification, true)]
+#[case(Child::Topic, false)]
+#[case(Child::Topic, true)]
+#[case(Child::Scheduler, false)]
+#[case(Child::Scheduler, true)]
 #[tokio::test]
-async fn ordinary_stack_delete_retains_denied_trigger(#[case] child: Child) {
+async fn stack_delete_retains_denied_trigger(#[case] child: Child, #[case] replacing: bool) {
     let mut controller = GcpWorkerController::mock_ready("test-worker");
     controller.state = match child {
         Child::Scheduler => GcpWorkerState::DeletingSchedulerJobs,
@@ -217,7 +223,13 @@ async fn ordinary_stack_delete_retains_denied_trigger(#[case] child: Child) {
         .unwrap()
         .dependencies
         .clear();
-    let empty = Stack::new("remove-worker".into()).build();
+    let desired = if replacing {
+        Stack::new("replace-worker".into())
+            .add(function_public_ingress(), ResourceLifecycle::Live)
+            .build()
+    } else {
+        Stack::new("remove-worker".into()).build()
+    };
     let config = alien_core::DeploymentConfig::builder()
         .stack_settings(alien_core::StackSettings::default())
         .environment_variables(alien_core::EnvironmentVariablesSnapshot {
@@ -228,18 +240,36 @@ async fn ordinary_stack_delete_retains_denied_trigger(#[case] child: Child) {
         .external_bindings(alien_core::ExternalBindings::default())
         .allow_frozen_changes(false)
         .build();
-    let executor =
-        StackExecutor::builder(&empty, ClientConfig::Gcp(Box::new(GcpClientConfig::mock())))
-            .deployment_config(&config)
-            .service_provider(services)
-            .build()
-            .unwrap();
+    let executor = StackExecutor::builder(
+        &desired,
+        ClientConfig::Gcp(Box::new(GcpClientConfig::mock())),
+    )
+    .deployment_config(&config)
+    .service_provider(services)
+    .build()
+    .unwrap();
     let next = executor.step(state).await.unwrap().next_state;
     assert_eq!(*calls.lock().unwrap(), ["second"]);
     assert_eq!(
         next.resources["public-func"].status,
         ResourceStatus::DeleteFailed
     );
+    let error = next.resources["public-func"].error.as_ref().unwrap();
+    assert_eq!(
+        error.code,
+        if replacing {
+            "REPLACE_DELETE_DENIED"
+        } else {
+            "RESOURCE_CLEANUP_INCOMPLETE"
+        }
+    );
+    assert!(
+        std::iter::successors(Some(error), |source| source.source.as_deref())
+            .any(|source| source.code == "REMOTE_ACCESS_DENIED")
+    );
+    if replacing {
+        assert!(executor.plan(&next).unwrap().replaces.is_empty());
+    }
     let serialized = serde_json::to_vec(&next).unwrap();
     let mut restored: alien_core::StackState = serde_json::from_slice(&serialized).unwrap();
     let saved = restored.resources.get_mut("public-func").unwrap();
@@ -257,12 +287,14 @@ async fn ordinary_stack_delete_retains_denied_trigger(#[case] child: Child) {
         Child::Scheduler => assert_eq!(controller.scheduler_job_names, ["second"]),
     }
     let retry_calls = Arc::new(Mutex::new(Vec::new()));
-    let retry =
-        StackExecutor::builder(&empty, ClientConfig::Gcp(Box::new(GcpClientConfig::mock())))
-            .deployment_config(&config)
-            .service_provider(provider(child, true, true, retry_calls.clone()))
-            .build()
-            .unwrap();
+    let retry = StackExecutor::builder(
+        &desired,
+        ClientConfig::Gcp(Box::new(GcpClientConfig::mock())),
+    )
+    .deployment_config(&config)
+    .service_provider(provider(child, true, true, retry_calls.clone()))
+    .build()
+    .unwrap();
     let next = retry.step(restored).await.unwrap().next_state;
     assert_eq!(*retry_calls.lock().unwrap(), ["second"]);
     let controller = next.resources["public-func"]

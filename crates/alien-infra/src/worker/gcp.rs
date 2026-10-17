@@ -5782,7 +5782,7 @@ impl GcpWorkerController {
         Ok(())
     }
 
-    /// Deletes all push subscriptions using best-effort approach
+    /// Retire recorded push subscriptions, preserving unfinished children for retry.
     async fn delete_all_push_subscriptions(
         &mut self,
         ctx: &ResourceControllerContext<'_>,
@@ -5795,7 +5795,7 @@ impl GcpWorkerController {
         let pubsub_client = ctx.service_provider.get_gcp_pubsub_client(gcp_config)?;
         let worker_config = ctx.desired_resource_config::<Worker>()?;
 
-        for subscription_name in &self.push_subscriptions.clone() {
+        while let Some(subscription_name) = self.push_subscriptions.first().cloned() {
             match pubsub_client
                 .delete_subscription(subscription_name.clone())
                 .await
@@ -5820,18 +5820,18 @@ impl GcpWorkerController {
                     );
                 }
                 Err(e) => {
-                    return Err(e.context(ErrorData::CloudPlatformError {
+                    return Err(e.context(ErrorData::ResourceCleanupIncomplete {
                         message: format!(
                             "Failed to delete push subscription '{}'",
                             subscription_name
                         ),
-                        resource_id: Some(worker_config.id.clone()),
+                        resource_id: worker_config.id.clone(),
                     }));
                 }
             }
+            self.push_subscriptions.remove(0);
         }
 
-        self.push_subscriptions.clear();
         Ok(())
     }
 
