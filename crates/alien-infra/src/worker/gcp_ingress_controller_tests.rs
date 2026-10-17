@@ -32,6 +32,7 @@ struct Services {
 enum Fault {
     None,
     PendingDns,
+    PendingPrivateOperation,
     StaleDns,
     LostBackendResponse,
     LostNegResponse,
@@ -77,6 +78,7 @@ fn restore_legacy_https_graph(
 #[case(EndpointAccess::Both, EndpointAccess::Private, Fault::None)]
 #[case(EndpointAccess::Internet, EndpointAccess::Private, Fault::None)]
 #[case(EndpointAccess::Private, EndpointAccess::Internet, Fault::None)]
+#[case::public_certificate_during_private_operation(EndpointAccess::Internet, EndpointAccess::Both, Fault::PendingPrivateOperation)]
 #[case::private_dns_pending(EndpointAccess::Internet, EndpointAccess::Both, Fault::PendingDns)]
 #[case::public_dns_pending(EndpointAccess::Private, EndpointAccess::Both, Fault::PendingDns)]
 #[case::private_dns_stale(EndpointAccess::Internet, EndpointAccess::Private, Fault::StaleDns)]
@@ -320,6 +322,14 @@ async fn access_changes_preserve_service_revision_and_retained_frontends(
                 }
                 controller = serde_json::from_value(checkpoint).unwrap();
             }
+            if fault == Fault::PendingPrivateOperation {
+                graphs.lock().unwrap().pending_regional_operations = true;
+                let domain = metadata.resources.get_mut(&worker.id).unwrap();
+                domain.certificate_chain = Some("expanded-certificate".to_string());
+                let private = domain.private_endpoints.get_mut("api").unwrap();
+                private.certificate_chain = domain.certificate_chain.clone();
+                private.dns_status = DnsRecordStatus::Pending;
+            }
             controller.state = GcpWorkerState::UpdateStart;
             if pending_dns {
                 let domain = metadata.resources.get_mut(&worker.id).unwrap();
@@ -496,6 +506,62 @@ async fn access_changes_preserve_service_revision_and_retained_frontends(
                 assert_eq!(negs.lock().unwrap().objects.len(), 1);
             }
             break;
+        }
+        if index == 1 && fault == Fault::PendingPrivateOperation {
+            let original_proxy = graphs.lock().unwrap().objects.iter()
+                .find(|(name, _)| name.starts_with("proxy/public-"))
+                .map(|(_, value)| value["sslCertificates"].clone()).unwrap();
+            let mut progressed = false;
+            for _ in 0..30 {
+                executor.step().await.unwrap();
+                let saved = executor.internal_state::<GcpWorkerController>().unwrap();
+                assert_eq!(services.lock().unwrap().patches, 0);
+                for (name, frontend) in &retained {
+                    assert_eq!(graphs.lock().unwrap().objects.get(name), Some(frontend));
+                }
+                let current = graphs.lock().unwrap().objects.iter()
+                    .find(|(name, _)| name.starts_with("proxy/public-"))
+                    .map(|(_, value)| value["sslCertificates"].clone()).unwrap();
+                if current != original_proxy {
+                    let checkpoint = serde_json::to_value(saved).unwrap();
+                    assert!(!checkpoint["ingress"]["private"]["operation"].is_null());
+                    assert!(!checkpoint["ingress"]["public"]["operation"].is_null());
+                    assert!(saved.ingress.private_endpoints.is_empty());
+                    let restored: GcpWorkerController = serde_json::from_value(checkpoint).unwrap();
+                    executor = SingleControllerExecutor::builder()
+                        .resource(worker.clone())
+                        .previous_resource(previous_worker.clone())
+                        .controller(restored)
+                        .platform(Platform::Gcp)
+                        .service_provider(provider.clone())
+                        .with_dependency(
+                            Network::new("default-network".to_string()).settings(NetworkSettings::Create {
+                                cidr: None, availability_zones: 2,
+                            }).build(), network.clone(),
+                        )
+                        .stack_settings(StackSettings { endpoint_access: access, ..Default::default() })
+                        .domain_metadata(metadata.clone()).build().await.unwrap();
+                    progressed = true;
+                    break;
+                }
+            }
+            assert!(progressed, "public certificate waited for pending private operation");
+            // Keep the private operation pending across reload. The public graph
+            // completes without recreating either graph's recorded children.
+            for _ in 0..4 { executor.step().await.unwrap(); }
+            assert_eq!(services.lock().unwrap().patches, 0);
+            graphs.lock().unwrap().pending_regional_operations = false;
+            for _ in 0..30 { executor.step().await.unwrap(); }
+            let saved = executor.internal_state::<GcpWorkerController>().unwrap();
+            assert!(!saved.ingress.private_endpoints.is_empty());
+            assert!(matches!(saved.state, GcpWorkerState::ReconcilingWorkerIngress));
+            assert_eq!(services.lock().unwrap().patches, 0);
+            for (name, frontend) in &retained {
+                assert_eq!(graphs.lock().unwrap().objects.get(name), Some(frontend));
+            }
+            metadata.resources.get_mut(&worker.id).unwrap().private_endpoints
+                .get_mut("api").unwrap().dns_status = DnsRecordStatus::Active;
+            executor.set_domain_metadata(metadata.clone());
         }
         if index == 1 && matches!(fault, Fault::PendingDns | Fault::StaleDns) {
             let mut waiting = false;

@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex};
 pub(crate) struct Provider {
     pub(crate) objects: BTreeMap<String, Value>,
     pub(crate) mutations: usize,
+    pub(crate) pending_regional_operations: bool,
     pub(crate) lose_backend_response: bool,
     pub(crate) deny_backend_recovery_reads: bool,
     fail_certificate_delete: bool,
@@ -284,9 +285,16 @@ pub(crate) fn provider(store: &Store) -> MockComputeApi {
             state.mutations += 1;
             Ok(done())
         });
+    let state = store.clone();
     client
         .expect_get_region_operation()
-        .returning(|_, _| Ok(done()));
+        .returning(move |_, _| {
+            let mut operation = done();
+            if state.lock().unwrap().pending_regional_operations {
+                operation.status = Some(OperationStatus::Running);
+            }
+            Ok(operation)
+        });
     let state = store.clone();
     client
         .expect_set_region_target_https_proxy_ssl_certificates()

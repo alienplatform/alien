@@ -257,7 +257,7 @@ impl GcpWorkerIngress {
 
     /// Prepare the requested graphs before updating service ingress. Retirement
     /// is allowed only after the caller confirms the service's ingress update.
-    /// Each invocation issues at most one durable provider mutation.
+    /// Each enabled graph records its own progress before the next graph advances.
     pub async fn reconcile(
         &mut self,
         ctx: &ResourceControllerContext<'_>,
@@ -277,6 +277,7 @@ impl GcpWorkerIngress {
             "https://www.googleapis.com/compute/v1/projects/{}/regions/{}/networkEndpointGroups/{neg_name}",
             config.project_id, config.region
         );
+        let mut pending = false;
         for (scope, enabled) in [
             (
                 GcpHttpsIngressScope::RegionalPrivate,
@@ -353,7 +354,8 @@ impl GcpWorkerIngress {
             };
             let state = state.get_or_insert_with(|| GcpHttpsIngressState::new(&plan));
             if !state.reconcile(client.as_ref(), plan).await? {
-                return Ok(false);
+                pending = true;
+                continue;
             }
             let address = state
                 .address
@@ -364,9 +366,13 @@ impl GcpWorkerIngress {
                 *outputs = confirmed;
                 // DNS metadata predates this target publication. Checkpoint it
                 // before narrowing the service or retiring its retained path.
-                return Ok(false);
+                pending = true;
+                continue;
             }
             *fingerprint = Some(domains.fingerprint());
+        }
+        if pending {
+            return Ok(false);
         }
         // Publish confirmed addresses and wait for DNS before narrowing Cloud
         // Run ingress; otherwise a mode switch can close the retained path
