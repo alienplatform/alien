@@ -380,7 +380,7 @@ impl OperatorDb {
         expected: &DeploymentState,
         next: &DeploymentState,
     ) -> Result<bool> {
-        let expected = serde_json::to_string(expected).into_alien_error().context(
+        let expected = serde_json::to_value(expected).into_alien_error().context(
             ErrorData::DatabaseError {
                 message: "Failed to serialize expected deployment state".to_string(),
             },
@@ -392,9 +392,42 @@ impl OperatorDb {
                     message: "Failed to serialize observed deployment state".to_string(),
                 })?;
         let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query("SELECT value FROM state WHERE key = 'deployment_state'", ())
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to read observed deployment state".to_string(),
+            })?;
+        let Some(row) = rows
+            .next()
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to fetch observed deployment state".to_string(),
+            })?
+        else {
+            return Ok(false);
+        };
+        let original: String = row
+            .get(0)
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to read observed deployment state value".to_string(),
+            })?;
+        let stored: serde_json::Value = serde_json::from_str(&original)
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to parse observed deployment state".to_string(),
+            })?;
+        // Object key order is not state: resource HashMaps can reorder on read-back.
+        if stored != expected {
+            return Ok(false);
+        }
+        drop(rows);
         let changed = conn.execute(
             "UPDATE state SET value = ?, updated_at = datetime('now') WHERE key = 'deployment_state' AND value = ?",
-            (next, expected),
+            (next, original),
         ).await.into_alien_error().context(ErrorData::DatabaseError {
             message: "Failed to save observed deployment state".to_string(),
         })?;

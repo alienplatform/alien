@@ -275,6 +275,9 @@ jobs:
       - name: Build TypeScript dependencies for Rust tests
         run: pnpm exec turbo run build --filter=@alienplatform/sdk --filter=@alienplatform/commands
 
+      - name: Install zsh for deployer command tests
+        run: sudo apt-get update && sudo apt-get install -y zsh
+
       - name: Rust fast tests (non-cloud)
         env:
           AXIOM_OTLP_ENDPOINT: https://api.axiom.co/v1/logs

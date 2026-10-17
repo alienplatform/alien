@@ -233,7 +233,9 @@ async fn sync_with_manager(
                 protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
             });
 
-    refresh_running_secrets(state, &mut deployment_state).await?;
+    // A vault outage must not prevent receiving a new target or deletion request.
+    // Preserve the last observation and surface the refresh error after syncing.
+    let secret_refresh = refresh_running_secrets(state, &mut deployment_state).await;
 
     // Build the sync request with full deployment state
     // Deployment ID is stored in SQLite (from initialization)
@@ -489,6 +491,7 @@ async fn sync_with_manager(
         }
     }
 
+    secret_refresh?;
     Ok(has_update || state_hydrated)
 }
 
@@ -894,6 +897,119 @@ mod tests {
             .runtime_metadata
             .as_ref()
             .is_some_and(|metadata| metadata.pending_prepared_stack.is_none()));
+    }
+
+    #[tokio::test]
+    async fn secret_refresh_failure_still_receives_delete_and_reports_the_error() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            OperatorDb::new(data_dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+                .await
+                .unwrap(),
+        );
+        db.set_deployment_id("dep_secret_failure").await.unwrap();
+        let mut stack = Stack::new("secret-check".into()).build();
+        stack.inputs = vec![serde_json::from_value(json!({
+            "id": "key", "kind": "secret", "providedBy": ["deployer"],
+            "required": true, "label": "Test key", "description": ""
+        }))
+        .unwrap()];
+        let report = serde_json::from_value(json!({
+            "inputId": "key", "label": "Test key", "required": true, "status": "present",
+            "location": {"store": "local-vault", "name": "input-key", "cliCommand": "unused"}
+        }))
+        .unwrap();
+        let mut stack_state = alien_core::StackState::new(Platform::Local);
+        stack_state.resources.insert(
+            "secrets".into(),
+            alien_core::StackResourceState::new_pending(
+                "vault".into(),
+                alien_core::Resource::new(alien_core::Vault::new("secrets".into()).build()),
+                Some(alien_core::ResourceLifecycle::Frozen),
+                Vec::new(),
+            ),
+        );
+        let running = DeploymentState {
+            platform: Platform::Local,
+            status: DeploymentStatus::Running,
+            current_release: None,
+            target_release: None,
+            // The vault binding is unavailable: refreshing this established slot must fail.
+            stack_state: Some(stack_state),
+            runtime_metadata: Some(alien_core::RuntimeMetadata {
+                prepared_stack: Some(stack),
+                deployer_secrets: vec![report],
+                ..Default::default()
+            }),
+            error: None,
+            environment_info: None,
+            retry_requested: false,
+            protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        };
+        db.set_deployment_state(&running).await.unwrap();
+        let deletion = DeploymentState {
+            status: DeploymentStatus::DeletePending,
+            ..running.clone()
+        };
+        let captured = Arc::new(Mutex::new(None));
+        let request_capture = captured.clone();
+        let app = Router::new().route(
+            "/v1/sync",
+            post(move |Json(body): Json<Value>| {
+                *request_capture.lock().unwrap() = Some(body);
+                let response = json!({"currentState": deletion});
+                async move { Json(response) }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await });
+        let state = OperatorState {
+            config: OperatorConfig::builder()
+                .platform(Platform::Local)
+                .data_dir(data_dir.path().to_str().unwrap())
+                .encryption_key(TEST_ENCRYPTION_KEY)
+                .build(),
+            db,
+            service_provider: None,
+            operations_sync_handler: None,
+            cancel: CancellationToken::new(),
+        };
+        let error = sync_with_manager(
+            &state,
+            &create_authenticated_client("fake-token").unwrap(),
+            &url,
+            false,
+            None,
+        )
+        .await
+        .expect_err("failed secret observation remains an error");
+        assert!(error
+            .to_string()
+            .contains("Failed to refresh deployer secrets"));
+        let request = captured
+            .lock()
+            .unwrap()
+            .take()
+            .expect("manager was contacted");
+        assert_eq!(
+            request["currentState"]["runtimeMetadata"]["deployerSecrets"],
+            serde_json::to_value(&running.runtime_metadata.as_ref().unwrap().deployer_secrets)
+                .unwrap()
+        );
+        assert_eq!(
+            state
+                .db
+                .get_deployment_state()
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            DeploymentStatus::DeletePending
+        );
+        server.abort();
     }
 
     struct SyncFixture {

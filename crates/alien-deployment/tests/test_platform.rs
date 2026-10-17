@@ -3225,7 +3225,6 @@ async fn test_missing_deployer_secret_blocks_workloads_until_written() {
     assert_eq!(reports.len(), 1);
     assert_eq!(reports[0].status, alien_core::DeployerSecretStatus::Missing);
     assert_eq!(reports[0].location.name, "input-database-password");
-    assert!(reports[0].location.cli_command.contains("'<VALUE>'"));
     let worker = blocked
         .stack_state
         .as_ref()

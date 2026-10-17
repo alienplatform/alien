@@ -79,8 +79,9 @@ For a hidden prompt in bash or zsh:
 ```sh
 (
 set +x
-printf 'API token: ' >&2
-IFS= read -rs secret && printf '\n' >&2 && printf '%s' "$secret" | alien dev vault set secrets API_TOKEN --stdin
+printf 'API token (Ctrl-D to finish): ' >&2
+IFS= read -rs -d $'\004' secret || [ -n "$secret" ]
+[ -n "$secret" ] && printf '\n' >&2 && printf '%s' "$secret" | alien dev vault set secrets API_TOKEN --stdin
 )
 ```
 

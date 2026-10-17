@@ -358,10 +358,11 @@ pub fn deployer_secret_location(
         }
     };
     // Subshell scope discards the value and preserves the caller's shell options.
+    // EOT finishes terminal input without adding a newline; EOF also accepts pipes.
     // printf + read works in both bash and zsh; their read prompt flags differ.
-    let prompt = shell_quote(&format!("{label}: "));
+    let prompt = shell_quote(&format!("{label} (Ctrl-D to finish): "));
     let write = format!(
-        "{prepare}printf '%s' {prompt} >&2\nIFS= read -rs secret && printf '\\n' >&2 &&\nprintf '%s' \"$secret\" |\n  {}",
+        "{prepare}printf '%s' {prompt} >&2\nIFS= read -rs -d $'\\004' secret || [ -n \"$secret\" ]\n[ -n \"$secret\" ] && printf '\\n' >&2 &&\nprintf '%s' \"$secret\" |\n  {}",
         location.cli_command
     );
     location.cli_command = if location.store == DeployerSecretStore::AwsParameterStore {

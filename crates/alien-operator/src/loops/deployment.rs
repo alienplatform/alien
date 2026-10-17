@@ -655,7 +655,14 @@ mod tests {
             .unwrap()
             .inputs
             .push(supplied);
+        // Read-back can reorder resource HashMaps without changing the checkpoint.
+        let resources = &mut running.stack_state.as_mut().unwrap().resources;
+        let vault_resource = resources["secrets"].clone();
+        for index in 0..32 {
+            resources.insert(format!("unchanged-{index}"), vault_resource.clone());
+        }
         state.db.set_deployment_state(&running).await.unwrap();
+        running = state.db.get_deployment_state().await.unwrap().unwrap();
         state.db.clear_deployment_config().await.unwrap();
         vault
             .set_secret("input-key", "fake-test-value-1566")
