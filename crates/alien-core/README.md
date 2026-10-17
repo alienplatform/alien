@@ -70,7 +70,8 @@ administrator from changing IAM or workload code.
 
 ### Existing deployments
 
-Rerun setup to install the new vault and permissions, then rewrite keys at the
+Rebuild prebuilt Worker images with the updated Worker runtime: the runtime
+embedded in an older image still resolves the former vault. Then rerun setup to install the new vault and permissions, then rewrite keys at the
 new names using your own cloud credentials. There is no fallback to former
 locations. A missing key has the normal missing-slot report and write command.
 Stored legacy values already shared with the control plane keep their existing

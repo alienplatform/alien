@@ -169,6 +169,7 @@ impl StackMutation for DeployerSecretsVaultMutation {
         if !self.should_run(&stack, state, config) {
             return Ok(stack);
         }
+        validate_workload_vault_grants(&stack)?;
         let keys = if [Platform::Aws, Platform::Gcp, Platform::Azure]
             .into_iter()
             .any(|platform| runs_on_platform_or_base(state, config, platform))
@@ -220,6 +221,42 @@ impl StackMutation for DeployerSecretsVaultMutation {
         }
         Ok(stack)
     }
+}
+
+/// Ordinary vault grants must not widen the slot grants installed below.
+fn validate_workload_vault_grants(stack: &Stack) -> Result<()> {
+    for (profile_name, profile) in &stack.permissions.profiles {
+        for (scope, permissions) in &profile.0 {
+            let normalized_scope = scope.replace('_', "-").to_ascii_lowercase();
+            let overlaps = scope == "*"
+                || normalized_scope == DEPLOYER_SECRETS_VAULT_ID
+                || DEPLOYER_SECRETS_VAULT_ID.starts_with(&format!("{normalized_scope}-"));
+            if !overlaps {
+                continue;
+            }
+            for permission in permissions {
+                let canonical = match permission {
+                    PermissionSetReference::Name(name) => {
+                        alien_permissions::get_permission_set(name)
+                            .map(|set| set.id.as_str())
+                            .unwrap_or(name.as_str())
+                    }
+                    PermissionSetReference::Inline(set) => set.id.as_str(),
+                };
+                if matches!(
+                    canonical,
+                    "vault/data-read" | "vault/data-write" | "vault/provision"
+                ) {
+                    return Err(AlienError::new(ErrorData::StackMutationFailed {
+                        mutation_name: "DeployerSecretsVaultMutation".to_string(),
+                        message: format!("Workload profile '{profile_name}' grants '{canonical}' on '{scope}', which overlaps deployer secrets. Scope ordinary vault access to a separate vault; deployer slot access comes from input mappings."),
+                        resource_id: Some(DEPLOYER_SECRETS_VAULT_ID.to_string()),
+                    }));
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Managed Azure database passwords need a setup vault even when workloads run
@@ -1691,6 +1728,51 @@ mod tests {
 
     /// Workloads that share a permission profile share one cloud identity, so
     /// two that receive different deployer secrets cannot share a profile.
+    #[tokio::test]
+    async fn broad_workload_vault_grants_cannot_reopen_other_slots() {
+        for scope in ["*", "deployer", DEPLOYER_SECRETS_VAULT_ID] {
+            for permission in [
+                "vault/data-read",
+                "vault/data-write",
+                "vault/data_read",
+                "vault/data_write",
+                "vault/provision",
+            ] {
+                for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+                    let mut stack = deployer_secret_stack(
+                        &[("api", "api-profile"), ("web", "web-profile")],
+                        &["api"],
+                    );
+                    stack.permissions.profiles.insert(
+                        "web-profile".into(),
+                        PermissionProfile::new().resource(scope, [permission]),
+                    );
+                    let error = DeployerSecretsVaultMutation
+                        .mutate(stack, &StackState::new(platform), &deployer_secret_config())
+                        .await
+                        .unwrap_err();
+                    assert!(
+                        error.to_string().contains("overlaps deployer secrets"),
+                        "{platform} {scope} {permission}: {error}"
+                    );
+                }
+            }
+        }
+        let mut stack = deployer_secret_stack(&[("api", "api-profile")], &["api"]);
+        stack.permissions.profiles.insert(
+            "api-profile".into(),
+            PermissionProfile::new().resource("secrets", ["vault/data-read"]),
+        );
+        DeployerSecretsVaultMutation
+            .mutate(
+                stack,
+                &StackState::new(Platform::Aws),
+                &deployer_secret_config(),
+            )
+            .await
+            .unwrap();
+    }
+
     #[tokio::test]
     async fn workloads_sharing_a_profile_must_receive_the_same_deployer_secrets() {
         let config = deployer_secret_config();

@@ -157,11 +157,16 @@ fn validate_deployer_secret_management(stack: &Stack) -> Result<()> {
             // registry permissions are the reviewable path on clouds without an IAM deny.
             let unreviewed_inline = matches!(permission, PermissionSetReference::Inline(set)
                 if set.platforms.gcp.is_some() || set.platforms.azure.is_some());
+            let canonical = match permission {
+                PermissionSetReference::Name(name) => get_permission_set(name)
+                    .map(|set| set.id.as_str())
+                    .unwrap_or(name.as_str()),
+                PermissionSetReference::Inline(set) => set.id.as_str(),
+            };
             let forbidden = unreviewed_inline
                 || (scope == alien_core::DEPLOYER_SECRETS_VAULT_ID
                     && !matches!(permission, PermissionSetReference::Name(name) if matches!(name.as_str(), "vault/heartbeat" | "vault/management")))
-                || (scope == "*"
-                    && matches!(permission.id(), "vault/data-read" | "vault/data-write"));
+                || (scope == "*" && matches!(canonical, "vault/data-read" | "vault/data-write"));
             if forbidden {
                 return Err(AlienError::new(ErrorData::StackMutationFailed {
                     mutation_name: "ManagementPermissionProfileMutation".to_string(),
@@ -795,7 +800,12 @@ mod tests {
     #[test]
     fn explicit_management_data_grants_cannot_reopen_deployer_vault() {
         for scope in ["*", alien_core::DEPLOYER_SECRETS_VAULT_ID] {
-            for id in ["vault/data-read", "vault/data-write"] {
+            for id in [
+                "vault/data-read",
+                "vault/data-write",
+                "vault/data_read",
+                "vault/data_write",
+            ] {
                 for override_profile in [false, true] {
                     let profile = PermissionProfile::new().resource(scope, [id]);
                     let stack = Stack::new("test".to_string())

@@ -223,6 +223,17 @@ fn management_permission_refs<'a>(ctx: &'a EmitContext<'_>) -> Vec<&'a Permissio
     let Some(profile) = ctx.stack.management().profile() else {
         return Vec::new();
     };
+    if ctx.stack_settings.setup_management == alien_core::SetupManagement::Automatic {
+        // Automatic setup already installs stack-scoped grants on the management
+        // role. Re-emitting them for each vault duplicates policies and can exceed
+        // the managed-policy attachment quota when a second vault is introduced.
+        return profile
+            .0
+            .get(ctx.resource_id)
+            .into_iter()
+            .flatten()
+            .collect();
+    }
     resource_permission_refs(profile, ctx.resource_id)
 }
 
