@@ -1525,6 +1525,89 @@ mod tests {
         }
     }
 
+    /// The ComputeCluster is setup-owned, but the manager PUTs its scale sets with the
+    /// management role whenever it scales a capacity group, changes the machine size or rolls
+    /// the nodes. Azure authorizes every scale set PUT against the resources its profile links
+    /// to (`LinkedAuthorizationFailed` otherwise): the cluster NSG, the subnet and the node
+    /// identity. All three live in the deployment resource group, and so must the grants.
+    #[test]
+    fn management_role_can_link_scale_sets_to_the_cluster_nsg_subnet_and_identity() {
+        let resource_group_scope = "/subscriptions/sub-123/resourceGroups/rg-123";
+        let nsg = format!(
+            "{resource_group_scope}/providers/Microsoft.Network/networkSecurityGroups/e2e-01-azcr-compute-nsg"
+        );
+        let subnet = format!(
+            "{resource_group_scope}/providers/Microsoft.Network/virtualNetworks/e2e-01-azcr-default-network-vnet/subnets/e2e-01-azcr-default-network-private-subnet"
+        );
+        let node_identity = format!(
+            "{resource_group_scope}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/e2e-01-azcr-compute-identity"
+        );
+
+        // A ComputeCluster runs Live containers or daemons, so auto-derivation pairs
+        // `compute-cluster/management` with one of their provision sets.
+        for workload_set in ["container/provision", "daemon/provision"] {
+            let profile = PermissionProfile::new().global([
+                PermissionSetReference::from_name("compute-cluster/management"),
+                PermissionSetReference::from_name(workload_set),
+                PermissionSetReference::from_name("network/heartbeat"),
+            ]);
+            let grant_plan = generate_stack_management_grant_plan(
+                &profile,
+                std::iter::empty(),
+                &permission_context(),
+                &Default::default(),
+            )
+            .unwrap();
+            let roles = management_role_definitions(
+                &grant_plan,
+                "test",
+                "Management role.",
+                "sub-123",
+                "rg-123",
+            )
+            .unwrap();
+
+            for (target, action) in [
+                (
+                    nsg.as_str(),
+                    "Microsoft.Network/networkSecurityGroups/join/action",
+                ),
+                (
+                    subnet.as_str(),
+                    "Microsoft.Network/virtualNetworks/subnets/join/action",
+                ),
+                (
+                    node_identity.as_str(),
+                    "Microsoft.ManagedIdentity/userAssignedIdentities/assign/action",
+                ),
+            ] {
+                // The roles the controller creates: one per scope, each assigned at its scope.
+                let holders: Vec<_> = roles
+                    .iter()
+                    .filter(|role| {
+                        role.properties.permissions[0]
+                            .actions
+                            .iter()
+                            .any(|a| a == action)
+                    })
+                    .collect();
+                assert_eq!(
+                    holders.iter().map(|role| role.scope.as_str()).collect::<Vec<_>>(),
+                    [resource_group_scope],
+                    "{workload_set}: {action} must be in the resource-group management role only"
+                );
+                assert_eq!(
+                    holders[0].properties.assignable_scopes,
+                    [resource_group_scope]
+                );
+                assert!(
+                    target.starts_with(&format!("{}/", holders[0].scope)),
+                    "{workload_set}: the role granting {action} must cover {target}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn stack_management_grant_plan_includes_worker_dispatch_command_once() {
         let profile = PermissionProfile::new()
