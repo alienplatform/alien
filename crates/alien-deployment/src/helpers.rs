@@ -1648,6 +1648,7 @@ mod tests {
             message: None,
             version: None,
             location: alien_core::DeployerSecretLocation {
+                commands: None,
                 store: alien_core::DeployerSecretStore::LocalVault,
                 name: "input-api-key".to_string(),
                 vault_name: None,

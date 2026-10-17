@@ -4,6 +4,7 @@
 */
 
 import * as z from "zod";
+import { DeployerSecretCommandsSchema } from "./deployer-secret-commands-schema.js";
 import { DeployerSecretStoreSchema } from "./deployer-secret-store-schema.js";
 
 /**
@@ -11,6 +12,9 @@ import { DeployerSecretStoreSchema } from "./deployer-secret-store-schema.js";
  */
 export const DeployerSecretLocationSchema = z.object({
     "cliCommand": z.string().describe("Command that prompts without echoing and writes the value through stdin."),
+get "commands"(){
+                return z.union([DeployerSecretCommandsSchema, z.null()]).optional()
+              },
 "consoleUrl": z.string().describe("Cloud console page where the secret is created, when the store has one.").nullish(),
 "deleteCommand": z.string().describe("Command that deletes the secret. Deleting a deployment keeps the\nsecrets the deployer wrote, since Alien never owned their values.").nullish(),
 "name": z.string().describe("Full name of the secret in that store."),

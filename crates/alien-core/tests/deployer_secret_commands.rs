@@ -28,6 +28,16 @@ case "${0##*/} $1 $2" in
   'aws sts get-caller-identity') printf '%s\n' "$ACCOUNT"; exit 0;;
   'gcloud secrets describe') exit 0;;
 esac
+for ((i=1; i<=$#; i++)); do
+  arg="${!i}"
+  if [[ "$arg" == --value ]]; then
+    ((i++)); value="${!i}"
+    if [[ "$value" != file:///dev/stdin ]]; then printf '%s' "$value" > "$CAPTURE/value"; exit 0; fi
+  elif [[ "$arg" == --from-literal=value=* ]]; then
+    printf '%s' "${arg#--from-literal=value=}"; exit 0
+  fi
+done
+if [[ "${0##*/}" == alien && "${!#}" != --stdin ]]; then printf '%s' "${!#}" > "$CAPTURE/value"; exit 0; fi
 case "${0##*/}" in
   aws) [[ " $* " == *' --value file:///dev/stdin '* ]] || exit 40;;
   az) [[ " $* " == *' --file /dev/stdin '* ]] || exit 41;;
@@ -164,5 +174,39 @@ fn cancelled_prompt_does_not_write_an_empty_secret() {
         let output = shell.run(&location.cli_command, "123456789012", "");
         assert!(!output.status.success());
         assert!(!shell.directory.path().join("value").exists());
+    }
+}
+
+#[test]
+fn inline_variants_preserve_shell_quoted_values() {
+    for executable in ["bash", "zsh"] {
+        for binding in [
+            VaultBinding::parameter_store("test-secrets"),
+            VaultBinding::secret_manager("test-secrets"),
+            VaultBinding::key_vault("testvault"),
+            VaultBinding::kubernetes_secret("default", "test-secrets"),
+            VaultBinding::local("secrets", "/tmp/unused"),
+        ] {
+            let shell = Shell::new(executable);
+            let location = deployer_secret_location(&binding, "input-key", &context()).unwrap();
+            let value = "fake-test '$ \" café\n";
+            let quoted = format!("'{}'", value.replace('\'', "'\"'\"'"));
+            let command = location
+                .commands
+                .unwrap()
+                .unix
+                .inline
+                .replace("'<VALUE>'", &quoted);
+            let output = shell.run(&command, "123456789012", "");
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(
+                fs::read(shell.directory.path().join("value")).unwrap(),
+                value.as_bytes()
+            );
+        }
     }
 }

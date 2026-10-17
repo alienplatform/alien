@@ -30,6 +30,9 @@ EXAMPLES:
     # Set a secret from stdin in the default deployment
     secret-source | alien dev vault set app-secrets GITHUB_TOKEN --stdin
     
+    # Set a secret from a UTF-8 file (also works in Windows PowerShell)
+    alien dev vault set app-secrets GITHUB_TOKEN --file key.txt
+
     # Get a secret
     alien dev vault get customer-secrets GITHUB_TOKEN
 
@@ -69,11 +72,14 @@ pub enum VaultAction {
         /// Secret name (e.g., "GITHUB_TOKEN")
         secret_name: String,
         /// Secret value (prefer --stdin to keep it out of process arguments)
-        #[arg(required_unless_present = "stdin", conflicts_with = "stdin")]
+        #[arg(required_unless_present_any = ["stdin", "file"], conflicts_with_all = ["stdin", "file"])]
         value: Option<String>,
         /// Read the exact secret bytes from stdin, without trimming whitespace
         #[arg(long)]
         stdin: bool,
+        /// Read a UTF-8 file exactly, without adding a newline or exposing the value in arguments
+        #[arg(long, conflicts_with = "stdin")]
+        file: Option<PathBuf>,
     },
     /// Get a secret value from a vault
     Get {
@@ -96,9 +102,18 @@ pub enum VaultAction {
     },
 }
 
-async fn read_secret_value(value: Option<String>) -> Result<String> {
+async fn read_secret_value(value: Option<String>, file: Option<PathBuf>) -> Result<String> {
     if let Some(value) = value {
         return Ok(value);
+    }
+    if let Some(path) = file {
+        return tokio::fs::read_to_string(path)
+            .await
+            .into_alien_error()
+            .context(ErrorData::ValidationError {
+                field: "file".to_string(),
+                message: "Failed to read the UTF-8 secret file".to_string(),
+            });
     }
     let mut value = String::new();
     tokio::io::stdin()
@@ -157,8 +172,9 @@ pub async fn vault_task(args: VaultArgs, port: u16) -> Result<()> {
             secret_name,
             value,
             stdin: _,
+            file,
         } => {
-            let value = read_secret_value(value).await?;
+            let value = read_secret_value(value, file).await?;
             validate_vault_name(&vault_name)?;
             validate_vault_name(&secret_name)?;
             set_secret(&vault_name, &secret_name, &value, &vault_path).await?;
@@ -412,8 +428,9 @@ pub async fn vault_remote_task(
             secret_name,
             value,
             stdin: _,
+            file,
         } => {
-            let value = read_secret_value(value).await?;
+            let value = read_secret_value(value, file).await?;
             validate_vault_name(&vault_name)?;
             validate_vault_name(&secret_name)?;
             let url = format!(
@@ -564,7 +581,7 @@ async fn delete_remote_secret(
 
 #[cfg(test)]
 mod tests {
-    use axum::{extract::Path, http::StatusCode, routing::delete, Router};
+    use axum::{Router, extract::Path, http::StatusCode, routing::delete};
     use clap::Parser;
     use tempfile::TempDir;
 
@@ -588,15 +605,10 @@ mod tests {
             matches!(argument.action, VaultAction::Set { value: Some(value), stdin: false, .. } if value == "fake-value")
         );
         assert!(VaultArgs::try_parse_from(["vault", "set", "secrets", "key"]).is_err());
-        assert!(VaultArgs::try_parse_from([
-            "vault",
-            "set",
-            "secrets",
-            "key",
-            "fake-value",
-            "--stdin"
-        ])
-        .is_err());
+        assert!(
+            VaultArgs::try_parse_from(["vault", "set", "secrets", "key", "fake-value", "--stdin"])
+                .is_err()
+        );
         let remote = VaultRemoteArgs::try_parse_from([
             "vault",
             "--deployment",
@@ -615,6 +627,47 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[tokio::test]
+    async fn file_values_preserve_unicode_and_trailing_newlines() {
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("value.txt");
+        let expected = "fake-test-value '$ \" café\n\n";
+        tokio::fs::write(&path, expected).await.unwrap();
+        let args = VaultArgs::try_parse_from([
+            "vault",
+            "set",
+            "secrets",
+            "key",
+            "--file",
+            path.to_str().unwrap(),
+        ])
+        .unwrap();
+        let VaultAction::Set { value, file, .. } = args.action else {
+            panic!("expected set")
+        };
+        let actual = read_secret_value(value, file).await.unwrap();
+        assert_eq!(actual.as_bytes(), expected.as_bytes());
+        for extra in ["--stdin", "fake-value"] {
+            assert!(
+                VaultArgs::try_parse_from([
+                    "vault",
+                    "set",
+                    "secrets",
+                    "key",
+                    "--file",
+                    "value.txt",
+                    extra
+                ])
+                .is_err()
+            );
+        }
+        assert!(
+            read_secret_value(None, Some(directory.path().join("missing")))
+                .await
+                .is_err()
+        );
     }
 
     #[test]

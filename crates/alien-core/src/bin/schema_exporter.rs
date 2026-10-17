@@ -162,6 +162,8 @@ use utoipa::OpenApi;
     // Vault-native deployer secret reports (deployment runtime metadata)
     DeployerSecretReport,
     DeployerSecretLocation,
+    DeployerSecretCommands,
+    DeployerSecretCommandVariants,
     DeployerSecretStatus,
     DeployerSecretStore,
     UpdatesMode,
