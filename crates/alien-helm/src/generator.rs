@@ -4169,15 +4169,13 @@ fn append_stack_settings(yaml: &mut String, stack_settings: &StackSettings) -> R
         return Ok(());
     }
 
-    let serialized = serde_yaml::to_string(stack_settings)
+    // JSON is valid YAML and quotes strings such as "off" that Helm
+    // otherwise interprets as booleans under YAML 1.1.
+    let serialized = serde_json::to_string_pretty(stack_settings)
         .into_alien_error()
         .context(ErrorData::JsonSerializationFailed {
             reason: "failed to serialize stack settings into chart values".to_string(),
         })?;
-    let serialized = serialized
-        .strip_prefix("---\n")
-        .unwrap_or(&serialized)
-        .trim_end();
 
     if serialized == "{}" || serialized.is_empty() {
         yaml.push_str("\nstackSettings: null\n");
