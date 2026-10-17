@@ -575,15 +575,17 @@ mod tests {
         .unwrap()];
         let mut vault = StackResourceState::new_pending(
             "vault".into(),
-            Resource::new(Vault::new("secrets".into()).build()),
+            Resource::new(Vault::new("deployer-secrets".into()).build()),
             Some(ResourceLifecycle::Frozen),
             Vec::new(),
         );
         vault.status = ResourceStatus::Running;
         vault.remote_binding_params =
-            Some(serde_json::to_value(VaultBinding::local("secrets", data_dir)).unwrap());
+            Some(serde_json::to_value(VaultBinding::local("deployer-secrets", data_dir)).unwrap());
         let mut stack_state = StackState::new(Platform::Local);
-        stack_state.resources.insert("secrets".into(), vault);
+        stack_state
+            .resources
+            .insert("deployer-secrets".into(), vault);
         let provider = BindingsProvider::from_stack_state(
             &stack_state,
             ClientConfig::Local {
@@ -591,7 +593,7 @@ mod tests {
             },
         )
         .unwrap();
-        let vault = provider.load_vault("secrets").await.unwrap();
+        let vault = provider.load_vault("deployer-secrets").await.unwrap();
         let release = alien_core::ReleaseInfo {
             release_id: Some("rel_test".into()),
             version: None,
@@ -664,7 +666,7 @@ mod tests {
             .push(supplied);
         // Read-back can reorder resource HashMaps without changing the checkpoint.
         let resources = &mut running.stack_state.as_mut().unwrap().resources;
-        let vault_resource = resources["secrets"].clone();
+        let vault_resource = resources["deployer-secrets"].clone();
         for index in 0..32 {
             resources.insert(format!("unchanged-{index}"), vault_resource.clone());
         }
@@ -672,7 +674,7 @@ mod tests {
         running = state.db.get_deployment_state().await.unwrap().unwrap();
         state.db.clear_deployment_config().await.unwrap();
         vault
-            .set_secret("input-key", "fake-test-value-1566")
+            .set_secret("key", "fake-test-value-1566")
             .await
             .unwrap();
         super::super::sync::refresh_running_secrets(&state, &mut running)
@@ -682,7 +684,7 @@ mod tests {
         assert_eq!(reports.len(), 1);
         assert_eq!(reports[0].status, alien_core::DeployerSecretStatus::Present);
         let stale = running.clone();
-        vault.delete_secret("input-key").await.unwrap();
+        vault.delete_secret("key").await.unwrap();
         super::super::sync::refresh_running_secrets(&state, &mut running)
             .await
             .unwrap();

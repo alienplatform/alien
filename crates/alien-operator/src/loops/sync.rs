@@ -920,10 +920,10 @@ mod tests {
             let app = Router::new().route("/", post(move |headers: axum::http::HeaderMap, body: axum::body::Bytes| {
                 let body: Value = serde_json::from_slice(&body).unwrap();
                 assert_eq!(headers["x-amz-target"], "AmazonSSM.DescribeParameters");
-                assert_eq!(body["ParameterFilters"][0]["Values"][0], "test-secrets-input-key");
+                assert_eq!(body["ParameterFilters"][0]["Values"][0], "test-deployer-secrets-key");
                 let call = request_calls.fetch_add(1, Ordering::SeqCst);
                 async move { Json(if call == 0 {
-                    json!({"Parameters": [{"Name": "test-secrets-input-key", "Type": "SecureString", "Version": 7}]})
+                    json!({"Parameters": [{"Name": "test-deployer-secrets-key", "Type": "SecureString", "Version": 7}]})
                 } else { json!({"Parameters": []}) }) }
             }));
             let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
@@ -978,17 +978,17 @@ mod tests {
         .unwrap()];
         let mut vault = alien_core::StackResourceState::new_pending(
             "vault".into(),
-            alien_core::Resource::new(alien_core::Vault::new("secrets".into()).build()),
+            alien_core::Resource::new(alien_core::Vault::new("deployer-secrets".into()).build()),
             Some(alien_core::ResourceLifecycle::Frozen),
             Vec::new(),
         );
         vault.status = alien_core::ResourceStatus::Running;
         vault.remote_binding_params = Some(
-            serde_json::to_value(alien_core::VaultBinding::parameter_store("test-secrets"))
+            serde_json::to_value(alien_core::VaultBinding::parameter_store("test-deployer-secrets"))
                 .unwrap(),
         );
         let mut stack_state = alien_core::StackState::new(Platform::Kubernetes);
-        stack_state.resources.insert("secrets".into(), vault);
+        stack_state.resources.insert("deployer-secrets".into(), vault);
         let running = DeploymentState {
             platform: Platform::Kubernetes, status: DeploymentStatus::Running,
             current_release: None, target_release: None, stack_state: Some(stack_state),
@@ -999,7 +999,7 @@ mod tests {
                 prepared_stack: Some(stack),
                 deployer_secrets: vec![serde_json::from_value(json!({
                     "inputId": "key", "label": "Test key", "required": true, "status": "missing",
-                    "location": {"store": "aws-parameter-store", "name": "test-secrets-input-key", "cliCommand": "unused"}
+                    "location": {"store": "aws-parameter-store", "name": "test-deployer-secrets-key", "cliCommand": "unused"}
                 })).unwrap()],
                 ..Default::default()
             }),
@@ -1081,10 +1081,10 @@ mod tests {
         .unwrap();
         let mut stack_state = alien_core::StackState::new(Platform::Local);
         stack_state.resources.insert(
-            "secrets".into(),
+            "deployer-secrets".into(),
             alien_core::StackResourceState::new_pending(
                 "vault".into(),
-                alien_core::Resource::new(alien_core::Vault::new("secrets".into()).build()),
+                alien_core::Resource::new(alien_core::Vault::new("deployer-secrets".into()).build()),
                 Some(alien_core::ResourceLifecycle::Frozen),
                 Vec::new(),
             ),

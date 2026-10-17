@@ -14,6 +14,19 @@ struct OperationCoverage<'a> {
 fn critical_e2e_provider_operations_are_declared() {
     let cases = [
         OperationCoverage {
+            permission_set_id: "vault/certificate-management",
+            aws_actions: &[],
+            gcp_permissions: &[],
+            gcp_predefined_roles: &[],
+            azure_actions: &[],
+            azure_data_actions: &[
+                "Microsoft.KeyVault/vaults/certificates/import/action",
+                "Microsoft.KeyVault/vaults/certificates/read",
+                "Microsoft.KeyVault/vaults/certificates/delete",
+            ],
+            azure_predefined_roles: &[],
+        },
+        OperationCoverage {
             // Ops the provision flow exercises against live clouds; the WHY for each grant lives
             // in permission-sets/postgres/provision.jsonc.
             permission_set_id: "postgres/provision",
@@ -132,10 +145,7 @@ fn critical_e2e_provider_operations_are_declared() {
                 "Microsoft.Authorization/roleAssignments/write",
                 "Microsoft.Network/publicIPAddresses/write",
             ],
-            azure_data_actions: &[
-                "Microsoft.KeyVault/vaults/certificates/import/action",
-                "Microsoft.KeyVault/vaults/certificates/delete",
-            ],
+            azure_data_actions: &[],
             azure_predefined_roles: &[],
         },
         OperationCoverage {

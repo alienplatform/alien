@@ -49,14 +49,19 @@ impl ResourceEntry {
     }
 
     /// Whether the controller's non-secret binding locator must be synchronized
-    /// into stack state. The built-in secrets vault is consumed by the manager,
-    /// but is not exposed through the external Remote Bindings API.
+    /// into stack state. Reserved vault locators support secret sync and metadata
+    /// checks, without exposing either vault through the Remote Bindings API.
     pub fn publishes_binding_params(&self) -> bool {
         self.remote_access
             || self
                 .config
                 .downcast_ref::<crate::Vault>()
-                .is_some_and(|vault| vault.id == "secrets")
+                .is_some_and(|vault| {
+                    matches!(
+                        vault.id.as_str(),
+                        crate::SECRETS_VAULT_ID | crate::DEPLOYER_SECRETS_VAULT_ID
+                    )
+                })
     }
 }
 

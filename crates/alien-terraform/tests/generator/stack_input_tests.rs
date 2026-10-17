@@ -85,7 +85,7 @@ fn deployer_secret_stack(provided_by: Vec<StackInputProvider>) -> Stack {
             }],
         }])
         .add(
-            Vault::new("secrets".to_string()).build(),
+            Vault::new("deployer-secrets".to_string()).build(),
             ResourceLifecycle::Frozen,
         )
         .build()
@@ -169,7 +169,7 @@ fn deployer_secrets_never_reach_terraform_variables_or_state() {
 
         let outputs = module.get("outputs.tf").expect("outputs.tf");
         let expected = deployer_secret_location(
-            &VaultBinding::parameter_store("acme-prod-secrets"),
+            &VaultBinding::parameter_store("acme-prod-deployer-secrets"),
             &deployer_secret_vault_key("apiKey"),
             &DeployerSecretLocationContext::default(),
         )
@@ -181,25 +181,6 @@ fn deployer_secrets_never_reach_terraform_variables_or_state() {
 
         assert_terraform_valid(&module, "deployer secret");
     }
-}
-
-#[test]
-fn deployer_secrets_need_the_secrets_vault() {
-    let stack = Stack::new("secret-input-stack".to_string())
-        .inputs(deployer_secret_stack(vec![StackInputProvider::Deployer]).inputs)
-        .add(
-            Storage::new("data".to_string()).build(),
-            ResourceLifecycle::Frozen,
-        )
-        .build();
-
-    let error = try_render(&stack, TerraformTarget::Aws, StackSettings::default())
-        .expect_err("a deployer secret without the secrets vault is refused");
-    assert!(
-        error.message.contains("'secrets' vault"),
-        "{}",
-        error.message
-    );
 }
 
 /// Distinct ids can normalize to the same Terraform variable; a silent shadow

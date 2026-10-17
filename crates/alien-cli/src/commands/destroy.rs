@@ -858,8 +858,8 @@ mod tests {
         status: alien_core::DeployerSecretStatus,
     ) -> DeployerSecretReport {
         let location = alien_core::deployer_secret_location(
-            &alien_core::bindings::VaultBinding::parameter_store("stack-secrets"),
-            &format!("input-{}", label.to_lowercase()),
+            &alien_core::bindings::VaultBinding::parameter_store("stack-deployer-secrets"),
+            &alien_core::deployer_secret_vault_key(label),
             &alien_core::DeployerSecretLocationContext {
                 aws_region: Some("us-east-1".to_string()),
                 ..Default::default()
@@ -906,9 +906,9 @@ mod tests {
         assert_eq!(
             kept_deployer_secret_lines(&kept),
             vec![
-                "Token (stack-secrets-input-token): aws ssm delete-parameter --region us-east-1 --name 'stack-secrets-input-token'".to_string(),
-                "Unwritten (stack-secrets-input-unwritten): aws ssm delete-parameter --region us-east-1 --name 'stack-secrets-input-unwritten'".to_string(),
-                "Plaintext (stack-secrets-input-plaintext): aws ssm delete-parameter --region us-east-1 --name 'stack-secrets-input-plaintext'".to_string(),
+                "Token (stack-deployer-secrets-token): aws ssm delete-parameter --region us-east-1 --name 'stack-deployer-secrets-token'".to_string(),
+                "Unwritten (stack-deployer-secrets-unwritten): aws ssm delete-parameter --region us-east-1 --name 'stack-deployer-secrets-unwritten'".to_string(),
+                "Plaintext (stack-deployer-secrets-plaintext): aws ssm delete-parameter --region us-east-1 --name 'stack-deployer-secrets-plaintext'".to_string(),
             ],
             "a slot last reported missing may have been written since"
         );

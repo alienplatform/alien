@@ -66,58 +66,66 @@ pub async fn load_secrets_from_vault(
         config.keys.len() + config.deployer_secrets.len()
     );
 
-    // Load the vault binding
-    // The vault binding name is conventionally "secrets" (the vault resource added by SecretsVaultMutation)
-    let vault = bindings_provider
-        .load_vault(alien_core::SECRETS_VAULT_ID)
-        .await
-        .context(ErrorData::SecretLoadFailed {
-            secret_name: "vault".to_string(),
-            message: "Failed to load vault binding".to_string(),
-        })?;
-
     let mut loaded_secrets = HashMap::new();
-    for secret_key in &config.keys {
-        let value = fetch_secret(vault.as_ref(), secret_key, true)
+    if !config.keys.is_empty() {
+        let vault = bindings_provider
+            .load_vault(alien_core::SECRETS_VAULT_ID)
             .await
-            .map_err(|e| {
-                e.context(ErrorData::SecretLoadFailed {
-                    secret_name: secret_key.clone(),
-                    message: format!(
-                        "Failed to fetch secret '{}' from vault after {} retries",
-                        secret_key, MAX_RETRIES
-                    ),
-                })
+            .context(ErrorData::SecretLoadFailed {
+                secret_name: "vault".to_string(),
+                message: "Failed to load vault binding".to_string(),
             })?;
-        loaded_secrets.insert(secret_key.clone(), value);
-    }
 
-    for secret in &config.deployer_secrets {
-        match fetch_secret(vault.as_ref(), &secret.vault_key, false).await {
-            Ok(value) => {
-                loaded_secrets.insert(secret.name.clone(), value);
-            }
-            Err(e) if is_not_found(&e) => {
-                if secret.required {
-                    return Err(AlienError::new(ErrorData::DeployerSecretMissing {
-                        label: secret.label.clone(),
+        for secret_key in &config.keys {
+            let value = fetch_secret(vault.as_ref(), secret_key, true)
+                .await
+                .map_err(|e| {
+                    e.context(ErrorData::SecretLoadFailed {
+                        secret_name: secret_key.clone(),
+                        message: format!(
+                            "Failed to fetch secret '{}' from vault after {} retries",
+                            secret_key, MAX_RETRIES
+                        ),
+                    })
+                })?;
+            loaded_secrets.insert(secret_key.clone(), value);
+        }
+    }
+    if !config.deployer_secrets.is_empty() {
+        let vault = bindings_provider
+            .load_vault(alien_core::DEPLOYER_SECRETS_VAULT_ID)
+            .await
+            .context(ErrorData::SecretLoadFailed {
+                secret_name: alien_core::DEPLOYER_SECRETS_VAULT_ID.to_string(),
+                message: "Failed to load deployer secrets vault binding".to_string(),
+            })?;
+        for secret in &config.deployer_secrets {
+            match fetch_secret(vault.as_ref(), &secret.vault_key, false).await {
+                Ok(value) => {
+                    loaded_secrets.insert(secret.name.clone(), value);
+                }
+                Err(e) if is_not_found(&e) => {
+                    if secret.required {
+                        return Err(AlienError::new(ErrorData::DeployerSecretMissing {
+                            label: secret.label.clone(),
+                            secret_name: secret.secret_name.clone(),
+                        }));
+                    }
+                    info!(
+                        env = %secret.name,
+                        secret_name = %secret.secret_name,
+                        "Optional deployer secret is not set; leaving it unset"
+                    );
+                }
+                Err(e) => {
+                    return Err(e.context(ErrorData::SecretLoadFailed {
                         secret_name: secret.secret_name.clone(),
+                        message: format!(
+                            "Failed to fetch deployer secret '{}' from vault after {} retries",
+                            secret.label, MAX_RETRIES
+                        ),
                     }));
                 }
-                info!(
-                    env = %secret.name,
-                    secret_name = %secret.secret_name,
-                    "Optional deployer secret is not set; leaving it unset"
-                );
-            }
-            Err(e) => {
-                return Err(e.context(ErrorData::SecretLoadFailed {
-                    secret_name: secret.secret_name.clone(),
-                    message: format!(
-                        "Failed to fetch deployer secret '{}' from vault after {} retries",
-                        secret.label, MAX_RETRIES
-                    ),
-                }));
             }
         }
     }
@@ -217,7 +225,7 @@ mod tests {
     fn local_vault_provider(state_dir: &std::path::Path) -> alien_bindings::BindingsProvider {
         let state_dir = state_dir.to_string_lossy().to_string();
         let binding = serde_json::to_value(alien_core::VaultBinding::local(
-            alien_core::SECRETS_VAULT_ID,
+            alien_core::DEPLOYER_SECRETS_VAULT_ID,
             &state_dir,
         ))
         .unwrap();
@@ -225,7 +233,7 @@ mod tests {
             alien_core::ClientConfig::Local {
                 state_directory: state_dir,
             },
-            HashMap::from([(alien_core::SECRETS_VAULT_ID.to_string(), binding)]),
+            HashMap::from([(alien_core::DEPLOYER_SECRETS_VAULT_ID.to_string(), binding)]),
         )
         .unwrap()
     }
@@ -236,8 +244,8 @@ mod tests {
             "hash": "h",
             "deployerSecrets": [{
                 "name": "DATABASE_PASSWORD",
-                "vaultKey": "input-database-password",
-                "secretName": "input-database-password",
+                "vaultKey": "database-password",
+                "secretName": "database-password",
                 "label": "Database password",
                 "required": required,
             }],
@@ -279,13 +287,13 @@ mod tests {
         let provider = local_vault_provider(temp.path());
         let vault = alien_bindings::BindingsProviderApi::load_vault(
             &provider,
-            alien_core::SECRETS_VAULT_ID,
+            alien_core::DEPLOYER_SECRETS_VAULT_ID,
         )
         .await
         .unwrap();
 
         vault
-            .set_secret("input-database-password", "first")
+            .set_secret("database-password", "first")
             .await
             .unwrap();
         let loaded = load_secrets_from_vault(&provider, &deployer_secrets_json(true))
@@ -294,7 +302,7 @@ mod tests {
         assert_eq!(loaded["DATABASE_PASSWORD"], "first");
 
         vault
-            .set_secret("input-database-password", "rotated")
+            .set_secret("database-password", "rotated")
             .await
             .unwrap();
         let loaded = load_secrets_from_vault(&provider, &deployer_secrets_json(true))
