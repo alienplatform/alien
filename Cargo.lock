@@ -1214,6 +1214,7 @@ dependencies = [
  "serde_json",
  "syn 2.0.119",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
