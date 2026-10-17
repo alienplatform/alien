@@ -305,7 +305,7 @@
             "scope": "projects/${projectName}",
             "condition": {
               "title": "ResourcePostgresSecretWrite",
-              "expression": "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && resource.name.startsWith(\"projects/${projectNumber}/secrets/${resourceName}-\")"
+              "expression": "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && resource.name.startsWith(\"projects/${projectNumber}/secrets/${resourceName}-\") && !resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-deployer-secrets-\")"
             }
           }
         }

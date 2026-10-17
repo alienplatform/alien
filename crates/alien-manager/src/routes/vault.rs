@@ -123,56 +123,69 @@ async fn ensure_manager_vault_access(
         return Ok(());
     }
 
-    let release_id = deployment
+    let release_ids: Vec<_> = deployment
         .desired_release_id
-        .as_ref()
-        .or(deployment.current_release_id.as_ref())
-        .ok_or_else(|| {
+        .iter()
+        .chain(deployment.current_release_id.iter())
+        .collect();
+    if release_ids.is_empty() {
+        return Err(ErrorData::bad_request(format!(
+            "Deployment {} has no release attached",
+            deployment.id
+        )));
+    }
+    let system = crate::auth::Subject::system();
+    for release_id in release_ids {
+        let release = state
+            .release_store
+            .get_release(&system, release_id)
+            .await
+            .context(ErrorData::InternalError {
+                message: "Failed to load release for vault authorization".to_string(),
+            })?
+            .ok_or_else(|| {
+                alien_error::AlienError::new(ErrorData::ReleaseNotFound {
+                    release_id: release_id.clone(),
+                })
+            })?;
+        let stack = release.stacks.get(&deployment.platform).ok_or_else(|| {
             ErrorData::bad_request(format!(
-                "Deployment {} has no release attached",
-                deployment.id
+                "Release {} has no stack for platform {}",
+                release_id, deployment.platform
             ))
         })?;
-
-    let system = crate::auth::Subject::system();
-    let release = state
-        .release_store
-        .get_release(&system, release_id)
-        .await
-        .context(ErrorData::InternalError {
-            message: "Failed to load release for vault authorization".to_string(),
-        })?
-        .ok_or_else(|| {
-            alien_error::AlienError::new(ErrorData::ReleaseNotFound {
-                release_id: release_id.clone(),
-            })
-        })?;
-
-    let stack = release.stacks.get(&deployment.platform).ok_or_else(|| {
-        ErrorData::bad_request(format!(
-            "Release {} has no stack for platform {}",
-            release_id, deployment.platform
-        ))
-    })?;
-
-    if shared_vault {
-        let config = deployment.deployment_config.as_ref();
-        let values = config.map(|config| &config.input_values).unwrap_or(&deployment.input_values);
-        let slots = alien_core::deployer_secret_slots(
-            &stack.inputs, values,
-            config.and_then(|config| config.stored_secret_input_ids.as_deref()),
-            config.map(|config| config.environment_variables.variables.as_slice()).unwrap_or(&[]),
-            deployment.platform,
-        );
-        if slots.iter().any(|slot| !slot.has_stored_value && normalize(key) == normalize(&format!("input-{}", slot.vault_key))) {
-            return Err(ErrorData::forbidden(
-                "This is a former deployer-secret location. Move it to deployer-secrets with your own cloud credentials; the manager cannot read or change it.",
-            ));
+        if shared_vault {
+            let config = deployment.deployment_config.as_ref();
+            let values = config
+                .map(|config| &config.input_values)
+                .unwrap_or(&deployment.input_values);
+            let slots = alien_core::deployer_secret_slots(
+                &stack.inputs,
+                values,
+                config.and_then(|config| config.stored_secret_input_ids.as_deref()),
+                config
+                    .map(|config| config.environment_variables.variables.as_slice())
+                    .unwrap_or(&[]),
+                deployment.platform,
+            );
+            if slots.iter().any(|slot| {
+                !slot.has_stored_value
+                    && normalize(key) == normalize(&format!("input-{}", slot.vault_key))
+            }) {
+                return Err(ErrorData::forbidden(
+                    "This is a former deployer-secret location. Move it to deployer-secrets with your own cloud credentials; the manager cannot read or change it.",
+                ));
+            }
+        } else {
+            // Ordinary vault permissions continue to use the desired release, or
+            // the current release when no update is pending.
+            if stack_management_allows_vault_access(stack, vault_name, permission_set_id) {
+                return Ok(());
+            }
+            break;
         }
-        return Ok(());
     }
-
-    if stack_management_allows_vault_access(stack, vault_name, permission_set_id) {
+    if shared_vault {
         return Ok(());
     }
 
