@@ -776,9 +776,16 @@ async fn removed_push_trigger_after_checkpoint_retains_intent_and_refuses_advanc
     };
     let mut controller = GcpWorkerController::mock_ready("test-worker");
     controller.state = GcpWorkerState::CreatingPushSubscriptions;
+    let queue = crate::queue::gcp::GcpQueueController {
+        state: crate::queue::gcp::GcpQueueState::Ready,
+        topic_name: Some("test-test-queue".into()),
+        subscription_name: Some("test-test-queue-sub".into()),
+        _internal_stay_count: None,
+    };
     let mut executor = SingleControllerExecutor::builder()
         .resource(desired.clone()).controller(controller).platform(Platform::Gcp)
-        .service_provider(services.clone()).with_test_dependencies().build().await.unwrap();
+        .service_provider(services.clone()).with_test_dependencies()
+        .with_dependency(crate::worker::fixtures::test_queue(), queue).build().await.unwrap();
     executor.step().await.unwrap();
     let controller: GcpWorkerController = serde_json::from_value(serde_json::to_value(executor.internal_state::<GcpWorkerController>().unwrap()).unwrap()).unwrap();
     assert_eq!(controller.storage_topic_intents.len() + controller.push_subscription_intents.len(), 1);
