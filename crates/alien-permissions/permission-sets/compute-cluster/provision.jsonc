@@ -491,6 +491,8 @@
             "Microsoft.Compute/virtualMachineScaleSets/write",
             "Microsoft.Compute/virtualMachineScaleSets/read",
             "Microsoft.Compute/virtualMachineScaleSets/delete",
+            // Scale-in, node-cohort retirement, and rolling replacement delete individual VMs.
+            "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/delete",
             "Microsoft.Compute/virtualMachineScaleSets/instanceView/read",
             "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/read",
             "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/instanceView/read",
