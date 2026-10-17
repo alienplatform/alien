@@ -3097,6 +3097,65 @@ fn deployer_reports(state: &DeploymentState) -> Vec<alien_core::DeployerSecretRe
 }
 
 #[tokio::test]
+async fn imported_initial_deployment_resumes_after_waiting_for_secrets() {
+    let vault_env = test_vault_env().await;
+    let mut stack = create_test_stack_with_storage("test-stack", "archive", "worker");
+    stack.inputs = vec![database_password_input()];
+    let config = create_test_config("initial-env", false);
+    let mut blocked = run_until_status(
+        create_initial_state(stack),
+        config.clone(),
+        &[DeploymentStatus::WaitingForSecrets],
+    )
+    .await;
+    // Automatic setup registration records the imported release before its
+    // workloads settle. This is initial provisioning, with no prepared update.
+    let release = blocked.target_release.clone().unwrap();
+    blocked.current_release = Some(release.clone());
+    let metadata = blocked.runtime_metadata.as_mut().unwrap();
+    metadata.automatic_setup = true;
+    metadata.initial_setup_authority = alien_core::InitialSetupAuthority::DirectSetup;
+    assert!(metadata.pending_prepared_stack.is_none());
+    let frozen = blocked.stack_state.as_ref().unwrap().resources["archive"].clone();
+    assert_eq!(
+        deployer_reports(&blocked)[0].status,
+        alien_core::DeployerSecretStatus::Missing
+    );
+
+    vault_env
+        .customer_vault()
+        .set_secret("input-database-password", "customer-only-value")
+        .await
+        .unwrap();
+    let checkpoint = serde_json::from_value(serde_json::to_value(&blocked).unwrap()).unwrap();
+    let running = run_to_completion(checkpoint, config).await;
+    assert_eq!(running.status, DeploymentStatus::Running);
+    assert_eq!(running.current_release, Some(release));
+    assert!(running.target_release.is_none());
+    assert!(running
+        .runtime_metadata
+        .as_ref()
+        .unwrap()
+        .pending_prepared_stack
+        .is_none());
+    assert_eq!(
+        running.stack_state.as_ref().unwrap().resources["worker"].status,
+        alien_core::ResourceStatus::Running
+    );
+    assert_eq!(
+        serde_json::to_value(&running.stack_state.as_ref().unwrap().resources["archive"]).unwrap(),
+        serde_json::to_value(frozen).unwrap()
+    );
+    assert_eq!(
+        deployer_reports(&running)[0].status,
+        alien_core::DeployerSecretStatus::Present
+    );
+    assert!(!serde_json::to_string(&running)
+        .unwrap()
+        .contains("customer-only-value"));
+}
+
+#[tokio::test]
 async fn initial_update_resumes_prepared_target_after_waiting_for_secrets() {
     let vault_env = test_vault_env().await;
     let config = create_test_config("target-env", false);
