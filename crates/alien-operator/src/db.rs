@@ -103,6 +103,7 @@ pub struct Approval {
 /// Operator database for persisting state across restarts
 pub struct OperatorDb {
     conn: Arc<Mutex<Connection>>,
+    sync_requested: tokio::sync::Notify,
 }
 
 impl OperatorDb {
@@ -154,6 +155,7 @@ impl OperatorDb {
 
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
+            sync_requested: tokio::sync::Notify::new(),
         })
     }
 
@@ -361,6 +363,42 @@ impl OperatorDb {
         })?;
 
         Ok(())
+    }
+
+    /// Wake the existing sync loop after persisting a changed secret report.
+    pub(crate) fn request_sync(&self) {
+        self.sync_requested.notify_one();
+    }
+
+    pub(crate) async fn wait_for_sync(&self) {
+        self.sync_requested.notified().await;
+    }
+
+    /// Save an observation only if no deployment step changed its source state.
+    pub(crate) async fn compare_and_set_deployment_state(
+        &self,
+        expected: &DeploymentState,
+        next: &DeploymentState,
+    ) -> Result<bool> {
+        let expected = serde_json::to_string(expected).into_alien_error().context(
+            ErrorData::DatabaseError {
+                message: "Failed to serialize expected deployment state".to_string(),
+            },
+        )?;
+        let next =
+            serde_json::to_string(next)
+                .into_alien_error()
+                .context(ErrorData::DatabaseError {
+                    message: "Failed to serialize observed deployment state".to_string(),
+                })?;
+        let conn = self.conn.lock().await;
+        let changed = conn.execute(
+            "UPDATE state SET value = ?, updated_at = datetime('now') WHERE key = 'deployment_state' AND value = ?",
+            (next, expected),
+        ).await.into_alien_error().context(ErrorData::DatabaseError {
+            message: "Failed to save observed deployment state".to_string(),
+        })?;
+        Ok(changed > 0)
     }
 
     /// Get the latest resource heartbeat snapshot emitted by deployment steps.

@@ -28,7 +28,7 @@ functions need at runtime. Each deployment has isolated vault state.
 
 EXAMPLES:
     # Set a secret from stdin in the default deployment
-    secret-source | alien dev vault set customer-secrets GITHUB_TOKEN --stdin
+    secret-source | alien dev vault set app-secrets GITHUB_TOKEN --stdin
     
     # Get a secret
     alien dev vault get customer-secrets GITHUB_TOKEN

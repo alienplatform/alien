@@ -96,6 +96,7 @@ pub(crate) async fn run_sync_loop_with_command_address_support(
 
         tokio::select! {
             _ = tokio::time::sleep(interval) => {},
+            _ = state.db.wait_for_sync() => {},
             _ = state.cancel.cancelled() => {
                 info!("Sync loop shutting down");
                 return;
@@ -129,6 +130,83 @@ fn create_authenticated_client(token: &str) -> crate::error::Result<Client> {
         })
 }
 
+/// Refresh only established secret slots; completed deployments no longer retain
+/// the input values and credentials from their installation configuration.
+pub(super) async fn refresh_running_secrets(
+    state: &OperatorState,
+    current: &mut alien_core::DeploymentState,
+) -> crate::error::Result<()> {
+    if current.status != DeploymentStatus::Running || current.target_release.is_some() {
+        return Ok(());
+    }
+    let Some(metadata) = &current.runtime_metadata else {
+        return Ok(());
+    };
+    if metadata.deployer_secrets.is_empty() {
+        return Ok(());
+    }
+    let (Some(prepared), Some(stack_state)) = (&metadata.prepared_stack, &current.stack_state)
+    else {
+        return Ok(());
+    };
+    let mut stack = prepared.clone();
+    stack.inputs.retain(|input| {
+        metadata
+            .deployer_secrets
+            .iter()
+            .any(|report| report.input_id == input.id)
+    });
+    let client_config = super::deployment::resolve_client_config(
+        current.platform,
+        state.config.base_platform,
+        &state.config.data_dir,
+        state.config.namespace.clone(),
+        state.config.sync.as_ref(),
+    )
+    .await?;
+    let config = alien_core::DeploymentConfig::builder()
+        .maybe_deployment_name(state.config.agent_name.clone())
+        .stack_settings(Default::default())
+        .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+            variables: Vec::new(),
+            hash: String::new(),
+            created_at: String::new(),
+        })
+        .stored_secret_input_ids(Vec::new())
+        .allow_frozen_changes(false)
+        .external_bindings(Default::default())
+        .build();
+    let reports = alien_deployment::check_deployer_secrets(
+        &stack,
+        stack_state,
+        &client_config,
+        &config,
+        current.platform,
+    )
+    .await
+    .context(crate::error::ErrorData::DeploymentFailed {
+        message: "Failed to refresh deployer secrets".to_string(),
+    })?;
+    if reports == metadata.deployer_secrets {
+        return Ok(());
+    }
+    let mut next = current.clone();
+    next.runtime_metadata
+        .as_mut()
+        .expect("metadata checked above")
+        .deployer_secrets = reports;
+    if state
+        .db
+        .compare_and_set_deployment_state(current, &next)
+        .await?
+    {
+        *current = next;
+    } else if let Some(latest) = state.db.get_deployment_state().await? {
+        *current = latest;
+    }
+    Ok(())
+}
+
 async fn sync_with_manager(
     state: &OperatorState,
     client: &Client,
@@ -154,6 +232,8 @@ async fn sync_with_manager(
                 retry_requested: false,
                 protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
             });
+
+    refresh_running_secrets(state, &mut deployment_state).await?;
 
     // Build the sync request with full deployment state
     // Deployment ID is stored in SQLite (from initialization)

@@ -361,7 +361,7 @@ pub fn deployer_secret_location(
     // printf + read works in both bash and zsh; their read prompt flags differ.
     let prompt = shell_quote(&format!("{label}: "));
     let write = format!(
-        "{prepare}printf '%s' {prompt} >&2\nIFS= read -rs secret && printf '\\n' >&2 && printf '%s' \"$secret\" | {}",
+        "{prepare}printf '%s' {prompt} >&2\nIFS= read -rs secret && printf '\\n' >&2 &&\nprintf '%s' \"$secret\" |\n  {}",
         location.cli_command
     );
     location.cli_command = if location.store == DeployerSecretStore::AwsParameterStore {
@@ -370,9 +370,9 @@ pub fn deployer_secret_location(
             .as_deref()
             .unwrap_or("<AWS_ACCOUNT_ID>");
         let expected = shell_quote(account);
-        let message = shell_quote(&format!("Switch to AWS account {account} and try again.\n"));
+        let message = shell_quote(&format!("Switch to AWS account {account} and try again."));
         format!(
-            "(\nset +x\nset -o pipefail\nif [ \"$(aws sts get-caller-identity --query Account --output text)\" = {expected} ]; then\n{write}\nelse\n  printf '%s' {message} >&2\n  false\nfi\n)"
+            "(\nset +x\nset -o pipefail\nif [ \"$(aws sts get-caller-identity --query Account --output text)\" = {expected} ]; then\n{write}\nelse\n  printf '%s\\n' {message} >&2\n  false\nfi\n)"
         )
     } else {
         format!("(\nset +x\nset -o pipefail\n{write}\n)")
