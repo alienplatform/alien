@@ -318,7 +318,14 @@ async fn run_deployment_continuously(state: &OperatorState) -> Result<(usize, Du
         );
     }
 
-    let delay = if loop_result.stop_reason == LoopStopReason::Delayed {
+    // Only waits on the deployer (keys, machines) honor the step's delay; resource
+    // waits during setup or updates keep the loop's short polling interval.
+    let waiting_on_deployer = matches!(
+        loop_result.final_status,
+        alien_core::DeploymentStatus::WaitingForSecrets
+            | alien_core::DeploymentStatus::WaitingForMachines
+    );
+    let delay = if loop_result.stop_reason == LoopStopReason::Delayed && waiting_on_deployer {
         Duration::from_millis(transport.suggested_delay_ms.load(Ordering::Relaxed))
     } else {
         Duration::ZERO
