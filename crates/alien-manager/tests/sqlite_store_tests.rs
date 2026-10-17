@@ -1133,6 +1133,36 @@ async fn acquire_picks_active_status_without_retry_request() {
 }
 
 #[tokio::test]
+async fn acquire_resumes_waiting_for_secrets_without_retry() {
+    for explicit in [false, true] {
+        let db = fresh_db().await;
+        let store = SqliteDeploymentStore::new(db.clone());
+        let group_id = create_test_group(&store).await;
+        let dep = create_test_deployment(&store, &group_id, "dep", Platform::Aws).await;
+        db.conn().lock().await.execute(
+            "UPDATE deployments SET status = 'waiting-for-secrets', retry_requested = 0 WHERE id = ?",
+            [dep.id.as_str()],
+        ).await.unwrap();
+        let acquired = store
+            .acquire(
+                &test_subject(),
+                "secret-poll",
+                &DeploymentFilter {
+                    statuses: explicit.then(|| vec!["waiting-for-secrets".into()]),
+                    deployment_ids: Some(vec![dep.id.clone()]),
+                    ..Default::default()
+                },
+                1,
+            )
+            .await
+            .unwrap();
+        assert_eq!(acquired.len(), 1);
+        assert_eq!(acquired[0].deployment.id, dep.id);
+        assert!(!acquired[0].deployment.retry_requested);
+    }
+}
+
+#[tokio::test]
 async fn concurrent_acquire() {
     let db = fresh_db().await;
     let store = SqliteDeploymentStore::new(db);
