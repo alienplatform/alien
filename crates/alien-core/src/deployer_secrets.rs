@@ -1,7 +1,7 @@
 //! Deployer secrets that live only in the customer's own secret store.
 //!
 //! A secret stack input the deployer provides is *vault-native*: the deployer
-//! writes the value into their cloud's secret store, in the stack's `secrets`
+//! writes the value into their cloud's secret store, in the stack's `deployer-secrets`
 //! vault, under a key Alien derives from the input id. Alien tells them where
 //! (a console link and a CLI command with a hidden prompt), checks whether the
 //! slot is filled using metadata-only calls, and the workload reads the value
@@ -20,26 +20,22 @@ use crate::{
     VaultBinding,
 };
 
-/// Prefix of every vault key that holds a deployer secret, so these keys
-/// never collide with the env-var-named keys Alien syncs itself.
-pub const DEPLOYER_SECRET_KEY_PREFIX: &str = "input-";
-
 /// Placeholder for the secret value in the CLI commands Alien shows.
 pub const DEPLOYER_SECRET_VALUE_PLACEHOLDER: &str = "<VALUE>";
 
-/// The `secrets` vault key for a deployer secret input: `input-` plus the input
-/// id in lowercase kebab case (`databasePassword` → `input-database-password`).
+/// The `deployer-secrets` vault key is the input id in lowercase kebab case
+/// (`databasePassword` → `database-password`).
 ///
 /// Only `[a-z0-9-]` survive, so the key is valid unchanged in every backend
 /// (SSM, Secret Manager, Key Vault and Kubernetes object names).
 pub fn deployer_secret_vault_key(input_id: &str) -> String {
-    let mut key = String::from(DEPLOYER_SECRET_KEY_PREFIX);
+    let mut key = String::new();
     let mut previous_lower_or_digit = false;
     let mut pending_separator = false;
     for character in input_id.chars() {
         if character.is_ascii_alphanumeric() {
             let starts_word = character.is_ascii_uppercase() && previous_lower_or_digit;
-            if (pending_separator || starts_word) && !key.ends_with('-') {
+            if (pending_separator || starts_word) && !key.is_empty() && !key.ends_with('-') {
                 key.push('-');
             }
             key.push(character.to_ascii_lowercase());
@@ -64,7 +60,7 @@ pub fn is_deployer_secret_input(input: &StackInputDefinition) -> bool {
 pub fn deployer_secret_value_refusal(name: &str) -> String {
     format!(
         "'{name}' is a deployer secret: its value goes into your own secret store and never \
-         through Alien. Do not pass it here; write it into the deployment's secrets vault \
+         through Alien. Do not pass it here; write it into the deployment's deployer-secrets vault \
          instead (the deployment status shows the secret's name and the command that writes it)."
     )
 }
@@ -74,7 +70,7 @@ pub fn deployer_secret_value_refusal(name: &str) -> String {
 pub struct DeployerSecretSlot<'a> {
     /// The stack input.
     pub input: &'a StackInputDefinition,
-    /// Key of the value in the `secrets` vault.
+    /// Key of the value in the `deployer-secrets` vault.
     pub vault_key: String,
     /// The deployment still stores a value for this input from before slots
     /// were vault-native. It is used until the control plane drops it.
@@ -260,7 +256,7 @@ pub struct DeployerSecretLocationContext {
     pub deployment_name: Option<String>,
 }
 
-/// Where the deployer writes the value for `vault_key` of the `secrets` vault
+/// Where the deployer writes the value for `vault_key` of the `deployer-secrets` vault
 /// described by `binding`.
 pub fn deployer_secret_location(
     binding: &VaultBinding,
@@ -580,7 +576,9 @@ fn shell_quote(value: &str) -> String {
 }
 
 fn concrete(value: &BindingValue<String>, field: &str) -> crate::Result<String> {
-    value.clone().into_value(crate::SECRETS_VAULT_ID, field)
+    value
+        .clone()
+        .into_value(crate::DEPLOYER_SECRETS_VAULT_ID, field)
 }
 
 /// Whether a deployer secret slot holds a usable value. Alien learns this from
@@ -655,7 +653,7 @@ pub const ENV_ALIEN_DEPLOYER_SECRETS: &str = "ALIEN_DEPLOYER_SECRETS";
 pub struct DeployerSecretEnv {
     /// Environment variable name.
     pub name: String,
-    /// Key in the `secrets` vault.
+    /// Key in the `deployer-secrets` vault.
     pub vault_key: String,
     /// Full name in the secret store (the Kubernetes Secret on Kubernetes).
     pub secret_name: String,
@@ -877,14 +875,11 @@ mod tests {
     fn vault_keys_are_kebab_case_and_backend_safe() {
         assert_eq!(
             deployer_secret_vault_key("databasePassword"),
-            "input-database-password"
+            "database-password"
         );
-        assert_eq!(deployer_secret_vault_key("api_key"), "input-api-key");
-        assert_eq!(
-            deployer_secret_vault_key("OAuth2Token"),
-            "input-oauth2-token"
-        );
-        assert_eq!(deployer_secret_vault_key("a--b__c"), "input-a-b-c");
+        assert_eq!(deployer_secret_vault_key("api_key"), "api-key");
+        assert_eq!(deployer_secret_vault_key("OAuth2Token"), "oauth2-token");
+        assert_eq!(deployer_secret_vault_key("a--b__c"), "a-b-c");
     }
 
     #[test]
@@ -900,7 +895,7 @@ mod tests {
 
         let slots = deployer_secret_slots(&inputs, &stored, Some(&[]), &[], Platform::Aws);
         assert_eq!(slots.len(), 1);
-        assert_eq!(slots[0].vault_key, "input-database-password");
+        assert_eq!(slots[0].vault_key, "database-password");
         assert!(slots[0].has_stored_value);
     }
 
@@ -947,38 +942,38 @@ mod tests {
             deployment_name: Some("default".to_string()),
             ..Default::default()
         };
-        let key = "input-database-password";
+        let key = "database-password";
 
         let aws = deployer_secret_location(
-            &VaultBinding::parameter_store("stack-secrets"),
+            &VaultBinding::parameter_store("stack-deployer-secrets"),
             key,
             &context,
         )
         .unwrap();
-        assert_eq!(aws.name, "stack-secrets-input-database-password");
+        assert_eq!(aws.name, "stack-deployer-secrets-database-password");
         assert_eq!(aws.store, DeployerSecretStore::AwsParameterStore);
         assert!(aws.cli_command.contains("--type SecureString"));
 
         assert_eq!(
             aws.delete_command.as_deref(),
             Some(
-                "aws ssm delete-parameter --region us-east-1 --name 'stack-secrets-input-database-password'"
+                "aws ssm delete-parameter --region us-east-1 --name 'stack-deployer-secrets-database-password'"
             )
         );
 
         let gcp = deployer_secret_location(
-            &VaultBinding::secret_manager("stack-secrets"),
+            &VaultBinding::secret_manager("stack-deployer-secrets"),
             key,
             &context,
         )
         .unwrap();
-        assert_eq!(gcp.name, "stack-secrets-input-database-password");
+        assert_eq!(gcp.name, "stack-deployer-secrets-database-password");
         assert_eq!(gcp.vault_name, None);
         assert!(gcp.console_url.unwrap().contains("project=acme-prod"));
         assert_eq!(
             gcp.delete_command.as_deref(),
             Some(
-                "gcloud secrets delete stack-secrets-input-database-password --project acme-prod --quiet"
+                "gcloud secrets delete stack-deployer-secrets-database-password --project acme-prod --quiet"
             )
         );
 
@@ -999,25 +994,28 @@ mod tests {
         );
 
         let kubernetes = deployer_secret_location(
-            &VaultBinding::kubernetes_secret("apps", "Stack-Secrets"),
+            &VaultBinding::kubernetes_secret("apps", "Stack-Deployer-Secrets"),
             key,
             &context,
         )
         .unwrap();
-        assert_eq!(kubernetes.name, "stack-secrets-input-database-password");
+        assert_eq!(kubernetes.name, "stack-deployer-secrets-database-password");
         assert!(kubernetes.cli_command.contains("--namespace apps"));
         assert_eq!(
             kubernetes.delete_command.as_deref(),
-            Some("kubectl delete secret stack-secrets-input-database-password --namespace apps")
+            Some("kubectl delete secret stack-deployer-secrets-database-password --namespace apps")
         );
 
-        let local =
-            deployer_secret_location(&VaultBinding::local("secrets", "/tmp/x"), key, &context)
-                .unwrap();
+        let local = deployer_secret_location(
+            &VaultBinding::local("deployer-secrets", "/tmp/x"),
+            key,
+            &context,
+        )
+        .unwrap();
 
         assert_eq!(
             local.delete_command.as_deref(),
-            Some("alien dev vault --deployment default delete secrets input-database-password")
+            Some("alien dev vault --deployment default delete deployer-secrets database-password")
         );
     }
 
@@ -1026,19 +1024,17 @@ mod tests {
         let binding = VaultBinding::ParameterStore(crate::ParameterStoreVaultBinding {
             vault_prefix: BindingValue::expression(serde_json::json!({"Ref": "Prefix"})),
         });
-        assert!(deployer_secret_location(
-            &binding,
-            "input-x",
-            &DeployerSecretLocationContext::default()
-        )
-        .is_err());
+        assert!(
+            deployer_secret_location(&binding, "x", &DeployerSecretLocationContext::default())
+                .is_err()
+        );
     }
 
     #[test]
     fn only_required_unfilled_slots_block_start() {
         let location = deployer_secret_location(
-            &VaultBinding::local("secrets", "/tmp/x"),
-            "input-x",
+            &VaultBinding::local("deployer-secrets", "/tmp/x"),
+            "x",
             &DeployerSecretLocationContext::default(),
         )
         .unwrap();
@@ -1073,7 +1069,7 @@ mod tests {
             location: DeployerSecretLocation {
                 commands: None,
                 store: DeployerSecretStore::AwsParameterStore,
-                name: "stack-secrets-input-database-password".to_string(),
+                name: "stack-deployer-secrets-database-password".to_string(),
                 vault_name: None,
                 console_url: None,
                 cli_command: String::new(),
@@ -1111,10 +1107,10 @@ mod tests {
         assert_eq!(env.len(), 1);
         let (variable, targets) = &env[0];
         assert_eq!(variable.name, "DATABASE_PASSWORD");
-        assert_eq!(variable.vault_key, "input-database-password");
+        assert_eq!(variable.vault_key, "database-password");
         assert_eq!(
             variable.secret_name,
-            "stack-secrets-input-database-password"
+            "stack-deployer-secrets-database-password"
         );
         assert!(variable.required);
         assert_eq!(variable.vault_name, None);
@@ -1129,7 +1125,7 @@ mod tests {
         )];
         let location = deployer_secret_location(
             &VaultBinding::key_vault("stacksecrets7f3a"),
-            "input-database-password",
+            "database-password",
             &DeployerSecretLocationContext::default(),
         )
         .unwrap();
@@ -1146,7 +1142,7 @@ mod tests {
         );
 
         assert_eq!(env.len(), 1);
-        assert_eq!(env[0].0.secret_name, "input-database-password");
+        assert_eq!(env[0].0.secret_name, "database-password");
         assert_eq!(env[0].0.vault_name.as_deref(), Some("stacksecrets7f3a"));
     }
 
@@ -1273,7 +1269,7 @@ mod tests {
             &[report("apiKey", DeployerSecretStatus::Present)],
         );
         assert_eq!(environment.len(), 1);
-        assert_eq!(environment[0].0.vault_key, "input-api-key");
+        assert_eq!(environment[0].0.vault_key, "api-key");
     }
 
     #[test]
