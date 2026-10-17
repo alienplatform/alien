@@ -106,12 +106,21 @@ fn provider(
 async fn failed_trigger_delete_preserves_remaining_child_across_reload(
     #[case] child: Child,
     #[case] denied: bool,
+    #[values(false, true)] updating: bool,
 ) {
     let mut controller = GcpWorkerController::mock_ready("test-worker");
-    controller.state = match child {
-        Child::Scheduler => GcpWorkerState::DeletingSchedulerJobs,
-        _ => GcpWorkerState::DeletingPushSubscriptions,
+    controller.state = if updating {
+        GcpWorkerState::UpdatePushSubscriptions
+    } else {
+        match child {
+            Child::Scheduler => GcpWorkerState::DeletingSchedulerJobs,
+            _ => GcpWorkerState::DeletingPushSubscriptions,
+        }
     };
+    let mut previous = function_public_ingress();
+    previous.triggers.push(alien_core::WorkerTrigger::Schedule {
+        cron: "* * * * *".into(),
+    });
     for name in ["first", "second"] {
         match child {
             Child::Notification => controller
@@ -128,6 +137,7 @@ async fn failed_trigger_delete_preserves_remaining_child_across_reload(
     let calls = Arc::new(Mutex::new(Vec::new()));
     let mut executor = SingleControllerExecutor::builder()
         .resource(function_public_ingress())
+        .previous_resource(previous.clone())
         .controller(controller)
         .platform(Platform::Gcp)
         .service_provider(provider(child, denied, false, calls.clone()))
@@ -154,13 +164,29 @@ async fn failed_trigger_delete_preserves_remaining_child_across_reload(
     let retry_calls = Arc::new(Mutex::new(Vec::new()));
     let mut resumed = SingleControllerExecutor::builder()
         .resource(function_public_ingress())
+        .previous_resource(previous.clone())
         .controller(controller)
         .platform(Platform::Gcp)
-        .service_provider(provider(child, denied, true, retry_calls.clone()))
+        .service_provider(provider(child, denied, !updating, retry_calls.clone()))
         .with_test_dependencies()
         .build()
         .await
         .unwrap();
+    if updating {
+        let error = resumed.step().await.unwrap_err();
+        assert_eq!(error.code, "RESOURCE_CLEANUP_INCOMPLETE");
+        assert_eq!(*retry_calls.lock().unwrap(), ["second"]);
+        // No create expectations exist: a failed old-trigger deletion must not
+        // reach replacement creation, including after serialization and retry.
+        assert_eq!(
+            resumed
+                .internal_state::<GcpWorkerController>()
+                .unwrap()
+                .state,
+            GcpWorkerState::UpdatePushSubscriptions
+        );
+        return;
+    }
     resumed.step().await.unwrap();
     assert_eq!(*retry_calls.lock().unwrap(), ["second"]);
     let controller = resumed.internal_state::<GcpWorkerController>().unwrap();
