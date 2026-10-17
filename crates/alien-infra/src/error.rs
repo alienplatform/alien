@@ -531,6 +531,21 @@ pub enum ErrorData {
         message: String,
     },
 
+    /// A cloud object with the name a resource uses already exists and this deployment did not create it.
+    #[error(
+        code = "EXISTING_CLOUD_RESOURCE_NOT_OWNED",
+        message = "{object} already exists and is not managed by this deployment. Resource '{resource_id}' will not use or change it; remove the existing one or give the resource a different ID.",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    ExistingCloudResourceNotOwned {
+        /// Resource that would have used the name
+        resource_id: String,
+        /// The existing object, named as the cloud names it (for example "S3 bucket 'x'")
+        object: String,
+    },
+
     /// A cloud object setup would create already exists and is not one setup can safely adopt.
     #[error(
         code = "SETUP_SCAFFOLDING_NOT_ADOPTABLE",

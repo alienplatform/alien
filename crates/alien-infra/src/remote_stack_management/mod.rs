@@ -158,6 +158,11 @@ pub(crate) fn management_permissions_need_refresh(
     if ctx.initial_setup_authority != InitialSetupAuthority::DirectSetup {
         return Ok(false);
     }
+    // Setup installs the infrastructure grant. Runtime may
+    // use it, but must never rewrite its own management identity or remove its guard.
+    if !ctx.deployment_config.setup_run {
+        return Ok(false);
+    }
     Ok(management_permissions_revision(ctx)?.as_deref() != applied_revision)
 }
 
@@ -180,12 +185,14 @@ mod tests {
         platform: Platform,
         controller: impl ResourceController + 'static,
         authority: InitialSetupAuthority,
+        setup_run: bool,
     ) -> SingleControllerExecutor {
         SingleControllerExecutor::builder()
             .resource(RemoteStackManagement::new("management".to_string()).build())
             .controller(controller)
             .platform(platform)
             .initial_setup_authority(authority)
+            .setup_run(setup_run)
             .build()
             .await
             .expect("executor builds")
@@ -196,23 +203,24 @@ mod tests {
         platform: Platform,
         authority: InitialSetupAuthority,
         applied: Option<&str>,
+        setup_run: bool,
     ) -> (bool, String) {
         let applied = applied.map(str::to_string);
         let executor = match platform {
             Platform::Aws => {
                 let mut controller = AwsRemoteStackManagementController::mock_ready("test");
                 controller.management_permissions_revision = applied;
-                executor(platform, controller, authority).await
+                executor(platform, controller, authority, setup_run).await
             }
             Platform::Gcp => {
                 let mut controller = GcpRemoteStackManagementController::mock_ready("test");
                 controller.management_permissions_revision = applied;
-                executor(platform, controller, authority).await
+                executor(platform, controller, authority, setup_run).await
             }
             Platform::Azure => {
                 let mut controller = AzureRemoteStackManagementController::mock_ready("test");
                 controller.management_permissions_revision = applied;
-                executor(platform, controller, authority).await
+                executor(platform, controller, authority, setup_run).await
             }
             other => panic!("no remote stack management controller for {other:?}"),
         };
@@ -226,17 +234,27 @@ mod tests {
     #[tokio::test]
     async fn direct_setup_refreshes_management_permissions_that_changed() {
         for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
-            let (stale, current) =
-                needs_update(platform, InitialSetupAuthority::DirectSetup, Some("stale")).await;
+            let (stale, current) = needs_update(
+                platform,
+                InitialSetupAuthority::DirectSetup,
+                Some("stale"),
+                true,
+            )
+            .await;
             assert!(stale, "{platform:?}: a changed revision is refreshed");
             let (legacy, _) =
-                needs_update(platform, InitialSetupAuthority::DirectSetup, None).await;
+                needs_update(platform, InitialSetupAuthority::DirectSetup, None, true).await;
             assert!(
                 legacy,
                 "{platform:?}: an install without a recorded revision is refreshed"
             );
-            let (unchanged, _) =
-                needs_update(platform, InitialSetupAuthority::DirectSetup, Some(&current)).await;
+            let (unchanged, _) = needs_update(
+                platform,
+                InitialSetupAuthority::DirectSetup,
+                Some(&current),
+                true,
+            )
+            .await;
             assert!(
                 !unchanged,
                 "{platform:?}: the applied revision is left alone"
@@ -249,23 +267,25 @@ mod tests {
     /// runtime credentials still never touch the management role.
     #[tokio::test]
     async fn direct_setup_replaces_the_legacy_combined_azure_role() {
-        for (authority, expected) in [
-            (InitialSetupAuthority::DirectSetup, true),
-            (InitialSetupAuthority::ImportedHandoff, false),
+        for (authority, setup_run, expected) in [
+            (InitialSetupAuthority::DirectSetup, true, true),
+            (InitialSetupAuthority::ImportedHandoff, true, false),
+            (InitialSetupAuthority::DirectSetup, false, false),
+            (InitialSetupAuthority::ImportedHandoff, false, false),
         ] {
             // The applied revision is current, so only the legacy role can ask for the update.
-            let (_, current) = needs_update(Platform::Azure, authority, None).await;
+            let (_, current) = needs_update(Platform::Azure, authority, None, setup_run).await;
             let mut controller = AzureRemoteStackManagementController::mock_ready("test");
             controller.management_permissions_revision = Some(current);
             controller.role_definition_id = Some(
                 "/subscriptions/sub-1234/providers/Microsoft.Authorization/roleDefinitions/legacy"
                     .to_string(),
             );
-            let executor = executor(Platform::Azure, controller, authority).await;
+            let executor = executor(Platform::Azure, controller, authority, setup_run).await;
             assert_eq!(
                 executor.needs_update().expect("needs_update"),
                 expected,
-                "{authority:?}"
+                "{authority:?} with setup_run={setup_run}"
             );
         }
     }
@@ -274,9 +294,13 @@ mod tests {
     async fn runtime_credentials_never_refresh_management_permissions() {
         for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
             for applied in [Some("stale"), None] {
-                let (refresh, _) =
-                    needs_update(platform, InitialSetupAuthority::ImportedHandoff, applied).await;
-                assert!(!refresh, "{platform:?} with {applied:?}");
+                for authority in [
+                    InitialSetupAuthority::ImportedHandoff,
+                    InitialSetupAuthority::DirectSetup,
+                ] {
+                    let (refresh, _) = needs_update(platform, authority, applied, false).await;
+                    assert!(!refresh, "{platform:?} with {authority:?} and {applied:?}");
+                }
             }
         }
     }

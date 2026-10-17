@@ -6,14 +6,25 @@ use std::{collections::HashMap, fs::File, io::Read, path::Path};
 /// Validate the completed image, including inherited layers, before Lambda sees it.
 /// Large layer blobs are skipped with seeks; only bounded JSON metadata is buffered.
 pub(crate) fn validate(path: &Path, resource_name: &str) -> Result<()> {
-    let invalid = |reason: &str| {
-        ErrorData::InvalidResourceConfig {
-            resource_id: resource_name.to_string(),
-            reason: format!(
-                "AWS Worker image '{}' is not Lambda-compatible: {reason}. Rebuild with the current CLI using `alien build`, then release again. Custom base images must use Linux ARM64 and gzip layers.",
+    validate_arm64(path, resource_name, true)
+}
+
+/// MicroVM base images also require ARM64, but accept Docker-supported layer formats.
+pub(crate) fn validate_sandbox(path: &Path, resource_name: &str) -> Result<()> {
+    validate_arm64(path, resource_name, false)
+}
+
+fn validate_arm64(path: &Path, resource_name: &str, require_gzip: bool) -> Result<()> {
+    let invalid = |reason: &str| ErrorData::InvalidResourceConfig {
+        resource_id: resource_name.to_string(),
+        reason: if require_gzip {
+            format!("AWS Worker image '{}' is not Lambda-compatible: {reason}. Rebuild with the current CLI using `alien build`, then release again. Custom base images must use Linux ARM64 and gzip layers.", path.display())
+        } else {
+            format!(
+                "AWS Sandbox image '{}' requires Linux ARM64: {reason}",
                 path.display()
-            ),
-        }
+            )
+        },
     };
     let file = File::open(path)
         .into_alien_error()
@@ -72,6 +83,9 @@ pub(crate) fn validate(path: &Path, resource_name: &str) -> Result<()> {
         return Err(AlienError::new(invalid(
             "expected Linux ARM64 image configuration",
         )));
+    }
+    if !require_gzip {
+        return Ok(());
     }
     let layers = manifest["layers"]
         .as_array()

@@ -19,8 +19,33 @@ pub async fn prepare_direct_setup_update(
     existing_metadata: &alien_core::RuntimeMetadata,
 ) -> Result<alien_core::RuntimeMetadata> {
     let mut config = config.clone();
-    let persisted_gate_answers =
-        resolve_frozen_gate_answers(&target_stack, stack_state, &config.input_values)?;
+    // Automatic installations answer from the requested inputs. Manual setup
+    // preserves recorded choices, but a new gate must use the setup inputs:
+    // absence from the old state says nothing about a newly introduced resource.
+    let mut gate_inputs = config.input_values.clone();
+    if !existing_metadata.automatic_setup {
+        let mut recorded = existing_metadata.persisted_gate_answers.clone();
+        if let Some(previous_stack) = existing_metadata.prepared_stack.as_ref() {
+            if frozen_gating_inputs(previous_stack)
+                .iter()
+                .any(|input| !recorded.contains_key(input))
+            {
+                let previous_answers =
+                    resolve_frozen_gate_answers(previous_stack, stack_state, &config.input_values)?;
+                for (input, answer) in previous_answers {
+                    recorded.entry(input).or_insert(answer);
+                }
+            }
+        }
+        for (input, answer) in recorded {
+            gate_inputs.insert(input, serde_json::Value::Bool(answer));
+        }
+    }
+    let persisted_gate_answers = resolve_frozen_gate_answers_from_presence(
+        &target_stack,
+        &std::collections::HashSet::new(),
+        &gate_inputs,
+    )?;
     let frozen_gating = frozen_gating_inputs(&target_stack);
     let target_stack = strip_frozen_declines_with_compute_settings(
         target_stack,
@@ -69,6 +94,23 @@ pub async fn handle_pending(
     _service_provider: std::sync::Arc<dyn alien_infra::PlatformServiceProvider>,
 ) -> Result<DeploymentStepResult> {
     info!("Handling Pending status");
+
+    // Azure automatic management must hand off to an installed identity;
+    // bootstrap credentials are never a runtime fallback for this mode.
+    if current.platform == Platform::Azure
+        && config.stack_settings.setup_management == alien_core::SetupManagement::Automatic
+        && config.management_config.is_none()
+        && !current.stack_state.as_ref().is_some_and(|state| {
+            state.resources.values().any(|resource| {
+                resource.config.resource_type() == alien_core::RemoteStackManagement::RESOURCE_TYPE
+                    && resource.status != alien_core::ResourceStatus::Deleted
+            })
+        })
+    {
+        return Err(AlienError::new(ErrorData::MissingConfiguration {
+            message: "Automatic Azure management requires management configuration to install its runtime identity".to_string(),
+        }));
+    }
 
     // Step 1: Initialize stack state. Direct platform deployments may carry a
     // user-selected resource prefix in their initial stack state.
@@ -139,12 +181,10 @@ pub async fn handle_pending(
         ..alien_core::RuntimeMetadata::default()
     };
     runtime_metadata.prepared_stack = Some(mutated_stack.clone());
-    if current.platform == alien_core::Platform::Local {
-        runtime_metadata.pending_prepared_release_id = current
-            .target_release
-            .as_ref()
-            .and_then(|release| release.release_id.clone());
-    }
+    runtime_metadata.pending_prepared_release_id = current
+        .target_release
+        .as_ref()
+        .and_then(|release| release.release_id.clone());
     runtime_metadata.persisted_gate_answers = persisted_gate_answers;
 
     // Inject environment variables into the prepared stack for validation

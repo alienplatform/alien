@@ -1133,6 +1133,20 @@ export type ImportSourceNetworkUnion =
   | string;
 
 /**
+ * Whether setup remains a separate administrator operation.
+ */
+export const ImportSourceSetupManagement = {
+  Manual: "manual",
+  Automatic: "automatic",
+} as const;
+/**
+ * Whether setup remains a separate administrator operation.
+ */
+export type ImportSourceSetupManagement = ClosedEnum<
+  typeof ImportSourceSetupManagement
+>;
+
+/**
  * How telemetry (logs, metrics, traces) is handled.
  */
 export const ImportSourceTelemetry = {
@@ -1213,6 +1227,10 @@ export type ImportSourceStackSettings = {
    * Unknown identities are rejected. An empty list restores normal blocking.
    */
   quotaWarningOverrides?: Array<string> | undefined;
+  /**
+   * Whether setup remains a separate administrator operation.
+   */
+  setupManagement?: ImportSourceSetupManagement | undefined;
   /**
    * How telemetry (logs, metrics, traces) is handled.
    */
@@ -3695,6 +3713,11 @@ export function importSourceNetworkUnionToJSON(
 }
 
 /** @internal */
+export const ImportSourceSetupManagement$outboundSchema: z.ZodEnum<
+  typeof ImportSourceSetupManagement
+> = z.enum(ImportSourceSetupManagement);
+
+/** @internal */
 export const ImportSourceTelemetry$outboundSchema: z.ZodEnum<
   typeof ImportSourceTelemetry
 > = z.enum(ImportSourceTelemetry);
@@ -3727,6 +3750,7 @@ export type ImportSourceStackSettings$Outbound = {
     | undefined;
   publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
   quotaWarningOverrides?: Array<string> | undefined;
+  setupManagement?: string | undefined;
   telemetry?: string | undefined;
   updates?: string | undefined;
 };
@@ -3765,6 +3789,7 @@ export const ImportSourceStackSettings$outboundSchema: z.ZodType<
     z.record(z.string(), z.record(z.string(), z.string())),
   ).optional(),
   quotaWarningOverrides: z.array(z.string()).optional(),
+  setupManagement: ImportSourceSetupManagement$outboundSchema.optional(),
   telemetry: ImportSourceTelemetry$outboundSchema.optional(),
   updates: ImportSourceUpdates$outboundSchema.optional(),
 });

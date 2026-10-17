@@ -14,8 +14,8 @@ use tracing::info;
 use alien_manager::{
     stores::sqlite::{SqliteDatabase, SqliteTokenStore},
     traits::{
-        CreateTokenParams, CredentialResolver, DeploymentRecord, ResolvedCredentials, TokenStore,
-        TokenType,
+        CreateTokenParams, CredentialResolver, DeploymentRecord, DeploymentStore,
+        ResolvedCredentials, TokenStore, TokenType,
     },
     AlienManagerBuilder, ManagerTomlConfig,
 };
@@ -103,6 +103,7 @@ pub struct TestManager {
     management_config: Option<alien_core::ManagementConfig>,
     /// Token store for creating deployment tokens in tests.
     token_store: Arc<dyn TokenStore>,
+    deployment_store: Arc<dyn DeploymentStore>,
     /// Temp directory backing the SQLite database. Dropped after the manager
     /// shuts down so the directory is cleaned up.
     _state_dir: tempfile::TempDir,
@@ -296,6 +297,7 @@ impl TestManager {
             .await?
             .build()
             .await?;
+        let deployment_store = server.deployment_store().clone();
 
         // 8. Spawn the server in a background task
         let addr: SocketAddr = format!("127.0.0.1:{}", port).parse()?;
@@ -349,6 +351,7 @@ impl TestManager {
             config: config.cloned(),
             management_config,
             token_store,
+            deployment_store,
             _state_dir: state_dir,
             server_handle: Some(server_handle),
             _ngrok_tunnel: ngrok_tunnel,
@@ -358,6 +361,11 @@ impl TestManager {
     /// Get a reference to the pre-authenticated SDK client.
     pub fn client(&self) -> &alien_manager_api::Client {
         &self.client
+    }
+
+    /// Test fixture access for reserving an imported deployment before a real setup artifact runs.
+    pub fn deployment_store(&self) -> &Arc<dyn DeploymentStore> {
+        &self.deployment_store
     }
 
     /// Get a reference to the test configuration used to start this manager, if

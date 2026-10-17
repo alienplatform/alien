@@ -161,6 +161,9 @@ pub enum TestApp {
     /// A bindings-only AI deployment used to qualify Manager-minted Access
     /// credentials and one real model invocation on each cloud.
     ByoAi,
+    /// An empty first release whose package installs management access; subsequent releases
+    /// add, change, and remove frozen cloud storage through that installed identity.
+    AutomaticSetup,
 }
 
 impl std::fmt::Display for TestApp {
@@ -175,6 +178,7 @@ impl std::fmt::Display for TestApp {
             TestApp::EnabledDemo => write!(f, "enabled-demo"),
             TestApp::ByoEncryptionKey => write!(f, "byo-encryption-key"),
             TestApp::ByoAi => write!(f, "byo-ai"),
+            TestApp::AutomaticSetup => write!(f, "automatic-setup"),
         }
     }
 }
@@ -399,6 +403,7 @@ pub(crate) fn test_app_path(app: TestApp) -> &'static str {
         TestApp::EnabledDemo => "test-apps/enabled-demo",
         TestApp::ByoEncryptionKey => "test-apps/byo-encryption-key",
         TestApp::ByoAi => "test-apps/byo-ai",
+        TestApp::AutomaticSetup => "test-apps/automatic-setup",
     }
 }
 
@@ -416,7 +421,8 @@ fn deployment_environment_variables(
         | TestApp::CommandRoutingTs
         | TestApp::ContainerRust
         | TestApp::RuntimeLessMixed
-        | TestApp::EnabledDemo => None,
+        | TestApp::EnabledDemo
+        | TestApp::AutomaticSetup => None,
         TestApp::ByoEncryptionKey | TestApp::ByoAi => None,
         TestApp::FullStackMicroservices => {
             Some(vec![alien_manager_api::types::EnvironmentVariable {

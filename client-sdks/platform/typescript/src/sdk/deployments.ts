@@ -327,7 +327,7 @@ export class Deployments extends ClientSDK {
   }
 
   /**
-   * Update deployment-time compute pool selections and request reconciliation by the hosted manager.
+   * Update deployment-time compute selections or quota warning overrides and request reconciliation by the hosted manager.
    */
   async updateCompute(
     id: string,

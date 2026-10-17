@@ -17,12 +17,6 @@ import {
   ManagerRetryDeploymentResponse$inboundSchema,
 } from "./managerretrydeploymentresponse.js";
 import {
-  ManagerRetryResponseSetupConfig,
-  ManagerRetryResponseSetupConfig$inboundSchema,
-  ManagerRetryResponseSetupTerraform,
-  ManagerRetryResponseSetupTerraform$inboundSchema,
-} from "./managerretryresponsedomains2.js";
-import {
   ManagerRetryResponseCertificateUnion1,
   ManagerRetryResponseCertificateUnion1$inboundSchema,
   ManagerRetryResponseClusterUnion1,
@@ -43,11 +37,30 @@ import {
   ManagerRetryResponseModeGenerated1$inboundSchema,
   ManagerRetryResponseProviderAzureApplicationGatewayForContainers2,
   ManagerRetryResponseProviderAzureApplicationGatewayForContainers2$inboundSchema,
-  ManagerRetryResponseProviderGkeGateway2,
-  ManagerRetryResponseProviderGkeGateway2$inboundSchema,
   ManagerRetryResponseSetupGoogleOauth,
   ManagerRetryResponseSetupGoogleOauth$inboundSchema,
-} from "./managerretryresponseprovidergkegateway2.js";
+} from "./managerretryresponseproviderazureapplicationgatewayforcontainers2.js";
+import {
+  ManagerRetryResponseSetupConfig,
+  ManagerRetryResponseSetupConfig$inboundSchema,
+  ManagerRetryResponseSetupTerraform,
+  ManagerRetryResponseSetupTerraform$inboundSchema,
+} from "./managerretryresponsepublicendpointtargetunion2.js";
+
+export const ManagerRetryResponseProviderGkeGatewayEnum2 = {
+  GkeGateway: "gkeGateway",
+} as const;
+export type ManagerRetryResponseProviderGkeGatewayEnum2 = ClosedEnum<
+  typeof ManagerRetryResponseProviderGkeGatewayEnum2
+>;
+
+export type ManagerRetryResponseProviderGkeGateway2 = {
+  provider: ManagerRetryResponseProviderGkeGatewayEnum2;
+  /**
+   * Optional static address name for the Gateway frontend.
+   */
+  staticAddressName?: string | null | undefined;
+};
 
 export const ManagerRetryResponseProviderAwsAlbEnum2 = {
   AwsAlb: "awsAlb",
@@ -412,6 +425,20 @@ export type ManagerRetryResponseNetworkUnion1 =
   | string;
 
 /**
+ * Whether setup remains a separate administrator operation.
+ */
+export const ManagerRetryResponseSetupManagement1 = {
+  Manual: "manual",
+  Automatic: "automatic",
+} as const;
+/**
+ * Whether setup remains a separate administrator operation.
+ */
+export type ManagerRetryResponseSetupManagement1 = ClosedEnum<
+  typeof ManagerRetryResponseSetupManagement1
+>;
+
+/**
  * How telemetry (logs, metrics, traces) is handled.
  */
 export const ManagerRetryResponseTelemetry1 = {
@@ -497,6 +524,10 @@ export type ManagerRetryResponseStackSettings1 = {
    */
   quotaWarningOverrides?: Array<string> | undefined;
   /**
+   * Whether setup remains a separate administrator operation.
+   */
+  setupManagement?: ManagerRetryResponseSetupManagement1 | undefined;
+  /**
    * How telemetry (logs, metrics, traces) is handled.
    */
   telemetry?: ManagerRetryResponseTelemetry1 | undefined;
@@ -557,6 +588,37 @@ export type ManagerRetryResponse =
   | ManagerRetryDeploymentResponse;
 
 /** @internal */
+export const ManagerRetryResponseProviderGkeGatewayEnum2$inboundSchema:
+  z.ZodEnum<typeof ManagerRetryResponseProviderGkeGatewayEnum2> = z.enum(
+    ManagerRetryResponseProviderGkeGatewayEnum2,
+  );
+
+/** @internal */
+export const ManagerRetryResponseProviderGkeGateway2$inboundSchema: z.ZodType<
+  ManagerRetryResponseProviderGkeGateway2,
+  unknown
+> = z.object({
+  provider: ManagerRetryResponseProviderGkeGatewayEnum2$inboundSchema,
+  staticAddressName: z.nullable(z.string()).optional(),
+});
+
+export function managerRetryResponseProviderGkeGateway2FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  ManagerRetryResponseProviderGkeGateway2,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ManagerRetryResponseProviderGkeGateway2$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'ManagerRetryResponseProviderGkeGateway2' from JSON`,
+  );
+}
+
+/** @internal */
 export const ManagerRetryResponseProviderAwsAlbEnum2$inboundSchema: z.ZodEnum<
   typeof ManagerRetryResponseProviderAwsAlbEnum2
 > = z.enum(ManagerRetryResponseProviderAwsAlbEnum2);
@@ -591,7 +653,7 @@ export const ManagerRetryResponseProviderUnion2$inboundSchema: z.ZodType<
 > = z.union([
   z.lazy(() => ManagerRetryResponseProviderAwsAlb2$inboundSchema),
   ManagerRetryResponseProviderAzureApplicationGatewayForContainers2$inboundSchema,
-  ManagerRetryResponseProviderGkeGateway2$inboundSchema,
+  z.lazy(() => ManagerRetryResponseProviderGkeGateway2$inboundSchema),
   z.string(),
 ]);
 
@@ -620,7 +682,9 @@ export const ManagerRetryResponseRouteGateway1$inboundSchema: z.ZodType<
     z.union([
       z.lazy(() => ManagerRetryResponseProviderAwsAlb2$inboundSchema),
       ManagerRetryResponseProviderAzureApplicationGatewayForContainers2$inboundSchema,
-      ManagerRetryResponseProviderGkeGateway2$inboundSchema,
+      z.lazy(() =>
+        ManagerRetryResponseProviderGkeGateway2$inboundSchema
+      ),
       z.string(),
     ]),
   ).optional(),
@@ -1111,6 +1175,11 @@ export function managerRetryResponseNetworkUnion1FromJSON(
 }
 
 /** @internal */
+export const ManagerRetryResponseSetupManagement1$inboundSchema: z.ZodEnum<
+  typeof ManagerRetryResponseSetupManagement1
+> = z.enum(ManagerRetryResponseSetupManagement1);
+
+/** @internal */
 export const ManagerRetryResponseTelemetry1$inboundSchema: z.ZodEnum<
   typeof ManagerRetryResponseTelemetry1
 > = z.enum(ManagerRetryResponseTelemetry1);
@@ -1156,6 +1225,8 @@ export const ManagerRetryResponseStackSettings1$inboundSchema: z.ZodType<
     z.record(z.string(), z.record(z.string(), z.string())),
   ).optional(),
   quotaWarningOverrides: z.array(z.string()).optional(),
+  setupManagement: ManagerRetryResponseSetupManagement1$inboundSchema
+    .optional(),
   telemetry: ManagerRetryResponseTelemetry1$inboundSchema.optional(),
   updates: ManagerRetryResponseUpdates1$inboundSchema.optional(),
 });

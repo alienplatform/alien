@@ -138,4 +138,6 @@ pub use alien_macros::alien_event;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+mod setup_package;
+pub use setup_package::*;
 pub mod gar_repository;

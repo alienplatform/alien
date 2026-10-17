@@ -820,6 +820,10 @@ pub struct KubernetesTlsSecretRef {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct StackSettings {
+    /// Ongoing authority over infrastructure normally owned by setup. Automatic requires
+    /// an explicit CLI setup grant; changing this setting alone never grants that authority.
+    #[serde(default, skip_serializing_if = "is_manual_setup_management")]
+    pub setup_management: SetupManagement,
     /// Provider quota identities whose preflight failures become visible warnings
     /// for this deployment. Checks still run; deploy-time provider limits still apply.
     /// Unknown identities are rejected. An empty list restores normal blocking.
@@ -904,6 +908,22 @@ pub struct StackSettings {
     /// Required for Kubernetes platform, optional for cloud platforms.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub external_bindings: Option<crate::ExternalBindings>,
+}
+
+/// Whether setup remains a separate administrator operation.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum SetupManagement {
+    /// Setup owns structural infrastructure changes and teardown.
+    #[default]
+    Manual,
+    /// Alien continues managing setup infrastructure with permissions explicitly granted at setup.
+    Automatic,
+}
+
+fn is_manual_setup_management(mode: &SetupManagement) -> bool {
+    *mode == SetupManagement::Manual
 }
 
 fn is_default_deployment_model(model: &DeploymentModel) -> bool {

@@ -11,9 +11,194 @@ import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 import {
-  TargetDeploymentConfig,
-  TargetDeploymentConfig$inboundSchema,
-} from "./targetdeploymentconfig.js";
+  ExternalBindingUnion,
+  ExternalBindingUnion$inboundSchema,
+} from "./externalbindingunion.js";
+import {
+  TargetDeploymentBasePlatformUnion,
+  TargetDeploymentBasePlatformUnion$inboundSchema,
+  TargetDeploymentComputeBackendUnion,
+  TargetDeploymentComputeBackendUnion$inboundSchema,
+  TargetDeploymentDomainMetadataUnion,
+  TargetDeploymentDomainMetadataUnion$inboundSchema,
+  TargetDeploymentEnvironmentVariables,
+  TargetDeploymentEnvironmentVariables$inboundSchema,
+  TargetDeploymentManagementConfigUnion,
+  TargetDeploymentManagementConfigUnion$inboundSchema,
+  TargetDeploymentMonitoringUnion,
+  TargetDeploymentMonitoringUnion$inboundSchema,
+  TargetDeploymentStackSettings,
+  TargetDeploymentStackSettings$inboundSchema,
+  TargetDeploymentVolumeRestore,
+  TargetDeploymentVolumeRestore$inboundSchema,
+} from "./targetdeploymentvolumerestore.js";
+
+/**
+ * Deployment configuration
+ *
+ * @remarks
+ *
+ * Configuration for how to perform the deployment.
+ * Note: Credentials (ClientConfig) are passed separately to step() function.
+ */
+export type TargetDeploymentConfig = {
+  /**
+   * Allow frozen resource changes during updates
+   *
+   * @remarks
+   * When true, skips the frozen resources compatibility check.
+   * This requires running with elevated cloud credentials.
+   */
+  allowFrozenChanges?: boolean | undefined;
+  basePlatform?: TargetDeploymentBasePlatformUnion | null | undefined;
+  computeBackend?: TargetDeploymentComputeBackendUnion | null | undefined;
+  /**
+   * Human-readable deployment name for cloud console metadata.
+   *
+   * @remarks
+   *
+   * This is separate from the physical resource prefix in StackState. It is
+   * used only for display text such as IAM role descriptions, service
+   * account descriptions, and custom role titles.
+   */
+  deploymentName?: string | null | undefined;
+  /**
+   * Deployment token for pull authentication with the manager's registry.
+   *
+   * @remarks
+   *
+   * Used by controllers to configure registry credentials so cloud platforms
+   * and K8s can pull images from the manager's `/v2/` endpoint.
+   */
+  deploymentToken?: string | null | undefined;
+  domainMetadata?: TargetDeploymentDomainMetadataUnion | null | undefined;
+  /**
+   * Snapshot of environment variables at a point in time
+   */
+  environmentVariables: TargetDeploymentEnvironmentVariables;
+  /**
+   * Map from resource ID to external binding.
+   *
+   * @remarks
+   *
+   * Validated at runtime: binding type must match resource type.
+   */
+  externalBindings?: { [k: string]: ExternalBindingUnion } | undefined;
+  /**
+   * Deployer-provided stack input values, keyed by input id. A resource
+   *
+   * @remarks
+   * gated with `.enabled(input)` and a Live lifecycle follows these
+   * values; a missing key falls back to the input's declared boolean
+   * default. Suppliers must not place secret-kind input values here:
+   * this map serializes and debug-prints unredacted.
+   */
+  inputValues?: { [k: string]: any | null } | undefined;
+  /**
+   * DNS-style label domain used for Kubernetes resource ownership labels.
+   *
+   * @remarks
+   *
+   * Defaults to `alien.dev` when absent. Whitelabeled Operator builds set this
+   * so generated workloads and optional log collectors share the same label
+   * namespace.
+   */
+  labelDomain?: string | null | undefined;
+  managementConfig?: TargetDeploymentManagementConfigUnion | null | undefined;
+  /**
+   * Manager base URL (e.g., "https://manager.alien.dev").
+   *
+   * @remarks
+   *
+   * The manager IS the container registry — its `/v2/` endpoint serves as
+   * the OCI Distribution API. Controllers derive the proxy host from this
+   * to configure pull auth (RegistryCredentials, imagePullSecrets).
+   *
+   * When None (e.g., `alien dev`), controllers use image URIs as-is.
+   */
+  managerUrl?: string | null | undefined;
+  monitoring?: TargetDeploymentMonitoringUnion | null | undefined;
+  /**
+   * Native image registry host+prefix for platforms that require it.
+   *
+   * @remarks
+   *
+   * Lambda (ECR) and Cloud Run (GAR) require native registry URIs. Other
+   * runtimes, including Azure Container Apps, pull through the manager's
+   * registry proxy.
+   *
+   * Derived by the manager from the artifact registry binding:
+   * - ECR: `{account_id}.dkr.ecr.{region}.amazonaws.com/{repository_prefix}`
+   * - GAR: `{region}-docker.pkg.dev/{project_id}/{repository_name}`
+   */
+  nativeImageHost?: string | null | undefined;
+  /**
+   * When true the observe pass reports raw resources across every namespace
+   *
+   * @remarks
+   * (cluster scope); otherwise it stays within the operator's own namespace.
+   * The label selector, if any, still filters within whichever scope applies.
+   * Ignored by cloud observers.
+   */
+  observeAllNamespaces?: boolean | undefined;
+  /**
+   * Kubernetes label selector that narrows which raw resources the observe
+   *
+   * @remarks
+   * pass reports (e.g. `app.kubernetes.io/part-of=my-app`). `None` observes
+   * everything in the namespace. Ignored by cloud observers.
+   */
+  observeLabelSelector?: string | null | undefined;
+  /**
+   * Public endpoint URLs for exposed resources (optional override).
+   *
+   * @remarks
+   *
+   * Use this only when a caller already knows the public URL. Managed public
+   * endpoint flows should prefer `domain_metadata` plus controller-reported
+   * load balancer outputs so DNS, certificate renewal, and route readiness
+   * stay tied to the resource state.
+   *
+   * If not set, platforms determine public endpoint URLs from other sources:
+   * - Managed DNS/TLS flows: `domain_metadata` FQDN or load balancer DNS
+   * - Local: `http://localhost:{allocated_port}`
+   * - Custom or disabled exposure: no public endpoint URL unless a controller reports one
+   *
+   * Outer key: resource ID. Inner key: endpoint name. Value: public URL.
+   */
+  publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * User-customizable deployment settings specified at deploy time.
+   *
+   * @remarks
+   *
+   * These settings are provided by the customer via CloudFormation parameters,
+   * Terraform attributes, CLI flags, or Helm values. They customize how the
+   * deployment runs and what capabilities are enabled.
+   *
+   * **Key distinction**: StackSettings is user-customizable, while ManagementConfig
+   * is platform-derived (from the Manager's ServiceAccount).
+   */
+  stackSettings?: TargetDeploymentStackSettings | undefined;
+  /**
+   * IDs of applicable secret inputs stored for this exact deployment target.
+   *
+   * @remarks
+   * Trusted presence metadata only: never values, gate answers, or authority.
+   * Absent on legacy targets; an explicit empty list means no stored secrets.
+   */
+  storedSecretInputIds?: Array<string> | undefined;
+  /**
+   * Operator requests to replace a replica's persistent volume with a new
+   *
+   * @remarks
+   * volume made from a snapshot. A container controller performs each
+   * request once, identified by its `request_id`, and reports it in
+   * `ContainerOutputs.volumes`. Only a volume that a controller reports in
+   * `ContainerOutputs.volumes` can be the target of a request.
+   */
+  volumeRestores?: Array<TargetDeploymentVolumeRestore> | undefined;
+};
 
 export const ReleaseInfoTypeStringList = {
   StringList: "stringList",
@@ -1838,6 +2023,53 @@ export type TargetDeployment = {
    */
   releaseInfo: ReleaseInfo;
 };
+
+/** @internal */
+export const TargetDeploymentConfig$inboundSchema: z.ZodType<
+  TargetDeploymentConfig,
+  unknown
+> = z.object({
+  allowFrozenChanges: z.boolean().optional(),
+  basePlatform: z.nullable(TargetDeploymentBasePlatformUnion$inboundSchema)
+    .optional(),
+  computeBackend: z.nullable(TargetDeploymentComputeBackendUnion$inboundSchema)
+    .optional(),
+  deploymentName: z.nullable(z.string()).optional(),
+  deploymentToken: z.nullable(z.string()).optional(),
+  domainMetadata: z.nullable(TargetDeploymentDomainMetadataUnion$inboundSchema)
+    .optional(),
+  environmentVariables: TargetDeploymentEnvironmentVariables$inboundSchema,
+  externalBindings: z.record(z.string(), ExternalBindingUnion$inboundSchema)
+    .optional(),
+  inputValues: z.record(z.string(), z.nullable(z.any())).optional(),
+  labelDomain: z.nullable(z.string()).optional(),
+  managementConfig: z.nullable(
+    TargetDeploymentManagementConfigUnion$inboundSchema,
+  ).optional(),
+  managerUrl: z.nullable(z.string()).optional(),
+  monitoring: z.nullable(TargetDeploymentMonitoringUnion$inboundSchema)
+    .optional(),
+  nativeImageHost: z.nullable(z.string()).optional(),
+  observeAllNamespaces: z.boolean().optional(),
+  observeLabelSelector: z.nullable(z.string()).optional(),
+  publicEndpoints: z.nullable(
+    z.record(z.string(), z.record(z.string(), z.string())),
+  ).optional(),
+  stackSettings: TargetDeploymentStackSettings$inboundSchema.optional(),
+  storedSecretInputIds: z.array(z.string()).optional(),
+  volumeRestores: z.array(TargetDeploymentVolumeRestore$inboundSchema)
+    .optional(),
+});
+
+export function targetDeploymentConfigFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetDeploymentConfig, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetDeploymentConfig$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetDeploymentConfig' from JSON`,
+  );
+}
 
 /** @internal */
 export const ReleaseInfoTypeStringList$inboundSchema: z.ZodEnum<
@@ -4158,7 +4390,7 @@ export const TargetDeployment$inboundSchema: z.ZodType<
   TargetDeployment,
   unknown
 > = z.object({
-  config: TargetDeploymentConfig$inboundSchema,
+  config: z.lazy(() => TargetDeploymentConfig$inboundSchema),
   releaseInfo: z.lazy(() => ReleaseInfo$inboundSchema),
 });
 

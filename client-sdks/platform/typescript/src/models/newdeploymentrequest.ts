@@ -1314,6 +1314,20 @@ export type NewDeploymentRequestNetworkUnion =
   | string;
 
 /**
+ * Whether setup remains a separate administrator operation.
+ */
+export const NewDeploymentRequestSetupManagement = {
+  Manual: "manual",
+  Automatic: "automatic",
+} as const;
+/**
+ * Whether setup remains a separate administrator operation.
+ */
+export type NewDeploymentRequestSetupManagement = ClosedEnum<
+  typeof NewDeploymentRequestSetupManagement
+>;
+
+/**
  * How telemetry (logs, metrics, traces) is handled.
  */
 export const NewDeploymentRequestTelemetry = {
@@ -1389,6 +1403,10 @@ export type NewDeploymentRequestStackSettings = {
    * Unknown identities are rejected. An empty list restores normal blocking.
    */
   quotaWarningOverrides?: Array<string> | undefined;
+  /**
+   * Whether setup remains a separate administrator operation.
+   */
+  setupManagement?: NewDeploymentRequestSetupManagement | undefined;
   /**
    * How telemetry (logs, metrics, traces) is handled.
    */
@@ -4194,6 +4212,11 @@ export function newDeploymentRequestNetworkUnionToJSON(
 }
 
 /** @internal */
+export const NewDeploymentRequestSetupManagement$outboundSchema: z.ZodEnum<
+  typeof NewDeploymentRequestSetupManagement
+> = z.enum(NewDeploymentRequestSetupManagement);
+
+/** @internal */
 export const NewDeploymentRequestTelemetry$outboundSchema: z.ZodEnum<
   typeof NewDeploymentRequestTelemetry
 > = z.enum(NewDeploymentRequestTelemetry);
@@ -4230,6 +4253,7 @@ export type NewDeploymentRequestStackSettings$Outbound = {
     | undefined;
   publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
   quotaWarningOverrides?: Array<string> | undefined;
+  setupManagement?: string | undefined;
   telemetry?: string | undefined;
   updates?: string | undefined;
 };
@@ -4278,6 +4302,8 @@ export const NewDeploymentRequestStackSettings$outboundSchema: z.ZodType<
     z.record(z.string(), z.record(z.string(), z.string())),
   ).optional(),
   quotaWarningOverrides: z.array(z.string()).optional(),
+  setupManagement: NewDeploymentRequestSetupManagement$outboundSchema
+    .optional(),
   telemetry: NewDeploymentRequestTelemetry$outboundSchema.optional(),
   updates: NewDeploymentRequestUpdates$outboundSchema.optional(),
 });

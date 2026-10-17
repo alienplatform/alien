@@ -22,7 +22,7 @@ use crate::{
     expr,
 };
 use alien_core::{import::EmitContext, PermissionProfile, PermissionSetReference, Result, Vault};
-use alien_error::Context;
+use alien_error::{AlienError, Context};
 use alien_permissions::{
     generators::{AzureRoleDefinitionRef, AzureRuntimePermissionsGenerator},
     BindingTarget,
@@ -201,7 +201,7 @@ fn emit_vault_permissions(
                     &binding.role_name,
                     role_definition_id,
                     principal_id_expr.clone(),
-                );
+                )?;
             }
         }
     }
@@ -269,7 +269,7 @@ fn emit_vault_permissions(
                 &binding.role_name,
                 role_definition_id,
                 principal_id_expr.clone(),
-            );
+            )?;
         }
     }
 
@@ -284,9 +284,9 @@ fn emit_role_assignment(
     role_name: &str,
     role_definition_id: Expression,
     principal_id_expr: Expression,
-) {
+) -> Result<()> {
     let role_label = sanitize_role_label(role_name);
-    fragment.resource_blocks.push(resource_block(
+    let assignment = resource_block(
         "azurerm_role_assignment",
         &format!("{vault_label}_{role_label}_{principal_label}_assignment_{binding_index}"),
         [
@@ -306,7 +306,21 @@ fn emit_role_assignment(
             ),
             attr("principal_id", principal_id_expr),
         ],
-    ));
+    );
+    if let Some(existing) = fragment.resource_blocks.iter().find(|resource| {
+        resource.identifier == assignment.identifier && resource.labels == assignment.labels
+    }) {
+        if existing != &assignment {
+            return Err(AlienError::new(alien_core::ErrorData::GenericError {
+                message: format!(
+                    "conflicting Azure Vault role assignments for {vault_label} and {role_name}"
+                ),
+            }));
+        }
+        return Ok(());
+    }
+    fragment.resource_blocks.push(assignment);
+    Ok(())
 }
 
 fn sanitize_role_label(input: &str) -> String {
@@ -325,6 +339,9 @@ fn sanitize_role_label(input: &str) -> String {
 fn vault_permission_owners<'a>(
     ctx: &'a EmitContext<'_>,
 ) -> Vec<(String, Vec<&'a PermissionSetReference>)> {
+    if ctx.stack_settings.setup_management == alien_core::SetupManagement::Automatic {
+        return Vec::new();
+    }
     let mut owners = Vec::new();
     for (profile_name, profile) in ctx.stack.permission_profiles() {
         let refs = resource_permission_refs(profile, ctx.resource_id);

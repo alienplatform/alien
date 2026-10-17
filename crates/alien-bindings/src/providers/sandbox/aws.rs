@@ -686,6 +686,7 @@ mod tests {
 
     fn image_version(version: &str) -> alien_aws_clients::aws::lambda_microvms::MicrovmImage {
         alien_aws_clients::aws::lambda_microvms::MicrovmImage {
+            description: None,
             image_identifier: Some("sbx-image".to_string()),
             image_arn: None,
             image_version: Some(version.to_string()),

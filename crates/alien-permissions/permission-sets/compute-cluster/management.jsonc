@@ -637,7 +637,12 @@
             // Removing a capacity group, retiring the legacy node cohort, and the
             // ComputeCluster delete flow all delete scale sets with this role. Without it the
             // delete is denied and the scale set outlives the cluster.
-            "Microsoft.Compute/virtualMachineScaleSets/delete"
+            "Microsoft.Compute/virtualMachineScaleSets/delete",
+            // Every scale set PUT (scaling, a size change, a rolling update) re-checks join on
+            // the cluster NSG its network profile links to. The NSG is created at setup, so
+            // nothing else gives the management identity this action.
+            // https://learn.microsoft.com/azure/virtual-network/manage-network-security-group#permissions
+            "Microsoft.Network/networkSecurityGroups/join/action"
           ]
         },
         "binding": {

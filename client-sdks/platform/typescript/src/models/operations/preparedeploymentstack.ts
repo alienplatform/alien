@@ -1185,6 +1185,20 @@ export type PrepareDeploymentStackNetworkUnion =
   | string;
 
 /**
+ * Whether setup remains a separate administrator operation.
+ */
+export const PrepareDeploymentStackSetupManagement = {
+  Manual: "manual",
+  Automatic: "automatic",
+} as const;
+/**
+ * Whether setup remains a separate administrator operation.
+ */
+export type PrepareDeploymentStackSetupManagement = ClosedEnum<
+  typeof PrepareDeploymentStackSetupManagement
+>;
+
+/**
  * How telemetry (logs, metrics, traces) is handled.
  */
 export const PrepareDeploymentStackTelemetry = {
@@ -1272,6 +1286,10 @@ export type PrepareDeploymentStackStackSettings = {
    * Unknown identities are rejected. An empty list restores normal blocking.
    */
   quotaWarningOverrides?: Array<string> | undefined;
+  /**
+   * Whether setup remains a separate administrator operation.
+   */
+  setupManagement?: PrepareDeploymentStackSetupManagement | undefined;
   /**
    * How telemetry (logs, metrics, traces) is handled.
    */
@@ -3833,6 +3851,11 @@ export function prepareDeploymentStackNetworkUnionToJSON(
 }
 
 /** @internal */
+export const PrepareDeploymentStackSetupManagement$outboundSchema: z.ZodEnum<
+  typeof PrepareDeploymentStackSetupManagement
+> = z.enum(PrepareDeploymentStackSetupManagement);
+
+/** @internal */
 export const PrepareDeploymentStackTelemetry$outboundSchema: z.ZodEnum<
   typeof PrepareDeploymentStackTelemetry
 > = z.enum(PrepareDeploymentStackTelemetry);
@@ -3869,6 +3892,7 @@ export type PrepareDeploymentStackStackSettings$Outbound = {
     | undefined;
   publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
   quotaWarningOverrides?: Array<string> | undefined;
+  setupManagement?: string | undefined;
   telemetry?: string | undefined;
   updates?: string | undefined;
 };
@@ -3918,6 +3942,8 @@ export const PrepareDeploymentStackStackSettings$outboundSchema: z.ZodType<
     z.record(z.string(), z.record(z.string(), z.string())),
   ).optional(),
   quotaWarningOverrides: z.array(z.string()).optional(),
+  setupManagement: PrepareDeploymentStackSetupManagement$outboundSchema
+    .optional(),
   telemetry: PrepareDeploymentStackTelemetry$outboundSchema.optional(),
   updates: PrepareDeploymentStackUpdates$outboundSchema.optional(),
 });

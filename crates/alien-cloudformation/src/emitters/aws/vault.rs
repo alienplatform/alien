@@ -258,6 +258,9 @@ fn resource_permission_refs<'a>(
 fn vault_permission_owners(
     ctx: &EmitContext<'_>,
 ) -> Vec<(usize, (String, Vec<PermissionSetReference>))> {
+    if ctx.stack_settings.setup_management == alien_core::SetupManagement::Automatic {
+        return Vec::new();
+    }
     let mut owners = Vec::new();
     for (profile_name, profile) in ctx.stack.permission_profiles() {
         let refs = resource_permission_refs(profile, ctx.resource_id)

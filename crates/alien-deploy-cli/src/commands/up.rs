@@ -230,6 +230,8 @@ struct DeployConfigFile {
     base_platform: Option<String>,
     /// Network settings for cloud deployments.
     network: Option<DeployConfigNetwork>,
+    /// Ongoing setup authority requested at installation.
+    setup_management: Option<alien_core::SetupManagement>,
     /// Quota identities whose failures become visible, non-blocking warnings.
     quota_warning_overrides: Option<Vec<String>>,
     /// Update delivery mode.
@@ -3243,6 +3245,9 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
         output::label_value("Manager", &manager_url);
         output::label_value("Name", &name);
         output::label_value("Compute", &effective_compute_summary(&stack_settings));
+        if stack_settings.setup_management == alien_core::SetupManagement::Automatic {
+            output::info("Infrastructure management: Alien can create, change, and remove infrastructure for this installation, including resources added by future releases. New cloud permissions can require an explicit setup update.");
+        }
         if let Some(public_endpoints) = public_endpoints.as_ref() {
             let endpoint_count: usize = public_endpoints.values().map(HashMap::len).sum();
             output::label_value("Public endpoints", &endpoint_count.to_string());
@@ -4497,6 +4502,17 @@ fn load_stack_settings(
     }
 
     if let Some(config) = deploy_config {
+        if let Some(mode) = config.setup_management {
+            if mode == alien_core::SetupManagement::Automatic
+                && !matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure)
+            {
+                return Err(AlienError::new(ErrorData::ValidationError {
+                    field: "setupManagement".to_string(),
+                    message: "Automatic infrastructure management supports AWS, GCP, and Azure CLI installations".to_string(),
+                }));
+            }
+            settings.setup_management = mode;
+        }
         if let Some(network) = config.network.clone() {
             settings.network = Some(network.into());
         }
@@ -6752,6 +6768,8 @@ async fn push_initial_setup_targeted(
             let acquired_stack_settings = config.stack_settings.clone();
             apply_external_bindings_from_stack_settings(&mut config, &acquired_stack_settings);
         }
+
+        config.setup_run = true;
 
         // Re-fetch the deployment state now that we hold the lock.
         // The manager may have advanced the state while we were waiting.

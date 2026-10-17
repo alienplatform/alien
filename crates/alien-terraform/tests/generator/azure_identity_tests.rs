@@ -255,6 +255,7 @@ fn azure_management_grants_stay_at_the_scope_their_permission_set_names() {
         .expect("the management grants are assigned at the deployment resource group");
     for action in [
         "Microsoft.Compute/virtualMachineScaleSets/write",
+        "Microsoft.Network/networkSecurityGroups/join/action",
         "Microsoft.Network/applicationGateways/write",
     ] {
         assert!(

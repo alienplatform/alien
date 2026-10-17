@@ -1452,6 +1452,7 @@ mod project_policy_writer_tests {
                 created_at: String::new(),
             })
             .external_bindings(ExternalBindings::default())
+            .setup_run(true)
             .allow_frozen_changes(true)
             .management_config(ManagementConfig::Gcp(GcpManagementConfig {
                 service_account_email: "control-plane@vendor.iam.gserviceaccount.com".to_string(),
