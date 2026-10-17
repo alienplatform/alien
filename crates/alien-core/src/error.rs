@@ -199,6 +199,20 @@ pub enum ErrorData {
     )]
     FeatureNotEnabled { feature: String },
 
+    /// A resource requires setup capabilities unavailable to automatic management.
+    #[error(
+        code = "AUTOMATIC_SETUP_RESOURCE_UNSUPPORTED",
+        message = "Automatic infrastructure management does not support {resource_type} '{resource_id}' on {platform}; use manual setup",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    AutomaticSetupResourceUnsupported {
+        resource_type: String,
+        resource_id: String,
+        platform: Platform,
+    },
+
     /// A sandbox capability is unavailable on the target platform.
     #[error(
         code = "SANDBOX_CAPABILITY_UNSUPPORTED",

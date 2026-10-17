@@ -1246,6 +1246,7 @@ impl RunnerConfigSources<'_> {
                 management_config,
                 environment_variables,
                 allow_frozen_changes: false,
+                setup_run: false,
                 compute_backend: None,
                 base_platform: deployment.base_platform,
                 label_domain: None,

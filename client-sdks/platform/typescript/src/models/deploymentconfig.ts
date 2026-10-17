@@ -1835,6 +1835,20 @@ export type DeploymentConfigNetworkUnion =
   | string;
 
 /**
+ * Whether setup remains a separate administrator operation.
+ */
+export const DeploymentConfigSetupManagement = {
+  Manual: "manual",
+  Automatic: "automatic",
+} as const;
+/**
+ * Whether setup remains a separate administrator operation.
+ */
+export type DeploymentConfigSetupManagement = ClosedEnum<
+  typeof DeploymentConfigSetupManagement
+>;
+
+/**
  * How telemetry (logs, metrics, traces) is handled.
  */
 export const DeploymentConfigTelemetry = {
@@ -1919,6 +1933,10 @@ export type DeploymentConfigStackSettings = {
    * Unknown identities are rejected. An empty list restores normal blocking.
    */
   quotaWarningOverrides?: Array<string> | undefined;
+  /**
+   * Whether setup remains a separate administrator operation.
+   */
+  setupManagement?: DeploymentConfigSetupManagement | undefined;
   /**
    * How telemetry (logs, metrics, traces) is handled.
    */
@@ -4785,6 +4803,11 @@ export function deploymentConfigNetworkUnionFromJSON(
 }
 
 /** @internal */
+export const DeploymentConfigSetupManagement$inboundSchema: z.ZodEnum<
+  typeof DeploymentConfigSetupManagement
+> = z.enum(DeploymentConfigSetupManagement);
+
+/** @internal */
 export const DeploymentConfigTelemetry$inboundSchema: z.ZodEnum<
   typeof DeploymentConfigTelemetry
 > = z.enum(DeploymentConfigTelemetry);
@@ -4831,6 +4854,7 @@ export const DeploymentConfigStackSettings$inboundSchema: z.ZodType<
     z.record(z.string(), z.record(z.string(), z.string())),
   ).optional(),
   quotaWarningOverrides: z.array(z.string()).optional(),
+  setupManagement: DeploymentConfigSetupManagement$inboundSchema.optional(),
   telemetry: DeploymentConfigTelemetry$inboundSchema.optional(),
   updates: DeploymentConfigUpdates$inboundSchema.optional(),
 });

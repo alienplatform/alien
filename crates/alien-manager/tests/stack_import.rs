@@ -35,8 +35,8 @@ use alien_core::{
     GcpEnvironmentInfo, GcpManagementConfig, GcpRemoteStackManagementImportData, HeartbeatsMode,
     KubernetesCluster, KubernetesClusterOwnership, KubernetesClusterProvider, ManagementConfig,
     Network, NetworkSettings, Platform, ReleaseInfo, RemoteStackManagement, ResourceLifecycle,
-    ResourceStatus, RuntimeMetadata, ServiceAccount, Stack, StackSettings, StackState, Storage,
-    UpdatesMode, Worker, WorkerCode,
+    ResourceStatus, RuntimeMetadata, ServiceAccount, Stack, StackResourceState, StackSettings,
+    StackState, Storage, UpdatesMode, Worker, WorkerCode,
 };
 use alien_manager::auth::Authz;
 use alien_manager::config::ManagerConfig;
@@ -2694,4 +2694,251 @@ async fn initialize_cannot_supply_trusted_stored_secret_presence() {
     assert!(deployment.deployment_config.is_none());
     assert!(deployment.input_values.is_empty());
     assert!(deployment.desired_release_id.is_none());
+}
+
+#[tokio::test]
+async fn runtime_reports_cannot_grant_automatic_setup_to_an_imported_installation() {
+    let stack = stack_with_storage("assets");
+    let fixture = make_fixture(Some(stack.clone())).await;
+    let body = aws_s3_import_request("manual-installation", "us-east-1", "assets", "test-imports");
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+    assert_eq!(status, StatusCode::CREATED, "{json:#}");
+    let imported: StackImportResponse = serde_json::from_value(json).unwrap();
+    let token = imported.deployment_token.unwrap();
+    let stored = fixture
+        .deployment_store
+        .get_deployment(
+            &alien_manager::auth::Subject::system(),
+            &imported.deployment_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let mut metadata = stored.runtime_metadata.clone().unwrap();
+    metadata.automatic_setup = true;
+    let reported = DeploymentState {
+        status: DeploymentStatus::Running,
+        platform: stored.platform,
+        current_release: Some(ReleaseInfo {
+            release_id: fixture.release_id.clone(),
+            version: None,
+            description: None,
+            stack,
+        }),
+        target_release: None,
+        stack_state: stored.stack_state,
+        error: None,
+        environment_info: stored.environment_info,
+        runtime_metadata: Some(metadata),
+        retry_requested: false,
+        protocol_version: stored.deployment_protocol_version,
+    };
+    let (status, json) = post_sync(&fixture, &token, "/v1/sync/reconcile", serde_json::json!({
+        "deploymentId": imported.deployment_id, "session": "runtime-grant-attempt", "state": reported,
+        "updateHeartbeat": false
+    })).await;
+    assert_eq!(status, StatusCode::OK, "{json:#}");
+    let persisted = fixture
+        .deployment_store
+        .get_deployment(
+            &alien_manager::auth::Subject::system(),
+            &imported.deployment_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!persisted.runtime_metadata.unwrap().automatic_setup);
+}
+
+#[tokio::test]
+async fn imported_installations_cannot_request_automatic_setup() {
+    let fixture = make_fixture(Some(stack_with_storage("assets"))).await;
+    let mut request =
+        aws_s3_import_request("manual-installation", "us-east-1", "assets", "test-imports");
+    request.stack_settings.setup_management = alien_core::SetupManagement::Automatic;
+    let (status, body) = post_import(&fixture, Some(&fixture.dg_token), &request).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body:#}");
+    let deployments = fixture
+        .deployment_store
+        .list_deployments(&alien_manager::auth::Subject::system(), &Default::default())
+        .await
+        .unwrap();
+    assert!(deployments.is_empty());
+}
+
+#[tokio::test]
+async fn automatic_registration_requires_approval_and_defers_application_resources() {
+    for approved in [false, true] {
+        let fixture = make_fixture(Some(stack_with_storage("archive"))).await;
+        let release_id = fixture.release_id.clone().unwrap();
+        let settings = StackSettings {
+            setup_management: if approved {
+                alien_core::SetupManagement::Automatic
+            } else {
+                alien_core::SetupManagement::Manual
+            },
+            ..StackSettings::default()
+        };
+        let reserved = fixture
+            .deployment_store
+            .create_with_state(
+                &alien_manager::auth::Subject::system(),
+                CreateImportedDeploymentParams {
+                    name: "own-application".into(),
+                    deployment_group_id: fixture.deployment_group_id.clone(),
+                    platform: Platform::Aws,
+                    deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                    base_platform: None,
+                    stack_settings: settings,
+                    stack_state: StackState::new(Platform::Aws),
+                    environment_info: None,
+                    runtime_metadata: RuntimeMetadata::default(),
+                    status: "pending".into(),
+                    current_release_id: None,
+                    desired_release_id: None,
+                    import_source: Some(ImportSourceKind::CloudFormation),
+                    setup_metadata: Some(
+                        serde_json::json!({ "setupReservation": { "releaseId": release_id } }),
+                    ),
+                    setup_target: "aws".into(),
+                    setup_fingerprint: "test".into(),
+                    setup_fingerprint_version: 1,
+                    deployment_token: None,
+                    management_config: None,
+                    input_values: Default::default(),
+                },
+            )
+            .await
+            .unwrap();
+        let mut request = aws_remote_management_import_request(
+            "own-application",
+            "us-east-1",
+            "management",
+            "123456789012",
+        );
+        request.stack_settings.setup_management = alien_core::SetupManagement::Automatic;
+        let (status, body) = post_import(&fixture, Some(&fixture.dg_token), &request).await;
+        if !approved {
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{body:#}");
+            continue;
+        }
+        assert_eq!(status, StatusCode::OK, "{body:#}");
+        let installed = fixture
+            .deployment_store
+            .get_deployment(&alien_manager::auth::Subject::system(), &reserved.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(installed.status, "initial-setup");
+        let metadata = installed.runtime_metadata.unwrap();
+        assert!(metadata.automatic_setup);
+        assert_eq!(
+            metadata.initial_setup_authority,
+            alien_core::InitialSetupAuthority::DirectSetup
+        );
+        assert!(metadata
+            .prepared_stack
+            .as_ref()
+            .unwrap()
+            .resources
+            .contains_key("archive"));
+        let state = installed.stack_state.unwrap();
+        assert!(state.resources.contains_key("management"));
+        assert!(
+            !state.resources.contains_key("archive"),
+            "Application infrastructure must be created after registration using installed access"
+        );
+
+        // A later package registration reports only setup scaffolding. It must
+        // retain application controller state, even for Frozen resources and
+        // resources that a subsequent release is still deleting.
+        let mut running_state = state;
+        let archive_config = stack_with_storage("archive")
+            .resources
+            .get("archive")
+            .unwrap()
+            .config
+            .clone();
+        let mut archive = StackResourceState::new_pending(
+            Storage::RESOURCE_TYPE.into(),
+            archive_config,
+            Some(ResourceLifecycle::Frozen),
+            vec![],
+        );
+        archive.status = ResourceStatus::Running;
+        archive.internal_state = Some(serde_json::json!({ "installed": true }));
+        running_state
+            .resources
+            .insert("archive".into(), archive.clone());
+        let mut retiring = archive.clone();
+        retiring.config = stack_with_storage("retiring")
+            .resources
+            .get("retiring")
+            .unwrap()
+            .config
+            .clone();
+        retiring.status = ResourceStatus::Deleting;
+        running_state
+            .resources
+            .insert("retiring".into(), retiring.clone());
+        fixture
+            .deployment_store
+            .reconcile(
+                &alien_manager::auth::Subject::system(),
+                ReconcileData {
+                    deployment_id: reserved.id.clone(),
+                    session: "test-reconcile".into(),
+                    execution_claim: None,
+                    state: DeploymentState {
+                        status: DeploymentStatus::Running,
+                        platform: Platform::Aws,
+                        current_release: Some(ReleaseInfo {
+                            release_id: fixture.release_id.clone(),
+                            version: None,
+                            description: None,
+                            stack: stack_with_storage("archive"),
+                        }),
+                        target_release: None,
+                        stack_state: Some(running_state),
+                        error: None,
+                        environment_info: installed.environment_info,
+                        runtime_metadata: Some(metadata),
+                        retry_requested: false,
+                        protocol_version: installed.deployment_protocol_version,
+                    },
+                    update_heartbeat: false,
+                    suggested_delay_ms: None,
+                    heartbeats: vec![],
+                    observed_inventory_batches: vec![],
+                    capabilities: vec![],
+                    operator_version: None,
+                    operations_report: None,
+                },
+            )
+            .await
+            .unwrap();
+        request.setup_fingerprint = "updated-test".into();
+        let (status, body) = post_import(&fixture, Some(&fixture.dg_token), &request).await;
+        assert_eq!(status, StatusCode::OK, "{body:#}");
+        let reimported = fixture
+            .deployment_store
+            .get_deployment(&alien_manager::auth::Subject::system(), &reserved.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .stack_state
+            .unwrap();
+        assert_eq!(
+            reimported.resources["archive"].status,
+            ResourceStatus::Running
+        );
+        assert_eq!(
+            reimported.resources["archive"].internal_state,
+            archive.internal_state
+        );
+        assert_eq!(
+            reimported.resources["retiring"].status,
+            ResourceStatus::Deleting
+        );
+    }
 }

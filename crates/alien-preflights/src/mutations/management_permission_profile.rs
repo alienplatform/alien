@@ -5,10 +5,13 @@ use alien_core::{
     ownership_policy_for_resource_type, Container, DeploymentConfig, KubernetesCertificateMode,
     KubernetesCluster, KubernetesExposureSettings, KubernetesHeartbeatMode,
     KubernetesIngressRouteProfile, KubernetesRouteProfile, KubernetesRouteProviderOptions,
-    Platform, Postgres, ResourceLifecycle, Sandbox, Stack, StackState, Storage, Worker, WorkerTrigger,
+    Platform, Postgres, ResourceLifecycle, Sandbox, Stack, StackState, Storage, Worker,
+    WorkerTrigger,
 };
-use alien_error::AlienError;
-use alien_permissions::{get_permission_set, MANAGEMENT_ROLE_GUARD, SANDBOX_SETUP_ROLES_GUARD};
+use alien_error::{AlienError, Context};
+use alien_permissions::{
+    get_permission_set, list_permission_set_ids, MANAGEMENT_ROLE_GUARD, SANDBOX_SETUP_ROLES_GUARD,
+};
 use indexmap::IndexMap;
 use std::collections::BTreeSet;
 
@@ -50,12 +53,32 @@ impl StackMutation for ManagementPermissionProfileMutation {
         stack_state: &StackState,
         config: &DeploymentConfig,
     ) -> Result<Stack> {
+        alien_core::validate_automatic_setup_resources(
+            &stack,
+            stack_state.platform,
+            config.stack_settings.setup_management,
+        )
+        .context(ErrorData::StackMutationFailed {
+            mutation_name: self.description().to_string(),
+            message: "The stack contains resources that require manual setup".to_string(),
+            resource_id: None,
+        })?;
         let current_management = stack.management().clone();
         if management_profile_contains(&current_management, OBSERVE_PERMISSION_SET_ID) {
             return Err(AlienError::new(ErrorData::StackMutationFailed {
                 mutation_name: self.description().to_string(),
                 message: "Account-wide observation is available only through a dedicated observe-only deployment; remove 'observe/observe' from the application stack"
                     .to_string(),
+                resource_id: None,
+            }));
+        }
+
+        if config.stack_settings.setup_management == alien_core::SetupManagement::Automatic
+            && matches!(current_management, ManagementPermissions::Override(_))
+        {
+            return Err(AlienError::new(ErrorData::StackMutationFailed {
+                mutation_name: self.description().to_string(),
+                message: "Automatic infrastructure management requires auto or extended management permissions; an override cannot guarantee future resource provisioning".to_string(),
                 resource_id: None,
             }));
         }
@@ -99,7 +122,11 @@ impl StackMutation for ManagementPermissionProfileMutation {
                 stack.permissions.management = ManagementPermissions::Override(override_profile);
             }
         }
-        add_role_guards(&mut stack, stack_state.platform);
+        add_role_guards(
+            &mut stack,
+            stack_state.platform,
+            config.stack_settings.setup_management,
+        );
 
         Ok(stack)
     }
@@ -108,7 +135,11 @@ impl StackMutation for ManagementPermissionProfileMutation {
 /// Whatever else management is granted on `role/<prefix>-*`, it may not change its own role, nor
 /// the roles setup creates for AWS sandboxes. A Deny can only narrow the identity, so an Override
 /// profile gets them too.
-fn add_role_guards(stack: &mut Stack, platform: Platform) {
+fn add_role_guards(
+    stack: &mut Stack,
+    platform: Platform,
+    setup_management: alien_core::SetupManagement,
+) {
     if platform != Platform::Aws {
         return;
     }
@@ -116,7 +147,8 @@ fn add_role_guards(stack: &mut Stack, platform: Platform) {
         .resources()
         .any(|(_, entry)| entry.config.downcast_ref::<Sandbox>().is_some());
     let guards: Vec<PermissionSetReference> = [
-        declares_a_sandbox.then_some(SANDBOX_SETUP_ROLES_GUARD),
+        (declares_a_sandbox && setup_management != alien_core::SetupManagement::Automatic)
+            .then_some(SANDBOX_SETUP_ROLES_GUARD),
         Some(MANAGEMENT_ROLE_GUARD),
     ]
     .into_iter()
@@ -171,6 +203,47 @@ fn generate_auto_management_profile(
     let mut permission_set_ids = BTreeSet::new();
     let mut resource_permission_set_ids: IndexMap<String, BTreeSet<String>> = IndexMap::new();
     let platform = stack_state.platform;
+    let automatic_aws = platform == Platform::Aws
+        && config.stack_settings.setup_management == alien_core::SetupManagement::Automatic;
+
+    if config.stack_settings.setup_management == alien_core::SetupManagement::Automatic {
+        // A direct setup explicitly grants ongoing infrastructure control for all supported
+        // resource types, including ones a later release adds. Reuse the permission registry
+        // rather than keeping a second cloud-specific administrator-policy implementation.
+        // Data payload permissions stay explicit; on AWS they are stack-scoped (see below)
+        // because the management role cannot receive a resource-scoped grant after setup.
+        for id in list_permission_set_ids() {
+            let Some((resource_type, operation)) = id.split_once('/') else {
+                continue;
+            };
+            let requested_operation = matches!(operation, "provision" | "management" | "heartbeat")
+                || (operation == "telemetry" && config.stack_settings.telemetry.is_enabled());
+            if requested_operation
+                && resource_type != "remote-stack-management"
+                && supports_stack_grant(id, platform)
+            {
+                permission_set_ids.insert(id.to_string());
+            }
+        }
+        if platform == Platform::Aws {
+            // The AWS management role may not change its own policies
+            // (remote-stack-management/protect-management-role), so after setup no
+            // controller can attach a resource-scoped grant to it. Approved setup installs
+            // the stack-prefixed grants those controllers would otherwise attach:
+            // - command dispatch for this stack's workers, including workers added later;
+            //   Lambda invocation stays bounded to the stack prefix;
+            // - data access to the secrets vault, which usually arrives with a later
+            //   release's first workload; vault provisioning already allows the same
+            //   parameter writes.
+            for id in [
+                "worker/dispatch-command",
+                "vault/data-read",
+                "vault/data-write",
+            ] {
+                permission_set_ids.insert(id.to_string());
+            }
+        }
+    }
 
     // Iterate through all resources in the stack to determine required management permissions
     for (resource_id, resource_entry) in stack.resources() {
@@ -239,19 +312,27 @@ fn generate_auto_management_profile(
         }
 
         if platform == Platform::Aws {
-            if resource_entry.config.downcast_ref::<Postgres>()
+            if resource_entry
+                .config
+                .downcast_ref::<Postgres>()
                 .is_some_and(|postgres| postgres.encryption_key.is_some())
             {
                 // Setup still owns the cluster. Recovery may only start that
                 // existing cluster after its customer key becomes available.
-                resource_permission_set_ids.entry(resource_id.clone()).or_default()
+                resource_permission_set_ids
+                    .entry(resource_id.clone())
+                    .or_default()
                     .insert("postgres/key-recovery".to_string());
             }
-            if let Some(key) = resource_entry.config.downcast_ref::<Container>()
+            if let Some(key) = resource_entry
+                .config
+                .downcast_ref::<Container>()
                 .and_then(|container| container.persistent_storage.as_ref())
                 .and_then(|storage| storage.encryption_key.as_ref())
             {
-                resource_permission_set_ids.entry(key.id().to_string()).or_default()
+                resource_permission_set_ids
+                    .entry(key.id().to_string())
+                    .or_default()
                     .insert("key/native-volume".to_string());
             }
         }
@@ -280,6 +361,13 @@ fn generate_auto_management_profile(
             if let Some(worker) = resource_entry.config.downcast_ref::<Worker>() {
                 if worker.commands_enabled {
                     match platform {
+                        Platform::Aws
+                            if config.stack_settings.setup_management
+                                == alien_core::SetupManagement::Automatic =>
+                        {
+                            // Already installed by approved setup. Runtime credentials
+                            // cannot attach another policy to their own management role.
+                        }
                         Platform::Aws | Platform::Gcp | Platform::Azure => {
                             // Preflights author the explicit command dispatch grant for
                             // this concrete worker. Each cloud maps it to that worker's
@@ -307,12 +395,28 @@ fn generate_auto_management_profile(
                 .insert("kubernetes-public-endpoint/management".to_string());
         }
 
-        add_storage_trigger_source_management_permissions(
-            stack,
-            platform,
-            resource_entry,
-            &mut resource_permission_set_ids,
-        );
+        // Automatic AWS installs configure trigger notifications through storage/provision,
+        // which approved setup installs stack-wide (see above).
+        if !automatic_aws {
+            add_storage_trigger_source_management_permissions(
+                stack,
+                platform,
+                resource_entry,
+                &mut resource_permission_set_ids,
+            );
+        }
+    }
+
+    if automatic_aws {
+        if let Some((resource_id, permission_set_ids)) = resource_permission_set_ids.first() {
+            return Err(AlienError::new(ErrorData::StackMutationFailed {
+                mutation_name: "management permission profile".to_string(),
+                message: format!(
+                    "Automatic infrastructure management cannot grant {permission_set_ids:?} on '{resource_id}': the management role cannot change its own policies after setup; use manual setup"
+                ),
+                resource_id: Some(resource_id.clone()),
+            }));
+        }
     }
 
     if permission_set_ids.is_empty() && resource_permission_set_ids.is_empty() {
@@ -361,6 +465,38 @@ fn generate_auto_management_profile(
     }
 
     Ok(Some(PermissionProfile(management_permissions)))
+}
+
+/// Future resources can only be covered by grants whose binding exists before the resource.
+/// Resource-only permissions keep their explicit resource scope below.
+fn supports_stack_grant(id: &str, platform: Platform) -> bool {
+    let Some(permission_set) = get_permission_set(id) else {
+        return false;
+    };
+    match platform {
+        Platform::Aws => permission_set
+            .platforms
+            .aws
+            .as_ref()
+            .is_some_and(|entries| {
+                !entries.is_empty() && entries.iter().all(|entry| entry.binding.stack.is_some())
+            }),
+        Platform::Gcp => permission_set
+            .platforms
+            .gcp
+            .as_ref()
+            .is_some_and(|entries| {
+                !entries.is_empty() && entries.iter().all(|entry| entry.binding.stack.is_some())
+            }),
+        Platform::Azure => permission_set
+            .platforms
+            .azure
+            .as_ref()
+            .is_some_and(|entries| {
+                !entries.is_empty() && entries.iter().all(|entry| entry.binding.stack.is_some())
+            }),
+        Platform::Kubernetes | Platform::Machines | Platform::Local | Platform::Test => false,
+    }
 }
 
 fn add_storage_trigger_source_management_permissions(
@@ -503,6 +639,65 @@ pub(crate) fn permission_resource_type(resource_type: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn automatic_stack_grants_render_on_each_cloud() {
+        use alien_permissions::generators::{
+            AwsRuntimePermissionsGenerator, AzureRuntimePermissionsGenerator,
+            GcpRuntimePermissionsGenerator,
+        };
+        use alien_permissions::{BindingTarget, PermissionContext};
+
+        let context = PermissionContext::new()
+            .with_aws_account_id("123456789012")
+            .with_aws_region("us-east-1")
+            .with_managing_account_id("123456789012")
+            .with_managing_role_arn("arn:aws:iam::123456789012:role/automatic-management-test")
+            .with_project_name("automatic-management-test")
+            .with_project_number("123456789012")
+            .with_managing_project_id("automatic-management-test")
+            .with_region("us-central1")
+            .with_subscription_id("00000000-0000-0000-0000-000000000001")
+            .with_managing_subscription_id("00000000-0000-0000-0000-000000000001")
+            .with_managing_resource_group("automatic-management-test")
+            .with_resource_group("automatic-management-test")
+            .with_stack_prefix("automatic-management-test")
+            .with_principal_id("00000000-0000-0000-0000-000000000002");
+
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            for id in list_permission_set_ids() {
+                let Some((resource_type, operation)) = id.split_once('/') else {
+                    continue;
+                };
+                let requested = matches!(operation, "provision" | "management" | "heartbeat")
+                    || (platform == Platform::Aws
+                        && matches!(
+                            id,
+                            "worker/dispatch-command" | "vault/data-read" | "vault/data-write"
+                        ));
+                if !requested
+                    || resource_type == "remote-stack-management"
+                    || !supports_stack_grant(id, platform)
+                {
+                    continue;
+                }
+                let permission_set = get_permission_set(id).unwrap();
+                let result = match platform {
+                    Platform::Aws => AwsRuntimePermissionsGenerator::new()
+                        .generate_policy(&permission_set, BindingTarget::Stack, &context)
+                        .map(|_| ()),
+                    Platform::Gcp => GcpRuntimePermissionsGenerator::new()
+                        .generate_grant_plan(&permission_set, BindingTarget::Stack, &context)
+                        .map(|_| ()),
+                    Platform::Azure => AzureRuntimePermissionsGenerator::new()
+                        .generate_grant_plan(&permission_set, BindingTarget::Stack, &context)
+                        .map(|_| ()),
+                    _ => unreachable!(),
+                };
+                result.unwrap_or_else(|error| panic!("{platform} {id}: {error}"));
+            }
+        }
+    }
     use alien_core::permissions::{ManagementPermissions, PermissionsConfig};
     use alien_core::{
         ArtifactRegistry, AzureContainerAppsEnvironment, AzureResourceGroup,
@@ -544,6 +739,151 @@ mod tests {
             .allow_frozen_changes(false)
             .external_bindings(ExternalBindings::default())
             .build()
+    }
+
+    #[tokio::test]
+    async fn automatic_aws_command_workers_reuse_the_installed_stack_grant() {
+        let mut config = deployment_config_for_management_permission_test();
+        config.stack_settings.setup_management = alien_core::SetupManagement::Automatic;
+        let state = StackState::new(Platform::Aws);
+        let initial = Stack::new("example".to_string()).build();
+        let updated = Stack::new("example".to_string())
+            .add(
+                Worker::new("later-worker".to_string())
+                    .code(WorkerCode::Image {
+                        image: "test:latest".to_string(),
+                    })
+                    .permissions("test".to_string())
+                    .commands_enabled(true)
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        for stack in [initial, updated] {
+            let prepared = ManagementPermissionProfileMutation
+                .mutate(stack, &state, &config)
+                .await
+                .expect("automatic command workers are supported");
+            let profile = prepared.management().profile().expect("management grant");
+            assert!(profile.0["*"]
+                .iter()
+                .any(|grant| grant.id() == "worker/dispatch-command"));
+            assert!(!profile
+                .0
+                .get("later-worker")
+                .into_iter()
+                .flatten()
+                .any(|grant| grant.id() == "worker/dispatch-command"));
+        }
+    }
+
+    /// The AWS management role may not change its own policies after setup, so an automatic
+    /// grant must hold no resource-scoped entry for a runtime controller to attach. Storage
+    /// triggers on Frozen storage are configured through the installed storage/provision.
+    #[tokio::test]
+    async fn automatic_aws_grant_has_nothing_for_runtime_controllers_to_attach() {
+        let mut config = deployment_config_for_management_permission_test();
+        config.stack_settings.setup_management = alien_core::SetupManagement::Automatic;
+        let state = StackState::new(Platform::Aws);
+        let storage = Storage::new("uploads".to_string()).build();
+        let worker = Worker::new("processor".to_string())
+            .code(WorkerCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .permissions("test".to_string())
+            .commands_enabled(true)
+            .trigger(WorkerTrigger::storage(
+                &storage,
+                vec!["created".to_string()],
+            ))
+            .build();
+        let stack = Stack::new("example".to_string())
+            .add(storage, ResourceLifecycle::Frozen)
+            .add(worker, ResourceLifecycle::Live)
+            .build();
+
+        let prepared = ManagementPermissionProfileMutation
+            .mutate(stack, &state, &config)
+            .await
+            .expect("storage-triggered workers are supported by automatic setup");
+        let profile = prepared.management().profile().expect("management grant");
+        assert_eq!(
+            profile.0.keys().collect::<Vec<_>>(),
+            vec!["*"],
+            "only stack-wide grants: {profile:?}"
+        );
+        for id in [
+            "storage/provision",
+            "worker/dispatch-command",
+            "vault/data-read",
+            "vault/data-write",
+        ] {
+            assert!(
+                profile.0["*"].iter().any(|grant| grant.id() == id),
+                "approved setup installs {id}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn automatic_keys_are_refused_before_provisioning() {
+        let stack = Stack::new("example".to_string())
+            .add(
+                alien_core::Key::new("customer-key".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            let state = StackState::new(platform);
+            let mut config = deployment_config_for_management_permission_test();
+            ManagementPermissionProfileMutation
+                .mutate(stack.clone(), &state, &config)
+                .await
+                .expect("manual key setup remains supported");
+            config.stack_settings.setup_management = alien_core::SetupManagement::Automatic;
+            let error = ManagementPermissionProfileMutation
+                .mutate(stack.clone(), &state, &config)
+                .await
+                .expect_err("initial setup and later key additions must stop before cloud changes");
+            assert!(error.to_string().contains("manual setup"), "{error}");
+        }
+    }
+
+    #[tokio::test]
+    async fn automatic_azure_sandbox_is_refused_before_provisioning() {
+        let stack = Stack::new("example".to_string())
+            .add(
+                Sandbox::new("agents".to_string())
+                    .code(SandboxCode::Image {
+                        image: "ubuntu".to_string(),
+                    })
+                    .egress(SandboxEgress::Allow)
+                    .lifecycle(SandboxLifecyclePolicy {
+                        max_lifetime_seconds: None,
+                        idle_pause_seconds: None,
+                    })
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let state = StackState::new(Platform::Azure);
+        let mut config = deployment_config_for_management_permission_test();
+
+        ManagementPermissionProfileMutation
+            .mutate(stack.clone(), &state, &config)
+            .await
+            .expect("manual Azure setup retains its sandbox support");
+
+        config.stack_settings.setup_management = alien_core::SetupManagement::Automatic;
+        ManagementPermissionProfileMutation
+            .mutate(stack, &state, &config)
+            .await
+            .expect_err("initial setup and later sandbox additions must fail before cloud changes");
+
+        ManagementPermissionProfileMutation
+            .mutate(Stack::new("example".to_string()).build(), &state, &config)
+            .await
+            .expect("automatic Azure management without a sandbox stays supported");
     }
 
     #[tokio::test]

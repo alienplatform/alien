@@ -57,6 +57,11 @@ pub struct RuntimeMetadata {
     #[serde(default)]
     pub initial_setup_authority: InitialSetupAuthority,
 
+    /// Setup-owned grant to keep using the direct setup executor for updates.
+    /// Runtime settings and release contents must never create or change this grant.
+    #[serde(default, skip_serializing_if = "super::is_false")]
+    pub automatic_setup: bool,
+
     /// Hash of the environment variables snapshot that was last synced to the vault
     /// Used to avoid redundant sync operations during incremental deployment
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -78,9 +83,9 @@ pub struct RuntimeMetadata {
     /// keyed by input id, recorded when the deployment is created or its
     /// setup import registers.
     ///
-    /// A frozen gate's answer is fixed for the deployment's lifetime: the
-    /// update path refuses input values that conflict with these, and a Live
-    /// resource sharing such an input resolves the persisted answer forever.
+    /// Manual installations keep these answers fixed. An installation with an
+    /// ongoing-management grant refreshes them when preparing a release. Live
+    /// resources sharing a gate use the same recorded answer as Frozen resources.
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub persisted_gate_answers: GateAnswers,
 

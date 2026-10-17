@@ -177,7 +177,6 @@ pub fn filter_openapi(document: &Value, required_operation_ids: &[&str]) -> Resu
         "components".to_string(),
         reachable_components(document, &filtered)?,
     );
-    normalize_optional_success_bodies(&mut filtered);
     preserve_secret_presence(&mut filtered)?;
     normalize_binding_unions(&mut filtered)?;
     open_string_enums(&mut filtered)?;
@@ -186,6 +185,7 @@ pub fn filter_openapi(document: &Value, required_operation_ids: &[&str]) -> Resu
         required_operation_ids == REQUIRED_OPERATION_IDS,
     )?;
     canonicalize_nullable_enums(&mut filtered);
+    normalize_optional_response_bodies(&mut filtered);
     allow_unknown_properties(&mut filtered);
 
     Ok(Value::Object(filtered))
@@ -482,54 +482,56 @@ pub fn normalize_openapi(document: &Value) -> Result<Value, String> {
         .as_object()
         .ok_or_else(|| "OpenAPI document must be a JSON object".to_string())?
         .clone();
-    normalize_optional_success_bodies(&mut root);
     preserve_secret_presence(&mut root)?;
     normalize_binding_unions(&mut root)?;
     open_string_enums(&mut root)?;
     canonicalize_nullable_enums(&mut root);
+    normalize_optional_response_bodies(&mut root);
     allow_unknown_properties(&mut root);
     Ok(Value::Object(root))
 }
 
-// Progenitor requires one return type for all successful statuses. Operations that
-// return JSON on acceptance and no body on an idempotent no-op need a raw response:
-// callers retain the status and body without attempting to decode an empty 204.
-fn normalize_optional_success_bodies(document: &mut Map<String, Value>) {
+// Progenitor requires one success type per operation. For an operation that can
+// return JSON or no body, expose the HTTP response so callers can inspect its
+// status before decoding. Keep every status and the original wire body intact.
+fn normalize_optional_response_bodies(document: &mut Map<String, Value>) {
     let Some(paths) = document.get_mut("paths").and_then(Value::as_object_mut) else {
         return;
     };
     for path in paths.values_mut().filter_map(Value::as_object_mut) {
-        for operation in path.values_mut().filter_map(Value::as_object_mut) {
-            let Some(responses) = operation
-                .get_mut("responses")
+        for method in HTTP_METHODS {
+            let Some(responses) = path
+                .get_mut(*method)
+                .and_then(|operation| operation.get_mut("responses"))
                 .and_then(Value::as_object_mut)
             else {
                 continue;
             };
-            let mut has_json = false;
-            let mut has_empty = false;
-            for (_, response) in responses
+            let successes: Vec<_> = responses
                 .iter()
                 .filter(|(status, _)| status.starts_with('2'))
-            {
-                let content = response.get("content").and_then(Value::as_object);
-                has_empty |= content.is_none_or(Map::is_empty);
-                has_json |= content.is_some_and(|content| {
-                    content.keys().any(|kind| {
-                        kind == "application/json" || kind.starts_with("application/json;")
+                .map(|(_, response)| response)
+                .collect();
+            let has_json = successes.iter().any(|response| {
+                response
+                    .get("content")
+                    .and_then(Value::as_object)
+                    .is_some_and(|content| {
+                        content.keys().any(|kind| {
+                            kind == "application/json" || kind.starts_with("application/json;")
+                        })
                     })
-                });
-            }
+            });
+            let has_empty = successes.iter().any(|response| {
+                response.get("$ref").is_none()
+                    && response
+                        .get("content")
+                        .is_none_or(|content| content.as_object().is_some_and(Map::is_empty))
+            });
             if has_json && has_empty {
-                for (_, response) in responses
-                    .iter_mut()
-                    .filter(|(status, _)| status.starts_with('2'))
-                {
-                    if let Some(response) = response.as_object_mut() {
-                        response.insert(
-                            "content".to_string(),
-                            serde_json::json!({ "application/octet-stream": {} }),
-                        );
+                for (status, response) in responses {
+                    if status.starts_with('2') {
+                        response["content"] = serde_json::json!({"application/octet-stream": {}});
                     }
                 }
             }

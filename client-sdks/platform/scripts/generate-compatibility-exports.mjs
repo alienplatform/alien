@@ -15,10 +15,18 @@ const modules = {
   "persistimporteddeploymentrequestpreparedstackoverridestackconditionunion": "persistimporteddeploymentrequestpreparedstackoverrideconditionstack",
   "synclistresponsependingpreparedstacktypeunion": "synclistresponsependingpreparedstacktypeenvenum",
   "synclistresponsepreparedstackoperationsunion": "synclistresponsepreparedstackoperations",
+  "targetdeploymentconfig": "targetdeploymentvolumerestore",
   "releaseinfotypestringlist": "targetdeploymentconfig"
 };
 // Names can move separately from the shared models in their former module.
 const additionalExports = {
+  "targetdeploymentconfig": {
+    "targetdeployment": [
+      "TargetDeploymentConfig",
+      "TargetDeploymentConfig$inboundSchema",
+      "targetDeploymentConfigFromJSON"
+]
+  },
   "createmanagerresponseproviderawsalb2": {
     "createmanagerresponse": [
       "CreateManagerResponseProviderAwsAlb2",
@@ -127,19 +135,133 @@ const additionalExports = {
     ]
   }
 };
+// Authority settings add fields to inline groups; retain their published module paths.
+Object.assign(modules, {
+  "createmanagerresponseprovidergkegatewayenum2": "createmanagerresponseproviderazureapplicationgatewayforcontainersenum2",
+  "createmanagerresponsepublicendpointtargetunion2": "createmanagerresponsepublicendpointtargetmachineaddresses2",
+  "deploymentdetailresponsependingpreparedstacktypeenvenum": "deploymentdetailresponsependingpreparedstackdefaultunion",
+  "deploymentdetailresponsepreparedstackoperations": "deploymentdetailresponsepreparedstackplugins",
+  "deploymentpendingpreparedstacktypeenvenum": "deploymentpendingpreparedstackdefaultunion",
+  "deploymentpreparedstackoperations": "deploymentpreparedstackplugins",
+  "managerretryresponseprovidergkegateway2": "managerretryresponseproviderazureapplicationgatewayforcontainers2",
+  "managerretryresponsedomains2": "managerretryresponsepublicendpointtargetunion2",
+  "persistimporteddeploymentrequestpendingpreparedstacksettingscustom1": "persistimporteddeploymentrequestpendingpreparedstacksettingscustom2",
+  "persistimporteddeploymentrequestpreparedstackoverrideconditionstack": "persistimporteddeploymentrequestpreparedstackoverridegcpresource",
+  "synclistresponsependingpreparedstacktypeenvenum": "synclistresponsependingpreparedstackdefaultunion",
+  "synclistresponsepreparedstackoperations": "synclistresponsepreparedstackplugins"
+});
+Object.assign(additionalExports, {
+  "createmanagerresponseprovidergkegatewayenum2": {
+    "createmanagerresponse": [
+      "CreateManagerResponseProviderAzureApplicationGatewayForContainers2",
+      "CreateManagerResponseProviderAzureApplicationGatewayForContainers2$inboundSchema",
+      "CreateManagerResponseProviderGkeGatewayEnum2",
+      "CreateManagerResponseProviderGkeGatewayEnum2$inboundSchema",
+      "createManagerResponseProviderAzureApplicationGatewayForContainers2FromJSON"
+    ]
+  },
+  "createmanagerresponsepublicendpointtargetunion2": {
+    "createmanagerresponseproviderazureapplicationgatewayforcontainersenum2": [
+      "CreateManagerResponsePublicEndpointTargetUnion2",
+      "CreateManagerResponsePublicEndpointTargetUnion2$inboundSchema",
+      "createManagerResponsePublicEndpointTargetUnion2FromJSON"
+    ]
+  },
+  "deploymentdetailresponsependingpreparedstacktypeenvenum": {
+    "deploymentdetailresponsepreparedstackplugins": [
+      "DeploymentDetailResponsePendingPreparedStackTypeEnvEnum",
+      "DeploymentDetailResponsePendingPreparedStackTypeEnvEnum$inboundSchema"
+    ]
+  },
+  "deploymentdetailresponsepreparedstackoperations": {
+    "deploymentdetailresponse": [
+      "DeploymentDetailResponsePreparedStackOperations",
+      "DeploymentDetailResponsePreparedStackOperations$inboundSchema",
+      "deploymentDetailResponsePreparedStackOperationsFromJSON"
+    ]
+  },
+  "deploymentpendingpreparedstacktypeenvenum": {
+    "deploymentpreparedstackplugins": [
+      "DeploymentPendingPreparedStackTypeEnvEnum",
+      "DeploymentPendingPreparedStackTypeEnvEnum$inboundSchema"
+    ]
+  },
+  "deploymentpreparedstackoperations": {
+    "deployment": [
+      "DeploymentPreparedStackOperations",
+      "DeploymentPreparedStackOperations$inboundSchema",
+      "deploymentPreparedStackOperationsFromJSON"
+    ]
+  },
+  "managerretryresponseprovidergkegateway2": {
+    "managerretryresponse": [
+      "ManagerRetryResponseProviderGkeGateway2",
+      "ManagerRetryResponseProviderGkeGateway2$inboundSchema",
+      "ManagerRetryResponseProviderGkeGatewayEnum2",
+      "ManagerRetryResponseProviderGkeGatewayEnum2$inboundSchema",
+      "managerRetryResponseProviderGkeGateway2FromJSON"
+    ]
+  },
+  "managerretryresponsedomains2": {
+    "managerretryresponseproviderazureapplicationgatewayforcontainers2": [
+      "ManagerRetryResponseDomains2",
+      "ManagerRetryResponseDomains2$inboundSchema",
+      "managerRetryResponseDomains2FromJSON"
+    ]
+  },
+  "persistimporteddeploymentrequestpendingpreparedstacksettingscustom1": {
+    "persistimporteddeploymentrequestpreparedstackoverridegcpresource": [
+      "PersistImportedDeploymentRequestPendingPreparedStackSettingsCustom1",
+      "PersistImportedDeploymentRequestPendingPreparedStackSettingsCustom1$Outbound",
+      "PersistImportedDeploymentRequestPendingPreparedStackSettingsCustom1$outboundSchema",
+      "persistImportedDeploymentRequestPendingPreparedStackSettingsCustom1ToJSON"
+    ]
+  },
+  "persistimporteddeploymentrequestpreparedstackoverrideconditionstack": {
+    "persistimporteddeploymentrequest": [
+      "PersistImportedDeploymentRequestPreparedStackOverrideConditionStack",
+      "PersistImportedDeploymentRequestPreparedStackOverrideConditionStack$Outbound",
+      "PersistImportedDeploymentRequestPreparedStackOverrideConditionStack$outboundSchema",
+      "persistImportedDeploymentRequestPreparedStackOverrideConditionStackToJSON"
+    ]
+  },
+  "synclistresponsependingpreparedstacktypeenvenum": {
+    "synclistresponsepreparedstackplugins": [
+      "SyncListResponsePendingPreparedStackTypeEnvEnum",
+      "SyncListResponsePendingPreparedStackTypeEnvEnum$inboundSchema"
+    ]
+  },
+  "synclistresponsepreparedstackoperations": {
+    "synclistresponse": [
+      "SyncListResponsePreparedStackOperations",
+      "SyncListResponsePreparedStackOperations$inboundSchema",
+      "syncListResponsePreparedStackOperationsFromJSON"
+    ]
+  }
+});
 const models = new URL("../typescript/src/models/", import.meta.url);
-for (const [previous, current] of Object.entries(modules)) {
+async function exportIsValue(module, name) {
+  if (modules[module]) {
+    const moved = Object.entries(additionalExports[module] ?? {})
+      .find(([, names]) => names.includes(name));
+    return exportIsValue(moved?.[0] ?? modules[module], name);
+  }
+  const source = await readFile(new URL(`${module}.ts`, models), "utf8");
+  return [...source.matchAll(/export\s+(?:const|function|class)\s+([\w$]+)/g)]
+    .some(match => match[1] === name);
+}
+
+// Generate leaf forwarders before older compatibility paths that reference them.
+const orderedModules = Object.entries(modules).sort(([, left], [, right]) =>
+  Number(left in modules) - Number(right in modules));
+for (const [previous, current] of orderedModules) {
   const existing = await readFile(new URL(`${previous}.ts`, models), "utf8").catch(() => "");
   if (existing && !existing.startsWith("// Generated by generate-compatibility-exports.mjs.")) continue;
   await readFile(new URL(`${current}.ts`, models));
   const reexports = [];
   for (const [module, names] of Object.entries(additionalExports[previous] ?? {})) {
-    const source = await readFile(new URL(`${module}.ts`, models), "utf8");
-    const values = new Set(
-      [...source.matchAll(/export\s+(?:const|function|class)\s+([\w$]+)/g)].map(match => match[1]),
-    );
     for (const name of names) {
-      const value = values.has(name);
+      const value = await exportIsValue(module, name);
       reexports.push(`export ${value ? "" : "type "}{ ${name} } from "./${module}.js";`);
     }
   }
@@ -167,3 +289,14 @@ for (const file of await readdir(models)) {
   });
   if (aliases.length) await writeFile(url, `${source}${resourceMarker}${aliases.join("\n")}\n`);
 }
+
+// Inline setup settings share enums with deployment info after regeneration.
+// Preserve the public deployment-info names at both root and deep import paths.
+const deploymentInfoUrl = new URL("deploymentinfo.ts", models);
+const deploymentInfoMarker = "\n// Published deployment-info compatibility exports.\n";
+const deploymentInfoSource = (await readFile(deploymentInfoUrl, "utf8")).split(deploymentInfoMarker)[0];
+const deploymentInfoAliases = ["Heartbeats", "Telemetry", "Updates"].flatMap(name => [
+  `export { SetupUpdate${name} as DeploymentInfo${name} };`,
+  `export { SetupUpdate${name}$inboundSchema as DeploymentInfo${name}$inboundSchema };`,
+]);
+await writeFile(deploymentInfoUrl, `${deploymentInfoSource}${deploymentInfoMarker}${deploymentInfoAliases.join("\n")}\n`);

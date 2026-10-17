@@ -29,7 +29,7 @@ import {
   PersistImportedDeploymentRequestStackSettings,
   PersistImportedDeploymentRequestStackSettings$Outbound,
   PersistImportedDeploymentRequestStackSettings$outboundSchema,
-} from "./persistimporteddeploymentrequestpendingpreparedstacksettingscustom1.js";
+} from "./persistimporteddeploymentrequestpendingpreparedstacksettingscustom2.js";
 import {
   PersistImportedDeploymentRequestPendingPreparedStackUnion,
   PersistImportedDeploymentRequestPendingPreparedStackUnion$Outbound,
@@ -48,18 +48,24 @@ import {
   PersistImportedDeploymentRequestPreparedStackOverrideAzure,
   PersistImportedDeploymentRequestPreparedStackOverrideAzure$Outbound,
   PersistImportedDeploymentRequestPreparedStackOverrideAzure$outboundSchema,
-  PersistImportedDeploymentRequestPreparedStackOverrideConditionStack,
-  PersistImportedDeploymentRequestPreparedStackOverrideConditionStack$Outbound,
-  PersistImportedDeploymentRequestPreparedStackOverrideConditionStack$outboundSchema,
   PersistImportedDeploymentRequestPreparedStackOverrideGcpResource,
   PersistImportedDeploymentRequestPreparedStackOverrideGcpResource$Outbound,
   PersistImportedDeploymentRequestPreparedStackOverrideGcpResource$outboundSchema,
-} from "./persistimporteddeploymentrequestpreparedstackoverrideconditionstack.js";
+} from "./persistimporteddeploymentrequestpreparedstackoverridegcpresource.js";
 import {
   StackInputValueRequest,
   StackInputValueRequest$Outbound,
   StackInputValueRequest$outboundSchema,
 } from "./stackinputvaluerequest.js";
+
+/**
+ * GCP IAM condition
+ */
+export type PersistImportedDeploymentRequestPreparedStackOverrideConditionStack =
+  {
+    expression: string;
+    title: string;
+  };
 
 export type PersistImportedDeploymentRequestPreparedStackOverrideStackConditionUnion =
   | PersistImportedDeploymentRequestPreparedStackOverrideConditionStack
@@ -1278,7 +1284,10 @@ export type PersistImportedDeploymentRequestSetupScaffolding = {
  */
 export type PersistImportedDeploymentRequestSetupUpdateAuthorization = {
   /**
-   * Setup-owned digest (`Stack::setup_owned_digest`) of the last successful deployment.
+   * Setup resources and permissions digest (`Stack::setup_update_digest`) of the last
+   *
+   * @remarks
+   * successful deployment. The field name is retained for serialized compatibility.
    */
   baselineFrozenDigest: string;
   /**
@@ -1302,7 +1311,10 @@ export type PersistImportedDeploymentRequestSetupUpdateAuthorization = {
    */
   setupTarget: string;
   /**
-   * Setup-owned digest (`Stack::setup_owned_digest`) of the stack the setup re-import prepared.
+   * Setup resources and permissions digest (`Stack::setup_update_digest`) of the stack
+   *
+   * @remarks
+   * the setup re-import prepared.
    */
   targetFrozenDigest: string;
 };
@@ -1319,6 +1331,13 @@ export type PersistImportedDeploymentRequestSetupUpdateAuthorizationUnion =
  * Stores deployment state that needs to persist across step calls.
  */
 export type PersistImportedDeploymentRequestRuntimeMetadata = {
+  /**
+   * Setup-owned grant to keep using the direct setup executor for updates.
+   *
+   * @remarks
+   * Runtime settings and release contents must never create or change this grant.
+   */
+  automaticSetup?: boolean | undefined;
   /**
    * Whether each vault-native deployer secret is in the customer's secret
    *
@@ -1359,9 +1378,10 @@ export type PersistImportedDeploymentRequestRuntimeMetadata = {
    */
   lastSyncedSecretNames?: Array<string> | undefined;
   /**
-   * Release `pending_prepared_stack` was prepared from. The target can move
+   * Release the in-flight stack was prepared from: `pending_prepared_stack`
    *
    * @remarks
+   * during updates, or `prepared_stack` during local first startup. The target can move
    * to a newer release while that stack is still being applied; this tells
    * the update which release actually converged.
    */
@@ -1377,9 +1397,9 @@ export type PersistImportedDeploymentRequestRuntimeMetadata = {
    * keyed by input id, recorded when the deployment is created or its
    * setup import registers.
    *
-   * A frozen gate's answer is fixed for the deployment's lifetime: the
-   * update path refuses input values that conflict with these, and a Live
-   * resource sharing such an input resolves the persisted answer forever.
+   * Manual installations keep these answers fixed. An installation with an
+   * ongoing-management grant refreshes them when preparing a release. Live
+   * resources sharing a gate use the same recorded answer as Frozen resources.
    */
   persistedGateAnswers?: { [k: string]: boolean } | undefined;
   preparedStack?:
@@ -1628,6 +1648,35 @@ export type PersistImportedDeploymentRequest = {
 };
 
 /** @internal */
+export type PersistImportedDeploymentRequestPreparedStackOverrideConditionStack$Outbound =
+  {
+    expression: string;
+    title: string;
+  };
+
+/** @internal */
+export const PersistImportedDeploymentRequestPreparedStackOverrideConditionStack$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestPreparedStackOverrideConditionStack$Outbound,
+    PersistImportedDeploymentRequestPreparedStackOverrideConditionStack
+  > = z.object({
+    expression: z.string(),
+    title: z.string(),
+  });
+
+export function persistImportedDeploymentRequestPreparedStackOverrideConditionStackToJSON(
+  persistImportedDeploymentRequestPreparedStackOverrideConditionStack:
+    PersistImportedDeploymentRequestPreparedStackOverrideConditionStack,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestPreparedStackOverrideConditionStack$outboundSchema
+      .parse(
+        persistImportedDeploymentRequestPreparedStackOverrideConditionStack,
+      ),
+  );
+}
+
+/** @internal */
 export type PersistImportedDeploymentRequestPreparedStackOverrideStackConditionUnion$Outbound =
   | PersistImportedDeploymentRequestPreparedStackOverrideConditionStack$Outbound
   | string;
@@ -1638,7 +1687,9 @@ export const PersistImportedDeploymentRequestPreparedStackOverrideStackCondition
     PersistImportedDeploymentRequestPreparedStackOverrideStackConditionUnion$Outbound,
     PersistImportedDeploymentRequestPreparedStackOverrideStackConditionUnion
   > = z.union([
-    PersistImportedDeploymentRequestPreparedStackOverrideConditionStack$outboundSchema,
+    z.lazy(() =>
+      PersistImportedDeploymentRequestPreparedStackOverrideConditionStack$outboundSchema
+    ),
     z.string(),
   ]);
 
@@ -1673,7 +1724,9 @@ export const PersistImportedDeploymentRequestPreparedStackOverrideGcpStack$outbo
   > = z.object({
     condition: z.nullable(
       z.union([
-        PersistImportedDeploymentRequestPreparedStackOverrideConditionStack$outboundSchema,
+        z.lazy(() =>
+          PersistImportedDeploymentRequestPreparedStackOverrideConditionStack$outboundSchema
+        ),
         z.string(),
       ]),
     ).optional(),
@@ -3964,6 +4017,7 @@ export function persistImportedDeploymentRequestSetupUpdateAuthorizationUnionToJ
 
 /** @internal */
 export type PersistImportedDeploymentRequestRuntimeMetadata$Outbound = {
+  automaticSetup?: boolean | undefined;
   deployerSecrets?:
     | Array<PersistImportedDeploymentRequestDeployerSecret$Outbound>
     | undefined;
@@ -4004,6 +4058,7 @@ export const PersistImportedDeploymentRequestRuntimeMetadata$outboundSchema:
     PersistImportedDeploymentRequestRuntimeMetadata$Outbound,
     PersistImportedDeploymentRequestRuntimeMetadata
   > = z.object({
+    automaticSetup: z.boolean().optional(),
     deployerSecrets: z.array(
       PersistImportedDeploymentRequestDeployerSecret$outboundSchema,
     ).optional(),

@@ -990,6 +990,7 @@ impl AzureRemoteStackManagementController {
         // permissions themselves did not change.
         if self.role_definition_id.is_some()
             && ctx.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
+            && ctx.deployment_config.setup_run
         {
             return Ok(true);
         }

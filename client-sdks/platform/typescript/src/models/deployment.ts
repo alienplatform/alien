@@ -26,15 +26,17 @@ import {
   DeploymentStackState$inboundSchema,
   DeploymentStatus,
   DeploymentStatus$inboundSchema,
-} from "./deploymentpendingpreparedstacktypeenvenum.js";
+} from "./deploymentpendingpreparedstackdefaultunion.js";
 import {
   DeploymentPendingPreparedStackUnion,
   DeploymentPendingPreparedStackUnion$inboundSchema,
+  DeploymentPreparedStackCustom,
+  DeploymentPreparedStackCustom$inboundSchema,
   DeploymentPreparedStackInput,
   DeploymentPreparedStackInput$inboundSchema,
-  DeploymentPreparedStackOperations,
-  DeploymentPreparedStackOperations$inboundSchema,
-} from "./deploymentpreparedstackoperations.js";
+  DeploymentPreparedStackPlugins,
+  DeploymentPreparedStackPlugins$inboundSchema,
+} from "./deploymentpreparedstackplugins.js";
 import {
   DeploymentPurpose,
   DeploymentPurpose$inboundSchema,
@@ -52,6 +54,20 @@ import {
   ReportedOperation,
   ReportedOperation$inboundSchema,
 } from "./reportedoperation.js";
+
+/**
+ * Operations declared by a stack, or by an Operator installed on its own.
+ */
+export type DeploymentPreparedStackOperations = {
+  /**
+   * Published custom plugins, pinned to exact versions.
+   */
+  custom?: Array<DeploymentPreparedStackCustom> | undefined;
+  /**
+   * Built-in plugins, by plugin name.
+   */
+  plugins?: { [k: string]: DeploymentPreparedStackPlugins } | undefined;
+};
 
 export type DeploymentPreparedStackOperationsUnion =
   | DeploymentPreparedStackOperations
@@ -1434,7 +1450,10 @@ export type DeploymentSetupScaffolding = {
  */
 export type DeploymentSetupUpdateAuthorization = {
   /**
-   * Setup-owned digest (`Stack::setup_owned_digest`) of the last successful deployment.
+   * Setup resources and permissions digest (`Stack::setup_update_digest`) of the last
+   *
+   * @remarks
+   * successful deployment. The field name is retained for serialized compatibility.
    */
   baselineFrozenDigest: string;
   /**
@@ -1458,7 +1477,10 @@ export type DeploymentSetupUpdateAuthorization = {
    */
   setupTarget: string;
   /**
-   * Setup-owned digest (`Stack::setup_owned_digest`) of the stack the setup re-import prepared.
+   * Setup resources and permissions digest (`Stack::setup_update_digest`) of the stack
+   *
+   * @remarks
+   * the setup re-import prepared.
    */
   targetFrozenDigest: string;
 };
@@ -1471,6 +1493,13 @@ export type DeploymentSetupUpdateAuthorizationUnion =
  * Runtime metadata for deployment state persistence
  */
 export type DeploymentRuntimeMetadata = {
+  /**
+   * Setup-owned grant to keep using the direct setup executor for updates.
+   *
+   * @remarks
+   * Runtime settings and release contents must never create or change this grant.
+   */
+  automaticSetup?: boolean | undefined;
   /**
    * Whether each vault-native deployer secret is in the customer's secret
    *
@@ -1507,9 +1536,10 @@ export type DeploymentRuntimeMetadata = {
    */
   lastSyncedSecretNames?: Array<string> | undefined;
   /**
-   * Release `pending_prepared_stack` was prepared from. The target can move
+   * Release the in-flight stack was prepared from: `pending_prepared_stack`
    *
    * @remarks
+   * during updates, or `prepared_stack` during local first startup. The target can move
    * to a newer release while that stack is still being applied; this tells
    * the update which release actually converged.
    */
@@ -1522,9 +1552,9 @@ export type DeploymentRuntimeMetadata = {
    * keyed by input id, recorded when the deployment is created or its
    * setup import registers.
    *
-   * A frozen gate's answer is fixed for the deployment's lifetime: the
-   * update path refuses input values that conflict with these, and a Live
-   * resource sharing such an input resolves the persisted answer forever.
+   * Manual installations keep these answers fixed. An installation with an
+   * ongoing-management grant refreshes them when preparing a release. Live
+   * resources sharing a gate use the same recorded answer as Frozen resources.
    */
   persistedGateAnswers?: { [k: string]: boolean } | undefined;
   preparedStack?: DeploymentPreparedStack | string | null | undefined;
@@ -1821,13 +1851,40 @@ export type Deployment = {
    * Unique identifier for the workspace.
    */
   workspaceId: string;
+  /**
+   * A customer encryption key is unavailable. Dependent resources are preserved until access returns.
+   */
+  customerKeyUnavailable?: boolean | undefined;
 };
+
+/** @internal */
+export const DeploymentPreparedStackOperations$inboundSchema: z.ZodType<
+  DeploymentPreparedStackOperations,
+  unknown
+> = z.object({
+  custom: z.array(DeploymentPreparedStackCustom$inboundSchema).optional(),
+  plugins: z.record(z.string(), DeploymentPreparedStackPlugins$inboundSchema)
+    .optional(),
+});
+
+export function deploymentPreparedStackOperationsFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentPreparedStackOperations, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentPreparedStackOperations$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentPreparedStackOperations' from JSON`,
+  );
+}
 
 /** @internal */
 export const DeploymentPreparedStackOperationsUnion$inboundSchema: z.ZodType<
   DeploymentPreparedStackOperationsUnion,
   unknown
-> = z.union([DeploymentPreparedStackOperations$inboundSchema, z.string()]);
+> = z.union([
+  z.lazy(() => DeploymentPreparedStackOperations$inboundSchema),
+  z.string(),
+]);
 
 export function deploymentPreparedStackOperationsUnionFromJSON(
   jsonString: string,
@@ -3689,7 +3746,10 @@ export const DeploymentPreparedStack$inboundSchema: z.ZodType<
   id: z.string(),
   inputs: z.array(DeploymentPreparedStackInput$inboundSchema).optional(),
   operations: z.nullable(
-    z.union([DeploymentPreparedStackOperations$inboundSchema, z.string()]),
+    z.union([
+      z.lazy(() => DeploymentPreparedStackOperations$inboundSchema),
+      z.string(),
+    ]),
   ).optional(),
   permissions: z.lazy(() => DeploymentPreparedStackPermissions$inboundSchema)
     .optional(),
@@ -3883,6 +3943,7 @@ export const DeploymentRuntimeMetadata$inboundSchema: z.ZodType<
   DeploymentRuntimeMetadata,
   unknown
 > = z.object({
+  automaticSetup: z.boolean().optional(),
   deployerSecrets: z.array(DeploymentDeployerSecret$inboundSchema).optional(),
   directSetupRevision: z.nullable(z.string()).optional(),
   initialSetupAuthority: DeploymentInitialSetupAuthority$inboundSchema
@@ -4030,6 +4091,7 @@ export const Deployment$inboundSchema: z.ZodType<Deployment, unknown> = z
     updatedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
     managerId: z.string(),
     workspaceId: z.string(),
+    customerKeyUnavailable: z.boolean().optional(),
   });
 
 export function deploymentFromJSON(
