@@ -897,7 +897,13 @@ mod tests {
                         .map(|_| ()),
                     Platform::Azure => AzureRuntimePermissionsGenerator::new()
                         .generate_grant_plan(&permission_set, BindingTarget::Stack, &context)
-                        .map(|_| ()),
+                        .map(|plan| {
+                            for role in plan.custom_roles {
+                                for action in role.role_definition.actions.iter().chain(&role.role_definition.data_actions) {
+                                    assert!(!action.starts_with("Microsoft.KeyVault/vaults/secrets/") && !action.starts_with("Microsoft.KeyVault/vaults/certificates/"), "Automatic management set {id} reaches secret values: {action}");
+                                }
+                            }
+                        }),
                     _ => unreachable!(),
                 };
                 result.unwrap_or_else(|error| panic!("{platform} {id}: {error}"));

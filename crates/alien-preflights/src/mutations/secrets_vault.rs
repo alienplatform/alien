@@ -128,10 +128,17 @@ impl StackMutation for SecretsVaultMutation {
         if !(stack_state.platform == Platform::Aws
             && config.stack_settings.setup_management == alien_core::SetupManagement::Automatic)
         {
+            let needs_certificates = runs_on_platform_or_base(stack_state, config, Platform::Azure)
+                && stack.resources.values().any(|entry| {
+                    (entry.config.downcast_ref::<Container>().is_some()
+                        || entry.config.downcast_ref::<Daemon>().is_some())
+                        && azure_resource_needs_vault(entry)
+                });
             add_vault_permissions_to_management(
                 &mut stack,
                 secrets_vault_id,
                 !infrastructure_only,
+                needs_certificates,
             )?;
         }
 
@@ -599,6 +606,7 @@ fn add_vault_permissions_to_management(
     stack: &mut Stack,
     vault_name: &str,
     needs_read: bool,
+    needs_certificates: bool,
 ) -> Result<()> {
     use alien_core::permissions::ManagementPermissions;
 
@@ -633,6 +641,15 @@ fn add_vault_permissions_to_management(
                 .0
                 .entry(vault_name.to_string())
                 .or_default();
+            if needs_certificates
+                && !vault_permissions
+                    .iter()
+                    .any(|p| p.id() == "vault/certificate-management")
+            {
+                vault_permissions.push(PermissionSetReference::from_name(
+                    "vault/certificate-management",
+                ));
+            }
             if needs_read
                 && !vault_permissions
                     .iter()
@@ -853,6 +870,10 @@ mod tests {
             let stack = Stack::new("endpoints".to_string())
                 .add(container, ResourceLifecycle::Live)
                 .add(daemon, ResourceLifecycle::Live)
+                .add(
+                    RemoteStackManagement::new("management".into()).build(),
+                    ResourceLifecycle::Frozen,
+                )
                 .build();
             let config = DeploymentConfig::builder()
                 .stack_settings(StackSettings::default())
@@ -876,6 +897,40 @@ mod tests {
                         prepared.resources["secrets"].lifecycle,
                         ResourceLifecycle::Frozen
                     );
+                    let profile = prepared
+                        .management()
+                        .profile()
+                        .expect("shared vault permissions");
+                    let grant = profile.0["secrets"]
+                        .iter()
+                        .find(|grant| grant.id() == "vault/certificate-management")
+                        .expect("scoped certificate management");
+                    let set = grant
+                        .resolve(|name| alien_permissions::get_permission_set(name).cloned())
+                        .unwrap();
+                    let context = alien_permissions::PermissionContext::new()
+                        .with_subscription_id("subscription")
+                        .with_resource_group("group")
+                        .with_resource_name("shared-vault")
+                        .with_principal_id("manager");
+                    let plan =
+                        alien_permissions::generators::AzureRuntimePermissionsGenerator::new()
+                            .generate_grant_plan(
+                                &set,
+                                alien_permissions::BindingTarget::Resource,
+                                &context,
+                            )
+                            .unwrap();
+                    assert!(plan
+                        .bindings
+                        .iter()
+                        .all(|binding| binding.scope.ends_with("/vaults/shared-vault")));
+                    assert!(plan.custom_roles.iter().any(|role| role
+                        .role_definition
+                        .data_actions
+                        .iter()
+                        .any(|action| action
+                            == "Microsoft.KeyVault/vaults/certificates/import/action")));
                     let wired = super::super::infrastructure_dependencies::InfrastructureDependenciesMutation.mutate(prepared, &state, &config).await.expect("wire dependencies");
                     for id in ["api", "daemon"] {
                         assert!(wired.resources[id]

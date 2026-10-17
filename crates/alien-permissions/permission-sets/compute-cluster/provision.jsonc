@@ -560,24 +560,6 @@
             "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
           }
         }
-      },
-      // Key Vault for worker runtime secrets
-      {
-        "grant": {
-          "actions": [
-            "Microsoft.KeyVault/vaults/secrets/write",
-            "Microsoft.KeyVault/vaults/secrets/read"
-          ],
-          "dataActions": ["Microsoft.KeyVault/vaults/secrets/delete"]
-        },
-        "binding": {
-          "stack": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
-          },
-          "resource": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
-          }
-        }
       }
     ]
   }

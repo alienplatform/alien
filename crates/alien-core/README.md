@@ -58,11 +58,17 @@ write, or delete permission. The manager vault API refuses the deployer vault. E
 cannot reopen the reserved vault.
 
 AWS and GCP workloads read only their mapped slots. Workloads sharing one
-permission profile must receive the same slots. Azure grants those workloads
+permission profile must receive the same slots. When native slots exist, ordinary
+workload `vault/data-read`, `vault/data-write`, and `vault/provision` grants must
+name a separate vault. Global grants and vault prefixes that overlap
+`deployer-secrets` are rejected; use input environment mappings to grant slot access. Azure grants those workloads
 read access to the dedicated vault: per-secret RBAC cannot be installed before
 the secret exists. Kubernetes workloads use `secretKeyRef`; the in-cluster
 Operator needs Secret `get` for presence checks, and Kubernetes has no
-metadata-only Secret permission. Local development uses the local file vault.
+metadata-only Secret permission. Azure certificate imports and deletion are
+scoped to the shared vault, because certificates have backing secrets. Vault
+provisioning grants only vault lifecycle actions, without ARM secret child-resource
+writes. Local development uses the local file vault.
 
 This separates direct management access from workload access. It does not
 prevent trusted workload code from using its secrets, or an infrastructure
