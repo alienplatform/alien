@@ -506,3 +506,71 @@ async fn uncertain_scheduler_create_is_retired_after_controller_reload() {
         }
     }
 }
+
+#[tokio::test]
+async fn uncertain_storage_topic_create_is_retired_after_controller_reload() {
+    let native = Arc::new(Mutex::new(None::<alien_gcp_clients::pubsub::Topic>));
+    let reads = native.clone();
+    let writes = native.clone();
+    let deletes = native.clone();
+    let mut pubsub = MockPubSubApi::new();
+    pubsub.expect_get_topic().returning(move |name| {
+        reads.lock().unwrap().clone().ok_or_else(|| AlienError::new(ClientError::RemoteResourceNotFound {
+            resource_type: "topic".into(), resource_name: name,
+        }))
+    });
+    pubsub.expect_create_topic().times(1).returning(move |name, mut topic| {
+        topic.name = Some(format!("projects/{}/topics/{name}", GcpClientConfig::mock().project_id));
+        *writes.lock().unwrap() = Some(topic);
+        Err(AlienError::new(ClientError::RemoteServiceUnavailable { message: "accepted topic create with lost reply".into() }))
+    });
+    pubsub.expect_delete_topic().times(1).returning(move |name| {
+        let topic = deletes.lock().unwrap().take().unwrap();
+        assert!(topic.name.unwrap().ends_with(&format!("/topics/{name}")));
+        Ok(())
+    });
+    pubsub.expect_set_topic_iam_policy().never();
+    let pubsub = Arc::new(pubsub);
+    let gcs = Arc::new(MockGcsApi::new());
+    let mut services = MockPlatformServiceProvider::new();
+    services.expect_get_gcp_pubsub_client().returning(move |_| Ok(pubsub.clone()));
+    services.expect_get_gcp_gcs_client().returning(move |_| Ok(gcs.clone()));
+    let services = Arc::new(services);
+    let mut desired = function_public_ingress();
+    desired.triggers = vec![alien_core::WorkerTrigger::Storage {
+        storage: (&crate::core::controller_test::test_storage_1()).into(), events: vec!["created".into()],
+    }];
+    let mut controller = GcpWorkerController::mock_ready("test-worker");
+    controller.state = GcpWorkerState::CreatingPushSubscriptions;
+    for step in 0..3 {
+        if step == 2 { controller.state = GcpWorkerState::DeletingPushSubscriptions; }
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(desired.clone()).controller(controller).platform(Platform::Gcp)
+            .service_provider(services.clone()).with_test_dependencies().build().await.unwrap();
+        let result = executor.step().await;
+        if step == 1 { assert!(result.is_err()); } else { result.unwrap(); }
+        controller = serde_json::from_value(serde_json::to_value(executor.internal_state::<GcpWorkerController>().unwrap()).unwrap()).unwrap();
+        assert!(controller.storage_notification_topics.is_empty());
+        match step {
+            0 => { assert!(native.lock().unwrap().is_none()); assert_eq!(controller.storage_topic_intents.len(), 1); }
+            1 => { assert!(native.lock().unwrap().is_some()); assert_eq!(controller.storage_topic_intents.len(), 1); }
+            _ => { assert!(native.lock().unwrap().is_none()); assert!(controller.storage_topic_intents.is_empty()); }
+        }
+    }
+}
+
+#[tokio::test]
+async fn absent_service_does_not_discard_retained_trigger_cleanup() {
+    let mut controller = GcpWorkerController::mock_ready("test-worker");
+    controller.state = GcpWorkerState::DeleteStart;
+    controller.service_name = None;
+    controller.scheduler_job_names = vec!["recorded-job".into()];
+    let mut executor = SingleControllerExecutor::builder()
+        .resource(function_public_ingress()).controller(controller).platform(Platform::Gcp)
+        .service_provider(Arc::new(MockPlatformServiceProvider::new()))
+        .with_test_dependencies().build().await.unwrap();
+    executor.step().await.unwrap();
+    let restored: GcpWorkerController = serde_json::from_value(serde_json::to_value(executor.internal_state::<GcpWorkerController>().unwrap()).unwrap()).unwrap();
+    assert_eq!(restored.state, GcpWorkerState::DeletingPushSubscriptions);
+    assert_eq!(restored.scheduler_job_names, ["recorded-job"]);
+}
