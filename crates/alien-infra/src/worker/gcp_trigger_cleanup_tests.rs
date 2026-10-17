@@ -585,6 +585,38 @@ async fn absent_service_does_not_discard_retained_trigger_cleanup(#[case] child:
     assert_eq!(restored.state, GcpWorkerState::DeletingPushSubscriptions);
     let restored = serde_json::to_value(restored).unwrap();
     for field in ["pushSubscriptions", "gcsNotificationIds", "storageNotificationTopics", "schedulerJobNames"] {
+        assert!(original[field].is_array(), "Expected recorded child collection {field}");
         assert_eq!(restored[field], original[field]);
+    }
+}
+
+#[tokio::test]
+async fn uncertain_queue_subscription_is_retired_after_controller_reload() {
+    let native = Arc::new(Mutex::new(None::<alien_gcp_clients::pubsub::Subscription>));
+    let reads = native.clone(); let writes = native.clone(); let deletes = native.clone();
+    let mut pubsub = MockPubSubApi::new();
+    pubsub.expect_get_subscription().returning(move |name| reads.lock().unwrap().clone().ok_or_else(|| AlienError::new(ClientError::RemoteResourceNotFound { resource_type: "subscription".into(), resource_name: name })));
+    pubsub.expect_create_subscription().times(1).returning(move |name, mut subscription| {
+        subscription.name = Some(format!("projects/{}/subscriptions/{name}", GcpClientConfig::mock().project_id)); *writes.lock().unwrap() = Some(subscription);
+        Err(AlienError::new(ClientError::RemoteServiceUnavailable { message: "accepted subscription with lost reply".into() }))
+    });
+    pubsub.expect_delete_subscription().times(1).returning(move |name| { assert!(deletes.lock().unwrap().take().unwrap().name.unwrap().ends_with(&format!("/subscriptions/{name}"))); Ok(()) });
+    let pubsub = Arc::new(pubsub); let mut services = MockPlatformServiceProvider::new();
+    services.expect_get_gcp_pubsub_client().returning(move |_| Ok(pubsub.clone())); let services = Arc::new(services);
+    let desired = crate::worker::fixtures::function_with_queue_trigger();
+    let mut controller = GcpWorkerController::mock_ready("test-worker"); controller.state = GcpWorkerState::CreatingPushSubscriptions;
+    for step in 0..3 {
+        if step == 2 { controller.state = GcpWorkerState::DeletingPushSubscriptions; }
+        let queue = crate::queue::gcp::GcpQueueController { state: crate::queue::gcp::GcpQueueState::Ready, topic_name: Some("test-test-queue".into()), subscription_name: Some("test-test-queue-sub".into()), _internal_stay_count: None };
+        let mut executor = SingleControllerExecutor::builder().resource(desired.clone()).controller(controller).platform(Platform::Gcp)
+            .service_provider(services.clone()).with_test_dependencies().with_dependency(crate::core::controller_test::test_queue(), queue).build().await.unwrap();
+        let result = executor.step().await; if step == 1 { assert!(result.is_err()); } else { result.unwrap(); }
+        controller = serde_json::from_value(serde_json::to_value(executor.internal_state::<GcpWorkerController>().unwrap()).unwrap()).unwrap();
+        assert!(controller.push_subscriptions.is_empty());
+        match step {
+            0 => { assert!(native.lock().unwrap().is_none()); assert_eq!(controller.push_subscription_intents.len(), 1); }
+            1 => { assert!(native.lock().unwrap().is_some()); assert_eq!(controller.push_subscription_intents.len(), 1); }
+            _ => { assert!(native.lock().unwrap().is_none()); assert!(controller.push_subscription_intents.is_empty()); }
+        }
     }
 }

@@ -4,6 +4,7 @@ use tracing::{debug, info, warn};
 
 use super::gcp_scheduler_identity::GcpSchedulerJobIntent;
 use super::gcp_topic_identity::{self, GcpTopicIntent};
+use super::gcp_subscription_identity::GcpSubscriptionIntent;
 use super::gcp_ingress::{GcpWorkerIngress, RecordedWorkerIngress};
 use super::gcp_service_identity::{CloudRunCreatePlan, CloudRunCreation, GcpCloudRunOwner};
 use crate::core::{EnvironmentVariableBuilder, ResourcePermissionsHelper};
@@ -350,6 +351,9 @@ pub struct GcpWorkerController {
     pub(crate) compute_operation_region: Option<String>,
     /// Push subscription names for queue triggers (one per queue trigger)
     pub(crate) push_subscriptions: Vec<String>,
+    /// Original push configuration and owner for uncertain or confirmed new creates.
+    #[serde(default)]
+    pub(super) push_subscription_intents: BTreeMap<String, GcpSubscriptionIntent>,
     /// Pub/Sub topic names created for storage trigger notifications
     pub(crate) storage_notification_topics: Vec<String>,
     /// Pending and confirmed new topic ownership, distinct from legacy receipts.
@@ -2009,8 +2013,10 @@ impl GcpWorkerController {
         for trigger in &cfg.triggers {
             if let alien_core::WorkerTrigger::Queue { queue } = trigger {
                 info!(worker=%cfg.id, queue=%queue.id, "Creating Pub/Sub push subscription");
-                self.create_push_subscription(ctx, gcp_config, &service_name, &cfg, queue)
-                    .await?;
+                if !self.create_push_subscription(ctx, gcp_config, &service_name, &cfg, queue)
+                    .await? {
+                    return Ok(HandlerAction::Continue { state: CreatingPushSubscriptions, suggested_delay: None });
+                }
                 created_any = true;
             }
         }
@@ -3763,6 +3769,7 @@ impl GcpWorkerController {
 
         // An absent parent does not establish that its separately owned children are gone.
         let has_children = !self.push_subscriptions.is_empty()
+            || !self.push_subscription_intents.is_empty()
             || !self.storage_notification_topics.is_empty()
             || !self.storage_topic_intents.is_empty()
             || !self.gcs_notification_ids.is_empty()
@@ -5598,8 +5605,7 @@ impl GcpWorkerController {
         _service_name: &str,
         worker_config: &alien_core::Worker,
         queue_ref: &alien_core::ResourceRef,
-    ) -> Result<()> {
-        let pubsub_client = ctx.service_provider.get_gcp_pubsub_client(gcp_config)?;
+    ) -> Result<bool> {
 
         // Get queue controller to access the topic name
         let queue_controller =
@@ -5693,40 +5699,32 @@ impl GcpWorkerController {
             "Creating Pub/Sub push subscription"
         );
 
-        match pubsub_client
-            .create_subscription(subscription_name.clone(), subscription)
-            .await
-        {
-            Ok(_) => {}
-            Err(e) if is_remote_resource_conflict(&e) => {
-                info!(
-                    worker=%worker_config.id,
-                    subscription=%subscription_name,
-                    "Pub/Sub push subscription already exists; treating as created"
-                );
+        self.ensure_push_subscription(ctx, gcp_config, &subscription_name, subscription).await
+    }
+
+    async fn ensure_push_subscription(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+        gcp_config: &alien_gcp_clients::GcpClientConfig,
+        name: &str,
+        subscription: Subscription,
+    ) -> Result<bool> {
+        if let Some(intent) = self.push_subscription_intents.get(name) {
+            intent.validate_scope(&gcp_config.project_id, name, ctx.desired_config.id())?;
+            intent.validate_request(&subscription, ctx.desired_config.id())?;
+            if !self.push_subscriptions.iter().any(|recorded| recorded == name) {
+                let client = ctx.service_provider.get_gcp_pubsub_client(gcp_config)?;
+                intent.create_or_recover(client.as_ref(), name, ctx.desired_config.id()).await?;
+                self.push_subscriptions.push(name.to_string());
             }
-            Err(e) => {
-                return Err(e.context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to create push subscription '{}' for queue '{}'",
-                        subscription_name, queue_ref.id
-                    ),
-                    resource_id: Some(worker_config.id.clone()),
-                }));
-            }
+            Ok(true)
+        } else if self.push_subscriptions.iter().any(|recorded| recorded == name) {
+            // A pre-version-6 confirmed receipt keeps its explicit ownership.
+            Ok(true)
+        } else {
+            self.push_subscription_intents.insert(name.to_string(), GcpSubscriptionIntent::new(&gcp_config.project_id, name, subscription));
+            Ok(false)
         }
-
-        if !self.push_subscriptions.contains(&subscription_name) {
-            self.push_subscriptions.push(subscription_name.clone());
-        }
-
-        info!(
-            worker=%worker_config.id,
-            subscription=%subscription_name,
-            "Successfully created Pub/Sub push subscription"
-        );
-
-        Ok(())
     }
 
     /// Retire recorded push subscriptions, preserving unfinished children for retry.
@@ -5735,13 +5733,24 @@ impl GcpWorkerController {
         ctx: &ResourceControllerContext<'_>,
         gcp_config: &alien_gcp_clients::GcpClientConfig,
     ) -> Result<()> {
-        if self.push_subscriptions.is_empty() {
+        if self.push_subscriptions.is_empty() && self.push_subscription_intents.is_empty() {
             return Ok(());
         }
 
         let pubsub_client = ctx.service_provider.get_gcp_pubsub_client(gcp_config)?;
         let worker_config = ctx.desired_resource_config::<Worker>()?;
 
+        while let Some((name, intent)) = self.push_subscription_intents.first_key_value() {
+            let name = name.clone();
+            let prefix = format!("{}-{}-", ctx.resource_prefix, worker_config.id);
+            if !name.starts_with(&prefix) {
+                return Err(AlienError::new(ErrorData::ResourceCleanupIncomplete { resource_id: worker_config.id.clone(), message: "Pending subscription is outside worker scope".to_string() }));
+            }
+            intent.validate_scope(&gcp_config.project_id, &name, &worker_config.id)?;
+            intent.delete(pubsub_client.as_ref(), &name, &worker_config.id).await.context(ErrorData::ResourceCleanupIncomplete { resource_id: worker_config.id.clone(), message: format!("Push subscription '{name}' could not be safely retired") })?;
+            self.push_subscription_intents.remove(&name);
+            self.push_subscriptions.retain(|recorded| recorded != &name);
+        }
         while let Some(subscription_name) = self.push_subscriptions.first().cloned() {
             match pubsub_client
                 .delete_subscription(subscription_name.clone())
@@ -6012,40 +6021,7 @@ impl GcpWorkerController {
             "Creating Pub/Sub push subscription for storage trigger"
         );
 
-        match pubsub_client
-            .create_subscription(subscription_name.clone(), subscription)
-            .await
-        {
-            Ok(_) => {}
-            Err(e) if is_remote_resource_conflict(&e) => {
-                info!(
-                    worker=%worker_config.id,
-                    subscription=%subscription_name,
-                    "Storage trigger push subscription already exists; treating as created"
-                );
-            }
-            Err(e) => {
-                return Err(e.context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to create push subscription '{}' for storage trigger '{}'",
-                        subscription_name, storage_ref.id
-                    ),
-                    resource_id: Some(worker_config.id.clone()),
-                }));
-            }
-        }
-
-        if !self.push_subscriptions.contains(&subscription_name) {
-            self.push_subscriptions.push(subscription_name);
-        }
-
-        info!(
-            worker=%worker_config.id,
-            storage=%storage_ref.id,
-            "Successfully created storage trigger infrastructure"
-        );
-
-        Ok(true)
+        self.ensure_push_subscription(ctx, gcp_config, &subscription_name, subscription).await
     }
 
     /// Retire recorded notifications, preserving unfinished children for retry.
@@ -6191,6 +6167,7 @@ impl GcpWorkerController {
             compute_operation_name: None,
             compute_operation_region: None,
             push_subscriptions: Vec::new(),
+            push_subscription_intents: Default::default(),
             storage_notification_topics: Vec::new(),
             storage_topic_intents: Default::default(),
             gcs_notification_ids: Vec::new(),
@@ -7676,6 +7653,7 @@ mod tests {
             setup_mock_client_for_creation_and_update(&function_name, false, resumed);
 
         let mut mock_pubsub = MockPubSubApi::new();
+        mock_pubsub.expect_get_subscription().times(1).returning(|name| Err(AlienError::new(CloudClientErrorData::RemoteResourceNotFound { resource_type: "subscription".into(), resource_name: name })));
         mock_pubsub
             .expect_create_subscription()
             .withf(|subscription_id, subscription| {
@@ -7691,7 +7669,10 @@ mod tests {
                         == Some("https://test-queue-func-abcd1234-uc.a.run.app")
             })
             .times(1)
-            .returning(|_, subscription| Ok(subscription));
+            .returning(|name, mut subscription| {
+                subscription.name = Some(format!("projects/test-project-123/subscriptions/{name}"));
+                Ok(subscription)
+            });
 
         let mock_provider =
             setup_mock_service_provider_with_pubsub(mock_cloudrun, None, Arc::new(mock_pubsub));
@@ -8254,6 +8235,7 @@ mod tests {
             compute_operation_name: None,
             compute_operation_region: None,
             push_subscriptions: Vec::new(),
+            push_subscription_intents: Default::default(),
             fqdn: None,
             certificate_id: None,
             ssl_certificate_name: None,
