@@ -6131,7 +6131,7 @@ impl GcpWorkerController {
         Ok(())
     }
 
-    /// Deletes all GCS notifications (best-effort)
+    /// Retire recorded notifications, preserving unfinished children for retry.
     async fn delete_all_storage_notifications(
         &mut self,
         ctx: &ResourceControllerContext<'_>,
