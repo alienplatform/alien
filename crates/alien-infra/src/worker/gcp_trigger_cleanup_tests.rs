@@ -343,9 +343,13 @@ async fn trigger_update_restart_does_not_retire_newly_created_jobs() {
         delete_calls.lock().unwrap().push(name);
         Ok(())
     });
+    scheduler.expect_get_job().returning(|name| Err(AlienError::new(ClientError::RemoteResourceNotFound {
+        resource_type: "scheduler job".into(), resource_name: name,
+    })));
     scheduler
         .expect_create_job()
-        .returning(move |_, name, job| {
+        .returning(move |region, name, mut job| {
+            job.name = Some(format!("projects/{}/locations/{region}/jobs/{name}", GcpClientConfig::mock().project_id));
             let mut calls = create_calls.lock().unwrap();
             calls.push(name);
             if calls.len() == 2 {
@@ -374,7 +378,7 @@ async fn trigger_update_restart_does_not_retire_newly_created_jobs() {
     let mut controller = GcpWorkerController::mock_ready("test-worker");
     controller.state = GcpWorkerState::UpdatePushSubscriptions;
     controller.scheduler_job_names = vec!["old-job".into()];
-    for step in 0..4 {
+    for step in 0..5 {
         let mut executor = SingleControllerExecutor::builder()
             .resource(desired.clone())
             .previous_resource(function_public_ingress())
@@ -386,7 +390,7 @@ async fn trigger_update_restart_does_not_retire_newly_created_jobs() {
             .await
             .unwrap();
         let result = executor.step().await;
-        if step == 2 {
+        if step == 3 {
             assert!(result.is_err());
         } else {
             result.unwrap();
@@ -407,6 +411,12 @@ async fn trigger_update_restart_does_not_retire_newly_created_jobs() {
                 GcpWorkerState::UpdateCreatingSchedulerJobs
             ),
             2 => {
+                assert!(created.lock().unwrap().is_empty());
+                assert!(controller.scheduler_job_names.is_empty());
+                assert_eq!(controller.scheduler_job_intents.len(), 2);
+                assert_eq!(controller.state, GcpWorkerState::UpdateCreatingSchedulerJobs);
+            }
+            3 => {
                 assert_eq!(controller.scheduler_job_names.len(), 1);
                 assert_eq!(
                     controller.state,

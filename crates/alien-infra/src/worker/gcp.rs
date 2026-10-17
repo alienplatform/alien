@@ -1,7 +1,8 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
+use super::gcp_scheduler_identity::GcpSchedulerJobIntent;
 use super::gcp_ingress::{GcpWorkerIngress, RecordedWorkerIngress};
 use super::gcp_service_identity::{CloudRunCreatePlan, CloudRunCreation, GcpCloudRunOwner};
 use crate::core::{EnvironmentVariableBuilder, ResourcePermissionsHelper};
@@ -354,6 +355,9 @@ pub struct GcpWorkerController {
     pub(crate) gcs_notification_ids: Vec<GcsNotificationTracker>,
     /// Cloud Scheduler job names for schedule triggers
     pub(crate) scheduler_job_names: Vec<String>,
+    /// New jobs retain a durable create intent until ownership-checked deletion.
+    #[serde(default)]
+    pub(super) scheduler_job_intents: BTreeMap<String, GcpSchedulerJobIntent>,
 
     // Domain & Certificate
     /// The fully qualified domain name for the worker
@@ -2070,24 +2074,19 @@ impl GcpWorkerController {
         // Get service account email for OIDC authentication
         let service_account_email = self.get_service_account_email(ctx, &cfg)?;
 
+        // Save the complete phase's uncertain creates before any provider mutation.
+        let mut planned = false;
         for (index, cron) in &schedule_triggers {
             let job_id = format!("{}-{}-cron-{}", ctx.resource_prefix, cfg.id, index);
             let job_full_name = format!(
                 "projects/{}/locations/{}/jobs/{}",
                 gcp_config.project_id, gcp_config.region, job_id
             );
-
-            if self.scheduler_job_names.contains(&job_full_name) {
+            if self.scheduler_job_names.contains(&job_full_name)
+                || self.scheduler_job_intents.contains_key(&job_full_name)
+            {
                 continue;
             }
-
-            info!(
-                worker=%cfg.id,
-                job=%job_id,
-                cron=%cron,
-                "Creating Cloud Scheduler job"
-            );
-
             let job = SchedulerJob {
                 name: None,
                 description: Some(format!(
@@ -2109,38 +2108,21 @@ impl GcpWorkerController {
                 state: None,
             };
 
-            match scheduler_client
-                .create_job(gcp_config.region.clone(), job_id.clone(), job)
-                .await
-            {
-                Ok(_) => {}
-                Err(e) if is_remote_resource_conflict(&e) => {
-                    info!(
-                        worker=%cfg.id,
-                        job=%job_id,
-                        "Cloud Scheduler job already exists; treating as created"
-                    );
-                }
-                Err(e) => {
-                    return Err(e.context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to create Cloud Scheduler job '{}' for worker '{}'",
-                            job_id, cfg.id
-                        ),
-                        resource_id: Some(cfg.id.clone()),
-                    }));
-                }
+            self.scheduler_job_intents.insert(job_full_name, GcpSchedulerJobIntent::new(job));
+            planned = true;
+        }
+        if planned {
+            return Ok(HandlerAction::Continue {
+                state: CreatingSchedulerJobs,
+                suggested_delay: None,
+            });
+        }
+        for (name, intent) in &self.scheduler_job_intents {
+            if self.scheduler_job_names.contains(name) {
+                continue;
             }
-
-            if !self.scheduler_job_names.contains(&job_full_name) {
-                self.scheduler_job_names.push(job_full_name);
-            }
-
-            info!(
-                worker=%cfg.id,
-                job=%job_id,
-                "Successfully created Cloud Scheduler job"
-            );
+            intent.create_or_recover(scheduler_client.as_ref(), name, &gcp_config.region, &cfg.id).await?;
+            self.scheduler_job_names.push(name.clone());
         }
 
         Ok(HandlerAction::Continue {
@@ -3664,6 +3646,12 @@ impl GcpWorkerController {
             HandlerAction::Continue { state: CreatingCommandsInfrastructure, suggested_delay } => {
                 Ok(HandlerAction::Continue {
                     state: UpdateSettingIamPolicy,
+                    suggested_delay,
+                })
+            }
+            HandlerAction::Continue { state: CreatingSchedulerJobs, suggested_delay } => {
+                Ok(HandlerAction::Continue {
+                    state: UpdateCreatingSchedulerJobs,
                     suggested_delay,
                 })
             }
@@ -6146,12 +6134,30 @@ impl GcpWorkerController {
         ctx: &ResourceControllerContext<'_>,
         gcp_config: &alien_gcp_clients::GcpClientConfig,
     ) -> Result<()> {
-        if self.scheduler_job_names.is_empty() {
+        if self.scheduler_job_names.is_empty() && self.scheduler_job_intents.is_empty() {
             return Ok(());
         }
         let client = ctx
             .service_provider
             .get_gcp_cloud_scheduler_client(gcp_config)?;
+        // Pending creates also require cleanup after a crash or lost reply.
+        while let Some((name, intent)) = self.scheduler_job_intents.first_key_value() {
+            let name = name.clone();
+            let prefix = format!("projects/{}/locations/{}/jobs/{}-{}-cron-", gcp_config.project_id, gcp_config.region, ctx.resource_prefix, ctx.desired_config.id());
+            if !name.starts_with(&prefix) {
+                return Err(AlienError::new(ErrorData::ResourceCleanupIncomplete {
+                    resource_id: ctx.desired_config.id().to_string(),
+                    message: "Pending scheduler job is outside the worker scope".to_string(),
+                }));
+            }
+            intent.delete(client.as_ref(), &name, ctx.desired_config.id()).await.context(ErrorData::ResourceCleanupIncomplete {
+                resource_id: ctx.desired_config.id().to_string(),
+                message: format!("Pending scheduler job '{name}' could not be safely retired"),
+            })?;
+            self.scheduler_job_intents.remove(&name);
+            self.scheduler_job_names.retain(|recorded| recorded != &name);
+        }
+        // Explicitly recorded pre-version-6 jobs retain their legacy cleanup authority.
         while let Some(name) = self.scheduler_job_names.first().cloned() {
             match client.delete_job(name.clone()).await {
                 Ok(()) => {}
@@ -6191,6 +6197,7 @@ impl GcpWorkerController {
             storage_notification_topics: Vec::new(),
             gcs_notification_ids: Vec::new(),
             scheduler_job_names: Vec::new(),
+            scheduler_job_intents: BTreeMap::new(),
             fqdn: None,
             certificate_id: None,
             ssl_certificate_name: None,
@@ -8268,6 +8275,7 @@ mod tests {
             storage_notification_topics: Vec::new(),
             gcs_notification_ids: Vec::new(),
             scheduler_job_names: Vec::new(),
+            scheduler_job_intents: BTreeMap::new(),
             project_id: None,
             region: None,
             _internal_stay_count: None,
