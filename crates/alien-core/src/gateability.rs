@@ -21,6 +21,9 @@ use crate::ownership_policy_for_resource_type;
 /// constant.
 pub const SECRETS_VAULT_ID: &str = "secrets";
 
+/// Reserved vault for secrets written by the deployer with their own credentials.
+pub const DEPLOYER_SECRETS_VAULT_ID: &str = "deployer-secrets";
+
 /// Framework and auxiliary infrastructure Alien derives from the stack, the
 /// platform, or the deployment settings. A gate here is never a customer
 /// choice: `ServiceAccountMutation` inserts profile-derived "{profile}-sa"
@@ -93,7 +96,7 @@ impl GateRefusal {
 /// gateable. Lifecycle legality is not decided here — a lifecycle the type
 /// does not allow is refused by the lifecycle rules regardless of gating.
 pub fn gate_refusal(resource_type: &str, resource_id: &str) -> Option<GateRefusal> {
-    if resource_id == SECRETS_VAULT_ID {
+    if matches!(resource_id, SECRETS_VAULT_ID | DEPLOYER_SECRETS_VAULT_ID) {
         return Some(GateRefusal::ReservedSecretsVault);
     }
     if STACK_DERIVED_TYPES.contains(&resource_type) {

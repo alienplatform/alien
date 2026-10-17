@@ -1423,6 +1423,9 @@ spec:
 /// does not know, so the notes give the vault key and point to the deployment
 /// status for the full name.
 fn deployer_secret_notes_tpl(stack: &Stack) -> Option<String> {
+    // Manager-served charts use the original release stack, before preflights.
+    // Its input definitions describe possible slots; deployment status determines
+    // which still need a value.
     let inputs: Vec<_> = stack
         .inputs()
         .iter()
@@ -1444,7 +1447,7 @@ fn deployer_secret_notes_tpl(stack: &Stack) -> Option<String> {
     );
     for input in inputs {
         notes.push_str(&format!(
-            "  - {} ({}): secrets vault key {}\n",
+            "  - {} ({}): deployer-secrets vault key {}\n",
             input.label,
             if input.required {
                 "required; workloads that read it wait until it exists"
@@ -1455,7 +1458,7 @@ fn deployer_secret_notes_tpl(stack: &Stack) -> Option<String> {
         ));
     }
     notes.push_str(&format!(
-        "The deployment status shows each Secret's name. Create one with:\n  kubectl create \
+        "The deployment status shows which inputs need values and each Secret's name. Create one with:\n  kubectl create \
          secret generic <name> --namespace {{{{ .Release.Namespace }}}} --from-literal={}='{}'\n",
         alien_core::vault_naming::KUBERNETES_SECRET_VALUE_KEY,
         alien_core::DEPLOYER_SECRET_VALUE_PLACEHOLDER,
@@ -8936,11 +8939,11 @@ infrastructureExistingSecret: customer-bindings
         let notes = &rendered.stdout;
         assert!(notes.contains("namespace apps"), "{notes}");
         assert!(
-            notes.contains("Database password (required; workloads that read it wait until it exists): secrets vault key input-database-password"),
+            notes.contains("Database password (required; workloads that read it wait until it exists): deployer-secrets vault key database-password"),
             "{notes}"
         );
         assert!(
-            notes.contains("License key (optional): secrets vault key input-license-key"),
+            notes.contains("License key (optional): deployer-secrets vault key license-key"),
             "{notes}"
         );
         assert!(

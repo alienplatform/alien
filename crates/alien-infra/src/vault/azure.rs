@@ -119,7 +119,15 @@ impl AzureVaultController {
         );
 
         // Generate vault name and look up resource group from infra requirements
-        self.vault_name = Some(format!("{}-{}", ctx.resource_prefix, config.id));
+        if self.vault_name.is_none() {
+            self.vault_name = Some(if config.id == alien_core::DEPLOYER_SECRETS_VAULT_ID {
+                // A fresh suffix avoids globally reserved soft-deleted vault names.
+                let suffix = Uuid::new_v4().simple().to_string();
+                alien_core::vault_naming::azure_deployer_vault_name(ctx.resource_prefix, &suffix[..6])
+            } else {
+                format!("{}-{}", ctx.resource_prefix, config.id)
+            });
+        }
         self.resource_group_name =
             Some(crate::infra_requirements::azure_utils::get_resource_group_name(ctx.state)?);
         self.vault_uri = Some(format!(

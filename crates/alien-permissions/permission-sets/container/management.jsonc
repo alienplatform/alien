@@ -204,11 +204,6 @@
             "Microsoft.Network/applicationGateways/backendhealth/action",
             "Microsoft.Network/loadBalancers/loadBalancingRules/health/action",
             "Microsoft.Compute/disks/read"
-          ],
-          "dataActions": [
-            "Microsoft.KeyVault/vaults/certificates/import/action",
-            "Microsoft.KeyVault/vaults/certificates/read",
-            "Microsoft.KeyVault/vaults/certificates/delete"
           ]
         },
         "binding": {

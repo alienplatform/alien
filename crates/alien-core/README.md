@@ -40,3 +40,79 @@ Rust types (alien-core)
 2. Add to `schema_exporter.rs` in `#[openapi(components(schemas(...)))]`
 3. Run `pnpm generate && pnpm build` from workspace root
 4. Export from `packages/core/src/index.ts`
+
+## Deployer secrets
+
+A secret input provided by the deployer is stored in the reserved, setup-owned
+`deployer-secrets` vault. Its key is the input ID in kebab case: `apiKey` becomes
+`api-key`. The deployer writes it with their own cloud credentials using the
+command in deployment status. AWS SSM and GCP Secret Manager names are
+`<prefix>-deployer-secrets-api-key`; Kubernetes uses that Secret name with data
+key `value`. Azure uses secret `api-key` in a separate Key Vault whose generated
+name is reported by the deployment.
+
+The `secrets` vault remains for shared developer environment secrets and stored
+legacy input values. Management keeps its existing access there. Management
+receives metadata access to deployer slots, with no direct secret-value read,
+write, or delete permission. The manager vault API refuses the deployer vault. Explicit management data grants
+cannot reopen the reserved vault.
+
+AWS and GCP workloads read only their mapped slots. Workloads sharing one
+permission profile must receive the same slots. When native slots exist, ordinary
+workload `vault/data-read`, `vault/data-write`, and `vault/provision` grants must
+name a separate vault. Global grants and vault prefixes that overlap
+`deployer-secrets` are rejected; use input environment mappings to grant slot access. Azure grants those workloads
+read access to the dedicated vault: per-secret RBAC cannot be installed before
+the secret exists. Kubernetes workloads use `secretKeyRef`; the in-cluster
+Operator needs Secret `get` for presence checks, and Kubernetes has no
+metadata-only Secret permission. Azure certificate imports and deletion are
+scoped to the shared vault, because certificates have backing secrets. Vault
+provisioning grants only vault lifecycle actions, without ARM secret child-resource
+writes. Local development uses the local file vault.
+
+This separates direct management access from workload access. It does not
+prevent trusted workload code from using its secrets, or an infrastructure
+administrator from changing IAM or workload code.
+
+### Existing deployments
+
+Rebuild prebuilt Worker images with the updated Worker runtime: the runtime
+embedded in an older image still resolves the former vault. Then rerun setup to install the new vault and permissions, then rewrite keys at the
+new names using your own cloud credentials. There is no fallback to former
+locations. A missing key has the normal missing-slot report and write command.
+Stored legacy values already shared with the control plane keep their existing
+delivery.
+
+### Indirect infrastructure privileges
+
+This boundary covers direct value access. Infrastructure management still has
+powers that can change IAM or deploy code using a workload identity:
+
+- AWS management can create/update compute using stack roles and `iam:PassRole`.
+  The reserved-vault deny applies to management itself, including parameter
+  tags and resource policies; it does not follow a workload role. CloudTrail
+  records `CreateFunction`, `UpdateFunctionCode`, `UpdateFunctionConfiguration`,
+  `RunInstances`, and IAM `PutRolePolicy` / `UpdateAssumeRolePolicy` changes.
+  `PassRole` is a permission check, not a separate CloudTrail event; inspect the
+  role in the compute API event. KMS decrypt alone does not authorize SSM reads.
+- GCP management retains project `setIamPolicy`, custom-role updates, and
+  project-level secret creation. Secret creation checks the parent project,
+  so IAM cannot exclude a requested slot name using a resource-name condition.
+  IAM changes can grant subsequent payload access. Admin Activity logs record
+  `SetIamPolicy`, `google.iam.admin.v1.UpdateRole`, and
+  `google.cloud.secretmanager.v1.SecretManagerService.CreateSecret`.
+- Azure management retains resource-group role-assignment writes and vault
+  configuration powers. Those can grant payload access or change the vault's
+  authorization model; infrastructure teardown can also delete the containing
+  vault/resource group. Activity Log operations include
+  `Microsoft.Authorization/roleAssignments/write`,
+  `Microsoft.Authorization/roleDefinitions/write`,
+  `Microsoft.KeyVault/vaults/write`, `Microsoft.KeyVault/vaults/accessPolicies/write`,
+  and `Microsoft.KeyVault/vaults/delete`.
+
+These are accepted infrastructure privileges, not a hard boundary against a
+compromised infrastructure manager. Customer-owned deny policies (for example,
+GCP IAM deny policies) and separately controlled provisioning identities are
+possible follow-up work. On GCP/Azure, custom inline management permissions are
+refused while native slots exist because they can embed arbitrary payload roles
+or scopes; use reviewed named permission sets on concrete shared resources.
