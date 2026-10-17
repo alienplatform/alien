@@ -44,6 +44,7 @@ impl ResourceImporter for GcpWorkerImporter {
             compute_operation_region: None,
             push_subscriptions: data.pubsub_subscription_names,
             storage_notification_topics: Vec::new(),
+            storage_topic_intents: Default::default(),
             gcs_notification_ids: Vec::new(),
             scheduler_job_names: data.scheduler_job_names,
             scheduler_job_intents: Default::default(),

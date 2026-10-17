@@ -254,7 +254,7 @@ impl PubSubApi for PubSubClient {
         );
 
         self.base
-            .execute_request(Method::GET, &path, None, Option::<()>::None, &topic_id)
+            .execute_request(Method::GET, &path, Some(vec![("options.requestedPolicyVersion", "3".to_string())]), Option::<()>::None, &topic_id)
             .await
     }
 

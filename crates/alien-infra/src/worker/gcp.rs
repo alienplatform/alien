@@ -3,6 +3,7 @@ use std::time::Duration;
 use tracing::{debug, info, warn};
 
 use super::gcp_scheduler_identity::GcpSchedulerJobIntent;
+use super::gcp_topic_identity::{self, GcpTopicIntent};
 use super::gcp_ingress::{GcpWorkerIngress, RecordedWorkerIngress};
 use super::gcp_service_identity::{CloudRunCreatePlan, CloudRunCreation, GcpCloudRunOwner};
 use crate::core::{EnvironmentVariableBuilder, ResourcePermissionsHelper};
@@ -351,6 +352,9 @@ pub struct GcpWorkerController {
     pub(crate) push_subscriptions: Vec<String>,
     /// Pub/Sub topic names created for storage trigger notifications
     pub(crate) storage_notification_topics: Vec<String>,
+    /// Pending and confirmed new topic ownership, distinct from legacy receipts.
+    #[serde(default)]
+    pub(super) storage_topic_intents: BTreeMap<String, GcpTopicIntent>,
     /// GCS notification IDs for storage triggers (for cleanup)
     pub(crate) gcs_notification_ids: Vec<GcsNotificationTracker>,
     /// Cloud Scheduler job names for schedule triggers
@@ -2019,8 +2023,10 @@ impl GcpWorkerController {
         for trigger in &cfg.triggers {
             if let alien_core::WorkerTrigger::Storage { storage, events } = trigger {
                 info!(worker=%cfg.id, storage=%storage.id, "Creating storage trigger infrastructure");
-                self.create_storage_trigger(ctx, gcp_config, &service_name, &cfg, storage, events)
-                    .await?;
+                if !self.create_storage_trigger(ctx, gcp_config, &service_name, &cfg, storage, events)
+                    .await? {
+                    return Ok(HandlerAction::Continue { state: CreatingPushSubscriptions, suggested_delay: None });
+                }
             }
         }
 
@@ -3623,6 +3629,9 @@ impl GcpWorkerController {
                     state: UpdateCreatingSchedulerJobs,
                     suggested_delay,
                 })
+            }
+            HandlerAction::Continue { state: CreatingPushSubscriptions, suggested_delay } => {
+                Ok(HandlerAction::Continue { state: UpdateCreatingPushSubscriptions, suggested_delay })
             }
             HandlerAction::Stay { max_times, suggested_delay } => {
                 Ok(HandlerAction::Stay { max_times, suggested_delay })
@@ -5802,7 +5811,7 @@ impl GcpWorkerController {
         worker_config: &alien_core::Worker,
         storage_ref: &alien_core::ResourceRef,
         events: &[String],
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let pubsub_client = ctx.service_provider.get_gcp_pubsub_client(gcp_config)?;
         let gcs_client = ctx.service_provider.get_gcp_gcs_client(gcp_config)?;
 
@@ -5833,32 +5842,17 @@ impl GcpWorkerController {
             "Creating Pub/Sub topic for storage notifications"
         );
 
-        match pubsub_client
-            .create_topic(topic_short_name.clone(), Topic::default())
-            .await
-        {
-            Ok(_) => {}
-            Err(e) if is_remote_resource_conflict(&e) => {
-                info!(
-                    worker=%worker_config.id,
-                    topic=%topic_short_name,
-                    "Storage notification topic already exists; treating as created"
-                );
-            }
-            Err(e) => {
-                return Err(e.context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to create storage notification topic '{}'",
-                        topic_short_name
-                    ),
-                    resource_id: Some(worker_config.id.clone()),
-                }));
-            }
+        if !self.storage_topic_intents.contains_key(&topic_short_name)
+            && !self.storage_notification_topics.contains(&topic_short_name) {
+            self.storage_topic_intents.insert(topic_short_name.clone(), GcpTopicIntent::new(&gcp_config.project_id, &topic_short_name));
+            return Ok(false);
         }
-
+        if let Some(intent) = self.storage_topic_intents.get(&topic_short_name) {
+            intent.validate_scope(&gcp_config.project_id, &topic_short_name, &worker_config.id)?;
+            intent.create_or_recover(pubsub_client.as_ref(), &topic_short_name, &worker_config.id).await?;
+        }
         if !self.storage_notification_topics.contains(&topic_short_name) {
-            self.storage_notification_topics
-                .push(topic_short_name.clone());
+            self.storage_notification_topics.push(topic_short_name.clone());
         }
 
         // 2. Ask Cloud Storage for its managed service account before granting it
@@ -5878,25 +5872,12 @@ impl GcpWorkerController {
             gcs_project_service_account.email_address
         );
 
-        let iam_policy = alien_gcp_clients::iam::IamPolicy::builder()
-            .version(1)
-            .bindings(vec![Binding {
-                role: "roles/pubsub.publisher".to_string(),
-                members: vec![gcs_service_agent],
-                condition: None,
-            }])
-            .build();
-
-        pubsub_client
-            .set_topic_iam_policy(topic_short_name.clone(), iam_policy)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to set IAM policy on storage notification topic '{}'",
-                    topic_short_name
-                ),
-                resource_id: Some(worker_config.id.clone()),
-            })?;
+        if let Some(intent) = self.storage_topic_intents.get(&topic_short_name) {
+            intent.grant_publisher(pubsub_client.as_ref(), &topic_short_name, &gcs_service_agent, &worker_config.id).await?;
+        } else {
+            // Only explicit legacy receipts reach this compatibility path.
+            gcp_topic_identity::grant_publisher(pubsub_client.as_ref(), &topic_short_name, &gcs_service_agent, &worker_config.id).await?;
+        }
 
         // 3. Create GCS notification on the bucket pointing to the topic
         let gcs_event_types: Vec<String> = events
@@ -6059,7 +6040,7 @@ impl GcpWorkerController {
             "Successfully created storage trigger infrastructure"
         );
 
-        Ok(())
+        Ok(true)
     }
 
     /// Retire recorded notifications, preserving unfinished children for retry.
@@ -6104,10 +6085,21 @@ impl GcpWorkerController {
         ctx: &ResourceControllerContext<'_>,
         gcp_config: &alien_gcp_clients::GcpClientConfig,
     ) -> Result<()> {
-        if self.storage_notification_topics.is_empty() {
+        if self.storage_notification_topics.is_empty() && self.storage_topic_intents.is_empty() {
             return Ok(());
         }
         let client = ctx.service_provider.get_gcp_pubsub_client(gcp_config)?;
+        while let Some((name, intent)) = self.storage_topic_intents.first_key_value() {
+            let name = name.clone();
+            let prefix = format!("{}-{}-", ctx.resource_prefix, ctx.desired_config.id());
+            if !name.starts_with(&prefix) || !name.ends_with("-notif") {
+                return Err(AlienError::new(ErrorData::ResourceCleanupIncomplete { resource_id: ctx.desired_config.id().to_string(), message: "Pending storage topic is outside worker scope".to_string() }));
+            }
+            intent.validate_scope(&gcp_config.project_id, &name, ctx.desired_config.id())?;
+            intent.delete(client.as_ref(), &name, ctx.desired_config.id()).await.context(ErrorData::ResourceCleanupIncomplete { resource_id: ctx.desired_config.id().to_string(), message: format!("Storage topic '{name}' could not be safely retired") })?;
+            self.storage_topic_intents.remove(&name);
+            self.storage_notification_topics.retain(|recorded| recorded != &name);
+        }
         while let Some(name) = self.storage_notification_topics.first().cloned() {
             match client.delete_topic(name.clone()).await {
                 Ok(()) => {}
@@ -6195,6 +6187,7 @@ impl GcpWorkerController {
             compute_operation_region: None,
             push_subscriptions: Vec::new(),
             storage_notification_topics: Vec::new(),
+            storage_topic_intents: Default::default(),
             gcs_notification_ids: Vec::new(),
             scheduler_job_names: Vec::new(),
             scheduler_job_intents: Default::default(),
@@ -8273,6 +8266,7 @@ mod tests {
             commands_topic_name: None,
             commands_subscription_name: None,
             storage_notification_topics: Vec::new(),
+            storage_topic_intents: Default::default(),
             gcs_notification_ids: Vec::new(),
             scheduler_job_names: Vec::new(),
             scheduler_job_intents: Default::default(),
