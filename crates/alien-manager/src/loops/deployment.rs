@@ -2228,6 +2228,17 @@ mod tests {
         state
     }
 
+    #[cfg(feature = "sqlite")]
+    #[test]
+    fn sqlite_store_can_acquire_every_active_work_status() {
+        for status in active_work_statuses() {
+            assert!(
+                SqliteDeploymentStore::WORK_STATUSES.contains(&status.as_str()),
+                "The deployment loop polls {status}, so SQLite must acquire it without a retry request"
+            );
+        }
+    }
+
     #[test]
     fn active_work_statuses_include_new_deployment_phases() {
         let statuses = active_work_statuses();

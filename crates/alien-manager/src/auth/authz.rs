@@ -121,7 +121,12 @@ pub trait Authz: Send + Sync {
     /// passes the handler's own check that the repository is its project's
     /// or named by its release. Defaults to deny so an embedder decides
     /// explicitly.
-    fn can_pull_image(&self, _subject: &Subject, _project: &ProjectRecord, _repo_name: &str) -> bool {
+    fn can_pull_image(
+        &self,
+        _subject: &Subject,
+        _project: &ProjectRecord,
+        _repo_name: &str,
+    ) -> bool {
         false
     }
     /// Push to `repo_name`, a repository of `project`.
