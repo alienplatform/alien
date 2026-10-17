@@ -5909,7 +5909,7 @@ impl GcpWorkerController {
 
         let notification = GcsNotification {
             id: None,
-            topic: Some(topic_full_name.clone()),
+            topic: Some(format!("//pubsub.googleapis.com/{topic_full_name}")),
             event_types: gcs_event_types,
             payload_format: Some("JSON_API_V1".to_string()),
             object_name_prefix: None,

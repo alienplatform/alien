@@ -780,20 +780,24 @@ pub struct GcsNotification {
     /// Server-assigned notification ID
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
-    /// The Pub/Sub topic to publish to (format: `projects/{project}/topics/{topic}`)
+    /// The Pub/Sub topic to publish to (format: `//pubsub.googleapis.com/projects/{project}/topics/{topic}`)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub topic: Option<String>,
     /// Event types to trigger on (e.g., "OBJECT_FINALIZE", "OBJECT_DELETE")
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(rename = "event_types", alias = "eventTypes")]
     pub event_types: Vec<String>,
     /// Payload format: "JSON_API_V1" or "NONE"
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "payload_format", alias = "payloadFormat")]
     pub payload_format: Option<String>,
     /// Optional object name prefix filter
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "object_name_prefix", alias = "objectNamePrefix")]
     pub object_name_prefix: Option<String>,
     /// Custom attributes to attach to each notification message
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    #[serde(rename = "custom_attributes", alias = "customAttributes")]
     pub custom_attributes: HashMap<String, String>,
 }
 
