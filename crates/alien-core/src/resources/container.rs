@@ -105,6 +105,10 @@ pub struct PersistentStorage {
     /// Key used to encrypt this volume and its snapshots. Cannot be changed after creation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub encryption_key: Option<ResourceRef>,
+    /// When adding encryption, keep an installed volume with no customer-managed key
+    /// unchanged. New volumes use encryption_key; existing keys cannot be changed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_unencrypted_existing: bool,
     /// Scheduled snapshots of each replica's volume. On by default.
     #[serde(default)]
     pub backups: VolumeBackups,
@@ -1020,6 +1024,7 @@ mod tests {
             .stateful(true)
             .replicas(1)
             .persistent_storage(PersistentStorage {
+                allow_unencrypted_existing: false,
                 encryption_key: None,
                 size: "100Gi".to_string(),
                 mount_path: "/var/lib/postgresql/data".to_string(),

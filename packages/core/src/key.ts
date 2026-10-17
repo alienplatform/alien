@@ -11,6 +11,15 @@ import { type Resource, ResourceBuilder } from "./resource.js"
 export type { Key as KeyConfig, KeyFingerprint, KeyOutputs } from "./generated/index.js"
 export { KeySchema as KeyConfigSchema } from "./generated/index.js"
 
+export interface EncryptionKeyOptions {
+  /**
+   * Keep installed resources without a customer-managed key unchanged when this
+   * release adds encryption. New resources use the declared key. Existing keys
+   * still cannot be removed or replaced.
+   */
+  allowUnencryptedExisting?: boolean
+}
+
 const InvalidEncryptionKey = defineError({
   code: "INVALID_ENCRYPTION_KEY",
   context: z.object({ resourceType: z.string() }),

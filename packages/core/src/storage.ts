@@ -4,7 +4,7 @@ import {
   type Storage as StorageConfig,
   StorageSchema,
 } from "./generated/index.js"
-import { encryptionKeyRef } from "./key.js"
+import { type EncryptionKeyOptions, encryptionKeyRef } from "./key.js"
 import { type Resource, ResourceBuilder } from "./resource.js"
 
 export type { LifecycleRule, Storage as StorageConfig, StorageOutputs } from "./generated/index.js"
@@ -87,8 +87,9 @@ export class Storage extends ResourceBuilder {
    * Uses an Alien Key for provider-native encryption of objects in this Storage resource.
    * The Key and Storage must both be added to the same stack.
    */
-  public encryptionKey(key: Resource): this {
+  public encryptionKey(key: Resource, options: EncryptionKeyOptions = {}): this {
     this._config.encryptionKey = encryptionKeyRef(key)
+    this._config.allowUnencryptedExisting = options.allowUnencryptedExisting
     return this
   }
 

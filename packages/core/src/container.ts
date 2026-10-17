@@ -13,7 +13,7 @@ import {
   type ResourceSpec,
   type ResourceType,
 } from "./generated/index.js"
-import { encryptionKeyRef } from "./key.js"
+import { type EncryptionKeyOptions, encryptionKeyRef } from "./key.js"
 import { type Resource, ResourceBuilder } from "./resource.js"
 
 /** Deployment-time choices for one resource dimension. */
@@ -55,7 +55,7 @@ export {
   ExposeProtocolSchema,
 } from "./generated/index.js"
 
-export interface PersistentStorageOptions {
+export interface PersistentStorageOptions extends EncryptionKeyOptions {
   /** Key in the same stack used to encrypt this volume and its snapshots. Immutable after creation. */
   encryptionKey?: Resource
   /**
@@ -397,6 +397,7 @@ export class Container extends ResourceBuilder {
     }
     if (options.encryptionKey !== undefined) {
       persistentStorage.encryptionKey = encryptionKeyRef(options.encryptionKey)
+      persistentStorage.allowUnencryptedExisting = options.allowUnencryptedExisting
     }
     if (options.backups !== undefined) {
       persistentStorage.backups =
