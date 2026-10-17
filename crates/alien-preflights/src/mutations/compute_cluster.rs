@@ -3934,6 +3934,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn standalone_cluster_materializes_selected_machine_without_workloads() {
+        for (platform, machine) in [
+            (Platform::Aws, "m7i.large"),
+            (Platform::Gcp, "n2-standard-2"),
+            (Platform::Azure, "Standard_D2s_v5"),
+        ] {
+            let stack = Stack::new("standalone".to_string())
+                .add(
+                    ComputeCluster::new("compute".to_string())
+                        .capacity_group(CapacityGroup {
+                            group_id: "general".to_string(),
+                            instance_type: None,
+                            profile: None,
+                            min_size: 0,
+                            max_size: 0,
+                            scale_policy: Some(CapacityGroupScalePolicy::Fixed {
+                                machines: ComputeChoiceRange {
+                                    min: 1,
+                                    max: 2,
+                                    default: 1,
+                                },
+                            }),
+                            nested_virtualization: None,
+                        })
+                        .build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build();
+            let state = StackState::new(platform);
+            let config = deployment_config_with_compute_pool(machine, 1, 1);
+            let mutation = ComputeClusterMutation;
+            assert!(mutation.should_run(&stack, &state, &config), "{platform:?}");
+            let prepared = mutation.mutate(stack, &state, &config).await.unwrap();
+            assert_eq!(prepared.resources.len(), 1);
+            let entry = &prepared.resources["compute"];
+            assert_eq!(entry.lifecycle, ResourceLifecycle::Frozen);
+            let cluster = entry.config.downcast_ref::<ComputeCluster>().unwrap();
+            assert_eq!(cluster.capacity_groups.len(), 1);
+            let group = &cluster.capacity_groups[0];
+            assert_eq!(group.instance_type.as_deref(), Some(machine));
+            assert!(group.profile.is_some());
+            assert_eq!((group.min_size, group.max_size), (1, 1));
+            assert!(!mutation.should_run(&prepared, &state, &config));
+        }
+    }
+
+    #[tokio::test]
     async fn test_daemon_explicit_cluster_materializes_deployment_compute_selection() {
         let daemon = Daemon::new("loader".to_string())
             .code(DaemonCode::Image {
