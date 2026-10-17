@@ -100,6 +100,13 @@ fn is_redirect(error: &AlienError<CloudClientErrorData>) -> bool {
     )
 }
 
+fn is_accepted_without_body(error: &AlienError<CloudClientErrorData>) -> bool {
+    matches!(
+        &error.error,
+        Some(CloudClientErrorData::HttpResponseBodyReadFailed { .. })
+    )
+}
+
 /// Whether a failed request may still have been applied: no answer from S3 arrived.
 fn is_outcome_unknown(error: &AlienError<CloudClientErrorData>) -> bool {
     matches!(
@@ -215,6 +222,13 @@ impl AwsStorageController {
                         info!(
                             bucket = %bucket_name,
                             "S3 bucket was created by this request's earlier attempt"
+                        );
+                    }
+                    // S3 answered 2xx; only reading the body failed. The bucket was created.
+                    Err(error) if is_accepted_without_body(&error) => {
+                        info!(
+                            bucket = %bucket_name,
+                            "S3 accepted CreateBucket but its response body could not be read"
                         );
                     }
                     Err(error) => {
@@ -1391,6 +1405,8 @@ mod tests {
         LoseTaggingResponse,
         /// S3 refuses CreateBucket and creates nothing.
         RejectCreate,
+        /// CreateBucket creates the bucket and answers 2xx, but its body cannot be read.
+        UnreadableCreateResponse,
     }
 
     /// An S3 mock that keeps one bucket's existence, tags and object count, with us-east-1
@@ -1408,6 +1424,7 @@ mod tests {
         let state = account.clone();
         let lose_create = Arc::new(Mutex::new(fault == Fault::LoseCreateResponse));
         let reject_create = Arc::new(Mutex::new(fault == Fault::RejectCreate));
+        let unreadable_create = Arc::new(Mutex::new(fault == Fault::UnreadableCreateResponse));
         mock_s3.expect_create_bucket().returning(move |_| {
             if std::mem::take(&mut *reject_create.lock().unwrap()) {
                 return Err(AlienError::new(CloudClientErrorData::RemoteAccessDenied {
@@ -1424,6 +1441,11 @@ mod tests {
             }
             if std::mem::take(&mut *lose_create.lock().unwrap()) {
                 return Err(lost_response());
+            }
+            if std::mem::take(&mut *unreadable_create.lock().unwrap()) {
+                return Err(AlienError::new(
+                    CloudClientErrorData::HttpResponseBodyReadFailed { http_status: 200 },
+                ));
             }
             Ok(())
         });
@@ -1752,6 +1774,26 @@ mod tests {
         );
         let controller = executor.internal_state::<AwsStorageController>().unwrap();
         assert_eq!(controller.requested_bucket_name, None);
+    }
+
+    /// A 2xx CreateBucket whose body cannot be read still created the bucket.
+    #[tokio::test]
+    async fn create_accepted_with_an_unreadable_response_continues() {
+        let storage = Storage::new("data".to_string()).build();
+        let account = account_with(None);
+        let mut executor = data_executor(storage, &account, Fault::UnreadableCreateResponse).await;
+
+        executor.run_until_terminal().await.unwrap();
+
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert_eq!(
+            account
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|bucket| bucket.tags.clone()),
+            Some(our_tags("data"))
+        );
     }
 
     /// When S3 refuses CreateBucket, nothing was created, so the request no longer vouches for
