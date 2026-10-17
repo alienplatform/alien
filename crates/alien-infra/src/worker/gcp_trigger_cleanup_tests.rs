@@ -906,3 +906,48 @@ async fn command_cleanup_does_not_infer_ownership_from_service_name() {
     executor.step().await.unwrap();
     assert_eq!(executor.internal_state::<GcpWorkerController>().unwrap().state, GcpWorkerState::DeletingService);
 }
+
+#[rstest]
+#[case(false)]
+#[case(true)]
+#[tokio::test]
+async fn command_enablement_update_reconciles_command_children(#[case] enabled: bool) {
+    let mut previous = function_public_ingress(); previous.commands_enabled = !enabled;
+    let mut desired = previous.clone(); desired.commands_enabled = enabled;
+    let mut controller = GcpWorkerController::mock_ready("test-worker"); controller.state = GcpWorkerState::UpdatePushSubscriptions;
+    let mut pubsub = MockPubSubApi::new();
+    if !enabled {
+        controller.commands_topic_name = Some("test-worker-rq".into());
+        controller.commands_subscription_name = Some("test-worker-rq-sub".into());
+        pubsub.expect_delete_subscription().times(1).returning(|name| { assert_eq!(name, "test-worker-rq-sub"); Ok(()) });
+        pubsub.expect_delete_topic().times(1).returning(|name| { assert_eq!(name, "test-worker-rq"); Ok(()) });
+    }
+    let pubsub = Arc::new(pubsub); let mut services = MockPlatformServiceProvider::new();
+    services.expect_get_gcp_pubsub_client().returning(move |_| Ok(pubsub.clone()));
+    let mut executor = SingleControllerExecutor::builder().resource(desired).previous_resource(previous)
+        .controller(controller).platform(Platform::Gcp).service_provider(Arc::new(services))
+        .with_test_dependencies().build().await.unwrap();
+    executor.step().await.unwrap();
+    let controller = executor.internal_state::<GcpWorkerController>().unwrap();
+    assert!(controller.commands_topic_name.is_none()); assert!(controller.commands_subscription_name.is_none());
+    assert_eq!(controller.state, GcpWorkerState::UpdateCreatingPushSubscriptions);
+}
+
+#[tokio::test]
+async fn delivery_timeout_update_retires_old_subscription_before_recreation() {
+    let previous = crate::worker::fixtures::function_with_queue_trigger();
+    let mut desired = previous.clone(); desired.timeout_seconds = previous.timeout_seconds + 1;
+    let mut controller = GcpWorkerController::mock_ready("test-worker"); controller.state = GcpWorkerState::UpdatePushSubscriptions;
+    controller.push_subscriptions = vec!["recorded-subscription".into()];
+    let mut pubsub = MockPubSubApi::new();
+    pubsub.expect_delete_subscription().times(1).returning(|name| { assert_eq!(name, "recorded-subscription"); Ok(()) });
+    let pubsub = Arc::new(pubsub); let mut services = MockPlatformServiceProvider::new();
+    services.expect_get_gcp_pubsub_client().returning(move |_| Ok(pubsub.clone()));
+    let mut executor = SingleControllerExecutor::builder().resource(desired).previous_resource(previous)
+        .controller(controller).platform(Platform::Gcp).service_provider(Arc::new(services))
+        .with_test_dependencies().build().await.unwrap();
+    executor.step().await.unwrap();
+    let controller = executor.internal_state::<GcpWorkerController>().unwrap();
+    assert!(controller.push_subscriptions.is_empty());
+    assert_eq!(controller.state, GcpWorkerState::UpdateCreatingPushSubscriptions);
+}
