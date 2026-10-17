@@ -1250,6 +1250,104 @@ mod tests {
     }
 
     #[test]
+    fn saved_image_preserves_distinct_layer_order_across_links() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("image.tar");
+        let [first, second] = [b"first".as_slice(), b"second".as_slice()].map(|payload| {
+            let mut builder = tar::Builder::new(Vec::new());
+            let mut header = tar::Header::new_gnu();
+            header.set_mode(0o644);
+            header.set_size(payload.len() as u64);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, "payload", payload)
+                .unwrap();
+            builder.into_inner().unwrap()
+        });
+        let first_digest = format!("sha256:{:x}", Sha256::digest(&first));
+        let second_digest = format!("sha256:{:x}", Sha256::digest(&second));
+        let expected = [
+            first_digest.as_str(),
+            second_digest.as_str(),
+            first_digest.as_str(),
+            second_digest.as_str(),
+        ];
+        let config = serde_json::to_vec(&json!({
+            "architecture": "arm64", "os": "linux", "config": {"Cmd": ["/app"]},
+            "rootfs": {"type": "layers", "diff_ids": expected},
+            "history": vec![json!({"created_by": "COPY payload /payload"}); 4],
+        }))
+        .unwrap();
+        let manifest = serde_json::to_vec(&json!([{
+            "Config": "config.json", "RepoTags": ["archive-order:test"],
+            "Layers": ["linked/layer.tar", "second/layer.tar", "first/layer.tar", "repeated/layer.tar"],
+        }]))
+        .unwrap();
+        let mut builder = tar::Builder::new(File::create(&path).unwrap());
+        for (name, target) in [
+            ("linked/layer.tar", "../first/layer.tar"),
+            ("repeated/layer.tar", "../second/layer.tar"),
+        ] {
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(tar::EntryType::Symlink);
+            header.set_mode(0o777);
+            header.set_size(0);
+            builder.append_link(&mut header, name, target).unwrap();
+        }
+        // Archive order deliberately differs from the image's layer order.
+        for (name, bytes) in [
+            ("second/layer.tar", second.as_slice()),
+            ("first/layer.tar", first.as_slice()),
+            ("config.json", config.as_slice()),
+            ("manifest.json", manifest.as_slice()),
+        ] {
+            let mut header = tar::Header::new_gnu();
+            header.set_mode(0o644);
+            header.set_size(bytes.len() as u64);
+            header.set_cksum();
+            builder.append_data(&mut header, name, bytes).unwrap();
+        }
+        builder.finish().unwrap();
+        drop(builder);
+
+        DockerToolchain::normalize_oci_archive(&path, "arm64").unwrap();
+        let mut archive = tar::Archive::new(File::open(&path).unwrap());
+        let mut contents = HashMap::new();
+        for entry in archive.entries().unwrap() {
+            let mut entry = entry.unwrap();
+            let name = entry.path().unwrap().to_string_lossy().into_owned();
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).unwrap();
+            assert!(contents.insert(name, bytes).is_none());
+        }
+        let index: Value = serde_json::from_slice(&contents["index.json"]).unwrap();
+        let manifest_path =
+            digest_to_blob_path(index["manifests"][0]["digest"].as_str().unwrap()).unwrap();
+        let oci: Value = serde_json::from_slice(&contents[&manifest_path]).unwrap();
+        let actual: Vec<_> = oci["layers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|layer| layer["digest"].as_str().unwrap())
+            .collect();
+        assert_eq!(actual, expected);
+        let docker: Value = serde_json::from_slice(&contents["manifest.json"]).unwrap();
+        let expected_paths: Vec<_> = expected
+            .iter()
+            .map(|digest| digest_to_blob_path(digest).unwrap())
+            .collect();
+        assert_eq!(docker[0]["Layers"], json!(expected_paths));
+        assert_eq!(
+            contents[&digest_to_blob_path(&first_digest).unwrap()],
+            first
+        );
+        assert_eq!(
+            contents[&digest_to_blob_path(&second_digest).unwrap()],
+            second
+        );
+    }
+
+    #[test]
     fn saved_image_rejects_invalid_layer_links_without_replacing_source() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("image.tar");
