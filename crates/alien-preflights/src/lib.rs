@@ -465,7 +465,6 @@ impl PreflightRegistry {
         // determined by the dependency graph, not mutation order.
 
         // Phase 0: Platform normalization (adjust values before anything else)
-        registry.add_mutation(Box::new(mutations::ExistingEncryptionMutation));
         registry.add_mutation(Box::new(mutations::ContainerResourcesMutation));
         registry.add_mutation(Box::new(mutations::AzureMemoryAdjustmentMutation));
 

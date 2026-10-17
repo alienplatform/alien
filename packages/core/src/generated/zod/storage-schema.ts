@@ -11,8 +11,7 @@ import { ResourceRefSchema } from "./resource-ref-schema.js";
  * @description Represents an object storage bucket.
  */
 export const StorageSchema = z.object({
-    "allowUnencryptedExisting": z.optional(z.boolean().describe("When adding encryption, keep an installed resource with no customer-managed key\nunchanged. New resources use encryption_key; existing keys cannot be changed.")),
-"corsAllowedOrigins": z.optional(z.array(z.string()).describe("Browser origins allowed to read objects through signed URLs.\n\nWhen non-empty, providers configure CORS for `GET` and `HEAD` requests.\nAn origin of `*` is appropriate for private buckets whose signed URLs\nare bearer credentials and do not use browser cookies.\nDefault: `[]` (CORS disabled).")),
+    "corsAllowedOrigins": z.optional(z.array(z.string()).describe("Browser origins allowed to read objects through signed URLs.\n\nWhen non-empty, providers configure CORS for `GET` and `HEAD` requests.\nAn origin of `*` is appropriate for private buckets whose signed URLs\nare bearer credentials and do not use browser cookies.\nDefault: `[]` (CORS disabled).")),
 get "encryptionKey"(){
                 return z.union([ResourceRefSchema, z.null()]).optional()
               },

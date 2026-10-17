@@ -61,11 +61,6 @@ pub struct Storage {
     /// Customer-managed Key used by the provider's native storage encryption.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub encryption_key: Option<ResourceRef>,
-    /// When adding encryption, keep an installed resource with no customer-managed key
-    /// unchanged. New resources use encryption_key; existing keys cannot be changed.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    #[builder(default)]
-    pub allow_unencrypted_existing: bool,
 }
 
 impl Storage {
