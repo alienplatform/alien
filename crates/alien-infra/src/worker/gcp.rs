@@ -1,3 +1,4 @@
+use super::gcp_notification_identity::GcpNotificationIntent;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::Duration;
 use tracing::{debug, info, warn};
@@ -141,11 +142,12 @@ fn same_unordered_strings(left: &[String], right: &[String]) -> bool {
     left.iter().collect::<HashSet<_>>() == right.iter().collect::<HashSet<_>>()
 }
 
-fn gcs_notification_matches_existing(
+pub(super) fn gcs_notification_matches_existing(
     existing: &GcsNotification,
     desired: &GcsNotification,
 ) -> bool {
-    existing.topic == desired.topic
+    existing.topic.as_deref().map(|topic| topic.trim_start_matches("//pubsub.googleapis.com/"))
+        == desired.topic.as_deref().map(|topic| topic.trim_start_matches("//pubsub.googleapis.com/"))
         && same_unordered_strings(&existing.event_types, &desired.event_types)
         && existing.payload_format == desired.payload_format
         && existing.object_name_prefix == desired.object_name_prefix
@@ -359,6 +361,9 @@ pub struct GcpWorkerController {
     /// Pending and confirmed new topic ownership, distinct from legacy receipts.
     #[serde(default)]
     pub(super) storage_topic_intents: BTreeMap<String, GcpTopicIntent>,
+    /// Original notification configurations with durable unique ownership markers.
+    #[serde(default)]
+    pub(super) storage_notification_intents: BTreeMap<String, GcpNotificationIntent>,
     /// GCS notification IDs for storage triggers (for cleanup)
     pub(crate) gcs_notification_ids: Vec<GcsNotificationTracker>,
     /// Cloud Scheduler job names for schedule triggers
@@ -3772,6 +3777,7 @@ impl GcpWorkerController {
             || !self.push_subscription_intents.is_empty()
             || !self.storage_notification_topics.is_empty()
             || !self.storage_topic_intents.is_empty()
+            || !self.storage_notification_intents.is_empty()
             || !self.gcs_notification_ids.is_empty()
             || !self.scheduler_job_names.is_empty()
             || !self.scheduler_job_intents.is_empty()
@@ -5916,51 +5922,30 @@ impl GcpWorkerController {
             custom_attributes: std::collections::HashMap::new(),
         };
 
-        let existing_notification = gcs_client
-            .list_notifications(bucket_name.clone())
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to list GCS notifications on bucket '{}' for worker '{}'",
-                    bucket_name, worker_config.id
-                ),
-                resource_id: Some(worker_config.id.clone()),
-            })?
-            .items
-            .into_iter()
-            .find(|existing| gcs_notification_matches_existing(existing, &notification));
-
-        let created_notification = if let Some(existing_notification) = existing_notification {
-            info!(
-                worker=%worker_config.id,
-                storage=%storage_ref.id,
-                bucket=%bucket_name,
-                notification_id=?existing_notification.id,
-                "GCS notification already exists; treating as created"
-            );
-            existing_notification
-        } else {
-            gcs_client
-                .insert_notification(bucket_name.clone(), notification)
-                .await
+        if !self.storage_notification_intents.contains_key(&topic_short_name) {
+            // Only exact IDs recorded by older controllers permit legacy adoption.
+            let existing = gcs_client.list_notifications(bucket_name.clone()).await
                 .context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to create GCS notification on bucket '{}' for worker '{}'",
-                        bucket_name, worker_config.id
-                    ),
+                    message: "Failed to inspect legacy storage notifications".into(),
                     resource_id: Some(worker_config.id.clone()),
-                })?
-        };
-
-        if let Some(notification_id) = &created_notification.id {
-            if !self.gcs_notification_ids.iter().any(|tracker| {
-                tracker.bucket_name == *bucket_name && tracker.notification_id == *notification_id
-            }) {
-                self.gcs_notification_ids.push(GcsNotificationTracker {
-                    bucket_name: bucket_name.clone(),
-                    notification_id: notification_id.clone(),
-                });
+                })?;
+            let legacy = existing.items.iter().any(|item| {
+                gcs_notification_matches_existing(item, &notification)
+                    && self.gcs_notification_ids.iter().any(|receipt| {
+                        receipt.bucket_name == *bucket_name
+                            && item.id.as_deref() == Some(receipt.notification_id.as_str())
+                    })
+            });
+            if !legacy {
+                self.storage_notification_intents.insert(topic_short_name.clone(),
+                    GcpNotificationIntent::new(bucket_name.clone(), notification.clone()));
+                return Ok(false);
             }
+        }
+        if let Some(intent) = self.storage_notification_intents.get(&topic_short_name) {
+            intent.validate_scope(&gcp_config.project_id, &topic_short_name, &worker_config.id)?;
+            intent.validate_request(bucket_name, &notification, &worker_config.id)?;
+            intent.create_or_recover(gcs_client.as_ref(), &worker_config.id).await?;
         }
 
         // 4. Create a push subscription to the Cloud Run URL
@@ -6030,10 +6015,32 @@ impl GcpWorkerController {
         ctx: &ResourceControllerContext<'_>,
         gcp_config: &alien_gcp_clients::GcpClientConfig,
     ) -> Result<()> {
-        if self.gcs_notification_ids.is_empty() {
+        if self.gcs_notification_ids.is_empty() && self.storage_notification_intents.is_empty() {
             return Ok(());
         }
         let client = ctx.service_provider.get_gcp_gcs_client(gcp_config)?;
+        while let Some((topic, intent)) = self.storage_notification_intents.first_key_value() {
+            let topic = topic.clone();
+            let resource_id = ctx.desired_config.id();
+            let prefix = format!("{}-{}-", ctx.resource_prefix, resource_id);
+            if !topic.starts_with(&prefix) {
+                return Err(AlienError::new(ErrorData::ResourceCleanupIncomplete {
+                    message: "Notification intent is outside the worker topic prefix".into(),
+                    resource_id: resource_id.to_string(),
+                }));
+            }
+            intent.validate_scope(&gcp_config.project_id, &topic, resource_id)
+                .context(ErrorData::ResourceCleanupIncomplete {
+                    message: "Cannot validate original notification ownership scope".into(),
+                    resource_id: resource_id.to_string(),
+                })?;
+            intent.delete(client.as_ref(), resource_id).await
+                .context(ErrorData::ResourceCleanupIncomplete {
+                    message: "Owned storage notification cleanup remains incomplete".into(),
+                    resource_id: resource_id.to_string(),
+                })?;
+            self.storage_notification_intents.remove(&topic);
+        }
         while let Some(tracker) = self.gcs_notification_ids.first().cloned() {
             match client
                 .delete_notification(tracker.bucket_name.clone(), tracker.notification_id.clone())
@@ -6170,6 +6177,7 @@ impl GcpWorkerController {
             push_subscription_intents: Default::default(),
             storage_notification_topics: Vec::new(),
             storage_topic_intents: Default::default(),
+            storage_notification_intents: Default::default(),
             gcs_notification_ids: Vec::new(),
             scheduler_job_names: Vec::new(),
             scheduler_job_intents: Default::default(),
@@ -8254,6 +8262,7 @@ mod tests {
             commands_subscription_name: None,
             storage_notification_topics: Vec::new(),
             storage_topic_intents: Default::default(),
+            storage_notification_intents: Default::default(),
             gcs_notification_ids: Vec::new(),
             scheduler_job_names: Vec::new(),
             scheduler_job_intents: Default::default(),

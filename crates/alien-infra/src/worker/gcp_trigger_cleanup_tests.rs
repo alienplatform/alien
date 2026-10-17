@@ -620,3 +620,47 @@ async fn uncertain_queue_subscription_is_retired_after_controller_reload() {
         }
     }
 }
+
+#[tokio::test]
+async fn pending_notification_without_confirmed_id_is_cleaned_after_controller_reload() {
+    use crate::worker::gcp_notification_identity::GcpNotificationIntent;
+    use alien_gcp_clients::gcs::{GcsNotification, ListNotificationsResponse};
+    let project = GcpClientConfig::mock().project_id;
+    let topic = "test-test-worker-storage-notif";
+    let intent = GcpNotificationIntent::new("owned-bucket".into(), GcsNotification {
+        topic: Some(format!("//pubsub.googleapis.com/projects/{project}/topics/{topic}")),
+        event_types: vec!["OBJECT_FINALIZE".into()], payload_format: Some("JSON_API_V1".into()),
+        ..Default::default()
+    });
+    let native = Arc::new(Mutex::new(Vec::<GcsNotification>::new()));
+    let reads = native.clone(); let writes = native.clone(); let deletes = native.clone();
+    let mut client = MockGcsApi::new();
+    client.expect_list_notifications().returning(move |bucket| {
+        assert_eq!(bucket, "owned-bucket");
+        Ok(ListNotificationsResponse { items: reads.lock().unwrap().clone(), ..Default::default() })
+    });
+    client.expect_insert_notification().times(1).returning(move |_, mut notification| {
+        notification.id = Some("123".into()); writes.lock().unwrap().push(notification);
+        Err(AlienError::new(ClientError::RemoteServiceUnavailable { message: "accepted notification create, lost reply".into() }))
+    });
+    client.expect_delete_notification().times(1).returning(move |bucket, id| {
+        assert_eq!(bucket, "owned-bucket"); assert_eq!(id, "123"); deletes.lock().unwrap().clear(); Ok(())
+    });
+    let mut controller = GcpWorkerController::mock_ready("test-worker");
+    controller.storage_notification_intents.insert(topic.into(), intent);
+    let saved = serde_json::to_value(&controller).unwrap();
+    assert!(controller.storage_notification_intents[topic].create_or_recover(&client, "test-worker").await.is_err());
+    let mut controller: GcpWorkerController = serde_json::from_value(saved).unwrap();
+    controller.state = GcpWorkerState::DeletingPushSubscriptions;
+    assert!(controller.gcs_notification_ids.is_empty());
+    let client = Arc::new(client);
+    let mut services = MockPlatformServiceProvider::new();
+    services.expect_get_gcp_gcs_client().returning(move |_| Ok(client.clone()));
+    let mut executor = SingleControllerExecutor::builder()
+        .resource(function_public_ingress()).controller(controller).platform(Platform::Gcp)
+        .service_provider(Arc::new(services)).with_test_dependencies().build().await.unwrap();
+    executor.step().await.unwrap();
+    let controller = executor.internal_state::<GcpWorkerController>().unwrap();
+    assert!(controller.storage_notification_intents.is_empty());
+    assert!(native.lock().unwrap().is_empty());
+}

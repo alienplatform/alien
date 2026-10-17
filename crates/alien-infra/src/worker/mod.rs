@@ -20,6 +20,7 @@ mod gcp_service_identity;
 mod gcp_scheduler_identity;
 mod gcp_topic_identity;
 mod gcp_subscription_identity;
+mod gcp_notification_identity;
 
 mod gcp_import;
 pub use gcp_import::GcpWorkerImporter;
