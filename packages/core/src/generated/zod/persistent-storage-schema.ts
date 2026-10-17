@@ -11,7 +11,8 @@ import { VolumeBackupsSchema } from "./volume-backups-schema.js";
  * @description Persistent storage configuration for stateful containers.
  */
 export const PersistentStorageSchema = z.object({
-    get "backups"(){
+    "allowUnencryptedExisting": z.optional(z.boolean().describe("When adding encryption, keep an installed volume with no customer-managed key\nunchanged. New volumes use encryption_key; existing keys cannot be changed.")),
+get "backups"(){
                 return VolumeBackupsSchema.describe("Scheduled snapshots of a persistent volume.\n\nThe cloud's own scheduler takes the snapshots (AWS Data Lifecycle Manager,\na Compute Engine snapshot schedule, or Azure Disk Backup), so they keep being\ntaken while the deployment is unreachable. Snapshots are crash-consistent:\nthe volume as it would be after a sudden power loss. When a container is\ndeleted, Alien keeps one final snapshot of each volume.\n\nKubernetes deployments leave volume backups to the cluster's own tooling,\nand local deployments don't snapshot volumes. Neither reports volumes in\n`ContainerOutputs.volumes` or a `volumeBackups` status.").optional()
               },
 get "encryptionKey"(){

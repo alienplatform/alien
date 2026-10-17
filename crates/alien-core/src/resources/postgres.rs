@@ -41,6 +41,11 @@ pub struct Postgres {
     /// Cannot be changed after creation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub encryption_key: Option<ResourceRef>,
+    /// When adding encryption, keep an installed database with no customer-managed key
+    /// unchanged. New databases use encryption_key; existing keys cannot be changed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[builder(default)]
+    pub allow_unencrypted_existing: bool,
     /// Cloud backend selector; None resolves to the platform default. The field
     /// exists so a single per-cloud controller can dispatch on it without a later
     /// schema change — the registry allows only one controller per (resource, cloud).

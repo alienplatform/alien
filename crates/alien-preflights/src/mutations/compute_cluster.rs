@@ -1821,6 +1821,7 @@ mod tests {
                 desired: "1Gi".to_string(),
             })
             .persistent_storage(PersistentStorage {
+                allow_unencrypted_existing: false,
                 encryption_key: None,
                 size: "20Gi".to_string(),
                 mount_path: "/data".to_string(),
@@ -2083,6 +2084,7 @@ mod tests {
                 desired: "1Gi".to_string(),
             })
             .persistent_storage(PersistentStorage {
+                allow_unencrypted_existing: false,
                 encryption_key: None,
                 size: "20Gi".to_string(),
                 mount_path: "/data".to_string(),
@@ -2145,6 +2147,7 @@ mod tests {
                 desired: "1Gi".to_string(),
             })
             .persistent_storage(PersistentStorage {
+                allow_unencrypted_existing: false,
                 encryption_key: None,
                 size: "20Gi".to_string(),
                 mount_path: "/data".to_string(),

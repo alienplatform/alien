@@ -67,6 +67,7 @@ mod tests {
             })
             .stateful(true)
             .persistent_storage(PersistentStorage {
+                allow_unencrypted_existing: false,
                 size: size.to_string(),
                 mount_path: "/data".to_string(),
                 encryption_key: None,
