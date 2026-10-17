@@ -103,9 +103,23 @@ async fn ensure_manager_vault_access(
     state: &AppState,
     deployment: &DeploymentRecord,
     vault_name: &str,
+    key: &str,
     permission_set_id: &str,
 ) -> Result<()> {
-    if vault_name == "secrets" {
+    let normalize = |name: &str| match deployment.platform {
+        Platform::Kubernetes => alien_core::vault_naming::kubernetes_secret_name("", name),
+        Platform::Azure => alien_core::vault_naming::key_vault_secret_name(name).to_lowercase(),
+        _ => name.to_string(),
+    };
+    if normalize(vault_name) == normalize(alien_core::DEPLOYER_SECRETS_VAULT_ID) {
+        return Err(ErrorData::forbidden(
+            "Deployer secrets cannot be read or changed through the manager. Use your own cloud credentials and the commands in deployment status.",
+        ));
+    }
+    let shared_vault = normalize(vault_name) == normalize(alien_core::SECRETS_VAULT_ID);
+    // Only former deployer-slot names need release inspection. Ordinary developer
+    // environment secrets retain their shared-vault API behavior.
+    if shared_vault && !normalize(key).starts_with(&normalize("input-")) {
         return Ok(());
     }
 
@@ -140,6 +154,23 @@ async fn ensure_manager_vault_access(
             release_id, deployment.platform
         ))
     })?;
+
+    if shared_vault {
+        let config = deployment.deployment_config.as_ref();
+        let values = config.map(|config| &config.input_values).unwrap_or(&deployment.input_values);
+        let slots = alien_core::deployer_secret_slots(
+            &stack.inputs, values,
+            config.and_then(|config| config.stored_secret_input_ids.as_deref()),
+            config.map(|config| config.environment_variables.variables.as_slice()).unwrap_or(&[]),
+            deployment.platform,
+        );
+        if slots.iter().any(|slot| !slot.has_stored_value && normalize(key) == normalize(&format!("input-{}", slot.vault_key))) {
+            return Err(ErrorData::forbidden(
+                "This is a former deployer-secret location. Move it to deployer-secrets with your own cloud credentials; the manager cannot read or change it.",
+            ));
+        }
+        return Ok(());
+    }
 
     if stack_management_allows_vault_access(stack, vault_name, permission_set_id) {
         return Ok(());
@@ -242,7 +273,7 @@ async fn set_secret(
             "Access denied: cannot mutate vault for this deployment",
         ));
     }
-    ensure_manager_vault_access(&state, &deployment, &vault_name, "vault/data-write").await?;
+    ensure_manager_vault_access(&state, &deployment, &vault_name, &key, "vault/data-write").await?;
 
     info!(deployment_id = %deployment_id, vault_name = %vault_name, "Setting vault secret");
 
@@ -300,7 +331,7 @@ async fn get_secret(
             "Access denied: cannot read vault for this deployment",
         ));
     }
-    ensure_manager_vault_access(&state, &deployment, &vault_name, "vault/data-read").await?;
+    ensure_manager_vault_access(&state, &deployment, &vault_name, &key, "vault/data-read").await?;
 
     info!(deployment_id = %deployment_id, vault_name = %vault_name, "Getting vault secret");
 
@@ -360,7 +391,7 @@ async fn delete_secret(
             "Access denied: cannot mutate vault for this deployment",
         ));
     }
-    ensure_manager_vault_access(&state, &deployment, &vault_name, "vault/data-write").await?;
+    ensure_manager_vault_access(&state, &deployment, &vault_name, &key, "vault/data-write").await?;
 
     info!(deployment_id = %deployment_id, vault_name = %vault_name, "Deleting vault secret");
 

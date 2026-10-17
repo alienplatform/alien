@@ -35,7 +35,7 @@ impl TestVaultEnv {
     /// cloud's CLI, outside Alien.
     fn customer_vault(&self) -> alien_bindings::providers::vault::LocalVault {
         alien_bindings::providers::vault::LocalVault::new(
-            "secrets".to_string(),
+            "deployer-secrets".to_string(),
             self._temp_dir.path().to_path_buf(),
         )
     }
@@ -3155,7 +3155,7 @@ async fn initial_update_resumes_prepared_target_after_waiting_for_secrets() {
 
     vault_env
         .customer_vault()
-        .set_secret("input-database-password", "demo-secret")
+        .set_secret("database-password", "demo-secret")
         .await
         .unwrap();
     let checkpoint = serde_json::from_value(serde_json::to_value(&blocked).unwrap()).unwrap();
@@ -3224,7 +3224,7 @@ async fn test_missing_deployer_secret_blocks_workloads_until_written() {
     let reports = deployer_reports(&blocked);
     assert_eq!(reports.len(), 1);
     assert_eq!(reports[0].status, alien_core::DeployerSecretStatus::Missing);
-    assert_eq!(reports[0].location.name, "input-database-password");
+    assert_eq!(reports[0].location.name, "database-password");
     let worker = blocked
         .stack_state
         .as_ref()
@@ -3238,7 +3238,7 @@ async fn test_missing_deployer_secret_blocks_workloads_until_written() {
 
     vault_env
         .customer_vault()
-        .set_secret("input-database-password", "customer-only-value")
+        .set_secret("database-password", "customer-only-value")
         .await
         .unwrap();
 
@@ -3257,8 +3257,8 @@ async fn test_missing_deployer_secret_blocks_workloads_until_written() {
         alien_secrets["deployerSecrets"],
         serde_json::json!([{
             "name": "DATABASE_PASSWORD",
-            "vaultKey": "input-database-password",
-            "secretName": "input-database-password",
+            "vaultKey": "database-password",
+            "secretName": "database-password",
             "label": "Database password",
             "required": true,
             "version": deployer_reports(&running)[0].version,
@@ -3318,7 +3318,7 @@ async fn test_redeploy_after_deployer_secret_overwrite_restarts_workloads() {
     let config = create_test_config("hash_v1", false);
     vault_env
         .customer_vault()
-        .set_secret("input-database-password", "customer-value-v1")
+        .set_secret("database-password", "customer-value-v1")
         .await
         .unwrap();
 
@@ -3342,7 +3342,7 @@ async fn test_redeploy_after_deployer_secret_overwrite_restarts_workloads() {
     // redeploys the same release with the same config.
     vault_env
         .customer_vault()
-        .set_secret("input-database-password", "customer-value-v2")
+        .set_secret("database-password", "customer-value-v2")
         .await
         .unwrap();
     let mut redeploy = running;
@@ -3443,7 +3443,7 @@ async fn test_stored_deployer_secret_keeps_working_until_the_slot_is_filled() {
 
     vault_env
         .customer_vault()
-        .set_secret("input-database-password", "customer-only-value")
+        .set_secret("database-password", "customer-only-value")
         .await
         .unwrap();
     let result = alien_deployment::step(running, config, ClientConfig::Test, None)
@@ -3518,7 +3518,7 @@ async fn rebuilt_injected_config_plans_no_update() {
     let vault_env = test_vault_env().await;
     vault_env
         .customer_vault()
-        .set_secret("input-database-password", "value-v1")
+        .set_secret("database-password", "value-v1")
         .await
         .unwrap();
     let worker_id = "drift-rebuilt-fn";
@@ -3584,7 +3584,7 @@ async fn deployer_secret_rewritten_mid_create_converges_after_one_update() {
     let vault_env = test_vault_env().await;
     let vault = vault_env.customer_vault();
     vault
-        .set_secret("input-database-password", "value-v1")
+        .set_secret("database-password", "value-v1")
         .await
         .unwrap();
     let worker_id = "drift-rewrite-fn";
@@ -3606,7 +3606,7 @@ async fn deployer_secret_rewritten_mid_create_converges_after_one_update() {
     }
     assert_eq!(state.status, DeploymentStatus::Provisioning);
     vault
-        .set_secret("input-database-password", "value-v2")
+        .set_secret("database-password", "value-v2")
         .await
         .unwrap();
 
@@ -3677,7 +3677,7 @@ async fn fail_create_after_deployer_secret_rewrite(
         Some(alien_core::ResourceStatus::Provisioning)
     );
     vault
-        .set_secret("input-database-password", "value-v2")
+        .set_secret("database-password", "value-v2")
         .await
         .unwrap();
     run_to_completion(state, config.clone()).await
@@ -3702,7 +3702,7 @@ async fn provisioning_retry_resumes_a_failed_create_with_deployer_only_drift() {
     let vault_env = test_vault_env().await;
     let vault = vault_env.customer_vault();
     vault
-        .set_secret("input-database-password", "value-v1")
+        .set_secret("database-password", "value-v1")
         .await
         .unwrap();
     let worker_id = "drift-prov-retry-fn";
@@ -3753,7 +3753,7 @@ async fn update_retry_resumes_a_failed_create_with_deployer_only_drift() {
     let vault_env = test_vault_env().await;
     let vault = vault_env.customer_vault();
     vault
-        .set_secret("input-database-password", "value-v1")
+        .set_secret("database-password", "value-v1")
         .await
         .unwrap();
     let worker_id = "drift-upd-retry-fn";

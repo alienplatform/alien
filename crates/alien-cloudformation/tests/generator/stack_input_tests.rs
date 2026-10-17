@@ -122,7 +122,7 @@ fn stack_with_deployer_secret(provided_by: Vec<StackInputProvider>) -> Stack {
     Stack::new("inputs".to_string())
         .inputs(vec![deployer_secret_input(provided_by)])
         .add(
-            Vault::new("secrets".to_string()).build(),
+            Vault::new("deployer-secrets".to_string()).build(),
             ResourceLifecycle::Frozen,
         )
         .build()
@@ -190,7 +190,7 @@ fn deployer_secrets_never_pass_through_the_template() {
         let output = &template.outputs["DeployerSecretTailScaleAuthKey"];
         let stack_name = "acme-prod";
         let expected = deployer_secret_location(
-            &VaultBinding::parameter_store(format!("{stack_name}-secrets")),
+            &VaultBinding::parameter_store(format!("{stack_name}-deployer-secrets")),
             &deployer_secret_vault_key("tailScaleAuthKey"),
             &DeployerSecretLocationContext::default(),
         )
@@ -229,7 +229,7 @@ fn deployer_secrets_need_the_secrets_vault() {
     )
     .expect_err("a deployer secret without the secrets vault is refused");
     assert!(
-        error.message.contains("'secrets' vault"),
+        error.message.contains("'deployer-secrets' vault"),
         "{}",
         error.message
     );

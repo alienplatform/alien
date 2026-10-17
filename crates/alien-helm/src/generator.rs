@@ -1444,7 +1444,7 @@ fn deployer_secret_notes_tpl(stack: &Stack) -> Option<String> {
     );
     for input in inputs {
         notes.push_str(&format!(
-            "  - {} ({}): secrets vault key {}\n",
+            "  - {} ({}): deployer-secrets vault key {}\n",
             input.label,
             if input.required {
                 "required; workloads that read it wait until it exists"
@@ -8936,7 +8936,7 @@ infrastructureExistingSecret: customer-bindings
         let notes = &rendered.stdout;
         assert!(notes.contains("namespace apps"), "{notes}");
         assert!(
-            notes.contains("Database password (required; workloads that read it wait until it exists): secrets vault key input-database-password"),
+            notes.contains("Database password (required; workloads that read it wait until it exists): deployer-secrets vault key database-password"),
             "{notes}"
         );
         assert!(

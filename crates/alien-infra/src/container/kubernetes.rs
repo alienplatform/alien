@@ -3234,8 +3234,8 @@ mod tests {
         for version in ["7", "7", "8"] {
             let deployer_secrets = serde_json::json!([{
                 "name": "DATABASE_PASSWORD",
-                "vaultKey": "input-database-password",
-                "secretName": "stack-secrets-input-database-password",
+                "vaultKey": "database-password",
+                "secretName": "stack-deployer-secrets-database-password",
                 "label": "Database password",
                 "required": true,
                 "version": version,
@@ -3268,7 +3268,7 @@ mod tests {
                 .find(|var| var.name == "DATABASE_PASSWORD")
                 .and_then(|var| var.value_from.as_ref()?.secret_key_ref.as_ref())
                 .expect("DATABASE_PASSWORD is a secretKeyRef");
-            assert_eq!(reference.name, "stack-secrets-input-database-password");
+            assert_eq!(reference.name, "stack-deployer-secrets-database-password");
             templates.push(template);
         }
 

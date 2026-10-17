@@ -269,7 +269,7 @@ fn generate_terraform_module_internal(
     let mut registration_resources: Vec<(Option<String>, Expression)> = Vec::new();
     let mut shared_locals: IndexMap<String, Expression> = IndexMap::new();
     let mut gated = crate::gating::GatedAddresses::default();
-    let mut secrets_vault_binding: Option<Expression> = None;
+    let mut deployer_secrets_vault_binding: Option<Expression> = None;
 
     for (resource_id, resource) in stack.resources() {
         let resource_type = resource.config.resource_type();
@@ -350,8 +350,8 @@ fn generate_terraform_module_internal(
         shared_locals.extend(local_contributions);
         per_resource.insert(resource_id.clone(), fragment);
 
-        if resource_id.as_str() == alien_core::SECRETS_VAULT_ID {
-            secrets_vault_binding = emitter.emit_binding_ref(&ctx)?;
+        if resource_id.as_str() == alien_core::DEPLOYER_SECRETS_VAULT_ID {
+            deployer_secrets_vault_binding = emitter.emit_binding_ref(&ctx)?;
         }
 
         let registration_data = emitter.emit_import_ref(&ctx)?;
@@ -585,7 +585,7 @@ fn generate_terraform_module_internal(
             target,
             options.registration.as_ref(),
             &stack_inputs,
-            deployer_secret_outputs(stack, target, secrets_vault_binding.as_ref())?,
+            deployer_secret_outputs(stack, target, deployer_secrets_vault_binding.as_ref())?,
         ))?,
     );
     if let Some(contents) = remote_bindings_permissions_md(stack, target) {
@@ -1664,7 +1664,7 @@ fn stack_inputs_for_terraform(stack: &Stack, target: TerraformTarget) -> Vec<Sta
 
 /// One output per deployer secret, naming where the deployer writes its value.
 ///
-/// The name comes from the `secrets` vault's binding: a Parameter Store or
+/// The name comes from the `deployer-secrets` vault's binding: a Parameter Store or
 /// Secret Manager prefix, or a Key Vault. On a Kubernetes target the value is
 /// a Secret in the deployment's namespace whose name the operator derives, so
 /// the output carries the vault key and the deployment status shows the full
@@ -1672,7 +1672,7 @@ fn stack_inputs_for_terraform(stack: &Stack, target: TerraformTarget) -> Vec<Sta
 fn deployer_secret_outputs(
     stack: &Stack,
     target: TerraformTarget,
-    secrets_vault_binding: Option<&Expression>,
+    deployer_secrets_vault_binding: Option<&Expression>,
 ) -> Result<Vec<(String, Expression, String)>> {
     let platform = target.deployment_platform();
     let inputs: Vec<&StackInputDefinition> = stack
@@ -1690,7 +1690,7 @@ fn deployer_secret_outputs(
         return Ok(Vec::new());
     }
 
-    let binding_field = |field: &str| match secrets_vault_binding {
+    let binding_field = |field: &str| match deployer_secrets_vault_binding {
         Some(Expression::Object(binding)) => binding.iter().find_map(|(key, value)| {
             matches!(key, hcl::expr::ObjectKey::Identifier(id) if id.as_str() == field)
                 .then(|| value.clone())
@@ -1703,7 +1703,7 @@ fn deployer_secret_outputs(
             reason: format!(
                 "deployer secret inputs live in the '{}' vault, which this module does not \
                  emit; run the stack through preflights so the vault is added",
-                alien_core::SECRETS_VAULT_ID
+                alien_core::DEPLOYER_SECRETS_VAULT_ID
             ),
         })
     };

@@ -21,6 +21,15 @@ pub fn key_vault_secret_name(secret_name: &str) -> String {
     secret_name.replace('_', "-")
 }
 
+/// A fresh Azure deployer vault name, limited to 24 characters including its
+/// six-character alphanumeric installation suffix. The saved name survives retries.
+pub fn azure_deployer_vault_name(resource_prefix: &str, suffix: &str) -> String {
+    let prefix: String = format!("{resource_prefix}-deployer-secrets")
+        .chars().filter(|character| character.is_ascii_alphanumeric() || *character == '-')
+        .take(17).collect::<String>().trim_matches('-').to_ascii_lowercase();
+    format!("{prefix}-{suffix}")
+}
+
 /// Kubernetes Secret name: `{vault_prefix}-{secret_name}`, lowercased, with
 /// underscores turned into hyphens and other characters dropped, cut to the
 /// 253-character object name limit. The value lives under the `value` key.

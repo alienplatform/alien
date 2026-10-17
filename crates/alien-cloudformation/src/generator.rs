@@ -423,7 +423,7 @@ pub fn generate_cloudformation_template_with_profile(
 
     let mut registration_resources: Vec<RegistrationEntry> = Vec::new();
     let mut emitted_resource_ids: IndexMap<String, Vec<String>> = IndexMap::new();
-    let mut secrets_vault_binding: Option<CfExpression> = None;
+    let mut deployer_secrets_vault_binding: Option<CfExpression> = None;
 
     for (resource_id, resource) in stack.resources() {
         let resource_type = resource.config.resource_type();
@@ -522,8 +522,8 @@ pub fn generate_cloudformation_template_with_profile(
             insert_resource(&mut template, emitted)?;
         }
 
-        if resource_id.as_str() == alien_core::SECRETS_VAULT_ID {
-            secrets_vault_binding = emitter.emit_binding_ref(&ctx)?;
+        if resource_id.as_str() == alien_core::DEPLOYER_SECRETS_VAULT_ID {
+            deployer_secrets_vault_binding = emitter.emit_binding_ref(&ctx)?;
         }
 
         let registration_data = emitter.emit_import_ref(&ctx)?;
@@ -561,7 +561,7 @@ pub fn generate_cloudformation_template_with_profile(
         &mut template,
         stack,
         options.target,
-        secrets_vault_binding.as_ref(),
+        deployer_secrets_vault_binding.as_ref(),
     )?;
 
     if let Some(service_token) = options.registration.service_token(&mut template)? {
@@ -653,7 +653,7 @@ fn stack_inputs_for_cloudformation(
 
 /// One output per deployer secret, naming where the deployer writes its value.
 ///
-/// On AWS that is the SSM parameter in the stack's `secrets` vault. On a
+/// On AWS that is the SSM parameter in the stack's `deployer-secrets` vault. On a
 /// Kubernetes target the value is a Secret in the deployment's namespace whose
 /// name the operator derives, so the output carries the vault key and the
 /// deployment status shows the full name.
@@ -661,7 +661,7 @@ fn add_deployer_secret_outputs(
     template: &mut CfTemplate,
     stack: &Stack,
     target: CloudFormationTarget,
-    secrets_vault_binding: Option<&CfExpression>,
+    deployer_secrets_vault_binding: Option<&CfExpression>,
 ) -> Result<()> {
     let platform = target.deployment_platform();
     let inputs: Vec<&StackInputDefinition> = stack
@@ -682,7 +682,7 @@ fn add_deployer_secret_outputs(
     let vault_prefix = if target.is_kubernetes() {
         None
     } else {
-        let prefix = match secrets_vault_binding {
+        let prefix = match deployer_secrets_vault_binding {
             Some(CfExpression::Object(binding)) => binding.get("vaultPrefix").cloned(),
             _ => None,
         };
@@ -692,7 +692,7 @@ fn add_deployer_secret_outputs(
                 reason: format!(
                     "deployer secret inputs live in the '{}' vault, which this stack does not \
                      emit; run the stack through preflights so the vault is added",
-                    alien_core::SECRETS_VAULT_ID
+                    alien_core::DEPLOYER_SECRETS_VAULT_ID
                 ),
             })
         })?)
