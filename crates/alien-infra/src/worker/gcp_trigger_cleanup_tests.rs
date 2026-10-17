@@ -331,3 +331,97 @@ async fn stack_delete_retains_denied_trigger(#[case] child: Child, #[case] repla
     assert!(controller.storage_notification_topics.is_empty());
     assert!(controller.scheduler_job_names.is_empty());
 }
+
+#[tokio::test]
+async fn trigger_update_restart_does_not_retire_newly_created_jobs() {
+    let deleted = Arc::new(Mutex::new(Vec::new()));
+    let created = Arc::new(Mutex::new(Vec::new()));
+    let delete_calls = deleted.clone();
+    let create_calls = created.clone();
+    let mut scheduler = MockCloudSchedulerApi::new();
+    scheduler.expect_delete_job().returning(move |name| {
+        delete_calls.lock().unwrap().push(name);
+        Ok(())
+    });
+    scheduler
+        .expect_create_job()
+        .returning(move |_, name, job| {
+            let mut calls = create_calls.lock().unwrap();
+            calls.push(name);
+            if calls.len() == 2 {
+                Err(AlienError::new(ClientError::RemoteServiceUnavailable {
+                    message: "second create interrupted".into(),
+                }))
+            } else {
+                Ok(job)
+            }
+        });
+    let scheduler = Arc::new(scheduler);
+    let mut services = MockPlatformServiceProvider::new();
+    services
+        .expect_get_gcp_cloud_scheduler_client()
+        .returning(move |_| Ok(scheduler.clone()));
+    let services = Arc::new(services);
+    let mut desired = function_public_ingress();
+    desired.triggers = vec![
+        alien_core::WorkerTrigger::Schedule {
+            cron: "* * * * *".into(),
+        },
+        alien_core::WorkerTrigger::Schedule {
+            cron: "*/5 * * * *".into(),
+        },
+    ];
+    let mut controller = GcpWorkerController::mock_ready("test-worker");
+    controller.state = GcpWorkerState::UpdatePushSubscriptions;
+    controller.scheduler_job_names = vec!["old-job".into()];
+    for step in 0..4 {
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(desired.clone())
+            .previous_resource(function_public_ingress())
+            .controller(controller)
+            .platform(Platform::Gcp)
+            .service_provider(services.clone())
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        let result = executor.step().await;
+        if step == 2 {
+            assert!(result.is_err());
+        } else {
+            result.unwrap();
+        }
+        controller = serde_json::from_value(
+            serde_json::to_value(executor.internal_state::<GcpWorkerController>().unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(*deleted.lock().unwrap(), ["old-job"]);
+        match step {
+            0 => assert_eq!(
+                controller.state,
+                GcpWorkerState::UpdateCreatingPushSubscriptions
+            ),
+            1 => assert_eq!(
+                controller.state,
+                GcpWorkerState::UpdateCreatingSchedulerJobs
+            ),
+            2 => {
+                assert_eq!(controller.scheduler_job_names.len(), 1);
+                assert_eq!(
+                    controller.state,
+                    GcpWorkerState::UpdateCreatingSchedulerJobs
+                );
+            }
+            _ => {
+                assert_eq!(controller.scheduler_job_names.len(), 2);
+                assert_eq!(controller.state, GcpWorkerState::UpdateSettingIamPolicy);
+            }
+        }
+    }
+    let calls = created.lock().unwrap();
+    assert_eq!(calls.len(), 3);
+    assert!(calls[0].ends_with("-cron-0"));
+    assert!(calls[1].ends_with("-cron-1"));
+    assert_eq!(calls[1], calls[2]);
+}
