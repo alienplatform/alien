@@ -43,10 +43,11 @@ pub struct SqliteDeploymentStore {
 }
 
 impl SqliteDeploymentStore {
-    const WORK_STATUSES: [&'static str; 7] = [
+    const WORK_STATUSES: [&'static str; 8] = [
         "pending",
         "initial-setup",
         "provisioning",
+        "waiting-for-secrets",
         "updating",
         "deleting",
         "update-pending",
