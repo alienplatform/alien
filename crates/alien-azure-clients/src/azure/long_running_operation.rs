@@ -141,7 +141,9 @@ pub trait LongRunningOperationApi: Send + Sync + Debug {
     /// Returns:
     /// - `Ok(Some(body))` if the operation is complete (200 OK)
     /// - `Ok(None)` if the operation is still running (202 Accepted)
-    /// - `Err(Error)` if there was an error
+    /// - A non-retryable `RemoteOperationFailed` error for a terminal Failed/Canceled status.
+    ///   Retrying requires reissuing the original operation, not polling this handle.
+    /// - Other errors retain their transport/polling retry semantics.
     async fn check_status(
         &self,
         operation: &LongRunningOperation,
@@ -310,19 +312,13 @@ impl LongRunningOperationApi for LongRunningOperationClient {
                             Ok(Some(body))
                         }
                         "failed" | "canceled" => {
-                            // Operation failed or was canceled
-                            let error_msg = if let Some(error) = &operation_status.error {
-                                format!("Operation {}: {}", operation_status.status, error)
-                            } else {
-                                format!("Operation {}", operation_status.status)
-                            };
                             warn!(operation = %operation_name, resource = %resource_name, status = %operation_status.status, error = ?operation_status.error, "❌ Azure async operation failed");
-                            Err(AlienError::new(ErrorData::GenericError {
-                                message: format!(
-                                    "Azure {operation_name} for '{resource_name}' {}: {error_msg}",
-                                    operation_status.status.to_lowercase()
-                                ),
-                            }))
+                            Err(terminal_operation_error(
+                                operation_name,
+                                resource_name,
+                                &operation_status.status,
+                                operation_status.error.as_ref(),
+                            ))
                         }
                         _ => {
                             // Operation still in progress (e.g., "InProgress", "Accepted", etc.)
@@ -358,9 +354,14 @@ impl LongRunningOperationApi for LongRunningOperationClient {
                                     }
                                     "failed" | "canceled" => {
                                         warn!(operation = %operation_name, resource = %resource_name, provisioning_state = %state_str, "❌ Azure resource operation failed");
-                                        Err(AlienError::new(ErrorData::GenericError {
-                                            message: format!("Azure {operation_name} for '{resource_name}' failed with provisioningState: {state_str}"),
-                                        }))
+                                        Err(terminal_operation_error(
+                                            operation_name,
+                                            resource_name,
+                                            state_str,
+                                            properties
+                                                .get("error")
+                                                .or_else(|| parsed_json.get("error")),
+                                        ))
                                     }
                                     _ => {
                                         // Operation still in progress (e.g., "Creating", "Updating", etc.)
@@ -441,6 +442,26 @@ impl LongRunningOperationApi for LongRunningOperationClient {
             }
         }
     }
+}
+
+fn terminal_operation_error(
+    operation: &str,
+    resource_name: &str,
+    status: &str,
+    error: Option<&serde_json::Value>,
+) -> AlienError<ErrorData> {
+    AlienError::new(ErrorData::RemoteOperationFailed {
+        operation: format!("Azure {operation}"),
+        resource_name: resource_name.to_string(),
+        status: status.to_string(),
+        provider_code: error
+            .and_then(|error| error.get("code"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+        message: error
+            .map(ToString::to_string)
+            .unwrap_or_else(|| "No error details returned by Azure".to_string()),
+    })
 }
 
 // -----------------------------------------------------------------------------

@@ -124,6 +124,26 @@ pub enum ErrorData {
         message: String,
     },
 
+    /// A remote asynchronous operation finished unsuccessfully; polling it again cannot recover it.
+    #[error(
+        code = "REMOTE_OPERATION_FAILED",
+        message = "{operation} for '{resource_name}' finished with status {status}: {message}",
+        retryable = "false",
+        internal = "true"
+    )]
+    RemoteOperationFailed {
+        /// Operation that finished unsuccessfully.
+        operation: String,
+        /// Resource associated with the operation.
+        resource_name: String,
+        /// Terminal status reported by the provider.
+        status: String,
+        /// Provider error code, when supplied.
+        provider_code: Option<String>,
+        /// Provider diagnostics, including its message and any nested error details.
+        message: String,
+    },
+
     /// Network or request-level failure when sending HTTP request.
     #[error(
         code = "HTTP_REQUEST_FAILED",
