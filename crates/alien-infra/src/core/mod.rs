@@ -16,6 +16,8 @@ mod certificates;
 pub use certificates::*;
 
 #[cfg(feature = "aws")]
+pub(crate) mod aws_ownership;
+#[cfg(feature = "aws")]
 pub(crate) mod aws_tag_scoped;
 
 pub mod state_utils;
