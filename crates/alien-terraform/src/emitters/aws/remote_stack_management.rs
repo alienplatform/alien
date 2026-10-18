@@ -86,9 +86,7 @@ impl TfEmitter for AwsRemoteStackManagementEmitter {
                 let Some(resource_entry) = ctx.stack.resources.get(resource_id) else {
                     continue;
                 };
-                if resource_entry.lifecycle != ResourceLifecycle::Live
-                && resource_entry.config.downcast_ref::<Vault>().is_none()
-            {
+                if resource_entry.lifecycle != ResourceLifecycle::Live {
                     continue;
                 }
                 let Some(permission_set) = permission_set_ref
