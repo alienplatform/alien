@@ -30,7 +30,7 @@ logs, gateway connection logs, and the deployment's independently read NAT IP.
 DNS resolution failure alone cannot prove that a query did not escape.
 The `dnsQuery` probe sends an A query directly to a numeric `server` and `port`,
 with a unique `host` under a controlled zone. It bypasses the configured resolver
-and proxy, checks the reply's source, transaction and question, and treats even
+and proxy, checks the reply's source, transaction, question and authoritative flag, and treats even
 NXDOMAIN as reachability. Compare authoritative logs for unique control and
 subject labels; a timeout alone does not prove non-exfiltration.
 

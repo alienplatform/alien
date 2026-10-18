@@ -43,7 +43,8 @@ def dns_query(probe):
     if len(response) < 12:
         return {"outcome": "protocolFailed"}
     flags, questions = struct.unpack("!HH", response[2:6])
-    if (response[:2] != transaction or not flags & 0x8000 or flags & 0x7800
+    if (response[:2] != transaction or not flags & 0x8000 or not flags & 0x0400
+            or flags & 0x7800 or flags & 0x000F not in (0, 3)
             or questions != 1 or response[12:12 + len(question)] != question):
         return {"outcome": "protocolFailed"}
     # Even NXDOMAIN proves that the query reached a DNS server. Authoritative

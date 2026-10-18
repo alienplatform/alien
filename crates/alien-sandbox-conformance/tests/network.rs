@@ -8,7 +8,12 @@ use alien_sandbox_conformance::{evaluate, Expectation, Observation, Probe, Verdi
 
 #[test]
 fn direct_dns_checks_the_reply_and_treats_nxdomain_as_reachability() {
-    for wrong_transaction in [false, true] {
+    for (wrong_transaction, authoritative, response_code) in [
+        (false, true, 3),
+        (true, true, 3),
+        (false, false, 3),
+        (false, true, 2),
+    ] {
         let server = UdpSocket::bind("127.0.0.1:0").unwrap();
         server
             .set_read_timeout(Some(Duration::from_secs(10)))
@@ -21,8 +26,8 @@ fn direct_dns_checks_the_reply_and_treats_nxdomain_as_reachability() {
                 &packet[12..length],
                 b"\x05nonce\x07example\x07invalid\0\0\x01\0\x01"
             );
-            packet[2] = 0x84; // Response, authoritative, NXDOMAIN.
-            packet[3] = 3;
+            packet[2] = if authoritative { 0x84 } else { 0x80 };
+            packet[3] = response_code;
             if wrong_transaction {
                 packet[0] ^= 1;
             }
@@ -39,7 +44,7 @@ fn direct_dns_checks_the_reply_and_treats_nxdomain_as_reachability() {
         task.join().unwrap();
         assert_eq!(
             result,
-            if wrong_transaction {
+            if wrong_transaction || !authoritative || response_code == 2 {
                 Observation::ProtocolFailed
             } else {
                 Observation::Connected
