@@ -15,3 +15,9 @@ pub mod image_command;
 
 #[cfg(target_os = "linux")]
 pub mod gateway_egress;
+
+#[cfg(target_os = "linux")]
+pub mod egress;
+
+#[cfg(target_os = "linux")]
+mod netfilter;

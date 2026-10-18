@@ -621,6 +621,8 @@ def main():
                 time.sleep(0.1)
         suite.run()
         if args.agent_image:
+            from legacy_egress import check_legacy_agents
+            check_legacy_agents(suite, args.agent_image, containers, AGENT_UID)
             suite.agent(args.agent_image, containers, networks)
             suite.proxy_only(args.agent_image, containers)
         if args.vault_config:
