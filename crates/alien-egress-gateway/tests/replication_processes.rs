@@ -9,6 +9,7 @@ use serde_json::{json, Value};
 use std::{
     net::SocketAddr,
     process::Stdio,
+    sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
@@ -182,8 +183,8 @@ impl Cluster {
             Command::new(env!("CARGO_BIN_EXE_alien-egress-gateway"))
                 .kill_on_drop(true)
                 .env("ALIEN_EGRESS_GATEWAY_CONFIG", config.to_string())
-                .env("RUST_LOG", "info")
-                .stdout(Stdio::inherit())
+                .env("RUST_LOG", "error")
+                .stdout(Stdio::null())
                 .stderr(Stdio::inherit())
                 .spawn()
                 .unwrap(),
@@ -238,22 +239,7 @@ impl Cluster {
             .as_u16()
     }
     async fn connect(&self, index: usize, token: &str) -> u16 {
-        let mut connection = TcpStream::connect(self.proxy[index]).await.unwrap();
-        connection.write_all(format!("CONNECT one.one.one.one:443 HTTP/1.1\r\nHost: one.one.one.one:443\r\nProxy-Authorization: Bearer {token}\r\n\r\n").as_bytes()).await.unwrap();
-        let mut status = String::new();
-        tokio::time::timeout(
-            Duration::from_secs(5),
-            BufReader::new(connection).read_line(&mut status),
-        )
-        .await
-        .unwrap()
-        .unwrap();
-        status
-            .split_whitespace()
-            .nth(1)
-            .expect("proxy HTTP status")
-            .parse()
-            .unwrap()
+        connect_status(self.proxy[index], token).await
     }
     async fn assert_all(&self, token: &str, status: u16) {
         for index in 0..3 {
@@ -273,6 +259,25 @@ impl Cluster {
     }
 }
 
+async fn connect_status(proxy: SocketAddr, token: &str) -> u16 {
+    let mut connection = TcpStream::connect(proxy).await.unwrap();
+    connection.write_all(format!("CONNECT one.one.one.one:443 HTTP/1.1\r\nHost: one.one.one.one:443\r\nProxy-Authorization: Bearer {token}\r\n\r\n").as_bytes()).await.unwrap();
+    let mut status = String::new();
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        BufReader::new(connection).read_line(&mut status),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    status
+        .split_whitespace()
+        .nth(1)
+        .expect("proxy HTTP status")
+        .parse()
+        .unwrap()
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn three_process_replication_survives_faults_and_exposes_total_loss_replay() {
     let start = Instant::now();
@@ -284,6 +289,33 @@ async fn three_process_replication_survives_faults_and_exposes_total_loss_replay
     assert_eq!(cluster.write(0, &allow, false).await, 204);
     cluster.assert_all(&token, 200).await;
 
+    let (stop_traffic, traffic_done) = watch::channel(false);
+    let traffic_started = Arc::new(tokio::sync::Barrier::new(3));
+    let mut traffic = tokio::task::JoinSet::new();
+    for proxy in &cluster.proxy[..2] {
+        let proxy = *proxy;
+        let token = token.clone();
+        let traffic_started = traffic_started.clone();
+        let traffic_done = traffic_done.clone();
+        traffic.spawn(async move {
+            assert_eq!(connect_status(proxy, &token).await, 200);
+            traffic_started.wait().await;
+            let (mut allowed, mut denied) = (1, 0);
+            while !*traffic_done.borrow() {
+                match connect_status(proxy, &token).await {
+                    200 => {
+                        assert_eq!(denied, 0, "allowed after observing the newer denial");
+                        allowed += 1;
+                    }
+                    403 => denied += 1,
+                    status => panic!("steady traffic returned unexpected status {status}"),
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+            (allowed, denied)
+        });
+    }
+    traffic_started.wait().await;
     // A stopped replica cannot acknowledge a write. Its replacement stays unready
     // while every listed peer is cut, then snapshots the write before serving.
     cluster.stop(2).await;
@@ -300,6 +332,13 @@ async fn three_process_replication_survives_faults_and_exposes_total_loss_replay
     cluster.isolate(2, Fault::Heal);
     cluster.ready_all().await;
     cluster.assert_all(&token, 403).await;
+
+    stop_traffic.send(true).unwrap();
+    while let Some(result) = traffic.join_next().await {
+        let (allowed, denied) = result.unwrap();
+        assert!(allowed > 0 && denied > 0);
+        eprintln!("steady traffic during replica restart: {allowed} allowed, {denied} denied, no errors or allowed-after-deny");
+    }
 
     // Equal timestamp races resolve by writer id, independent of arrival order.
     let older = record(base + 2, 1, Some(json!("internet")));
