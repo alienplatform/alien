@@ -115,6 +115,38 @@ Log exports may be concatenated in any node order. The verifier assigns a distin
 matching event to each observation, reassigning overlapping timestamp matches when
 needed; sorting the input is not required and no event is reused.
 
+Some providers assign a sandbox ID after the binding has established the gateway
+identity. For Azure, the provider ID is used for commands and cleanup, while the
+gateway subject is the UUID in the provider's `labels["alien-egress-identity"]`.
+Export that mapping through the trusted provider API while the sessions exist;
+retain the original provider readback as evidence. Never infer it from gateway logs
+or ask the guest to supply it. Pass an uncommitted mapping artifact to the verifier:
+
+```json
+{
+  "revision": "DEPLOYED_COMMIT_AND_IMAGE_DIGEST",
+  "audience": "deployment-prefix/resource",
+  "subjects": {"PROVIDER_SANDBOX_ID": "GATEWAY_IDENTITY_UUID"}
+}
+```
+
+```sh
+python3 crates/alien-sandbox-conformance/after/verify_logs.py \
+  after-run/report.json gateway.jsonl --audience deployment-prefix/resource \
+  --identity-map provider-identities.json --output after-run/gateway-log-check.json
+```
+
+The revision and audience must match. Subjects must be unique across provider IDs.
+When a map is supplied, missing IDs remain unproven, with no provider-ID fallback.
+The output keeps `sandboxId` and records the separate `gatewaySubject`; it does not
+rewrite the network report or cleanup journal. Without a map, matching still uses
+the provider ID directly, so distinct Azure token subjects cannot qualify. The
+trusted `identityCommand` wrapper must likewise resolve the provider ID to its
+gateway subject before invoking the packet observer. This mapping proves no network
+behavior by itself: normal connection checks and independent provider evidence
+are still required. Azure has no agent; its connectorless agent self-check remains
+unproven and must not be counted as a pass based on this mapping.
+
 The update row measures from **before** the update API call through the observed
 CONNECT denial and includes command dispatch latency. It permits at most ten
 seconds, uses fresh connections, and requires the removed destination to work
@@ -125,7 +157,7 @@ not claim an exhaustive test of every address and protocol.
 Run local harness checks with:
 
 ```sh
-python3 -m unittest discover -s crates/alien-sandbox-conformance/after -p test_after.py -v
+python3 -m unittest discover -s crates/alien-sandbox-conformance/after -p 'test_*.py' -v
 ```
 
 These exercise real guest processes, CONNECT and TLS sockets, mutable policy,

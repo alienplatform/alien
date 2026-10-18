@@ -17,7 +17,30 @@ def observations(report):
             yield case["name"], attempt
 
 
-def verify(report, events, audience):
+def validate_identity_map(identity_map, report, audience):
+    if not isinstance(identity_map, dict) or (
+        identity_map.get("audience"),
+        identity_map.get("revision"),
+    ) != (audience, report["revision"]):
+        raise ValueError("identity map must match the report revision and audience")
+    subjects = identity_map.get("subjects")
+    if not isinstance(subjects, dict) or not all(
+        isinstance(value, str) and value and value.strip() == value
+        for pair in subjects.items()
+        for value in pair
+    ):
+        raise ValueError("identity map subjects must map nonempty IDs to subjects")
+    if len(set(subjects.values())) != len(subjects):
+        raise ValueError("identity map must not share a subject between provider IDs")
+    return subjects
+
+
+def verify(report, events, audience, identity_map=None):
+    subjects = (
+        validate_identity_map(identity_map, report, audience)
+        if identity_map is not None
+        else None
+    )
     checks = []
     candidates = []
     for name, item in observations(report):
@@ -34,6 +57,24 @@ def verify(report, events, audience):
             continue
         destination = urlsplit(item["probe"]["url"])
         decision = "deny" if value["outcome"] == "proxyDenied" else "allow"
+        subject = (
+            subjects.get(item["sandboxId"])
+            if subjects is not None
+            else item["sandboxId"]
+        )
+        check = {
+            "case": name,
+            "sandboxId": item["sandboxId"],
+            "host": destination.hostname,
+            "decision": decision,
+            "verdict": "unproven",
+        }
+        checks.append(check)
+        if subjects is not None:
+            check["gatewaySubject"] = subject
+        if subject is None:
+            check["reason"] = "provider identity mapping is missing"
+            continue
         for index, event in enumerate(events):
             fields = event.get("fields", event)
             if fields.get("message") != "egress connection":
@@ -46,7 +87,7 @@ def verify(report, events, audience):
                 fields.get("decision"),
             ) != (
                 audience,
-                item["sandboxId"],
+                subject,
                 destination.hostname,
                 destination.port or 443,
                 decision,
@@ -69,15 +110,6 @@ def verify(report, events, audience):
             ):
                 continue
             candidates[-1].append(index)
-        checks.append(
-            {
-                "case": name,
-                "sandboxId": item["sandboxId"],
-                "host": destination.hostname,
-                "decision": decision,
-                "verdict": "unproven",
-            }
-        )
     # Clock-skew windows overlap, and per-node exports need not be chronological.
     # Reassign earlier matches when needed so each connection gets a distinct event.
     assigned = {}
@@ -112,12 +144,27 @@ def main():
         "logs", type=Path, help="JSON lines, one original gateway event per line"
     )
     parser.add_argument("--audience", required=True)
+    parser.add_argument(
+        "--identity-map",
+        type=Path,
+        help="trusted provider ID to gateway subject mapping for this revision/audience",
+    )
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     events = [
         json.loads(line) for line in args.logs.read_text().splitlines() if line.strip()
     ]
-    result = verify(json.loads(args.report.read_text()), events, args.audience)
+    try:
+        identity_map = (
+            json.loads(args.identity_map.read_text()) if args.identity_map else None
+        )
+        if args.identity_map and identity_map is None:
+            raise ValueError("identity map must be a JSON object")
+        result = verify(
+            json.loads(args.report.read_text()), events, args.audience, identity_map
+        )
+    except ValueError as error:
+        parser.error(str(error))
     with args.output.open("x") as output:
         json.dump(result, output, indent=2)
         output.write("\n")
