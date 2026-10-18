@@ -25,7 +25,7 @@ use alien_core::{
     ResourceLifecycle, Result, Sandbox, SandboxCode, SandboxEgress, ServiceAccount,
     ALIEN_MANAGED_BY_TAG_KEY, ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY,
 };
-use alien_error::{AlienError, Context};
+use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{
     aws_resource_policies::without_refs_the_stack_policy_grants,
     generators::AwsRuntimePermissionsGenerator, BindingTarget,
@@ -497,6 +497,14 @@ impl TfEmitter for AwsSandboxEmitter {
         }
         let mut fields = vec![
             ("service", Expression::String("sandbox-aws".to_string())),
+            (
+                "egress",
+                hcl::to_expression(&sandbox.egress)
+                    .into_alien_error()
+                    .context(ErrorData::GenericError {
+                        message: "serializing the sandbox egress bound".to_string(),
+                    })?,
+            ),
             ("previewPorts", preview_ports(sandbox)),
             ("egressConnectorArns", egress_connector_arns(sandbox, label)),
             (
@@ -1092,6 +1100,7 @@ mod tests {
                 .collect();
 
         let typed = serde_json::to_value(alien_core::AwsSandboxBinding {
+            egress: None,
             image_arn: alien_core::BindingValue::Value("arn".to_string()),
             image_version: alien_core::BindingValue::Value("1".to_string()),
             region: alien_core::BindingValue::Value("us-east-2".to_string()),

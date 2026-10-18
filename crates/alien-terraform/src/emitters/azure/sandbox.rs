@@ -24,9 +24,9 @@ use crate::{
 };
 use alien_core::{
     import::EmitContext, ErrorData, PermissionProfile, PermissionSet, PermissionSetReference,
-    RemoteBindings, Result, Sandbox, SandboxEgress,
+    RemoteBindings, Result, Sandbox,
 };
-use alien_error::{AlienError, Context};
+use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{
     generators::{AzureRoleDefinitionRef, AzureRuntimePermissionsGenerator},
     BindingTarget,
@@ -65,31 +65,6 @@ fn sandbox_group_name(ctx: &EmitContext<'_>) -> String {
 
 fn sandbox_group_expression(resource_id: &str) -> String {
     format!("replace(lower(\"${{local.resource_prefix}}-{resource_id}\"), \"_\", \"-\")")
-}
-
-/// The declared outbound policy, in the shape the binding carries.
-///
-/// The sandbox is created with it rather than a setup resource enforcing it — Azure's proxy takes
-/// the policy at create — so the declaration has to survive as far as the binding intact.
-fn egress(sandbox: &Sandbox) -> Expression {
-    match &sandbox.egress {
-        SandboxEgress::None => expr::object([("mode", Expression::String("deny".to_string()))]),
-        SandboxEgress::Internet => {
-            expr::object([("mode", Expression::String("allow".to_string()))])
-        }
-        SandboxEgress::Allow { allow: domains } => expr::object([
-            ("mode", Expression::String("allowDomains".to_string())),
-            (
-                "domains",
-                Expression::from(
-                    domains
-                        .iter()
-                        .map(|domain| Expression::String(domain.clone()))
-                        .collect::<Vec<_>>(),
-                ),
-            ),
-        ]),
-    }
 }
 
 impl TfEmitter for AzureSandboxEmitter {
@@ -160,7 +135,14 @@ impl TfEmitter for AzureSandboxEmitter {
             ("region", expr::raw("var.azure_location")),
             ("resourceGroup", expr::raw("var.azure_resource_group_name")),
             ("diskImage", Expression::String(disk_image)),
-            ("egress", egress(sandbox)),
+            (
+                "egress",
+                hcl::to_expression(&sandbox.egress)
+                    .into_alien_error()
+                    .context(ErrorData::GenericError {
+                        message: "serializing the sandbox egress bound".to_string(),
+                    })?,
+            ),
         ];
 
         if let Some(seconds) = sandbox.lifecycle.idle_pause_seconds {
@@ -683,7 +665,9 @@ mod tests {
     use super::*;
     use alien_core::bindings::{AzureSandboxBinding, BindingValue};
     use alien_core::SandboxCode;
+    use alien_core::SandboxEgress;
     use alien_core::{ResourceLifecycle, SandboxLifecyclePolicy, Stack, StackSettings};
+    use hcl::eval::Evaluate;
     use indexmap::IndexMap;
 
     fn binding_for(egress: SandboxEgress) -> String {
@@ -773,30 +757,33 @@ mod tests {
             .to_string()
     }
 
-    /// The declared mode has to reach the binding, whole.
-    ///
-    /// Azure applies the policy at create rather than through a setup resource, so the binding is
-    /// the only carrier: a mode that stops here leaves every session created under the data
-    /// plane's own default, which is open. A hostname list fails twice over — the mode without the
-    /// domains denies everything, and the domains without the mode are ignored.
+    /// Azure receives policy through the binding, so prove the rendered HCL decodes to it.
     #[test]
     fn the_binding_carries_the_declared_egress() {
-        // The key names are asserted, not just the values: `AzureSandboxBinding.egress` has no
-        // serde default, so a misspelled key here is a deserialization failure on the customer's
-        // cluster rather than a failure at emit.
-        let denied = binding_for(SandboxEgress::None);
-        assert!(denied.contains("egress = {"), "{denied}");
-        assert!(denied.contains(r#"mode = "deny""#), "{denied}");
-
-        let listed = binding_for(SandboxEgress::Allow {
-            allow: vec!["api.example.com".to_string()],
-        });
-        assert!(listed.contains(r#"mode = "allowDomains""#), "{listed}");
-        assert!(listed.contains("domains = ["), "{listed}");
-        assert!(listed.contains(r#""api.example.com""#), "{listed}");
-
-        let open = binding_for(SandboxEgress::Internet);
-        assert!(open.contains(r#"mode = "allow""#), "{open}");
+        for policy in [
+            SandboxEgress::None,
+            SandboxEgress::Allow {
+                allow: vec!["api.example.com".to_string()],
+            },
+            SandboxEgress::Internet,
+        ] {
+            let rendered = binding_for(policy.clone());
+            let expression: Expression = rendered.parse().expect("binding is valid HCL");
+            let Expression::Object(fields) = expression else {
+                panic!("binding must be an object");
+            };
+            let egress = fields
+                .iter()
+                .find(|(key, _)| key.to_string() == "egress")
+                .expect("binding carries egress")
+                .1
+                .evaluate(&hcl::eval::Context::new())
+                .expect("egress has no unresolved expressions");
+            let actual: alien_core::bindings::SandboxEgressBinding =
+                serde_json::from_value(serde_json::to_value(egress).unwrap())
+                    .expect("emitted egress is readable by the binding");
+            assert_eq!(actual, policy.into());
+        }
     }
 
     /// Every key the binding deserializes is a key the emitter writes.
@@ -817,7 +804,7 @@ mod tests {
             data_plane_endpoint: BindingValue::Value("https://example.invalid".to_string()),
             region: BindingValue::Value("eastus".to_string()),
             resource_group: BindingValue::Value("rg".to_string()),
-            egress: SandboxEgress::Internet,
+            egress: SandboxEgress::Internet.into(),
             idle_pause_seconds: Some(900),
             disk_image: BindingValue::Value("ubuntu".to_string()),
             cpu: Some(BindingValue::Value("1000m".to_string())),

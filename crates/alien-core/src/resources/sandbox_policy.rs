@@ -1,10 +1,13 @@
 //! Sandbox egress declarations and the shared runtime narrowing rule.
 
+use sha2::{Digest, Sha256};
 use std::net::Ipv4Addr;
 
 use alien_error::{AlienError, Context, IntoAlienError};
 use ipnet::Ipv4Net;
 use serde::{Deserialize, Deserializer, Serialize};
+#[cfg(feature = "openapi")]
+use utoipa::openapi::schema::{ArrayBuilder, ObjectBuilder, OneOfBuilder, Type};
 
 use crate::error::{ErrorData, Result};
 
@@ -20,7 +23,6 @@ pub enum SandboxEgress {
     #[serde(untagged)]
     Allow {
         /// Hostnames, wildcard hostnames, IPv4 literals or IPv4 CIDRs, optionally with a port.
-        #[serde(serialize_with = "serialize_targets")]
         allow: Vec<String>,
     },
 }
@@ -29,7 +31,6 @@ pub enum SandboxEgress {
 #[cfg(feature = "openapi")]
 impl utoipa::PartialSchema for SandboxEgress {
     fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
-        use utoipa::openapi::schema::{ArrayBuilder, ObjectBuilder, OneOfBuilder, Type};
         OneOfBuilder::new()
             .item(
                 ObjectBuilder::new()
@@ -43,7 +44,7 @@ impl utoipa::PartialSchema for SandboxEgress {
                         ArrayBuilder::new()
                             .items(ObjectBuilder::new().schema_type(Type::String))
                             .min_items(Some(1))
-                            .max_items(Some(256)),
+                            .max_items(Some(4096)),
                     )
                     .required("allow")
                     .additional_properties(Some(
@@ -56,18 +57,6 @@ impl utoipa::PartialSchema for SandboxEgress {
 
 #[cfg(feature = "openapi")]
 impl utoipa::ToSchema for SandboxEgress {}
-
-fn serialize_targets<S: serde::Serializer>(
-    targets: &[String],
-    serializer: S,
-) -> std::result::Result<S::Ok, S::Error> {
-    let normalized = targets
-        .iter()
-        .map(|value| Target::parse(value).map(|target| target.canonical()))
-        .collect::<Result<Vec<_>>>()
-        .map_err(serde::ser::Error::custom)?;
-    normalized.serialize(serializer)
-}
 
 impl<'de> Deserialize<'de> for SandboxEgress {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
@@ -121,6 +110,29 @@ impl SandboxEgress {
         }
     }
 
+    /// Canonical JSON used by the gateway policy reference: normalized, sorted, no whitespace.
+    /// Duplicate entries remain present; sorting makes input order irrelevant to the digest.
+    pub fn canonical_json(&self) -> Result<Vec<u8>> {
+        let mut policy = self.normalized()?;
+        if let Self::Allow { allow } = &mut policy {
+            allow.sort_unstable();
+        }
+        serde_json::to_vec(&policy)
+            .into_alien_error()
+            .context(ErrorData::SandboxEgressInvalid {
+                target: "policy".to_string(),
+                reason: "could not encode canonical policy".to_string(),
+            })
+    }
+
+    /// SHA-256 reference carried in proxy and admin JWS claims.
+    pub fn policy_digest(&self) -> Result<String> {
+        Ok(format!(
+            "sha256:{:x}",
+            Sha256::digest(self.canonical_json()?)
+        ))
+    }
+
     /// Checks the declaration bound, naming the first target that would widen it.
     /// Invalid targets are refused even when the bound permits internet access.
     pub fn ensure_subset_of(&self, bound: &Self) -> Result<()> {
@@ -143,7 +155,8 @@ impl SandboxEgress {
     }
 
     // Setup authorizations predate the JSON rename. Keep only their hash projection stable;
-    // declarations and stored state always serialize using the current public format.
+    // declarations and stored state use the current format but retain the original spelling.
+    // Normalizing at storage time would invalidate approvals after saving and reloading a stack.
     pub(crate) fn setup_digest_value(&self) -> serde_json::Value {
         match self {
             Self::None => serde_json::json!({ "mode": "deny" }),
@@ -173,10 +186,31 @@ impl SandboxEgress {
         let Self::Allow { allow } = self else {
             return Ok(Vec::new());
         };
-        if allow.is_empty() || allow.len() > 256 {
-            return Err(invalid("allow", "must contain between 1 and 256 targets"));
+        if allow.is_empty() {
+            return Err(invalid("allow", "must contain at least one target"));
         }
-        allow.iter().map(|target| Target::parse(target)).collect()
+        if allow.len() > 4096 {
+            return Err(AlienError::new(ErrorData::SandboxEgressPolicyTooLarge {
+                limit: "4096 targets".to_string(),
+            }));
+        }
+        let targets = allow
+            .iter()
+            .map(|target| Target::parse(target))
+            .collect::<Result<Vec<_>>>()?;
+        // Valid targets are ASCII without JSON escape characters. Include object/array syntax,
+        // two quotes per target and commas to measure the exact canonical JSON byte length.
+        let canonical_bytes = 11
+            + targets
+                .iter()
+                .map(|target| target.canonical().len() + 3)
+                .sum::<usize>();
+        if canonical_bytes > 256 * 1024 {
+            return Err(AlienError::new(ErrorData::SandboxEgressPolicyTooLarge {
+                limit: "256 KiB of canonical JSON".to_string(),
+            }));
+        }
+        Ok(targets)
     }
 }
 

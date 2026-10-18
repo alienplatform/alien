@@ -19,6 +19,9 @@ use alien_macros::controller;
 /// Local Sandbox controller.
 #[controller]
 pub struct LocalSandboxController {
+    /// Bound installed with the parent and published to runtime bindings.
+    #[serde(default)]
+    pub(crate) egress: Option<alien_core::SandboxEgress>,
     /// Sandbox this controller owns sessions for, and the enumeration scope for reaping.
     pub(crate) sandbox_name: Option<String>,
     /// Loopback route the workload's binding talks to.
@@ -75,6 +78,7 @@ impl LocalSandboxController {
 
         self.route_url = Some(route.base_url.clone());
         self.token_path = Some(route.token_path.display().to_string());
+        self.egress = Some(config.egress.clone());
 
         info!(sandbox_id = %config.id, route = %route.base_url, "Local sandbox ready");
 
@@ -108,6 +112,7 @@ impl LocalSandboxController {
         })?;
         self.route_url = Some(route.base_url);
         self.token_path = Some(route.token_path.display().to_string());
+        self.egress = Some(config.egress.clone());
 
         // "Healthy" on a platform with nothing durable means the runtime is still there to
         // create sessions in; the session count itself is not a health signal.
@@ -261,6 +266,7 @@ impl LocalSandboxController {
             BindingValue::value(route_url.clone()),
             BindingValue::value(sandbox_name.clone()),
             BindingValue::value(token_path.clone()),
+            self.egress.clone(),
         );
 
         Ok(Some(

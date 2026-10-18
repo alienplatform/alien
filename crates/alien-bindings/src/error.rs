@@ -13,6 +13,45 @@ pub fn binding_env_var(binding_name: &str) -> String {
 #[derive(Debug, Clone, AlienErrorData, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ErrorData {
+    /// Policy exceeds the portable target-count or canonical JSON size limit.
+    #[error(
+        code = "SANDBOX_EGRESS_POLICY_TOO_LARGE",
+        message = "Sandbox egress policy exceeds {limit}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    SandboxEgressPolicyTooLarge { limit: String },
+
+    /// Another caller advanced the sandbox policy during this operation.
+    #[error(
+        code = "SANDBOX_EGRESS_CONFLICT",
+        message = "Sandbox egress changed concurrently; retry with the current policy",
+        retryable = "true",
+        internal = "false",
+        http_status_code = 409
+    )]
+    SandboxEgressConflict,
+
+    /// The runtime policy exceeds the declared bound.
+    #[error(
+        code = "SANDBOX_EGRESS_WIDENS",
+        message = "Sandbox egress target '{target}' exceeds the declared policy",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    SandboxEgressWidens { target: String },
+    /// An egress target is invalid.
+    #[error(
+        code = "SANDBOX_EGRESS_INVALID",
+        message = "Invalid sandbox egress: {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    SandboxEgressInvalid { reason: String },
+
     /// Plaintext or context is outside the portable Key binding limits.
     #[error(
         code = "KEY_INPUT_INVALID",
