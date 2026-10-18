@@ -3895,22 +3895,32 @@ async fn lock_image_export(image_key: &str, resource_name: &str) -> Result<std::
     let cache = dirs::cache_dir().ok_or_else(|| AlienError::new(error()))?;
     let lock_dir = cache.join("alien").join("image-export-locks");
     let lock_path = lock_dir.join(format!("{:x}.lock", Sha256::digest(image_key.as_bytes())));
-    tokio::task::spawn_blocking(move || {
-        std::fs::create_dir_all(lock_dir)?;
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(lock_path)?;
-        FileExt::lock_exclusive(&file)?;
-        Ok::<_, std::io::Error>(file)
-    })
-    .await
-    .into_alien_error()
-    .context(error())?
-    .into_alien_error()
-    .context(error())
+    fs::create_dir_all(lock_dir)
+        .await
+        .into_alien_error()
+        .context(error())?;
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(lock_path)
+        .await
+        .into_alien_error()
+        .context(error())?
+        .into_std()
+        .await;
+    loop {
+        match FileExt::try_lock_exclusive(&file) {
+            Ok(()) => return Ok(file),
+            // Contention is an asynchronous wait, so cancellation cannot strand a blocking
+            // worker and prevent the CLI's Tokio runtime from shutting down.
+            Err(error) if error.raw_os_error() == fs2::lock_contended_error().raw_os_error() => {
+                sleep(Duration::from_millis(50)).await;
+            }
+            Err(source) => return Err(source).into_alien_error().context(error()),
+        }
+    }
 }
 
 /// Resolve a registry image and export an OCI archive for each target architecture.
@@ -5052,6 +5062,44 @@ mod tests {
         assert!(
             metadata.cmd.is_some() || metadata.entrypoint.is_some(),
             "Alpine image should have entrypoint or cmd"
+        );
+    }
+
+    #[test]
+    fn canceling_an_export_lock_wait_does_not_block_runtime_shutdown() {
+        let key = tempfile::tempdir().expect("unique lock key");
+        let key = key.path().display().to_string();
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+        let held = runtime
+            .block_on(lock_image_export(&key, "holder"))
+            .expect("hold lock");
+        drop(runtime);
+        let (finished, completion) = std::sync::mpsc::channel();
+        let waiter = std::thread::spawn(move || {
+            let runtime = tokio::runtime::Runtime::new().expect("waiter runtime");
+            runtime.block_on(async move {
+                let waiting = tokio::spawn(async move { lock_image_export(&key, "waiter").await });
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                assert!(
+                    !waiting.is_finished(),
+                    "the other runtime still holds the lock"
+                );
+                waiting.abort();
+                assert!(waiting
+                    .await
+                    .expect_err("waiter was canceled")
+                    .is_cancelled());
+            });
+            drop(runtime);
+            finished.send(()).expect("report runtime shutdown");
+        });
+        let exited_while_locked = completion.recv_timeout(Duration::from_secs(3)).is_ok();
+        // Release before asserting so a regressed blocking waiter can still finish cleanup.
+        drop(held);
+        waiter.join().expect("waiter thread");
+        assert!(
+            exited_while_locked,
+            "a canceled lock wait must not hold runtime shutdown open"
         );
     }
 
