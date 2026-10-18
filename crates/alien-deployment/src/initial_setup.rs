@@ -1777,7 +1777,22 @@ mod tests {
                 },
             )
             .unwrap();
+        // This fixture represents persisted state from the earlier direct-deploy
+        // path, which marked the image Ready despite missing registration facts.
+        // Set and assert that historical serving state explicitly so changes to
+        // fresh imports cannot weaken the precondition this regression exercises.
+        serving.internal_state.as_mut().unwrap()["state"] = serde_json::json!("ready");
+        serving.status = ResourceStatus::Running;
         serving.controller_platform = Some(Platform::Aws);
+        assert_eq!(
+            serving
+                .get_internal_controller()
+                .unwrap()
+                .unwrap()
+                .get_status(),
+            ResourceStatus::Running,
+            "the regression must start with an already serving sandbox"
+        );
         assert!(
             load_binding(&published_binding(&serving)).await.is_err(),
             "the fixture must start from the binding the runtime refuses"
@@ -1830,6 +1845,142 @@ mod tests {
             .await
             .unwrap_or_else(|error| panic!("the corrected binding must load: {error}\n{binding}"));
         assert_eq!(binding["imageVersion"], "1.0");
+    }
+
+    /// The fixture is the complete state and binding emitted by v3.3.34's real
+    /// direct-setup/provisioning test at bec39e61d, using its public fake provider.
+    #[tokio::test]
+    async fn released_serving_legacy_state_survives_a_second_setup_pass_unchanged() {
+        let captured: serde_json::Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/aws-serving-allow-3.3.34.json"
+        ))
+        .unwrap();
+        let serving: alien_core::StackResourceState =
+            serde_json::from_value(captured["state"].clone()).unwrap();
+        assert_eq!(serving.status, ResourceStatus::Running);
+        assert_eq!(published_binding(&serving), captured["binding"]);
+        let mut deployment = live_sandbox_setup(InitialSetupAuthority::DirectSetup);
+        deployment
+            .stack_state
+            .as_mut()
+            .unwrap()
+            .resources
+            .insert("agents".into(), serving);
+        deployment
+            .runtime_metadata
+            .as_mut()
+            .unwrap()
+            .setup_scaffolding = BTreeMap::from([(
+            "agents".into(),
+            SetupScaffolding::AwsSandbox {
+                build_role_name: BUILD_ROLE.into(),
+                egress: None,
+                image_arn: None,
+            },
+        )]);
+        let result = handle_initial_setup(
+            deployment,
+            config(),
+            aws_client_config(),
+            with_iam(ready_role()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.state.status, DeploymentStatus::Provisioning);
+        let sandbox = &result.state.stack_state.as_ref().unwrap().resources["agents"];
+        assert_eq!(sandbox.status, ResourceStatus::Running);
+        let controller = sandbox.internal_state.as_ref().unwrap();
+        assert_eq!(controller["state"], "ready");
+        assert!(controller["egressPublicKey"].is_null());
+        assert_eq!(
+            published_binding(sandbox),
+            captured["binding"],
+            "setup must not change a serving legacy binding"
+        );
+        load_binding(&captured["binding"]).await.unwrap();
+    }
+
+    #[test]
+    fn only_explicit_internet_imports_wait_for_gateway_initialization() {
+        let captured: serde_json::Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/aws-serving-allow-3.3.34.json"
+        ))
+        .unwrap();
+        let registry = alien_infra::ImporterRegistry::built_in();
+        for declaration in [
+            serde_json::json!({"mode": "allow"}),
+            serde_json::json!({"mode": "deny"}),
+            serde_json::json!({"mode": "allowDomains", "domains": ["example.com"]}),
+            serde_json::json!("none"),
+            serde_json::json!("internet"),
+        ] {
+            for allow_egress in [false, true] {
+                for lifecycle in [ResourceLifecycle::Live, ResourceLifecycle::Frozen] {
+                    let mut deployment =
+                        sandbox_setup(lifecycle, InitialSetupAuthority::DirectSetup);
+                    let stack = deployment
+                        .runtime_metadata
+                        .as_mut()
+                        .unwrap()
+                        .prepared_stack
+                        .as_mut()
+                        .unwrap();
+                    stack
+                        .resources
+                        .get_mut("agents")
+                        .unwrap()
+                        .config
+                        .downcast_mut::<alien_core::Sandbox>()
+                        .unwrap()
+                        .egress = serde_json::from_value(declaration.clone()).unwrap();
+                    let settings = StackSettings::default();
+                    let ctx = alien_core::import::ImportContext {
+                        resource_id: "agents",
+                        platform: Platform::Aws,
+                        region: "us-east-1",
+                        stack_settings: &settings,
+                        management_config: None,
+                        resource: &stack.resources["agents"],
+                    };
+                    let imported = registry.run(
+                        &alien_core::Sandbox::RESOURCE_TYPE, Platform::Aws,
+                        serde_json::json!({"imageIdentifier": IMAGE_ARN, "imageArn": IMAGE_ARN,
+                            "imageVersion": "1.0", "allowEgress": allow_egress, "previewPorts": [8080]}), &ctx,
+                    ).unwrap();
+                    let merged = registry
+                        .merge_reimport(
+                            &alien_core::Sandbox::RESOURCE_TYPE,
+                            Platform::Aws,
+                            serde_json::from_value(captured["state"].clone()).unwrap(),
+                            imported.clone(),
+                            &ctx,
+                        )
+                        .unwrap();
+                    let internet = declaration == serde_json::json!("internet");
+                    for state in [&imported, &merged] {
+                        assert_eq!(state.status,
+                            if internet { ResourceStatus::Provisioning } else { ResourceStatus::Running },
+                            "declaration={declaration}, allowEgress={allow_egress}, lifecycle={lifecycle:?}");
+                        assert_eq!(
+                            state.internal_state.as_ref().unwrap()["state"],
+                            if internet {
+                                "initializingEgressKey"
+                            } else {
+                                "ready"
+                            }
+                        );
+                        assert!(state.internal_state.as_ref().unwrap()["egressPublicKey"].is_null());
+                    }
+                    if declaration == serde_json::json!({"mode": "allow"}) && allow_egress {
+                        assert_eq!(
+                            published_binding(&merged),
+                            captured["binding"],
+                            "both Live and Frozen reimports preserve the released legacy binding"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     /// Corrupt runtime state must stop setup before handoff and retain the verified scaffolding.

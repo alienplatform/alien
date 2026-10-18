@@ -14,9 +14,10 @@ use crate::sandbox::{AwsSandboxController, AwsSandboxState};
 
 /// AWS Sandbox importer.
 ///
-/// A template's Frozen sandbox names its built image and imports Ready. A Live one, or a Frozen
-/// one a direct setup registers, names the build role and bundle and imports at the start of the
-/// create flow, so the deployment loop builds the image once; later bundles roll via update.
+/// A template's Frozen sandbox names its built image. Legacy egress imports Ready; Internet
+/// first initializes its gateway configuration. A Live sandbox, or a Frozen one a direct setup
+/// registers, names the build role and bundle and starts the create flow, so the deployment loop
+/// builds the image once; later bundles roll via update.
 #[derive(Debug, Default)]
 pub struct AwsSandboxImporter;
 
@@ -57,7 +58,7 @@ impl ResourceImporter for AwsSandboxImporter {
             data.build_role_arn,
             data.bundle_uri,
         ) {
-            // Frozen: stack creation built the image; nothing is left to provision.
+            // Frozen: setup built the image; Internet still needs gateway initialization.
             (Some(image_identifier), Some(image_arn), Some(image_version), _, _) => {
                 // The region the ARN names — needed before a binding can be published, and
                 // waiting for a health tick to supply it leaves the application with no
@@ -75,9 +76,7 @@ impl ResourceImporter for AwsSandboxImporter {
                         })
                     })?;
                 let controller = AwsSandboxController {
-                    state: if !base.allow_egress
-                        && !matches!(sandbox.egress, alien_core::SandboxEgress::None)
-                    {
+                    state: if matches!(sandbox.egress, alien_core::SandboxEgress::Internet) {
                         AwsSandboxState::InitializingEgressKey
                     } else {
                         AwsSandboxState::Ready
@@ -138,7 +137,7 @@ impl ResourceImporter for AwsSandboxImporter {
             return Ok(imported);
         };
 
-        let imported_controller: AwsSandboxController = serde_json::from_value(imported_state)
+        let mut imported_controller: AwsSandboxController = serde_json::from_value(imported_state)
             .map_err(|error| {
                 AlienError::new(CoreErrorData::GenericError {
                     message: format!(
@@ -147,11 +146,6 @@ impl ResourceImporter for AwsSandboxImporter {
                     ),
                 })
             })?;
-        if ctx.resource.lifecycle == ResourceLifecycle::Frozen
-            && imported_controller.build_role_arn.is_none()
-        {
-            return Ok(imported);
-        }
         let existing_controller =
             AwsSandboxController::from_persisted(existing_state).map_err(|error| {
                 AlienError::new(CoreErrorData::GenericError {
@@ -162,10 +156,30 @@ impl ResourceImporter for AwsSandboxImporter {
                 })
             })?;
 
-        let requires_gateway = !imported_controller.allow_egress
-            && imported_controller.egress.as_ref().is_some_and(|value| {
-                !matches!(value.declaration(), alien_core::SandboxEgress::None)
-            });
+        let requires_gateway = imported_controller.egress.as_ref().is_some_and(|value| {
+            matches!(value.declaration(), alien_core::SandboxEgress::Internet)
+        });
+        // Older serving sandboxes publish no egress descriptor. Repeating setup
+        // must keep that binding stable when the egress declaration is unchanged.
+        if !requires_gateway
+            && existing_controller.egress.is_none()
+            && existing
+                .config
+                .downcast_ref::<Sandbox>()
+                .is_some_and(|sandbox| {
+                    imported_controller
+                        .egress
+                        .as_ref()
+                        .is_some_and(|egress| egress.declaration() == &sandbox.egress)
+                })
+        {
+            imported_controller.egress = None;
+        }
+        if ctx.resource.lifecycle == ResourceLifecycle::Frozen
+            && imported_controller.build_role_arn.is_none()
+        {
+            return make_imported_state_with_status(imported_controller, ctx, imported.status);
+        }
         let gateway = existing_controller
             .egress
             .as_ref()
