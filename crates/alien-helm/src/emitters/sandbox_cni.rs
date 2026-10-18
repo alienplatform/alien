@@ -3,7 +3,7 @@
 //! This samples pod-to-pod traffic on the nodes selected by the scheduler. It does
 //! not certify every node, address family, or CNI exception for traffic to the host.
 
-pub(super) fn template() -> String {
+pub(crate) fn template() -> String {
     let script = include_str!("sandbox_cni_probe.py")
         .lines()
         .map(|line| format!("              {line}\n"))

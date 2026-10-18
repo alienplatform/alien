@@ -12,3 +12,6 @@ pub use kubernetes::*;
 
 #[cfg(feature = "local")]
 mod local_utils;
+
+#[cfg(feature = "kubernetes")]
+mod kubernetes_network;

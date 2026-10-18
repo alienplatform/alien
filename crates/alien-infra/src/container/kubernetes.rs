@@ -179,6 +179,8 @@ pub struct KubernetesContainerController {
     pub(crate) service_name: Option<String>,
     /// The first declared service port for binding construction.
     pub(crate) service_port: Option<u16>,
+    #[serde(default)]
+    pub(crate) network_policy_name: Option<String>,
     /// The container ID (for binding construction)
     pub(crate) container_id: Option<String>,
     /// Public endpoint route/certificate state.
@@ -372,6 +374,8 @@ impl KubernetesContainerController {
             )
             .await?;
         self.env_secret.record(env_secret_plan.as_ref());
+        self.reconcile_network_policy(config, &container_name, &namespace, ctx)
+            .await?;
         self.reconcile_internal_service(config, &container_name, &namespace, ctx)
             .await?;
 
@@ -695,7 +699,11 @@ impl KubernetesContainerController {
         let config = ctx.desired_resource_config::<Container>()?;
 
         // Heartbeat check: verify workload status
-        if let (Some(workload_name), Some(namespace)) = (&self.workload_name, &self.namespace) {
+        if let (Some(workload_name), Some(namespace)) =
+            (self.workload_name.clone(), self.namespace.clone())
+        {
+            let workload_name = &workload_name;
+            let namespace = &namespace;
             let deployment_client = ctx
                 .service_provider
                 .get_kubernetes_deployment_client(kubernetes_config)
@@ -779,6 +787,8 @@ impl KubernetesContainerController {
             )
             .await?;
 
+            self.reconcile_network_policy(config, workload_name, namespace, ctx)
+                .await?;
             self.reconcile_internal_service(config, workload_name, namespace, ctx)
                 .await?;
 
@@ -978,6 +988,8 @@ impl KubernetesContainerController {
                 message: "Workload name not set in state".to_string(),
             })
         })?;
+        let workload_name_owned = workload_name.clone();
+        let workload_name = &workload_name_owned;
 
         let namespace = self.namespace.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceControllerConfigError {
@@ -985,6 +997,8 @@ impl KubernetesContainerController {
                 message: "Namespace not set in state".to_string(),
             })
         })?;
+        let namespace_owned = namespace.clone();
+        let namespace = &namespace_owned;
 
         let workload_type = if self.is_stateful {
             "StatefulSet"
@@ -1129,6 +1143,8 @@ impl KubernetesContainerController {
             .await?;
         self.env_secret.record(env_secret_plan.as_ref());
         self.service_port = first_declared_container_port(config);
+        self.reconcile_network_policy(config, workload_name, namespace, ctx)
+            .await?;
         self.reconcile_internal_service(config, workload_name, namespace, ctx)
             .await?;
         if self.is_stateful {
@@ -1569,6 +1585,12 @@ impl KubernetesContainerController {
                     false,
                 )
                 .await?;
+                if self.network_policy_name.is_some() {
+                    return Ok(HandlerAction::Continue {
+                        state: WaitingForNetworkPolicyDeletion,
+                        suggested_delay: Some(Duration::from_secs(2)),
+                    });
+                }
                 self.workload_name = None;
                 self.namespace = None;
                 return Ok(HandlerAction::Continue {
@@ -1614,6 +1636,12 @@ impl KubernetesContainerController {
                     )
                     .await?;
 
+                    if self.network_policy_name.is_some() {
+                        return Ok(HandlerAction::Continue {
+                            state: WaitingForNetworkPolicyDeletion,
+                            suggested_delay: Some(Duration::from_secs(2)),
+                        });
+                    }
                     self.workload_name = None;
                     self.namespace = None;
 
@@ -1697,6 +1725,12 @@ impl KubernetesContainerController {
                     )
                     .await?;
 
+                    if self.network_policy_name.is_some() {
+                        return Ok(HandlerAction::Continue {
+                            state: WaitingForNetworkPolicyDeletion,
+                            suggested_delay: Some(Duration::from_secs(2)),
+                        });
+                    }
                     self.workload_name = None;
                     self.namespace = None;
 
@@ -1717,6 +1751,47 @@ impl KubernetesContainerController {
         Ok(HandlerAction::Stay {
             max_times: Some(60), // 60 attempts * 5 seconds = 5 minutes max wait for deletion
             suggested_delay: Some(Duration::from_secs(5)),
+        })
+    }
+
+    #[handler(state = WaitingForNetworkPolicyDeletion, on_failure = DeleteFailed, status = ResourceStatus::Deleting)]
+    async fn waiting_for_network_policy_deletion(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<Container>()?;
+        let namespace = self.get_kubernetes_namespace(ctx)?;
+        let client = ctx
+            .service_provider
+            .get_kubernetes_pod_client(ctx.get_kubernetes_config()?)
+            .await?;
+        let pods = client
+            .list_pods(
+                &namespace,
+                Some(label_selector(&kubernetes_branded_resource_labels(
+                    ctx, &config.id,
+                ))),
+                None,
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to inspect Container pods before removing network restrictions"
+                    .into(),
+                resource_id: Some(config.id.clone()),
+            })?;
+        if !pods.items.is_empty() {
+            return Ok(HandlerAction::Stay {
+                max_times: Some(120),
+                suggested_delay: Some(Duration::from_secs(5)),
+            });
+        }
+        self.delete_network_policy(&namespace, &config.id, ctx)
+            .await?;
+        self.workload_name = None;
+        self.namespace = None;
+        Ok(HandlerAction::Continue {
+            state: Deleted,
+            suggested_delay: None,
         })
     }
 
@@ -1856,6 +1931,7 @@ mod output_tests {
             namespace: Some("test-namespace".to_string()),
             service_name: Some("test-container".to_string()),
             service_port: Some(3000),
+            network_policy_name: None,
             container_id: Some("container".to_string()),
             public_endpoint,
             env_secret: EnvSecretRotationTracker::default(),
@@ -1893,6 +1969,7 @@ mod output_tests {
             namespace: Some("test-namespace".to_string()),
             service_name: Some("test-container".to_string()),
             service_port: Some(3000),
+            network_policy_name: None,
             container_id: Some("container".to_string()),
             public_endpoint,
             env_secret: EnvSecretRotationTracker::default(),
@@ -1926,6 +2003,7 @@ impl KubernetesContainerController {
             namespace: Some(namespace.to_string()),
             service_name: Some(container_name.to_string()),
             service_port: Some(80),
+            network_policy_name: None,
             container_id: Some("test-container".to_string()),
             public_endpoint: KubernetesPublicEndpointState::default(),
             env_secret: EnvSecretRotationTracker::default(),
@@ -2871,6 +2949,7 @@ mod tests {
             namespace: Some("test-ns".to_string()),
             service_name: Some("api".to_string()),
             service_port: Some(3000),
+            network_policy_name: None,
             container_id: Some("api".to_string()),
             public_endpoint: KubernetesPublicEndpointState::default(),
             env_secret: EnvSecretRotationTracker::default(),
