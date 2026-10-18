@@ -1296,6 +1296,7 @@ dependencies = [
  "futures",
  "httparse",
  "libc",
+ "nlink",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -7002,6 +7003,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27b02d87554356db9e9a873add8782d4ea6e3e58ea071a9adb9a2e8ddb884a8b"
 
 [[package]]
+name = "netlink-sys"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c99d38e00b420df49e940fe0826e667c3dad82ac68eb4c2bbf754c1c14a83a10"
+dependencies = [
+ "bytes",
+ "libc",
+ "log",
+]
+
+[[package]]
 name = "new_debug_unreachable"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7045,6 +7057,36 @@ dependencies = [
  "tracing",
  "url",
  "windows-sys 0.45.0",
+]
+
+[[package]]
+name = "nlink"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6b316da22cdd6b936514a1de61815b6ce8e6f59bbda0f4c3846bf60c70c0e016"
+dependencies = [
+ "bitflags 2.13.1",
+ "bytes",
+ "libc",
+ "netlink-sys",
+ "nlink-macros",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+ "winnow 1.0.4",
+ "zerocopy",
+]
+
+[[package]]
+name = "nlink-macros"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac07396bcfdf09858f4801b1ed38aca98382ecbfd308c52d222e5a5947ff36d4"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.3",
 ]
 
 [[package]]

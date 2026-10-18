@@ -6,8 +6,9 @@
 import * as z from "zod";
 import { ContainerAutoscalingSchema } from "./container-autoscaling-schema.js";
 import { ContainerCodeSchema } from "./container-code-schema.js";
+import { ContainerEgressSchema } from "./container-egress-schema.js";
 import { ContainerGpuSpecSchema } from "./container-gpu-spec-schema.js";
-import { ContainerInternalLoadBalancerSchema } from "./container-internal-load-balancer-schema.js";
+import { ContainerInternalEndpointSchema } from "./container-internal-endpoint-schema.js";
 import { ContainerPortSchema } from "./container-port-schema.js";
 import { ContainerResourceChoicesSchema } from "./container-resource-choices-schema.js";
 import { ContainerSecuritySchema } from "./container-security-schema.js";
@@ -36,6 +37,9 @@ get "code"(){
 get "cpu"(){
                 return ResourceSpecSchema.describe("Resource specification with min/desired values.")
               },
+get "egress"(){
+                return z.union([ContainerEgressSchema, z.null()]).optional()
+              },
 "environment": z.optional(z.object({
     
     }).catchall(z.string()).describe("Environment variables")),
@@ -47,10 +51,9 @@ get "healthCheck"(){
                 return z.union([HealthCheckSchema, z.null()]).optional()
               },
 "id": z.string().describe("Unique identifier for the container.\nMust be DNS-compatible: lowercase alphanumeric with hyphens."),
-get "internalLoadBalancer"(){
-                return z.union([ContainerInternalLoadBalancerSchema, z.null()]).optional()
+get "internalEndpoints"(){
+                return z.array(ContainerInternalEndpointSchema.describe("A port reachable only by the listed resources of this deployment.\nIndependent of public endpoints and the deployment's endpointAccess setting.")).describe("Named ports reachable only by their explicitly allowed deployment resources.").optional()
               },
-"internetOnlyEgress": z.optional(z.boolean().describe("Restrict connections initiated by this container to public IPv4 destinations\nand its runtime DNS resolver. Blocks private networks, the container overlay,\nhost services, and IPv6. The only metadata exception is the runtime proxy\nfor this container's own service-account credentials (169.254.169.254:80).\nRequires the restricted security profile.\nEnforcement is outside the container; unsupported backends fail planning.")),
 get "kubernetesLivenessProbe"(){
                 return z.union([KubernetesHttpProbeSchema, z.null()]).optional()
               },

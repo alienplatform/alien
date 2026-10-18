@@ -64,13 +64,15 @@ impl GatewayEgress {
     /// Prepare routing before dropping bootstrap capabilities. An absent token is pending until
     /// the authenticated policy endpoint delivers it outside the shared image snapshot.
     pub fn from_env() -> Result<Option<Arc<Self>>> {
+        if crate::egress::legacy_from_env()?.is_some() {
+            return Ok(None);
+        }
         let declared_none = std::env::var("ALIEN_SANDBOX_EGRESS")
             .ok()
             .is_some_and(|policy| {
                 policy == "none"
-                    || serde_json::from_str::<serde_json::Value>(&policy).is_ok_and(|value| {
-                        value == "none" || value == serde_json::json!({"mode":"deny"})
-                    })
+                    || serde_json::from_str::<serde_json::Value>(&policy)
+                        .is_ok_and(|value| value == "none")
             });
         let address = match std::env::var("ALIEN_SANDBOX_EGRESS_GATEWAY") {
             Ok(value) => Some(
@@ -90,6 +92,10 @@ impl GatewayEgress {
             .zip(std::env::var("ALIEN_SANDBOX_SESSION_ID").ok());
         let privileged = unsafe { libc::geteuid() } == 0;
         if privileged {
+            // IPv6 sockets can exist on kernels without IPv6 netfilter support.
+            // Every image command and exec child installs the irreversible socket
+            // filter before executing; an installation failure prevents its launch.
+            crate::privilege::block_command_ipv6();
             redirect::install()
                 .into_alien_error()
                 .context(failed("install transparent forwarding"))?;

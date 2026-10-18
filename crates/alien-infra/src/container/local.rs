@@ -715,6 +715,7 @@ impl LocalContainerController {
                 desired_replicas: 1,
                 internal_dns: info.internal_dns.clone(),
                 public_endpoints: local_public_endpoint_outputs(info),
+                internal_endpoints: std::collections::HashMap::new(),
                 replicas: Vec::new(), // TODO: Add replica status
                 // A local volume is a host directory: nothing is snapshotted, and with no
                 // volumes reported there is nothing to restore.

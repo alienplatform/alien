@@ -53,6 +53,10 @@ fn main() -> Result<()> {
     let mut run_image_command = false;
     if std::env::var_os("ALIEN_SANDBOX_EGRESS").is_some() {
         #[cfg(target_os = "linux")]
+        if let Some(policy) = alien_sandbox_agent::egress::legacy_from_env()? {
+            alien_sandbox_agent::egress::install(&policy, state.exec_identity.uid)?;
+        }
+        #[cfg(target_os = "linux")]
         if unsafe { libc::geteuid() } == 0 {
             alien_sandbox_agent::privilege::prepare_identity(
                 state.exec_identity,

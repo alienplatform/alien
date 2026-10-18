@@ -7,9 +7,10 @@
 use crate::{
     emitter::CfEmitter,
     emitters::aws::helpers::{
-        cf_from_json, prefixed_permission_refs, required_logical_id, resource_config,
-        service_account_role_id, service_trust_policy, subnet_refs, tags,
+        cf_from_json, prefixed_permission_refs, private_subnet_ids_expr, required_logical_id,
+        resource_config, service_account_role_id, service_trust_policy, subnet_refs, tags,
         uniquify_iam_statement_sids, vpc_id_expr, CONDITION_NETWORK_MODE_CREATE,
+        PARAM_PRIVATE_SUBNET_IDS,
     },
     emitters::aws::service_account::permission_context,
     template::{CfExpression, CfResource},
@@ -113,6 +114,10 @@ impl CfEmitter for AwsSandboxEmitter {
                 CfExpression::list([CfExpression::object([
                     ("IpProtocol", CfExpression::from("-1")),
                     ("CidrIp", CfExpression::from(LOOPBACK_ONLY_CIDR)),
+                    (
+                        "Description",
+                        CfExpression::from("Sandbox sessions reach nothing outbound"),
+                    ),
                 ])])
             } else {
                 super::network::gateway_egress_rules(ctx)?
@@ -162,20 +167,22 @@ impl CfEmitter for AwsSandboxEmitter {
                     ]),
                 )]),
             );
-            let network = sandbox_egress_network(ctx.stack).map_err(|error| {
-                AlienError::new(ErrorData::OperationNotSupported {
-                    operation: "sandbox connector".into(),
-                    reason: error.to_string(),
-                })
-            })?;
-            let prefix = ctx.name_for(network.id).ok_or_else(|| {
-                AlienError::new(ErrorData::GenericError {
-                    message: format!("network '{}' has no generated name", network.id),
-                })
-            })?;
-            connector
-                .depends_on
-                .push(format!("{prefix}SandboxNetworkValidation"));
+            if matches!(sandbox.egress, SandboxEgress::Internet) {
+                let network = sandbox_egress_network(ctx.stack).map_err(|error| {
+                    AlienError::new(ErrorData::OperationNotSupported {
+                        operation: "sandbox connector".into(),
+                        reason: error.to_string(),
+                    })
+                })?;
+                let prefix = ctx.name_for(network.id).ok_or_else(|| {
+                    AlienError::new(ErrorData::GenericError {
+                        message: format!("network '{}' has no generated name", network.id),
+                    })
+                })?;
+                connector
+                    .depends_on
+                    .push(format!("{prefix}SandboxNetworkValidation"));
+            }
             connector.properties.insert("Tags".to_string(), tags(ctx));
             egress_resources.extend([operator_role, security_group, connector]);
         }
@@ -894,6 +901,7 @@ fn egress_network(
             network.id
         ))
     })?;
+    let gateway = matches!(sandbox.egress, SandboxEgress::Internet);
 
     Ok(Some(match network.vpc {
         // Deliberately not `private_subnet_ids_expr`: its use-default branch resolves to
@@ -909,13 +917,29 @@ fn egress_network(
             ),
             CfExpression::if_(
                 CONDITION_NETWORK_MODE_CREATE,
-                subnet_refs(network_id, "SandboxSubnet"),
-                CfExpression::ref_("SandboxSubnetIds"),
+                subnet_refs(
+                    network_id,
+                    if gateway {
+                        "SandboxSubnet"
+                    } else {
+                        "PrivateSubnet"
+                    },
+                ),
+                CfExpression::ref_(if gateway {
+                    "SandboxSubnetIds"
+                } else {
+                    PARAM_PRIVATE_SUBNET_IDS
+                }),
             ),
         ),
-        SandboxEgressVpc::BroughtByCustomer => {
-            (vpc_id_expr(ctx), CfExpression::ref_("SandboxSubnetIds"))
-        }
+        SandboxEgressVpc::BroughtByCustomer => (
+            vpc_id_expr(ctx),
+            if gateway {
+                CfExpression::ref_("SandboxSubnetIds")
+            } else {
+                private_subnet_ids_expr(ctx)
+            },
+        ),
     }))
 }
 

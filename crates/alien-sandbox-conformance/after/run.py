@@ -408,7 +408,8 @@ class Run:
         for box, record in reversed(self.sessions):
             try:
                 # A create intent may have failed before the session existed.
-                if await box.get(record["sandboxId"]) is not None:
+                info = await box.get(record["sandboxId"])
+                if info is not None and info.state != "terminated":
                     await box.terminate(record["sandboxId"])
                 outcomes.append({**record, "terminationCallCompleted": True})
             except Exception as error:  # noqa: BLE001 - retain evidence and attempt all cleanup

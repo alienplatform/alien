@@ -511,6 +511,7 @@ fn generate_terraform_module_internal(
             &options.supported_aws_regions,
             &stack_inputs,
             alien_core::restricts_network_mode(stack, target.is_kubernetes()),
+            !target.is_kubernetes() && alien_core::sandbox_egress::has_sandbox_gateway(stack),
             profile,
         )?)?,
     );
@@ -1865,6 +1866,7 @@ fn variables_body(
     supported_aws_regions: &[String],
     stack_inputs: &[StackInputDefinition],
     needs_named_subnets: bool,
+    needs_gateway_subnets: bool,
     profile: alien_core::SetupConfigurationProfile,
 ) -> Result<Body> {
     let mut blocks: Vec<Structure> = Vec::new();
@@ -1947,7 +1949,7 @@ fn variables_body(
 
     if matches!(target.cloud_platform(), alien_core::Platform::Aws) {
         blocks.push(nested(aws_region_variable_block(supported_aws_regions)));
-        if needs_named_subnets {
+        if needs_gateway_subnets {
             for (name, description) in [
                 ("sandbox_subnet_ids", "Dedicated sandbox connector subnets with only local routes, in at least two availability zones. Required with use-existing."),
                 ("sandbox_gateway_subnet_ids", "Dedicated gateway subnets in at least two zones, with only local routes and the deployment NAT default route. Required with use-existing."),
@@ -4327,6 +4329,7 @@ fn readme_md(
             // to demand subnets and the restriction would explain itself with a resource the
             // module does not contain.
             alien_core::restricts_network_mode(stack, target.is_kubernetes()),
+            !target.is_kubernetes() && alien_core::sandbox_egress::has_sandbox_gateway(stack),
         ));
     }
     if target.is_kubernetes() {
@@ -4459,9 +4462,14 @@ fn readme_azure_inputs(target: TerraformTarget) -> String {
 ///
 /// An installer reads this and picks a value; documenting one the module refuses at plan makes
 /// the package contradict itself.
-fn readme_network_inputs(target: TerraformTarget, needs_named_subnets: bool) -> String {
+fn readme_network_inputs(
+    target: TerraformTarget,
+    needs_named_subnets: bool,
+    needs_gateway_subnets: bool,
+) -> String {
     match target.cloud_platform() {
-        alien_core::Platform::Aws if needs_named_subnets => "Network settings:\n\n- `network_mode`: `create-new` or `use-existing`. Sandboxes require explicit subnet IDs, so the default network is not offered.\n- `vpc_cidr`, `availability_zones`: used with `create-new`; use at least two availability zones.\n- `vpc_id`, `public_subnet_ids`, `private_subnet_ids`, `security_group_ids`: used with `use-existing`.\n- `sandbox_subnet_ids`: dedicated connector subnets in at least two zones, with only local VPC routes and no IPv6 CIDRs. Required with `use-existing`. Setup reads each effective route table, including the main table, and rejects any non-local route.\n- `sandbox_gateway_subnet_ids`: dedicated gateway subnets in at least two zones. Required with `use-existing` when the sandbox gateway is enabled; gateway and workload subnets must use the same NAT gateway. Gateway subnets may have only local routes and that NAT default route.\n\nThe gateway Container owns its internal load balancer and enforces internet-only egress. Sandbox setup creates the isolated connector network.".to_string(),
+        alien_core::Platform::Aws if needs_gateway_subnets => "Network settings:\n\n- `network_mode`: `create-new` or `use-existing`. Sandboxes require explicit subnet IDs, so the default network is not offered.\n- `vpc_cidr`, `availability_zones`: used with `create-new`; use at least two availability zones.\n- `vpc_id`, `public_subnet_ids`, `private_subnet_ids`, `security_group_ids`: used with `use-existing`.\n- `sandbox_subnet_ids`: dedicated connector subnets in at least two zones, with only local VPC routes and no IPv6 CIDRs. Required with `use-existing`. Setup reads each effective route table, including the main table, and rejects any non-local route.\n- `sandbox_gateway_subnet_ids`: dedicated gateway subnets in at least two zones. Required with `use-existing` when the sandbox gateway is enabled; gateway and workload subnets must use the same NAT gateway. Gateway subnets may have only local routes and that NAT default route.\n\nThe gateway Container owns its internal load balancer and enforces internet-only egress. Sandbox setup creates the isolated connector network.".to_string(),
+        alien_core::Platform::Aws if needs_named_subnets => "Network settings:\n\n- `network_mode`: `create-new` or `use-existing`. Private resources require explicit subnet IDs, so the default network is not offered.\n- `vpc_cidr`, `availability_zones`: used with `create-new`.\n- `vpc_id`, `public_subnet_ids`, `private_subnet_ids`, `security_group_ids`: required with `use-existing`.".to_string(),
         alien_core::Platform::Aws => "Network settings:\n\n- `network_mode`: `create-new`, `use-existing`, or `use-default`.\n- `vpc_cidr`, `availability_zones`: used with `create-new`.\n- `vpc_id`, `public_subnet_ids`, `private_subnet_ids`, `security_group_ids`: required with `use-existing`.".to_string(),
         alien_core::Platform::Gcp => "Network settings:\n\n- `network_mode`: `create-new`, `use-existing`, or `use-default`.\n- `network_cidr`, `availability_zones`: used with `create-new`.\n- `network_name`, `subnet_name`, `network_region`: required with `use-existing`.".to_string(),
         _ => String::new(),

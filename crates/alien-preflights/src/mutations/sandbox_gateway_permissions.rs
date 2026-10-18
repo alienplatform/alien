@@ -107,7 +107,7 @@ pub(crate) fn configure_aws_gateway_permissions(stack: &mut Stack) -> Result<()>
             entry
                 .config
                 .downcast_ref::<alien_core::Sandbox>()
-                .filter(|sandbox| !matches!(sandbox.egress, alien_core::SandboxEgress::None))
+                .filter(|sandbox| matches!(sandbox.egress, alien_core::SandboxEgress::Internet))
                 .map(|_| id.clone())
         })
         .collect();

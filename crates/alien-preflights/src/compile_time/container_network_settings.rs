@@ -17,7 +17,7 @@ impl CompileTimeCheck for ContainerNetworkSettingsCheck {
                 .config
                 .downcast_ref::<Container>()
                 .is_some_and(|container| {
-                    container.internal_load_balancer.is_some() || container.internet_only_egress
+                    !container.internal_endpoints.is_empty() || container.egress.is_some()
                 })
         })
     }
@@ -31,11 +31,11 @@ impl CompileTimeCheck for ContainerNetworkSettingsCheck {
             if let Err(error) = container.validate_network_settings() {
                 errors.push(error.to_string());
             }
-            if (container.internal_load_balancer.is_some() || container.internet_only_egress)
+            if (!container.internal_endpoints.is_empty() || container.egress.is_some())
                 && platform != Platform::Aws
             {
                 errors.push(format!(
-                    "Container '{id}': internalLoadBalancer and internetOnlyEgress require the AWS container runtime; {platform} has no implementation for these fields, refusing to deploy without the requested network isolation"
+                    "Container '{id}': internalEndpoint and egress require the AWS container runtime; {platform} has no implementation for these fields, refusing to deploy without the requested network isolation"
                 ));
             }
         }
@@ -61,8 +61,7 @@ mod tests {
                     "cpu": {"min": "1", "desired": "1"},
                     "memory": {"min": "128Mi", "desired": "128Mi"},
                     "permissions": "gateway", "links": [], "ports": [{"port": 3128}],
-                    "internalLoadBalancer": {"ports": [3128], "subnets": ["subnet-1"],
-                        "allowedSources": {"3128": ["10.2.0.0/24"]}}
+                    "internalEndpoints": [{"name":"proxy","port":3128,"from":[{"type":"sandbox","id":"box"}]}]
                 }, "lifecycle": "live", "dependencies": []
             }},
             "permissions": {"profiles": {}}

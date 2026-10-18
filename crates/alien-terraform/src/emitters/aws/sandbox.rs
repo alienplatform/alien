@@ -10,7 +10,8 @@ use crate::{
     emitters::aws::helpers::{
         aws_terraform_permission_context, downcast, emit_iam_role_policy_for_target_with_label,
         iam_policy_name_sanitize, iam_role_block, iam_role_policy_block, jsonencode, nested_block,
-        required_label, resource_prefix_template, service_assume_role_policy, tags, vpc_id_expr,
+        private_subnet_ids_expr, required_label, resource_prefix_template,
+        service_assume_role_policy, tags, vpc_id_expr,
     },
     expr,
 };
@@ -81,8 +82,10 @@ impl TfEmitter for AwsSandboxEmitter {
         let open = !sandbox_needs_connector(ctx.stack, sandbox);
         let subnet_ids = if open {
             Expression::Null
-        } else {
+        } else if matches!(sandbox.egress, SandboxEgress::Internet) {
             super::network::sandbox_subnet_ids(ctx)?
+        } else {
+            private_subnet_ids_expr(ctx)
         };
         // The size whose peak stays inside the declared ceilings. A MicroVM bursts to four times
         // its baseline with no way to opt out, so the baseline is a quarter of what was declared.
@@ -338,33 +341,33 @@ impl TfEmitter for AwsSandboxEmitter {
                 ],
             );
 
-            let network = sandbox_egress_network(ctx.stack).map_err(|error| {
-                AlienError::new(ErrorData::OperationNotSupported {
-                    operation: "sandbox connector".into(),
-                    reason: error.to_string(),
-                })
-            })?;
-            let network_label = ctx.name_for(network.id).ok_or_else(|| {
-                AlienError::new(ErrorData::GenericError {
-                    message: format!("network '{}' has no generated name", network.id),
-                })
-            })?;
-            let connector_dependencies = Expression::from(vec![
-                expr::traversal([
-                    PROPAGATION_BARRIER_RESOURCE,
-                    &format!("{label}_iam_propagation"),
-                ]),
-                expr::traversal([
+            let mut connector_dependencies = vec![expr::traversal([
+                PROPAGATION_BARRIER_RESOURCE,
+                &format!("{label}_iam_propagation"),
+            ])];
+            if matches!(sandbox.egress, SandboxEgress::Internet) {
+                let network = sandbox_egress_network(ctx.stack).map_err(|error| {
+                    AlienError::new(ErrorData::OperationNotSupported {
+                        operation: "sandbox connector".into(),
+                        reason: error.to_string(),
+                    })
+                })?;
+                let network_label = ctx.name_for(network.id).ok_or_else(|| {
+                    AlienError::new(ErrorData::GenericError {
+                        message: format!("network '{}' has no generated name", network.id),
+                    })
+                })?;
+                connector_dependencies.push(expr::traversal([
                     "terraform_data",
                     &format!("{network_label}_sandbox_network_validation"),
-                ]),
-            ]);
+                ]));
+            }
 
             let connector = resource_block(
                 NETWORK_CONNECTOR_RESOURCE,
                 label,
                 [
-                    attr("depends_on", connector_dependencies),
+                    attr("depends_on", Expression::from(connector_dependencies)),
                     attr("name", resource_prefix_template(sandbox.id())),
                     attr(
                         "operator_role",

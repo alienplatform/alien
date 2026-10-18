@@ -30,6 +30,7 @@ ORIGIN = "93.184.216.2"
 PROXY = "93.184.216.3"
 BODY = b"controlled-origin-response\n"
 PREFIX = "alien1609-gw-conformance"
+AGENT_UID = 60000
 
 
 def docker(*args):
@@ -64,7 +65,7 @@ for host in ["localhost","127.0.0.1"]:
  assert subprocess.check_output(["curl","--fail","--silent","--max-time","3",url])==b"loopback-http-ok"
 server.shutdown();print("loopback-http-ok")
 '''
-    assert docker("exec", "-u", "60000:60000", container, "python", "-c", script) == "loopback-http-ok"
+    assert docker("exec", "-u", f"{AGENT_UID}:{AGENT_UID}", container, "python", "-c", script) == "loopback-http-ok"
 
 
 
@@ -363,6 +364,29 @@ class Suite:
         print(json.dumps({"benchmark": result}), flush=True)
 
     def agent(self, image, containers, networks):
+        def equal(actual, expected):
+            assert actual == expected, (actual, expected)
+        # The image provides ordinary app tools only; the agent owns firewall installation.
+        self.record("agent image needs no nft or iptables", lambda: equal(docker(
+            "run", "--rm", "--entrypoint", "python", image, "-c",
+            "import shutil; assert all(shutil.which(x) is None for x in ['nft','iptables','iptables-nft']); print('no firewall tools')"
+        ), "no firewall tools"))
+        failed = PREFIX + "-no-net-admin"
+        failed_root = self.output / "failed-agent"
+        failed_root.mkdir(mode=0o777)
+        failed_root.chmod(0o777)
+        docker("run", "-d", "--name", failed, "--network", "none",
+               "-v", f"{failed_root}:/data", image)
+        containers.append(failed)
+        def cannot_install():
+            deadline = time.monotonic() + 10
+            while docker("inspect", "--format", "{{.State.Running}}", failed) == "true":
+                assert time.monotonic() < deadline, "agent did not fail closed without NET_ADMIN"
+                time.sleep(.05)
+            assert int(docker("inspect", "--format", "{{.State.ExitCode}}", failed)) != 0
+            assert "install transparent forwarding" in docker("logs", failed)
+            assert not (failed_root / "image-env").exists(), "image command started without redirect"
+        self.record("refused netlink installation exits before serving or image code", cannot_install)
         network = PREFIX + "-guest"
         docker("network", "create", "--internal", "--subnet", "172.29.91.0/24", network)
         networks.append(network)
@@ -390,8 +414,6 @@ class Suite:
                 if time.monotonic() > deadline:
                     raise
                 time.sleep(0.1)
-        def equal(actual, expected):
-            assert actual == expected, (actual, expected)
         self.record("agent pending health", lambda: equal(json.loads(call("GET", "/v1/health")[1])["status"], "awaiting-egress-policy"))
         hook = {"microvmId": SUB, "runHookPayload": json.dumps({"gateway": "172.29.91.2:3128", "audience": AUD})}
         self.record("AWS run wrapper bootstrap", lambda: equal(call("POST", "/aws/lambda-microvms/runtime/v1/run", hook)[0], 200))
@@ -400,11 +422,22 @@ class Suite:
         self.record("agent refuses forged identity via authenticated health", lambda: equal(call("PUT", "/v1/egress", {"token": forged})[0], 503))
         self.record("agent token install and path self-check", lambda: equal(call("PUT", "/v1/egress", {"token": self.token()})[0], 204))
         self.record("agent ready health", lambda: equal(json.loads(call("GET", "/v1/health")[1])["status"], "ready"))
-        image_env = docker("exec", "-u", "60000:60000", name, "cat", "/data/image-env")
+        def reinstall():
+            # A second bootstrap replaces the existing tables before failing to bind the
+            # occupied control port. Subsequent packet probes exercise the replacement rules.
+            result = subprocess.run(
+                ["docker", "exec", "--privileged", name, "alien-sandbox-agent"],
+                env={**os.environ, "DOCKER_HOST": "unix:///var/run/docker.sock"},
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=10,
+            )
+            assert result.returncode != 0 and b"bind the agent listener" in result.stdout, result.stdout
+            assert b"install transparent forwarding" not in result.stdout, result.stdout
+        self.record("bootstrap atomically replaces its existing tables", reinstall)
+        image_env = docker("exec", "-u", f"{AGENT_UID}:{AGENT_UID}", name, "cat", "/data/image-env")
         assert "HTTP_PROXY=http://127.0.0.1:15002" in image_env
         assert "ALIEN_SANDBOX_EGRESS_TOKEN" not in image_env and "fake-test-secret" not in image_env
         self.record("gateway command environment preserves localhost HTTP", lambda: check_loopback_http(name))
-        self.record("remote client reaches command UID preview", lambda: check_remote_preview(name, "60000:60000", 9090))
+        self.record("remote client reaches command UID preview", lambda: check_remote_preview(name, f"{AGENT_UID}:{AGENT_UID}", 9090))
         self.record("remote client reaches root preview", lambda: check_remote_preview(name, "0", 9091))
         new_connection = '''import socket
 s=socket.socket();s.settimeout(3);s.bind(("0.0.0.0",9092))
@@ -415,7 +448,7 @@ try:
 except (ConnectionError,TimeoutError): pass
 print("new outbound refused")
 '''
-        self.record("new outbound TCP cannot use incoming reply exception", lambda: equal(docker("exec", "-u", "60000:60000", name, "python", "-c", new_connection), "new outbound refused"))
+        self.record("new outbound TCP cannot use incoming reply exception", lambda: equal(docker("exec", "-u", f"{AGENT_UID}:{AGENT_UID}", name, "python", "-c", new_connection), "new outbound refused"))
         script = '''import socket,ssl,http.client
 ip=socket.gethostbyname("allowed.test")
 assert ip.startswith("198.18."),ip
@@ -427,16 +460,16 @@ with c.wrap_socket(s,server_hostname="allowed.test") as t:
 print("root transparent TLS passed")
 '''
         self.record("root-owned TCP uses synthetic DNS and gateway", lambda: equal(docker("exec", "-u", "0", name, "python", "-c", script), "root transparent TLS passed"))
-        self.record("command UID TCP uses synthetic DNS and gateway", lambda: equal(docker("exec", "-u", "60000:60000", name, "python", "-c", script), "root transparent TLS passed"))
+        self.record("command UID TCP uses synthetic DNS and gateway", lambda: equal(docker("exec", "-u", f"{AGENT_UID}:{AGENT_UID}", name, "python", "-c", script), "root transparent TLS passed"))
         equal(call("PUT", "/v1/egress", {"token": self.token(), "caCert": (self.output / "guest-ca.pem").read_text()})[0], 204)
         injected_script = script.replace('"allowed.test"', '"inject.test"').replace('/fixture-ca.pem', '/opt/alien/egress-ca-bundle.pem').replace('GET / HTTP', 'GET /v1/action HTTP').replace('Host: allowed.test', 'Host: inject.test')
-        self.record("command UID uses installed CA for intercepted TLS", lambda: equal(docker("exec", "-u", "60000:60000", name, "python", "-c", injected_script), "root transparent TLS passed"))
+        self.record("command UID uses installed CA for intercepted TLS", lambda: equal(docker("exec", "-u", f"{AGENT_UID}:{AGENT_UID}", name, "python", "-c", injected_script), "root transparent TLS passed"))
         memory_check = '''try:
  open("/proc/1/mem","rb")
 except PermissionError: print("agent memory inaccessible")
 else: raise AssertionError("command can read agent memory")
 '''
-        self.record("command UID cannot read agent memory", lambda: equal(docker("exec", "-u", "60000:60000", name, "python", "-c", memory_check), "agent memory inaccessible"))
+        self.record("command UID cannot read agent memory", lambda: equal(docker("exec", "-u", f"{AGENT_UID}:{AGENT_UID}", name, "python", "-c", memory_check), "agent memory inaccessible"))
         docker("exec", name, "python", "-c", 'import socket; assert socket.gethostbyname("exfil-test.test").startswith("198.18.")')
         queries = [json.loads(line)["name"] for line in (self.output / "origin/dns.jsonl").read_text().splitlines()]
         assert "allowed.test" in queries and "exfil-test.test" not in queries
@@ -477,8 +510,8 @@ while True:
         sub = "proxy-only"
         assert self.admin("/v1/policies", {"aud": AUD, "sub": sub, "policy": self.policy})[0] == 204
         docker("run", "-d", "--name", name, "--network", PREFIX + "-guest", "--ip", "172.29.91.4",
-               "--user", "60000:60000", "--cap-drop", "ALL", "--read-only",
-               "--tmpfs", "/data:rw,uid=60000,gid=60000,mode=0700",
+               "--user", f"{AGENT_UID}:{AGENT_UID}", "--cap-drop", "ALL", "--read-only",
+               "--tmpfs", f"/data:rw,uid={AGENT_UID},gid={AGENT_UID},mode=0700",
                "-e", "ALIEN_SANDBOX_ISOLATION=platform", "-e", "ALIEN_SANDBOX_SESSION_ID=" + sub,
                "-e", "ALIEN_SANDBOX_EGRESS_AUDIENCE=" + AUD, "-e", "ALIEN_SANDBOX_EGRESS_GATEWAY=172.29.91.2:3128",
                "-v", f"{self.output / 'origin/ca.pem'}:/fixture-ca.pem:ro", image)
@@ -524,13 +557,18 @@ print("proxy-only passed")
 
 
 def main():
+    global AGENT_UID
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--agent-image")
+    parser.add_argument("--agent-uid", type=int, default=60000, help="command UID/GID configured in the agent fixture image")
     parser.add_argument("--gateway-binary", type=Path)
     parser.add_argument("--vault-config", action="store_true")
     args = parser.parse_args()
+    if args.agent_uid <= 0:
+        parser.error("--agent-uid must be a non-root UID")
+    AGENT_UID = args.agent_uid
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     for name in ["origin", "vault", "kv"]:
@@ -583,6 +621,8 @@ def main():
                 time.sleep(0.1)
         suite.run()
         if args.agent_image:
+            from legacy_egress import check_legacy_agents
+            check_legacy_agents(suite, args.agent_image, containers, AGENT_UID)
             suite.agent(args.agent_image, containers, networks)
             suite.proxy_only(args.agent_image, containers)
         if args.vault_config:

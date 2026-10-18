@@ -1,5 +1,5 @@
 FROM python:3.13-slim
-RUN apt-get update && apt-get install -y --no-install-recommends nftables curl ca-certificates \
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
     && rm -rf /var/lib/apt/lists/* && mkdir -p /data /opt/alien
 COPY alien-sandbox-agent /usr/local/bin/alien-sandbox-agent
 RUN echo '{"command":["/bin/sh","-c","env > /data/image-env"],"env":{"PATH":"/usr/local/bin:/usr/bin:/bin"},"workingDirectory":"/data"}' > /opt/alien/image-command.json

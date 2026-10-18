@@ -1,13 +1,12 @@
 //! Install the shared gateway before compute sizing and permission derivation.
 
-use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
 use alien_core::{
-    sandbox_egress::{sandbox_egress_network, SANDBOX_EGRESS_GATEWAY_ID},
-    Container, ContainerCode, ContainerInternalLoadBalancer, ContainerLoadBalancerSourceGroup,
-    ContainerLoadBalancerSubnetGroup, ContainerSecurity, ContainerSecurityProfile,
+    sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID, Build, Container, ContainerCode, ContainerEgress,
+    ContainerInternalEndpoint, ContainerSecurity, ContainerSecurityProfile, Daemon,
     DeploymentConfig, HealthCheck, Kv, Platform, Resource, ResourceEntry, ResourceLifecycle,
-    ResourceSpec, Sandbox, SandboxEgress, Stack, StackState,
+    ResourceRef, ResourceSpec, Sandbox, SandboxEgress, Stack, StackState, Worker,
 };
 use alien_error::AlienError;
 use async_trait::async_trait;
@@ -21,7 +20,7 @@ const POLICY_STORE_ID: &str = "egress-state";
 const GATEWAY_IMAGE: &str = "ghcr.io/alienplatform/alien-egress-gateway@sha256:7a3a66b0894c05fca445cbf5fd71e351cd8a9a98c40744acad4496b59574bdbd";
 
 /// Managed AWS deployments use the same compute and service-account machinery
-/// as application containers. OSS deployments retain the explicit native-path warning.
+/// as application containers. Unsupported deployments are refused before execution.
 pub struct SandboxGatewayMutation;
 
 #[async_trait]
@@ -54,10 +53,36 @@ impl StackMutation for SandboxGatewayMutation {
                 resource_id: Some(SANDBOX_EGRESS_GATEWAY_ID.into()),
             })
         };
-        let network = sandbox_egress_network(&stack)
-            .map_err(|error| invalid(error.to_string()))?
-            .id
-            .to_string();
+        let sandboxes: BTreeSet<String> = stack
+            .resources()
+            .filter_map(|(id, entry)| {
+                entry
+                    .config
+                    .downcast_ref::<Sandbox>()
+                    .filter(|sandbox| matches!(sandbox.egress, SandboxEgress::Internet))
+                    .map(|_| id.clone())
+            })
+            .collect();
+        let mut consumers = Vec::new();
+        for (id, entry) in stack.resources() {
+            if sandboxes.contains(id) && entry.remote_access {
+                return Err(invalid(format!("Sandbox '{id}': internet egress cannot be used with remoteAccess because policy administration is private to this deployment")));
+            }
+            let links = entry
+                .config
+                .downcast_ref::<Container>()
+                .map(|r| &r.links)
+                .or_else(|| entry.config.downcast_ref::<Worker>().map(|r| &r.links))
+                .or_else(|| entry.config.downcast_ref::<Daemon>().map(|r| &r.links))
+                .or_else(|| entry.config.downcast_ref::<Build>().map(|r| &r.links));
+            if links.is_some_and(|links| links.iter().any(|link| sandboxes.contains(link.id()))) {
+                if entry.config.downcast_ref::<Build>().is_some() {
+                    return Err(invalid(format!("Build '{id}' cannot manage an internet Sandbox: internalEndpoint access supports Worker, Container and Daemon consumers")));
+                }
+                consumers.push(ResourceRef::new(entry.config.resource_type(), id));
+            }
+        }
+        consumers.sort_by(|a, b| a.id().cmp(b.id()));
         let kv = Kv::new(POLICY_STORE_ID.into()).build();
         if let Some(existing) = stack.resources.get(POLICY_STORE_ID) {
             if existing.config.downcast_ref::<Kv>().is_none() || existing.enabled_when.is_some() {
@@ -95,15 +120,14 @@ impl StackMutation for SandboxGatewayMutation {
                 run_as_group: 1000,
                 read_only_root_filesystem: true,
             })
-            .internet_only_egress(true)
-            .internal_load_balancer(ContainerInternalLoadBalancer::Network {
-                ports: vec![3128, 3129],
-                network,
-                subnet_group: ContainerLoadBalancerSubnetGroup::SandboxGateway,
-                allowed_source_groups: BTreeMap::from([
-                    (3128, ContainerLoadBalancerSourceGroup::Sandbox),
-                    (3129, ContainerLoadBalancerSourceGroup::Runtime),
-                ]),
+            .egress(ContainerEgress::Internet)
+            .internal_endpoint(ContainerInternalEndpoint {
+                name: "proxy".into(),
+                port: 3128,
+                from: sandboxes
+                    .iter()
+                    .map(|id| ResourceRef::new(Sandbox::RESOURCE_TYPE, id))
+                    .collect(),
             })
             .health_check(HealthCheck {
                 path: "/health".into(),
@@ -113,10 +137,17 @@ impl StackMutation for SandboxGatewayMutation {
                 failure_threshold: 3,
             })
             .commands_enabled(false)
-            .port(3128)
-            .port(3129)
-            .link(&kv)
-            .build();
+            .link(&kv);
+        let gateway = if consumers.is_empty() {
+            gateway
+        } else {
+            gateway.internal_endpoint(ContainerInternalEndpoint {
+                name: "admin".into(),
+                port: 3129,
+                from: consumers,
+            })
+        }
+        .build();
         gateway
             .validate_network_settings()
             .map_err(|error| invalid(error.to_string()))?;
@@ -129,8 +160,8 @@ impl StackMutation for SandboxGatewayMutation {
             // Re-running preparation preserves computed placement and dependency links.
             if container.code != gateway.code
                 || container.security != gateway.security
-                || container.internal_load_balancer != gateway.internal_load_balancer
-                || !container.internet_only_egress
+                || container.internal_endpoints != gateway.internal_endpoints
+                || container.egress != gateway.egress
                 || container.replicas != gateway.replicas
                 || container.permissions != gateway.permissions
                 || container.ports != gateway.ports
