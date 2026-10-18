@@ -5807,12 +5807,13 @@ mod tests {
 
     use alien_client_core::ErrorData as CloudClientErrorData;
     use alien_core::{
-        CertificateStatus, DnsRecordStatus, DomainMetadata, Platform, ResourceDomainInfo,
-        ResourceStatus, Worker, WorkerOutputs,
+        CertificateStatus, DnsRecordStatus, DomainMetadata, Network, NetworkSettings, Platform,
+        ResourceDomainInfo, ResourceStatus, Worker, WorkerOutputs,
     };
     use alien_error::AlienError;
     use alien_gcp_clients::cloudrun::{
-        Condition, ConditionState, Ingress as CloudRunIngress, MockCloudRunApi, Service,
+        Condition, ConditionState, Ingress as CloudRunIngress, MockCloudRunApi, NetworkInterface,
+        RevisionTemplate, Service, VpcAccess, VpcEgress,
     };
     use alien_gcp_clients::gcp::compute::{Address, MockComputeApi, Operation, OperationStatus};
     use alien_gcp_clients::iam::{IamPolicy, MockIamApi};
@@ -6863,6 +6864,147 @@ mod tests {
         });
 
         Arc::new(mock_cloudrun)
+    }
+
+    #[rstest]
+    #[case::default_network(Some(NetworkSettings::UseDefault), Some(VpcEgress::PrivateRangesOnly))]
+    #[case::created_network(Some(NetworkSettings::Create { cidr: None, availability_zones: 2 }), Some(VpcEgress::AllTraffic))]
+    #[case::byo_network(Some(NetworkSettings::ByoVpcGcp {
+        network_name: "customer-vpc".to_string(),
+        subnet_name: "customer-subnet".to_string(),
+        region: "us-central1".to_string(),
+    }), Some(VpcEgress::PrivateRangesOnly))]
+    #[case::no_network(None, None)]
+    #[tokio::test]
+    async fn worker_vpc_egress_follows_network_mode(
+        #[case] settings: Option<NetworkSettings>,
+        #[case] expected_egress: Option<VpcEgress>,
+        #[values(false, true)] updating: bool,
+    ) {
+        let worker = basic_function();
+        let service_name = format!("test-{}", worker.id);
+        let sent_services = Arc::new(Mutex::new(Vec::new()));
+        let mut cloudrun = MockCloudRunApi::new();
+        let created_services = Arc::clone(&sent_services);
+        cloudrun
+            .expect_create_service()
+            .times(usize::from(!updating))
+            .returning(move |_, _, service, _| {
+                created_services.lock().unwrap().push(service);
+                Ok(create_successful_operation_response("create-worker"))
+            });
+        let updated_services = Arc::clone(&sent_services);
+        let expected_name = service_name.clone();
+        cloudrun
+            .expect_patch_service()
+            .times(usize::from(updating))
+            .returning(move |_, name, service, _, _, allow_missing| {
+                assert_eq!(name, expected_name);
+                assert_eq!(service.etag.as_deref(), Some("existing-etag"));
+                assert_ne!(allow_missing, Some(true));
+                updated_services.lock().unwrap().push(service);
+                Ok(create_successful_operation_response("update-worker"))
+            });
+        cloudrun.expect_delete_service().never();
+        cloudrun
+            .expect_get_operation()
+            .returning(|_, _| Ok(create_completed_operation_response("worker")));
+        cloudrun.expect_get_service().returning(|_, name| {
+            let mut service = create_successful_service_response(&name);
+            service.etag = Some("existing-etag".to_string());
+            // Existing services use ALL_TRAFFIC, including ones on a network without NAT.
+            service.template = Some(
+                RevisionTemplate::builder()
+                    .vpc_access(VpcAccess::builder().egress(VpcEgress::AllTraffic).build())
+                    .build(),
+            );
+            Ok(service)
+        });
+        cloudrun
+            .expect_get_service_iam_policy()
+            .returning(|_, _| Ok(create_empty_iam_policy()));
+        cloudrun
+            .expect_set_service_iam_policy()
+            .returning(|_, _, _| Ok(create_empty_iam_policy()));
+
+        let controller = if updating {
+            GcpWorkerController::mock_ready(&service_name)
+        } else {
+            GcpWorkerController::default()
+        };
+        let mut builder = SingleControllerExecutor::builder()
+            .resource(worker.clone())
+            .controller(controller)
+            .platform(Platform::Gcp)
+            .service_provider(setup_mock_service_provider(Arc::new(cloudrun), None))
+            .with_test_dependencies();
+        let mut expected_interface = None;
+        if let Some(settings) = settings {
+            let mut network = crate::network::GcpNetworkController::mock_ready("default-network");
+            match &settings {
+                NetworkSettings::UseDefault => {
+                    network.network_name = Some("default".to_string());
+                    network.subnetwork_name = Some("default".to_string());
+                    network.is_byo_vpc = true;
+                    network.cloud_nat_name = None;
+                }
+                NetworkSettings::ByoVpcGcp {
+                    network_name,
+                    subnet_name,
+                    ..
+                } => {
+                    network.network_name = Some(network_name.clone());
+                    network.subnetwork_name = Some(subnet_name.clone());
+                    network.is_byo_vpc = true;
+                    network.cloud_nat_name = None;
+                }
+                NetworkSettings::Create { .. } => {}
+                _ => unreachable!(),
+            }
+            expected_interface = Some(
+                NetworkInterface::builder()
+                    .network(network.network_name.clone().unwrap())
+                    .subnetwork(network.subnetwork_name.clone().unwrap())
+                    .build(),
+            );
+            builder = builder.with_dependency(
+                Network::new("default-network".to_string())
+                    .settings(settings)
+                    .build(),
+                network,
+            );
+        }
+        let mut executor = builder.build().await.unwrap();
+        if updating {
+            assert_eq!(executor.status(), ResourceStatus::Running);
+            let mut updated_worker = worker;
+            updated_worker
+                .environment
+                .insert("RELEASE".to_string(), "next".to_string());
+            executor.update(updated_worker).unwrap();
+        }
+        executor.run_until_terminal().await.unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        let sent_services = sent_services.lock().unwrap();
+        assert_eq!(sent_services.len(), 1);
+        let vpc_access = sent_services[0]
+            .template
+            .as_ref()
+            .unwrap()
+            .vpc_access
+            .as_ref();
+        assert_eq!(
+            vpc_access.and_then(|access| access.egress.clone()),
+            expected_egress
+        );
+        if let Some(expected_interface) = expected_interface {
+            assert_eq!(
+                vpc_access.unwrap().network_interfaces,
+                vec![expected_interface]
+            );
+        } else {
+            assert!(vpc_access.is_none());
+        }
     }
 
     // ─────────────── CREATE AND DELETE FLOW TESTS ────────────────────
