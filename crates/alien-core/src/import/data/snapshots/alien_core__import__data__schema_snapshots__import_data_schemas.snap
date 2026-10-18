@@ -435,6 +435,14 @@ expression: schemas
           "null"
         ]
       },
+      "egressPublicIps": {
+        "default": [],
+        "description": "Public addresses allocated to this deployment's NAT; empty when unknown.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
       "eipAllocationId": {
         "description": "Elastic IP allocation ID backing the NAT gateway.",
         "type": [

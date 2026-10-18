@@ -145,6 +145,12 @@ impl TfEmitter for AwsNetworkEmitter {
                     )),
                 ),
                 (
+                    "egressPublicIps",
+                    expr::raw(format!(
+                        "var.network_mode == \"create-new\" ? [aws_eip.{label}_nat[0].public_ip] : []"
+                    )),
+                ),
+                (
                     "publicSubnetIds",
                     expr::raw(format!(
                         "var.network_mode == \"create-new\" ? aws_subnet.{label}_public[*].id : var.network_mode == \"use-existing\" ? compact([for id in var.public_subnet_ids : trimspace(id)]) : []"
