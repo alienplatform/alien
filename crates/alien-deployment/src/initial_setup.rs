@@ -9,7 +9,7 @@ use alien_error::{AlienError, Context};
 use alien_infra::setup_scaffolding::{
     self, ScaffoldingProgress, SeedContext, SetupScaffoldingContext,
 };
-use alien_infra::{ImporterRegistry, StackExecutor, StackStateExt};
+use alien_infra::{ImporterRegistry, RunningResourcePolicy, StackExecutor, StackStateExt};
 use tracing::{debug, info};
 
 /// Handle InitialSetup status (deploy setup-owned Frozen resources)
@@ -86,7 +86,8 @@ pub async fn handle_initial_setup(
         .service_provider(service_provider.clone())
         .initial_setup_authority(runtime_metadata.initial_setup_authority)
         .lifecycle_filter(vec![ResourceLifecycle::Frozen])
-        .step_running_resources(false)
+        // Imported keys must establish availability before dependent setup work can advance.
+        .running_resource_policy(RunningResourcePolicy::OptIn)
         // Resumed setup may contain unfinished Live work; only runtime may advance it.
         .step_out_of_scope_resources(false)
         .build()
@@ -640,6 +641,7 @@ mod tests {
         ListAttachedRolePoliciesResponse, ListAttachedRolePoliciesResult, ListRolePoliciesResponse,
         ListRolePoliciesResult, MockIamApi, PolicyNames,
     };
+    use alien_aws_clients::kms::{DescribeKeyResponse, KeyMetadata, MockKmsApi};
     use alien_aws_clients::lambda_microvms::{
         CreateMicrovmImageResponse, MicrovmImage, MicrovmImageVersion, MockLambdaMicrovmsApi,
     };
@@ -657,7 +659,10 @@ mod tests {
         DefaultPlatformServiceProvider, MockPlatformServiceProvider, StackResourceStateExt,
     };
     use std::collections::BTreeMap;
-    use std::sync::Arc;
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
 
     fn config() -> DeploymentConfig {
         DeploymentConfig::builder()
@@ -731,6 +736,153 @@ mod tests {
                 ..Default::default()
             }),
         }
+    }
+
+    #[tokio::test]
+    async fn imported_key_health_unblocks_initial_setup_without_advancing_live_work() {
+        const ARN: &str = "arn:aws:kms:us-east-1:123456789012:key/initial-setup";
+        let key = alien_core::Key::new("key".to_string()).build();
+        let storage = Storage::new("initial-key-dependent".to_string()).build();
+        let seed_stack = Stack::new("test".to_string())
+            .add(storage.clone(), ResourceLifecycle::Frozen)
+            .build();
+        // The test controller represents an imported Frozen resource whose runtime
+        // management is unfinished, like a compute pool waiting to start its fleet.
+        let mut registered = StackExecutor::builder(&seed_stack, ClientConfig::Test)
+            .deployment_config(&config())
+            .initial_setup_authority(InitialSetupAuthority::DirectSetup)
+            .build()
+            .unwrap()
+            .step(StackState::new(Platform::Test))
+            .await
+            .unwrap()
+            .next_state;
+        let dependency = alien_core::ResourceRef::new(alien_core::Key::RESOURCE_TYPE, "key");
+        let stack = Stack::new("test".to_string())
+            .add(key, ResourceLifecycle::Frozen)
+            .add_with_dependencies(storage, ResourceLifecycle::Frozen, vec![dependency.clone()])
+            .add(
+                Storage::new("live".to_string()).build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        let dependent = registered
+            .resources
+            .get_mut("initial-key-dependent")
+            .unwrap();
+        dependent.dependencies = vec![dependency];
+        dependent.controller_platform = Some(Platform::Aws);
+        let original_dependent = dependent.clone();
+        registered.platform = Platform::Aws;
+        registered.resources.insert(
+            "key".to_string(),
+            ImporterRegistry::built_in()
+                .run(
+                    &alien_core::Key::RESOURCE_TYPE,
+                    Platform::Aws,
+                    serde_json::json!({"keyArn": ARN}),
+                    &alien_core::import::ImportContext {
+                        resource_id: "key",
+                        platform: Platform::Aws,
+                        region: "us-east-1",
+                        stack_settings: &StackSettings::default(),
+                        management_config: None,
+                        resource: &stack.resources["key"],
+                    },
+                )
+                .unwrap(),
+        );
+        let enabled = Arc::new(AtomicBool::new(false));
+        let observed = enabled.clone();
+        let mut kms = MockKmsApi::new();
+        kms.expect_describe_key()
+            .withf(|arn| arn == ARN)
+            .returning(move |_| {
+                let enabled = observed.load(Ordering::SeqCst);
+                Ok(DescribeKeyResponse {
+                    key_metadata: KeyMetadata {
+                        arn: ARN.to_string(),
+                        key_id: "initial-setup".to_string(),
+                        enabled,
+                        key_state: if enabled { "Enabled" } else { "Disabled" }.to_string(),
+                        key_usage: "ENCRYPT_DECRYPT".to_string(),
+                        key_spec: "SYMMETRIC_DEFAULT".to_string(),
+                        origin: Some("AWS_KMS".to_string()),
+                        deletion_date: None,
+                    },
+                })
+            });
+        let kms = Arc::new(kms);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_kms_client()
+            .returning(move |_| Ok(kms.clone()));
+        let provider = Arc::new(provider);
+        let mut state = DeploymentState {
+            status: DeploymentStatus::InitialSetup,
+            platform: Platform::Aws,
+            current_release: None,
+            target_release: None,
+            stack_state: Some(registered),
+            error: None,
+            environment_info: None,
+            retry_requested: false,
+            protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+            runtime_metadata: Some(RuntimeMetadata {
+                prepared_stack: Some(stack),
+                initial_setup_authority: InitialSetupAuthority::ImportedHandoff,
+                ..Default::default()
+            }),
+        };
+        for _ in 0..2 {
+            state = handle_initial_setup(state, config(), aws_client_config(), provider.clone())
+                .await
+                .unwrap()
+                .state;
+            assert_eq!(state.status, DeploymentStatus::InitialSetup);
+            let resources = &state.stack_state.as_ref().unwrap().resources;
+            assert_eq!(
+                resources["initial-key-dependent"].status,
+                original_dependent.status
+            );
+            assert_eq!(
+                resources["initial-key-dependent"].internal_state,
+                original_dependent.internal_state
+            );
+            assert!(!resources.contains_key("live"));
+        }
+        enabled.store(true, Ordering::SeqCst);
+        for _ in 0..4 {
+            if state.status != DeploymentStatus::InitialSetup {
+                break;
+            }
+            state = handle_initial_setup(state, config(), aws_client_config(), provider.clone())
+                .await
+                .unwrap()
+                .state;
+        }
+        assert_eq!(
+            state.status,
+            DeploymentStatus::Provisioning,
+            "{:?}",
+            state.error
+        );
+        let resources = &state.stack_state.as_ref().unwrap().resources;
+        assert_eq!(
+            resources["initial-key-dependent"].status,
+            ResourceStatus::Running
+        );
+        assert_eq!(
+            resources["key"]
+                .outputs
+                .as_ref()
+                .unwrap()
+                .downcast_ref::<alien_core::KeyOutputs>()
+                .unwrap()
+                .available,
+            Some(true)
+        );
+        assert!(!resources.contains_key("live"));
     }
 
     const BUILD_ROLE: &str = "test-agents-build";
@@ -1680,10 +1832,9 @@ mod tests {
         assert_eq!(binding["imageVersion"], "1.0");
     }
 
-    /// A seed that cannot be applied must stop setup: handing off would start the runtime
-    /// controller from a state setup never registered.
+    /// Corrupt runtime state must stop setup before handoff and retain the verified scaffolding.
     #[tokio::test]
-    async fn a_seed_that_cannot_be_applied_stops_setup_before_handoff() {
+    async fn corrupt_runtime_state_stops_setup_before_handoff() {
         let mut deployment =
             with_serving_sandbox(live_sandbox_setup(InitialSetupAuthority::DirectSetup)).await;
         let sandbox = deployment
@@ -1702,15 +1853,15 @@ mod tests {
             with_iam(ready_role()),
         )
         .await
-        .expect("a seed failure is a failed setup, not a lost step");
+        .expect("invalid runtime state is a failed setup, not a lost step");
         assert_eq!(
             result.state.status,
             DeploymentStatus::InitialSetupFailed,
             "setup must not hand off an unseeded sandbox"
         );
         assert!(
-            format!("{:?}", result.state.error).contains("the existing state cannot take the seed"),
-            "the seed's own failure surfaces: {:?}",
+            format!("{:?}", result.state.error).contains("noSuchState"),
+            "the invalid controller state surfaces: {:?}",
             result.state.error
         );
         assert_eq!(
