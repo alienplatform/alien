@@ -242,7 +242,7 @@ async fn azure_declares_no_lifetime_and_sends_nothing() {
         Arc::new(alien_azure_clients::azure::sandbox_data_plane::MockSandboxDataPlaneApi::new()),
         "group".to_string(),
         "ubuntu".to_string(),
-        SandboxEgress::Allow,
+        SandboxEgress::Internet,
         None,
         "1".to_string(),
         "2Gi".to_string(),
@@ -282,6 +282,7 @@ async fn kubernetes_narrows_the_platform_flag_and_claims_nothing() {
     let sandbox = KubernetesSandbox::new(
         "sbx",
         &KubernetesSandboxBinding {
+            egress: None,
             namespace: BindingValue::Value("alien".to_string()),
             runtime_class: BindingValue::Value("gvisor".to_string()),
             selector: BindingValue::Value("alien/sandbox=sbx".to_string()),
@@ -331,6 +332,7 @@ async fn local_declares_no_lifetime_and_asks_its_manager_for_nothing() {
     let sandbox = LocalSandbox::new(
         "sbx",
         &LocalSandboxBinding {
+            egress: None,
             manager_url: BindingValue::Value(manager),
             sandbox_key: BindingValue::Value("sbx".to_string()),
             token_path: BindingValue::Value(token.path().display().to_string()),

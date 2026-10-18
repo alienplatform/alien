@@ -1958,7 +1958,7 @@ fn remote_sandbox_binding(
             // Bypassable rather than unreachable: the grant is a data-plane role whose holder
             // creates sandboxes directly, so handing out the lease would report a restriction
             // that is not one. Same reference as the AWS arm for the full contrast.
-            if !matches!(binding.egress, alien_core::SandboxEgress::Allow) {
+            if !matches!(binding.egress, alien_core::SandboxEgress::Internet) {
                 return Err(ErrorData::bad_request(format!(
                     "Sandbox resource '{resource_id}' restricts egress; Remote Bindings can only reach a sandbox declared with open egress"
                 )));
@@ -1989,7 +1989,7 @@ fn remote_sandbox_binding(
                 )?,
                 disk_image: concrete_binding_value(&binding.disk_image, "Azure sandbox diskImage")?,
                 // Checked immediately above, so this is the checked value rather than a literal.
-                allow_egress: matches!(binding.egress, alien_core::SandboxEgress::Allow),
+                allow_egress: matches!(binding.egress, alien_core::SandboxEgress::Internet),
                 idle_pause_seconds: binding.idle_pause_seconds,
                 cpu: optional(binding.cpu, "Azure sandbox cpu")?,
                 memory: optional(binding.memory, "Azure sandbox memory")?,

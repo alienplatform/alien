@@ -846,7 +846,7 @@ mod tests {
             .code(alien_core::SandboxCode::Image {
                 image: "s3://acme-artifacts/sandbox-bundle/f00dcafe/bundle.zip".to_string(),
             })
-            .egress(alien_core::SandboxEgress::Allow)
+            .egress(alien_core::SandboxEgress::Internet)
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
@@ -1212,7 +1212,7 @@ mod tests {
                 .code(alien_core::SandboxCode::Image {
                     image: "s3://acme/sandbox-bundle/f00d/bundle.zip".to_string(),
                 })
-                .egress(alien_core::SandboxEgress::Allow)
+                .egress(alien_core::SandboxEgress::Internet)
                 .lifecycle(alien_core::SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,

@@ -177,9 +177,9 @@ pub fn sandbox_egress_network<'a>(
     egress: &SandboxEgress,
 ) -> Result<Option<SandboxEgressNetwork<'a>>, SandboxEgressRefusal> {
     match egress {
-        SandboxEgress::Allow => return Ok(None),
-        SandboxEgress::AllowDomains { .. } => return Err(SandboxEgressRefusal::DomainAllowList),
-        SandboxEgress::Deny => {}
+        SandboxEgress::Internet => return Ok(None),
+        SandboxEgress::Allow { .. } => return Err(SandboxEgressRefusal::DomainAllowList),
+        SandboxEgress::None => {}
     }
     let (id, entry, network) = stack
         .resources()
@@ -258,7 +258,7 @@ mod tests {
                     ResourceLifecycle::Frozen,
                 )
                 .build();
-            let found = sandbox_egress_network(&stack, &SandboxEgress::Deny)
+            let found = sandbox_egress_network(&stack, &SandboxEgress::None)
                 .expect("a created or brought VPC is attachable")
                 .expect("deny attaches to a network");
             assert_eq!((found.id, found.vpc), ("first", expected));
@@ -302,33 +302,33 @@ mod tests {
             subnet_name: "subnet".to_string(),
             region: "us-central1".to_string(),
         };
-        let domains = || SandboxEgress::AllowDomains {
-            domains: vec!["example.com".to_string()],
+        let domains = || SandboxEgress::Allow {
+            allow: vec!["example.com".to_string()],
         };
 
         let cases = [
-            (SandboxEgress::Allow, None, Ok(None)),
+            (SandboxEgress::Internet, None, Ok(None)),
             (
-                SandboxEgress::Allow,
+                SandboxEgress::Internet,
                 Some(NetworkSettings::UseDefault),
                 Ok(None),
             ),
-            (SandboxEgress::Allow, Some(byo_gcp()), Ok(None)),
+            (SandboxEgress::Internet, Some(byo_gcp()), Ok(None)),
             (domains(), None, Err(DomainAllowList)),
             (domains(), Some(create()), Err(DomainAllowList)),
-            (SandboxEgress::Deny, None, Err(NoNetwork)),
-            (SandboxEgress::Deny, Some(create()), Ok(Some(Created))),
+            (SandboxEgress::None, None, Err(NoNetwork)),
+            (SandboxEgress::None, Some(create()), Ok(Some(Created))),
             (
-                SandboxEgress::Deny,
+                SandboxEgress::None,
                 Some(byo_aws()),
                 Ok(Some(BroughtByCustomer)),
             ),
             (
-                SandboxEgress::Deny,
+                SandboxEgress::None,
                 Some(NetworkSettings::UseDefault),
                 Err(DefaultVpc),
             ),
-            (SandboxEgress::Deny, Some(byo_gcp()), Err(OtherCloudNetwork)),
+            (SandboxEgress::None, Some(byo_gcp()), Err(OtherCloudNetwork)),
         ];
         for (egress, network, expected) in cases {
             let label = format!("{egress:?} on {network:?}");

@@ -49,7 +49,7 @@ fn a_sandbox_emits_its_network_policy_and_the_brokers_rbac() {
                 .code(SandboxCode::Image {
                     image: "ubuntu:24.04".to_string(),
                 })
-                .egress(SandboxEgress::Deny)
+                .egress(SandboxEgress::None)
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: Some(3600),
                     idle_pause_seconds: None,
@@ -105,7 +105,7 @@ fn a_sandbox_allowing_egress_still_denies_the_metadata_endpoint() {
                 .code(SandboxCode::Image {
                     image: "ubuntu:24.04".to_string(),
                 })
-                .egress(SandboxEgress::Allow)
+                .egress(SandboxEgress::Internet)
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
@@ -178,8 +178,8 @@ fn a_hostname_allowlist_is_refused_rather_than_widened() {
                 .code(SandboxCode::Image {
                     image: "ubuntu:24.04".to_string(),
                 })
-                .egress(SandboxEgress::AllowDomains {
-                    domains: vec!["example.com".to_string()],
+                .egress(SandboxEgress::Allow {
+                    allow: vec!["example.com".to_string()],
                 })
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,

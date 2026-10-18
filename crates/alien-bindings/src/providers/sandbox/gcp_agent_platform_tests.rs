@@ -1605,8 +1605,8 @@ async fn terminate_reports_unconfirmed_when_the_sandbox_stays_present() {
 fn egress_refuses_domain_scoping_and_names_the_modes() {
     let error = egress_control_config(
         "sbx-7",
-        &SandboxEgress::AllowDomains {
-            domains: vec!["x.io".into()],
+        &SandboxEgress::Allow {
+            allow: vec!["x.io".into()],
         },
     )
     .expect_err("domain-scoped egress has no representation");
@@ -1619,13 +1619,13 @@ fn egress_refuses_domain_scoping_and_names_the_modes() {
     );
 
     assert_eq!(
-        egress_control_config("s", &SandboxEgress::Deny)
+        egress_control_config("s", &SandboxEgress::None)
             .expect("deny maps")
             .internet_access,
         Some(false)
     );
     assert_eq!(
-        egress_control_config("s", &SandboxEgress::Allow)
+        egress_control_config("s", &SandboxEgress::Internet)
             .expect("allow maps")
             .internet_access,
         Some(true)

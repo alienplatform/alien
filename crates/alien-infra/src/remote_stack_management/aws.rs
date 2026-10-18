@@ -1227,7 +1227,7 @@ mod tests {
                 .code(SandboxCode::Image {
                     image: "s3://acme-artifacts/sandbox-bundle/f00dcafe/bundle.zip".to_string(),
                 })
-                .egress(SandboxEgress::Allow)
+                .egress(SandboxEgress::Internet)
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,

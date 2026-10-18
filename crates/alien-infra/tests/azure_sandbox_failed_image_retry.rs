@@ -104,7 +104,7 @@ async fn a_failed_build_is_rebuilt_on_retry() {
                 .code(SandboxCode::Image {
                     image: PYTHON.to_string(),
                 })
-                .egress(SandboxEgress::Allow)
+                .egress(SandboxEgress::Internet)
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,

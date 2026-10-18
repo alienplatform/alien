@@ -1052,6 +1052,9 @@ pub trait Container: Binding {
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreateSandboxRequest {
+    /// Optional policy within the declaration; omission uses the declared policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub egress: Option<alien_core::SandboxEgress>,
     /// Sandbox id to reconnect to, for the verbs that take one. AWS, Azure and GCP always
     /// allocate their own on `create` and ignore this; only Local and Kubernetes honor it as the
     /// new sandbox's id. Read the id back from the response rather than assume the one sent.
@@ -1296,6 +1299,22 @@ pub struct PreviewCapability {
 /// typed error — an unsupported capability is never a silent no-op.
 #[async_trait]
 pub trait Sandbox: Binding {
+    /// Deployment bound, absent only for a binding from before egress overrides were supported.
+    fn egress_bound(&self) -> Option<&alien_core::SandboxEgress>;
+
+    /// Changes a sandbox's policy within its declaration, including while paused.
+    /// Backends without gateway enforcement refuse this operation explicitly.
+    async fn update_egress(
+        &self,
+        _sandbox_id: &str,
+        egress: alien_core::SandboxEgress,
+    ) -> Result<()> {
+        crate::providers::sandbox::egress::check_bound(&egress, self.egress_bound())?;
+        Err(crate::providers::sandbox::egress::unsupported(
+            "update_egress",
+        ))
+    }
+
     /// What this platform's backend supports.
     fn capabilities(&self) -> alien_core::SandboxCapabilities;
 
