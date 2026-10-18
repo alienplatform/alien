@@ -96,7 +96,7 @@ fn build_policy(
         rules
     });
     let egress = config.egress.map(|_| {
-        vec![
+        let mut rules = vec![
             NetworkPolicyEgressRule {
                 to: Some(vec![NetworkPolicyPeer {
                     ip_block: Some(IPBlock {
@@ -144,7 +144,21 @@ fn build_policy(
                 }]),
                 ports: Some(vec![port(53, "UDP"), port(53, "TCP")]),
             },
-        ]
+        ];
+        // Replicas may synchronize only with the same Container in this deployment,
+        // on its declared ports. Other overlay destinations remain denied.
+        if !config.ports.is_empty() {
+            rules.push(NetworkPolicyEgressRule {
+                to: Some(vec![NetworkPolicyPeer {
+                    pod_selector: Some(selector(kubernetes_branded_resource_labels(
+                        ctx, &config.id,
+                    ))),
+                    ..Default::default()
+                }]),
+                ports: Some(config.ports.iter().map(|p| port(p.port, "TCP")).collect()),
+            });
+        }
+        rules
     });
     let mut policy_types = Vec::new();
     if ingress.is_some() {

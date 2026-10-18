@@ -212,4 +212,23 @@ async fn live_policy_client_round_trip() {
         .reconcile_network_policy(&outbound, "outbound", "alien-network-test", &ctx)
         .await
         .unwrap();
+
+    // Two actual pods with this resource identity exercise replica-only reach.
+    let mut replicated = container("replicated", "primary");
+    replicated.ports[0].port = 3129;
+    replicated.egress = Some(alien_core::ContainerEgress::Internet);
+    let mut replica_stack = stack.clone();
+    replica_stack.resources.extend(
+        Stack::new("replica-probe".into())
+            .add(replicated.clone(), ResourceLifecycle::Live)
+            .build()
+            .resources,
+    );
+    ctx.desired_stack = &replica_stack;
+    let mut replica_controller =
+        KubernetesContainerController::mock_ready("replicated", "alien-network-test", false);
+    replica_controller
+        .reconcile_network_policy(&replicated, "replicated", "alien-network-test", &ctx)
+        .await
+        .unwrap();
 }
