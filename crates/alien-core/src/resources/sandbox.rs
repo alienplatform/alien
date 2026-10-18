@@ -348,8 +348,8 @@ impl SandboxCapabilities {
         Self {
             files: true,
             reconnect: true,
-            // No Alien process runs inside the sandbox to own a command between two calls.
-            jobs: false,
+            // Native exec starts a detached shell supervisor with bounded retained output.
+            jobs: true,
             // A sandbox port carries a URL and an auth config, and the auth config offers two
             // things: anonymous, or Entra ID with an allowlist of human email addresses.
             // Neither is a credential scoped to a port for a fixed time, which is what a

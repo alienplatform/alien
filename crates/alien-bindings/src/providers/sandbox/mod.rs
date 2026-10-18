@@ -13,6 +13,9 @@ pub mod aws;
 #[cfg(feature = "azure")]
 pub mod azure;
 
+#[cfg(feature = "azure")]
+mod azure_jobs;
+
 #[cfg(feature = "gcp")]
 pub mod gcp_agent_platform;
 

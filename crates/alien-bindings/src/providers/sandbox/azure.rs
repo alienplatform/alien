@@ -665,21 +665,25 @@ impl Sandbox for AzureSandbox {
         ))
     }
 
-    async fn start_job(&self, _sandbox_id: &str, _request: RunCommandRequest) -> Result<JobStart> {
-        Err(self.unsupported("sandbox.jobStart", NO_JOB_HOST))
+    async fn start_job(&self, sandbox_id: &str, request: RunCommandRequest) -> Result<JobStart> {
+        Self::checked_sandbox_id("sandbox.jobStart", sandbox_id)?;
+        self.judged_sandbox("sandbox.jobStart", sandbox_id).await?;
+        self.start_native_job(sandbox_id, request).await
     }
 
     async fn poll_job(
         &self,
-        _sandbox_id: &str,
-        _job_id: &str,
-        _since_seq: Option<u64>,
+        sandbox_id: &str,
+        job_id: &str,
+        since_seq: Option<u64>,
     ) -> Result<JobPoll> {
-        Err(self.unsupported("sandbox.jobPoll", NO_JOB_HOST))
+        Self::checked_sandbox_id("sandbox.jobPoll", sandbox_id)?;
+        self.poll_native_job(sandbox_id, job_id, since_seq).await
     }
 
-    async fn cancel_job(&self, _sandbox_id: &str, _job_id: &str) -> Result<()> {
-        Err(self.unsupported("sandbox.jobCancel", NO_JOB_HOST))
+    async fn cancel_job(&self, sandbox_id: &str, job_id: &str) -> Result<()> {
+        Self::checked_sandbox_id("sandbox.jobCancel", sandbox_id)?;
+        self.cancel_native_job(sandbox_id, job_id).await
     }
 
     async fn terminate(&self, sandbox_id: &str) -> Result<()> {
@@ -1091,6 +1095,42 @@ impl AzureSandbox {
         })
     }
 
+    pub(super) async fn native_job_exec(
+        &self,
+        sandbox: &str,
+        operation: &str,
+        command: String,
+    ) -> Result<String> {
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            self.client
+                .execute_shell_command(&self.sandbox_group, sandbox, &command, None),
+        )
+        .await
+        .map_err(|_| {
+            AlienError::new(ErrorData::SandboxOutcomeUnknown {
+                operation: operation.to_string(),
+                reason: "native job exec did not acknowledge the request".to_string(),
+            })
+        })?
+        .map_err(|error| {
+            error.context(ErrorData::SandboxOutcomeUnknown {
+                operation: operation.to_string(),
+                reason: "native job exec failed without confirming its outcome".to_string(),
+            })
+        })?;
+        if result.exit_code != Some(0) {
+            return Err(AlienError::new(ErrorData::SandboxCommandFailed {
+                failure: "jobControlFailed".to_string(),
+                reason: format!(
+                    "{operation}: native wrapper exited {:?}: {}",
+                    result.exit_code, result.stderr
+                ),
+            }));
+        }
+        Ok(result.stdout)
+    }
+
     /// Runs one shell string under the client-side guard, which is the timeout plus the grace
     /// the in-sandbox `timeout` needs to report back. See `run_command` for why the timeout is
     /// enforced inside the sandbox.
@@ -1433,7 +1473,7 @@ const RUN_COMMAND: &str = "sandbox.runCommand";
 const CREATE: &str = "sandbox.create";
 const GET_OR_CREATE: &str = "sandbox.getOrCreate";
 
-const NO_JOB_HOST: &str = "Azure sandboxes run no in-guest agent to own a job between calls";
+
 
 /// How long a sandbox has to become able to take work, and how often that is checked.
 const SANDBOX_READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
