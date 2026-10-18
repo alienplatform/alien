@@ -422,6 +422,25 @@ class Suite:
         self.record("agent refuses forged identity via authenticated health", lambda: equal(call("PUT", "/v1/egress", {"token": forged})[0], 503))
         self.record("agent token install and path self-check", lambda: equal(call("PUT", "/v1/egress", {"token": self.token()})[0], 204))
         self.record("agent ready health", lambda: equal(json.loads(call("GET", "/v1/health")[1])["status"], "ready"))
+        def child_socket_boundary():
+            # Docker exec bypasses the agent's child setup: establish that IPv6 exists
+            # in this namespace, then exercise the real command launch boundary.
+            docker("exec", name, "python", "-c", "import socket; socket.socket(socket.AF_INET6).close()")
+            program = '''import socket
+for kind in [socket.SOCK_STREAM, socket.SOCK_DGRAM]:
+ try: socket.socket(socket.AF_INET6, kind)
+ except PermissionError: pass
+ else: raise AssertionError("IPv6 escaped the command boundary")
+socket.socket(socket.AF_INET, socket.SOCK_STREAM).close()
+print("IPv6 blocked; IPv4 available")
+'''
+            status, body = call("POST", "/v1/exec", {"command": ["python", "-c", program], "timeoutMs": 5000})
+            assert status == 200, (status, body)
+            frames = [json.loads(line) for line in body.splitlines()]
+            assert frames[-1]["t"] == "exit" and frames[-1]["code"] == 0, frames
+            output = b"".join(base64.b64decode(frame["data"]) for frame in frames if frame["t"] == "stdout")
+            assert output.strip() == b"IPv6 blocked; IPv4 available", frames
+        self.record("actual exec blocks IPv6 despite namespace socket support", child_socket_boundary)
         def reinstall():
             # A second bootstrap replaces the existing tables before failing to bind the
             # occupied control port. Subsequent packet probes exercise the replacement rules.

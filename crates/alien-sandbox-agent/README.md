@@ -54,8 +54,9 @@ this supervisor contract today. Their ordinary sandbox behavior continues to wor
 
 ## Build a compatible bundle
 
-The image must include `/usr/sbin/nft`. Alien's default sandbox
-base includes nftables. Older bundles cannot enable this setting: startup fails
+The agent programs nftables through native netlink; the image needs no `nft` or
+`iptables` executable. The kernel must support IPv4 nftables and the bootstrap
+process needs `NET_ADMIN`. Older bundles cannot enable this setting: startup fails
 unless they preserve the base image's OCI command as root-owned metadata.
 
 Pull the intended ARM64 base image, then package it with the inspected command:
