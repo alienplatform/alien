@@ -10,6 +10,7 @@ use rcgen::{
     GeneralSubtree, IsCa, Issuer, KeyPair, KeyUsagePurpose, NameConstraints,
 };
 use rustls::{
+    crypto::ring,
     pki_types::{PrivatePkcs8KeyDer, ServerName},
     ClientConfig, RootCertStore, ServerConfig,
 };
@@ -64,7 +65,11 @@ impl Credentials {
                 .into_alien_error()
                 .context(unavailable("load upstream CA"))?;
         }
-        let mut config = ClientConfig::builder()
+        // Workspace feature unification may enable more than one TLS provider.
+        let mut config = ClientConfig::builder_with_provider(Arc::new(ring::default_provider()))
+            .with_safe_default_protocol_versions()
+            .into_alien_error()
+            .context(unavailable("configure upstream TLS versions"))?
             .with_root_certificates(roots)
             .with_no_client_auth();
         config.alpn_protocols = vec![b"http/1.1".to_vec()];
@@ -203,7 +208,10 @@ impl Credentials {
             .signed_by(&key, &issuer)
             .into_alien_error()
             .context(unavailable("sign leaf certificate"))?;
-        let mut config = ServerConfig::builder()
+        let mut config = ServerConfig::builder_with_provider(Arc::new(ring::default_provider()))
+            .with_safe_default_protocol_versions()
+            .into_alien_error()
+            .context(unavailable("configure guest TLS versions"))?
             .with_no_client_auth()
             .with_single_cert(
                 vec![cert.der().clone()],
@@ -340,9 +348,12 @@ mod tests {
                     .unwrap(),
             ))
             .unwrap();
-        let verifier = rustls::client::WebPkiServerVerifier::builder(Arc::new(roots))
-            .build()
-            .unwrap();
+        let verifier = rustls::client::WebPkiServerVerifier::builder_with_provider(
+            Arc::new(roots),
+            Arc::new(ring::default_provider()),
+        )
+        .build()
+        .unwrap();
         for (host, allowed) in [
             ("inject.example.com", true),
             ("unrelated.example.com", false),

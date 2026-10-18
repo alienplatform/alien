@@ -2163,7 +2163,7 @@ mod tests {
             service_provider: &provider,
             resource_prefix: PREFIX,
         };
-        let stack = stack(SandboxEgress::Internet, None);
+        let stack = stack(SandboxEgress::Allow, None);
         let state = stack_state(None);
         let mut records = BTreeMap::new();
 

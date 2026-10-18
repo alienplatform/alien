@@ -900,7 +900,7 @@ mod tests {
             .code(alien_core::SandboxCode::Image {
                 image: BUNDLE_URI.to_string(),
             })
-            .egress(alien_core::SandboxEgress::Internet)
+            .egress(alien_core::SandboxEgress::Allow)
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
@@ -1240,7 +1240,7 @@ mod tests {
             .code(alien_core::SandboxCode::Image {
                 image: BUNDLE_URI.to_string(),
             })
-            .egress(alien_core::SandboxEgress::Internet)
+            .egress(alien_core::SandboxEgress::Allow)
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
@@ -1496,7 +1496,7 @@ mod tests {
             .code(alien_core::SandboxCode::Image {
                 image: PYTHON.to_string(),
             })
-            .egress(alien_core::SandboxEgress::Internet)
+            .egress(alien_core::SandboxEgress::Allow)
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,

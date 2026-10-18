@@ -921,7 +921,7 @@ mod tests {
                 .private_base_image(
                     "123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base:1".to_string(),
                 )
-                .egress(alien_core::SandboxEgress::Internet)
+                .egress(alien_core::SandboxEgress::Allow)
                 .lifecycle(alien_core::SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
