@@ -6,8 +6,11 @@ use crate::{
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use base64::{engine::general_purpose::STANDARD, Engine};
+use futures_util::TryStreamExt;
 use hmac::{Hmac, Mac};
+use serde::de::{Deserializer as _, SeqAccess, Visitor};
 use sha2::{Digest, Sha256};
+use std::io::{BufReader, Read};
 use std::{
     net::{IpAddr, SocketAddr},
     sync::Arc,
@@ -155,12 +158,11 @@ impl Replication {
         peers.dedup();
         Ok(peers)
     }
-    async fn request(&self, peer: SocketAddr, path: &str, body: Vec<u8>) -> Result<(u16, Vec<u8>)> {
+    async fn send(&self, peer: SocketAddr, path: &str, body: Vec<u8>) -> Result<reqwest::Response> {
         let time = chrono::Utc::now().timestamp().max(0) as u64;
         let signature =
             STANDARD.encode(self.mac("POST", path, time, &body)?.finalize().into_bytes());
-        let mut response = self
-            .client
+        self.client
             .post(format!("http://{peer}{path}"))
             .header("content-type", "application/json")
             .header("x-alien-replica-time", time)
@@ -169,7 +171,10 @@ impl Replication {
             .send()
             .await
             .into_alien_error()
-            .context(unavailable("contact replica"))?;
+            .context(unavailable("contact replica"))
+    }
+    async fn request(&self, peer: SocketAddr, path: &str, body: Vec<u8>) -> Result<(u16, Vec<u8>)> {
+        let mut response = self.send(peer, path, body).await?;
         let status = response.status().as_u16();
         let mut bytes = Vec::new();
         while let Some(chunk) = response
@@ -184,6 +189,38 @@ impl Replication {
             bytes.extend_from_slice(&chunk);
         }
         Ok((status, bytes))
+    }
+    async fn pull(
+        &self,
+        peer: SocketAddr,
+        body: Vec<u8>,
+        gateway: Arc<crate::server::Gateway>,
+    ) -> Result<usize> {
+        let response = self.send(peer, "/v1/replicas/pull", body).await?;
+        if response.status().as_u16() != 200 {
+            return Err(AlienError::new(unavailable("replica snapshot unavailable")));
+        }
+        let stream = response.bytes_stream().map_err(std::io::Error::other);
+        let bridge = tokio_util::io::SyncIoBridge::new(tokio_util::io::StreamReader::new(stream));
+        // Serde consumes one string at a time on a blocking worker; no complete snapshot buffer.
+        tokio::task::spawn_blocking(move || {
+            let mut decoder = serde_json::Deserializer::from_reader(BufReader::with_capacity(
+                64 * 1024,
+                bridge.take(MAX_SNAPSHOT as u64),
+            ));
+            let count = decoder
+                .deserialize_seq(RecordVisitor(gateway))
+                .into_alien_error()
+                .context(unavailable("stream replica snapshot"))?;
+            decoder
+                .end()
+                .into_alien_error()
+                .context(unavailable("finish replica snapshot"))?;
+            Ok(count)
+        })
+        .await
+        .into_alien_error()
+        .context(unavailable("join snapshot reader"))?
     }
     /// A successful mutation has reached every discovered healthy replica.
     pub async fn fanout(&self, record: &Record, recovery: bool) -> Result<()> {
@@ -217,24 +254,8 @@ impl Replication {
                 let request = serde_json::to_vec(&gateway.policies.summary()?)
                     .into_alien_error()
                     .context(unavailable("encode replica summary"))?;
-                let (status, bytes) = self.request(peer, "/v1/replicas/pull", request).await?;
-                if status != 200 {
-                    return Err(AlienError::new(unavailable("replica snapshot unavailable")));
-                }
-                let records: Vec<String> = serde_json::from_slice(&bytes)
-                    .into_alien_error()
-                    .context(unavailable("decode replica snapshot"))?;
-                if records.is_empty() {
+                if self.pull(peer, request, gateway.clone()).await? == 0 {
                     break;
-                }
-                for record in records {
-                    let record = Record::verify(
-                        record,
-                        &gateway.keys,
-                        &gateway.config.audiences,
-                        chrono::Utc::now().timestamp_millis().max(0) as u64,
-                    )?;
-                    gateway.policies.apply(record, false)?;
                 }
             }
             // Fetch a new summary after each bounded page so all stored policies can synchronize.
@@ -254,7 +275,7 @@ impl Replication {
                 }
                 for record in records {
                     let bytes = serde_json::to_vec(&Mutation {
-                        record: record.signed,
+                        record: record.signed.clone(),
                     })
                     .into_alien_error()
                     .context(unavailable("encode replica update"))?;
@@ -266,6 +287,32 @@ impl Replication {
         }
         gateway.policies.set_ready();
         Ok(())
+    }
+}
+
+struct RecordVisitor(Arc<crate::server::Gateway>);
+impl<'de> Visitor<'de> for RecordVisitor {
+    type Value = usize;
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("an array of compact signed records")
+    }
+    fn visit_seq<A: SeqAccess<'de>>(self, mut sequence: A) -> std::result::Result<usize, A::Error> {
+        let mut count = 0;
+        while let Some(signed) = sequence.next_element::<String>()? {
+            let record = Record::verify(
+                signed,
+                &self.0.keys,
+                &self.0.config.audiences,
+                chrono::Utc::now().timestamp_millis().max(0) as u64,
+            )
+            .map_err(serde::de::Error::custom)?;
+            self.0
+                .policies
+                .apply(record, false)
+                .map_err(serde::de::Error::custom)?;
+            count += 1;
+        }
+        Ok(count)
     }
 }
 
@@ -287,6 +334,75 @@ pub async fn run(live: Arc<LiveGateway>) -> Result<()> {
             if let Err(error) = gateway.replication.catch_up(&live).await {
                 tracing::warn!(code=%error.code, "replica synchronization failed");
             }
+        }
+    }
+}
+
+#[cfg(all(test, feature = "local"))]
+mod tests {
+    use super::*;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use ed25519_compact::{KeyPair, Seed};
+    use std::collections::HashMap;
+    use tokio::io::AsyncWriteExt;
+
+    #[tokio::test]
+    async fn chunked_snapshot_decodes_one_signed_record_at_a_time() {
+        let pair = KeyPair::from_seed(Seed::new([9; 32]));
+        let bindings = Arc::new(
+            alien_bindings::Bindings::from_env_map(HashMap::from([(
+                "ALIEN_DEPLOYMENT_TYPE".into(),
+                "local".into(),
+            )]))
+            .unwrap(),
+        );
+        let config = serde_json::json!({"listen":"127.0.0.1:3128","audiences":["p/r"],"keys":[{"kid":"test","publicKey":STANDARD.encode(pair.pk.as_ref())}],"deniedRanges":[],"policyMemoryBytes":1048576});
+        let gateway = Arc::new(
+            crate::runtime::build(
+                &config.to_string(),
+                bindings,
+                Arc::new(std::sync::atomic::AtomicU64::new(0)),
+                Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            )
+            .await
+            .unwrap(),
+        );
+        let mut signed = Vec::new();
+        for index in 0..3 {
+            let claims = serde_json::json!({"v":1,"aud":"p/r","sub":format!("box-{index}"),"ver":[1,"0".repeat(32)],"policy":{"allow":(0..1000).map(|i|format!("{i}.example.com")).collect::<Vec<_>>()}});
+            let input = format!(
+                "{}.{}",
+                URL_SAFE_NO_PAD
+                    .encode(br#"{"alg":"EdDSA","kid":"test","typ":"alien-egress-record"}"#),
+                URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims).unwrap())
+            );
+            signed.push(format!(
+                "{input}.{}",
+                URL_SAFE_NO_PAD.encode(pair.sk.sign(input.as_bytes(), None).as_ref())
+            ));
+        }
+        let bytes = serde_json::to_vec(&signed).unwrap();
+        let (reader, mut writer) = tokio::io::duplex(113);
+        let bridge = tokio_util::io::SyncIoBridge::new(reader);
+        let output = gateway.clone();
+        let decoder = tokio::task::spawn_blocking(move || {
+            let mut decoder =
+                serde_json::Deserializer::from_reader(BufReader::with_capacity(4096, bridge));
+            let count = decoder.deserialize_seq(RecordVisitor(output)).unwrap();
+            decoder.end().unwrap();
+            count
+        });
+        for chunk in bytes.chunks(67) {
+            writer.write_all(chunk).await.unwrap();
+        }
+        drop(writer);
+        assert_eq!(decoder.await.unwrap(), 3);
+        for index in 0..3 {
+            assert!(gateway
+                .policies
+                .resolve("p/r", &format!("box-{index}"))
+                .await
+                .is_ok());
         }
     }
 }
