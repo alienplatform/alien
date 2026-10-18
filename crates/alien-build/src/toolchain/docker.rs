@@ -1265,6 +1265,10 @@ fn rewrite_archive(
         ))
 }
 
+#[cfg(all(test, unix))]
+#[path = "docker_builder_tests.rs"]
+mod builder_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
