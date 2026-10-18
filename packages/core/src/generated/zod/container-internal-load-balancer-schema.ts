@@ -11,18 +11,18 @@ import { ContainerLoadBalancerSubnetGroupSchema } from "./container-load-balance
  * @description A dedicated internal TCP load balancer for one container. Its placement and\nsource rules are immutable; replace the resource to change the boundary.
  */
 export const ContainerInternalLoadBalancerSchema = z.union([z.object({
-    "allowed_sources": z.object({
+    "allowedSources": z.object({
     
     }).catchall(z.array(z.string())).describe("Exactly one entry per listener. An empty list denies every client."),
 "ports": z.array(z.int().min(0)),
 "subnets": z.array(z.string())
     }), z.object({
-    "allowed_source_groups": z.object({
+    "allowedSourceGroups": z.object({
     
     }).catchall(z.lazy(() => ContainerLoadBalancerSourceGroupSchema)),
 "network": z.string(),
 "ports": z.array(z.int().min(0)),
-get "subnet_group"(){
+get "subnetGroup"(){
                 return ContainerLoadBalancerSubnetGroupSchema
               }
     })]).describe("A dedicated internal TCP load balancer for one container. Its placement and\nsource rules are immutable; replace the resource to change the boundary.")

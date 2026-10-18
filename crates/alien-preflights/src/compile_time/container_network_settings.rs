@@ -2,7 +2,7 @@ use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
 use alien_core::{Container, Platform, Stack};
 
-/// Refuse network guarantees until the selected runtime can enforce them.
+/// Refuse network guarantees on runtimes that cannot enforce them.
 pub struct ContainerNetworkSettingsCheck;
 
 #[async_trait::async_trait]
@@ -31,9 +31,11 @@ impl CompileTimeCheck for ContainerNetworkSettingsCheck {
             if let Err(error) = container.validate_network_settings() {
                 errors.push(error.to_string());
             }
-            if container.internal_load_balancer.is_some() || container.internet_only_egress {
+            if (container.internal_load_balancer.is_some() || container.internet_only_egress)
+                && platform != Platform::Aws
+            {
                 errors.push(format!(
-                    "Container '{id}': internalLoadBalancer and internetOnlyEgress are not yet supported on {platform}; refusing to deploy without the requested network isolation"
+                    "Container '{id}': internalLoadBalancer and internetOnlyEgress require the AWS container runtime; {platform} has no implementation for these fields, refusing to deploy without the requested network isolation"
                 ));
             }
         }
@@ -66,8 +68,14 @@ mod tests {
             "permissions": {"profiles": {}}
         }))
         .expect("valid stack");
+        assert!(
+            ContainerNetworkSettingsCheck
+                .check(&stack, Platform::Aws)
+                .await
+                .unwrap()
+                .success
+        );
         for platform in [
-            Platform::Aws,
             Platform::Gcp,
             Platform::Azure,
             Platform::Kubernetes,
