@@ -4,6 +4,8 @@
 //! files and lifecycle natively, so this provider is a translation layer rather than a transport
 //! for a protocol. Verified against a stock `ubuntu` catalog disk containing no Alien code.
 
+mod egress;
+
 use std::collections::BTreeMap;
 
 use async_trait::async_trait;
@@ -16,7 +18,7 @@ use crate::traits::{
     ResolvedSandbox, RunCommandRequest, Sandbox, SandboxInstance, SandboxState,
 };
 use alien_azure_clients::azure::sandbox_data_plane::{
-    CreateSandbox, EgressHostRule, EgressPolicy, SandboxDataPlaneApi,
+    CreateSandbox, EgressPolicy, SandboxDataPlaneApi,
 };
 use alien_client_core::ErrorData as ClientErrorData;
 use alien_core::{
@@ -314,11 +316,12 @@ impl Sandbox for AzureSandbox {
     }
 
     async fn create(&self, request: CreateSandboxRequest) -> Result<SandboxInstance> {
-        super::egress::require_default(request.egress.as_ref(), self.egress_bound())?;
+        let effective = request.egress.as_ref().unwrap_or(&self.egress);
+        super::egress::check_bound(effective, self.egress_bound())?;
+        let asked = egress::policy(effective)?;
         checked_sandbox_env(CREATE, &request.env)?;
         refuse_unsupported_create_fields(&request, CREATE)?;
 
-        let asked = egress_policy(&self.egress);
         let disk_image_id = self.disk_image_id().await?;
         let sandbox = self
             .create_from_image(CreateSandbox {
@@ -328,7 +331,7 @@ impl Sandbox for AzureSandbox {
                 memory: self.memory.clone(),
                 disk: self.disk.clone(),
                 environment: request.env,
-                egress: asked.clone(),
+                egress: Some(asked.clone()),
                 idle_pause_seconds: self.idle_pause_seconds,
                 customer_vnet_connection_name: Some("default".to_string()),
             })
@@ -373,7 +376,7 @@ impl Sandbox for AzureSandbox {
 
         // Everything past this point owns a sandbox the caller has no id for, so every failure
         // deletes it. Azure allocates the id, so the one in this response was minted by this call.
-        match self.settle(&sandbox).await {
+        match self.settle(&sandbox, &asked).await {
             Ok(sandbox) => Ok(sandbox),
             Err(error) => Err(self.discard(&sandbox.id, error).await),
         }
@@ -403,13 +406,21 @@ impl Sandbox for AzureSandbox {
     }
 
     async fn get_or_create(&self, request: CreateSandboxRequest) -> Result<ResolvedSandbox> {
-        super::egress::require_default(request.egress.as_ref(), self.egress_bound())?;
+        if let Some(egress) = &request.egress {
+            super::egress::check_bound(egress, self.egress_bound())?;
+            egress::policy(egress)?;
+        }
         if let Some(id) = request.sandbox_id.as_deref() {
             // `create` returns a sandbox that can take work, and reaching one someone else
             // started has to mean the same thing — so the same gate every other verb uses: bring
             // it up, judge it there, and refuse it if it does not match.
             match self.reconnect(id).await {
-                Ok(sandbox) => return Ok(ResolvedSandbox::found(sandbox)),
+                Ok(sandbox) => {
+                    if let Some(egress) = &request.egress {
+                        self.update_egress(id, egress.clone()).await?;
+                    }
+                    return Ok(ResolvedSandbox::found(sandbox));
+                }
                 // The two ways an id can fail to serve — gone, or running a policy the
                 // declaration no longer matches — mean the same thing to a caller asking for a
                 // sandbox, and are answered the same way: a fresh one. A sandbox refused for its
@@ -431,6 +442,58 @@ impl Sandbox for AzureSandbox {
         }
 
         self.create(request).await.map(ResolvedSandbox::created)
+    }
+
+    async fn update_egress(&self, sandbox_id: &str, egress: SandboxEgress) -> Result<()> {
+        const OPERATION: &str = "sandbox.updateEgress";
+        super::egress::check_bound(&egress, self.egress_bound())?;
+        let asked = egress::policy(&egress)?;
+        Self::checked_sandbox_id(OPERATION, sandbox_id)?;
+        let Some(found) = self.read_sandbox(OPERATION, sandbox_id).await? else {
+            return Err(self.policy_mismatch(sandbox_id, "the sandbox no longer exists"));
+        };
+        self.judge_if_judgeable(&found)?;
+        let mut resumed_here = false;
+        let result = async {
+            let running = self
+                .await_running(OPERATION, sandbox_id, &mut resumed_here)
+                .await?;
+            self.policy_must_hold(&running)?;
+            let applied = self
+                .client
+                .update_egress_policy(&self.sandbox_group, sandbox_id, asked.clone())
+                .await
+                .map_err(|error| Self::failed(OPERATION, error))?;
+            if !egress::equivalent(&asked, Some(&applied)) {
+                return Err(self.policy_mismatch(
+                    sandbox_id,
+                    "Azure did not apply the requested egress update",
+                ));
+            }
+            let readback = self
+                .read_sandbox(OPERATION, sandbox_id)
+                .await?
+                .ok_or_else(|| {
+                    self.policy_mismatch(
+                        sandbox_id,
+                        "the sandbox disappeared during the egress update",
+                    )
+                })?;
+            self.policy_must_hold(&readback)?;
+            if !egress::equivalent(&asked, readback.egress_policy.as_ref()) {
+                return Err(self.policy_mismatch(
+                    sandbox_id,
+                    "the egress update readback differs from the requested policy",
+                ));
+            }
+            Ok(())
+        }
+        .await;
+        match result {
+            Err(error) => Err(self.put_back(sandbox_id, resumed_here, error).await),
+            Ok(()) if resumed_here => self.pause(sandbox_id).await,
+            Ok(()) => Ok(()),
+        }
     }
 
     async fn list(&self) -> Result<Vec<SandboxInstance>> {
@@ -867,22 +930,32 @@ impl AzureSandbox {
                 reason: "the sandbox is not attached to the setup-owned default VNet connection; rerun setup and create a new sandbox".to_string(),
             }));
         }
-        let Some(asked) = egress_policy(&self.egress) else {
-            return Ok(());
-        };
-        if policy_holds(&asked, sandbox.egress_policy.as_ref()) {
-            return Ok(());
-        }
+        let effective = sandbox
+            .egress_policy
+            .as_ref()
+            .ok_or_else(|| self.policy_mismatch(&sandbox.id, "the native policy is absent"))?;
+        let actual = egress::effective(effective).map_err(|error| {
+            error.context(ErrorData::SandboxNotAsDeclared {
+                sandbox_id: sandbox.id.clone(),
+                restriction: "egress policy".to_string(),
+                reason: "the native policy cannot be verified".to_string(),
+            })
+        })?;
+        actual.ensure_subset_of(&self.egress).map_err(|error| {
+            error.context(ErrorData::SandboxNotAsDeclared {
+                sandbox_id: sandbox.id.clone(),
+                restriction: "egress policy".to_string(),
+                reason: "the native policy exceeds the declaration".to_string(),
+            })
+        })
+    }
 
-        Err(AlienError::new(ErrorData::SandboxNotAsDeclared {
-            sandbox_id: sandbox.id.clone(),
+    fn policy_mismatch(&self, id: &str, reason: &str) -> AlienError<ErrorData> {
+        AlienError::new(ErrorData::SandboxNotAsDeclared {
+            sandbox_id: id.to_string(),
             restriction: "egress policy".to_string(),
-            reason: format!(
-                "it is running {} where the declaration asks for {}",
-                describe(sandbox.egress_policy.as_ref()),
-                describe(Some(&asked))
-            ),
-        }))
+            reason: reason.to_string(),
+        })
     }
 
     /// Turns a freshly created record into a usable sandbox, or says why it is not one.
@@ -892,6 +965,7 @@ impl AzureSandbox {
     async fn settle(
         &self,
         sandbox: &alien_azure_clients::azure::sandbox_data_plane::Sandbox,
+        asked: &EgressPolicy,
     ) -> Result<SandboxInstance> {
         // The running sandbox is what gets judged, not the accept: a create response sent while
         // the sandbox is still coming up need not carry the policy yet, and reading its absence
@@ -904,6 +978,12 @@ impl AzureSandbox {
         // A restriction that did not take effect is worse than one that was never asked for: the
         // caller believes the sandbox is contained.
         self.policy_must_hold(&running)?;
+        if !egress::equivalent(asked, running.egress_policy.as_ref()) {
+            return Err(self.policy_mismatch(
+                &running.id,
+                "the created policy differs from the requested policy",
+            ));
+        }
 
         Ok(SandboxInstance {
             sandbox_id: running.id,
@@ -1281,125 +1361,6 @@ fn checked_path(operation: &str, path: &str) -> Result<String> {
     Ok(relative.to_string())
 }
 
-/// The policy a declared mode is created with.
-///
-/// `Full` inspection is what makes a `Deny` default mean no outbound access: under `Partial`,
-/// `Legacy` and `None`, non-HTTP traffic is allowed through whatever the default action says, so
-/// the sandbox would carry a `deny` label and a live network. `allow` sends no policy at all —
-/// the data plane's default is already open, and `Full` there would block the non-HTTP traffic
-/// `allow` promises.
-fn egress_policy(egress: &SandboxEgress) -> Option<EgressPolicy> {
-    let bounded = |host_rules| {
-        Some(EgressPolicy {
-            default_action: DENY.to_string(),
-            unmodelled: Default::default(),
-            rules: Vec::new(),
-            host_rules,
-            traffic_inspection: Some(FULL_INSPECTION.to_string()),
-        })
-    };
-
-    match egress {
-        SandboxEgress::Internet => None,
-        // Written as a rule as well as a default, because Microsoft documents `Partial`
-        // inspection as evaluating only traffic a rule matches and never states that `Full`
-        // differs. A policy holding no rule at all is the one shape where "deny" could mean
-        // nothing, and this is one rule to be out of it.
-        SandboxEgress::None => bounded(vec![EgressHostRule {
-            pattern: EVERY_HOST.to_string(),
-            action: DENY.to_string(),
-        }]),
-        SandboxEgress::Allow { allow: domains } => bounded(
-            domains
-                .iter()
-                .map(|domain| EgressHostRule {
-                    pattern: domain.clone(),
-                    action: ALLOW.to_string(),
-                })
-                .collect(),
-        ),
-    }
-}
-
-/// Whether the sandbox is running the policy it was created with.
-///
-/// Not equality — the data plane may return the policy normalised, and failing every create over a
-/// reordered list would push whoever hits it into removing the check. Not a subset either, which
-/// is the same mistake pointing outward: a permission the sandbox holds and the declaration never
-/// asked for is exactly what this is looking for. So both directions, on the two things that can
-/// permit traffic: nothing may allow a host the declaration did not name, in either list.
-///
-/// A group-scoped policy can add an entry nobody sent here, which is why the rules list is read at
-/// all — it is never written.
-fn policy_holds(asked: &EgressPolicy, effective: Option<&EgressPolicy>) -> bool {
-    let Some(effective) = effective else {
-        return false;
-    };
-
-    let asked_for = |host: &str| {
-        asked
-            .host_rules
-            .iter()
-            .any(|rule| rule.action.eq_ignore_ascii_case(ALLOW) && rule.pattern == host)
-    };
-
-    effective.default_action.eq_ignore_ascii_case(&asked.default_action)
-        && effective
-            .traffic_inspection
-            .as_deref()
-            .is_some_and(|mode| mode.eq_ignore_ascii_case(FULL_INSPECTION))
-        && asked.host_rules.iter().all(|asked_rule| {
-            effective.host_rules.iter().any(|rule| {
-                rule.pattern == asked_rule.pattern
-                    && rule.action.eq_ignore_ascii_case(&asked_rule.action)
-            })
-        })
-        // A whitelist, not a blacklist: an action this client does not recognise is one it cannot
-        // weigh, and `Transform` and `Rewrite` reach a host by rewriting the request rather than
-        // by naming it. Only a plain deny, or an allow the declaration asked for, passes.
-        && effective.host_rules.iter().all(|rule| {
-            rule.action.eq_ignore_ascii_case(DENY)
-                || (rule.action.eq_ignore_ascii_case(ALLOW) && asked_for(&rule.pattern))
-        })
-        // This client never writes `rules`, so anything here came from elsewhere — a group-scoped
-        // policy, or an API that moved — and only an outright deny is readable as harmless.
-        && effective.rules.iter().all(|rule| {
-            rule.action
-                .as_ref()
-                .is_some_and(|action| action.action_type.eq_ignore_ascii_case(DENY))
-        })
-        // A field this client cannot read is a permission it cannot rule out.
-        && effective.unmodelled.is_empty()
-}
-
-/// The effective policy, short enough to read in an error.
-fn describe(effective: Option<&EgressPolicy>) -> String {
-    match effective {
-        None => "no policy at all".to_string(),
-        Some(policy) if !policy.unmodelled.is_empty() => format!(
-            "a policy carrying {}, which this client cannot weigh",
-            policy
-                .unmodelled
-                .keys()
-                .map(String::as_str)
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-        Some(policy) => format!(
-            "default action '{}' under {} inspection, {} host rules and {} match rules",
-            policy.default_action,
-            policy.traffic_inspection.as_deref().unwrap_or("unstated"),
-            policy.host_rules.len(),
-            policy.rules.len()
-        ),
-    }
-}
-
-/// The data plane's own lifecycle vocabulary, in ours.
-///
-/// An unrecognised state is an error rather than a default, because every default here is a lie
-/// a caller acts on: `Running` sends commands to a sandbox that cannot answer them, and anything
-/// else hides one that can.
 fn sandbox_state(operation: &str, state: Option<&str>) -> Result<SandboxState> {
     match state {
         Some("Running") => Ok(SandboxState::Running),
@@ -1422,15 +1383,6 @@ fn sandbox_state(operation: &str, state: Option<&str>) -> Result<SandboxState> {
         })),
     }
 }
-
-/// The data plane's own words for the two actions and the one inspection mode that blocks
-/// non-HTTP traffic.
-const DENY: &str = "Deny";
-const ALLOW: &str = "Allow";
-const FULL_INSPECTION: &str = "Full";
-
-/// The host pattern that matches everything, so `deny` is a rule rather than only a default.
-const EVERY_HOST: &str = "*";
 
 /// Longest sandbox id this client will put in a data-plane URL.
 ///
@@ -1495,6 +1447,8 @@ fn is_not_found(error: &AlienError<ClientErrorData>) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use alien_azure_clients::azure::sandbox_data_plane::EgressHostRule;
+
     use super::*;
     use alien_azure_clients::azure::sandbox_data_plane::ExecResult;
     use alien_azure_clients::azure::sandbox_data_plane::MockSandboxDataPlaneApi;
@@ -1539,7 +1493,7 @@ mod tests {
     async fn a_sandbox_outside_the_deployment_network_is_refused() {
         let mut client = MockSandboxDataPlaneApi::new();
         client.expect_get_sandbox().returning(|_, id| {
-            let mut sandbox = running(id, None);
+            let mut sandbox = running(id, Some(egress::policy(&SandboxEgress::Internet).unwrap()));
             sandbox.vnet_connection_name = None;
             Ok(sandbox)
         });
@@ -1574,7 +1528,10 @@ mod tests {
                     state: Some("Running".to_string()),
                 })
             });
-        settles_running(&mut client, None);
+        settles_running(
+            &mut client,
+            Some(egress::policy(&SandboxEgress::Internet).unwrap()),
+        );
 
         let sandbox = AzureSandbox::new(
             std::sync::Arc::new(client),
@@ -1651,7 +1608,10 @@ mod tests {
                     state: Some("Running".to_string()),
                 })
             });
-        settles_running(&mut client, None);
+        settles_running(
+            &mut client,
+            Some(egress::policy(&SandboxEgress::Internet).unwrap()),
+        );
 
         let sandbox = registry_sandbox(client);
         for _ in 0..2 {
@@ -1704,7 +1664,10 @@ mod tests {
                     state: Some("Running".to_string()),
                 })
             });
-        settles_running(&mut client, None);
+        settles_running(
+            &mut client,
+            Some(egress::policy(&SandboxEgress::Internet).unwrap()),
+        );
 
         registry_sandbox(client)
             .create(CreateSandboxRequest::default())
@@ -1873,7 +1836,10 @@ mod tests {
                     state: Some("Running".to_string()),
                 })
             });
-        settles_running(&mut client, None);
+        settles_running(
+            &mut client,
+            Some(egress::policy(&SandboxEgress::Internet).unwrap()),
+        );
 
         let sandbox = registry_sandbox(client);
         let error = sandbox
@@ -2002,6 +1968,14 @@ mod tests {
 
     #[async_trait]
     impl SandboxDataPlaneApi for ScriptedExec {
+        async fn update_egress_policy(
+            &self,
+            _: &str,
+            _: &str,
+            _: EgressPolicy,
+        ) -> alien_client_core::Result<EgressPolicy> {
+            unreachable!("command-only fixture")
+        }
         async fn stop_sandbox(
             &self,
             _group: &str,
@@ -2067,7 +2041,7 @@ mod tests {
             Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
                 id: sandbox_id.to_string(),
                 vnet_connection_name: Some("default".to_string()),
-                egress_policy: None,
+                egress_policy: Some(egress::policy(&SandboxEgress::Internet).unwrap()),
                 state: Some("Running".to_string()),
             })
         }
@@ -2489,10 +2463,18 @@ mod tests {
             .expect_create_sandbox()
             .times(1)
             .withf(|_, request| request.environment.get("TOKEN").map(String::as_str) == Some("t"))
-            .returning(|_, _| Ok(running("s1", None)));
-        client
-            .expect_get_sandbox()
-            .returning(|_, id| Ok(running(id, None)));
+            .returning(|_, _| {
+                Ok(running(
+                    "s1",
+                    Some(egress::policy(&SandboxEgress::Internet).unwrap()),
+                ))
+            });
+        client.expect_get_sandbox().returning(|_, id| {
+            Ok(running(
+                id,
+                Some(egress::policy(&SandboxEgress::Internet).unwrap()),
+            ))
+        });
 
         sandbox_with(client)
             .create(CreateSandboxRequest {
@@ -2513,9 +2495,12 @@ mod tests {
     #[tokio::test]
     async fn a_command_naming_no_program_is_refused() {
         let mut client = MockSandboxDataPlaneApi::new();
-        client
-            .expect_get_sandbox()
-            .returning(|_, id| Ok(running(id, None)));
+        client.expect_get_sandbox().returning(|_, id| {
+            Ok(running(
+                id,
+                Some(egress::policy(&SandboxEgress::Internet).unwrap()),
+            ))
+        });
         client.expect_execute_shell_command().never();
 
         let mut request = command(5);
@@ -2538,9 +2523,12 @@ mod tests {
     #[tokio::test]
     async fn a_program_name_env_would_swallow_is_refused() {
         let mut client = MockSandboxDataPlaneApi::new();
-        client
-            .expect_get_sandbox()
-            .returning(|_, id| Ok(running(id, None)));
+        client.expect_get_sandbox().returning(|_, id| {
+            Ok(running(
+                id,
+                Some(egress::policy(&SandboxEgress::Internet).unwrap()),
+            ))
+        });
         client.expect_execute_shell_command().never();
 
         let mut request = command(5);
@@ -2670,7 +2658,10 @@ mod tests {
     #[tokio::test]
     async fn a_failed_write_stops_the_ones_behind_it() {
         let mut client = MockSandboxDataPlaneApi::new();
-        settles_running(&mut client, None);
+        settles_running(
+            &mut client,
+            Some(egress::policy(&SandboxEgress::Internet).unwrap()),
+        );
         client
             .expect_write_file()
             .times(1)
@@ -2739,7 +2730,10 @@ mod tests {
         );
 
         let mut client = MockSandboxDataPlaneApi::new();
-        settles_running(&mut client, None);
+        settles_running(
+            &mut client,
+            Some(egress::policy(&SandboxEgress::Internet).unwrap()),
+        );
         client
             .expect_execute_shell_command()
             .times(1)
@@ -2782,7 +2776,7 @@ mod tests {
                 Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
                     id: "s1".to_string(),
                     vnet_connection_name: Some("default".to_string()),
-                    egress_policy: None,
+                    egress_policy: Some(egress::policy(&SandboxEgress::Internet).unwrap()),
                     state: Some(state.clone()),
                 })
             });
@@ -2843,10 +2837,12 @@ mod tests {
         // Created as `Creating`, so the create waits: the trait owes the caller a sandbox that
         // can already take work, and returning one that cannot pushes the readiness poll into
         // every caller.
-        client
-            .expect_get_sandbox()
-            .times(1)
-            .returning(|_, _| Ok(running("s1", None)));
+        client.expect_get_sandbox().times(1).returning(|_, _| {
+            Ok(running(
+                "s1",
+                Some(egress::policy(&SandboxEgress::Internet).unwrap()),
+            ))
+        });
 
         let sandbox = sandbox_with(client)
             .create(CreateSandboxRequest {
@@ -2886,111 +2882,32 @@ mod tests {
         )
     }
 
-    /// What each declared mode is created with.
-    ///
-    /// The inspection mode is the half that is easy to leave out and impossible to notice: under
-    /// anything but `Full` a `Deny` default still lets every non-HTTP protocol out, so a sandbox
-    /// would carry the label and none of the containment. `allow` must send no policy, because
-    /// `Full` would block the traffic `allow` promises.
     #[tokio::test]
     async fn each_declared_mode_is_created_with_the_policy_that_realises_it() {
-        let mut client = MockSandboxDataPlaneApi::new();
-        client
-            .expect_create_sandbox()
-            .times(1)
-            .returning(|_, request| {
-                let policy = request.egress.expect("deny must send a policy");
-                assert_eq!(policy.default_action, "Deny");
-                assert_eq!(
-                    policy.traffic_inspection.as_deref(),
-                    Some("Full"),
-                    "only Full inspection blocks non-HTTP traffic"
-                );
-                assert_eq!(
-                    policy.host_rules,
-                    vec![EgressHostRule {
-                        pattern: "*".to_string(),
-                        action: "Deny".to_string(),
-                    }],
-                    "deny is written as a rule too, so it does not rest on how the proxy treats a \
-                     policy with no rules"
-                );
-                Ok(running("s1", Some(policy)))
-            });
-        settles_running(
-            &mut client,
-            Some(EgressPolicy {
-                default_action: "Deny".to_string(),
-                host_rules: vec![EgressHostRule {
-                    pattern: "*".to_string(),
-                    action: "Deny".to_string(),
-                }],
-                rules: Vec::new(),
-                unmodelled: Default::default(),
-                traffic_inspection: Some("Full".to_string()),
-            }),
-        );
-        sandbox_denying(client, SandboxEgress::None)
-            .create(CreateSandboxRequest::default())
-            .await
-            .expect("deny should create");
-
-        let mut client = MockSandboxDataPlaneApi::new();
-        client
-            .expect_create_sandbox()
-            .times(1)
-            .returning(|_, request| {
-                let policy = request.egress.expect("allowDomains must send a policy");
-                assert_eq!(policy.default_action, "Deny", "anything unlisted is denied");
-                assert_eq!(policy.traffic_inspection.as_deref(), Some("Full"));
-                assert_eq!(
-                    policy.host_rules,
-                    vec![EgressHostRule {
-                        pattern: "api.example.com".to_string(),
-                        action: "Allow".to_string(),
-                    }]
-                );
-                Ok(running("s1", Some(policy)))
-            });
-        settles_running(
-            &mut client,
-            Some(EgressPolicy {
-                default_action: "Deny".to_string(),
-                host_rules: vec![EgressHostRule {
-                    pattern: "api.example.com".to_string(),
-                    action: "Allow".to_string(),
-                }],
-                rules: Vec::new(),
-                unmodelled: Default::default(),
-                traffic_inspection: Some("Full".to_string()),
-            }),
-        );
-        sandbox_denying(
-            client,
+        for bound in [
+            SandboxEgress::None,
+            SandboxEgress::Internet,
             SandboxEgress::Allow {
-                allow: vec!["api.example.com".to_string()],
+                allow: vec!["*.example.org".to_string(), "example.com:80".to_string()],
             },
-        )
-        .create(CreateSandboxRequest::default())
-        .await
-        .expect("allowDomains should create");
-
-        let mut client = MockSandboxDataPlaneApi::new();
-        client
-            .expect_create_sandbox()
-            .times(1)
-            .returning(|_, request| {
-                assert!(
-                    request.egress.is_none(),
-                    "an open sandbox sends no policy: Full inspection would block non-HTTP traffic"
-                );
-                Ok(running("s1", None))
-            });
-        settles_running(&mut client, None);
-        sandbox_denying(client, SandboxEgress::Internet)
-            .create(CreateSandboxRequest::default())
-            .await
-            .expect("allow should create");
+        ] {
+            let mut client = MockSandboxDataPlaneApi::new();
+            let expected = bound.clone();
+            client
+                .expect_create_sandbox()
+                .times(1)
+                .returning(move |_, request| {
+                    let actual = egress::effective(request.egress.as_ref().unwrap()).unwrap();
+                    assert!(actual.ensure_subset_of(&expected).is_ok());
+                    assert!(expected.ensure_subset_of(&actual).is_ok());
+                    Ok(running("s1", request.egress))
+                });
+            settles_running(&mut client, Some(egress::policy(&bound).unwrap()));
+            sandbox_denying(client, bound)
+                .create(CreateSandboxRequest::default())
+                .await
+                .unwrap();
+        }
     }
 
     /// A restriction that did not take effect is the failure this whole path exists to prevent,
@@ -3086,7 +3003,11 @@ mod tests {
     async fn a_terminated_sandbox_is_replaced_rather_than_reconnected_to() {
         let mut client = MockSandboxDataPlaneApi::new();
         client.expect_get_sandbox().times(1).returning(|_, id| {
-            Ok(running(id, None)).map(
+            Ok(running(
+                id,
+                Some(egress::policy(&SandboxEgress::Internet).unwrap()),
+            ))
+            .map(
                 |mut sandbox: alien_azure_clients::azure::sandbox_data_plane::Sandbox| {
                     sandbox.state = Some("Deleting".to_string());
                     sandbox
@@ -3165,6 +3086,7 @@ mod tests {
                 rules: vec![EgressRule {
                     name: None,
                     r#match: Some(EgressRuleMatch {
+                        scheme: None,
                         host: "*".to_string(),
                         path: None,
                         methods: None,
@@ -3265,7 +3187,7 @@ mod tests {
         let mut reads = 0;
         client.expect_get_sandbox().returning(move |_, id| {
             reads += 1;
-            let mut sandbox = running(id, None);
+            let mut sandbox = running(id, Some(egress::policy(&SandboxEgress::Internet).unwrap()));
             if reads < 3 {
                 sandbox.state = Some("Stopped".to_string());
             }
@@ -3294,7 +3216,7 @@ mod tests {
             .times(1)
             .returning(|_, _| Err(http_error(503, "gateway timeout")));
         client.expect_get_sandbox().returning(|_, id| {
-            let mut sandbox = running(id, None);
+            let mut sandbox = running(id, Some(egress::policy(&SandboxEgress::Internet).unwrap()));
             sandbox.state = Some("Stopped".to_string());
             Ok(sandbox)
         });
@@ -3309,9 +3231,12 @@ mod tests {
             .expect_stop_sandbox()
             .times(1)
             .returning(|_, _| Err(http_error(503, "gateway timeout")));
-        client
-            .expect_get_sandbox()
-            .returning(|_, id| Ok(running(id, None)));
+        client.expect_get_sandbox().returning(|_, id| {
+            Ok(running(
+                id,
+                Some(egress::policy(&SandboxEgress::Internet).unwrap()),
+            ))
+        });
         sandbox_with(client)
             .pause("s1")
             .await
@@ -3330,8 +3255,16 @@ mod tests {
             .expect_create_sandbox()
             .withf(|_, request| request.idle_pause_seconds == Some(900))
             .times(1)
-            .returning(|_, _| Ok(running("s1", None)));
-        settles_running(&mut client, None);
+            .returning(|_, _| {
+                Ok(running(
+                    "s1",
+                    Some(egress::policy(&SandboxEgress::Internet).unwrap()),
+                ))
+            });
+        settles_running(
+            &mut client,
+            Some(egress::policy(&SandboxEgress::Internet).unwrap()),
+        );
 
         AzureSandbox::new(
             std::sync::Arc::new(client),
@@ -3358,7 +3291,10 @@ mod tests {
         let mut client = MockSandboxDataPlaneApi::new();
         client.expect_get_sandbox().times(1).returning(|_, id| {
             // What an `allow` declaration built, before it was changed to `deny`.
-            Ok(running(id, None))
+            Ok(running(
+                id,
+                Some(egress::policy(&SandboxEgress::Internet).unwrap()),
+            ))
         });
 
         let error = sandbox_denying(client, SandboxEgress::None)
@@ -3510,7 +3446,10 @@ mod tests {
         // the declaration asks for.
         client.expect_get_sandbox().returning(move |_, id| {
             if id == "built-under-allow" {
-                return Ok(running(id, None));
+                return Ok(running(
+                    id,
+                    Some(egress::policy(&SandboxEgress::Internet).unwrap()),
+                ));
             }
             Ok(running(
                 id,
@@ -3579,10 +3518,12 @@ mod tests {
     #[tokio::test]
     async fn a_stale_policy_sandbox_cannot_run_a_command() {
         let mut client = MockSandboxDataPlaneApi::new();
-        client
-            .expect_get_sandbox()
-            .times(1)
-            .returning(|_, id| Ok(running(id, None)));
+        client.expect_get_sandbox().times(1).returning(|_, id| {
+            Ok(running(
+                id,
+                Some(egress::policy(&SandboxEgress::Internet).unwrap()),
+            ))
+        });
         // Refused, not reaped: this call did not create the sandbox and was not asked to replace
         // it, and two revisions of a stack share a sandbox group.
         client.expect_delete_sandbox().never();
@@ -3694,10 +3635,12 @@ mod tests {
         const SECRET: &str = "tenant-only-detail";
 
         let mut client = MockSandboxDataPlaneApi::new();
-        client
-            .expect_create_sandbox()
-            .times(1)
-            .returning(|_, _| Ok(running("s1", None)));
+        client.expect_create_sandbox().times(1).returning(|_, _| {
+            Ok(running(
+                "s1",
+                Some(egress::policy(&SandboxEgress::Internet).unwrap()),
+            ))
+        });
         // The readiness read and the delete both fail, which is one failure in practice: a
         // missing data-plane role refuses every verb.
         client
@@ -3729,11 +3672,12 @@ mod tests {
         let mut reads = 0;
         client.expect_get_sandbox().returning(move |_, id| {
             reads += 1;
-            let mut sandbox = running(id, None);
+            let mut sandbox = running(id, Some(egress::policy(&SandboxEgress::Internet).unwrap()));
             // Asleep for the resume's own read and the wait's first poll, so the wait is what
             // wakes it — and therefore what owes the put-back.
             if reads <= 2 {
                 sandbox.state = Some("Stopped".to_string());
+                sandbox.egress_policy = None;
             }
             Ok(sandbox)
         });
@@ -3762,9 +3706,12 @@ mod tests {
     #[tokio::test]
     async fn a_sandbox_this_call_did_not_wake_is_left_running() {
         let mut client = MockSandboxDataPlaneApi::new();
-        client
-            .expect_get_sandbox()
-            .returning(|_, id| Ok(running(id, None)));
+        client.expect_get_sandbox().returning(|_, id| {
+            Ok(running(
+                id,
+                Some(egress::policy(&SandboxEgress::Internet).unwrap()),
+            ))
+        });
         client.expect_resume_sandbox().never();
         client.expect_stop_sandbox().never();
         client.expect_delete_sandbox().never();
@@ -3788,7 +3735,7 @@ mod tests {
         let mut reads = 0;
         client.expect_get_sandbox().returning(move |_, id| {
             reads += 1;
-            let mut sandbox = running(id, None);
+            let mut sandbox = running(id, Some(egress::policy(&SandboxEgress::Internet).unwrap()));
             if reads <= 2 {
                 sandbox.state = Some("Creating".to_string());
             }
@@ -3814,8 +3761,9 @@ mod tests {
     async fn a_suspended_sandbox_reporting_no_policy_is_not_a_mismatch() {
         let mut client = MockSandboxDataPlaneApi::new();
         client.expect_get_sandbox().times(1).returning(|_, id| {
-            let mut sandbox = running(id, None);
+            let mut sandbox = running(id, Some(egress::policy(&SandboxEgress::Internet).unwrap()));
             sandbox.state = Some("Stopped".to_string());
+            sandbox.egress_policy = None;
             Ok(sandbox)
         });
 
@@ -3904,7 +3852,7 @@ mod tests {
         let mut reads = 0;
         client.expect_get_sandbox().returning(move |_, id| {
             reads += 1;
-            let mut sandbox = running(id, None);
+            let mut sandbox = running(id, Some(egress::policy(&SandboxEgress::Internet).unwrap()));
             sandbox.state = Some(if reads <= 2 { "Stopped" } else { "Hibernated" }.to_string());
             Ok(sandbox)
         });
@@ -3941,9 +3889,12 @@ mod tests {
     #[tokio::test]
     async fn the_program_leads_its_arguments_inside_the_wrapper() {
         let mut client = MockSandboxDataPlaneApi::new();
-        client
-            .expect_get_sandbox()
-            .returning(|_, id| Ok(running(id, None)));
+        client.expect_get_sandbox().returning(|_, id| {
+            Ok(running(
+                id,
+                Some(egress::policy(&SandboxEgress::Internet).unwrap()),
+            ))
+        });
         client
             .expect_execute_shell_command()
             .times(1)
@@ -3984,9 +3935,12 @@ mod tests {
     #[tokio::test]
     async fn a_declared_variable_reaches_the_command() {
         let mut client = MockSandboxDataPlaneApi::new();
-        client
-            .expect_get_sandbox()
-            .returning(|_, id| Ok(running(id, None)));
+        client.expect_get_sandbox().returning(|_, id| {
+            Ok(running(
+                id,
+                Some(egress::policy(&SandboxEgress::Internet).unwrap()),
+            ))
+        });
         client
             .expect_execute_shell_command()
             .times(1)
@@ -4023,9 +3977,12 @@ mod tests {
     #[tokio::test]
     async fn a_command_carrying_an_unusable_variable_name_runs_nothing() {
         let mut client = MockSandboxDataPlaneApi::new();
-        client
-            .expect_get_sandbox()
-            .returning(|_, id| Ok(running(id, None)));
+        client.expect_get_sandbox().returning(|_, id| {
+            Ok(running(
+                id,
+                Some(egress::policy(&SandboxEgress::Internet).unwrap()),
+            ))
+        });
         client.expect_execute_shell_command().never();
 
         let mut request = command(5);
@@ -4050,9 +4007,10 @@ mod tests {
         let mut reads = 0;
         client.expect_get_sandbox().returning(move |_, id| {
             reads += 1;
-            let mut sandbox = running(id, None);
+            let mut sandbox = running(id, Some(egress::policy(&SandboxEgress::Internet).unwrap()));
             if reads <= 2 {
                 sandbox.state = Some("Stopped".to_string());
+                sandbox.egress_policy = None;
             }
             Ok(sandbox)
         });
@@ -4083,7 +4041,7 @@ mod tests {
         let mut reads = 0;
         client.expect_get_sandbox().returning(move |_, id| {
             reads += 1;
-            let mut sandbox = running(id, None);
+            let mut sandbox = running(id, Some(egress::policy(&SandboxEgress::Internet).unwrap()));
             if reads <= 2 {
                 sandbox.state = Some("Stopped".to_string());
             }
@@ -4115,9 +4073,10 @@ mod tests {
         let mut reads = 0;
         client.expect_get_sandbox().returning(move |_, id| {
             reads += 1;
-            let mut sandbox = running(id, None);
+            let mut sandbox = running(id, Some(egress::policy(&SandboxEgress::Internet).unwrap()));
             if reads <= 2 {
                 sandbox.state = Some("Stopped".to_string());
+                sandbox.egress_policy = None;
             }
             Ok(sandbox)
         });
@@ -4152,7 +4111,8 @@ mod tests {
             let deleting = outcome == "Deleting";
             client.expect_get_sandbox().returning(move |_, id| {
                 if deleting {
-                    let mut sandbox = running(id, None);
+                    let mut sandbox =
+                        running(id, Some(egress::policy(&SandboxEgress::Internet).unwrap()));
                     sandbox.state = Some("Deleting".to_string());
                     Ok(sandbox)
                 } else {
@@ -4189,7 +4149,12 @@ mod tests {
             client
                 .expect_create_sandbox()
                 .times(1)
-                .returning(move |_, _| Ok(running(id, None)));
+                .returning(move |_, _| {
+                    Ok(running(
+                        id,
+                        Some(egress::policy(&SandboxEgress::Internet).unwrap()),
+                    ))
+                });
             client
         };
 
@@ -4224,7 +4189,7 @@ mod tests {
     async fn a_sandbox_that_is_still_coming_up_is_not_a_policy_mismatch() {
         let mut client = MockSandboxDataPlaneApi::new();
         client.expect_get_sandbox().times(1).returning(|_, id| {
-            let mut sandbox = running(id, None);
+            let mut sandbox = running(id, Some(egress::policy(&SandboxEgress::Internet).unwrap()));
             sandbox.state = Some("Creating".to_string());
             Ok(sandbox)
         });
@@ -4247,10 +4212,12 @@ mod tests {
     #[tokio::test]
     async fn a_stale_policy_sandbox_takes_no_written_files() {
         let mut client = MockSandboxDataPlaneApi::new();
-        client
-            .expect_get_sandbox()
-            .times(1)
-            .returning(|_, id| Ok(running(id, None)));
+        client.expect_get_sandbox().times(1).returning(|_, id| {
+            Ok(running(
+                id,
+                Some(egress::policy(&SandboxEgress::Internet).unwrap()),
+            ))
+        });
         client.expect_delete_sandbox().never();
         client.expect_write_file().never();
 
@@ -4276,7 +4243,7 @@ mod tests {
         let mut reads = 0;
         client.expect_get_sandbox().returning(move |_, id| {
             reads += 1;
-            let mut sandbox = running(id, None);
+            let mut sandbox = running(id, Some(egress::policy(&SandboxEgress::Internet).unwrap()));
             // Stopping, then stopped, then up — the shape a suspend-then-resume race produces.
             sandbox.state = Some(
                 match reads {
@@ -4317,7 +4284,7 @@ mod tests {
     async fn a_suspended_sandbox_is_refused_rather_than_woken() {
         let mut client = MockSandboxDataPlaneApi::new();
         client.expect_get_sandbox().returning(|_, id| {
-            let mut sandbox = running(id, None);
+            let mut sandbox = running(id, Some(egress::policy(&SandboxEgress::Internet).unwrap()));
             sandbox.state = Some("Stopped".to_string());
             Ok(sandbox)
         });
@@ -4411,9 +4378,12 @@ mod tests {
         let mut client = MockSandboxDataPlaneApi::new();
         client.expect_get_sandbox().returning(|_, id| {
             if id == "fresh" {
-                return Ok(running(id, None));
+                return Ok(running(
+                    id,
+                    Some(egress::policy(&SandboxEgress::Internet).unwrap()),
+                ));
             }
-            let mut sandbox = running(id, None);
+            let mut sandbox = running(id, Some(egress::policy(&SandboxEgress::Internet).unwrap()));
             sandbox.state = Some("Failed".to_string());
             Ok(sandbox)
         });
@@ -4451,7 +4421,7 @@ mod tests {
     async fn a_failed_sandbox_reads_as_terminated() {
         let mut client = MockSandboxDataPlaneApi::new();
         client.expect_get_sandbox().times(1).returning(|_, id| {
-            let mut sandbox = running(id, None);
+            let mut sandbox = running(id, Some(egress::policy(&SandboxEgress::Internet).unwrap()));
             sandbox.state = Some("Failed".to_string());
             Ok(sandbox)
         });
@@ -4475,10 +4445,13 @@ mod tests {
         let mut reads = 0;
         client.expect_get_sandbox().returning(move |_, id| {
             if id == "fresh" {
-                return Ok(running(id, None));
+                return Ok(running(
+                    id,
+                    Some(egress::policy(&SandboxEgress::Internet).unwrap()),
+                ));
             }
             reads += 1;
-            let mut sandbox = running(id, None);
+            let mut sandbox = running(id, Some(egress::policy(&SandboxEgress::Internet).unwrap()));
             // Asleep when it is found, being deleted by the time the wait looks.
             sandbox.state = Some(if reads == 1 { "Stopped" } else { "Deleting" }.to_string());
             Ok(sandbox)
@@ -4581,8 +4554,10 @@ mod tests {
         client.expect_get_sandbox().returning(move |_, id| {
             reads += 1;
             if reads <= 2 {
-                let mut asleep = running(id, None);
+                let mut asleep =
+                    running(id, Some(egress::policy(&SandboxEgress::Internet).unwrap()));
                 asleep.state = Some("Stopped".to_string());
+                asleep.egress_policy = None;
                 return Ok(asleep);
             }
             Ok(running(id, Some(carried.clone())))
@@ -4621,11 +4596,12 @@ mod tests {
         let mut reads = 0;
         client.expect_get_sandbox().returning(move |_, id| {
             reads += 1;
-            let mut sandbox = running(id, None);
+            let mut sandbox = running(id, Some(egress::policy(&SandboxEgress::Internet).unwrap()));
             // Asleep for the resume's own read and the wait's first poll, so the wait is what
             // wakes it — and therefore what owes the put-back.
             if reads <= 2 {
                 sandbox.state = Some("Stopped".to_string());
+                sandbox.egress_policy = None;
             }
             Ok(sandbox)
         });
@@ -4728,5 +4704,146 @@ mod tests {
             error.to_string().contains("tenantKey"),
             "the refusal has to name the field a caller must remove: {error}"
         );
+    }
+    #[tokio::test]
+    async fn create_narrows_before_the_sandbox_starts_and_read_preserves_it() {
+        let mut client = MockSandboxDataPlaneApi::new();
+        client
+            .expect_create_sandbox()
+            .times(1)
+            .returning(|_, request| {
+                assert_eq!(
+                    egress::effective(request.egress.as_ref().unwrap()).unwrap(),
+                    SandboxEgress::None
+                );
+                Ok(running("narrowed", request.egress))
+            });
+        settles_running(
+            &mut client,
+            Some(egress::policy(&SandboxEgress::None).unwrap()),
+        );
+        let binding = sandbox_with(client);
+        let created = binding
+            .create(CreateSandboxRequest {
+                egress: Some(SandboxEgress::None),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            binding
+                .get(&created.sandbox_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .state,
+            SandboxState::Running
+        );
+    }
+
+    #[tokio::test]
+    async fn a_policy_update_within_the_bound_is_read_back_and_restores_pause() {
+        for paused in [false, true] {
+            let state = std::sync::Arc::new(std::sync::Mutex::new((
+                paused,
+                egress::policy(&SandboxEgress::Internet).unwrap(),
+            )));
+            let mut client = MockSandboxDataPlaneApi::new();
+            let read = state.clone();
+            client.expect_get_sandbox().returning(move |_, id| {
+                let state = read.lock().unwrap();
+                let mut sandbox = running(id, Some(state.1.clone()));
+                if state.0 {
+                    sandbox.state = Some("Stopped".to_string());
+                }
+                Ok(sandbox)
+            });
+            let resume = state.clone();
+            client
+                .expect_resume_sandbox()
+                .times(usize::from(paused))
+                .returning(move |_, _| {
+                    resume.lock().unwrap().0 = false;
+                    Ok(())
+                });
+            let stop = state.clone();
+            client
+                .expect_stop_sandbox()
+                .times(usize::from(paused))
+                .returning(move |_, _| {
+                    stop.lock().unwrap().0 = true;
+                    Ok(())
+                });
+            let write = state.clone();
+            client
+                .expect_update_egress_policy()
+                .times(1)
+                .returning(move |_, _, policy| {
+                    assert_eq!(egress::effective(&policy).unwrap(), SandboxEgress::None);
+                    write.lock().unwrap().1 = policy.clone();
+                    Ok(policy)
+                });
+            sandbox_with(client)
+                .update_egress("s1", SandboxEgress::None)
+                .await
+                .unwrap();
+            let state = state.lock().unwrap();
+            assert_eq!(state.0, paused);
+            assert_eq!(egress::effective(&state.1).unwrap(), SandboxEgress::None);
+        }
+    }
+
+    #[tokio::test]
+    async fn widening_and_unrepresentable_policies_make_no_cloud_calls() {
+        let binding = sandbox_denying(MockSandboxDataPlaneApi::new(), SandboxEgress::None);
+        assert_eq!(
+            binding
+                .update_egress("s1", SandboxEgress::Internet)
+                .await
+                .unwrap_err()
+                .code,
+            "SANDBOX_EGRESS_WIDENS"
+        );
+        let binding = sandbox_with(MockSandboxDataPlaneApi::new());
+        let unsupported = SandboxEgress::Allow {
+            allow: vec!["example.com:8443".to_string()],
+        };
+        assert_eq!(
+            binding
+                .create(CreateSandboxRequest {
+                    egress: Some(unsupported.clone()),
+                    ..Default::default()
+                })
+                .await
+                .unwrap_err()
+                .code,
+            "SANDBOX_EGRESS_INVALID"
+        );
+        assert_eq!(
+            binding
+                .update_egress("s1", unsupported)
+                .await
+                .unwrap_err()
+                .code,
+            "SANDBOX_EGRESS_INVALID"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_acknowledged_update_with_stale_readback_is_refused() {
+        let mut client = MockSandboxDataPlaneApi::new();
+        settles_running(
+            &mut client,
+            Some(egress::policy(&SandboxEgress::Internet).unwrap()),
+        );
+        client
+            .expect_update_egress_policy()
+            .times(1)
+            .returning(|_, _, policy| Ok(policy));
+        let error = sandbox_with(client)
+            .update_egress("s1", SandboxEgress::None)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "SANDBOX_NOT_AS_DECLARED");
     }
 }
