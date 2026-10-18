@@ -2,7 +2,7 @@
 use crate::{
     error::{denied, unavailable, ErrorData, Result},
     policy::{canonical, Policy},
-    record::{compare_versions, Record, Summary, Version},
+    record::{compare_versions, Record, Summary, Version, TOMBSTONE_RETENTION_MS},
 };
 use alien_error::AlienError;
 use std::{
@@ -19,6 +19,7 @@ struct Stored {
     record: Record,
     policy: Option<Arc<Policy>>,
     bytes: usize,
+    expires: Option<tokio::time::Instant>,
 }
 #[derive(Default)]
 struct State {
@@ -109,6 +110,25 @@ impl PolicyStore {
             .map(|entry| entry.record.clone())
             .collect())
     }
+    /// Expiration only removes tombstones, at least 25 hours after this replica accepted them.
+    pub fn expire_tombstones(&self) -> Result<()> {
+        let mut state = self
+            .state
+            .write()
+            .map_err(|_| AlienError::new(unavailable("policy state lock")))?;
+        let now = tokio::time::Instant::now();
+        let mut removed = 0;
+        state.entries.retain(|_, entry| {
+            let keep = entry.expires.is_none_or(|expires| expires > now);
+            if !keep {
+                removed += entry.bytes;
+            }
+            keep
+        });
+        state.bytes -= removed;
+        Ok(())
+    }
+
     /// Apply a verified record; equal and older versions are no-ops on every path.
     pub fn apply(&self, record: Record, only_missing: bool) -> Result<bool> {
         let bytes = record
@@ -117,7 +137,7 @@ impl PolicyStore {
             .as_ref()
             .map(canonical)
             .transpose()?
-            .map_or(0, |bytes| bytes.len())
+            .map_or(0, |bytes| bytes.len() * 3)
             + record.signed.len()
             + record.claims.aud.len()
             + record.claims.sub.len()
@@ -129,7 +149,10 @@ impl PolicyStore {
             .map_err(|_| AlienError::new(unavailable("policy state lock")))?;
         let previous_bytes = if let Some(current) = state.entries.get(&key) {
             if only_missing
-                || !compare_versions(&record.claims.ver, &current.record.claims.ver).is_gt()
+                || !crate::record::should_replace(
+                    Some(&current.record.claims.ver),
+                    &record.claims.ver,
+                )
             {
                 return Ok(false);
             }
@@ -145,6 +168,10 @@ impl PolicyStore {
             key,
             Stored {
                 policy: record.claims.policy.clone().map(Arc::new),
+                expires: record.claims.deleted.then(|| {
+                    tokio::time::Instant::now()
+                        + std::time::Duration::from_millis(TOMBSTONE_RETENTION_MS)
+                }),
                 record,
                 bytes,
             },

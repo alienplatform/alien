@@ -116,3 +116,67 @@ async fn maximum_policy_remains_compact_and_reusable_in_memory() {
     let second = store.resolve("p/r", "box").await.unwrap();
     assert!(Arc::ptr_eq(&first, &second));
 }
+
+#[tokio::test(start_paused = true)]
+async fn tombstones_retain_for_twenty_five_hours_without_evicting_live_policies() {
+    let store = PolicyStore::new(true, 1024 * 1024);
+    let (live, _) = record(1, Some(Policy::Internet));
+    store.apply(live.clone(), false).unwrap();
+    let (deleted, _) = record(2, None);
+    store.apply(deleted, false).unwrap();
+    tokio::time::advance(std::time::Duration::from_secs(25 * 3600 - 1)).await;
+    store.expire_tombstones().unwrap();
+    assert!(store.record("p/r", "box").unwrap().unwrap().claims.deleted);
+    assert!(!store.apply(live, true).unwrap());
+    tokio::time::advance(std::time::Duration::from_secs(1)).await;
+    store.expire_tombstones().unwrap();
+    assert!(store.record("p/r", "box").unwrap().is_none());
+    let (live, _) = record(3, Some(Policy::Internet));
+    store.apply(live, false).unwrap();
+    tokio::time::advance(std::time::Duration::from_secs(50 * 3600)).await;
+    store.expire_tombstones().unwrap();
+    assert_eq!(
+        *store.resolve("p/r", "box").await.unwrap(),
+        Policy::Internet
+    );
+}
+
+#[tokio::test]
+async fn memory_overflow_preserves_the_previous_enforced_policy() {
+    let store = PolicyStore::new(true, 2048);
+    let (live, _) = record(1, Some(Policy::Allow { allow: vec![] }));
+    store.apply(live, false).unwrap();
+    let (larger, _) = record(
+        2,
+        Some(Policy::Allow {
+            allow: (0..256).map(|i| format!("{i}.example.com")).collect(),
+        }),
+    );
+    assert_eq!(
+        store.apply(larger, false).unwrap_err().code,
+        "SANDBOX_EGRESS_POLICY_STORE_FULL"
+    );
+    assert_eq!(
+        *store.resolve("p/r", "box").await.unwrap(),
+        Policy::Allow { allow: vec![] }
+    );
+}
+
+#[test]
+fn future_clock_guard_and_writer_ties_use_the_signed_version() {
+    let (future, keys) = record(61_001, Some(Policy::Internet));
+    assert_eq!(
+        Record::verify(future.signed.clone(), &keys, &["p/r".into()], 1_000)
+            .err()
+            .unwrap()
+            .code,
+        "SANDBOX_EGRESS_VERSION_IN_FUTURE"
+    );
+    assert!(Record::verify(future.signed, &keys, &["p/r".into()], 1_001).is_ok());
+    use alien_egress_gateway::record::should_replace;
+    let lower = (100, "0".repeat(32));
+    let higher = (100, "1".repeat(32));
+    assert!(should_replace(Some(&lower), &higher));
+    assert!(!should_replace(Some(&higher), &lower));
+    assert!(!should_replace(Some(&higher), &higher));
+}

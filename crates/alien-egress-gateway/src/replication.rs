@@ -30,7 +30,7 @@ impl Replication {
         resolver: hickory_resolver::TokioResolver,
     ) -> Result<Self> {
         if service.is_some() && secret.is_none() {
-            return Err(invalid("peerService requires replicaSecret"));
+            return Err(invalid("peers requires replicaSecret"));
         }
         let client = reqwest::Client::builder()
             .no_proxy()
@@ -211,6 +211,7 @@ impl Replication {
         let gateway = live
             .snapshot()
             .ok_or_else(|| denied("config unavailable"))?;
+        gateway.policies.expire_tombstones()?;
         let summary = gateway.policies.summary()?;
         let request = serde_json::to_vec(&summary)
             .into_alien_error()
@@ -261,19 +262,23 @@ impl Replication {
 }
 
 pub async fn run(live: Arc<LiveGateway>) -> Result<()> {
+    let mut tick = tokio::time::interval(Duration::from_secs(1));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut last_sync = None;
     loop {
-        let delay = if let Some(gateway) = live.snapshot() {
+        tick.tick().await;
+        if let Some(gateway) = live.snapshot() {
+            if gateway.policies.ready()
+                && last_sync.is_some_and(|last: tokio::time::Instant| {
+                    last.elapsed() < Duration::from_secs(30)
+                })
+            {
+                continue;
+            }
+            last_sync = Some(tokio::time::Instant::now());
             if let Err(error) = gateway.replication.catch_up(&live).await {
-                tracing::warn!(code=%error.code,"replica synchronization failed");
+                tracing::warn!(code=%error.code, "replica synchronization failed");
             }
-            if gateway.policies.ready() {
-                Duration::from_secs(30)
-            } else {
-                Duration::from_secs(1)
-            }
-        } else {
-            Duration::from_secs(1)
-        };
-        tokio::time::sleep(delay).await;
+        }
     }
 }

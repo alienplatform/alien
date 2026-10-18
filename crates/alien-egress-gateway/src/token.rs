@@ -136,23 +136,6 @@ pub struct AdminClaims {
     pub version: Option<u64>,
 }
 
-/// Verify the authority of a retained mutation, not a fresh admin request. Only authenticated
-/// replica exchange and absent-policy recovery may use this after the original request expired.
-pub fn verify_admin_record(token: &str, keys: &HashMap<String, PublicKey>) -> Result<AdminClaims> {
-    let claims: AdminClaims = verify_signed(token, keys, Some("alien-egress-admin"))?;
-    if claims.iss != "alien-sandbox"
-        || claims.aud.is_empty()
-        || claims.sub.is_empty()
-        || claims.aud.len() > 256
-        || claims.sub.len() > 256
-        || claims.exp <= claims.iat
-        || claims.exp - claims.iat > 60
-    {
-        return Err(denied("invalid retained admin identity or lifetime"));
-    }
-    Ok(claims)
-}
-
 /// Verify a short-lived admin JWS, distinct from proxy tokens by its mandatory type.
 pub fn verify_admin(
     token: &str,

@@ -19,3 +19,5 @@ pub mod runtime;
 pub mod server;
 pub mod store;
 pub mod token;
+
+pub mod recovery;

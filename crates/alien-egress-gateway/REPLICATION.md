@@ -1,7 +1,7 @@
 # Policy replication protocol
 
-The admin and peer listener uses the configured `listenAdmin` address. The proxy
-listener remains `listenProxy`. Local tests may configure
+The admin and peer listener uses the configured `admin` address. The proxy
+listener remains `listen`. Local tests may configure
 `peers: {"static": ["127.0.0.1:3129", "127.0.0.1:3139"]}` with the other replicas'
 admin addresses (exclude the current replica). Service discovery uses
 `peers: {"dns": "gateway.svc", "port": 3129}`. Omit `peers` for a single replica.
@@ -43,5 +43,23 @@ Peer POSTs carry `x-alien-replica-time` (Unix seconds) and
 must be within 60 seconds. Every received record also requires its own Ed25519
 signature; peer authentication does not replace record verification.
 
-This initial surface is available for integration testing. Agent recovery and
-bounded tombstone expiry are being completed before release qualification.
+The proxy listener accepts `GET /health` with a live `Proxy-Authorization: Bearer`
+sandbox token: 200 means an existing policy (including deny-all), 403 means a
+tombstone, and 404 means no entry. `PUT /v1/policies/register` on that listener
+accepts `{"record":"<compact JWS>"}` with the same token and bounded
+`Content-Length`. It only fills absence, including on peers: 204 means the saved
+record is current; 409 means an existing entry prevented replacement; 503 means
+replication failed. The agent never registers after a 403.
+
+Agent delivery is `PUT /v1/egress` with `{token,policy:"<compact JWS>",caCert?}`;
+the `updateEgress` envelope carries the same fields. Resume checks the physical
+network and waits for a fresh delivery before allowing commands or recovery.
+A running agent checks gateway state every five seconds, re-registering only on
+404. The saved record and token remain in supervisor memory. Tombstones expire
+at least 25 hours after local acceptance; live records are never evicted.
+
+Total loss of every replica also loses version and deletion history. A live
+identity token can therefore re-register an older signed policy while the entry
+is absent. This protocol cannot distinguish that record from the latest one;
+the independent restart tests measure the recovery window. Agentless clients
+remain denied until their application publishes a policy again.

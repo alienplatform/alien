@@ -49,6 +49,10 @@ pub struct Summary {
 pub fn compare_versions(left: &Version, right: &Version) -> Ordering {
     left.cmp(right)
 }
+/// Pure merge decision shared by the store and independent convergence tests.
+pub fn should_replace(current: Option<&Version>, incoming: &Version) -> bool {
+    current.is_none_or(|version| compare_versions(incoming, version).is_gt())
+}
 impl Record {
     pub fn verify(
         signed: String,

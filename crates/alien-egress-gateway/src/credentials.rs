@@ -313,11 +313,17 @@ mod tests {
         let bindings = Arc::new(Bindings::from_env_map(HashMap::from([
             ("ALIEN_DEPLOYMENT_TYPE".into(), "local".into()),
             ("ALIEN_TEST_VAULT_BINDING".into(), serde_json::json!({"service":"local-vault","dataDir":dir.path().join("vault"),"vaultName":"test"}).to_string()),
-            ("ALIEN_EGRESS_STATE_BINDING".into(), serde_json::json!({"service":"local-kv","dataDir":dir.path().join("kv")}).to_string()),
         ])).unwrap());
         let rule: CredentialRule = serde_json::from_value(serde_json::json!({"aud":"p/r","host":"inject.example.com","port":443,"method":"GET","path":"/","header":"Authorization","vaultBinding":"test-vault","secret":"key"})).unwrap();
-        let credentials = Credentials::new(bindings.clone(), &[], &[rule], Some([7; 32])).unwrap();
+        let credentials =
+            Credentials::new(bindings.clone(), &[], &[rule.clone()], Some([7; 32])).unwrap();
         let certificate = credentials.issue_ca("p/r", "box").await.unwrap();
+        let replica = Credentials::new(bindings.clone(), &[], &[rule], Some([7; 32])).unwrap();
+        assert_eq!(certificate, replica.issue_ca("p/r", "box").await.unwrap());
+        assert_ne!(
+            certificate,
+            replica.issue_ca("p/r", "different").await.unwrap()
+        );
         let ca = credentials.ca("p/r", "box").unwrap();
         let issuer =
             Issuer::from_ca_cert_pem(&ca.certificate, KeyPair::from_pem(&ca.private_key).unwrap())

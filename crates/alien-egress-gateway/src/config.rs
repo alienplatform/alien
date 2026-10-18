@@ -11,7 +11,7 @@ use crate::{
     policy::Policy,
 };
 
-/// Deployment-owned gateway configuration. Secret values are never stored here.
+/// Deployment-owned gateway configuration loaded from the gateway vault.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Config {
@@ -85,9 +85,7 @@ impl Config {
     /// Decode public keys and reject duplicate key IDs.
     pub fn verification_keys(&self) -> Result<HashMap<String, PublicKey>> {
         if self.keys.is_empty() || self.audiences.is_empty() {
-            return Err(invalid(
-                "keys, audiences and generationStore.binding are required",
-            ));
+            return Err(invalid("keys and audiences are required"));
         }
         for policy in self.default_policies.values() {
             crate::policy::canonical(policy)?;

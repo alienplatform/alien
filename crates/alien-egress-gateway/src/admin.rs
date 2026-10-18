@@ -125,6 +125,17 @@ async fn mutate(
     {
         return StatusCode::FORBIDDEN.into_response();
     }
+    if let Some(expected) = grant.policy {
+        let actual = record
+            .claims
+            .policy
+            .as_ref()
+            .and_then(|policy| crate::policy::canonical(policy).ok())
+            .map(|bytes| crate::policy::digest(&bytes));
+        if actual.as_ref() != Some(&expected) {
+            return StatusCode::FORBIDDEN.into_response();
+        }
+    }
     publish(&admin.gateway, record).await
 }
 async fn publish(gateway: &Gateway, record: Record) -> Response {
