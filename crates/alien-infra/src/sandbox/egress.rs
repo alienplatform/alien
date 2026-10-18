@@ -282,7 +282,7 @@ pub(crate) async fn publish_aws_config(
     let value = serde_json::json!({
         "listen": "0.0.0.0:3128", "admin": "0.0.0.0:3129",
         "audiences": audiences, "defaultPolicies": {}, "keys": [key],
-        "generationStore": {"binding": "egress-state"}, "deniedRanges": denied,
+        "deniedRanges": denied,
         "credentials": []
     })
     .to_string();

@@ -1,5 +1,4 @@
 use crate::error::Result;
-use crate::mutations::sandbox_gateway::POLICY_STORE_ID;
 use crate::{CheckResult, CompileTimeCheck};
 use alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID;
 use alien_core::{
@@ -89,13 +88,10 @@ impl CompileTimeCheck for AllowedUserResourcesCheck {
                 continue;
             }
 
-            if internet
-                && matches!(
-                    resource_id.as_str(),
-                    POLICY_STORE_ID | SANDBOX_EGRESS_GATEWAY_ID
-                )
-            {
-                errors.push(format!("Resource ID '{resource_id}' is reserved for the sandbox gateway; its policy store must be created by preflight, not shared with an application"));
+            if internet && resource_id == SANDBOX_EGRESS_GATEWAY_ID {
+                errors.push(format!(
+                    "Resource ID '{resource_id}' is reserved for the sandbox gateway"
+                ));
                 continue;
             }
             let normalized_id = resource_id.replace('_', "-").to_ascii_lowercase();
