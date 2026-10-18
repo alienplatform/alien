@@ -1,4 +1,8 @@
 //! Gateway forwarding. DNS returns synthetic addresses so arbitrary TCP retains its original name.
+#![expect(
+    clippy::result_large_err,
+    reason = "Alien errors retain structured metadata and causal context"
+)]
 
 mod dns;
 mod redirect;
@@ -59,7 +63,7 @@ pub struct GatewayEgress {
 impl GatewayEgress {
     /// Prepare routing before dropping bootstrap capabilities. An absent token is pending until
     /// the authenticated policy endpoint delivers it outside the shared image snapshot.
-    pub fn from_env(control_port: u16) -> Result<Option<Arc<Self>>> {
+    pub fn from_env() -> Result<Option<Arc<Self>>> {
         let declared_none = std::env::var("ALIEN_SANDBOX_EGRESS")
             .ok()
             .is_some_and(|policy| {
@@ -86,7 +90,7 @@ impl GatewayEgress {
             .zip(std::env::var("ALIEN_SANDBOX_SESSION_ID").ok());
         let privileged = unsafe { libc::geteuid() } == 0;
         if privileged {
-            redirect::install(control_port)
+            redirect::install()
                 .into_alien_error()
                 .context(failed("install transparent forwarding"))?;
         }
@@ -149,6 +153,19 @@ impl GatewayEgress {
     /// An immutable deny declaration needs no gateway bootstrap or token.
     pub fn requires_token(&self) -> bool {
         !self.declared_none
+    }
+
+    /// Recheck the actual network after restoring a snapshot. Build-time network readiness must
+    /// never authorize the restored sandbox, and a failed build-time check must be recoverable.
+    pub async fn activate_declared_none(&self) -> Result<()> {
+        if !self.declared_none {
+            return Err(invalid("gateway policy requires a token"));
+        }
+        self.ready.store(false, Ordering::Release);
+        self.listeners_live.store(false, Ordering::Release);
+        self.self_check().await?;
+        self.listeners_live.store(true, Ordering::Release);
+        Ok(())
     }
 
     /// Gate session routes until the network path has been verified.
@@ -284,7 +301,7 @@ impl GatewayEgress {
             .ok_or_else(|| invalid("gateway endpoint pending"))
     }
 
-    /// Install a replacement signed token. Verification and generation enforcement happen in
+    /// Install a replacement signed token. Signature verification and policy lookup happen in
     /// the gateway; the self-check refuses invalid credentials before reopening session routes.
     pub async fn update(&self, token: String) -> Result<()> {
         let _update = self.update_lock.lock().await;
@@ -356,10 +373,20 @@ impl GatewayEgress {
     /// Configure standard proxy-aware tools without disclosing the gateway token.
     pub fn command_environment(&self, env: &mut BTreeMap<String, String>) -> Result<()> {
         for key in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
-            env.insert(key.into(), "http://127.0.0.1:15002".into());
+            env.insert(
+                key.into(),
+                if self.declared_none {
+                    String::new()
+                } else {
+                    "http://127.0.0.1:15002".into()
+                },
+            );
+        }
+        for key in ["ALL_PROXY", "all_proxy"] {
+            env.insert(key.into(), String::new());
         }
         for key in ["NO_PROXY", "no_proxy"] {
-            env.insert(key.into(), String::new());
+            env.insert(key.into(), "localhost,127.0.0.1,127.0.0.0/8,::1".into());
         }
         env.remove("ALIEN_SANDBOX_EGRESS_TOKEN");
         if let Some(path) = self
@@ -412,18 +439,14 @@ impl GatewayEgress {
             return Ok(());
         }
         let mut gateway = self.connect(self.gateway_address()?).await?;
-        self.send_connect(&mut gateway, "one.one.one.one:443")
-            .await?;
+        let token = self.current_token()?;
+        gateway.write_all(format!("GET /health HTTP/1.1\r\nHost: {}\r\nProxy-Authorization: Bearer {token}\r\nConnection: close\r\n\r\n", self.gateway_address()?).as_bytes())
+            .await.into_alien_error().context(failed("request authenticated gateway health"))?;
         let reply = timeout(TIMEOUT, read_header(&mut gateway))
             .await
             .into_alien_error()
             .context(failed("self-check gateway timeout"))??;
-        if !(reply.starts_with(b"HTTP/1.1 200 ")
-            || (reply.starts_with(b"HTTP/1.1 403 ")
-                && reply
-                    .windows(b"X-Alien-Egress-Reason: policy".len())
-                    .any(|v| v == b"X-Alien-Egress-Reason: policy")))
-        {
+        if !reply.starts_with(b"HTTP/1.1 200 ") {
             return Err(AlienError::new(ErrorData::EgressPathUnexpected));
         }
         self.ready.store(true, Ordering::Release);

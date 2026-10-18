@@ -9,7 +9,7 @@ use crate::error::{denied, Result};
 /// Maximum token size, before decoding. Bounds allocation before signature verification.
 pub const MAX_TOKEN_BYTES: usize = 4 * 1024;
 
-/// Signed identity and narrowed egress grant.
+/// Signed sandbox identity. Policy is read independently from the deployment store.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Claims {
@@ -19,14 +19,10 @@ pub struct Claims {
     pub aud: String,
     /// Sandbox instance ID.
     pub sub: String,
-    /// SHA-256 digest of the canonical policy stored for this exact generation.
-    pub policy: String,
     /// Issued-at Unix timestamp.
     pub iat: u64,
     /// Expiry Unix timestamp.
     pub exp: u64,
-    /// Policy generation.
-    pub gen: u64,
 }
 
 #[derive(Deserialize)]
@@ -46,7 +42,6 @@ pub fn verify(token: &str, keys: &HashMap<String, PublicKey>, now: u64) -> Resul
         || claims.sub.is_empty()
         || claims.aud.len() > 256
         || claims.sub.len() > 256
-        || !valid_digest(&claims.policy)
         || claims.iat > now
         || claims.exp <= now
         || claims.exp <= claims.iat
@@ -114,14 +109,14 @@ fn verify_signed<T: serde::de::DeserializeOwned>(
     Ok(claims)
 }
 
-/// An admin grant binds the signed mutation to exactly one sandbox and generation.
+/// An admin grant binds the request method and policy to exactly one sandbox.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AdminClaims {
     pub iss: String,
     pub aud: String,
     pub sub: String,
-    pub gen: u64,
+    pub method: String,
     pub iat: u64,
     pub exp: u64,
     /// Required for policy mutation; CA and metrics grants may omit it.
@@ -172,7 +167,7 @@ mod tests {
     fn signature_and_lifetime_are_required() {
         let pair = KeyPair::from_seed(Seed::new([7; 32]));
         let keys = HashMap::from([("test".into(), pair.pk)]);
-        let payload = serde_json::json!({"iss":"alien-sandbox", "aud":"prefix/resource", "sub":"box", "policy":format!("sha256:{}", "a".repeat(64)), "iat":100, "exp":200, "gen":0});
+        let payload = serde_json::json!({"iss":"alien-sandbox", "aud":"prefix/resource", "sub":"box", "iat":100, "exp":200});
         let token = signed(&pair, payload.clone());
         assert_eq!(verify(&token, &keys, 100).unwrap().sub, "box");
         assert!(verify(&token, &keys, 200).is_err());
@@ -188,10 +183,10 @@ mod tests {
     }
 
     #[test]
-    fn referenced_policy_keeps_proxy_tokens_small() {
+    fn identity_tokens_are_bounded() {
         let pair = KeyPair::from_seed(Seed::new([7; 32]));
         let keys = HashMap::from([("test".into(), pair.pk)]);
-        let payload = serde_json::json!({"iss":"alien-sandbox", "aud":"prefix/resource", "sub":"box", "policy":format!("sha256:{}", "a".repeat(64)), "iat":100, "exp":200, "gen":0});
+        let payload = serde_json::json!({"iss":"alien-sandbox", "aud":"prefix/resource", "sub":"box", "iat":100, "exp":200});
         let token = signed(&pair, payload);
         assert!(token.len() < MAX_TOKEN_BYTES);
         verify(&token, &keys, 100).unwrap();
@@ -210,7 +205,7 @@ mod admin_tests {
         let keys = HashMap::from([("admin".into(), pair.pk)]);
         let sign = |typ: &str, exp: u64| {
             let header = serde_json::json!({"alg":"EdDSA","kid":"admin","typ":typ});
-            let payload = serde_json::json!({"iss":"alien-sandbox","aud":"p/r","sub":"box","gen":7,"iat":100,"exp":exp});
+            let payload = serde_json::json!({"iss":"alien-sandbox","aud":"p/r","sub":"box","method":"PUT","iat":100,"exp":exp});
             let input = format!(
                 "{}.{}",
                 URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header).unwrap()),
@@ -224,8 +219,8 @@ mod admin_tests {
         assert_eq!(
             verify_admin(&sign("alien-egress-admin", 160), &keys, 100)
                 .unwrap()
-                .gen,
-            7
+                .method,
+            "PUT"
         );
         assert!(verify_admin(&sign("JWT", 160), &keys, 100).is_err());
         assert!(verify_admin(&sign("alien-egress-admin", 161), &keys, 100).is_err());

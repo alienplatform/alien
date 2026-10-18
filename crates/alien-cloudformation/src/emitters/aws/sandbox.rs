@@ -344,6 +344,18 @@ impl CfEmitter for AwsSandboxEmitter {
             ("region".to_string(), CfExpression::ref_("AWS::Region")),
         ];
         fields.extend(lifecycle_fields(sandbox));
+        if let Some(policy) = &sandbox.default_policy {
+            fields.push((
+                "defaultPolicy".to_string(),
+                serde_json::to_value(policy)
+                    .and_then(serde_json::from_value::<CfExpression>)
+                    .into_alien_error()
+                    .context(ErrorData::GenericError {
+                        message: "serializing sandbox default policy".into(),
+                    })?,
+            ));
+        }
+
         Ok(Some(CfExpression::object(fields)))
     }
 }
@@ -1057,6 +1069,7 @@ mod tests {
 
         let emitted = declared(Some(600), Some(1800));
         let typed = serde_json::to_value(alien_core::AwsSandboxBinding {
+            default_policy: None,
             egress: None,
             image_arn: alien_core::BindingValue::Value("arn".to_string()),
             image_version: alien_core::BindingValue::Value("1".to_string()),

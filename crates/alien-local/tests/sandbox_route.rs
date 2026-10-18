@@ -422,6 +422,7 @@ async fn a_command_gets_the_env_and_cwd_it_was_given() {
     let sandbox = LocalSandbox::new(
         "agent",
         &LocalSandboxBinding {
+            default_policy: None,
             egress: None,
             manager_url: BindingValue::Value(harness.route.base_url.clone()),
             sandbox_key: BindingValue::Value(SANDBOX.to_string()),

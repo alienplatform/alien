@@ -201,6 +201,7 @@ export type { DynamicContainerReport } from "./dynamic-container-report-schema.j
 export type { DynamicContainerStatus } from "./dynamic-container-status-schema.js";
 export type { DynamodbKvBinding } from "./dynamodb-kv-binding-schema.js";
 export type { EcrArtifactRegistryBinding } from "./ecr-artifact-registry-binding-schema.js";
+export type { EgressPolicy } from "./egress-policy-schema.js";
 export type { EmailDkimToken } from "./email-dkim-token-schema.js";
 export type { EmailDomainOutputs } from "./email-domain-outputs-schema.js";
 export type { EmailEvents } from "./email-events-schema.js";
@@ -715,6 +716,7 @@ export { DynamicContainerReportSchema } from "./dynamic-container-report-schema.
 export { DynamicContainerStatusSchema } from "./dynamic-container-status-schema.js";
 export { DynamodbKvBindingSchema } from "./dynamodb-kv-binding-schema.js";
 export { EcrArtifactRegistryBindingSchema } from "./ecr-artifact-registry-binding-schema.js";
+export { EgressPolicySchema } from "./egress-policy-schema.js";
 export { EmailDkimTokenSchema } from "./email-dkim-token-schema.js";
 export { EmailDomainOutputsSchema } from "./email-domain-outputs-schema.js";
 export { EmailEventsSchema } from "./email-events-schema.js";

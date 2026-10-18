@@ -40,23 +40,22 @@ pub(super) fn original_destination(stream: &TcpStream) -> io::Result<SocketAddrV
 }
 
 /// All guest TCP, including root-owned processes, is redirected. Only explicitly marked agent
-/// sockets and replies on the agent's control listener escape the redirect; no UID-wide exemption.
-pub(super) fn install(control_port: u16) -> io::Result<()> {
+/// sockets and TCP replies to incoming connections escape the redirect; no UID-wide exemption.
+pub(super) fn install() -> io::Result<()> {
     let rules = format!(
         r#"add table ip alien_gateway
 flush table ip alien_gateway
 add chain ip alien_gateway guest_tcp {{ type nat hook output priority -100; policy accept; }}
 add rule ip alien_gateway guest_tcp meta mark {MARK} return
-add rule ip alien_gateway guest_tcp ct direction reply tcp sport {{ {control_port},15001,15002,15053 }} return
-add rule ip alien_gateway guest_tcp ip daddr 127.0.0.1 tcp dport {{ {control_port},15001,15002,15053 }} return
-add rule ip alien_gateway guest_tcp ip daddr 127.0.0.1 udp dport 15053 return
+add rule ip alien_gateway guest_tcp ct direction reply meta l4proto tcp return
 add rule ip alien_gateway guest_tcp ct direction reply udp sport 15053 return
 add rule ip alien_gateway guest_tcp udp dport 53 redirect to :15053
 add rule ip alien_gateway guest_tcp tcp dport 53 redirect to :15053
+add rule ip alien_gateway guest_tcp ip daddr 127.0.0.0/8 return
 add rule ip alien_gateway guest_tcp meta l4proto tcp redirect to :15001
 add chain ip alien_gateway filter {{ type filter hook output priority 0; policy drop; }}
 add rule ip alien_gateway filter meta mark {MARK} accept
-add rule ip alien_gateway filter ct direction reply tcp sport {{ {control_port},15001,15002,15053 }} accept
+add rule ip alien_gateway filter ct direction reply meta l4proto tcp accept
 add rule ip alien_gateway filter ip daddr 127.0.0.1 accept
 add rule ip alien_gateway filter oifname "lo" accept
 add table ip6 alien_gateway

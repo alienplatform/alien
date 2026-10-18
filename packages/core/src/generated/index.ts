@@ -201,6 +201,7 @@ export type { DynamicContainerReport } from "./zod/dynamic-container-report-sche
 export type { DynamicContainerStatus } from "./zod/dynamic-container-status-schema.js";
 export type { DynamodbKvBinding } from "./zod/dynamodb-kv-binding-schema.js";
 export type { EcrArtifactRegistryBinding } from "./zod/ecr-artifact-registry-binding-schema.js";
+export type { EgressPolicy } from "./zod/egress-policy-schema.js";
 export type { EmailDkimToken } from "./zod/email-dkim-token-schema.js";
 export type { EmailDomainOutputs } from "./zod/email-domain-outputs-schema.js";
 export type { EmailEvents } from "./zod/email-events-schema.js";
@@ -715,6 +716,7 @@ export { DynamicContainerReportSchema } from "./zod/dynamic-container-report-sch
 export { DynamicContainerStatusSchema } from "./zod/dynamic-container-status-schema.js";
 export { DynamodbKvBindingSchema } from "./zod/dynamodb-kv-binding-schema.js";
 export { EcrArtifactRegistryBindingSchema } from "./zod/ecr-artifact-registry-binding-schema.js";
+export { EgressPolicySchema } from "./zod/egress-policy-schema.js";
 export { EmailDkimTokenSchema } from "./zod/email-dkim-token-schema.js";
 export { EmailDomainOutputsSchema } from "./zod/email-domain-outputs-schema.js";
 export { EmailEventsSchema } from "./zod/email-events-schema.js";

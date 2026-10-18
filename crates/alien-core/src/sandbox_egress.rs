@@ -299,9 +299,6 @@ mod tests {
             subnet_name: "subnet".to_string(),
             region: "us-central1".to_string(),
         };
-        let domains = || SandboxEgress::Allow {
-            allow: vec!["example.com".to_string()],
-        };
 
         let cases = [
             (SandboxEgress::Internet, None, Err(NoNetwork)),
@@ -315,8 +312,6 @@ mod tests {
                 Some(byo_gcp()),
                 Err(OtherCloudNetwork),
             ),
-            (domains(), None, Err(NoNetwork)),
-            (domains(), Some(create()), Ok(Created)),
             (SandboxEgress::None, None, Err(NoNetwork)),
             (SandboxEgress::None, Some(create()), Ok(Created)),
             (SandboxEgress::None, Some(byo_aws()), Ok(BroughtByCustomer)),

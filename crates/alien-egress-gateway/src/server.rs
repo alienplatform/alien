@@ -6,6 +6,7 @@ use std::{
 };
 
 use alien_error::{Context, IntoAlienError};
+use base64::{engine::general_purpose::STANDARD, Engine};
 use ed25519_compact::PublicKey;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -18,10 +19,10 @@ use tokio::{
 use crate::{
     config::Config,
     error::{denied, invalid, unavailable, Result},
-    generation::GenerationFence,
     io::{Counters, Metered, Prefixed},
     policy::{check_addresses, PolicyExt, Target},
     protocol::{read_client_hello, request_target, MAX_HEADER_BYTES},
+    store::PolicyStore,
     token::{self, Claims},
 };
 
@@ -30,35 +31,30 @@ pub const HEADER_TIMEOUT: Duration = Duration::from_secs(5);
 /// Maximum connection lifetime; limits resource retention by idle peers.
 pub const CONNECTION_TIMEOUT: Duration = Duration::from_secs(3600);
 
-/// Shared immutable configuration and generation store.
+/// Shared configuration and policy store.
 pub struct Gateway {
     /// Deployment configuration.
     pub config: Config,
     /// Parsed public keys.
     pub keys: HashMap<String, PublicKey>,
-    /// Shared monotonic generation fence.
-    pub generations: GenerationFence,
+    /// Current policies shared by all replicas.
+    pub policies: PolicyStore,
     /// Gateway-only CA and vault access.
     pub credentials: crate::credentials::Credentials,
     /// Total accepted proxy connections.
-    pub accepted: std::sync::atomic::AtomicU64,
+    pub accepted: Arc<std::sync::atomic::AtomicU64>,
     /// Total denied or failed proxy connections.
-    pub denied: std::sync::atomic::AtomicU64,
+    pub denied: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl Gateway {
-    /// Authorize against the independently configured bound and the signed grant.
+    /// Authorize the authenticated identity against its currently stored policy.
     pub async fn authorize(&self, claims: &Claims, target: &Target) -> Result<()> {
-        let bound = self
-            .config
-            .bounds
-            .get(&claims.aud)
-            .ok_or_else(|| denied("unknown audience"))?;
-        let policy = self
-            .generations
-            .resolve(&claims.aud, &claims.sub, claims.gen, &claims.policy)
-            .await?;
-        if !bound.intersection_permits(&policy, target) {
+        if !self.config.audiences.contains(&claims.aud) {
+            return Err(denied("unknown audience"));
+        }
+        let policy = self.policies.resolve(&claims.aud, &claims.sub).await?;
+        if !policy.permits(target) {
             return Err(alien_error::AlienError::new(
                 crate::error::ErrorData::PolicyDenied,
             ));
@@ -85,23 +81,34 @@ impl Gateway {
             &self.config.denied_ranges,
         )?;
         // Address failover is delegated to TcpStream, with only the validated addresses supplied.
-        timeout(HEADER_TIMEOUT, TcpStream::connect(addresses.as_slice()))
+        let stream = timeout(HEADER_TIMEOUT, TcpStream::connect(addresses.as_slice()))
             .await
             .into_alien_error()
             .context(unavailable("destination timeout"))?
             .into_alien_error()
-            .context(unavailable("connect destination"))
+            .context(unavailable("connect destination"))?;
+        stream
+            .set_nodelay(true)
+            .into_alien_error()
+            .context(unavailable("configure destination socket"))?;
+        Ok(stream)
     }
 }
 
 /// Serve proxy connections with bounded concurrency and supervised connection tasks.
-pub async fn serve(listener: TcpListener, gateway: Arc<Gateway>) -> Result<()> {
+pub async fn serve(listener: TcpListener, live: Arc<crate::runtime::LiveGateway>) -> Result<()> {
     let limit = Arc::new(Semaphore::new(1024));
     let mut tasks = JoinSet::new();
     loop {
         tokio::select! {
             accepted = listener.accept() => {
                 let (stream, _) = accepted.into_alien_error().context(unavailable("accept proxy connection"))?;
+                let Some(gateway) = live.snapshot() else {
+                    tracing::info!(ts = %chrono::Utc::now().to_rfc3339(), aud = "", sub = "", host = "", port = 0,
+                        decision = "deny", reason = "config unavailable", bytesUp = 0, bytesDown = 0, durationMs = 0, "egress connection");
+                    drop(stream);
+                    continue;
+                };
                 let permit = match limit.clone().try_acquire_owned() {
                     Ok(permit) => permit,
                     Err(_) => {
@@ -167,6 +174,11 @@ async fn proxy(
     gateway: Arc<Gateway>,
     audit: &mut Audit,
 ) -> Result<()> {
+    stream
+        .inner
+        .set_nodelay(true)
+        .into_alien_error()
+        .context(unavailable("configure guest socket"))?;
     let input = timeout(HEADER_TIMEOUT, read_head(stream))
         .await
         .into_alien_error()
@@ -179,8 +191,10 @@ async fn proxy(
             return Err(error);
         }
     };
-    audit.host = target.host.clone();
-    audit.port = target.port;
+    if let Some(target) = &target {
+        audit.host = target.host.clone();
+        audit.port = target.port;
+    }
     let claims = match token::verify(
         &bearer,
         &gateway.keys,
@@ -194,6 +208,24 @@ async fn proxy(
     };
     audit.aud = claims.aud.clone();
     audit.sub = claims.sub.clone();
+    let Some(target) = target else {
+        if !gateway.config.audiences.contains(&claims.aud)
+            || gateway
+                .policies
+                .resolve(&claims.aud, &claims.sub)
+                .await
+                .is_err()
+        {
+            refuse(stream, false).await?;
+            return Err(denied("health identity or policy unavailable"));
+        }
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nok\n")
+            .await
+            .into_alien_error()
+            .context(unavailable("reply to authenticated health"))?;
+        return Ok(());
+    };
     if let Err(error) = gateway.authorize(&claims, &target).await {
         refuse(stream, error.code == "EGRESS_POLICY_DENIED").await?;
         return Err(error);
@@ -226,91 +258,56 @@ async fn proxy(
         })
         .cloned()
         .collect();
-    if target.port == 443 || !rules.is_empty() {
-        let hello = timeout(HEADER_TIMEOUT, read_client_hello(&mut guest, &target))
-            .await
-            .into_alien_error()
-            .context(unavailable("ClientHello timeout"))??;
-        if !rules.is_empty() {
-            return gateway
-                .credentials
-                .forward(
-                    Prefixed::new(hello, guest),
-                    upstream,
-                    (&claims.aud, &claims.sub),
-                    target,
-                    &rules,
-                )
-                .await;
-        }
-        upstream
-            .write_all(&hello)
-            .await
-            .into_alien_error()
-            .context(unavailable("forward ClientHello"))?;
-    } else if target.port == 80 {
-        // CONNECT is not an escape hatch around plain-HTTP Host checks.
+    if target.port == 80 {
         return crate::http_proxy::forward(guest, upstream, target, None).await;
-    } else {
-        return relay_explicit_port(guest, upstream, &target).await;
     }
+    if target.host.parse::<std::net::Ipv4Addr>().is_ok() {
+        // Explicit IP/CIDR rules are the only grants for opaque, including server-first, protocols.
+        tokio::io::copy_bidirectional(&mut guest, &mut upstream)
+            .await
+            .into_alien_error()
+            .context(unavailable("relay IP connection"))?;
+        return Ok(());
+    }
+    let first = timeout(HEADER_TIMEOUT, guest.read_u8())
+        .await
+        .into_alien_error()
+        .context(unavailable("protocol timeout"))?
+        .into_alien_error()
+        .context(unavailable("read protocol"))?;
+    let mut guest = Prefixed::new(vec![first], guest);
+    if first != 22 {
+        // HTTP parsing enforces Host on every port; arbitrary protocols need an IP/CIDR rule.
+        if !rules.is_empty() {
+            return Err(denied("credential destination requires TLS"));
+        }
+        return crate::http_proxy::forward(guest, upstream, target, None).await;
+    }
+    let hello = timeout(HEADER_TIMEOUT, read_client_hello(&mut guest, &target))
+        .await
+        .into_alien_error()
+        .context(unavailable("ClientHello timeout"))??;
+    if !rules.is_empty() {
+        return gateway
+            .credentials
+            .forward(
+                Prefixed::new(hello, guest),
+                upstream,
+                (&claims.aud, &claims.sub),
+                target,
+                &rules,
+            )
+            .await;
+    }
+    upstream
+        .write_all(&hello)
+        .await
+        .into_alien_error()
+        .context(unavailable("forward ClientHello"))?;
     tokio::io::copy_bidirectional(&mut guest, &mut upstream)
         .await
         .into_alien_error()
         .context(unavailable("relay connection"))?;
-    Ok(())
-}
-
-/// Preserve server-first protocols such as SSH while checking TLS ClientHello on explicit ports.
-/// The upstream reader may deliver a protocol greeting, but no guest bytes reach upstream before
-/// the first payload is classified. Protocol upgrades inside an opaque stream are not inspected.
-async fn relay_explicit_port<G>(guest: G, upstream: TcpStream, target: &Target) -> Result<()>
-where
-    G: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
-{
-    let (mut guest_read, mut guest_write) = tokio::io::split(guest);
-    let (mut upstream_read, mut upstream_write) = upstream.into_split();
-    let send = async {
-        let mut first = [0u8; 4096];
-        let count = guest_read
-            .read(&mut first)
-            .await
-            .into_alien_error()
-            .context(unavailable("read explicit-port protocol"))?;
-        let mut input = Prefixed::new(first[..count].to_vec(), guest_read);
-        if count > 0 && first[0] == 22 {
-            let hello = timeout(HEADER_TIMEOUT, read_client_hello(&mut input, target))
-                .await
-                .into_alien_error()
-                .context(unavailable("ClientHello timeout"))??;
-            upstream_write
-                .write_all(&hello)
-                .await
-                .into_alien_error()
-                .context(unavailable("forward ClientHello"))?;
-        }
-        tokio::io::copy(&mut input, &mut upstream_write)
-            .await
-            .into_alien_error()
-            .context(unavailable("relay explicit-port request"))?;
-        upstream_write
-            .shutdown()
-            .await
-            .into_alien_error()
-            .context(unavailable("finish upstream request"))
-    };
-    let receive = async {
-        tokio::io::copy(&mut upstream_read, &mut guest_write)
-            .await
-            .into_alien_error()
-            .context(unavailable("relay explicit-port response"))?;
-        guest_write
-            .shutdown()
-            .await
-            .into_alien_error()
-            .context(unavailable("finish guest response"))
-    };
-    tokio::try_join!(send, receive)?;
     Ok(())
 }
 
@@ -349,8 +346,7 @@ async fn read_head(stream: &mut (impl tokio::io::AsyncRead + Unpin)) -> Result<V
     }
 }
 
-fn inspect_head(input: &[u8]) -> Result<(Target, String, bool, usize)> {
-    let target = request_target(input)?.ok_or_else(|| invalid("incomplete request"))?;
+fn inspect_head(input: &[u8]) -> Result<(Option<Target>, String, bool, usize)> {
     let mut headers = [httparse::EMPTY_HEADER; 64];
     let mut request = httparse::Request::new(&mut headers);
     let head_len = request
@@ -359,6 +355,21 @@ fn inspect_head(input: &[u8]) -> Result<(Target, String, bool, usize)> {
     let httparse::Status::Complete(head_len) = head_len else {
         return Err(invalid("incomplete request"));
     };
+    let health = request.method == Some("GET") && request.path == Some("/health");
+    let target = if health {
+        if request
+            .headers
+            .iter()
+            .filter(|header| header.name.eq_ignore_ascii_case("host"))
+            .count()
+            != 1
+        {
+            return Err(invalid("exactly one Host required"));
+        }
+        None
+    } else {
+        Some(request_target(input)?.ok_or_else(|| invalid("incomplete request"))?)
+    };
     let connect = request.method == Some("CONNECT");
     let mut bearer = None;
     for header in request.headers {
@@ -366,15 +377,25 @@ fn inspect_head(input: &[u8]) -> Result<(Target, String, bool, usize)> {
             if bearer.is_some() {
                 return Err(denied("duplicate proxy authorization"));
             }
-            bearer = Some(
-                std::str::from_utf8(header.value)
-                    .map_err(|_| denied("invalid proxy authorization"))?
-                    .strip_prefix("Bearer ")
-                    .ok_or_else(|| denied("Bearer token required"))?
-                    .to_string(),
-            );
+            let authorization = std::str::from_utf8(header.value)
+                .map_err(|_| denied("invalid proxy authorization"))?;
+            bearer = Some(if let Some(token) = authorization.strip_prefix("Bearer ") {
+                token.to_string()
+            } else if let Some(encoded) = authorization.strip_prefix("Basic ") {
+                let bytes = STANDARD
+                    .decode(encoded)
+                    .map_err(|_| denied("invalid proxy credentials"))?;
+                let credentials =
+                    std::str::from_utf8(&bytes).map_err(|_| denied("invalid proxy credentials"))?;
+                credentials
+                    .strip_prefix("alien:")
+                    .ok_or_else(|| denied("invalid proxy username"))?
+                    .to_string()
+            } else {
+                return Err(denied("proxy token required"));
+            });
         }
-        if connect
+        if (connect || health)
             && (header.name.eq_ignore_ascii_case("transfer-encoding")
                 || header.name.eq_ignore_ascii_case("content-length"))
         {

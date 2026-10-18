@@ -713,33 +713,6 @@ fn aws_sandbox_allowing_egress_builds_no_connector() {
     );
 }
 
-/// An egress mode the artifact cannot deliver is refused, not dropped.
-///
-/// AWS offers no domain filter at the connector, so `allowDomains` has nothing to render into and
-/// would otherwise be silently ignored while the customer believed it applied.
-#[test]
-fn aws_sandbox_refuses_an_egress_mode_it_cannot_deliver() {
-    for mode in [SandboxEgress::Allow {
-        allow: vec!["example.com".to_string()],
-    }] {
-        let (stack, settings) = sandbox_stack("acme-sandbox-egress", mode.clone());
-        let error = try_render_built_ins(
-            &stack,
-            settings,
-            custom_resource_registration(),
-            CloudFormationTarget::Aws,
-            "aws",
-            "sandbox egress",
-        )
-        .expect_err(&format!("egress {mode:?} must be refused at emit time"));
-        assert!(
-            error.message.contains("VPC egress connector"),
-            "the refusal must name why: {}",
-            error.message
-        );
-    }
-}
-
 /// The withheld mode must not still be the parameter's default — see `add_network_parameters`
 /// for why a stack can reach this mismatch. Asserted through cfn-lint, which is what
 /// CloudFormation itself would say.
@@ -1880,13 +1853,7 @@ fn the_emitted_registration_matches_the_direct_seed() {
         ),
         // The agent enforces these in the guest, so the cloud side sees open egress. A registration
         // that read the declared egress instead refused this sandbox on direct deployments only.
-        (
-            SandboxEgress::Allow {
-                allow: vec!["example.com".to_string()],
-            },
-            supervised.clone(),
-            LIVE_BUNDLE,
-        ),
+        (SandboxEgress::Internet, supervised.clone(), LIVE_BUNDLE),
         (SandboxEgress::None, supervised.clone(), LIVE_BUNDLE),
     ] {
         let sandbox = Sandbox {

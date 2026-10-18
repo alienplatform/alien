@@ -567,6 +567,17 @@ impl TfEmitter for AwsSandboxEmitter {
             ),
         ];
         fields.extend(lifecycle_fields(sandbox));
+        if let Some(policy) = &sandbox.default_policy {
+            fields.push((
+                "defaultPolicy",
+                hcl::to_expression(policy)
+                    .into_alien_error()
+                    .context(ErrorData::GenericError {
+                        message: "serializing sandbox default policy".into(),
+                    })?,
+            ));
+        }
+
         Ok(Some(expr::object(fields)))
     }
 }
@@ -1126,6 +1137,7 @@ mod tests {
                 .collect();
 
         let typed = serde_json::to_value(alien_core::AwsSandboxBinding {
+            default_policy: None,
             egress: None,
             image_arn: alien_core::BindingValue::Value("arn".to_string()),
             image_version: alien_core::BindingValue::Value("1".to_string()),

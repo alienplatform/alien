@@ -383,25 +383,6 @@ fn aws_sandbox_allowing_egress_builds_no_connector() {
     );
 }
 
-/// An egress mode the artifact cannot deliver is refused, not dropped.
-///
-/// AWS offers no domain filter at the connector, so `allowDomains` has nothing to render into and
-/// would otherwise be silently ignored while the customer believed it applied.
-#[test]
-fn aws_sandbox_refuses_an_egress_mode_it_cannot_deliver() {
-    for mode in [SandboxEgress::Allow {
-        allow: vec!["example.com".to_string()],
-    }] {
-        let (stack, settings) = sandbox_stack("acme-sandbox-egress", mode.clone());
-        let error = try_render(&stack, TerraformTarget::Aws, settings)
-            .expect_err(&format!("egress {mode:?} must be refused at emit time"));
-        assert!(
-            error.to_string().contains("VPC egress connector"),
-            "the refusal must name why: {error}"
-        );
-    }
-}
-
 /// A bundle key a runtime rebuild can be granted: the version segment moves, the prefix does not.
 /// A Frozen sandbox is built once and needs no such shape, so it keeps the flat key its snapshots
 /// were taken with.

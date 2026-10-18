@@ -55,11 +55,15 @@ def dns():
             log.write(json.dumps({"name": name, "type": packet[offset : offset + 2].hex()}) + "\n")
         ips = ["93.184.216.2"]
         if name == "private.test":
-            ips = ["10.77.0.2"]
+            ips = ["10.77.91.2"]
+        elif name == "configured-range.test":
+            ips = ["93.184.217.2"]
+        elif name == "overlay.test":
+            ips = ["10.244.0.2"]
         elif name == "metadata.test":
             ips = ["169.254.169.254"]
         elif name == "mixed.test":
-            ips += ["10.77.0.2"]
+            ips += ["10.77.91.2"]
         elif name == "rebind.test":
             ips = [Path("/fixture/rebind").read_text().strip()]
         if packet[offset : offset + 2] != b"\x00\x01":
@@ -70,6 +74,21 @@ def dns():
         server.sendto(answer, sender)
 
 
+def echo():
+    server = socket.socket()
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server.bind(("0.0.0.0", 2222))
+    server.listen()
+    while True:
+        stream, _ = server.accept()
+        with stream:
+            stream.settimeout(8)
+            try:
+                stream.sendall(stream.recv(1024))
+            except OSError:
+                pass
+
+threading.Thread(target=echo, daemon=True).start()
 for port, certificate in [(80, None), (443, "origin"), (9443, "origin"), (8443, "untrusted")]:
     threading.Thread(target=serve, args=(port, certificate), daemon=True).start()
 dns()
