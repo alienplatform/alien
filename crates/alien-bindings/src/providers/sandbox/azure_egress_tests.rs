@@ -11,6 +11,14 @@ use std::sync::Mutex;
 type Record = Arc<Mutex<Option<Sandbox>>>;
 type Request = Arc<Mutex<Option<CreateSandbox>>>;
 
+// Azure returns the enforced HTTP policy both flat and under `http`.
+fn readback_policy(policy: &EgressPolicy) -> EgressPolicy {
+    let mut value = serde_json::to_value(policy).unwrap();
+    value["enforcementMode"] = serde_json::json!("Enforced");
+    value["http"] = value.clone();
+    serde_json::from_value(value).unwrap()
+}
+
 fn provider(manager: SandboxEgressManager, corrupt: bool) -> (AzureSandbox, Record, Request) {
     let record: Record = Arc::new(Mutex::new(None));
     let request: Request = Arc::new(Mutex::new(None));
@@ -33,7 +41,7 @@ fn provider(manager: SandboxEgressManager, corrupt: bool) -> (AzureSandbox, Reco
                 id: "vendor-id".into(),
                 labels,
                 vnet_connection_name: Some("default".into()),
-                egress_policy: req.egress.clone(),
+                egress_policy: req.egress.as_ref().map(readback_policy),
                 state: Some("Running".into()),
             };
             *submitted.lock().unwrap() = Some(req);
@@ -256,4 +264,49 @@ async fn admin_failure_discards_create_and_does_not_prevent_termination() {
         h.policy(&id).is_some(),
         "failed revocation is not claimed as success"
     );
+}
+
+#[tokio::test]
+async fn gateway_readback_refuses_changed_or_unknown_enforcement() {
+    let h = Harness::new().await;
+    let (sandbox, record, _) = provider(h.reopen().await, false);
+    sandbox
+        .create(CreateSandboxRequest::default())
+        .await
+        .unwrap();
+    let expected = record
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .egress_policy
+        .clone()
+        .unwrap();
+    let changes = [
+        ("/enforcementMode", serde_json::json!("Audit")),
+        ("/http/enforcementMode", serde_json::json!("Audit")),
+        ("/http/defaultAction", serde_json::json!("Deny")),
+        ("/http/hostRules/2/action", serde_json::json!("Allow")),
+        ("/hostRules/0/pattern", serde_json::json!("*")),
+        ("/http", serde_json::json!(null)),
+    ];
+    for (path, value) in changes {
+        let mut altered = serde_json::to_value(&expected).unwrap();
+        *altered.pointer_mut(path).unwrap() = value;
+        record.lock().unwrap().as_mut().unwrap().egress_policy =
+            Some(serde_json::from_value(altered).unwrap());
+        let error = sandbox.get("vendor-id").await.unwrap_err();
+        assert_eq!(error.code, "SANDBOX_NOT_AS_DECLARED", "{path}");
+    }
+    for path in ["", "/http"] {
+        let mut altered = serde_json::to_value(&expected).unwrap();
+        altered.pointer_mut(path).unwrap()["bypass"] = serde_json::json!(true);
+        record.lock().unwrap().as_mut().unwrap().egress_policy =
+            Some(serde_json::from_value(altered).unwrap());
+        let error = sandbox.get("vendor-id").await.unwrap_err();
+        assert_eq!(error.code, "SANDBOX_NOT_AS_DECLARED", "{path}/bypass");
+    }
+    record.lock().unwrap().as_mut().unwrap().egress_policy = Some(expected);
+    assert!(sandbox.get("vendor-id").await.unwrap().is_some());
+    sandbox.terminate("vendor-id").await.unwrap();
 }

@@ -12,6 +12,22 @@ use std::{collections::BTreeMap, sync::Arc};
 const IDENTITY_LABEL: &str = "alien-egress-identity";
 const MAX_TOKEN_LIFETIME: u32 = 24 * 60 * 60;
 
+/// Azure echoes the effective HTTP policy twice and adds its enforcement mode.
+/// Both copies must match, including rule order; unknown fields remain refused.
+fn gateway_policy_holds(expected: &EgressPolicy, effective: &EgressPolicy) -> bool {
+    let enforced_matches = |mut policy: EgressPolicy| {
+        let mode = policy.unmodelled.remove("enforcementMode");
+        mode.is_none_or(|mode| mode.as_str() == Some("Enforced")) && policy == *expected
+    };
+    let mut flat = effective.clone();
+    let http = flat.unmodelled.remove("http");
+    enforced_matches(flat)
+        && match http {
+            None => true,
+            Some(http) => serde_json::from_value(http).is_ok_and(enforced_matches),
+        }
+}
+
 impl AzureSandbox {
     /// Use the deployment's gateway for policy writes and create-time proxy credentials.
     pub fn with_egress_manager(
@@ -129,7 +145,12 @@ impl AzureSandbox {
     }
 
     pub(super) fn check_gateway_floor(&self, sandbox: &Sandbox) -> Result<()> {
-        if sandbox.egress_policy != self.native_policy() {
+        if !self
+            .native_policy()
+            .as_ref()
+            .zip(sandbox.egress_policy.as_ref())
+            .is_some_and(|(expected, effective)| gateway_policy_holds(expected, effective))
+        {
             return Err(not_as_declared(
                 &sandbox.id,
                 "native gateway-only policy differs from the binding",
