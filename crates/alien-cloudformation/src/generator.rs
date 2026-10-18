@@ -12,7 +12,7 @@ use crate::{
 use alien_core::{
     import::{EmitContext, CURRENT_SETUP_IMPORT_FORMAT_VERSION},
     CapacityGroup, CapacityGroupScalePolicy, ComputeCluster, ComputePoolSelection, Container,
-    Daemon, DeploymentModel, DomainSettings, ErrorData, ExposeProtocol, HeartbeatsMode,
+    Daemon, DeploymentModel, DomainSettings, ErrorData, ExposeProtocol, HeartbeatsMode, Key,
     KubernetesCluster, KubernetesSettings, Network, NetworkSettings, Platform, RemoteBindings,
     ResourceLifecycle, Result, Sandbox, Stack, StackInputDefaultValue, StackInputDefinition,
     StackInputKind, StackInputProvider, StackSettings, Storage, TelemetryMode, UpdatesMode, Worker,
@@ -1287,6 +1287,27 @@ fn apply_resource_dependencies(
                 .resources
                 .get(dependency.id())
                 .is_some_and(|entry| entry.config.downcast_ref::<RemoteBindings>().is_some())
+            {
+                continue;
+            }
+            // Volume grants reference the key and node roles themselves. The executor
+            // dependency orders cluster completion, but applying it to the roles can
+            // cycle through a workload identity that is also allowed to use the key.
+            if dependency.resource_type() == &Key::RESOURCE_TYPE
+                && entry.config.downcast_ref::<ComputeCluster>().is_some()
+                && stack.resources().any(|(_, entry)| {
+                    entry
+                        .config
+                        .downcast_ref::<Container>()
+                        .is_some_and(|container| {
+                            container.cluster.as_deref() == Some(resource_id.as_str())
+                                && container
+                                    .persistent_storage
+                                    .as_ref()
+                                    .and_then(|storage| storage.encryption_key.as_ref())
+                                    == Some(dependency)
+                        })
+                })
             {
                 continue;
             }
