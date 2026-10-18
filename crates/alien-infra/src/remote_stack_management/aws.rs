@@ -46,6 +46,9 @@ pub struct AwsRemoteStackManagementController {
     /// Installed setup grants; runtime can narrow its requirements without rewriting this receipt.
     #[serde(default)]
     pub(crate) installed_management_grants: Option<std::collections::BTreeMap<String, Vec<String>>>,
+    /// Setup-owned, immutable task retirement capability; never created by runtime refresh.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) worker_gateway_cleanup_function_arn: Option<String>,
 }
 
 #[controller]
@@ -504,6 +507,7 @@ impl AwsRemoteStackManagementController {
             Some(ResourceOutputs::new(RemoteStackManagementOutputs {
                 management_resource_id: role_arn.clone(),
                 access_configuration: role_arn.clone(),
+                aws_worker_gateway_cleanup_function_arn: self.worker_gateway_cleanup_function_arn.clone(),
                 legacy_remote_bindings_access: None,
             }))
         } else {
@@ -1113,6 +1117,7 @@ impl AwsRemoteStackManagementController {
             management_permissions_applied: true,
             management_permissions_revision: None,
             installed_management_grants: None,
+            worker_gateway_cleanup_function_arn: None,
             _internal_stay_count: None,
         }
     }

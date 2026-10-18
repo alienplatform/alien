@@ -16,6 +16,9 @@ pub struct AwsRemoteStackManagementImportData {
     /// Per-scope revisions of the management grants installed by this setup artifact.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub installed_management_grants: Option<std::collections::BTreeMap<String, Vec<String>>>,
+    /// Published setup-owned capability for retiring private worker gateway tasks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_gateway_cleanup_function_arn: Option<String>,
     /// Setup-owned role used only for opted-in remote binding data access.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "openapi", schema(ignore))]

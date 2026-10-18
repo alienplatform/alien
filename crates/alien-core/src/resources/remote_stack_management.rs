@@ -63,6 +63,10 @@ pub struct RemoteStackManagementOutputs {
     /// For Azure: JSON containing the target managed identity client ID and tenant ID
     pub access_configuration: String,
 
+    /// Exact published AWS Lambda version installed by setup for gateway task retirement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aws_worker_gateway_cleanup_function_arn: Option<String>,
+
     /// Read-only compatibility for deployments imported before Remote Bindings became a
     /// first-class resource. New controllers never serialize this field.
     #[serde(default, rename = "remoteBindingsAccess", skip_serializing)]

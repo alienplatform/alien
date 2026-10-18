@@ -1,8 +1,8 @@
 //! Importer for AWS RemoteStackManagement (cross-account management role).
 
 use alien_core::{
-    import::{data::AwsRemoteStackManagementImportData, ImportContext},
     Result, StackResourceState,
+    import::{ImportContext, data::AwsRemoteStackManagementImportData},
 };
 
 use crate::import::ResourceImporter;
@@ -23,6 +23,21 @@ impl ResourceImporter for AwsRemoteStackManagementImporter {
         data: AwsRemoteStackManagementImportData,
         ctx: &ImportContext<'_>,
     ) -> Result<StackResourceState> {
+        if let Some(function_arn) = &data.worker_gateway_cleanup_function_arn {
+            if !data.management_permissions_applied {
+                return Err(alien_core::ErrorData::GenericError {
+                    message: "Worker gateway cleanup requires setup-applied management permissions"
+                        .to_string(),
+                }
+                .into());
+            }
+            alien_core::aws_worker_gateway::validate_cleanup_function_arn(
+                function_arn,
+                &data.role_arn,
+                &data.role_name,
+                ctx.region,
+            )?;
+        }
         let controller = AwsRemoteStackManagementController {
             state: AwsRemoteStackManagementState::Ready,
             role_arn: Some(data.role_arn),
@@ -32,6 +47,7 @@ impl ResourceImporter for AwsRemoteStackManagementImporter {
             installed_management_grants: data
                 .installed_management_grants
                 .filter(|_| data.management_permissions_applied),
+            worker_gateway_cleanup_function_arn: data.worker_gateway_cleanup_function_arn,
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)

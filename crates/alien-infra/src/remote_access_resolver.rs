@@ -109,6 +109,7 @@ impl RemoteAccessResolver {
         let access = RemoteStackManagementOutputs {
             management_resource_id: outputs.resource_id.clone(),
             access_configuration: outputs.access_configuration.clone(),
+            aws_worker_gateway_cleanup_function_arn: None,
             legacy_remote_bindings_access: None,
         };
         match base_config.platform() {
@@ -397,6 +398,7 @@ mod tests {
                 .outputs(ResourceOutputs::new(RemoteStackManagementOutputs {
                     management_resource_id: service_account_email.to_string(),
                     access_configuration: service_account_email.to_string(),
+                    aws_worker_gateway_cleanup_function_arn: None,
                     legacy_remote_bindings_access: None,
                 }))
                 .lifecycle(ResourceLifecycle::Frozen)

@@ -713,6 +713,7 @@ impl GcpRemoteStackManagementController {
             Some(ResourceOutputs::new(RemoteStackManagementOutputs {
                 management_resource_id: email.clone(),
                 access_configuration: email.clone(),
+                aws_worker_gateway_cleanup_function_arn: None,
                 legacy_remote_bindings_access: None,
             }))
         } else {

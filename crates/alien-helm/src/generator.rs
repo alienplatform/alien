@@ -10907,6 +10907,7 @@ logCollector:
                         "tenantId": "tenant"
                     })
                     .to_string(),
+                    aws_worker_gateway_cleanup_function_arn: None,
                     legacy_remote_bindings_access: None,
                 }));
             }),
