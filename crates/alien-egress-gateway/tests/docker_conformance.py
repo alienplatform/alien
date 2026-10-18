@@ -733,6 +733,7 @@ def main():
     parser.add_argument("--connect-port80-only", action="store_true")
     parser.add_argument("--range-refresh-only", action="store_true")
     parser.add_argument("--resume-only", action="store_true")
+    parser.add_argument("--edges-only", action="store_true")
     args = parser.parse_args()
     if args.range_refresh_only and not args.vault_config:
         parser.error("--range-refresh-only requires --vault-config")
@@ -797,6 +798,10 @@ def main():
         if args.replica_bootstrap_only:
             from dns_bootstrap import check_dns_bootstrap
             check_dns_bootstrap(suite, start_gateway, docker, PREFIX, AUD)
+            return
+        if args.edges_only:
+            from edge_cases import check_edges
+            check_edges(suite, AUD, SUB, PROXY)
             return
         if args.connect_port80_only:
             suite.connect_port80()

@@ -7,6 +7,9 @@ import struct
 import threading
 from pathlib import Path
 
+# The fixture must accept the gateway's 128-field boundary; Python defaults to 100.
+http.client._MAXHEADERS = 256
+
 
 class Origin(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -102,6 +105,8 @@ def dns():
             ips += ["10.77.91.2"]
         elif name == "rebind.test":
             ips = [Path("/fixture/rebind").read_text().strip()]
+        elif name == "failover.test":
+            ips = ["93.184.216.250", "93.184.216.2"]
         if packet[offset : offset + 2] != b"\x00\x01":
             ips = []
         answer = packet[:2] + struct.pack("!HHHHH", 0x8180, 1, len(ips), 0, 0) + question

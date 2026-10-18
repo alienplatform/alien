@@ -81,6 +81,7 @@ impl Gateway {
         let addresses: Vec<_> = if let Ok(ip) = target.host.parse::<std::net::Ipv4Addr>() {
             vec![SocketAddr::new(ip.into(), target.port)]
         } else {
+            let _timer = self.connections.dns_latency.start();
             // An absolute DNS name never applies deployment search domains.
             timeout(
                 HEADER_TIMEOUT,
@@ -103,13 +104,12 @@ impl Gateway {
             &addresses.iter().map(SocketAddr::ip).collect::<Vec<_>>(),
             &self.config.denied_ranges,
         )?;
-        // Address failover is delegated to TcpStream, with only the validated addresses supplied.
-        let stream = timeout(HEADER_TIMEOUT, TcpStream::connect(addresses.as_slice()))
+        let timer = self.connections.connect_latency.start();
+        let stream = crate::dial::connect(&addresses)
             .await
             .into_alien_error()
-            .context(unavailable("destination timeout"))?
-            .into_alien_error()
             .context(unavailable("connect destination"))?;
+        drop(timer);
         identity.record_peer(
             stream
                 .peer_addr()
