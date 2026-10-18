@@ -200,7 +200,7 @@ fn sandbox_resource() -> Sandbox {
         .code(SandboxCode::Image {
             image: "ubuntu:24.04".to_string(),
         })
-        .egress(SandboxEgress::Internet)
+        .egress(SandboxEgress::Allow)
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,
@@ -257,7 +257,7 @@ fn open_sandbox_binding_for(platform: Platform) -> SandboxBinding {
             "westus2",
             "rg",
             "ubuntu",
-            alien_core::SandboxEgress::Internet,
+            alien_core::SandboxEgress::Allow,
             None,
         ),
         Platform::Gcp => SandboxBinding::gcp_agent_platform(
@@ -561,6 +561,35 @@ fn remote_sandbox_validation_refuses_platforms_without_a_durable_parent() {
         "{}",
         error.message
     );
+}
+
+#[test]
+fn azure_remote_sandbox_accepts_only_legacy_open_egress() {
+    for (egress, allowed) in [
+        (SandboxEgress::Allow, true),
+        (SandboxEgress::Internet, false),
+        (SandboxEgress::None, false),
+        (
+            SandboxEgress::AllowDomains {
+                domains: vec!["example.com".into()],
+            },
+            false,
+        ),
+    ] {
+        let SandboxBinding::Azure(mut binding) = open_sandbox_binding_for(Platform::Azure) else {
+            unreachable!();
+        };
+        binding.egress = egress.into();
+        let deployment = deployment_on_platform(
+            sandbox_stack_state(SandboxBinding::Azure(binding), Platform::Azure),
+            Platform::Azure,
+        );
+        let result = remote_sandbox_binding(&deployment, "agents");
+        assert_eq!(result.is_ok(), allowed);
+        if let Ok(RemoteSandboxBinding::Azure(binding)) = result {
+            assert!(binding.allow_egress);
+        }
+    }
 }
 
 /// The wire contract remote clients decode. `service` selects the variant, so a rename is a silent
