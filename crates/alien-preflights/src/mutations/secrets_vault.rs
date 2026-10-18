@@ -53,6 +53,7 @@ impl StackMutation for SecretsVaultMutation {
         });
 
         explicitly_configured
+            || alien_core::sandbox_egress::has_sandbox_gateway(stack)
             || worker_needs_vault
             || azure_setup_needs_vault(stack, stack_state, config)
     }
@@ -140,6 +141,10 @@ impl StackMutation for SecretsVaultMutation {
                 !infrastructure_only,
                 needs_certificates,
             )?;
+        }
+
+        if stack_state.platform == Platform::Aws {
+            super::sandbox_gateway_permissions::configure_aws_gateway_permissions(&mut stack)?;
         }
 
         Ok(stack)

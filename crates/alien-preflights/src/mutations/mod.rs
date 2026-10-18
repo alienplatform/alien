@@ -19,6 +19,7 @@ pub mod remote_bindings;
 pub mod remote_stack_management;
 pub mod resource_link_permissions;
 pub mod sandbox_gateway_links;
+mod sandbox_gateway_permissions;
 pub mod secrets_vault;
 pub mod service_account;
 pub mod service_account_dependencies;
