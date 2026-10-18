@@ -392,6 +392,10 @@ impl PreflightRegistry {
         // released before it existed keep deploying and updating.
         registry.add_build_time_check(Box::new(compile_time::UniqueEndpointHostLabelsCheck));
 
+        registry.add_deployment_prerequisite_check(Box::new(
+            deployment_prerequisites::SandboxEgressGatewayCheck,
+        ));
+
         // Add deployment prerequisite checks. These validate the concrete
         // deployment target/config, so they run only after deployment-time
         // mutations have produced the final stack shape.

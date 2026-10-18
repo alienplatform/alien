@@ -195,7 +195,7 @@ pub fn seeds(
     scaffolded(stack, stack_state.platform)
         .map(|(_, _, scaffolded)| match scaffolded {
             #[cfg(feature = "aws")]
-            Scaffolded::AwsSandbox(sandbox) => aws_sandbox::seed(ctx, sandbox, records),
+            Scaffolded::AwsSandbox(sandbox) => aws_sandbox::seed(ctx, stack, sandbox, records),
             #[cfg(not(feature = "aws"))]
             Scaffolded::AwsSandbox(_) => Err(aws_not_built()),
         })

@@ -1,7 +1,7 @@
 use alien_error::AlienError;
 use serde::{Deserialize, Serialize};
 
-use crate::{parse_bundle_uri, BundleUri, ErrorData, Result, Sandbox, SandboxCode};
+use crate::{parse_bundle_uri, BundleUri, ErrorData, Result, Sandbox, SandboxCode, Stack};
 
 /// AWS Sandbox ImportData.
 ///
@@ -60,8 +60,9 @@ impl AwsSandboxImportData {
     /// What a runtime-built sandbox registers, with every template expression resolved. The
     /// setup emitters write the same fields as expressions, and parity tests hold them to this.
     ///
-    /// Every policy names the setup-owned connector. Missing registration fails closed.
+    /// Isolated sessions name the setup-owned connector. Missing registration fails closed.
     pub fn runtime_built(
+        stack: &Stack,
         sandbox: &Sandbox,
         build_role_arn: String,
         region: &str,
@@ -82,9 +83,14 @@ impl AwsSandboxImportData {
             BundleUri::Literal(uri) => uri.to_string(),
             BundleUri::Regional { before, after } => format!("{before}{region}{after}"),
         };
-        let egress_connector_arns = vec![recorded_connector_arn
-            .ok_or_else(|| refuse("sandbox has no egress connector recorded yet".to_string()))?
-            .to_string()];
+        let isolated = crate::sandbox_egress::sandbox_needs_connector(stack, sandbox);
+        let egress_connector_arns = if isolated {
+            vec![recorded_connector_arn
+                .ok_or_else(|| refuse("sandbox has no egress connector recorded yet".to_string()))?
+                .to_string()]
+        } else {
+            Vec::new()
+        };
 
         Ok(Self {
             image_identifier: None,
@@ -94,7 +100,7 @@ impl AwsSandboxImportData {
             bundle_uri: Some(bundle_uri),
             egress_connector_arns,
             preview_ports: sandbox.preview_ports.clone(),
-            allow_egress: false,
+            allow_egress: !isolated,
         })
     }
 }

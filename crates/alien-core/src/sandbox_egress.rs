@@ -9,7 +9,26 @@ use std::fmt;
 
 use serde_json::{json, Value};
 
-use crate::{setup_resource_tags, Network, NetworkSettings, ResourceEntry, Sandbox, Stack};
+use crate::{
+    setup_resource_tags, Network, NetworkSettings, ResourceEntry, Sandbox, SandboxEgress, Stack,
+};
+
+/// Reserved resource id of the deployment's sandbox egress gateway Container.
+pub const SANDBOX_EGRESS_GATEWAY_ID: &str = "sandbox-egress-gateway";
+
+/// Whether preflight installed the managed gateway for this deployment.
+pub fn has_sandbox_gateway(stack: &Stack) -> bool {
+    stack
+        .resources
+        .get(SANDBOX_EGRESS_GATEWAY_ID)
+        .is_some_and(|entry| entry.config.downcast_ref::<crate::Container>().is_some())
+}
+
+/// Native internet remains available when this deployment cannot host a gateway.
+/// A declared closed sandbox always needs an isolated connector.
+pub fn sandbox_needs_connector(stack: &Stack, sandbox: &Sandbox) -> bool {
+    matches!(sandbox.egress, SandboxEgress::None) || has_sandbox_gateway(stack)
+}
 
 /// The name of the operator role's inline policy.
 pub const SANDBOX_EGRESS_POLICY_NAME: &str = "sandbox-egress-connector";
@@ -158,8 +177,7 @@ impl fmt::Display for SandboxEgressRefusal {
     }
 }
 
-/// Every AWS sandbox uses a connector, including internet and name-filtered policies.
-/// The gateway enforces the policy behind the isolated network boundary.
+/// Resolve the setup-owned network for a sandbox that needs an isolated connector.
 pub fn sandbox_egress_network(
     stack: &Stack,
 ) -> Result<SandboxEgressNetwork<'_>, SandboxEgressRefusal> {

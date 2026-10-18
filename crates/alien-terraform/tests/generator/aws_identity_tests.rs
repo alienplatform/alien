@@ -1378,6 +1378,7 @@ fn the_emitted_registration_matches_the_direct_seed() {
             serde_json::from_value(evaluate_registration(&sandbox_file, import_data))
                 .unwrap_or_else(|error| panic!("{case}: the importer must accept it: {error}"));
         let direct = alien_core::import::data::AwsSandboxImportData::runtime_built(
+            &stack,
             &sandbox,
             alien_core::sandbox_build_role::sandbox_build_role_arn(
                 PARITY_PARTITION,

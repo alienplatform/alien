@@ -15,7 +15,9 @@ use crate::{
     expr,
 };
 use alien_core::sandbox_build_role::sandbox_build_role_name;
-use alien_core::sandbox_egress::{sandbox_egress_name, sandbox_egress_network, LOOPBACK_ONLY_CIDR};
+use alien_core::sandbox_egress::{
+    sandbox_egress_name, sandbox_egress_network, sandbox_needs_connector, LOOPBACK_ONLY_CIDR,
+};
 use alien_core::sandbox_image::AWS_MICROVM;
 use alien_core::{
     import::EmitContext, permissions::PermissionSetReference, BundleUri, ErrorData, RemoteBindings,
@@ -76,7 +78,12 @@ impl TfEmitter for AwsSandboxEmitter {
         let sandbox = downcast::<Sandbox>(ctx, Sandbox::RESOURCE_TYPE)?;
         let label = required_label(ctx)?;
         let artifact_uri = artifact_uri(sandbox)?;
-        let subnet_ids = egress_subnet_ids(ctx, sandbox)?;
+        let open = !sandbox_needs_connector(ctx.stack, sandbox);
+        let subnet_ids = if open {
+            Expression::Null
+        } else {
+            super::network::sandbox_subnet_ids(ctx)?
+        };
         // The size whose peak stays inside the declared ceilings. A MicroVM bursts to four times
         // its baseline with no way to opt out, so the baseline is a quarter of what was declared.
         let tier = sandbox.microvm_tier()?;
@@ -234,146 +241,172 @@ impl TfEmitter for AwsSandboxEmitter {
                 // so a replaced role keeps the same ARN and the barrier would never re-run.
                 attr(
                     "triggers",
-                    Expression::from_iter([
-                        (
+                    if open {
+                        Expression::from_iter([(
                             "build_role",
                             expr::traversal(["aws_iam_role", label, "unique_id"]),
-                        ),
-                        (
-                            "operator_role",
-                            expr::traversal(["aws_iam_role", &egress_label, "unique_id"]),
-                        ),
-                    ]),
+                        )])
+                    } else {
+                        Expression::from_iter([
+                            (
+                                "build_role",
+                                expr::traversal(["aws_iam_role", label, "unique_id"]),
+                            ),
+                            (
+                                "operator_role",
+                                expr::traversal(["aws_iam_role", &egress_label, "unique_id"]),
+                            ),
+                        ])
+                    },
                 ),
                 attr(
                     "depends_on",
-                    Expression::from(vec![
-                        expr::traversal(["aws_iam_role_policy", label]),
-                        expr::traversal(["aws_iam_role_policy", &egress_label]),
-                    ]),
-                ),
-            ],
-        );
-
-        let security_group = resource_block(
-            "aws_security_group",
-            &egress_label,
-            [
-                attr(
-                    "name_prefix",
-                    expr::template(format!(
-                        "{}-",
-                        sandbox_egress_name("${local.resource_prefix}", sandbox.id())
-                    )),
-                ),
-                attr(
-                    "description",
-                    Expression::String(format!("Sandbox {} session egress", sandbox.id())),
-                ),
-                attr("vpc_id", vpc_id_expr(ctx)),
-                nested_block(
-                    "egress",
-                    if matches!(sandbox.egress, SandboxEgress::None) {
-                        vec![
-                            attr("from_port", Expression::from(0)),
-                            attr("to_port", Expression::from(0)),
-                            attr("protocol", Expression::from("-1")),
-                            attr(
-                                "cidr_blocks",
-                                Expression::from(vec![Expression::from(LOOPBACK_ONLY_CIDR)]),
-                            ),
-                        ]
+                    if open {
+                        Expression::from(vec![expr::traversal(["aws_iam_role_policy", label])])
                     } else {
-                        let network = sandbox_egress_network(ctx.stack).map_err(|error| {
-                            AlienError::new(ErrorData::OperationNotSupported {
-                                operation: "sandbox gateway security group".into(),
-                                reason: error.to_string(),
-                            })
-                        })?;
-                        let network_label = ctx.name_for(network.id).ok_or_else(|| {
-                            AlienError::new(ErrorData::GenericError {
-                                message: format!("network '{}' has no generated name", network.id),
-                            })
-                        })?;
-                        vec![
-                            attr("from_port", Expression::from(3128)),
-                            attr("to_port", Expression::from(3128)),
-                            attr("protocol", Expression::from("tcp")),
-                            attr(
-                                "cidr_blocks",
-                                expr::raw(format!(
-                                    "data.aws_subnet.{network_label}_sandbox_gateway[*].cidr_block"
-                                )),
-                            ),
-                        ]
+                        Expression::from(vec![
+                            expr::traversal(["aws_iam_role_policy", label]),
+                            expr::traversal(["aws_iam_role_policy", &egress_label]),
+                        ])
                     },
                 ),
-                attr("tags", tags(ctx, "sandbox")),
             ],
         );
 
-        let network = sandbox_egress_network(ctx.stack).map_err(|error| {
-            AlienError::new(ErrorData::OperationNotSupported {
-                operation: "sandbox connector".into(),
-                reason: error.to_string(),
-            })
-        })?;
-        let network_label = ctx.name_for(network.id).ok_or_else(|| {
-            AlienError::new(ErrorData::GenericError {
-                message: format!("network '{}' has no generated name", network.id),
-            })
-        })?;
-        let barrier_dependency = Expression::from(vec![
-            expr::traversal([
-                PROPAGATION_BARRIER_RESOURCE,
-                &format!("{label}_iam_propagation"),
-            ]),
-            expr::traversal([
-                "terraform_data",
-                &format!("{network_label}_sandbox_network_validation"),
-            ]),
-        ]);
+        let barrier_dependency = Expression::from(vec![expr::traversal([
+            PROPAGATION_BARRIER_RESOURCE,
+            &format!("{label}_iam_propagation"),
+        ])]);
+        let egress_resources = if !open {
+            let security_group = resource_block(
+                "aws_security_group",
+                &egress_label,
+                [
+                    attr(
+                        "name_prefix",
+                        expr::template(format!(
+                            "{}-",
+                            sandbox_egress_name("${local.resource_prefix}", sandbox.id())
+                        )),
+                    ),
+                    attr(
+                        "description",
+                        Expression::String(format!("Sandbox {} session egress", sandbox.id())),
+                    ),
+                    attr("vpc_id", vpc_id_expr(ctx)),
+                    nested_block(
+                        "egress",
+                        if matches!(sandbox.egress, SandboxEgress::None) {
+                            vec![
+                                attr("from_port", Expression::from(0)),
+                                attr("to_port", Expression::from(0)),
+                                attr("protocol", Expression::from("-1")),
+                                attr(
+                                    "cidr_blocks",
+                                    Expression::from(vec![Expression::from(LOOPBACK_ONLY_CIDR)]),
+                                ),
+                            ]
+                        } else {
+                            let network = sandbox_egress_network(ctx.stack).map_err(|error| {
+                                AlienError::new(ErrorData::OperationNotSupported {
+                                    operation: "sandbox gateway security group".into(),
+                                    reason: error.to_string(),
+                                })
+                            })?;
+                            let network_label = ctx.name_for(network.id).ok_or_else(|| {
+                                AlienError::new(ErrorData::GenericError {
+                                    message: format!(
+                                        "network '{}' has no generated name",
+                                        network.id
+                                    ),
+                                })
+                            })?;
+                            vec![
+                                attr("from_port", Expression::from(3128)),
+                                attr("to_port", Expression::from(3128)),
+                                attr("protocol", Expression::from("tcp")),
+                                attr(
+                                    "cidr_blocks",
+                                    expr::raw(format!(
+                                    "data.aws_subnet.{network_label}_sandbox_gateway[*].cidr_block"
+                                )),
+                                ),
+                            ]
+                        },
+                    ),
+                    attr("tags", tags(ctx, "sandbox")),
+                ],
+            );
 
-        let connector = resource_block(
-            NETWORK_CONNECTOR_RESOURCE,
-            label,
-            [
-                attr("depends_on", barrier_dependency.clone()),
-                attr("name", resource_prefix_template(sandbox.id())),
-                attr(
-                    "operator_role",
-                    expr::traversal(["aws_iam_role", &egress_label, "arn"]),
-                ),
-                attr(
-                    "configuration",
-                    Expression::from_iter([(
-                        "vpc_egress_configuration",
-                        Expression::from_iter([
-                            (
-                                "associated_compute_resource_types",
-                                Expression::from(vec![Expression::String("MicroVm".to_string())]),
-                            ),
-                            // Documented optional in both the CloudControl schema and the
-                            // CloudFormation reference, and rejected when absent:
-                            // "NetworkProtocol cannot be null or empty for VPC_EGRESS connector".
-                            // IPv4 rather than DualStack because the security group that carries
-                            // the deny matches IPv4 CIDRs — a v6 path would be outside it.
-                            ("network_protocol", Expression::String("IPv4".to_string())),
-                            ("subnet_ids", subnet_ids),
-                            (
-                                "security_group_ids",
-                                Expression::from(vec![expr::traversal([
-                                    "aws_security_group",
-                                    &egress_label,
-                                    "id",
-                                ])]),
-                            ),
-                        ]),
-                    )]),
-                ),
-                attr("tags", tag_objects(ctx, true)),
-            ],
-        );
+            let network = sandbox_egress_network(ctx.stack).map_err(|error| {
+                AlienError::new(ErrorData::OperationNotSupported {
+                    operation: "sandbox connector".into(),
+                    reason: error.to_string(),
+                })
+            })?;
+            let network_label = ctx.name_for(network.id).ok_or_else(|| {
+                AlienError::new(ErrorData::GenericError {
+                    message: format!("network '{}' has no generated name", network.id),
+                })
+            })?;
+            let connector_dependencies = Expression::from(vec![
+                expr::traversal([
+                    PROPAGATION_BARRIER_RESOURCE,
+                    &format!("{label}_iam_propagation"),
+                ]),
+                expr::traversal([
+                    "terraform_data",
+                    &format!("{network_label}_sandbox_network_validation"),
+                ]),
+            ]);
+
+            let connector = resource_block(
+                NETWORK_CONNECTOR_RESOURCE,
+                label,
+                [
+                    attr("depends_on", connector_dependencies),
+                    attr("name", resource_prefix_template(sandbox.id())),
+                    attr(
+                        "operator_role",
+                        expr::traversal(["aws_iam_role", &egress_label, "arn"]),
+                    ),
+                    attr(
+                        "configuration",
+                        Expression::from_iter([(
+                            "vpc_egress_configuration",
+                            Expression::from_iter([
+                                (
+                                    "associated_compute_resource_types",
+                                    Expression::from(vec![Expression::String(
+                                        "MicroVm".to_string(),
+                                    )]),
+                                ),
+                                // Documented optional in both the CloudControl schema and the
+                                // CloudFormation reference, and rejected when absent:
+                                // "NetworkProtocol cannot be null or empty for VPC_EGRESS connector".
+                                // IPv4 rather than DualStack because the security group that carries
+                                // the deny matches IPv4 CIDRs — a v6 path would be outside it.
+                                ("network_protocol", Expression::String("IPv4".to_string())),
+                                ("subnet_ids", subnet_ids),
+                                (
+                                    "security_group_ids",
+                                    Expression::from(vec![expr::traversal([
+                                        "aws_security_group",
+                                        &egress_label,
+                                        "id",
+                                    ])]),
+                                ),
+                            ]),
+                        )]),
+                    ),
+                    attr("tags", tag_objects(ctx, true)),
+                ],
+            );
+
+            vec![operator_role, operator_policy, security_group, connector]
+        } else {
+            Vec::new()
+        };
 
         // Cloud Control takes the whole body as one JSON document, so the property names here
         // are the schema's own rather than the provider's snake_case rewriting of them.
@@ -449,20 +482,16 @@ impl TfEmitter for AwsSandboxEmitter {
         let mut fragment = TfFragment::empty()
             .with_resource(build_role)
             .with_resource(build_policy);
-        fragment = fragment.with_resource(iam_propagation);
+        if !open || !provisioned_at_runtime(ctx) {
+            fragment = fragment.with_resource(iam_propagation);
+        }
         // A Live sandbox is built by the runtime controller once the deployment has registered,
         // because only then is the customer's account a principal Alien's registry can be opened
         // to. The role and the connector stay: the controller may pass them and creates neither.
         if !provisioned_at_runtime(ctx) {
             fragment = fragment.with_resource(image);
         }
-        {
-            fragment = fragment
-                .with_resource(operator_role)
-                .with_resource(operator_policy)
-                .with_resource(security_group)
-                .with_resource(connector);
-        }
+        fragment.resource_blocks.extend(egress_resources);
         emit_remote_bindings_policy(ctx, &mut fragment)?;
         emit_profile_policies(ctx, &mut fragment)?;
         Ok(fragment)
@@ -472,12 +501,18 @@ impl TfEmitter for AwsSandboxEmitter {
         let sandbox = downcast::<Sandbox>(ctx, Sandbox::RESOURCE_TYPE)?;
         let label = required_label(ctx)?;
         if provisioned_at_runtime(ctx) {
-            return runtime_import_ref(sandbox, label);
+            return runtime_import_ref(ctx, sandbox, label);
         }
         Ok(expr::object([
             ("previewPorts", preview_ports(sandbox)),
-            ("egressConnectorArns", egress_connector_arns(sandbox, label)),
-            ("allowEgress", Expression::Bool(false)),
+            (
+                "egressConnectorArns",
+                egress_connector_arns(ctx, sandbox, label),
+            ),
+            (
+                "allowEgress",
+                Expression::Bool(!sandbox_needs_connector(ctx.stack, sandbox)),
+            ),
             // The ARN, not the name. Measured against the live API: `GetMicrovmImage` and
             // `RunMicrovm` both refuse a bare name — the latter with "Malformed ARN - doesn't
             // start with 'arn:'" — so a controller handed a name cannot read its own image or
@@ -513,8 +548,14 @@ impl TfEmitter for AwsSandboxEmitter {
                     })?,
             ),
             ("previewPorts", preview_ports(sandbox)),
-            ("egressConnectorArns", egress_connector_arns(sandbox, label)),
-            ("allowEgress", Expression::Bool(false)),
+            (
+                "egressConnectorArns",
+                egress_connector_arns(ctx, sandbox, label),
+            ),
+            (
+                "allowEgress",
+                Expression::Bool(!sandbox_needs_connector(ctx.stack, sandbox)),
+            ),
             ("imageArn", image_property(label, "ImageArn")),
             (
                 "imageVersion",
@@ -556,11 +597,17 @@ fn provisioned_at_runtime(ctx: &EmitContext<'_>) -> bool {
 /// The image fields are absent because the image doesn't exist yet. In their place go what the
 /// controller cannot derive — the build role it passes and the bundle it builds from — plus the
 /// egress facts the module still owns.
-fn runtime_import_ref(sandbox: &Sandbox, label: &str) -> Result<Expression> {
+fn runtime_import_ref(ctx: &EmitContext<'_>, sandbox: &Sandbox, label: &str) -> Result<Expression> {
     Ok(expr::object([
         ("previewPorts", preview_ports(sandbox)),
-        ("egressConnectorArns", egress_connector_arns(sandbox, label)),
-        ("allowEgress", Expression::Bool(false)),
+        (
+            "egressConnectorArns",
+            egress_connector_arns(ctx, sandbox, label),
+        ),
+        (
+            "allowEgress",
+            Expression::Bool(!sandbox_needs_connector(ctx.stack, sandbox)),
+        ),
         (
             "buildRoleArn",
             expr::traversal(["aws_iam_role", label, "arn"]),
@@ -926,12 +973,10 @@ fn operator_statements() -> Vec<Expression> {
     ]
 }
 
-/// Every connector places its ENIs in dedicated subnets with only local routes.
-fn egress_subnet_ids(ctx: &EmitContext<'_>, _sandbox: &Sandbox) -> Result<Expression> {
-    super::network::sandbox_subnet_ids(ctx)
-}
-
-fn egress_connector_arns(_sandbox: &Sandbox, label: &str) -> Expression {
+fn egress_connector_arns(ctx: &EmitContext<'_>, sandbox: &Sandbox, label: &str) -> Expression {
+    if !sandbox_needs_connector(ctx.stack, sandbox) {
+        return Expression::from(Vec::<Expression>::new());
+    }
     Expression::from(vec![expr::traversal([
         NETWORK_CONNECTOR_RESOURCE,
         label,

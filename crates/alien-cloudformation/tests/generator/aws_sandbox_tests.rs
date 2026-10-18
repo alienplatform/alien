@@ -1925,6 +1925,7 @@ fn the_emitted_registration_matches_the_direct_seed() {
         ))
         .unwrap_or_else(|error| panic!("{case}: the importer must accept it: {error}"));
         let direct = AwsSandboxImportData::runtime_built(
+            &stack,
             &sandbox,
             alien_core::sandbox_build_role::sandbox_build_role_arn(
                 PARITY_PARTITION,

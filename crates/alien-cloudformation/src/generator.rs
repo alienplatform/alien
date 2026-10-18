@@ -664,7 +664,10 @@ fn add_deployer_secret_outputs(
     deployer_secrets_vault_binding: Option<&CfExpression>,
 ) -> Result<()> {
     // Preflights omit this vault when every deployer input retains a stored value.
-    if !stack.resources.contains_key(alien_core::DEPLOYER_SECRETS_VAULT_ID) {
+    if !stack
+        .resources
+        .contains_key(alien_core::DEPLOYER_SECRETS_VAULT_ID)
+    {
         return Ok(());
     }
     let platform = target.deployment_platform();
@@ -1483,14 +1486,13 @@ fn add_network_parameters(
     network: Option<&NetworkSettings>,
     target: CloudFormationTarget,
 ) {
-    if !target.is_kubernetes() && stack.resources().any(|(_, entry)| entry.config.downcast_ref::<Sandbox>().is_some()) {
+    if !target.is_kubernetes() && alien_core::stack_needs_named_subnets_at_setup(stack) {
         for (name, description) in [
             ("SandboxSubnetIds", "Only used with use-existing. Dedicated sandbox connector subnets with no default route; at least two availability zones."),
             ("SandboxGatewaySubnetIds", "Only used with use-existing. Two or three dedicated gateway subnets, with only local routes and a default route through the deployment NAT."),
         ] {
             template.parameters.insert(name.to_string(), comma_list_parameter(description, vec![]));
         }
-
     }
     let defaults = NetworkParameterDefaults::from_settings(network);
     let mut modes = vec![
@@ -1546,15 +1548,19 @@ fn add_network_parameters(
                 number_parameter(
                     "Only used with create-new. Number of availability zones for the new VPC.",
                     u32::from(defaults.availability_zones),
-                    Some(if target.is_kubernetes() || stack.resources().any(|(_, entry)| entry.config.downcast_ref::<Sandbox>().is_some()) {
-                        vec![CfExpression::from(2u8), CfExpression::from(3u8)]
-                    } else {
-                        vec![
-                            CfExpression::from(1u8),
-                            CfExpression::from(2u8),
-                            CfExpression::from(3u8),
-                        ]
-                    }),
+                    Some(
+                        if target.is_kubernetes()
+                            || alien_core::stack_needs_named_subnets_at_setup(stack)
+                        {
+                            vec![CfExpression::from(2u8), CfExpression::from(3u8)]
+                        } else {
+                            vec![
+                                CfExpression::from(1u8),
+                                CfExpression::from(2u8),
+                                CfExpression::from(3u8),
+                            ]
+                        },
+                    ),
                 ),
             );
             template.parameters.insert(

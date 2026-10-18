@@ -15,7 +15,9 @@ use crate::{
     template::{CfExpression, CfResource},
 };
 use alien_core::sandbox_build_role::sandbox_build_role_name;
-use alien_core::sandbox_egress::{sandbox_egress_network, SandboxEgressVpc, LOOPBACK_ONLY_CIDR};
+use alien_core::sandbox_egress::{
+    sandbox_egress_network, sandbox_needs_connector, SandboxEgressVpc, LOOPBACK_ONLY_CIDR,
+};
 use alien_core::sandbox_image::AWS_MICROVM;
 use alien_core::{
     import::EmitContext, BundleUri, ErrorData, RemoteBindings, ResourceLifecycle, Result, Sandbox,
@@ -79,8 +81,7 @@ impl CfEmitter for AwsSandboxEmitter {
         role.properties.insert("Tags".to_string(), tags(ctx));
 
         let mut egress_resources = Vec::new();
-        {
-            let (vpc_id, subnet_ids) = egress;
+        if let Some((vpc_id, subnet_ids)) = egress {
             // Lambda assumes this to manage the connector's network interfaces. AWS documents the
             // permissions it must hold; the property being optional is not a promise that AWS
             // provisions an equivalent role.
@@ -272,15 +273,18 @@ impl CfEmitter for AwsSandboxEmitter {
         let sandbox = resource_config::<Sandbox>(ctx, Sandbox::RESOURCE_TYPE)?;
         let image_id = required_logical_id(ctx)?;
         if provisioned_at_runtime(ctx) {
-            return runtime_import_ref(sandbox, image_id);
+            return runtime_import_ref(ctx, sandbox, image_id);
         }
         Ok(CfExpression::object([
             ("previewPorts", preview_ports(sandbox)),
             (
                 "egressConnectorArns",
-                egress_connector_arns(sandbox, image_id),
+                egress_connector_arns(ctx, sandbox, image_id),
             ),
-            ("allowEgress", CfExpression::from(false)),
+            (
+                "allowEgress",
+                CfExpression::from(!sandbox_needs_connector(ctx.stack, sandbox)),
+            ),
             // Both `GetMicrovmImage` and `RunMicrovm` require the ARN — measured against the
             // live API, where a bare name is refused with "Malformed ARN - doesn't start with
             // 'arn:'". `Ref` was measured to return it too, but the attribute says
@@ -323,9 +327,12 @@ impl CfEmitter for AwsSandboxEmitter {
             ("previewPorts".to_string(), preview_ports(sandbox)),
             (
                 "egressConnectorArns".to_string(),
-                egress_connector_arns(sandbox, image_id),
+                egress_connector_arns(ctx, sandbox, image_id),
             ),
-            ("allowEgress".to_string(), CfExpression::from(false)),
+            (
+                "allowEgress".to_string(),
+                CfExpression::from(!sandbox_needs_connector(ctx.stack, sandbox)),
+            ),
             (
                 "imageArn".to_string(),
                 CfExpression::get_att(image_id, "ImageArn"),
@@ -555,7 +562,11 @@ fn provisioned_at_runtime(ctx: &EmitContext<'_>) -> bool {
 /// The image fields are absent because the image doesn't exist yet. The build role and bundle
 /// stand in: the controller derives both, but reads these to know the image is its own to delete
 /// and when a bundle change needs a rebuild. The egress facts the setup stack still owns follow.
-fn runtime_import_ref(sandbox: &Sandbox, image_id: &str) -> Result<CfExpression> {
+fn runtime_import_ref(
+    ctx: &EmitContext<'_>,
+    sandbox: &Sandbox,
+    image_id: &str,
+) -> Result<CfExpression> {
     // Mirrors the logical id `emit_resources` gives the build role. No shared constant ties them,
     // so a rename there leaves this GetAtt pointing at nothing and the template fails at deploy.
     let role_id = format!("{image_id}BuildRole");
@@ -563,9 +574,12 @@ fn runtime_import_ref(sandbox: &Sandbox, image_id: &str) -> Result<CfExpression>
         ("previewPorts", preview_ports(sandbox)),
         (
             "egressConnectorArns",
-            egress_connector_arns(sandbox, image_id),
+            egress_connector_arns(ctx, sandbox, image_id),
         ),
-        ("allowEgress", CfExpression::from(false)),
+        (
+            "allowEgress",
+            CfExpression::from(!sandbox_needs_connector(ctx.stack, sandbox)),
+        ),
         ("buildRoleArn", CfExpression::get_att(&role_id, "Arn")),
         ("bundleUri", code_artifact_uri(artifact_uri(sandbox)?)),
     ]))
@@ -846,7 +860,10 @@ fn operator_policies() -> CfExpression {
 fn egress_network(
     ctx: &EmitContext<'_>,
     sandbox: &Sandbox,
-) -> Result<(CfExpression, CfExpression)> {
+) -> Result<Option<(CfExpression, CfExpression)>> {
+    if !sandbox_needs_connector(ctx.stack, sandbox) {
+        return Ok(None);
+    }
     let refuse = |reason: String| {
         AlienError::new(ErrorData::OperationNotSupported {
             operation: format!("cloudformation emit sandbox '{}'", sandbox.id()),
@@ -862,7 +879,7 @@ fn egress_network(
         ))
     })?;
 
-    Ok(match network.vpc {
+    Ok(Some(match network.vpc {
         // Deliberately not `private_subnet_ids_expr`: its use-default branch resolves to
         // `AWS::NoValue`, and a connector with no subnets is a required property missing at
         // deploy — cfn-lint rejects it, and worse, it is the case where a session would run with
@@ -883,11 +900,14 @@ fn egress_network(
         SandboxEgressVpc::BroughtByCustomer => {
             (vpc_id_expr(ctx), CfExpression::ref_("SandboxSubnetIds"))
         }
-    })
+    }))
 }
 
-/// Every session uses its setup-owned connector.
-fn egress_connector_arns(_sandbox: &Sandbox, image_id: &str) -> CfExpression {
+/// Only isolated sessions use a setup-owned connector.
+fn egress_connector_arns(ctx: &EmitContext<'_>, sandbox: &Sandbox, image_id: &str) -> CfExpression {
+    if !sandbox_needs_connector(ctx.stack, sandbox) {
+        return CfExpression::list([]);
+    }
     CfExpression::list([CfExpression::get_att(
         format!("{image_id}EgressConnector"),
         "Arn",

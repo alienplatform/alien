@@ -512,12 +512,7 @@ pub(crate) fn gateway_egress_rules(ctx: &EmitContext<'_>) -> Result<CfExpression
 }
 
 pub(crate) fn needs_gateway(ctx: &EmitContext<'_>) -> bool {
-    ctx.stack.resources().any(|(_, entry)| {
-        entry
-            .config
-            .downcast_ref::<Sandbox>()
-            .is_some_and(|sandbox| !matches!(sandbox.egress, alien_core::SandboxEgress::None))
-    })
+    alien_core::sandbox_egress::has_sandbox_gateway(ctx.stack)
 }
 
 pub(crate) fn sandbox_subnet_ids(ctx: &EmitContext<'_>) -> Result<CfExpression> {
@@ -552,8 +547,12 @@ fn has_sandboxes(ctx: &EmitContext<'_>) -> bool {
             .resources()
             .find(|(_, entry)| entry.config.downcast_ref::<Network>().is_some())
             .is_some_and(|(id, _)| id == ctx.resource_id)
-        && ctx
-            .stack
-            .resources()
-            .any(|(_, entry)| entry.config.downcast_ref::<Sandbox>().is_some())
+        && ctx.stack.resources().any(|(_, entry)| {
+            entry
+                .config
+                .downcast_ref::<Sandbox>()
+                .is_some_and(|sandbox| {
+                    alien_core::sandbox_egress::sandbox_needs_connector(ctx.stack, sandbox)
+                })
+        })
 }
