@@ -31,9 +31,6 @@ const LABEL_SANDBOX: &str = "dev.alien.sandbox";
 /// Label carrying the session id within that sandbox.
 const LABEL_SESSION: &str = "dev.alien.sandbox.session";
 
-/// Unprivileged uid/gid the workload runs as. `nobody` exists in every common base image.
-const SANDBOX_USER: &str = "65534:65534";
-
 /// Where a session's writable area is mounted, and what every caller-supplied path resolves
 /// against. The same root the in-sandbox agent uses on the cloud backends, so one path means
 /// the same file everywhere.
@@ -153,6 +150,7 @@ impl LocalSandboxManager {
         }
 
         self.ensure_image(&config.image).await?;
+        let image = crate::sandbox_identity::inspect(&self.docker, &config.image).await?;
 
         let network_mode = match config.egress {
             // "none" gives no interface at all, which is a stronger and simpler guarantee than
@@ -165,11 +163,16 @@ impl LocalSandboxManager {
             }
         };
 
-        let env: Vec<String> = config
+        let mut env: Vec<String> = config
             .env
             .iter()
             .map(|(key, value)| format!("{key}={value}"))
             .collect();
+        env.extend([
+            format!("ALIEN_SANDBOX_EXEC_UID={}", image.identity.uid),
+            format!("ALIEN_SANDBOX_EXEC_GID={}", image.identity.gid),
+            format!("ALIEN_SANDBOX_ROOT={SESSION_ROOT}"),
+        ]);
 
         let labels = HashMap::from([
             (LABEL_SANDBOX.to_string(), sandbox.to_string()),
@@ -211,10 +214,10 @@ impl LocalSandboxManager {
             readonly_rootfs: Some(true),
             tmpfs: Some(HashMap::from([(
                 SESSION_ROOT.to_string(),
-                // 1777 because the workload runs as an unprivileged uid: a tmpfs mounted with
-                // the default mode is root-owned, and the session's only writable area would
-                // not be writable by the process using it.
-                format!("rw,noexec,nosuid,mode=1777,size={}", config.scratch_bytes),
+                format!(
+                    "rw,noexec,nosuid,mode=0700,uid={},gid={},size={}",
+                    image.identity.uid, image.identity.gid, config.scratch_bytes
+                ),
             )])),
             cap_drop: Some(vec!["ALL".to_string()]),
             security_opt: Some(vec!["no-new-privileges:true".to_string()]),
@@ -227,9 +230,11 @@ impl LocalSandboxManager {
         };
 
         let container_config = Config {
-            image: Some(config.image.clone()),
-            user: Some(SANDBOX_USER.to_string()),
-            working_dir: Some(SESSION_ROOT.to_string()),
+            image: Some(image.id),
+            user: Some(format!("{}:{}", image.identity.uid, image.identity.gid)),
+            // Docker can create/chmod WorkingDir after mounting tmpfs, resetting its owner.
+            // Enter the session root on exec, after the mount has its final ownership.
+            working_dir: Some("/".to_string()),
             env: Some(env),
             labels: Some(labels),
             exposed_ports: if exposed_ports.is_empty() {
@@ -343,7 +348,9 @@ impl LocalSandboxManager {
                     cmd: Some(command.to_vec()),
                     attach_stdout: Some(true),
                     attach_stderr: Some(true),
-                    user: Some(SANDBOX_USER.to_string()),
+                    // Docker inherits the container's resolved, non-root identity.
+                    user: None,
+                    working_dir: Some(SESSION_ROOT.to_string()),
                     ..Default::default()
                 },
             )
@@ -437,7 +444,8 @@ impl LocalSandboxManager {
                     attach_stdin: Some(true),
                     attach_stdout: Some(true),
                     attach_stderr: Some(true),
-                    user: Some(SANDBOX_USER.to_string()),
+                    user: None,
+                    working_dir: Some(SESSION_ROOT.to_string()),
                     ..Default::default()
                 },
             )
