@@ -10,6 +10,7 @@ cloud = ["alien-bindings/aws", "alien-bindings/gcp", "alien-bindings/azure", "al
 local = ["alien-bindings/local"]
 
 [dependencies]
+axum = { workspace = true, features = ["tokio", "http1", "json"] }
 alien-error = { workspace = true }
 alien-bindings = { workspace = true }
 async-trait = { workspace = true }
