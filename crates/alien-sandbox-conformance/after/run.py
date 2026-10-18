@@ -259,9 +259,25 @@ class Run:
         limited = await self.create(suite["binding"], {"allow": targets[:1]})
         await self.paired("create-listed-name", control, limited, a)
         await self.paired("create-unlisted-name", control, limited, b, True)
-        empty = await self.create(suite["binding"], {"allow": []})
-        for label, endpoint in (("allowed", a), ("removed", b)):
-            await self.paired("empty-allow-" + label, control, empty, endpoint, True)
+        try:
+            empty = await self.create(suite["binding"], {"allow": []})
+        except Exception as error:  # noqa: BLE001 - retain failed case and run independent probes
+            # A create refusal proves nothing about the empty policy's network behavior.
+            # Keep its unresolved intent for provider cleanup auditing, and never log raw errors.
+            for label in ("allowed", "removed"):
+                self.results.append(
+                    {
+                        "name": "empty-allow-" + label,
+                        "verdict": "unproven",
+                        "reason": "empty-policy sandbox create failed",
+                        "errorCode": getattr(error, "code", type(error).__name__),
+                    }
+                )
+        else:
+            for label, endpoint in (("allowed", a), ("removed", b)):
+                await self.paired(
+                    "empty-allow-" + label, control, empty, endpoint, True
+                )
         changing = await self.create(suite["binding"], {"allow": targets})
         before_a = await self.paired("before-update-retained", control, changing, a)
         before_b = await self.paired("before-update-removed", control, changing, b)

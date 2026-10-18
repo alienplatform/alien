@@ -155,3 +155,7 @@ For an initial deployment smoke run, `floor` may contain only the fixtures alrea
 available. Omitted category/address pairs produce explicit unproven rows while
 the other probes run. An update API timeout fails its timing row and likewise
 leaves the remaining probes runnable; it does not discard later floor/NAT checks.
+If creating the empty-policy sandbox fails, both empty-policy rows remain unproven
+with the typed error code. Independent update, floor, NAT and connector probes
+still run. The failed create intent remains in the cleanup journal and requires
+the same scoped provider audit; neither continuation nor cleanup turns it into a pass.

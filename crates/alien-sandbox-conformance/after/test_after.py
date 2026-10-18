@@ -146,6 +146,13 @@ class TimeoutBox(Box):
         raise TimeoutError()
 
 
+class EmptyRefusedBox(Box):
+    async def create(self, *, egress, timeout_ms):
+        if egress == {"allow": []}:
+            raise Refused("sensitive provider response")
+        return await super().create(egress=egress, timeout_ms=timeout_ms)
+
+
 class After(unittest.IsolatedAsyncioTestCase):
     async def test_live_transport_and_policy_transitions(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -274,6 +281,32 @@ class After(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(
                     all(item["terminationCallCompleted"] for item in cleanup)
                 )
+
+            with (root / "empty-refused.jsonl").open("x") as journal:
+                runner = run.Run(
+                    suite, journal, lambda name: EmptyRefusedBox(name, tls, cert)
+                )
+                try:
+                    await runner.execute()
+                    self.assertEqual(19, len(runner.results))
+                    for row in runner.results:
+                        if row["name"].startswith("empty-allow-"):
+                            self.assertEqual("unproven", row["verdict"])
+                            self.assertEqual("EGRESS_PATH_UNEXPECTED", row["errorCode"])
+                        else:
+                            self.assertEqual("pass", row["verdict"], row)
+                    self.assertEqual(2, len(runner.intents))
+                    self.assertEqual(3, len(runner.sessions))
+                    self.assertNotIn(
+                        "sensitive provider response", json.dumps(runner.results)
+                    )
+                finally:
+                    cleanup = await runner.cleanup()
+                self.assertEqual(3, len(cleanup))
+                self.assertTrue(
+                    all(item["terminationCallCompleted"] for item in cleanup)
+                )
+                self.assertTrue(all(not box.sessions for box, _ in runner.sessions))
 
     @unittest.skipUnless(os.geteuid() == 0, "host packet witness requires CAP_NET_RAW")
     async def test_packet_witness_captures_only_selected_identity(self):
