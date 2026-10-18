@@ -32,7 +32,7 @@ struct RuntimeReceipt {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RuntimeCapabilities {
-    container_app_gateway_metadata_version: u32,
+    container_app_gateway_metadata_version: Option<u32>,
 }
 
 /// Inspect an opt-in runtime receipt. Legacy images without one have no capability.
@@ -80,12 +80,13 @@ pub async fn inspect(
             "runtime bytes differ from the capability receipt",
         )));
     }
+    let Some(version) = receipt.capabilities.container_app_gateway_metadata_version else {
+        return Ok(None);
+    };
     Ok(Some(WorkerImageCapabilities {
         config_digest: image.config_digest().to_owned(),
         executable_sha256,
-        container_app_gateway_metadata_version: receipt
-            .capabilities
-            .container_app_gateway_metadata_version,
+        container_app_gateway_metadata_version: version,
     }))
 }
 
@@ -165,6 +166,28 @@ mod tests {
             let image = fixture(None, entrypoint, cmd).await;
             assert!(inspect(&image, "worker").await.is_err());
         }
+    }
+
+    #[tokio::test]
+    async fn runtime_built_without_azure_has_no_gateway_capability() {
+        let receipt = serde_json::json!({
+            "executableSha256": format!("{:x}", Sha256::digest(b"runtime fixture bytes")),
+            "capabilities": {"containerAppGatewayMetadataVersion": null}
+        })
+        .to_string();
+        let image = fixture(
+            Some((RECEIPT_PATH, receipt.as_bytes())),
+            RUNTIME_PATH,
+            vec![],
+        )
+        .await;
+        assert_eq!(inspect(&image, "worker").await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn malformed_receipt_is_rejected() {
+        let image = fixture(Some((RECEIPT_PATH, b"{invalid")), RUNTIME_PATH, vec![]).await;
+        assert!(inspect(&image, "worker").await.is_err());
     }
 
     #[tokio::test]
