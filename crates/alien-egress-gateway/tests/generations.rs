@@ -2,45 +2,96 @@
 use std::sync::Arc;
 
 use alien_bindings::providers::kv::local::LocalKv;
-use alien_egress_gateway::generation::GenerationFence;
+use alien_egress_gateway::{
+    generation::GenerationFence,
+    policy::{canonical, digest, Policy},
+};
 
 #[tokio::test]
-async fn replicas_and_restarts_observe_monotonic_updates() {
+async fn replicas_restarts_and_caches_require_the_exact_installed_policy() {
     let dir = tempfile::tempdir().unwrap();
     let first = GenerationFence::new(Arc::new(LocalKv::new(dir.path().into()).await.unwrap()));
     let second = GenerationFence::new(Arc::new(LocalKv::new(dir.path().into()).await.unwrap()));
-    first.check("deployment/resource", "box", 0).await.unwrap();
+    let policy = Policy::Internet;
+    let hash = digest(&canonical(&policy).unwrap());
+    let none_hash = digest(&canonical(&Policy::None).unwrap());
+    assert!(first.resolve("p/r", "box", 0, &hash).await.is_err());
     first
-        .advance("deployment/resource", "box", 7)
+        .advance("p/r", "box", 0, &policy, &hash)
         .await
         .unwrap();
     assert_eq!(
-        second
-            .check("deployment/resource", "box", 6)
-            .await
-            .unwrap_err()
-            .code,
-        "EGRESS_DENIED"
+        *second.resolve("p/r", "box", 0, &hash).await.unwrap(),
+        policy
     );
-    second
-        .advance("deployment/resource", "box", 3)
+    first
+        .advance("p/r", "box", 7, &Policy::None, &none_hash)
         .await
         .unwrap();
-    assert!(first.check("deployment/resource", "box", 6).await.is_err());
+    assert!(second.resolve("p/r", "box", 0, &hash).await.is_err());
+    assert!(second.resolve("p/r", "box", 8, &none_hash).await.is_err());
+    assert!(second.resolve("p/r", "box", 7, &hash).await.is_err());
+    for (generation, policy, digest) in [(3, &policy, &hash), (7, &policy, &hash)] {
+        assert_eq!(
+            second
+                .advance("p/r", "box", generation, policy, digest)
+                .await
+                .unwrap_err()
+                .code,
+            "EGRESS_GENERATION_SUPERSEDED"
+        );
+    }
     second
-        .check("deployment/resource", "another", 0)
+        .advance("p/r", "box", 7, &Policy::None, &none_hash)
         .await
         .unwrap();
-    second.check("other/resource", "box", 0).await.unwrap();
+    assert!(second
+        .resolve("p/r", "another", 7, &none_hash)
+        .await
+        .is_err());
+    assert!(second
+        .resolve("other/r", "box", 7, &none_hash)
+        .await
+        .is_err());
     drop(first);
     drop(second);
     let restarted = GenerationFence::new(Arc::new(LocalKv::new(dir.path().into()).await.unwrap()));
-    assert!(restarted
-        .check("deployment/resource", "box", 0)
-        .await
-        .is_err());
-    restarted
-        .check("deployment/resource", "box", 7)
+    assert!(restarted.resolve("p/r", "box", 0, &hash).await.is_err());
+    assert_eq!(
+        *restarted
+            .resolve("p/r", "box", 7, &none_hash)
+            .await
+            .unwrap(),
+        Policy::None
+    );
+}
+
+#[tokio::test]
+async fn chunks_preserve_a_policy_above_the_portable_kv_item_limit() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = GenerationFence::new(Arc::new(LocalKv::new(dir.path().into()).await.unwrap()));
+    let policy = Policy::Allow {
+        allow: (0..256)
+            .map(|i| format!("{i}.{}.{}.example.com", "a".repeat(63), "b".repeat(63)))
+            .collect(),
+    };
+    let bytes = canonical(&policy).unwrap();
+    assert!(bytes.len() > 24_576);
+    let hash = digest(&bytes);
+    store
+        .advance("p/r", "box", 0, &policy, &hash)
         .await
         .unwrap();
+    assert_eq!(
+        canonical(&store.resolve("p/r", "box", 0, &hash).await.unwrap()).unwrap(),
+        bytes
+    );
+    assert!(store
+        .advance("p/r", "box", 1, &Policy::None, &hash)
+        .await
+        .is_err());
+    assert_eq!(
+        canonical(&store.resolve("p/r", "box", 0, &hash).await.unwrap()).unwrap(),
+        bytes
+    );
 }

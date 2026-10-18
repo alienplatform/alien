@@ -23,6 +23,24 @@ pub enum ErrorData {
         http_status_code = 403
     )]
     PolicyDenied,
+    /// A concurrent policy update has already superseded this generation.
+    #[error(
+        code = "EGRESS_GENERATION_SUPERSEDED",
+        message = "Egress generation has been superseded",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    GenerationSuperseded,
+    /// The canonical declaration or narrowed policy exceeds the shared limit.
+    #[error(
+        code = "SANDBOX_EGRESS_POLICY_TOO_LARGE",
+        message = "Egress policy exceeds 4096 targets or 256 KiB",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    PolicyTooLarge,
     /// The authenticated request does not satisfy policy.
     #[error(
         code = "EGRESS_DENIED",

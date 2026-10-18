@@ -20,7 +20,7 @@ use crate::{
     error::{denied, invalid, unavailable, Result},
     generation::GenerationFence,
     io::{Counters, Metered, Prefixed},
-    policy::{check_addresses, Target},
+    policy::{check_addresses, PolicyExt, Target},
     protocol::{read_client_hello, request_target, MAX_HEADER_BYTES},
     token::{self, Claims},
 };
@@ -48,26 +48,22 @@ pub struct Gateway {
 
 impl Gateway {
     /// Authorize against the independently configured bound and the signed grant.
-    pub async fn authorize(&self, bearer: &str, target: &Target) -> Result<Claims> {
-        let claims = token::verify(
-            bearer,
-            &self.keys,
-            chrono::Utc::now().timestamp().max(0) as u64,
-        )?;
+    pub async fn authorize(&self, claims: &Claims, target: &Target) -> Result<()> {
         let bound = self
             .config
             .bounds
             .get(&claims.aud)
             .ok_or_else(|| denied("unknown audience"))?;
-        if !bound.permits(target) || !claims.egress.permits(target) {
+        let policy = self
+            .generations
+            .resolve(&claims.aud, &claims.sub, claims.gen, &claims.policy)
+            .await?;
+        if !bound.intersection_permits(&policy, target) {
             return Err(alien_error::AlienError::new(
                 crate::error::ErrorData::PolicyDenied,
             ));
         }
-        self.generations
-            .check(&claims.aud, &claims.sub, claims.gen)
-            .await?;
-        Ok(claims)
+        Ok(())
     }
 
     /// Resolve once, validate every returned address, then dial a validated socket address.
@@ -106,7 +102,18 @@ pub async fn serve(listener: TcpListener, gateway: Arc<Gateway>) -> Result<()> {
         tokio::select! {
             accepted = listener.accept() => {
                 let (stream, _) = accepted.into_alien_error().context(unavailable("accept proxy connection"))?;
-                let permit = match limit.clone().try_acquire_owned() { Ok(p) => p, Err(_) => { drop(stream); continue; } };
+                let permit = match limit.clone().try_acquire_owned() {
+                    Ok(permit) => permit,
+                    Err(_) => {
+                        gateway.accepted.fetch_add(1, Ordering::Relaxed);
+                        gateway.denied.fetch_add(1, Ordering::Relaxed);
+                        tracing::info!(ts = %chrono::Utc::now().to_rfc3339(), aud = "", sub = "",
+                            host = "", port = 0, decision = "deny", reason = "connection capacity",
+                            bytesUp = 0, bytesDown = 0, durationMs = 0, "egress connection");
+                        drop(stream);
+                        continue;
+                    }
+                };
                 let gateway = gateway.clone();
                 tasks.spawn(async move { let _permit = permit; connection(stream, gateway).await; });
             }
@@ -174,7 +181,11 @@ async fn proxy(
     };
     audit.host = target.host.clone();
     audit.port = target.port;
-    let claims = match gateway.authorize(&bearer, &target).await {
+    let claims = match token::verify(
+        &bearer,
+        &gateway.keys,
+        chrono::Utc::now().timestamp().max(0) as u64,
+    ) {
         Ok(claims) => claims,
         Err(error) => {
             refuse(stream, error.code == "EGRESS_POLICY_DENIED").await?;
@@ -183,6 +194,10 @@ async fn proxy(
     };
     audit.aud = claims.aud.clone();
     audit.sub = claims.sub.clone();
+    if let Err(error) = gateway.authorize(&claims, &target).await {
+        refuse(stream, error.code == "EGRESS_POLICY_DENIED").await?;
+        return Err(error);
+    }
     if !connect {
         let upstream = gateway.connect(&target).await?;
         return crate::http_proxy::forward(Prefixed::new(input, stream), upstream, target, None)
@@ -236,11 +251,66 @@ async fn proxy(
     } else if target.port == 80 {
         // CONNECT is not an escape hatch around plain-HTTP Host checks.
         return crate::http_proxy::forward(guest, upstream, target, None).await;
+    } else {
+        return relay_explicit_port(guest, upstream, &target).await;
     }
     tokio::io::copy_bidirectional(&mut guest, &mut upstream)
         .await
         .into_alien_error()
         .context(unavailable("relay connection"))?;
+    Ok(())
+}
+
+/// Preserve server-first protocols such as SSH while checking TLS ClientHello on explicit ports.
+/// The upstream reader may deliver a protocol greeting, but no guest bytes reach upstream before
+/// the first payload is classified. Protocol upgrades inside an opaque stream are not inspected.
+async fn relay_explicit_port<G>(guest: G, upstream: TcpStream, target: &Target) -> Result<()>
+where
+    G: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    let (mut guest_read, mut guest_write) = tokio::io::split(guest);
+    let (mut upstream_read, mut upstream_write) = upstream.into_split();
+    let send = async {
+        let mut first = [0u8; 4096];
+        let count = guest_read
+            .read(&mut first)
+            .await
+            .into_alien_error()
+            .context(unavailable("read explicit-port protocol"))?;
+        let mut input = Prefixed::new(first[..count].to_vec(), guest_read);
+        if count > 0 && first[0] == 22 {
+            let hello = timeout(HEADER_TIMEOUT, read_client_hello(&mut input, target))
+                .await
+                .into_alien_error()
+                .context(unavailable("ClientHello timeout"))??;
+            upstream_write
+                .write_all(&hello)
+                .await
+                .into_alien_error()
+                .context(unavailable("forward ClientHello"))?;
+        }
+        tokio::io::copy(&mut input, &mut upstream_write)
+            .await
+            .into_alien_error()
+            .context(unavailable("relay explicit-port request"))?;
+        upstream_write
+            .shutdown()
+            .await
+            .into_alien_error()
+            .context(unavailable("finish upstream request"))
+    };
+    let receive = async {
+        tokio::io::copy(&mut upstream_read, &mut guest_write)
+            .await
+            .into_alien_error()
+            .context(unavailable("relay explicit-port response"))?;
+        guest_write
+            .shutdown()
+            .await
+            .into_alien_error()
+            .context(unavailable("finish guest response"))
+    };
+    tokio::try_join!(send, receive)?;
     Ok(())
 }
 

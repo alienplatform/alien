@@ -1,4 +1,14 @@
-use std::{collections::HashMap, net::Ipv4Addr, sync::Mutex};
+use std::{
+    collections::HashMap,
+    io,
+    net::{Ipv4Addr, SocketAddr},
+    os::fd::AsRawFd,
+    sync::Mutex,
+};
+use tokio::{
+    net::UdpSocket,
+    time::{timeout, Duration},
+};
 
 /// Synthetic A records preserve a unique name for transparent CONNECT, without external DNS.
 #[derive(Default)]
@@ -12,9 +22,11 @@ impl Names {
 
     pub(super) fn answer(&self, packet: &[u8]) -> Option<Vec<u8>> {
         if packet.len() < 12
-            || packet.len() > 512
+            || packet.len() > 4096
             || packet[2] & 0xf8 != 0
-            || packet[4..12] != [0, 1, 0, 0, 0, 0, 0, 0]
+            || packet[4..10] != [0, 1, 0, 0, 0, 0]
+            || packet[10] != 0
+            || packet[11] > 1
         {
             return None;
         }
@@ -40,15 +52,25 @@ impl Names {
             offset += len;
         }
         let name = labels.join(".");
-        if name.is_empty()
-            || name.len() > 253
-            || packet.get(offset + 2..offset + 4)? != [0, 1]
-            || offset + 4 != packet.len()
-        {
+        if name.is_empty() || name.len() > 253 || packet.get(offset + 2..offset + 4)? != [0, 1] {
+            return None;
+        }
+        let question_end = offset + 4;
+        if packet[11] == 1 {
+            // Accept one EDNS OPT pseudo-record, but do not copy arbitrary options into replies.
+            let opt = packet.get(question_end..)?;
+            if opt.len() < 11
+                || opt[..3] != [0, 0, 41]
+                || 11 + usize::from(u16::from_be_bytes([opt[9], opt[10]])) != opt.len()
+            {
+                return None;
+            }
+        } else if question_end != packet.len() {
             return None;
         }
         let qtype = u16::from_be_bytes([packet[offset], packet[offset + 1]]);
-        let mut reply = packet.to_vec();
+        let mut reply = packet[..question_end].to_vec();
+        reply[11] = 0;
         reply[2] = 0x81;
         reply[3] = 0x80;
         if qtype != 1 {
@@ -71,6 +93,112 @@ impl Names {
         reply.extend_from_slice(&ip.octets());
         Some(reply)
     }
+}
+
+/// Resolve the trusted gateway hostname through a marked control socket. Guest DNS never uses
+/// this path: it receives synthetic records and cannot send externally observable DNS questions.
+pub(super) async fn resolve_gateway(
+    authority: &str,
+    marked: bool,
+) -> std::io::Result<std::net::SocketAddr> {
+    if let Ok(address) = authority.parse::<SocketAddr>() {
+        if address.is_ipv4() {
+            return Ok(address);
+        }
+    }
+    let (host, port) = authority
+        .rsplit_once(':')
+        .ok_or_else(|| io::Error::other("gateway needs host:port"))?;
+    let port = port
+        .parse::<u16>()
+        .map_err(|_| io::Error::other("invalid gateway port"))?;
+    if port == 0 || host.len() > 253 {
+        return Err(io::Error::other("invalid gateway authority"));
+    }
+    let mut query = vec![0u8; 12];
+    let random = uuid::Uuid::new_v4();
+    query[..2].copy_from_slice(&random.as_bytes()[..2]);
+    query[2] = 1;
+    query[5] = 1;
+    for label in host.trim_end_matches('.').split('.') {
+        if label.is_empty()
+            || label.len() > 63
+            || !label
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        {
+            return Err(io::Error::other("invalid gateway DNS name"));
+        }
+        query.push(label.len() as u8);
+        query.extend_from_slice(label.as_bytes());
+    }
+    query.extend_from_slice(&[0, 0, 1, 0, 1]);
+    let resolver = std::fs::read_to_string("/etc/resolv.conf")?
+        .lines()
+        .find_map(|line| {
+            let mut words = line.split_whitespace();
+            (words.next() == Some("nameserver"))
+                .then(|| words.next()?.parse::<Ipv4Addr>().ok())
+                .flatten()
+        })
+        .ok_or_else(|| io::Error::other("no IPv4 control DNS resolver"))?;
+    let socket = UdpSocket::bind("0.0.0.0:0").await?;
+    if marked {
+        super::redirect::mark(socket.as_raw_fd())?;
+    }
+    socket.connect((resolver, 53)).await?;
+    socket.send(&query).await?;
+    let mut answer = [0u8; 4096];
+    let n = timeout(Duration::from_secs(3), socket.recv(&mut answer))
+        .await
+        .map_err(|_| io::Error::other("gateway DNS timeout"))??;
+    let answer = &answer[..n];
+    if n < query.len()
+        || answer[..2] != query[..2]
+        || answer[2] & 0x82 != 0x80
+        || answer[3] & 15 != 0
+        || answer[4..6] != [0, 1]
+        || answer[12..query.len()] != query[12..]
+    {
+        return Err(io::Error::other("invalid gateway DNS reply"));
+    }
+    let count = u16::from_be_bytes([answer[6], answer[7]]);
+    let mut offset = query.len();
+    for _ in 0..count {
+        loop {
+            let len = *answer
+                .get(offset)
+                .ok_or_else(|| io::Error::other("short DNS name"))? as usize;
+            offset += 1;
+            if len == 0 {
+                break;
+            }
+            if len & 0xc0 == 0xc0 {
+                offset += 1;
+                break;
+            }
+            if len > 63 {
+                return Err(io::Error::other("invalid DNS name"));
+            }
+            offset += len;
+        }
+        let record = answer
+            .get(offset..offset + 10)
+            .ok_or_else(|| io::Error::other("short DNS record"))?;
+        let len = u16::from_be_bytes([record[8], record[9]]) as usize;
+        offset += 10;
+        let data = answer
+            .get(offset..offset + len)
+            .ok_or_else(|| io::Error::other("short DNS data"))?;
+        if record[..4] == [0, 1, 0, 1] && len == 4 {
+            return Ok(SocketAddr::from((
+                [data[0], data[1], data[2], data[3]],
+                port,
+            )));
+        }
+        offset += len;
+    }
+    Err(io::Error::other("gateway has no IPv4 address"))
 }
 
 #[cfg(test)]
@@ -97,5 +225,17 @@ mod tests {
             Some("a.example.com")
         );
         assert!(names.answer(&[0; 512]).is_none());
+    }
+
+    #[test]
+    fn edns_queries_preserve_name_mapping_without_forwarding_options() {
+        let names = Names::default();
+        let plain = question("example.com");
+        let mut edns = plain.clone();
+        edns[11] = 1;
+        edns.extend_from_slice(&[0, 0, 41, 4, 208, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(names.answer(&plain), names.answer(&edns));
+        edns.pop();
+        assert!(names.answer(&edns).is_none());
     }
 }

@@ -101,6 +101,8 @@ pub struct HealthResponse {
     /// on one kernel, so a caller compares it across reads to tell its container from a blank one
     /// that replaced it under the same session name.
     pub boot_id: String,
+    /// Session readiness; awaiting-egress-policy until create installs the signed token.
+    pub status: String,
 }
 
 /// Optional version assertion from the caller.
@@ -285,7 +287,7 @@ async fn health(
 ) -> std::result::Result<Json<HealthResponse>, ApiError> {
     #[cfg(target_os = "linux")]
     if let Some(egress) = &state.gateway_egress {
-        egress.ensure_ready()?;
+        egress.status()?;
     }
     // A mismatch is named, not negotiated down. Guessing which fields an older peer understands
     // is how a protocol acquires undocumented dialects.
@@ -309,7 +311,14 @@ async fn health(
         }))
     })?;
 
+    let status = "ready";
+    #[cfg(target_os = "linux")]
+    let status = match &state.gateway_egress {
+        Some(egress) => egress.status()?,
+        None => status,
+    };
     Ok(Json(HealthResponse {
+        status: status.into(),
         protocol_version: PROTOCOL_VERSION,
         boot_id,
     }))
@@ -615,7 +624,7 @@ async fn agent_platform(
             #[derive(Deserialize)]
             struct Envelope {
                 token: String,
-                #[serde(rename = "caCertificate")]
+                #[serde(rename = "caCert")]
                 ca_certificate: Option<String>,
             }
             let envelope: Envelope = reparse(&body)?;
@@ -748,6 +757,7 @@ impl axum::response::IntoResponse for ApiError {
 struct EgressUpdate {
     token: String,
     #[serde(default)]
+    #[serde(rename = "caCert")]
     ca_certificate: Option<String>,
 }
 
@@ -758,7 +768,7 @@ async fn update_egress(
     headers: HeaderMap,
     Json(update): Json<EgressUpdate>,
 ) -> std::result::Result<StatusCode, ApiError> {
-    authorize_control(&state, peer, &headers, SandboxOperationClass::Manage)?;
+    authorize_control(&state, peer, &headers, SandboxOperationClass::Execute)?;
     let egress = state
         .gateway_egress
         .as_ref()
@@ -778,11 +788,36 @@ async fn run_egress_hook(
     headers: HeaderMap,
     body: bytes::Bytes,
 ) -> std::result::Result<StatusCode, ApiError> {
-    if state.gateway_egress.is_none() {
+    if state
+        .gateway_egress
+        .as_ref()
+        .is_none_or(|egress| !egress.requires_token())
+    {
         return Ok(StatusCode::OK);
     }
-    authorize_control(&state, peer, &headers, SandboxOperationClass::Manage)?;
-    let update: EgressUpdate = serde_json::from_slice(&body)
+    authorize_control(&state, peer, &headers, SandboxOperationClass::Execute)?;
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct RunHook {
+        microvm_id: String,
+        run_hook_payload: String,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct Bootstrap {
+        gateway: String,
+        audience: String,
+    }
+    let hook: RunHook = serde_json::from_slice(&body)
         .map_err(|_| ApiError::from(AlienError::new(ErrorData::EgressPathUnexpected)))?;
-    update_egress(State(state), ConnectInfo(peer), headers, Json(update)).await
+    let bootstrap: Bootstrap = serde_json::from_str(&hook.run_hook_payload)
+        .map_err(|_| ApiError::from(AlienError::new(ErrorData::EgressPathUnexpected)))?;
+    let egress = state
+        .gateway_egress
+        .as_ref()
+        .ok_or_else(|| ApiError::from(AlienError::new(ErrorData::EgressPathUnexpected)))?;
+    egress
+        .set_gateway(&bootstrap.gateway, &bootstrap.audience, &hook.microvm_id)
+        .await?;
+    Ok(StatusCode::OK)
 }

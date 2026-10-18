@@ -98,6 +98,7 @@ pub async fn read_client_hello(
     target: &Target,
 ) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
+    let mut acceptor = Acceptor::default();
     loop {
         let mut chunk = [0u8; 4096];
         let n = stream
@@ -109,12 +110,30 @@ pub async fn read_client_hello(
             return Err(denied("incomplete ClientHello"));
         }
         bytes.extend_from_slice(&chunk[..n]);
-        if let Some(name) = client_hello_name(&bytes)? {
-            let sni = Target::parse(&name, Some(target.port))?;
-            if sni != *target {
-                return Err(denied("SNI mismatch"));
+        if bytes.len() > MAX_HELLO_BYTES {
+            return Err(denied("ClientHello too large"));
+        }
+        // Feed each byte once, even when a peer fragments every TLS record.
+        let mut cursor = Cursor::new(&chunk[..n]);
+        while (cursor.position() as usize) < n {
+            let read = acceptor
+                .read_tls(&mut cursor)
+                .into_alien_error()
+                .context(unavailable("parse ClientHello"))?;
+            if let Some(accepted) = acceptor
+                .accept()
+                .map_err(|_| denied("invalid ClientHello"))?
+            {
+                let hello = accepted.client_hello();
+                let name = hello.server_name().ok_or_else(|| denied("SNI required"))?;
+                if Target::parse(name, Some(target.port))? != *target {
+                    return Err(denied("SNI mismatch"));
+                }
+                return Ok(bytes);
             }
-            return Ok(bytes);
+            if read == 0 {
+                break;
+            }
         }
     }
 }
@@ -122,6 +141,36 @@ pub async fn read_client_hello(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+    use tokio::io::AsyncWriteExt;
+
+    #[tokio::test]
+    async fn client_hello_can_arrive_one_byte_at_a_time() {
+        let config = rustls::ClientConfig::builder()
+            .with_root_certificates(rustls::RootCertStore::empty())
+            .with_no_client_auth();
+        let mut client =
+            rustls::ClientConnection::new(Arc::new(config), "example.com".try_into().unwrap())
+                .unwrap();
+        let mut hello = Vec::new();
+        client.write_tls(&mut hello).unwrap();
+        let (mut sender, mut receiver) = tokio::io::duplex(1);
+        let expected = hello.clone();
+        let writer = tokio::spawn(async move {
+            sender.write_all(&hello).await.unwrap();
+        });
+        assert_eq!(
+            read_client_hello(
+                &mut receiver,
+                &Target::parse("example.com:443", None).unwrap()
+            )
+            .await
+            .unwrap(),
+            expected
+        );
+        writer.await.unwrap();
+    }
+
     #[test]
     fn connect_requires_unambiguous_matching_host() {
         assert_eq!(

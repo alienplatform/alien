@@ -772,8 +772,8 @@ name = "alien-egress-gateway"
 version = "3.3.34"
 dependencies = [
  "alien-bindings",
+ "alien-core",
  "alien-error",
- "async-trait",
  "axum 0.8.9",
  "base64 0.22.1",
  "bytes",

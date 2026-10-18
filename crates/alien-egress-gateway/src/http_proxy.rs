@@ -52,23 +52,30 @@ where
         .context(unavailable("initialize upstream HTTP"))?;
     let driver = tokio::spawn(connection);
     let sender = Arc::new(Mutex::new(sender));
+    let failure = Arc::new(Mutex::new(None));
+    let service_failure = failure.clone();
     let service = service_fn(move |mut request: Request<Incoming>| {
         let sender = sender.clone();
         let target = target.clone();
         let injection = injection.clone();
+        let failure = service_failure.clone();
         async move {
-            if prepare(
+            if let Err(error) = prepare(
                 &mut request,
                 &target,
                 injection.as_deref().map(Vec::as_slice).unwrap_or(&[]),
-            )
-            .is_err()
-            {
+            ) {
+                *failure.lock().await = Some(error);
                 return Ok::<_, Infallible>(empty(StatusCode::FORBIDDEN));
             }
             let response = match sender.lock().await.send_request(request).await {
                 Ok(response) => response.map(BodyExt::boxed),
-                Err(_) => empty(StatusCode::BAD_GATEWAY),
+                Err(_) => {
+                    *failure.lock().await = Some(alien_error::AlienError::new(unavailable(
+                        "upstream HTTP request",
+                    )));
+                    empty(StatusCode::BAD_GATEWAY)
+                }
             };
             Ok(response)
         }
@@ -81,6 +88,9 @@ where
         .serve_connection(TokioIo::new(guest), service)
         .await;
     driver.abort();
+    if let Some(error) = failure.lock().await.take() {
+        return Err(error);
+    }
     result
         .into_alien_error()
         .context(unavailable("serve proxied HTTP"))
@@ -160,6 +170,12 @@ fn prepare(
     request
         .headers_mut()
         .insert(CONNECTION, HeaderValue::from_static("close"));
+    if !injection.is_empty() {
+        let path = request.uri().path();
+        if path.contains(['%', '\\']) || path.split('/').any(|part| part == "." || part == "..") {
+            return Err(denied("ambiguous credential path"));
+        }
+    }
     for rule in injection {
         let path = request.uri().path();
         if request.method().as_str() == rule.method

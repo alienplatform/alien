@@ -149,6 +149,7 @@ impl Credentials {
         let mut params = CertificateParams::new(vec![target.host.clone()])
             .into_alien_error()
             .context(unavailable("prepare leaf certificate"))?;
+        params.use_authority_key_identifier_extension = true;
         params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
         let cert = params
             .signed_by(&key, &issuer)

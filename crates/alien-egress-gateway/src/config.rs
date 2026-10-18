@@ -18,6 +18,7 @@ pub struct Config {
     /// Proxy address, normally 0.0.0.0:3128.
     pub listen: SocketAddr,
     /// Separate management listener; restrict network access to management workloads.
+    #[serde(default = "admin_listen")]
     pub admin_listen: SocketAddr,
     /// Immutable declaration bounds keyed by audience.
     pub bounds: HashMap<String, Policy>,
@@ -26,6 +27,7 @@ pub struct Config {
     /// Additional deployment CIDRs. Built-in private ranges cannot be disabled.
     pub denied_ranges: Vec<Ipv4Net>,
     /// Name of the deployment KV binding shared by every replica.
+    #[serde(default = "generation_binding")]
     pub generation_binding: String,
     /// Additional deployment-owned trust roots, base64 DER, for upstream TLS.
     #[serde(default)]
@@ -76,6 +78,9 @@ impl Config {
         if self.keys.is_empty() || self.bounds.is_empty() || self.generation_binding.is_empty() {
             return Err(invalid("keys, bounds and generationBinding are required"));
         }
+        for bound in self.bounds.values() {
+            crate::policy::canonical(bound)?;
+        }
         let mut keys = HashMap::new();
         for key in &self.keys {
             let bytes = STANDARD
@@ -91,4 +96,11 @@ impl Config {
         }
         Ok(keys)
     }
+}
+
+fn admin_listen() -> SocketAddr {
+    SocketAddr::from(([0, 0, 0, 0], 3129))
+}
+fn generation_binding() -> String {
+    "egress-state".into()
 }
