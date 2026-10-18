@@ -44,6 +44,11 @@ class Proxy(http.server.BaseHTTPRequestHandler):
         connection.request(self.command, self.path, body=body, headers=headers)
         response = connection.getresponse()
         payload = response.read()
+        with lock, open(args.log, 'a') as output:
+            output.write(json.dumps({'time': time.time(), 'method': self.command,
+                'path': self.path.split('?', 1)[0], 'status': response.status,
+                'requestBytes': len(body), 'responseBytes': len(payload)}) + '\n')
+
         self.send_response(response.status)
         for key, value in response.getheaders():
             if key.lower() not in ('transfer-encoding', 'connection', 'content-length'):
@@ -52,10 +57,6 @@ class Proxy(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
         connection.close()
-        with lock, open(args.log, 'a') as output:
-            output.write(json.dumps({'time': time.time(), 'method': self.command,
-                'path': self.path.split('?', 1)[0], 'status': response.status,
-                'requestBytes': len(body), 'responseBytes': len(payload)}) + '\n')
 
     do_GET = do_HEAD = do_POST = do_PUT = do_PATCH = do_DELETE = forward
 

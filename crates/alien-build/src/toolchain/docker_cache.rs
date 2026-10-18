@@ -3,12 +3,16 @@ use super::{ToolchainContext, docker::DockerToolchain};
 use crate::error::{ErrorData, Result};
 use alien_error::{AlienError, Context, IntoAlienError};
 use futures::TryStreamExt;
-use object_store::{ObjectStore, buffered::BufWriter, path::Path as ObjectPath};
+use object_store::{MultipartUpload, ObjectStore, path::Path as ObjectPath};
 use sha2::{Digest, Sha256};
-use std::{fs::File, path::Component, sync::Arc};
+use std::{
+    fs::File,
+    path::{Component, Path},
+    sync::Arc,
+};
 use tempfile::TempDir;
-use tokio::io::{AsyncWriteExt, BufWriter as FileWriter};
-use tracing::info;
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter as FileWriter};
+use tracing::{info, warn};
 
 pub(super) struct DockerCache {
     store: Arc<dyn ObjectStore>,
@@ -96,46 +100,7 @@ impl DockerCache {
         drop(output);
         let destination = cache.directory.path().join("import");
         tokio::task::spawn_blocking(move || -> Result<()> {
-            std::fs::create_dir(&destination)
-                .into_alien_error()
-                .context(error("Could not create cache import directory"))?;
-            let file = File::open(&archive_path)
-                .into_alien_error()
-                .context(error("Could not open cache snapshot"))?;
-            let mut archive = tar::Archive::new(file);
-            for entry in archive
-                .entries()
-                .into_alien_error()
-                .context(error("Could not read cache snapshot"))?
-            {
-                let mut entry = entry
-                    .into_alien_error()
-                    .context(error("Could not read cache entry"))?;
-                let path = entry
-                    .path()
-                    .into_alien_error()
-                    .context(error("Could not read cache entry path"))?;
-                let kind = entry.header().entry_type();
-                if path.is_absolute()
-                    || path
-                        .components()
-                        .any(|c| matches!(c, Component::ParentDir | Component::Prefix(_)))
-                    || !(kind.is_file() || kind.is_dir())
-                {
-                    return Err(AlienError::new(error(
-                        "Docker cache contains an unsafe archive entry",
-                    )));
-                }
-                if !entry
-                    .unpack_in(&destination)
-                    .into_alien_error()
-                    .context(error("Could not restore cache entry"))?
-                {
-                    return Err(AlienError::new(error(
-                        "Docker cache entry escapes its staging directory",
-                    )));
-                }
-            }
+            extract_snapshot(&archive_path, &destination)?;
             std::fs::remove_file(archive_path)
                 .into_alien_error()
                 .context(error("Could not remove downloaded cache snapshot"))?;
@@ -199,30 +164,105 @@ impl DockerCache {
             .await
             .into_alien_error()
             .context(error("Could not read cache snapshot"))?;
-        // Multipart completion atomically replaces the one current snapshot. A
-        // concurrent successful writer can change hit rate, never mix snapshots.
-        let mut writer = BufWriter::new(Arc::clone(&self.store), self.key.clone());
-        let bytes = match tokio::io::copy(&mut input, &mut writer).await {
-            Ok(bytes) => bytes,
-            Err(source) => {
-                writer
-                    .abort()
-                    .await
-                    .into_alien_error()
-                    .context(error("Could not abort failed Docker cache upload"))?;
-                return Err(source)
-                    .into_alien_error()
-                    .context(error("Could not upload Docker cache"));
-            }
-        };
-        writer
-            .shutdown()
+        let mut upload = self
+            .store
+            .put_multipart(&self.key)
             .await
             .into_alien_error()
-            .context(error("Could not commit Docker cache snapshot"))?;
+            .context(error("Could not start Docker cache upload"))?;
+        let bytes = upload_snapshot(&mut input, upload.as_mut()).await?;
         info!(cache_upload_bytes = bytes, "Saved Docker build cache");
         Ok(())
     }
+}
+
+fn extract_snapshot(archive_path: &Path, destination: &Path) -> Result<()> {
+    std::fs::create_dir(destination)
+        .into_alien_error()
+        .context(error("Could not create cache import directory"))?;
+    let file = File::open(archive_path)
+        .into_alien_error()
+        .context(error("Could not open cache snapshot"))?;
+    let mut archive = tar::Archive::new(file);
+    for entry in archive
+        .entries()
+        .into_alien_error()
+        .context(error("Could not read cache snapshot"))?
+    {
+        let mut entry = entry
+            .into_alien_error()
+            .context(error("Could not read cache entry"))?;
+        let path = entry
+            .path()
+            .into_alien_error()
+            .context(error("Could not read cache entry path"))?;
+        let kind = entry.header().entry_type();
+        if path.is_absolute()
+            || path
+                .components()
+                .any(|c| matches!(c, Component::ParentDir | Component::Prefix(_)))
+            || !(kind.is_file() || kind.is_dir())
+        {
+            return Err(AlienError::new(error(
+                "Docker cache contains an unsafe archive entry",
+            )));
+        }
+        if !entry
+            .unpack_in(destination)
+            .into_alien_error()
+            .context(error("Could not restore cache entry"))?
+        {
+            return Err(AlienError::new(error(
+                "Docker cache entry escapes its staging directory",
+            )));
+        }
+    }
+    Ok(())
+}
+
+// Keep the handle through commit: the buffered writer drops access to it on
+// shutdown, preventing explicit cleanup when multipart completion fails.
+async fn upload_snapshot(
+    input: &mut tokio::fs::File,
+    upload: &mut dyn MultipartUpload,
+) -> Result<u64> {
+    let result: Result<u64> = async {
+        let length = input
+            .metadata()
+            .await
+            .into_alien_error()
+            .context(error("Could not stat cache snapshot"))?
+            .len();
+        let mut remaining = length;
+        while remaining > 0 {
+            let size = remaining.min(8 * 1024 * 1024) as usize;
+            let mut part = vec![0; size];
+            input
+                .read_exact(&mut part)
+                .await
+                .into_alien_error()
+                .context(error("Could not read Docker cache upload part"))?;
+            upload
+                .put_part(part.into())
+                .await
+                .into_alien_error()
+                .context(error("Could not upload Docker cache part"))?;
+            remaining -= size as u64;
+        }
+        upload
+            .complete()
+            .await
+            .into_alien_error()
+            .context(error("Could not commit Docker cache snapshot"))?;
+        Ok(length)
+    }
+    .await;
+    if result.is_err() {
+        if let Err(cleanup_error) = upload.abort().await {
+            warn!(%cleanup_error, "Failed to abort Docker cache upload after an error");
+        }
+    }
+    result
 }
 
 #[cfg(test)]
@@ -376,6 +416,113 @@ mod tests {
                 .unwrap();
             assert!(DockerCache::restore(&context, &toolchain()).await.is_err());
         }
-        assert!(!cache.directory.path().join("outside").exists());
+    }
+    #[test]
+    fn traversal_cannot_overwrite_a_known_canary() {
+        let root = tempfile::tempdir().unwrap();
+        let canary = root.path().join("canary");
+        std::fs::write(&canary, b"untouched").unwrap();
+        let mut header = tar::Header::new_gnu();
+        let path = b"../canary";
+        header.as_mut_bytes()[..path.len()].copy_from_slice(path);
+        header.set_mode(0o644);
+        header.set_size(7);
+        header.set_cksum();
+        let archive_path = root.path().join("snapshot.tar");
+        let mut archive = tar::Builder::new(File::create(&archive_path).unwrap());
+        archive.append(&header, b"changed".as_slice()).unwrap();
+        archive.finish().unwrap();
+        drop(archive);
+        assert!(extract_snapshot(&archive_path, &root.path().join("import")).is_err());
+        assert_eq!(std::fs::read(canary).unwrap(), b"untouched");
+    }
+
+    #[derive(Debug)]
+    struct FaultyUpload {
+        inner: Box<dyn MultipartUpload>,
+        fail_part: bool,
+        fail_commit: bool,
+        fail_abort: bool,
+        parts: usize,
+        aborts: usize,
+    }
+
+    fn injected(message: &str) -> object_store::Error {
+        object_store::Error::Generic {
+            store: "synthetic",
+            source: Box::new(std::io::Error::other(message.to_string())),
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MultipartUpload for FaultyUpload {
+        fn put_part(&mut self, payload: object_store::PutPayload) -> object_store::UploadPart {
+            self.parts += 1;
+            if self.fail_part && self.parts == 2 {
+                return Box::pin(async { Err(injected("part failure")) });
+            }
+            self.inner.put_part(payload)
+        }
+        async fn complete(&mut self) -> object_store::Result<object_store::PutResult> {
+            if self.fail_commit {
+                return Err(injected("commit failure"));
+            }
+            self.inner.complete().await
+        }
+        async fn abort(&mut self) -> object_store::Result<()> {
+            self.aborts += 1;
+            self.inner.abort().await?;
+            if self.fail_abort {
+                return Err(injected("abort failure"));
+            }
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_upload_preserves_previous_object_and_aborts_without_masking_error() {
+        let store = object_store::memory::InMemory::new();
+        let key = ObjectPath::from("snapshot");
+        let file = tempfile::NamedTempFile::new().unwrap();
+        file.as_file().set_len(17 * 1024 * 1024).unwrap();
+        for (fail_part, fail_commit, fail_abort) in [
+            (true, false, false),
+            (false, true, false),
+            (true, false, true),
+            (false, true, true),
+            (false, false, false),
+        ] {
+            store.put(&key, b"previous".to_vec().into()).await.unwrap();
+            let mut upload = FaultyUpload {
+                inner: store.put_multipart(&key).await.unwrap(),
+                fail_part,
+                fail_commit,
+                fail_abort,
+                parts: 0,
+                aborts: 0,
+            };
+            let mut input = tokio::fs::File::open(file.path()).await.unwrap();
+            let result = upload_snapshot(&mut input, &mut upload).await;
+            let visible = store.get(&key).await.unwrap().bytes().await.unwrap();
+            if fail_part || fail_commit {
+                let message = result.unwrap_err().to_string();
+                assert!(
+                    message.contains(if fail_part {
+                        "Could not upload Docker cache part"
+                    } else {
+                        "Could not commit Docker cache snapshot"
+                    }),
+                    "{message}"
+                );
+                assert_eq!(upload.aborts, 1);
+                assert_eq!(visible.as_ref(), b"previous");
+            } else {
+                assert_eq!(result.unwrap(), 17 * 1024 * 1024);
+                assert_eq!(visible.len(), 17 * 1024 * 1024);
+                assert!(visible.iter().all(|byte| *byte == 0));
+                assert_eq!(upload.aborts, 0);
+            }
+            assert_eq!(upload.parts, if fail_part { 2 } else { 3 });
+        }
     }
 }

@@ -1,10 +1,16 @@
 # Docker dependency cache validation
 
 Docker builds retain their daemon-scoped fallback BuildKit builder (`alien-cache-v1-*`).
-BuildKit's default garbage collection policies bound its local cache; Alien does not prune
+BuildKit's default garbage collection policies manage its local cache; Alien does not prune
 or reconfigure a builder you selected. Use `docker buildx du --builder NAME` to inspect
 usage and `docker buildx prune --builder NAME` when you deliberately want to discard it.
-A failed build leaves the builder available for later builds.
+A failed build leaves the builder available for later builds. The builder remains running.
+GC thresholds are soft targets, not a strict disk quota: active records cannot always be
+reclaimed. On the tested BuildKit 0.33.1 worker, `buildx inspect` reported 488.3 MiB/48h
+for short-lived source/cache-mount records and 73.57 GiB maximum-used / 18.63 GiB
+minimum-free targets for other records on a roughly 100 GB disk. These are defaults,
+not hardcoded Alien limits. Select a builder with your own BuildKit GC configuration
+when those defaults do not fit your machine.
 
 A fresh runner has no previous local cache. Select your CI provider's persistent builder
 before `alien build`, or supply the existing `--cache-url` with durable storage and its

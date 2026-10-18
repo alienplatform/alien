@@ -211,22 +211,27 @@ impl DockerToolchain {
         Ok(())
     }
 
-    async fn create_builder(builder_name: &str) -> Result<()> {
-        let output = Command::new("docker")
-            .args([
-                "buildx",
-                "create",
-                "--name",
-                builder_name,
-                "--driver",
-                "docker-container",
-            ])
-            .output()
-            .await
-            .into_alien_error()
-            .context(Self::docker_build_error(
-                "Could not create a scoped docker-container buildx builder",
-            ))?;
+    async fn create_builder(builder_name: &str, endpoint: &str) -> Result<()> {
+        let mut command = Command::new("docker");
+        command.args([
+            "buildx",
+            "create",
+            "--name",
+            builder_name,
+            "--driver",
+            "docker-container",
+        ]);
+        if endpoint != "default" {
+            command.arg(endpoint);
+        }
+        let output =
+            command
+                .output()
+                .await
+                .into_alien_error()
+                .context(Self::docker_build_error(
+                    "Could not create a scoped docker-container buildx builder",
+                ))?;
         if !output.status.success() {
             return Err(AlienError::new(Self::docker_build_error(format!(
                 "Could not create a scoped docker-container buildx builder: {}",
@@ -296,7 +301,23 @@ impl DockerToolchain {
 
         // Scope the persistent fallback to the actual daemon, not the current source
         // path or process. BuildKit validates content and manages its own cache GC.
-        let daemon = Command::new("docker")
+        let endpoint = Self::inspect_field(&inspect, "Endpoint:").ok_or_else(|| {
+            AlienError::new(Self::docker_build_error(
+                "Selected Docker builder did not report an endpoint",
+            ))
+        })?;
+        let mut daemon_command = Command::new("docker");
+        if endpoint != "default" {
+            daemon_command.args([
+                if endpoint.contains("://") {
+                    "--host"
+                } else {
+                    "--context"
+                },
+                endpoint,
+            ]);
+        }
+        let daemon = daemon_command
             .args(["info", "--format", "{{.ID}}"])
             .output()
             .await
@@ -309,7 +330,13 @@ impl DockerToolchain {
                 "Docker did not report a daemon ID for the build cache",
             )));
         }
-        let digest = format!("{:x}", Sha256::digest(&daemon.stdout));
+        let mut scope = Sha256::new();
+        scope.update(&daemon.stdout);
+        if endpoint != "default" {
+            scope.update(b"\0");
+            scope.update(endpoint.as_bytes());
+        }
+        let digest = format!("{:x}", scope.finalize());
         let name = format!("alien-cache-v1-{}", &digest[..16]);
         let existing = Command::new("docker")
             .args(["buildx", "inspect", &name])
@@ -320,7 +347,7 @@ impl DockerToolchain {
                 "Could not inspect the cached builder",
             ))?;
         if !existing.status.success() {
-            if let Err(error) = Self::create_builder(&name).await {
+            if let Err(error) = Self::create_builder(&name, endpoint).await {
                 // Another process can create the same daemon-scoped builder first.
                 // Never remove it: concurrent builds may already be using it.
                 let raced = Command::new("docker")
