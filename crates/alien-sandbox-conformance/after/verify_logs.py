@@ -61,10 +61,9 @@ def verify(report, events, audience):
                 for key in ("bytesUp", "bytesDown", "durationMs")
             ):
                 continue
-            # A name must actually resolve into the floor; DNS/storage failures also return 403.
+            # A floor denial must come from the address check, not policy or storage failure.
             if (
                 name.startswith("floor-")
-                and name.endswith("-name")
                 and decision == "deny"
                 and fields.get("reason") != "Egress denied: address is not public"
             ):

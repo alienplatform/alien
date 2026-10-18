@@ -368,22 +368,32 @@ class After(unittest.IsolatedAsyncioTestCase):
             "reason": "Egress denied: address is not public",
             "ts": datetime.fromtimestamp(100.5, UTC).isoformat(),
         }
-        self.assertEqual(
-            "pass",
-            verify_logs.verify(report, [event], "deployment/resource")["verdict"],
-        )
-        for change in (
-            {"sub": "other"},
-            {"aud": "other"},
-            {"reason": "DNS unavailable"},
-            {"ts": datetime.fromtimestamp(80, UTC).isoformat()},
-        ):
-            self.assertEqual(
-                "unproven",
-                verify_logs.verify(
-                    report, [dict(event, **change)], "deployment/resource"
-                )["verdict"],
-            )
+        for form, host in (("name", "private.test"), ("ip", "10.42.3.10")):
+            report["cases"][0]["name"] = "floor-vpc-" + form
+            observation["probe"] = run.http("https://" + host + "/")
+            event["host"] = host
+            with self.subTest(address_form=form):
+                self.assertEqual(
+                    "pass",
+                    verify_logs.verify(report, [event], "deployment/resource")[
+                        "verdict"
+                    ],
+                )
+                for change in (
+                    {"sub": "other"},
+                    {"aud": "other"},
+                    {"reason": "DNS unavailable"},
+                    {"reason": "policy store unavailable"},
+                    {"reason": "Egress denied: target is not allowed"},
+                    {"ts": datetime.fromtimestamp(80, UTC).isoformat()},
+                ):
+                    with self.subTest(change=change):
+                        self.assertEqual(
+                            "unproven",
+                            verify_logs.verify(
+                                report, [dict(event, **change)], "deployment/resource"
+                            )["verdict"],
+                        )
         report["cases"].append(report["cases"][0])
         self.assertEqual(
             "unproven",
