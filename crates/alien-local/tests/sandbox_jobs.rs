@@ -74,6 +74,8 @@ async fn jobs_reconnect_replay_cancel_timeout_and_keep_the_sandbox_usable() {
 
     // Keep teardown even if an assertion panics: cloud-style cleanup is part of the test.
     let result = tokio::spawn(async move {
+        sandbox.start_job("session", command("true", Duration::MAX)).await.expect_err("an unrepresentable deadline is refused before starting a job");
+
         let job = sandbox.start_job("session", command("printf ready; read input || true; sleep 0.2; printf done; printf err >&2; exit 7", Duration::from_secs(10))).await.expect("start");
         drop(sandbox);
         let sandbox = LocalSandbox::new("jobs", &binding).await.expect("reconnect");

@@ -1332,8 +1332,9 @@ pub trait Sandbox: Binding {
     /// Lists the sandboxes belonging to this binding's parent.
     ///
     /// Offered only where the backend has a verb for it and the grant covers it — GCP lists
-    /// under its engine. AWS and Azure raise `OperationNotSupported`: enumerating there costs an
-    /// account-wide grant the sandbox role deliberately withholds. Reaching a known id is `get`.
+    /// under its engine. AWS requires an account-wide grant this binding withholds. Azure's
+    /// binding does not expose group enumeration; its controller uses it for lifetime cleanup.
+    /// Reaching a known id is `get`.
     async fn list(&self) -> Result<Vec<SandboxInstance>>;
 
     /// Runs a command, streaming output frames until exactly one terminal frame.

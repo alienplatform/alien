@@ -252,7 +252,7 @@ impl AzureSandbox {
             });
         }
 
-        if operation == RUN_COMMAND || operation == CREATE {
+        if operation == RUN_COMMAND || operation == CREATE || operation == "sandbox.jobStart" {
             return error.context(ErrorData::SandboxOutcomeUnknown {
                 operation: operation.to_string(),
                 reason: "the Azure sandbox data plane did not complete the call".to_string(),
@@ -279,9 +279,8 @@ fn disk_image_gone(error: &AlienError<ClientErrorData>) -> bool {
     }
 }
 
-/// Refused rather than dropped: the create body has nowhere to put a tenant key or a lifetime, so
-/// accepting either would report success while putting a caller's tenants in one shared sandbox,
-/// or leaving it running past the deadline it asked for. Azure does carry sandbox-level `env`.
+/// Tenant keys have no native equivalent. Lifetimes travel as control-plane deadline labels;
+/// environment variables travel in the native create request.
 fn refuse_unsupported_create_fields(request: &CreateSandboxRequest, operation: &str) -> Result<()> {
     if request.tenant_key.is_some() {
         return Err(AlienError::new(ErrorData::OperationNotSupported {
@@ -432,8 +431,7 @@ impl Sandbox for AzureSandbox {
     async fn list(&self) -> Result<Vec<SandboxInstance>> {
         Err(self.unsupported(
             "sandbox.list",
-            "enumerating sandboxes is a control-plane read the data-plane role does not carry; \
-             reach a known sandbox with get",
+            "this binding does not expose group enumeration; reach a known sandbox with get",
         ))
     }
 
@@ -1110,17 +1108,27 @@ impl AzureSandbox {
         )
         .await
         .map_err(|_| {
-            AlienError::new(ErrorData::SandboxOutcomeUnknown {
-                operation: operation.to_string(),
-                reason: "native job exec did not acknowledge the request".to_string(),
+            let reason = "native job exec did not acknowledge the request".to_string();
+            AlienError::new(if operation == "sandbox.jobStart" {
+                ErrorData::SandboxOutcomeUnknown {
+                    operation: operation.to_string(),
+                    reason,
+                }
+            } else {
+                ErrorData::SandboxUnreachable {
+                    operation: operation.to_string(),
+                    reason,
+                }
             })
         })?
-        .map_err(|error| {
-            error.context(ErrorData::SandboxOutcomeUnknown {
+        .map_err(|error| Self::failed(operation, error))?;
+        if matches!(result.exit_code, Some(75 | 124)) {
+            return Err(AlienError::new(ErrorData::SandboxUnreachable {
                 operation: operation.to_string(),
-                reason: "native job exec failed without confirming its outcome".to_string(),
-            })
-        })?;
+                reason: "the native job controller is busy or has not confirmed completion"
+                    .to_string(),
+            }));
+        }
         if result.exit_code != Some(0) {
             return Err(AlienError::new(ErrorData::SandboxCommandFailed {
                 failure: "jobControlFailed".to_string(),

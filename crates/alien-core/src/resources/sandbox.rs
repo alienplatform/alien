@@ -2237,12 +2237,9 @@ mod tests {
         sandbox
             .validate_for_platform(Platform::Local)
             .expect("the manager reaps expired containers");
-        for platform in [Platform::Azure] {
-            let error = sandbox
-                .validate_for_platform(platform)
-                .expect_err("a deadline nothing applies must be refused");
-            assert_eq!(error.code, "SANDBOX_CAPABILITY_UNSUPPORTED");
-        }
+        sandbox
+            .validate_for_platform(Platform::Azure)
+            .expect("the controller reaps expired sandboxes while reconciling");
     }
 
     /// A MicroVM bursts to four times its baseline with no way to opt out, so a ceiling is kept

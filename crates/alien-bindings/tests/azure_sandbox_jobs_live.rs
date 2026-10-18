@@ -62,11 +62,19 @@ async fn drain(
             match frame {
                 CommandOutput::Stdout { seq, data } => {
                     assert!(cursor.is_none_or(|old| *seq > old));
+                    assert!(
+                        *seq <= 9_007_199_254_740_991,
+                        "cursor must survive JavaScript numbers exactly"
+                    );
                     cursor = Some(*seq);
                     stdout.extend(data);
                 }
                 CommandOutput::Stderr { seq, data } => {
                     assert!(cursor.is_none_or(|old| *seq > old));
+                    assert!(
+                        *seq <= 9_007_199_254_740_991,
+                        "cursor must survive JavaScript numbers exactly"
+                    );
                     cursor = Some(*seq);
                     stderr.extend(data);
                 }
@@ -100,7 +108,7 @@ async fn native_jobs_survive_reconnection_and_bound_work_and_output() {
             .start_job(
                 &id,
                 command(
-                    "printf first; printf error >&2; sleep 1; printf last; exit 7",
+                    "printf first; printf error >&2; sleep 10; printf last; exit 7",
                     20,
                 ),
             )
@@ -111,6 +119,17 @@ async fn native_jobs_survive_reconnection_and_bound_work_and_output() {
             .load_sandbox("box")
             .await
             .expect("fresh provider");
+        let live = second
+            .poll_job(&id, &job.job_id, None)
+            .await
+            .expect("live output");
+        assert!(live.running, "the detached job is still active");
+        assert!(
+            live.frames.iter().any(
+                |frame| matches!(frame, CommandOutput::Stdout { data, .. } if data == b"first")
+            ),
+            "short output is visible before command exit"
+        );
         let (out, err, result) = drain(second.as_ref(), &id, &job.job_id).await;
         assert_eq!(out, b"firstlast");
         assert_eq!(err, b"error");

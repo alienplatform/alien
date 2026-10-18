@@ -304,6 +304,7 @@ impl std::fmt::Debug for CreateDiskImage {
 fn disk_image_body(request: &CreateDiskImage) -> serde_json::Value {
     let mut body = serde_json::json!({
         "image": { "base": request.base },
+        "labels": request.labels,
     });
     if let Some((username, token)) = &request.registry_credentials {
         body["registryCredentials"] = serde_json::json!({ "username": username, "token": token });
@@ -1043,11 +1044,11 @@ mod tests {
             AzureClientConfig::mock().subscription_id
         );
         let second = server.mock_async(|when, then| {
-            when.method(GET).path(&path).query_param("page", "2");
+            when.method(httpmock::Method::GET).path(&path).query_param("page", "2");
             then.status(200).json_body(serde_json::json!([{"id":"two","createdAt":"2026-01-01T00:00:00Z","state":"Stopped"}]));
         }).await;
-        let mut first = server.mock_async(|when, then| {
-            when.method(GET).path(&path).query_param("api-version", API_VERSION);
+        let first = server.mock_async(|when, then| {
+            when.method(httpmock::Method::GET).path(&path).query_param("api-version", API_VERSION);
             then.status(200).json_body(serde_json::json!({"value":[{"id":"one","createdAt":"2026-01-01T00:00:00Z","state":"Running"}],"nextLink":format!("{}{path}?page=2",server.base_url())}));
         }).await;
         let listed = client_against(&server)
@@ -1063,7 +1064,7 @@ mod tests {
         first.delete_async().await;
         server
             .mock_async(|when, then| {
-                when.method(GET)
+                when.method(httpmock::Method::GET)
                     .path(&path)
                     .query_param("api-version", API_VERSION);
                 then.status(200).json_body(
@@ -1102,6 +1103,7 @@ mod tests {
                     environment: Default::default(),
                     egress: None,
                     idle_pause_seconds: None,
+                    labels: BTreeMap::new(),
                 },
             )
             .await
@@ -1366,6 +1368,7 @@ mod tests {
                 traffic_inspection: Some("Full".to_string()),
             }),
             idle_pause_seconds: None,
+            labels: BTreeMap::new(),
         });
 
         assert_eq!(body["environment"]["TOKEN"], "t");

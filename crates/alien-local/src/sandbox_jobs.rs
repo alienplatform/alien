@@ -58,14 +58,15 @@ impl SandboxJobs {
         request: RunCommandRequest,
     ) -> Result<String> {
         let cwd = working_directory(request.cwd.as_deref())?;
-        if request.timeout.is_zero()
+        if request.timeout < Duration::from_millis(1)
+            || request.timeout > Duration::from_secs(24 * 60 * 60)
             || request.command.is_empty()
             || request.command.contains(['=', '\0'])
             || request.args.iter().any(|arg| arg.contains('\0'))
         {
             return Err(failed(
                 &container,
-                "a job requires a valid command and a non-zero timeout",
+                "a job requires a valid command and a timeout between 1ms and 24 hours",
             ));
         }
         for (name, value) in &request.env {
@@ -110,7 +111,15 @@ impl SandboxJobs {
             jobs.insert(id.clone(), Arc::clone(&job));
         }
         tokio::spawn(async move {
-            let result = run(&docker, &container, request, cwd, cancelled, &job).await;
+            // Also bound a Docker create/start/inspect call that never acknowledges its result.
+            let deadline = request.timeout + STOP_GRACE;
+            let result = match tokio::time::timeout(deadline, run(&docker, &container, request, cwd, cancelled, &job)).await {
+                Ok(result) => result,
+                Err(_) => match remove_unresponsive(&docker, &container).await {
+                    Ok(()) => Err(failed(&container, "Docker did not confirm the job outcome before its deadline; sandbox removed")),
+                    Err(error) => Err(error),
+                },
+            };
             let mut state = job.lock().expect("job lock");
             state.snapshot.running = false;
             state.cancel = None;
@@ -289,7 +298,14 @@ async fn run(
     };
     tokio::pin!(collect);
     let reason = tokio::select! {
-        result = &mut collect => { result?; None }
+        result = &mut collect => {
+            if let Err(error) = result {
+                // Losing the output transport must not also lose the only external deadline.
+                remove_unresponsive(docker, container).await?;
+                return Err(error);
+            }
+            None
+        }
         _ = tokio::time::sleep(request.timeout) => Some("timeoutExceeded"),
         _ = cancelled => Some("cancelled"),
     };
@@ -308,21 +324,7 @@ async fn run(
             collect.await
         };
         if !matches!(tokio::time::timeout(STOP_GRACE, stopped).await, Ok(Ok(()))) {
-            docker
-                .remove_container(
-                    container,
-                    Some(bollard::container::RemoveContainerOptions {
-                        force: true,
-                        v: true,
-                        ..Default::default()
-                    }),
-                )
-                .await
-                .into_alien_error()
-                .context(ErrorData::SandboxSessionFailed {
-                    session_id: container.to_string(),
-                    operation: "remove unresponsive job sandbox".to_string(),
-                })?;
+            remove_unresponsive(docker, container).await?;
         }
         job.lock().expect("job lock").snapshot.error = Some(JobError {
             code: reason.to_string(),
@@ -342,4 +344,111 @@ async fn run(
         .exit_code
         .ok_or_else(|| failed(container, "job ended without an exit status"))?;
     Ok(Some(code as i32))
+}
+
+/// The host owns this backstop even if a guest has killed its shell supervisor.
+async fn remove_unresponsive(docker: &Docker, container: &str) -> Result<()> {
+    match docker
+        .remove_container(
+            container,
+            Some(bollard::container::RemoveContainerOptions {
+                force: true,
+                v: true,
+                ..Default::default()
+            }),
+        )
+        .await
+    {
+        Ok(())
+        | Err(bollard::errors::Error::DockerResponseServerError {
+            status_code: 404, ..
+        }) => Ok(()),
+        Err(error) => Err(error)
+            .into_alien_error()
+            .context(ErrorData::SandboxSessionFailed {
+                session_id: container.to_string(),
+                operation: "remove unresponsive job sandbox".to_string(),
+            }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::response::IntoResponse;
+    use axum::{http::StatusCode, Json, Router};
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[tokio::test]
+    async fn a_lost_docker_start_acknowledgement_keeps_the_host_deadline() {
+        let removed = Arc::new(AtomicBool::new(false));
+        let started = Arc::new(AtomicBool::new(false));
+        let observed_remove = removed.clone();
+        let observed_start = started.clone();
+        let server =
+            Router::new().fallback(move |method: axum::http::Method, uri: axum::http::Uri| {
+                let removed = observed_remove.clone();
+                let started = observed_start.clone();
+                async move {
+                    if method == axum::http::Method::DELETE {
+                        removed.store(true, Ordering::SeqCst);
+                        return StatusCode::NO_CONTENT.into_response();
+                    }
+                    if uri.path().ends_with("/start") {
+                        started.store(true, Ordering::SeqCst);
+                        // The exec may have started, but the manager never receives its stream.
+                        return std::future::pending().await;
+                    }
+                    Json(serde_json::json!({"Id": "exec"})).into_response()
+                }
+            });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listen");
+        let address = listener.local_addr().expect("address");
+        let serving = tokio::spawn(async move {
+            axum::serve(listener, server).await.expect("serve");
+        });
+        let docker = Docker::connect_with_http(
+            &format!("http://{address}"),
+            120,
+            bollard::API_DEFAULT_VERSION,
+        )
+        .expect("Docker client");
+        let jobs = SandboxJobs::default();
+        let id = jobs
+            .start(
+                docker,
+                "container".to_string(),
+                RunCommandRequest {
+                    command: "true".to_string(),
+                    args: vec![],
+                    cwd: None,
+                    env: Default::default(),
+                    timeout: Duration::from_millis(100),
+                },
+            )
+            .expect("job accepted");
+        let result = tokio::time::timeout(Duration::from_secs(8), async {
+            loop {
+                let poll = jobs.poll("container", &id, None).expect("poll");
+                if !poll.running {
+                    break poll;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("host deadline remains active");
+        serving.abort();
+        assert!(started.load(Ordering::SeqCst), "the probe reached start");
+        assert!(
+            removed.load(Ordering::SeqCst),
+            "unacknowledged work is contained by deleting its sandbox"
+        );
+        assert_eq!(
+            result.error.expect("unknown command result").code,
+            "outcomeUnknown"
+        );
+    }
 }

@@ -16,6 +16,10 @@ const START: &str = include_str!("azure_jobs/start.sh");
 const POLL: &str = include_str!("azure_jobs/poll.sh");
 const CANCEL: &str = include_str!("azure_jobs/cancel.sh");
 const CAP: u64 = 4 * 1024 * 1024;
+// Each offset includes 4 MiB itself, so it needs 23 bits. The combined cursor stays below
+// JavaScript's exact-integer ceiling when it crosses the Node binding.
+const CURSOR_SHIFT: u32 = 23;
+const CURSOR_MASK: u64 = (1 << CURSOR_SHIFT) - 1;
 
 fn invalid(detail: &str) -> AlienError<ErrorData> {
     AlienError::new(ErrorData::InvalidInput {
@@ -79,8 +83,15 @@ impl AzureSandbox {
         if args.iter().any(|value| value.contains('\0')) {
             return Err(invalid("job arguments cannot contain NUL"));
         }
-        self.native_job_exec(sandbox, "sandbox.jobStart", shell(START, &args))
+        let receipt = self
+            .native_job_exec(sandbox, "sandbox.jobStart", shell(START, &args))
             .await?;
+        if receipt.trim() != id {
+            return Err(AlienError::new(ErrorData::SandboxOutcomeUnknown {
+                operation: "sandbox.jobStart".to_string(),
+                reason: "the native wrapper did not acknowledge this job id".to_string(),
+            }));
+        }
         Ok(JobStart { job_id: id })
     }
 
@@ -92,8 +103,8 @@ impl AzureSandbox {
     ) -> Result<JobPoll> {
         let path = job_path(id)?;
         let cursor = since.unwrap_or(0);
-        let mut out = cursor >> 32;
-        let mut err = cursor & 0xffff_ffff;
+        let mut out = cursor >> CURSOR_SHIFT;
+        let mut err = cursor & CURSOR_MASK;
         if out > CAP || err > CAP {
             return Err(invalid("job cursor exceeds the output bounds"));
         }
@@ -120,14 +131,14 @@ impl AzureSandbox {
         if !stdout.is_empty() {
             out += stdout.len() as u64;
             frames.push(CommandOutput::Stdout {
-                seq: (out << 32) | err,
+                seq: (out << CURSOR_SHIFT) | err,
                 data: stdout,
             });
         }
         if !stderr.is_empty() {
             err += stderr.len() as u64;
             frames.push(CommandOutput::Stderr {
-                seq: (out << 32) | err,
+                seq: (out << CURSOR_SHIFT) | err,
                 data: stderr,
             });
         }

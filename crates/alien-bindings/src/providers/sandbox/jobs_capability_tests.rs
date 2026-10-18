@@ -215,10 +215,11 @@ async fn azure_declares_jobs_and_reaches_the_backend() {
         None,
     );
     assert!(sandbox.capabilities().jobs);
-    sandbox
+    let error = sandbox
         .start_job("s1", command())
         .await
-        .expect("native job starts");
+        .expect_err("fixture supplies no start receipt");
+    assert_eq!(error.code, "SANDBOX_OUTCOME_UNKNOWN");
 }
 
 /// Local starts jobs through the authenticated manager route.
