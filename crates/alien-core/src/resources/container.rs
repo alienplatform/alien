@@ -20,7 +20,7 @@ pub use network::{
 use crate::error::{ErrorData, Result};
 use crate::resource::{ResourceDefinition, ResourceOutputsDefinition, ResourceRef, ResourceType};
 use crate::resources::{
-    ComputeCluster, PublicEndpoint, PublicEndpointOutput, ToolchainConfig, APEX_HOST_LABEL,
+    APEX_HOST_LABEL, ComputeCluster, PublicEndpoint, PublicEndpointOutput, ToolchainConfig,
 };
 use alien_error::AlienError;
 use bon::Builder;
@@ -261,6 +261,21 @@ pub struct ContainerSecurity {
     pub run_as_group: i64,
     /// Mount the root filesystem read-only.
     pub read_only_root_filesystem: bool,
+    /// Alien-internal gateway egress boundary, assigned only by deployment preflight.
+    #[doc(hidden)]
+    #[cfg_attr(feature = "openapi", schema(ignore))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub egress: Option<ContainerEgress>,
+}
+
+/// Alien-internal outbound boundary for the managed sandbox gateway.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ContainerEgress {
+    /// Public destinations and configured public DNS, plus the container's own
+    /// service-account metadata proxy. Private networks and IPv6 are blocked.
+    InternetOnly,
 }
 
 /// Autoscaling configuration for stateless containers.
@@ -419,20 +434,11 @@ pub struct Container {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub security: Option<ContainerSecurity>,
 
-    /// Dedicated internal TCP load balancer with per-port source CIDR restrictions.
-    /// The selected backend must support this setting or planning fails.
+    /// Alien-internal gateway placement, assigned only by deployment preflight.
+    #[doc(hidden)]
+    #[cfg_attr(feature = "openapi", schema(ignore))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub internal_load_balancer: Option<ContainerInternalLoadBalancer>,
-
-    /// Restrict connections initiated by this container to public IPv4 destinations
-    /// and its runtime DNS resolver. Blocks private networks, the container overlay,
-    /// host services, and IPv6. The only metadata exception is the runtime proxy
-    /// for this container's own service-account credentials (169.254.169.254:80).
-    /// Requires the restricted security profile.
-    /// Enforcement is outside the container; unsupported backends fail planning.
-    #[builder(default)]
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub internet_only_egress: bool,
 
     /// ComputeCluster resource ID that this container runs on.
     /// If None, will be auto-assigned by ComputeClusterMutation at deployment time.
@@ -808,7 +814,7 @@ impl ResourceDefinition for Container {
         if let Some(network) = self
             .internal_load_balancer
             .as_ref()
-            .and_then(ContainerInternalLoadBalancer::network)
+            .map(|settings| settings.network.as_str())
         {
             deps.push(ResourceRef::new("network".into(), network));
         }

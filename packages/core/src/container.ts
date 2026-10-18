@@ -3,7 +3,6 @@ import {
   type ContainerCode,
   type Container as ContainerConfig,
   type ContainerGpuSpec,
-  type ContainerInternalLoadBalancer,
   ContainerSchema,
   type ContainerSecurity,
   type HealthCheck,
@@ -34,7 +33,6 @@ export type {
   ContainerAutoscaling,
   ContainerCode,
   ContainerGpuSpec,
-  ContainerInternalLoadBalancer,
   ContainerOutputs,
   ContainerPort,
   ContainerSecurity,
@@ -432,18 +430,6 @@ export class Container extends ResourceBuilder {
   /** Excludes a pod from Service endpoints until this Kubernetes HTTP readiness probe passes. */
   public kubernetesReadinessProbe(probe: KubernetesHttpProbe): this {
     this._config.kubernetesReadinessProbe = probe
-    return this
-  }
-
-  /** Creates a dedicated internal TCP load balancer with per-port source CIDRs. */
-  public internalLoadBalancer(settings: ContainerInternalLoadBalancer): this {
-    this._config.internalLoadBalancer = settings
-    return this
-  }
-
-  /** Restricts outbound connections to public IPv4 and runtime DNS. Requires restricted security. */
-  public internetOnlyEgress(enabled = true): this {
-    this._config.internetOnlyEgress = enabled
     return this
   }
 

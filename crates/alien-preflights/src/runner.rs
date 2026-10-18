@@ -228,6 +228,36 @@ impl PreflightRunner {
                 })?;
         }
 
+        // These settings are produced only by the managed gateway mutation. Keep
+        // the runtime capability check after mutations as well as the input guard.
+        for (id, entry) in current_stack.resources() {
+            let Some(container) = entry.config.downcast_ref::<alien_core::Container>() else {
+                continue;
+            };
+            if container.internal_load_balancer.is_none() && !container.internet_only_egress() {
+                continue;
+            }
+            let invalid = |message: String| {
+                AlienError::new(ErrorData::StackMutationFailed {
+                    mutation_name: "ManagedContainerNetworkSettings".into(),
+                    message,
+                    resource_id: Some(id.to_string()),
+                })
+            };
+            if id != "sandbox-egress-gateway" || container.id != "sandbox-egress-gateway" {
+                return Err(invalid("Only the managed sandbox gateway may carry internal container network settings".into()));
+            }
+            if stack_state.platform != Platform::Aws {
+                return Err(invalid(format!(
+                    "{} has no managed internal container load balancer implementation; refusing to deploy without the requested isolation",
+                    stack_state.platform
+                )));
+            }
+            container
+                .validate_network_settings()
+                .map_err(|error| invalid(error.to_string()))?;
+        }
+
         let mut dependency_result =
             crate::compile_time::validate_stack_dependencies(&current_stack);
         dependency_result = dependency_result.with_check_metadata(

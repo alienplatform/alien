@@ -7,7 +7,6 @@ import * as z from "zod";
 import { ContainerAutoscalingSchema } from "./container-autoscaling-schema.js";
 import { ContainerCodeSchema } from "./container-code-schema.js";
 import { ContainerGpuSpecSchema } from "./container-gpu-spec-schema.js";
-import { ContainerInternalLoadBalancerSchema } from "./container-internal-load-balancer-schema.js";
 import { ContainerPortSchema } from "./container-port-schema.js";
 import { ContainerResourceChoicesSchema } from "./container-resource-choices-schema.js";
 import { ContainerSecuritySchema } from "./container-security-schema.js";
@@ -47,10 +46,6 @@ get "healthCheck"(){
                 return z.union([HealthCheckSchema, z.null()]).optional()
               },
 "id": z.string().describe("Unique identifier for the container.\nMust be DNS-compatible: lowercase alphanumeric with hyphens."),
-get "internalLoadBalancer"(){
-                return z.union([ContainerInternalLoadBalancerSchema, z.null()]).optional()
-              },
-"internetOnlyEgress": z.optional(z.boolean().describe("Restrict connections initiated by this container to public IPv4 destinations\nand its runtime DNS resolver. Blocks private networks, the container overlay,\nhost services, and IPv6. The only metadata exception is the runtime proxy\nfor this container's own service-account credentials (169.254.169.254:80).\nRequires the restricted security profile.\nEnforcement is outside the container; unsupported backends fail planning.")),
 get "kubernetesLivenessProbe"(){
                 return z.union([KubernetesHttpProbeSchema, z.null()]).optional()
               },
