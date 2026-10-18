@@ -236,7 +236,13 @@ impl CloudRunApi for CloudRunClient {
         );
 
         self.base
-            .execute_request(Method::GET, &path, None, Option::<()>::None, &service_name)
+            .execute_request(
+                Method::GET,
+                &path,
+                Some(vec![("options.requestedPolicyVersion", "3".to_string())]),
+                Option::<()>::None,
+                &service_name,
+            )
             .await
     }
 
@@ -1499,7 +1505,6 @@ mod tests {
         get.assert_hits(1);
         set.assert_hits(1);
     }
-
 
     #[test]
     fn serializes_internal_ingress_with_cloud_run_v2_enum_value() {
