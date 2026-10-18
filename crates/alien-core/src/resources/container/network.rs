@@ -18,15 +18,16 @@ pub enum ContainerInternalLoadBalancer {
         ports: Vec<u16>,
         subnets: Vec<String>,
         /// Exactly one entry per listener. An empty list denies every client.
-        #[serde(deserialize_with = "deserialize_ports")]
+        #[serde(rename = "allowedSources", deserialize_with = "deserialize_ports")]
         allowed_sources: BTreeMap<u16, Vec<String>>,
     },
     /// Resolve setup-created subnet identifiers and CIDRs from a Network.
     Network {
         ports: Vec<u16>,
         network: String,
+        #[serde(rename = "subnetGroup")]
         subnet_group: ContainerLoadBalancerSubnetGroup,
-        #[serde(deserialize_with = "deserialize_ports")]
+        #[serde(rename = "allowedSourceGroups", deserialize_with = "deserialize_ports")]
         allowed_source_groups: BTreeMap<u16, ContainerLoadBalancerSourceGroup>,
     },
 }
