@@ -176,18 +176,18 @@ pub struct Worker {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub public_endpoints: Vec<WorkerPublicEndpoint>,
 
+    /// Optional build evidence for the published runtime. Consumers must match its
+    /// image to the applied immutable image before using its capabilities.
+    #[builder(field)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_image: Option<WorkerRuntimeImage>,
+
     /// Permission profile name that defines the permissions granted to this worker.
     /// This references a profile defined in the stack's permission definitions.
     pub permissions: String,
 
     /// Code for the worker, either a pre-built image or source code to be built.
     pub code: WorkerCode,
-
-    /// Optional build evidence for the published runtime. Consumers must match its
-    /// image to the applied immutable image before using its capabilities.
-    #[builder(field)]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub runtime_image: Option<WorkerRuntimeImage>,
 
     /// Memory allocated to the worker in megabytes (MB).
     /// Default: 512
