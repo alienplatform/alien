@@ -913,15 +913,32 @@ fn network_validation(ctx: &EmitContext<'_>, label: &str) -> Result<TfFragment> 
             &name,
             table_ids,
         ));
-        let condition = if kind == "sandbox" {
-            "alltrue([for route in self.routes : route.gateway_id == \"local\"])".to_string()
-        } else {
-            "length([for route in self.routes : route if route.cidr_block == \"0.0.0.0/0\" && route.nat_gateway_id != \"\"]) == 1".to_string()
+        let (condition, error_message) = match kind {
+            "sandbox" => (
+                "alltrue([for route in self.routes : route.gateway_id == \"local\"])",
+                "Sandbox connector subnets must have only local VPC routes.",
+            ),
+            "sandbox_gateway" => (
+                "length([for route in self.routes : route if route.cidr_block == \"0.0.0.0/0\" && route.nat_gateway_id != \"\"]) == 1 && alltrue([for route in self.routes : route.gateway_id == \"local\" || (route.cidr_block == \"0.0.0.0/0\" && route.nat_gateway_id != \"\")])",
+                "Gateway subnets must have only local VPC routes and the NAT default route.",
+            ),
+            _ => (
+                "length([for route in self.routes : route if route.cidr_block == \"0.0.0.0/0\" && route.nat_gateway_id != \"\"]) == 1",
+                "Workload subnets must have a NAT default route.",
+            ),
         };
-        fragment.data_blocks.push(crate::block::data_block("aws_route_table",&name,[count(),
-            attr("route_table_id",expr::raw(format!("coalesce(one(data.aws_route_tables.{name}[count.index].ids),data.aws_route_table.{main}.id)"))),
-            nested_block("lifecycle",vec![nested_block("postcondition",vec![attr("condition",expr::raw(condition)),attr("error_message",Expression::from(if kind == "sandbox" {"Sandbox connector subnets must have only local VPC routes."} else {"Gateway and workload subnets must have a NAT default route."}))])]),
-        ]));
+        fragment.data_blocks.push(crate::block::data_block(
+            "aws_route_table",
+            &name,
+            [
+                count(),
+                attr("route_table_id", expr::raw(format!("coalesce(one(data.aws_route_tables.{name}[count.index].ids),data.aws_route_table.{main}.id)"))),
+                nested_block("lifecycle", vec![nested_block("postcondition", vec![
+                    attr("condition", expr::raw(condition)),
+                    attr("error_message", Expression::from(error_message)),
+                ])]),
+            ],
+        ));
     }
     let mut conditions=vec![
         (format!("length(distinct(data.aws_subnet.{label}_sandbox[*].availability_zone_id)) >= 2"),"Sandbox subnets must span at least two availability zones."),

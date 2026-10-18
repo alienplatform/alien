@@ -59,9 +59,12 @@ def validate(ec2, properties):
             raise ValueError("Sandbox connector subnets must have only local VPC routes")
     nat_ids = set()
     for subnet_id in gateway_ids + (workload_ids if gateway_ids else []):
-        defaults = [r for r in routes(subnet_id) if r.get("DestinationCidrBlock") == "0.0.0.0/0"]
+        selected_routes = routes(subnet_id)
+        defaults = [r for r in selected_routes if r.get("DestinationCidrBlock") == "0.0.0.0/0"]
         if len(defaults) != 1 or not defaults[0].get("NatGatewayId") or defaults[0].get("State") != "active":
             raise ValueError("Gateway and workload subnets must use an active NAT gateway default route")
+        if subnet_id in gateway_ids and any(r.get("GatewayId") != "local" and r != defaults[0] for r in selected_routes):
+            raise ValueError("Gateway subnets must have only local VPC routes and the NAT default route")
         nat_ids.add(defaults[0]["NatGatewayId"])
     if len(nat_ids) > 1:
         raise ValueError("Gateway and workloads must share the deployment NAT gateway")
