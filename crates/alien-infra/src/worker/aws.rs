@@ -6096,6 +6096,8 @@ mod tests {
                     AwsWorkerController::default()
                 };
                 let expected_arn = controller.arn.clone();
+                let mut management = crate::remote_stack_management::AwsRemoteStackManagementController::mock_ready("test-management");
+                management.worker_gateway_cleanup_function_arn = Some("arn:aws:lambda:us-east-1:123456789012:function:_gateway-cleanup-test:7".into());
                 let mut executor = SingleControllerExecutor::builder()
                     .resource(desired)
                     .previous_resource(previous)
@@ -6106,6 +6108,10 @@ mod tests {
                         endpoint_access: alien_core::EndpointAccess::Both,
                         ..Default::default()
                     })
+                    .with_frozen_dependency(
+                        alien_core::RemoteStackManagement::new("management".into()).build(),
+                        management,
+                    )
                     .with_dependency(
                         alien_core::Network {
                             id: "default-network".into(),

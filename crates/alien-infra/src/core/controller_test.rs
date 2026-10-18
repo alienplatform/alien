@@ -754,6 +754,7 @@ pub struct SingleControllerExecutorBuilder {
     volume_restores: Vec<alien_core::VolumeRestoreRequest>,
     public_endpoints: Option<alien_core::PublicEndpointUrls>,
     dependencies: Vec<(ResourceRef, Resource, Box<dyn ResourceController>)>,
+    frozen_dependencies: Vec<String>,
     stack_resources: Vec<(Resource, ResourceLifecycle)>,
     service_provider: Option<Arc<dyn PlatformServiceProvider>>,
     client_config: Option<ClientConfig>,
@@ -786,6 +787,7 @@ impl SingleControllerExecutorBuilder {
             volume_restores: Vec::new(),
             public_endpoints: None,
             dependencies: Vec::new(),
+            frozen_dependencies: Vec::new(),
             stack_resources: Vec::new(),
             service_provider: None,
             client_config: None,
@@ -931,6 +933,16 @@ impl SingleControllerExecutorBuilder {
         self.dependencies
             .push((resource_ref, resource, Box::new(controller)));
         self
+    }
+
+    /// Adds a setup-owned dependency with its installed controller and outputs.
+    pub fn with_frozen_dependency<R: ResourceDefinition>(
+        mut self,
+        resource: R,
+        controller: impl ResourceController + 'static,
+    ) -> Self {
+        self.frozen_dependencies.push(resource.id().to_string());
+        self.with_dependency(resource, controller)
     }
 
     /// Adds a resource the stack declares that the main resource does not depend on, not yet
@@ -1142,6 +1154,11 @@ impl SingleControllerExecutorBuilder {
         // Add dependencies first
         for (_dep_ref, dep_resource, dep_controller) in &self.dependencies {
             let dep_id = dep_resource.id().to_string();
+            let lifecycle = if self.frozen_dependencies.contains(&dep_id) {
+                ResourceLifecycle::Frozen
+            } else {
+                ResourceLifecycle::Live
+            };
             let dep_status = dep_controller.get_status();
             let dep_outputs = dep_controller.get_outputs();
 
@@ -1150,7 +1167,7 @@ impl SingleControllerExecutorBuilder {
                 dep_id.clone(),
                 ResourceEntry {
                     config: dep_resource.clone(),
-                    lifecycle: ResourceLifecycle::Live,
+                    lifecycle,
                     dependencies: vec![],
                     remote_access: false,
                     enabled_when: None,
@@ -1174,7 +1191,7 @@ impl SingleControllerExecutorBuilder {
                 .config(dep_resource.clone())
                 .maybe_internal_state(internal_state)
                 .maybe_outputs(dep_outputs)
-                .lifecycle(ResourceLifecycle::Live)
+                .lifecycle(lifecycle)
                 .dependencies(vec![])
                 .build();
 
