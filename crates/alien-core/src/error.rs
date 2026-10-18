@@ -7,6 +7,26 @@ use crate::{Platform, ResourceType};
 #[derive(Debug, Clone, AlienErrorData, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ErrorData {
+    /// An egress target cannot be enforced safely.
+    #[error(
+        code = "SANDBOX_EGRESS_INVALID",
+        message = "Invalid sandbox egress target '{target}': {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    SandboxEgressInvalid { target: String, reason: String },
+
+    /// A runtime policy exceeds the deployment's declaration.
+    #[error(
+        code = "SANDBOX_EGRESS_WIDENS",
+        message = "Sandbox egress target '{target}' exceeds the declared policy",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    SandboxEgressWidens { target: String },
+
     /// A deployment selected resources outside the release's declared choices.
     #[error(
         code = "CONTAINER_RESOURCE_SELECTION_INVALID",

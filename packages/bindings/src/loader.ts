@@ -1,3 +1,4 @@
+import type { SandboxEgress } from "@alienplatform/core"
 /**
  * Native addon loader.
  *
@@ -226,6 +227,7 @@ export interface RawSandboxHandle {
     tenantKey?: string | null,
     env?: Record<string, string> | null,
     timeoutMs?: number | null,
+    egress?: SandboxEgress | null,
   ): Promise<RawSandboxInstance>
   get(sandboxId: string): Promise<RawSandboxInstance | null>
   getOrCreate(
@@ -233,7 +235,9 @@ export interface RawSandboxHandle {
     tenantKey?: string | null,
     env?: Record<string, string> | null,
     timeoutMs?: number | null,
+    egress?: SandboxEgress | null,
   ): Promise<RawResolvedSandbox>
+  updateEgress(sandboxId: string, egress: SandboxEgress): Promise<void>
   list(): Promise<RawSandboxInstance[]>
   runCommand(
     sandboxId: string,

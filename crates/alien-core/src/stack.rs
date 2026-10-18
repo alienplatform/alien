@@ -118,6 +118,9 @@ impl Stack {
             .map(|(id, entry)| {
                 let mut value =
                     serde_json::to_value(entry).expect("resource entries always serialize to JSON");
+                if let Some(sandbox) = entry.config.downcast_ref::<crate::Sandbox>() {
+                    value["config"]["egress"] = sandbox.egress.setup_digest_value();
+                }
                 canonicalize_json(&mut value);
                 (id, value)
             })
@@ -135,7 +138,10 @@ impl Stack {
                     sandbox,
                     entry.lifecycle,
                 );
-                for (_, value) in &mut inputs {
+                for (name, value) in &mut inputs {
+                    if *name == "egress" {
+                        *value = sandbox.egress.setup_digest_value();
+                    }
                     canonicalize_json(value);
                 }
                 Some((id, inputs))
@@ -458,7 +464,7 @@ mod tests {
             .code(crate::SandboxCode::Image {
                 image: "s3://alien-bundles/sandbox/bundle.zip".to_string(),
             })
-            .egress(crate::SandboxEgress::Allow)
+            .egress(crate::SandboxEgress::Internet)
             .lifecycle(crate::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
@@ -746,7 +752,7 @@ mod tests {
                 image: image.to_string(),
             })
             .maybe_private_base_image(private_base_image.map(str::to_string))
-            .egress(crate::SandboxEgress::Deny)
+            .egress(crate::SandboxEgress::None)
             .lifecycle(crate::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
@@ -798,7 +804,7 @@ mod tests {
             Self {
                 image: "s3://bucket/sandbox-bundle/v1/bundle.zip",
                 private_base_image: Some(BASE_A),
-                egress: crate::SandboxEgress::Allow,
+                egress: crate::SandboxEgress::Internet,
                 network_id: "net-a",
                 remote_access: false,
             }
@@ -911,7 +917,7 @@ mod tests {
             ),
             (
                 LiveSandbox {
-                    egress: crate::SandboxEgress::Deny,
+                    egress: crate::SandboxEgress::None,
                     ..LiveSandbox::installed()
                 },
                 "egress allow to deny",
@@ -943,7 +949,7 @@ mod tests {
 
         let deny = |network_id| {
             LiveSandbox {
-                egress: crate::SandboxEgress::Deny,
+                egress: crate::SandboxEgress::None,
                 network_id,
                 ..LiveSandbox::installed()
             }

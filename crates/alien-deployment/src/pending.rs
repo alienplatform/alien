@@ -776,7 +776,7 @@ mod tests {
             .code(alien_core::SandboxCode::Image {
                 image: "s3://acme-artifacts/agents/bundle.zip".to_string(),
             })
-            .egress(alien_core::SandboxEgress::Deny)
+            .egress(alien_core::SandboxEgress::None)
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
@@ -921,7 +921,7 @@ mod tests {
                 .private_base_image(
                     "123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base:1".to_string(),
                 )
-                .egress(alien_core::SandboxEgress::Allow)
+                .egress(alien_core::SandboxEgress::Internet)
                 .lifecycle(alien_core::SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,

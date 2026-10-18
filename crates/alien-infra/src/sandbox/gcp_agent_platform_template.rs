@@ -939,7 +939,7 @@ mod tests {
 
         let provider = provider_with(happy_client());
         let mut executor = build_executor(
-            sandbox_with(SandboxEgress::Deny, "ubuntu:24.04", None, None),
+            sandbox_with(SandboxEgress::None, "ubuntu:24.04", None, None),
             provider,
         )
         .await;
@@ -1001,7 +1001,7 @@ mod tests {
     #[tokio::test]
     async fn create_delete_deny_egress_default_limits() {
         create_then_delete(sandbox_with(
-            SandboxEgress::Deny,
+            SandboxEgress::None,
             "ubuntu:24.04",
             None,
             None,
@@ -1012,7 +1012,7 @@ mod tests {
     #[tokio::test]
     async fn create_delete_allow_egress() {
         create_then_delete(sandbox_with(
-            SandboxEgress::Allow,
+            SandboxEgress::Internet,
             "ubuntu:24.04",
             None,
             None,
@@ -1023,7 +1023,7 @@ mod tests {
     #[tokio::test]
     async fn create_delete_with_session_ttl() {
         create_then_delete(sandbox_with(
-            SandboxEgress::Deny,
+            SandboxEgress::None,
             "ubuntu:24.04",
             Some(3600),
             None,
@@ -1040,7 +1040,7 @@ mod tests {
             max_processes: None,
         };
         create_then_delete(sandbox_with(
-            SandboxEgress::Allow,
+            SandboxEgress::Internet,
             "ghcr.io/org/sbx:v1",
             Some(1800),
             Some(limits),
@@ -1054,7 +1054,7 @@ mod tests {
     async fn binding_params_carry_the_active_template_region_and_ttl() {
         let provider = provider_with(happy_client());
         let mut executor = build_executor(
-            sandbox_with(SandboxEgress::Deny, "ubuntu:24.04", Some(3600), None),
+            sandbox_with(SandboxEgress::None, "ubuntu:24.04", Some(3600), None),
             provider,
         )
         .await;
@@ -1114,7 +1114,7 @@ mod tests {
             }
         };
 
-        for egress in [SandboxEgress::Allow, SandboxEgress::Deny] {
+        for egress in [SandboxEgress::Internet, SandboxEgress::None] {
             let mut executor = build_executor(
                 sandbox_with(egress.clone(), "ubuntu:24.04", None, None),
                 provider_with(happy_client()),
@@ -1123,7 +1123,7 @@ mod tests {
             executor.run_until_terminal().await.expect("create runs");
             assert_eq!(
                 allow_egress(&executor),
-                egress == SandboxEgress::Allow,
+                egress == SandboxEgress::Internet,
                 "{egress:?}"
             );
         }
@@ -1136,7 +1136,7 @@ mod tests {
         m.expect_delete_template().returning(|_, _| Ok(()));
         let mut executor = SingleControllerExecutor::builder()
             .resource(sandbox_with(
-                SandboxEgress::Deny,
+                SandboxEgress::None,
                 "ubuntu:24.04",
                 None,
                 None,
@@ -1152,7 +1152,7 @@ mod tests {
             .expect("executor builds");
         executor
             .update(sandbox_with(
-                SandboxEgress::Allow,
+                SandboxEgress::Internet,
                 "ubuntu:24.04",
                 None,
                 None,
@@ -1163,7 +1163,10 @@ mod tests {
 
         // Desired config is the opposite of what serves in both cases, and state saved before the
         // field existed reads as deny until the first Ready.
-        for (served, desired) in [(true, SandboxEgress::Deny), (false, SandboxEgress::Allow)] {
+        for (served, desired) in [
+            (true, SandboxEgress::None),
+            (false, SandboxEgress::Internet),
+        ] {
             let mut m = MockAgentPlatformApi::new();
             m.expect_get_template().returning(move |_, id| {
                 Ok(SandboxEnvironmentTemplate {
@@ -1205,7 +1208,7 @@ mod tests {
         m.expect_create_template().never();
         let provider = provider_with(Arc::new(m));
 
-        let resource = sandbox_with(SandboxEgress::Deny, "ubuntu:24.04", None, None);
+        let resource = sandbox_with(SandboxEgress::None, "ubuntu:24.04", None, None);
         let mut executor = SingleControllerExecutor::builder()
             .resource(resource.clone())
             .controller(GcpAgentPlatformTemplateController::mock_ready(
@@ -1264,7 +1267,7 @@ mod tests {
         let provider = provider_with(Arc::new(m));
 
         let mut executor = SingleControllerExecutor::builder()
-            .resource(sandbox_with(SandboxEgress::Deny, "old:v1", None, None))
+            .resource(sandbox_with(SandboxEgress::None, "old:v1", None, None))
             .controller(GcpAgentPlatformTemplateController::mock_ready(
                 "eng", "tpl1",
             ))
@@ -1276,7 +1279,7 @@ mod tests {
             .expect("executor builds");
 
         executor
-            .update(sandbox_with(SandboxEgress::Deny, "new:v2", None, None))
+            .update(sandbox_with(SandboxEgress::None, "new:v2", None, None))
             .expect("update accepted");
         executor.run_until_terminal().await.expect("replace runs");
         assert_eq!(executor.status(), ResourceStatus::Running);
@@ -1325,7 +1328,7 @@ mod tests {
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(sandbox_with(
-                SandboxEgress::Deny,
+                SandboxEgress::None,
                 "ubuntu:24.04",
                 None,
                 None,
@@ -1357,7 +1360,7 @@ mod tests {
         let m = MockAgentPlatformApi::new();
         let provider = provider_with(Arc::new(m));
         let mut executor = build_executor(
-            sandbox_with(SandboxEgress::Deny, "ubuntu:24.04", None, None),
+            sandbox_with(SandboxEgress::None, "ubuntu:24.04", None, None),
             provider,
         )
         .await;
@@ -1417,7 +1420,7 @@ mod tests {
         };
         let mut executor = build_executor(
             sandbox_with(
-                SandboxEgress::Allow,
+                SandboxEgress::Internet,
                 "ghcr.io/org/sbx:v9",
                 None,
                 Some(limits),
@@ -1436,7 +1439,7 @@ mod tests {
     /// `None`, so a struct that looks right can still put a shape on the wire the API rejects.
     #[test]
     fn build_template_body_declares_the_port_the_agent_image_serves() {
-        let sandbox = sandbox_with(SandboxEgress::Allow, "ubuntu:24.04", None, None);
+        let sandbox = sandbox_with(SandboxEgress::Internet, "ubuntu:24.04", None, None);
         let body = build_template_body(&sandbox, "agent-sbx", &deployment_config(None, None))
             .expect("a valid sandbox builds a body");
         let wire = serde_json::to_value(&body).expect("the template body serializes");
@@ -1452,8 +1455,8 @@ mod tests {
     #[test]
     fn build_template_body_refuses_domain_egress_naming_the_sandbox_and_modes() {
         let sandbox = sandbox_with(
-            SandboxEgress::AllowDomains {
-                domains: vec!["api.example.com".to_string()],
+            SandboxEgress::Allow {
+                allow: vec!["api.example.com".to_string()],
             },
             "ubuntu:24.04",
             None,
@@ -1492,7 +1495,7 @@ mod tests {
     }
 
     fn template_image(image: &str, config: &DeploymentConfig) -> Result<String> {
-        let sandbox = sandbox_with(SandboxEgress::Deny, image, None, None);
+        let sandbox = sandbox_with(SandboxEgress::None, image, None, None);
         build_template_body(&sandbox, "agent-sbx", config).map(|body| {
             body.custom_container_environment
                 .and_then(|environment| environment.custom_container_spec)

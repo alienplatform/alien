@@ -31,6 +31,9 @@ const DEFAULT_RUNTIME_CLASS: &str = "gvisor";
 /// Kubernetes Sandbox controller.
 #[controller]
 pub struct KubernetesSandboxController {
+    /// Bound installed with the parent and published to runtime bindings.
+    #[serde(default)]
+    pub(crate) egress: Option<alien_core::SandboxEgress>,
     /// Sandbox this controller owns, and the enumeration scope for its pods.
     pub(crate) sandbox_id: Option<String>,
     /// Namespace the Helm chart created for this sandbox's pods.
@@ -93,6 +96,7 @@ impl KubernetesSandboxController {
 
         self.runtime_class = Some(runtime_class);
         self.sandbox_id = Some(config.id.clone());
+        self.egress = Some(config.egress.clone());
         self.broker_url = broker_url();
 
         // Recorded as soon as it is known, because the binding and the outputs both read it
@@ -350,6 +354,7 @@ impl KubernetesSandboxController {
             BindingValue::value(broker_url),
             BindingValue::value(capability_secret_name(&sandbox_id)),
             BindingValue::value(SERVICE_ACCOUNT_TOKEN_PATH.to_string()),
+            self.egress.clone(),
         );
 
         Ok(Some(
@@ -537,6 +542,7 @@ mod tests {
         use crate::core::ResourceController;
 
         let mut controller = KubernetesSandboxController {
+            egress: None,
             state: KubernetesSandboxState::Ready,
             sandbox_id: Some("sbx".to_string()),
             namespace: Some("alien-sandbox-sbx".to_string()),

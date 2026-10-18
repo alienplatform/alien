@@ -8,7 +8,7 @@ function complete() {
   return new Sandbox("agent")
     .code({ type: "image", image: "ubuntu:24.04" })
     .limits(limits)
-    .egress({ mode: "deny" })
+    .egress("none")
     .lifecycle(lifecycle)
 }
 
@@ -19,7 +19,7 @@ describe("Sandbox", () => {
     expect(r.config.type).toBe("sandbox")
     expect(r.config.id).toBe("agent")
     expect(r.config.limits).toEqual(limits)
-    expect(r.config.egress).toEqual({ mode: "deny" })
+    expect(r.config.egress).toEqual("none")
   })
 
   // Ceilings are optional because not every platform can enforce them. Declaring none takes the
@@ -28,7 +28,7 @@ describe("Sandbox", () => {
   it("accepts a declaration that names no ceilings", () => {
     const sandbox = new Sandbox("agent")
       .code({ type: "image", image: "ubuntu:24.04" })
-      .egress({ mode: "deny" })
+      .egress("none")
       .lifecycle(lifecycle)
 
     expect(sandbox.build().config.limits).toBeUndefined()
@@ -45,10 +45,10 @@ describe("Sandbox", () => {
 
   it("carries a hostname allowlist through the schema", () => {
     const r = complete()
-      .egress({ mode: "allowDomains", domains: ["example.com"] })
+      .egress({ allow: ["example.com"] })
       .build()
 
-    expect(r.config.egress).toEqual({ mode: "allowDomains", domains: ["example.com"] })
+    expect(r.config.egress).toEqual({ allow: ["example.com"] })
   })
 
   it("carries declared preview ports", () => {

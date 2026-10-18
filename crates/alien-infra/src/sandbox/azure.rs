@@ -908,7 +908,7 @@ mod tests {
             retired_disk_images: Vec::new(),
             pending_disk_image: None,
             built_disk_images: false,
-            egress: Some(SandboxEgress::Deny),
+            egress: Some(SandboxEgress::None),
             idle_pause_seconds: Some(300),
             limits: None,
             _internal_stay_count: None,
@@ -940,7 +940,7 @@ mod tests {
             .code(SandboxCode::Image {
                 image: "ubuntu".to_string(),
             })
-            .egress(SandboxEgress::Allow)
+            .egress(SandboxEgress::Internet)
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
@@ -956,7 +956,7 @@ mod tests {
             retired_disk_images: Vec::new(),
             pending_disk_image: None,
             built_disk_images: false,
-            egress: Some(SandboxEgress::Allow),
+            egress: Some(SandboxEgress::Internet),
             idle_pause_seconds: None,
             limits: None,
             _internal_stay_count: None,
@@ -1029,8 +1029,8 @@ mod tests {
         assert_eq!(restored.disk_image.as_deref(), Some("ubuntu"));
         assert_eq!(
             restored.egress,
-            Some(SandboxEgress::AllowDomains {
-                domains: vec!["api.example.com".to_string()],
+            Some(SandboxEgress::Allow {
+                allow: vec!["api.example.com".to_string()],
             })
         );
         assert_eq!(restored.idle_pause_seconds, Some(300));
@@ -1113,7 +1113,7 @@ mod tests {
             retired_disk_images: Vec::new(),
             pending_disk_image: None,
             built_disk_images: false,
-            egress: Some(SandboxEgress::Deny),
+            egress: Some(SandboxEgress::None),
             idle_pause_seconds: None,
             limits: None,
             _internal_stay_count: None,
@@ -1127,7 +1127,7 @@ mod tests {
                     target: None,
                 },
             })
-            .egress(SandboxEgress::Allow)
+            .egress(SandboxEgress::Internet)
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: Some(300),
@@ -1138,7 +1138,7 @@ mod tests {
             .capture_session_inputs(&config)
             .expect_err("a source-built sandbox has no Azure catalog image");
 
-        assert_eq!(controller.egress, Some(SandboxEgress::Deny));
+        assert_eq!(controller.egress, Some(SandboxEgress::None));
         assert_eq!(controller.idle_pause_seconds, None);
         assert_eq!(controller.disk_image.as_deref(), Some("ubuntu"));
     }
@@ -1158,7 +1158,7 @@ mod tests {
             retired_disk_images: Vec::new(),
             pending_disk_image: None,
             built_disk_images: false,
-            egress: Some(SandboxEgress::Allow),
+            egress: Some(SandboxEgress::Internet),
             idle_pause_seconds: None,
             limits: None,
             _internal_stay_count: None,
@@ -1172,7 +1172,7 @@ mod tests {
                     target: None,
                 },
             })
-            .egress(SandboxEgress::Deny)
+            .egress(SandboxEgress::None)
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
@@ -1185,7 +1185,7 @@ mod tests {
 
         assert_eq!(
             controller.egress,
-            Some(SandboxEgress::Allow),
+            Some(SandboxEgress::Internet),
             "the refused declaration leaves the served policy alone in both directions"
         );
         assert_eq!(controller.disk_image.as_deref(), Some("ubuntu"));
@@ -1206,7 +1206,7 @@ mod tests {
             retired_disk_images: Vec::new(),
             pending_disk_image: None,
             built_disk_images: false,
-            egress: Some(SandboxEgress::Deny),
+            egress: Some(SandboxEgress::None),
             idle_pause_seconds: Some(300),
             limits: Some(SandboxLimits {
                 cpu: "4000m".to_string(),
@@ -1241,7 +1241,7 @@ mod tests {
             retired_disk_images: Vec::new(),
             pending_disk_image: None,
             built_disk_images: false,
-            egress: Some(SandboxEgress::Deny),
+            egress: Some(SandboxEgress::None),
             idle_pause_seconds: None,
             limits: None,
             _internal_stay_count: None,
@@ -1271,8 +1271,8 @@ mod tests {
             retired_disk_images: Vec::new(),
             pending_disk_image: None,
             built_disk_images: false,
-            egress: Some(SandboxEgress::AllowDomains {
-                domains: vec!["api.example.com".to_string()],
+            egress: Some(SandboxEgress::Allow {
+                allow: vec!["api.example.com".to_string()],
             }),
             idle_pause_seconds: None,
             limits: None,
@@ -1336,7 +1336,7 @@ mod tests {
                 .code(SandboxCode::Image {
                     image: image.to_string(),
                 })
-                .egress(SandboxEgress::Allow)
+                .egress(SandboxEgress::Internet)
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
@@ -1358,7 +1358,7 @@ mod tests {
                 retired_disk_images: Vec::new(),
                 pending_disk_image: None,
                 built_disk_images: false,
-                egress: Some(SandboxEgress::Allow),
+                egress: Some(SandboxEgress::Internet),
                 idle_pause_seconds: None,
                 limits: None,
                 _internal_stay_count: None,

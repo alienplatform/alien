@@ -1914,13 +1914,15 @@ impl BindingsProviderApi for BindingsProvider {
                 config.region = region;
 
                 let client = AgentPlatformClient::new(reqwest::Client::new(), config);
-                let sandbox: Arc<dyn crate::traits::Sandbox> =
-                    Arc::new(GcpAgentPlatformSandbox::new(
+                let sandbox: Arc<dyn crate::traits::Sandbox> = Arc::new(
+                    GcpAgentPlatformSandbox::new(
                         Arc::new(client),
                         engine,
                         template,
                         gcp_binding.max_lifetime_seconds,
-                    ));
+                    )
+                    .with_egress(gcp_binding.egress),
+                );
                 Ok(sandbox)
             }
             #[cfg(feature = "azure")]
@@ -2082,15 +2084,18 @@ impl BindingsProviderApi for BindingsProvider {
                     }));
                 }
 
-                let sandbox: Arc<dyn crate::traits::Sandbox> = Arc::new(AwsSandbox::new(
-                    Arc::new(client),
-                    image_arn,
-                    image_version,
-                    egress_connector_arns,
-                    aws_binding.preview_ports,
-                    aws_binding.idle_pause_seconds,
-                    aws_binding.max_lifetime_seconds,
-                ));
+                let sandbox: Arc<dyn crate::traits::Sandbox> = Arc::new(
+                    AwsSandbox::new(
+                        Arc::new(client),
+                        image_arn,
+                        image_version,
+                        egress_connector_arns,
+                        aws_binding.preview_ports,
+                        aws_binding.idle_pause_seconds,
+                        aws_binding.max_lifetime_seconds,
+                    )
+                    .with_egress(aws_binding.egress),
+                );
                 Ok(sandbox)
             }
             // A backend whose feature is off reports which one, rather than a bare
@@ -2143,7 +2148,7 @@ mod tests {
                 disk: "20Gi".to_string(),
                 max_processes: None,
             })
-            .egress(alien_core::SandboxEgress::Allow)
+            .egress(alien_core::SandboxEgress::Internet)
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,

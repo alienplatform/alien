@@ -189,7 +189,7 @@ fn gcp_sandbox_stack(lifecycle: ResourceLifecycle) -> Stack {
                 .code(SandboxCode::Image {
                     image: "python:3.12".to_string(),
                 })
-                .egress(SandboxEgress::Deny)
+                .egress(SandboxEgress::None)
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
@@ -299,7 +299,7 @@ fn a_gcp_remote_sandbox_grants_the_access_identity_its_own_engine_and_nothing_wi
                 .code(SandboxCode::Image {
                     image: "python:3.12".to_string(),
                 })
-                .egress(SandboxEgress::Allow)
+                .egress(SandboxEgress::Internet)
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
@@ -435,7 +435,7 @@ fn a_frozen_gcp_sandbox_manager_gets_template_verbs_on_its_engine_only() {
                 .code(SandboxCode::Image {
                     image: "python:3.12".to_string(),
                 })
-                .egress(SandboxEgress::Deny)
+                .egress(SandboxEgress::None)
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
@@ -535,7 +535,7 @@ fn a_gcp_remote_sandbox_management_role_heartbeats_without_reaching_a_session() 
                 .code(SandboxCode::Image {
                     image: "python:3.12".to_string(),
                 })
-                .egress(SandboxEgress::Allow)
+                .egress(SandboxEgress::Internet)
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,

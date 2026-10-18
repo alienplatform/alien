@@ -81,11 +81,11 @@ impl HelmEmitter for SandboxEmitter {
 /// NetworkPolicy spells "none", where omitting the type would mean "unrestricted".
 fn network_policy(sandbox: &Sandbox, resource_id: &str) -> Result<String> {
     let egress = match sandbox.egress {
-        SandboxEgress::Deny => String::new(),
+        SandboxEgress::None => String::new(),
         // Refused here rather than upstream, so the function that would render the permissive
         // rule is the one that declines: a hostname list rendered as `allow` opens every address
         // it was written to exclude.
-        SandboxEgress::AllowDomains { .. } => {
+        SandboxEgress::Allow { .. } => {
             return Err(AlienError::new(ErrorData::OperationNotSupported {
                 operation: format!("generate the Helm chart for sandbox '{resource_id}'"),
                 reason: "a Kubernetes NetworkPolicy matches addresses, not names, so a hostname \
@@ -93,7 +93,7 @@ fn network_policy(sandbox: &Sandbox, resource_id: &str) -> Result<String> {
                     .to_string(),
             }));
         }
-        SandboxEgress::Allow => {
+        SandboxEgress::Internet => {
             let excepts: String = ALWAYS_DENIED_CIDRS
                 .iter()
                 .map(|cidr| format!("            - {cidr}\n"))

@@ -41,6 +41,7 @@ impl ResourceImporter for AwsSandboxImporter {
             })?;
 
         let base = AwsSandboxController {
+            egress: Some(sandbox.egress.clone()),
             egress_connector_arns: data.egress_connector_arns,
             allow_egress: data.allow_egress,
             preview_ports: data.preview_ports,
@@ -151,6 +152,7 @@ impl ResourceImporter for AwsSandboxImporter {
             })?;
 
         let merged = AwsSandboxController {
+            egress: imported_controller.egress,
             build_role_arn: imported_controller
                 .build_role_arn
                 .or(existing_controller.build_role_arn.clone()),

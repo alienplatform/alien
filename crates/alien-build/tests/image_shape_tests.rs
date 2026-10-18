@@ -586,7 +586,7 @@ async fn a_sandbox_base_is_built_for_its_backend_architecture() {
                     build_args: None,
                 },
             })
-            .egress(SandboxEgress::Allow)
+            .egress(SandboxEgress::Internet)
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,

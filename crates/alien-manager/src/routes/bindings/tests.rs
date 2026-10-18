@@ -200,7 +200,7 @@ fn sandbox_resource() -> Sandbox {
         .code(SandboxCode::Image {
             image: "ubuntu:24.04".to_string(),
         })
-        .egress(SandboxEgress::Allow)
+        .egress(SandboxEgress::Internet)
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,
@@ -257,7 +257,7 @@ fn open_sandbox_binding_for(platform: Platform) -> SandboxBinding {
             "westus2",
             "rg",
             "ubuntu",
-            alien_core::SandboxEgress::Allow,
+            alien_core::SandboxEgress::Internet,
             None,
         ),
         Platform::Gcp => SandboxBinding::gcp_agent_platform(
@@ -489,6 +489,7 @@ fn remote_sandbox_validation_refuses_a_sandbox_that_restricts_egress() {
         unreachable!("the fixture is the AWS variant")
     };
     let restricted = SandboxBinding::Aws(AwsSandboxBinding {
+        egress: None,
         allow_egress: false,
         egress_connector_arns: vec![BindingValue::value(
             "arn:aws:lambda:us-east-1:123456789012:network-connector:stack-agents".to_string(),

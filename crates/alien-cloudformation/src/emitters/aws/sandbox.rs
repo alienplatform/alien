@@ -273,7 +273,7 @@ impl CfEmitter for AwsSandboxEmitter {
             ),
             (
                 "allowEgress",
-                CfExpression::from(matches!(sandbox.cloud_egress(), SandboxEgress::Allow)),
+                CfExpression::from(matches!(sandbox.cloud_egress(), SandboxEgress::Internet)),
             ),
             // Both `GetMicrovmImage` and `RunMicrovm` require the ARN — measured against the
             // live API, where a bare name is refused with "Malformed ARN - doesn't start with
@@ -305,6 +305,15 @@ impl CfEmitter for AwsSandboxEmitter {
         }
         let mut fields = vec![
             ("service".to_string(), CfExpression::from("sandbox-aws")),
+            (
+                "egress".to_string(),
+                serde_json::to_value(&sandbox.egress)
+                    .and_then(serde_json::from_value::<CfExpression>)
+                    .into_alien_error()
+                    .context(ErrorData::GenericError {
+                        message: "serializing the sandbox egress bound".to_string(),
+                    })?,
+            ),
             ("previewPorts".to_string(), preview_ports(sandbox)),
             (
                 "egressConnectorArns".to_string(),
@@ -312,7 +321,7 @@ impl CfEmitter for AwsSandboxEmitter {
             ),
             (
                 "allowEgress".to_string(),
-                CfExpression::from(matches!(sandbox.cloud_egress(), SandboxEgress::Allow)),
+                CfExpression::from(matches!(sandbox.cloud_egress(), SandboxEgress::Internet)),
             ),
             (
                 "imageArn".to_string(),
@@ -555,7 +564,7 @@ fn runtime_import_ref(sandbox: &Sandbox, image_id: &str) -> Result<CfExpression>
         ),
         (
             "allowEgress",
-            CfExpression::from(matches!(sandbox.cloud_egress(), SandboxEgress::Allow)),
+            CfExpression::from(matches!(sandbox.cloud_egress(), SandboxEgress::Internet)),
         ),
         ("buildRoleArn", CfExpression::get_att(&role_id, "Arn")),
         ("bundleUri", code_artifact_uri(artifact_uri(sandbox)?)),
@@ -884,7 +893,7 @@ fn egress_network(
 /// binding carries `allowEgress` alongside so the two cannot be confused.
 fn egress_connector_arns(sandbox: &Sandbox, image_id: &str) -> CfExpression {
     match sandbox.cloud_egress() {
-        SandboxEgress::Allow => CfExpression::list([]),
+        SandboxEgress::Internet => CfExpression::list([]),
         _ => CfExpression::list([CfExpression::get_att(
             format!("{image_id}EgressConnector"),
             "Arn",
@@ -1022,7 +1031,7 @@ mod tests {
                 .code(SandboxCode::Image {
                     image: "s3://acme-artifacts/agents/bundle.zip".to_string(),
                 })
-                .egress(SandboxEgress::Allow)
+                .egress(SandboxEgress::Internet)
                 .lifecycle(alien_core::SandboxLifecyclePolicy {
                     max_lifetime_seconds: lifetime,
                     idle_pause_seconds: idle,
@@ -1035,6 +1044,7 @@ mod tests {
 
         let emitted = declared(Some(600), Some(1800));
         let typed = serde_json::to_value(alien_core::AwsSandboxBinding {
+            egress: None,
             image_arn: alien_core::BindingValue::Value("arn".to_string()),
             image_version: alien_core::BindingValue::Value("1".to_string()),
             region: alien_core::BindingValue::Value("us-east-2".to_string()),
@@ -1114,7 +1124,7 @@ mod tests {
                 disk: "20Gi".to_string(),
                 max_processes: None,
             })
-            .egress(SandboxEgress::Allow)
+            .egress(SandboxEgress::Internet)
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
@@ -1185,7 +1195,7 @@ mod tests {
                 disk: "20Gi".to_string(),
                 max_processes: None,
             })
-            .egress(SandboxEgress::Allow)
+            .egress(SandboxEgress::Internet)
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
