@@ -1067,6 +1067,32 @@ mod tests {
             .expect("an absent sandbox is already terminated");
     }
 
+    /// `TerminateMicrovm` returns once AWS accepts it, not once the MicroVM is gone. A caller told
+    /// the sandbox is terminated while its record still says `RUNNING` would treat code that is
+    /// still executing as contained.
+    #[tokio::test]
+    async fn terminate_does_not_report_a_sandbox_gone_while_it_still_runs() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        client
+            .expect_get_microvm()
+            .returning(|id| Ok(owned(id, "RUNNING")));
+        client
+            .expect_terminate_microvm()
+            .times(1)
+            .returning(|_| Ok(()));
+
+        let error = sandbox(client)
+            .terminate("still-running")
+            .await
+            .expect_err("a sandbox whose record still says RUNNING is not terminated");
+
+        assert_eq!(error.code, "SANDBOX_UNREACHABLE", "{error}");
+        assert!(
+            error.to_string().contains("still-running"),
+            "the failure names the sandbox it could not confirm gone: {error}"
+        );
+    }
+
     /// Reconnecting must not report a sandbox this call did not make, or a caller runs its
     /// first-run setup a second time on a sandbox that already had it.
     #[tokio::test]
