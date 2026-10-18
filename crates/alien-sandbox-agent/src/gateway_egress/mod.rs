@@ -51,6 +51,7 @@ pub struct GatewayEgress {
     address: RwLock<Option<SocketAddr>>,
     token: RwLock<String>,
     privileged: bool,
+    command_uid: u32,
     routing_ready: AtomicBool,
     declared_none: bool,
     ready: AtomicBool,
@@ -76,7 +77,7 @@ impl GatewayEgress {
 
     /// Prepare routing, or defer it until the AWS Run hook. An absent token is pending until
     /// the authenticated policy endpoint delivers it outside the shared image snapshot.
-    pub fn from_env() -> Result<Option<Arc<Self>>> {
+    pub fn from_env(command_uid: u32) -> Result<Option<Arc<Self>>> {
         if crate::egress::legacy_from_env()?.is_some() {
             return Ok(None);
         }
@@ -123,7 +124,7 @@ impl GatewayEgress {
             // filter before executing; an installation failure prevents its launch.
             crate::privilege::block_command_ipv6();
             if !defer_routing {
-                redirect::install()
+                redirect::install(command_uid)
                     .into_alien_error()
                     .context(failed("install transparent forwarding"))?;
             }
@@ -132,6 +133,7 @@ impl GatewayEgress {
             address: RwLock::new(address),
             token: RwLock::new(token),
             privileged,
+            command_uid,
             routing_ready: AtomicBool::new(!defer_routing),
             declared_none,
             ready: AtomicBool::new(false),
@@ -344,11 +346,11 @@ impl GatewayEgress {
     }
 
     // The supervisor retains NET_ADMIN before creating worker threads. Installing here lets
-    // the platform finish snapshot restoration before guest-wide rules affect its bootstrap.
+    // the platform finish snapshot restoration before enabling the command UID rules.
     // Callers hold update_lock, so token installation cannot race this transaction.
     async fn install_routing_at_run(&self) -> Result<()> {
         if !self.routing_ready.load(Ordering::Acquire) {
-            redirect::install_at_run()
+            redirect::install_at_run(self.command_uid)
                 .await
                 .into_alien_error()
                 .context(failed("install Run-hook transparent forwarding"))?;

@@ -131,7 +131,12 @@ DNS and command IPv6 restrictions. They require no gateway token. These startup
 rules also use native netlink.
 
 Replies to incoming TCP connections, including preview servers, keep their established
-return path. New outbound TCP is still redirected regardless of the source port or UID.
+return path. New outbound TCP from the command UID is redirected regardless of source port.
+All image commands, execs and jobs drop irreversibly to that UID. Other system
+identities retain their own DNS and metadata traffic so snapshot restore can reach
+the agent. No platform UID has a hardcoded bypass: a colliding command UID remains
+filtered. The external network boundary remains required against a guest-root
+compromise.
 Proxy-aware commands bypass the proxy for localhost and loopback; declared `none`
 does not advertise a proxy. Synthetic DNS answers expire after 60 seconds and
 renew on lookup. The agent retains at most 4096 names, reclaims expired entries
