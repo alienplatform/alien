@@ -23,15 +23,15 @@ pub enum ErrorData {
     )]
     SandboxEgressPolicyTooLarge { limit: String },
 
-    /// This resource has no outbound network access.
+    /// Runtime policies require the new internet declaration.
     #[error(
-        code = "SANDBOX_EGRESS_NONE",
-        message = "A runtime egress policy cannot be set on a sandbox declared none",
+        code = "SANDBOX_EGRESS_REQUIRES_INTERNET",
+        message = "A runtime egress policy requires a sandbox declared internet",
         retryable = "false",
         internal = "false",
         http_status_code = 400
     )]
-    SandboxEgressNone,
+    SandboxEgressRequiresInternet,
     /// No gateway can enforce a requested runtime policy.
     #[error(
         code = "SANDBOX_EGRESS_GATEWAY_UNAVAILABLE",

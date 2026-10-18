@@ -105,7 +105,10 @@ fn agent_platform_fields(
         ("region", expr::raw("var.gcp_region")),
         (
             "allowEgress",
-            Expression::Bool(matches!(sandbox.egress, SandboxEgress::Internet)),
+            Expression::Bool(matches!(
+                sandbox.egress,
+                SandboxEgress::Internet | SandboxEgress::Allow
+            )),
         ),
     ];
     if let Some(seconds) = sandbox.lifecycle.max_lifetime_seconds {

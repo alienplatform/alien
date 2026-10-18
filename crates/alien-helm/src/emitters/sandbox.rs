@@ -82,7 +82,13 @@ impl HelmEmitter for SandboxEmitter {
 fn network_policy(sandbox: &Sandbox) -> Result<String> {
     let egress = match sandbox.egress {
         SandboxEgress::None => String::new(),
-        SandboxEgress::Internet => {
+        SandboxEgress::AllowDomains { .. } => {
+            return Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: format!("generate the Helm chart for sandbox '{}'", sandbox.id),
+                reason: "a Kubernetes NetworkPolicy matches addresses, not hostnames".to_string(),
+            }));
+        }
+        SandboxEgress::Internet | SandboxEgress::Allow => {
             let excepts: String = ALWAYS_DENIED_CIDRS
                 .iter()
                 .map(|cidr| format!("            - {cidr}\n"))

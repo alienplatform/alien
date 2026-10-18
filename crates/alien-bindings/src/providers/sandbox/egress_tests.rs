@@ -14,7 +14,14 @@ use alien_core::{
 
 #[tokio::test]
 async fn every_provider_refuses_requested_policy_without_a_gateway_before_io() {
-    for bound in [SandboxEgress::Internet, SandboxEgress::None] {
+    for bound in [
+        SandboxEgress::Internet,
+        SandboxEgress::None,
+        SandboxEgress::Allow,
+        SandboxEgress::AllowDomains {
+            domains: vec!["example.com".into()],
+        },
+    ] {
         let token = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(token.path(), "test-token").unwrap();
         let value = |s: &str| BindingValue::Value(s.to_string());
@@ -74,7 +81,7 @@ async fn every_provider_refuses_requested_policy_without_a_gateway_before_io() {
                     "box",
                     &LocalSandboxBinding {
                         default_policy: None,
-                        egress: Some(bound.into()),
+                        egress: Some(bound.clone().into()),
                         manager_url: value("http://127.0.0.1:1"),
                         sandbox_key: value("box"),
                         token_path: value(&token.path().display().to_string()),
@@ -104,8 +111,8 @@ async fn every_provider_refuses_requested_policy_without_a_gateway_before_io() {
                     "SANDBOX_EGRESS_INVALID",
                 ),
             ] {
-                let code = if bound == SandboxEgress::None {
-                    "SANDBOX_EGRESS_NONE"
+                let code = if bound != SandboxEgress::Internet {
+                    "SANDBOX_EGRESS_REQUIRES_INTERNET"
                 } else {
                     code
                 };

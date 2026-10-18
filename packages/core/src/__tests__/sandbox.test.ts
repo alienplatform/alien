@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { Sandbox } from "../sandbox.js"
+import { Sandbox, type SandboxEgress } from "../sandbox.js"
 
 const limits = { cpu: "1", memory: "2Gi", disk: "20Gi", maxProcesses: 256 }
 const lifecycle = { maxLifetimeSeconds: 3600 }
@@ -71,4 +71,18 @@ describe("Sandbox", () => {
   it("exposes the resource type for permission targets", () => {
     expect(Sandbox.any()).toBe("sandbox")
   })
+})
+
+it("preserves deprecated declarations and supervisor settings without gateway migration", () => {
+  const policies: SandboxEgress[] = [
+    { mode: "deny" },
+    { mode: "allow" },
+    { mode: "allowDomains", domains: ["api.example.com"] },
+  ]
+  for (const egress of policies) {
+    const resource = complete().egress(egress).privilegedSupervisor({ commandUid: 60000 }).build()
+    expect(resource.config.egress).toEqual(egress)
+    expect(resource.config.privilegedSupervisor).toEqual({ commandUid: 60000 })
+    expect(resource.config.defaultPolicy).toBeUndefined()
+  }
 })
