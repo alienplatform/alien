@@ -822,7 +822,7 @@ impl AwsSandboxController {
         // token can be minted for; neither can be inferred from the image, and a session
         // started without the connectors reaches the public internet.
         let binding = SandboxBinding::Aws(AwsSandboxBinding {
-            egress: self.egress.clone(),
+            egress: self.egress.clone().map(Into::into),
             image_arn: BindingValue::value(image_arn.clone()),
             image_version: BindingValue::value(image_version.clone()),
             region: BindingValue::value(region.clone()),

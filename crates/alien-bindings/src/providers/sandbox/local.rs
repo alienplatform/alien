@@ -108,7 +108,7 @@ impl LocalSandbox {
             })?;
 
         Ok(Self {
-            egress: binding.egress.clone(),
+            egress: binding.egress.as_ref().map(|egress| egress.bound().clone()),
             client: reqwest::Client::new(),
             base_url: base_url.trim_end_matches('/').to_string(),
             token: token.trim().to_string(),

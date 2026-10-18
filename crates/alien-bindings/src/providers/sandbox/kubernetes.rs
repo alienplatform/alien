@@ -78,7 +78,7 @@ impl KubernetesSandbox {
         };
 
         Ok(Self {
-            egress: binding.egress.clone(),
+            egress: binding.egress.as_ref().map(|egress| egress.bound().clone()),
             resource_id: resource_id.to_string(),
             broker_url: value("brokerUrl", binding.broker_url.clone())?
                 .trim_end_matches('/')

@@ -58,7 +58,7 @@ async fn every_provider_refuses_widening_and_unenforceable_narrowing_before_io()
             KubernetesSandbox::new(
                 "box",
                 &KubernetesSandboxBinding {
-                    egress: Some(bound.clone()),
+                    egress: Some(bound.clone().into()),
                     namespace: value("test"),
                     runtime_class: value("gvisor"),
                     selector: value("test=box"),
@@ -74,7 +74,7 @@ async fn every_provider_refuses_widening_and_unenforceable_narrowing_before_io()
             LocalSandbox::new(
                 "box",
                 &LocalSandboxBinding {
-                    egress: Some(bound),
+                    egress: Some(bound.into()),
                     manager_url: value("http://127.0.0.1:1"),
                     sandbox_key: value("box"),
                     token_path: value(&token.path().display().to_string()),

@@ -90,8 +90,8 @@ async fn aws_declares_a_lifetime_and_a_create_carrying_one_reaches_the_backend()
     microvms
         .expect_run_microvm()
         .times(1)
-        .withf(|_, _, _, _, _, _, max_lifetime| *max_lifetime == Some(600))
-        .returning(|_, _, _, _, _, _, _| {
+        .withf(|_, _, _, _, _, _, max_lifetime, _| *max_lifetime == Some(600))
+        .returning(|_, _, _, _, _, _, _, _| {
             Ok(alien_aws_clients::aws::lambda_microvms::Microvm {
                 microvm_id: Some("s1".to_string()),
                 endpoint: None,

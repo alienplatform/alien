@@ -322,6 +322,7 @@ dependencies = [
  "alien-platform-api",
  "async-trait",
  "axum 0.8.9",
+ "axum-server",
  "base64 0.22.1",
  "bon",
  "bytes",
@@ -335,9 +336,12 @@ dependencies = [
  "k8s-openapi",
  "object_store",
  "oci-client",
+ "pkcs8 0.10.2",
+ "rcgen",
  "regex",
  "reqwest 0.12.28",
  "rstest",
+ "rustls 0.23.43",
  "sec",
  "serde",
  "serde_json",
@@ -2600,6 +2604,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "axum-server"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1df331683d982a0b9492b38127151e6453639cd34926eb9c07d4cd8c6d22bfc"
+dependencies = [
+ "arc-swap",
+ "bytes",
+ "either",
+ "fs-err",
+ "http 1.5.0",
+ "http-body 1.1.0",
+ "hyper 1.11.1",
+ "hyper-util",
+ "pin-project-lite",
+ "rustls 0.23.43",
+ "rustls-pki-types",
+ "tokio",
+ "tokio-rustls 0.26.4",
+ "tower-service",
+]
+
+[[package]]
 name = "backon"
 version = "1.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4712,6 +4738,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8878864ba14bb86e818a412bfd6f18f9eabd4ec0f008a28e8f7eb61db532fcf9"
 dependencies = [
  "futures-core",
+]
+
+[[package]]
+name = "fs-err"
+version = "3.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b5c95b673b8f6f7235229ae11c5642d81b04c2e64c1e2fb417bc0cf73ca45f29"
+dependencies = [
+ "autocfg",
+ "tokio",
 ]
 
 [[package]]
