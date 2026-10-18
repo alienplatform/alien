@@ -20,9 +20,9 @@ use tracing::{debug, error, info, warn};
 
 use alien_bindings::BindingsProviderApi;
 use alien_core::{
-    DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus, EnvironmentVariable,
-    EnvironmentVariableType, EnvironmentVariablesSnapshot, Platform, ReleaseInfo, Stack,
-    ENV_ALIEN_DEPLOYMENT_ID, ENV_ALIEN_DEPLOYMENT_NAME,
+    CredentialRetry, DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus,
+    EnvironmentVariable, EnvironmentVariableType, EnvironmentVariablesSnapshot, Platform,
+    ReleaseInfo, Stack, ENV_ALIEN_DEPLOYMENT_ID, ENV_ALIEN_DEPLOYMENT_NAME,
 };
 use alien_deployment::loop_contract::LoopOperation;
 use alien_deployment::runner::{failed_status_for_deployment_error, RunnerPolicy, RunnerResult};
@@ -53,13 +53,9 @@ const MAX_ACQUIRE_BATCHES_PER_TICK: usize = 16;
 /// setup-capable driver (the CLI) can move such a deployment, and it acquires
 /// it directly, so re-acquiring it every tick only rewrites its row.
 const UNPROVISIONABLE_RECHECK_INTERVAL: chrono::Duration = chrono::Duration::minutes(5);
-/// Google documents IAM policy changes as typically propagating within two
-/// minutes, but potentially taking seven minutes or longer. Keep the first
-/// target-side token exchange retryable for a bounded window after setup hands
-/// the deployment to Provisioning.
-const GCP_CREDENTIAL_HANDOFF_GRACE_PERIOD: Duration = Duration::from_secs(10 * 60);
-/// Retry transient credential failures for at most ten minutes since the last
-/// persisted deployment progress. Waiting never checkpoints or moves this deadline.
+/// Bound credential outages, including GCP's initial IAM propagation window.
+/// The first failure records a timestamp in deployment state; acquisition and
+/// later failures never move it, even if a store synthesizes record timestamps.
 const CREDENTIAL_ERROR_GRACE_PERIOD: Duration = Duration::from_secs(10 * 60);
 const CREDENTIAL_RETRY_INTERVAL: chrono::Duration = chrono::Duration::seconds(5);
 const CREDENTIAL_FAILURE_RECHECK_INTERVAL: chrono::Duration = chrono::Duration::minutes(5);
@@ -227,7 +223,7 @@ pub struct DeploymentLoop {
     /// One entry per deployment, replaced when it moves to another release.
     settled_stack_cache: Mutex<HashMap<String, (String, Option<Stack>)>>,
     /// Acquisition backoff shared by deployment and heartbeat ticks. The retry
-    /// deadline itself comes from persisted progress, never from this cache.
+    /// deadline itself comes from persisted retry state, never from this cache.
     deferred: Mutex<HashMap<String, DeferredDeployment>>,
 }
 
@@ -672,7 +668,7 @@ impl DeploymentLoop {
 
     async fn process_deployment_inner(
         &self,
-        deployment: DeploymentRecord,
+        mut deployment: DeploymentRecord,
         execution_claim: Option<crate::traits::deployment_store::ExecutionClaim>,
         session: &str,
         options: ProcessOptions,
@@ -694,6 +690,19 @@ impl DeploymentLoop {
         }
 
         let status = parse_status(&deployment.status);
+        let had_credential_retry = deployment
+            .runtime_metadata
+            .as_ref()
+            .is_some_and(|metadata| metadata.credential_retry.is_some());
+        if let Some(metadata) = deployment.runtime_metadata.as_mut() {
+            if metadata
+                .credential_retry
+                .as_ref()
+                .is_some_and(|retry| retry.status != status)
+            {
+                metadata.credential_retry = None;
+            }
+        }
 
         if options.require_heartbeats_enabled && !stack_settings.heartbeats.is_enabled() {
             debug!(
@@ -713,11 +722,12 @@ impl DeploymentLoop {
                 .runtime_metadata
                 .as_ref()
                 .filter(|metadata| metadata.pending_prepared_stack.is_none())
-                .and_then(|metadata| metadata.pending_prepared_release_id.as_ref())
+                .and_then(|metadata| metadata.pending_prepared_release_id.clone())
         } else {
             None
         };
         let target_release_id = prepared_startup_release
+            .as_ref()
             .or(deployment.desired_release_id.as_ref())
             .or(deployment.current_release_id.as_ref())
             .ok_or_else(|| {
@@ -735,7 +745,7 @@ impl DeploymentLoop {
             target_release_stack(self.release_store.as_ref(), &deployment, target_release_id)
                 .await?;
 
-        let recorded_state = state_from_record(
+        let mut recorded_state = state_from_record(
             &deployment,
             status,
             deployment_stack.as_ref(),
@@ -801,10 +811,36 @@ impl DeploymentLoop {
                 let retry_remaining = credential_error_retry_remaining(&deployment, &e, now);
                 let handoff_retry_remaining =
                     gcp_credential_handoff_retry_remaining(status, &deployment, &e, now);
-                if should_wait_for_credential_handoff(status, &deployment)
+                let waiting_for_driver = should_wait_for_credential_handoff(status, &deployment);
+                if waiting_for_driver
                     || handoff_retry_remaining.is_some()
                     || retry_remaining.is_some()
                 {
+                    let retry = deployment
+                        .runtime_metadata
+                        .as_ref()
+                        .and_then(|metadata| metadata.credential_retry.as_ref());
+                    // One checkpoint starts the window; subsequent failures only release
+                    // the lease. Expected setup-driver waits retain their existing semantics.
+                    if (!waiting_for_driver && retry.is_none())
+                        || (waiting_for_driver && had_credential_retry)
+                    {
+                        recorded_state
+                            .runtime_metadata
+                            .get_or_insert_default()
+                            .credential_retry = (!waiting_for_driver).then_some(CredentialRetry {
+                            started_at: now,
+                            status,
+                        });
+                        recorded_state.error = deployment_record_error(&deployment.error);
+                        self.checkpoint_without_step(
+                            &deployment_id,
+                            session,
+                            recorded_state,
+                            execution_claim.clone(),
+                        )
+                        .await?;
+                    }
                     warn!(
                         deployment_id = %deployment_id,
                         status = ?status,
@@ -819,6 +855,7 @@ impl DeploymentLoop {
                     let failed_status = failed_status_for_deployment_error(status);
                     let unchanged = status == failed_status
                         && !deployment.retry_requested
+                        && !had_credential_retry
                         && deployment_record_error(&deployment.error).as_ref() == Some(&e);
                     if unchanged {
                         warn!(
@@ -859,6 +896,24 @@ impl DeploymentLoop {
                 return Ok(Some(CREDENTIAL_FAILURE_RECHECK_INTERVAL));
             }
         };
+
+        if had_credential_retry {
+            deployment
+                .runtime_metadata
+                .as_mut()
+                .expect("retry metadata exists")
+                .credential_retry = None;
+            recorded_state.runtime_metadata = deployment.runtime_metadata.clone();
+            recorded_state.error = deployment_record_error(&deployment.error);
+            // Persist recovery even when a Running deployment requires no deployment step.
+            self.checkpoint_without_step(
+                &deployment_id,
+                session,
+                recorded_state.clone(),
+                execution_claim.clone(),
+            )
+            .await?;
+        }
 
         if needs_provision_capability(status) && !resolved_credentials.has_provision_capability {
             debug!(
@@ -1453,11 +1508,21 @@ fn credential_error_retry_remaining(
     if !error.retryable || parse_status(&deployment.status).is_failed() {
         return None;
     }
-    // Like the setup handoff window, the stored timestamp survives replica
-    // changes and restarts. Never use lease timestamps: acquisition moves them.
-    let last_progress = deployment.updated_at.unwrap_or(deployment.created_at);
+    credential_retry_remaining(deployment, now)
+}
+
+fn credential_retry_remaining(
+    deployment: &DeploymentRecord,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<Duration> {
+    let started_at = deployment
+        .runtime_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.credential_retry.as_ref())
+        .filter(|retry| retry.status == parse_status(&deployment.status))
+        .map_or(now, |retry| retry.started_at);
     let elapsed = now
-        .signed_duration_since(last_progress)
+        .signed_duration_since(started_at)
         .to_std()
         .unwrap_or(Duration::ZERO);
     CREDENTIAL_ERROR_GRACE_PERIOD
@@ -1482,18 +1547,7 @@ fn gcp_credential_handoff_retry_remaining(
         return None;
     }
 
-    // Provisioning is persisted by the setup-to-runtime transition, so
-    // updated_at is the durable start of this handoff window. created_at keeps
-    // older/imported records bounded if they lack an update timestamp.
-    let handoff_started_at = deployment.updated_at.unwrap_or(deployment.created_at);
-    let elapsed = now
-        .signed_duration_since(handoff_started_at)
-        .to_std()
-        .unwrap_or(Duration::ZERO);
-
-    GCP_CREDENTIAL_HANDOFF_GRACE_PERIOD
-        .checked_sub(elapsed)
-        .filter(|remaining| !remaining.is_zero())
+    credential_retry_remaining(deployment, now)
 }
 
 fn failed_state_for_credential_error(
@@ -1503,12 +1557,16 @@ fn failed_state_for_credential_error(
     target_release_id: &str,
     error: AlienError,
 ) -> DeploymentState {
-    DeploymentState {
+    let mut state = DeploymentState {
         status: failed_status_for_deployment_error(status),
         error: Some(error),
         retry_requested: false,
         ..state_from_record(deployment, status, deployment_stack, target_release_id)
+    };
+    if let Some(metadata) = state.runtime_metadata.as_mut() {
+        metadata.credential_retry = None;
     }
+    state
 }
 
 fn state_from_record(
@@ -1573,7 +1631,7 @@ mod tests {
         has_remote_stack_management_outputs, manager_candidate_statuses,
         needs_provision_capability, parse_status, retryable_failed_statuses,
         should_wait_for_credential_handoff, supplied_release_stacks, worker_commands_push_env_vars,
-        DeploymentLoop, ProcessOptions, RunnerConfigSources, GCP_CREDENTIAL_HANDOFF_GRACE_PERIOD,
+        DeploymentLoop, ProcessOptions, RunnerConfigSources, CREDENTIAL_ERROR_GRACE_PERIOD,
     };
     use alien_core::{
         Container, ContainerCode, Daemon, DaemonCode, DeploymentConfig, DeploymentStatus,
@@ -2519,7 +2577,11 @@ mod tests {
                     .await
                     .unwrap();
                 assert_eq!(acquired.len(), 1);
-                let item = acquired.into_iter().next().unwrap();
+                let mut item = acquired.into_iter().next().unwrap();
+                // Some adapters synthesize record timestamps on every acquisition.
+                // Only the deployment state itself is a durable clock for retries.
+                item.deployment.created_at = Utc::now();
+                item.deployment.updated_at = None;
                 runner
                     .process_deployment(
                         item.deployment,
@@ -2567,9 +2629,24 @@ mod tests {
                 "transient errors must retain the operation"
             );
             assert!(waiting.error.is_none());
+            let retry = waiting
+                .runtime_metadata
+                .as_ref()
+                .unwrap()
+                .credential_retry
+                .as_ref()
+                .unwrap();
+            assert_eq!(retry.status, status);
+            assert!(retry.started_at <= Utc::now());
+            let writes = fixture.writes().await;
+            fixture.process(&fixture.runner()).await;
+            let still_waiting = fixture.record().await;
+            assert_eq!(still_waiting.runtime_metadata, waiting.runtime_metadata);
+            assert_eq!(still_waiting.updated_at, waiting.updated_at);
             assert_eq!(
-                waiting.updated_at, before.updated_at,
-                "waiting must not extend the durable deadline"
+                fixture.writes().await - writes,
+                2,
+                "another replica only acquires and releases"
             );
             assert!(waiting.locked_by.is_none());
             fixture
@@ -2589,7 +2666,12 @@ mod tests {
                 recovered.updated_at, before.updated_at,
                 "resolved credentials must reach the runner checkpoint"
             );
-            assert_eq!(fixture.credentials.visits.load(Ordering::SeqCst), 2);
+            assert!(recovered
+                .runtime_metadata
+                .unwrap()
+                .credential_retry
+                .is_none());
+            assert_eq!(fixture.credentials.visits.load(Ordering::SeqCst), 3);
         }
 
         #[tokio::test]
@@ -2640,16 +2722,53 @@ mod tests {
             let fixture = Fixture::new(DeploymentStatus::UpdatePending, error.clone()).await;
             fixture.process(&fixture.runner()).await;
             assert_eq!(fixture.record().await.status, "update-pending");
-            let old = (Utc::now() - chrono::Duration::minutes(11)).to_rfc3339();
+            let mut metadata = fixture.record().await.runtime_metadata.unwrap();
+            metadata.credential_retry.as_mut().unwrap().started_at =
+                Utc::now() - chrono::Duration::minutes(11);
+            let serialized = serde_json::to_string(&metadata)
+                .unwrap()
+                .replace('\'', "''");
             fixture
                 .db
-                .execute(&format!("UPDATE deployments SET updated_at = '{old}'"))
+                .execute(&format!(
+                    "UPDATE deployments SET runtime_metadata = '{serialized}'"
+                ))
                 .await
                 .unwrap();
             fixture.process(&fixture.runner()).await;
             let record = fixture.record().await;
             assert_eq!(record.status, "update-failed");
+            assert!(record.runtime_metadata.unwrap().credential_retry.is_none());
             assert_eq!(record.error.unwrap(), serde_json::to_value(error).unwrap());
+        }
+
+        #[test]
+        fn legacy_runtime_metadata_has_no_credential_retry_window() {
+            let legacy: alien_core::RuntimeMetadata = serde_json::from_str("{}").unwrap();
+            assert!(legacy.credential_retry.is_none());
+            assert!(serde_json::to_value(&legacy)
+                .unwrap()
+                .get("credentialRetry")
+                .is_none());
+        }
+
+        #[tokio::test]
+        async fn changed_status_starts_a_new_credential_retry_window() {
+            let fixture = Fixture::new(DeploymentStatus::UpdatePending, transient_error()).await;
+            fixture.process(&fixture.runner()).await;
+            let mut metadata = fixture.record().await.runtime_metadata.unwrap();
+            let old = Utc::now() - chrono::Duration::minutes(11);
+            metadata.credential_retry.as_mut().unwrap().started_at = old;
+            let serialized = serde_json::to_string(&metadata)
+                .unwrap()
+                .replace('\'', "''");
+            fixture.db.execute(&format!("UPDATE deployments SET status = 'delete-pending', runtime_metadata = '{serialized}'")).await.unwrap();
+            fixture.process(&fixture.runner()).await;
+            let record = fixture.record().await;
+            assert_eq!(record.status, "delete-pending");
+            let retry = record.runtime_metadata.unwrap().credential_retry.unwrap();
+            assert_eq!(retry.status, DeploymentStatus::DeletePending);
+            assert!(retry.started_at > old);
         }
 
         #[tokio::test]
@@ -2713,18 +2832,18 @@ mod tests {
         async fn transient_credentials_are_attempted_once_per_tick_and_keep_deadline() {
             let fixture = Fixture::new(DeploymentStatus::UpdatePending, transient_error()).await;
             let runner = fixture.runner();
-            let before = fixture.record().await;
             runner.tick().await;
+            let waiting = fixture.record().await;
             assert_eq!(fixture.credentials.visits.load(Ordering::SeqCst), 1);
             let writes = fixture.writes().await;
             runner.tick().await;
             assert_eq!(fixture.credentials.visits.load(Ordering::SeqCst), 1);
             assert_eq!(fixture.writes().await, writes);
-            assert_eq!(fixture.record().await.updated_at, before.updated_at);
+            assert_eq!(fixture.record().await.updated_at, waiting.updated_at);
             // Another replica may retry, but must use the original persisted deadline.
             fixture.runner().tick().await;
             assert_eq!(fixture.credentials.visits.load(Ordering::SeqCst), 2);
-            assert_eq!(fixture.record().await.updated_at, before.updated_at);
+            assert_eq!(fixture.record().await.updated_at, waiting.updated_at);
         }
 
         #[tokio::test]
@@ -2820,7 +2939,13 @@ mod tests {
             Some(stack_state_with_remote_management_outputs(true)),
         );
         deployment.platform = Platform::Gcp;
-        deployment.updated_at = Some(now - chrono::Duration::minutes(2));
+        deployment.runtime_metadata = Some(alien_core::RuntimeMetadata {
+            credential_retry: Some(alien_core::CredentialRetry {
+                started_at: now - chrono::Duration::minutes(2),
+                status: DeploymentStatus::Provisioning,
+            }),
+            ..Default::default()
+        });
         let error = AlienError::new(ErrorData::RemoteCredentialHandoffFailed {
             deployment_id: deployment.id.clone(),
             platform: Platform::Gcp,
@@ -2837,7 +2962,7 @@ mod tests {
 
         assert_eq!(
             remaining,
-            GCP_CREDENTIAL_HANDOFF_GRACE_PERIOD - Duration::from_secs(2 * 60)
+            CREDENTIAL_ERROR_GRACE_PERIOD - Duration::from_secs(2 * 60)
         );
     }
 
@@ -2849,10 +2974,14 @@ mod tests {
             Some(stack_state_with_remote_management_outputs(true)),
         );
         deployment.platform = Platform::Gcp;
-        deployment.updated_at = Some(
-            now - chrono::Duration::from_std(GCP_CREDENTIAL_HANDOFF_GRACE_PERIOD)
-                .expect("grace period should fit chrono duration"),
-        );
+        deployment.runtime_metadata = Some(alien_core::RuntimeMetadata {
+            credential_retry: Some(alien_core::CredentialRetry {
+                started_at: now
+                    - chrono::Duration::from_std(CREDENTIAL_ERROR_GRACE_PERIOD).unwrap(),
+                status: DeploymentStatus::Provisioning,
+            }),
+            ..Default::default()
+        });
         let error = AlienError::new(ErrorData::RemoteCredentialHandoffFailed {
             deployment_id: deployment.id.clone(),
             platform: Platform::Gcp,
