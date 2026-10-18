@@ -28,6 +28,7 @@ use alien_preflights::runner::PreflightRunner;
 use command_output::image_build_error_with_output;
 use dockdash::{Image as DockDashImage, Layer as DockDashLayer, PullPolicy};
 use error::{DockdashResultExt, ErrorData, Result};
+use fs2::FileExt;
 use oci_client::client::{Client as OciClient, ClientConfig as OciClientConfig};
 use oci_client::manifest::{
     ImageIndexEntry, OciImageIndex, Platform as OciPlatform, IMAGE_MANIFEST_MEDIA_TYPE,
@@ -41,11 +42,10 @@ use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::error::Error as StdError;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, LazyLock, Weak};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::fs;
 use tokio::process::Command;
-use tokio::sync::Mutex;
 use tokio::time::sleep;
 
 use tracing::{info, warn};
@@ -53,9 +53,6 @@ use tracing::{info, warn};
 const BASE_IMAGE_BUILD_MAX_ATTEMPTS: usize = 3;
 const IMAGE_PUSH_MAX_ATTEMPTS: usize = 3;
 const ARTIFACT_CACHE_METADATA_FILE: &str = ".alien-build-cache.json";
-
-static IMAGE_EXPORT_LOCKS: LazyLock<Mutex<HashMap<String, Weak<Mutex<()>>>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct ArtifactCacheMetadata {
@@ -3888,6 +3885,37 @@ fn is_retryable_oci_error(error: &oci_client::errors::OciDistributionError) -> b
     }
 }
 
+/// A tag can switch architectures between pull and save in another process. File ownership
+/// releases the lock on errors, cancellation or process exit; keep the file so waiters share it.
+async fn lock_image_export(image_key: &str, resource_name: &str) -> Result<std::fs::File> {
+    let error = || ErrorData::ImageBuildFailed {
+        resource_name: resource_name.to_string(),
+        reason: "Failed to acquire the Docker image export lock".to_string(),
+        build_output: None,
+    };
+    let cache = dirs::cache_dir().ok_or_else(|| AlienError::new(error()))?;
+    let lock_path = cache
+        .join("alien")
+        .join("image-export-locks")
+        .join(format!("{:x}.lock", Sha256::digest(image_key.as_bytes())));
+    tokio::task::spawn_blocking(move || {
+        std::fs::create_dir_all(lock_path.parent().expect("lock has a parent"))?;
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(lock_path)?;
+        FileExt::lock_exclusive(&file)?;
+        Ok::<_, std::io::Error>(file)
+    })
+    .await
+    .into_alien_error()
+    .context(error())?
+    .into_alien_error()
+    .context(error())
+}
+
 /// Resolve a registry image and export an OCI archive for each target architecture.
 #[alien_event(AlienEvent::BuildingResource {
     resource_name: container_name.to_string(),
@@ -3925,9 +3953,8 @@ async fn pull_and_export_image(
             reason: "Failed to create container directory for export".to_string(),
         })?;
 
-    // Classic Docker stores one architecture under a tag. Keep pulls and saves
-    // for the same repository together, including short/fully qualified aliases.
-    // Unrelated repositories can still export concurrently.
+    // Docker tags are shared across processes, including separate build/test runners.
+    // Keep every pull/save pair under the same advisory lock for short/full-name aliases.
     let image_reference = Reference::try_from(image).into_alien_error().context(
         ErrorData::InvalidResourceConfig {
             resource_id: container_name.to_string(),
@@ -3939,21 +3966,9 @@ async fn pull_and_export_image(
         image_reference.registry(),
         image_reference.repository()
     );
-    let image_lock = {
-        let mut locks = IMAGE_EXPORT_LOCKS.lock().await;
-        locks.retain(|_, lock| lock.strong_count() > 0);
-        match locks.get(&image_key).and_then(Weak::upgrade) {
-            Some(lock) => lock,
-            None => {
-                let lock = Arc::new(Mutex::new(()));
-                locks.insert(image_key, Arc::downgrade(&lock));
-                lock
-            }
-        }
-    };
 
     for target in targets {
-        let image_guard = image_lock.lock().await;
+        let image_guard = lock_image_export(&image_key, container_name).await?;
         let arch_str = match target.to_dockdash_arch() {
             dockdash::Arch::Amd64 => "amd64",
             dockdash::Arch::ARM64 => "arm64",
