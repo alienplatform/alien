@@ -15,6 +15,7 @@ mod sandbox_publish_tests;
 pub mod settings;
 mod source_input;
 pub mod toolchain;
+pub mod worker_image;
 
 pub use source_input::docker_source_input_hash;
 
