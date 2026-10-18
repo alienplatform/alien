@@ -42,7 +42,6 @@ pub(crate) fn resources(ctx: &EmitContext<'_>) -> Result<Vec<CfResource>> {
                             (
                                 "Action",
                                 CfExpression::list([
-                                    CfExpression::from("ec2:DescribeVpcs"),
                                     CfExpression::from("ec2:DescribeSubnets"),
                                     CfExpression::from("ec2:DescribeRouteTables"),
                                 ]),
@@ -70,10 +69,7 @@ pub(crate) fn resources(ctx: &EmitContext<'_>) -> Result<Vec<CfResource>> {
         .insert("Role".into(), CfExpression::get_att(role_id, "Arn"));
     function.properties.insert(
         "Code".into(),
-        CfExpression::object([(
-            "ZipFile",
-            CfExpression::from(VALIDATOR_CODE),
-        )]),
+        CfExpression::object([("ZipFile", CfExpression::from(VALIDATOR_CODE))]),
     );
     function.properties.insert("Tags".into(), tags(ctx));
     let mut validation = CfResource::new(

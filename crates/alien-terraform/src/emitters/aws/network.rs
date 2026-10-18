@@ -74,9 +74,6 @@ impl TfEmitter for AwsNetworkEmitter {
         }?;
         if has_sandboxes(ctx) {
             fragment.extend(network_validation(ctx, label)?);
-            if needs_gateway(ctx) {
-                fragment.extend(gateway_topology(ctx, label)?);
-            }
         }
         Ok(fragment)
     }
@@ -614,165 +611,6 @@ fn create_topology(
     fragment
 }
 
-fn gateway_topology(ctx: &EmitContext<'_>, label: &str) -> Result<TfFragment> {
-    let mut fragment = TfFragment::default();
-    let nlb_group = format!("{label}_sandbox_gateway_nlb");
-    fragment.resource_blocks.push(resource_block(
-        "aws_security_group",
-        &nlb_group,
-        [
-            attr("vpc_id", vpc_id_expr(ctx)),
-            attr(
-                "description",
-                Expression::from("Sandbox proxy and workload admin ingress"),
-            ),
-            nested_block(
-                "ingress",
-                vec![
-                    attr("protocol", Expression::from("tcp")),
-                    attr("from_port", Expression::from(3128)),
-                    attr("to_port", Expression::from(3128)),
-                    attr(
-                        "cidr_blocks",
-                        expr::raw(format!("data.aws_subnet.{label}_sandbox[*].cidr_block")),
-                    ),
-                ],
-            ),
-            nested_block(
-                "ingress",
-                vec![
-                    attr("protocol", Expression::from("tcp")),
-                    attr("from_port", Expression::from(3129)),
-                    attr("to_port", Expression::from(3129)),
-                    attr(
-                        "cidr_blocks",
-                        expr::raw(format!("data.aws_subnet.{label}_private[*].cidr_block")),
-                    ),
-                ],
-            ),
-            nested_block(
-                "egress",
-                vec![
-                    attr("protocol", Expression::from("tcp")),
-                    attr("from_port", Expression::from(3128)),
-                    attr("to_port", Expression::from(3129)),
-                    attr(
-                        "cidr_blocks",
-                        expr::raw(format!(
-                            "data.aws_subnet.{label}_sandbox_gateway[*].cidr_block"
-                        )),
-                    ),
-                ],
-            ),
-            attr("tags", tags(ctx, "network")),
-        ],
-    ));
-    for (index, rules) in alien_core::sandbox_egress::gateway_task_egress(ctx.stack)?
-        .chunks(60)
-        .enumerate()
-    {
-        let mut attributes = vec![
-            attr("vpc_id", vpc_id_expr(ctx)),
-            attr(
-                "description",
-                Expression::from("Gateway public-only TCP destinations"),
-            ),
-            attr("tags", tags(ctx, "network")),
-        ];
-        if index == 0 {
-            attributes.push(nested_block(
-                "ingress",
-                vec![
-                    attr("protocol", Expression::from("tcp")),
-                    attr("from_port", Expression::from(3128)),
-                    attr("to_port", Expression::from(3129)),
-                    attr(
-                        "security_groups",
-                        expr::raw(format!("[aws_security_group.{nlb_group}.id]")),
-                    ),
-                ],
-            ));
-        }
-        attributes.extend(rules.iter().map(|(cidr, port)| {
-            nested_block(
-                "egress",
-                vec![
-                    attr("protocol", Expression::from("tcp")),
-                    attr("from_port", Expression::from(*port)),
-                    attr("to_port", Expression::from(*port)),
-                    attr(
-                        "cidr_blocks",
-                        Expression::from(vec![Expression::from(cidr.as_str())]),
-                    ),
-                ],
-            )
-        }));
-        fragment.resource_blocks.push(resource_block(
-            "aws_security_group",
-            &format!("{label}_sandbox_gateway_task_{index}"),
-            attributes,
-        ));
-    }
-    let gateway_label = format!("{label}_sandbox_gateway");
-    fragment.resource_blocks.push(resource_block(
-        "aws_lb",
-        &gateway_label,
-        [
-            attr("internal", Expression::Bool(true)),
-            attr(
-                "security_groups",
-                expr::raw(format!("[aws_security_group.{nlb_group}.id]")),
-            ),
-            attr("load_balancer_type", Expression::from("network")),
-            attr("ip_address_type", Expression::from("ipv4")),
-            attr("subnets", gateway_subnet_ids(ctx)?),
-            attr("enable_cross_zone_load_balancing", Expression::Bool(true)),
-            attr("tags", tags(ctx, "network")),
-        ],
-    ));
-    for (kind, port) in [("proxy", 3128), ("admin", 3129)] {
-        let target_label = format!("{gateway_label}_{kind}");
-        fragment.resource_blocks.push(resource_block(
-            "aws_lb_target_group",
-            &target_label,
-            [
-                attr("vpc_id", vpc_id_expr(ctx)),
-                attr("target_type", Expression::from("ip")),
-                attr("protocol", Expression::from("TCP")),
-                attr("port", Expression::from(port)),
-                nested_block(
-                    "health_check",
-                    vec![attr("protocol", Expression::from("TCP"))],
-                ),
-                attr("tags", tags(ctx, "network")),
-            ],
-        ));
-        fragment.resource_blocks.push(resource_block(
-            "aws_lb_listener",
-            &target_label,
-            [
-                attr(
-                    "load_balancer_arn",
-                    expr::raw(format!("aws_lb.{gateway_label}.arn")),
-                ),
-                attr("protocol", Expression::from("TCP")),
-                attr("port", Expression::from(port)),
-                nested_block(
-                    "default_action",
-                    vec![
-                        attr("type", Expression::from("forward")),
-                        attr(
-                            "target_group_arn",
-                            expr::raw(format!("aws_lb_target_group.{target_label}.arn")),
-                        ),
-                    ],
-                ),
-            ],
-        ));
-    }
-    Ok(fragment)
-}
-
 pub(crate) fn gateway_subnet_ids(ctx: &EmitContext<'_>) -> Result<Expression> {
     let network =
         alien_core::sandbox_egress::sandbox_egress_network(ctx.stack).map_err(|error| {
@@ -833,15 +671,6 @@ pub(crate) fn sandbox_subnet_ids(ctx: &EmitContext<'_>) -> Result<Expression> {
 
 fn network_validation(ctx: &EmitContext<'_>, label: &str) -> Result<TfFragment> {
     let mut fragment = TfFragment::default();
-    if needs_gateway(ctx) {
-        fragment.data_blocks.push(crate::block::data_block("aws_vpc",&format!("{label}_sandbox_vpc"),[
-            attr("id",vpc_id_expr(ctx)),
-            nested_block("lifecycle",vec![nested_block("postcondition",vec![
-                attr("condition",expr::raw("alltrue([for association in self.cidr_block_associations : (startswith(association.cidr_block, \"10.\") && tonumber(split(\"/\", association.cidr_block)[1]) >= 8) || (split(\".\", association.cidr_block)[0] == \"172\" && tonumber(split(\".\", association.cidr_block)[1]) >= 16 && tonumber(split(\".\", association.cidr_block)[1]) <= 31 && tonumber(split(\"/\", association.cidr_block)[1]) >= 12) || (startswith(association.cidr_block, \"192.168.\") && tonumber(split(\"/\", association.cidr_block)[1]) >= 16)])")),
-                attr("error_message",Expression::from("Sandbox gateways require VPC IPv4 CIDRs within RFC1918 private ranges.")),
-            ])]),
-        ]));
-    }
     let main = format!("{label}_sandbox_main");
     fragment.data_blocks.push(crate::block::data_block(
         "aws_route_table",

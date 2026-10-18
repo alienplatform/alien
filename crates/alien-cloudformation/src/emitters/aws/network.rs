@@ -13,8 +13,7 @@ use crate::{
     emitters::aws::helpers::{
         availability_zone_names, az_condition, existing_security_group_id, get_azs,
         list_parameter_value, required_logical_id, resource_config, select, subnet_refs, tags,
-        vpc_id_expr, CONDITION_HAS_VPC_CIDR, PARAM_PRIVATE_SUBNET_IDS, PARAM_PUBLIC_SUBNET_IDS,
-        PARAM_VPC_CIDR,
+        CONDITION_HAS_VPC_CIDR, PARAM_PRIVATE_SUBNET_IDS, PARAM_PUBLIC_SUBNET_IDS, PARAM_VPC_CIDR,
     },
     template::{CfExpression, CfResource},
 };
@@ -42,9 +41,6 @@ impl CfEmitter for AwsNetworkEmitter {
         }?;
         if has_sandboxes(ctx) {
             resources.extend(super::sandbox_network_validation::resources(ctx)?);
-            if needs_gateway(ctx) {
-                resources.extend(gateway_resources(ctx)?);
-            }
         }
         Ok(resources)
     }
@@ -471,147 +467,6 @@ fn cidr_blocks(vpc_id: &str, count: i64) -> CfExpression {
             CfExpression::Integer(8),
         ]),
     )])
-}
-
-/// Setup-owned load balancer; the controller registers the gateway tasks behind it.
-fn gateway_resources(ctx: &EmitContext<'_>) -> Result<Vec<CfResource>> {
-    let prefix = required_logical_id(ctx)?;
-    let mut resources = Vec::new();
-    let nlb_group_id = format!("{prefix}SandboxGatewayLoadBalancerSecurityGroup");
-    let mut nlb_group = CfResource::new(nlb_group_id.clone(), "AWS::EC2::SecurityGroup".into());
-    nlb_group.properties.insert(
-        "GroupDescription".into(),
-        CfExpression::from("Sandbox proxy and workload admin ingress"),
-    );
-    nlb_group
-        .properties
-        .insert("VpcId".into(), vpc_id_expr(ctx));
-    nlb_group.properties.insert(
-        "SecurityGroupIngress".into(),
-        CfExpression::get_att(format!("{prefix}SandboxNetworkValidation"), "NlbIngress"),
-    );
-    nlb_group.properties.insert(
-        "SecurityGroupEgress".into(),
-        CfExpression::get_att(format!("{prefix}SandboxNetworkValidation"), "NlbEgress"),
-    );
-    nlb_group.properties.insert("Tags".into(), tags(ctx));
-    resources.push(nlb_group);
-    for (index, rules) in alien_core::sandbox_egress::gateway_task_egress(ctx.stack)?
-        .chunks(60)
-        .enumerate()
-    {
-        let mut group = CfResource::new(
-            format!("{prefix}SandboxGatewayTaskSecurityGroup{index}"),
-            "AWS::EC2::SecurityGroup".into(),
-        );
-        group.properties.insert(
-            "GroupDescription".into(),
-            CfExpression::from("Gateway public-only TCP destinations"),
-        );
-        group.properties.insert("VpcId".into(), vpc_id_expr(ctx));
-        if index == 0 {
-            group.properties.insert(
-                "SecurityGroupIngress".into(),
-                CfExpression::list([CfExpression::object([
-                    ("IpProtocol", CfExpression::from("tcp")),
-                    ("FromPort", CfExpression::Integer(3128)),
-                    ("ToPort", CfExpression::Integer(3129)),
-                    (
-                        "SourceSecurityGroupId",
-                        CfExpression::get_att(&nlb_group_id, "GroupId"),
-                    ),
-                ])]),
-            );
-        }
-        group.properties.insert(
-            "SecurityGroupEgress".into(),
-            CfExpression::list(rules.iter().map(|(cidr, port)| {
-                CfExpression::object([
-                    ("IpProtocol", CfExpression::from("tcp")),
-                    ("FromPort", CfExpression::Integer(i64::from(*port))),
-                    ("ToPort", CfExpression::Integer(i64::from(*port))),
-                    ("CidrIp", CfExpression::from(cidr.as_str())),
-                ])
-            })),
-        );
-        group.properties.insert("Tags".into(), tags(ctx));
-        resources.push(group);
-    }
-    let nlb_id = format!("{prefix}SandboxGatewayLoadBalancer");
-    let mut nlb = CfResource::new(
-        nlb_id.clone(),
-        "AWS::ElasticLoadBalancingV2::LoadBalancer".to_string(),
-    );
-    nlb.properties
-        .insert("Type".to_string(), CfExpression::from("network"));
-    nlb.properties.insert(
-        "SecurityGroups".into(),
-        CfExpression::list([CfExpression::get_att(&nlb_group_id, "GroupId")]),
-    );
-    nlb.properties
-        .insert("Scheme".to_string(), CfExpression::from("internal"));
-    nlb.properties
-        .insert("IpAddressType".to_string(), CfExpression::from("ipv4"));
-    nlb.properties
-        .insert("Subnets".to_string(), gateway_subnet_ids(ctx)?);
-    nlb.properties.insert(
-        "LoadBalancerAttributes".to_string(),
-        CfExpression::list([CfExpression::object([
-            (
-                "Key",
-                CfExpression::from("load_balancing.cross_zone.enabled"),
-            ),
-            ("Value", CfExpression::from("true")),
-        ])]),
-    );
-    nlb.properties.insert("Tags".to_string(), tags(ctx));
-    resources.push(nlb);
-    for (kind, port) in [("Proxy", 3128), ("Admin", 3129)] {
-        let target_id = format!("{prefix}SandboxGateway{kind}Targets");
-        let mut target = CfResource::new(
-            target_id.clone(),
-            "AWS::ElasticLoadBalancingV2::TargetGroup".to_string(),
-        );
-        target
-            .properties
-            .insert("VpcId".to_string(), vpc_id_expr(ctx));
-        target
-            .properties
-            .insert("TargetType".to_string(), CfExpression::from("ip"));
-        target
-            .properties
-            .insert("Protocol".to_string(), CfExpression::from("TCP"));
-        target
-            .properties
-            .insert("Port".to_string(), CfExpression::Integer(port));
-        target
-            .properties
-            .insert("HealthCheckProtocol".to_string(), CfExpression::from("TCP"));
-        target.properties.insert("Tags".to_string(), tags(ctx));
-        resources.push(target);
-        let mut listener = CfResource::new(
-            format!("{prefix}SandboxGateway{kind}Listener"),
-            "AWS::ElasticLoadBalancingV2::Listener".to_string(),
-        );
-        listener
-            .properties
-            .insert("LoadBalancerArn".to_string(), CfExpression::ref_(&nlb_id));
-        listener
-            .properties
-            .insert("Protocol".to_string(), CfExpression::from("TCP"));
-        listener
-            .properties
-            .insert("Port".to_string(), CfExpression::Integer(port));
-        listener.properties.insert(
-            "DefaultActions".to_string(),
-            CfExpression::list([CfExpression::object([
-                ("Type", CfExpression::from("forward")),
-                ("TargetGroupArn", CfExpression::ref_(&target_id)),
-            ])]),
-        );
-        resources.push(listener);
-    }
-    Ok(resources)
 }
 
 pub(crate) fn gateway_subnet_ids(ctx: &EmitContext<'_>) -> Result<CfExpression> {

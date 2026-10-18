@@ -5,16 +5,11 @@
 //! The CloudFormation and Terraform emitters write the same objects as template expressions; the
 //! generator parity tests fail if the resolved forms here ever disagree with them.
 
-use alien_error::AlienError;
-use ipnet::Ipv4Net;
-use std::{collections::BTreeSet, fmt};
+use std::fmt;
 
 use serde_json::{json, Value};
 
-use crate::{
-    setup_resource_tags, ErrorData, Network, NetworkSettings, ResourceEntry, Sandbox,
-    SandboxEgress, Stack,
-};
+use crate::{setup_resource_tags, Network, NetworkSettings, ResourceEntry, Sandbox, Stack};
 
 /// The name of the operator role's inline policy.
 pub const SANDBOX_EGRESS_POLICY_NAME: &str = "sandbox-egress-connector";
@@ -181,69 +176,6 @@ pub fn sandbox_egress_network(
         }
     };
     Ok(SandboxEgressNetwork { id, entry, vpc })
-}
-
-/// TCP destination rules for gateway tasks. Splitting the public address space keeps
-/// private destinations unreachable even if the gateway process is compromised.
-pub fn gateway_task_egress(stack: &Stack) -> crate::Result<Vec<(String, u16)>> {
-    let mut ports = BTreeSet::from([443u16]);
-    for (_, entry) in stack.resources() {
-        let Some(sandbox) = entry.config.downcast_ref::<Sandbox>() else {
-            continue;
-        };
-        sandbox.egress.validate()?;
-        match &sandbox.egress {
-            SandboxEgress::None => {}
-            SandboxEgress::Internet => {
-                ports.insert(80);
-            }
-            SandboxEgress::Allow { allow } => {
-                for target in allow {
-                    if let Some((_, port)) = target.rsplit_once(':') {
-                        ports.insert(port.parse().expect("validated target port"));
-                    }
-                }
-            }
-        }
-    }
-    let denied: Vec<Ipv4Net> = [
-        "0.0.0.0/8",
-        "10.0.0.0/8",
-        "100.64.0.0/10",
-        "127.0.0.0/8",
-        "169.254.0.0/16",
-        "172.16.0.0/12",
-        "192.168.0.0/16",
-        "224.0.0.0/3",
-    ]
-    .into_iter()
-    .map(|cidr| cidr.parse().expect("constant CIDR"))
-    .collect();
-    let mut pending = vec!["0.0.0.0/0".parse::<Ipv4Net>().expect("constant CIDR")];
-    let mut public = Vec::new();
-    while let Some(network) = pending.pop() {
-        if denied.iter().any(|blocked| blocked.contains(&network)) {
-            continue;
-        }
-        if denied.iter().any(|blocked| network.contains(blocked)) {
-            pending.extend(
-                network
-                    .subnets(network.prefix_len() + 1)
-                    .expect("overlapping network can be split"),
-            );
-        } else {
-            public.push(network.to_string());
-        }
-    }
-    public.sort();
-    let rules: Vec<_> = ports
-        .into_iter()
-        .flat_map(|port| public.iter().map(move |cidr| (cidr.clone(), port)))
-        .collect();
-    if rules.len() > 300 {
-        return Err(AlienError::new(ErrorData::OperationNotSupported { operation: "AWS sandbox gateway networking".into(), reason: "Gateway destinations exceed the 300 outbound rules supported by five Fargate security groups; reduce the number of distinct outbound ports.".into() }));
-    }
-    Ok(rules)
 }
 
 #[cfg(test)]

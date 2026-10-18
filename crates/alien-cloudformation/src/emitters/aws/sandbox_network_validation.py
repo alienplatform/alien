@@ -1,7 +1,6 @@
 """Read the effective subnet routes before allowing sandbox setup to continue."""
 
 import json
-import ipaddress
 import urllib.request
 
 import boto3
@@ -17,11 +16,6 @@ def validate(ec2, properties):
         raise ValueError("Sandbox connector subnets must be dedicated and nonempty")
     if set(gateway_ids) & set(workload_ids):
         raise ValueError("Gateway subnets must be dedicated")
-    if gateway_ids:
-        vpc_data = ec2.describe_vpcs(VpcIds=[vpc])["Vpcs"][0]
-        private = [ipaddress.ip_network(cidr) for cidr in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")]
-        if any(not any(ipaddress.ip_network(c["CidrBlock"]).subnet_of(p) for p in private) for c in vpc_data["CidrBlockAssociationSet"]):
-            raise ValueError("Sandbox gateways require a VPC whose IPv4 CIDRs are within RFC1918 private ranges")
     ids = sorted(set(sandbox_ids + gateway_ids + workload_ids))
     subnets = {
         subnet["SubnetId"]: subnet
@@ -72,8 +66,6 @@ def validate(ec2, properties):
         raise ValueError("Provide two or three dedicated gateway subnets")
     data = {}
     data["ConnectorEgress"] = [{"IpProtocol": "tcp", "FromPort": 3128, "ToPort": 3128, "CidrIp": subnets[s]["CidrBlock"]} for s in gateway_ids]
-    data["NlbIngress"] = [{"IpProtocol": "tcp", "FromPort": port, "ToPort": port, "CidrIp": subnets[s]["CidrBlock"]} for port, selected in ((3128, sandbox_ids), (3129, workload_ids)) for s in selected]
-    data["NlbEgress"] = [{"IpProtocol": "tcp", "FromPort": 3128, "ToPort": 3129, "CidrIp": subnets[s]["CidrBlock"]} for s in gateway_ids]
     return data
 
 
