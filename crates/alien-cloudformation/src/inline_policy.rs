@@ -603,10 +603,14 @@ mod tests {
             let result = consolidate_role_inline_policies(&mut template);
             if existing == 19 {
                 result.expect("the twentieth attachment fits the default quota");
-                assert_eq!(super::managed_policy_attachment_counts(&template)["ExecutionRole"], 20);
+                assert_eq!(
+                    super::managed_policy_attachment_counts(&template)["ExecutionRole"],
+                    20
+                );
                 validate_role_policy_limits(&template).unwrap();
             } else {
-                let error = result.expect_err("the twenty-first attachment requires a quota increase");
+                let error =
+                    result.expect_err("the twenty-first attachment requires a quota increase");
                 assert!(error.to_string().contains("requires 21 managed policies"));
             }
         }
