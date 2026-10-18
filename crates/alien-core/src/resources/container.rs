@@ -329,6 +329,17 @@ pub struct ContainerPort {
     pub port: u16,
 }
 
+/// Outbound network restriction enforced outside the container.
+/// Absence preserves the runtime's existing full-network behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum ContainerEgress {
+    /// Public addresses and DNS only, plus the platform credential proxy for this identity.
+    /// Requires the restricted security profile and backend enforcement.
+    Internet,
+}
+
 /// Container resource for running long-running container workloads.
 ///
 /// A Container defines a deployable unit that runs on a ComputeCluster.
@@ -381,7 +392,7 @@ pub struct Container {
     #[builder(field)]
     pub links: Vec<ResourceRef>,
 
-    /// Internal container ports (at least one required).
+    /// Ports reachable by compute-cluster members and resources that link to this container.
     #[builder(field)]
     pub ports: Vec<ContainerPort>,
 
@@ -394,6 +405,10 @@ pub struct Container {
     #[builder(field)]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub public_endpoints: Vec<PublicEndpoint>,
+
+    /// Optional public-internet-only egress. Requires restricted security and backend support.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub egress: Option<ContainerEgress>,
 
     /// Makes one HTTP port reachable from the control plane through the
     /// manager's tunnel, over the operator's outbound connection. Nothing is
@@ -511,6 +526,27 @@ impl Container {
     /// Returns true if this container is stateless (not stateful).
     pub fn is_stateless(&self) -> bool {
         !self.stateful
+    }
+
+    /// Validate resource-local network options; preflight also checks source existence and backend support.
+    pub fn validate_network_settings(&self) -> Result<()> {
+        let invalid = |reason: String| {
+            AlienError::new(ErrorData::InvalidResourceUpdate {
+                resource_id: self.id.clone(),
+                reason,
+            })
+        };
+        if self.egress.is_some()
+            && !self
+                .security
+                .as_ref()
+                .is_some_and(|security| security.profile == ContainerSecurityProfile::Restricted)
+        {
+            return Err(invalid(
+                "container egress internet requires security.profile restricted".into(),
+            ));
+        }
+        Ok(())
     }
 
     /// Validates the public endpoint configuration.
@@ -672,6 +708,9 @@ pub struct ContainerOutputs {
     /// Public endpoints resolved for this container.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub public_endpoints: HashMap<String, PublicEndpointOutput>,
+    /// Internal URLs keyed by port for cluster members and linking resources.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub internal_urls: HashMap<u16, String>,
     /// Status of each replica
     pub replicas: Vec<ReplicaStatus>,
     /// Persistent volumes, one per replica ordinal, with their latest snapshot.
@@ -820,6 +859,7 @@ impl ResourceDefinition for Container {
 
         // Validate the new config's public endpoints.
         new_container.validate_public_endpoints()?;
+        new_container.validate_network_settings()?;
 
         if self.id != new_container.id {
             return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
@@ -910,6 +950,52 @@ impl ResourceDefinition for Container {
 mod tests {
     use super::*;
     use crate::resources::ExposeProtocol;
+
+    fn network_container() -> Container {
+        Container::new("api".to_string())
+            .code(ContainerCode::Image {
+                image: "example:latest".into(),
+            })
+            .cpu(ResourceSpec {
+                min: "1".into(),
+                desired: "1".into(),
+            })
+            .memory(ResourceSpec {
+                min: "512Mi".into(),
+                desired: "512Mi".into(),
+            })
+            .permissions("execution".into())
+            .public_endpoint(PublicEndpoint {
+                name: "web".into(),
+                port: 8080,
+                protocol: ExposeProtocol::Http,
+                host_label: None,
+                wildcard_subdomains: false,
+            })
+            .build()
+    }
+
+    #[test]
+    fn internet_egress_requires_restricted_security_and_is_opt_in() {
+        let mut container = network_container();
+        assert!(serde_json::to_value(&container)
+            .unwrap()
+            .get("egress")
+            .is_none());
+        container.egress = Some(ContainerEgress::Internet);
+        assert!(container.validate_update(&container).is_err());
+        container.security = Some(ContainerSecurity {
+            profile: ContainerSecurityProfile::Restricted,
+            run_as_user: 65532,
+            run_as_group: 65532,
+            read_only_root_filesystem: true,
+        });
+        container.validate_update(&container).unwrap();
+        assert_eq!(
+            serde_json::to_value(&container).unwrap()["egress"],
+            "internet"
+        );
+    }
 
     #[test]
     fn test_container_creation_with_autoscaling() {

@@ -355,7 +355,9 @@ impl KubernetesSandboxController {
             BindingValue::value(broker_url),
             BindingValue::value(capability_secret_name(&sandbox_id)),
             BindingValue::value(SERVICE_ACCOUNT_TOKEN_PATH.to_string()),
-            self.egress.as_ref().map(|value| *value.declaration()),
+            self.egress
+                .as_ref()
+                .map(|value| value.declaration().clone()),
         );
 
         if let SandboxBinding::Kubernetes(value) = &mut binding {

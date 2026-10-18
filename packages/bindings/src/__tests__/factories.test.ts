@@ -119,6 +119,7 @@ function fakeAddon(): { addon: NativeAddon; constructions: unknown[] } {
     listSecrets: async () => [],
   }
   const containerHandle: RawContainerHandle = {
+    getInternalUrls: async () => ({ 3129: "http://service.internal:3129" }),
     getInternalUrl: async () => "http://service.internal:8080",
     getPublicUrl: async () => null,
   }
@@ -541,6 +542,9 @@ describe("createFactories method mapping", () => {
     const { addon } = fakeAddon()
     const { container } = createFactories(() => addon)
 
+    await expect(container("database").getInternalUrls()).resolves.toEqual({
+      3129: "http://service.internal:3129",
+    })
     await expect(container("database").getInternalUrl()).resolves.toBe(
       "http://service.internal:8080",
     )

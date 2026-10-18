@@ -1416,7 +1416,7 @@ fn egress_policy(egress: &SandboxEgress) -> Option<EgressPolicy> {
     };
 
     match egress {
-        SandboxEgress::Internet => None,
+        SandboxEgress::Allow | SandboxEgress::Internet => None,
         // Written as a rule as well as a default, because Microsoft documents `Partial`
         // inspection as evaluating only traffic a rule matches and never states that `Full`
         // differs. A policy holding no rule at all is the one shape where "deny" could mean
@@ -1425,6 +1425,15 @@ fn egress_policy(egress: &SandboxEgress) -> Option<EgressPolicy> {
             pattern: EVERY_HOST.to_string(),
             action: DENY.to_string(),
         }]),
+        SandboxEgress::AllowDomains { domains } => bounded(
+            domains
+                .iter()
+                .map(|domain| EgressHostRule {
+                    pattern: domain.clone(),
+                    action: ALLOW.to_string(),
+                })
+                .collect(),
+        ),
     }
 }
 
@@ -1653,20 +1662,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_native_deny_sandbox_needs_no_new_vnet_attachment() {
-        let mut client = MockSandboxDataPlaneApi::new();
-        client.expect_get_sandbox().times(1).returning(|_, id| {
-            let mut sandbox = running(id, egress_policy(&SandboxEgress::None));
-            sandbox.vnet_connection_name = None;
-            Ok(sandbox)
-        });
-        let sandbox = sandbox_denying(client, SandboxEgress::None)
-            .get("existing-denied")
-            .await
-            .expect("released native policy remains usable")
-            .expect("sandbox exists");
-        assert_eq!(sandbox.sandbox_id, "existing-denied");
-        assert_eq!(sandbox.state, SandboxState::Running);
+    async fn released_native_sandboxes_need_no_new_vnet_attachment() {
+        for declaration in [
+            SandboxEgress::None,
+            SandboxEgress::Allow,
+            SandboxEgress::AllowDomains {
+                domains: vec!["api.example.com".into()],
+            },
+        ] {
+            let mut client = MockSandboxDataPlaneApi::new();
+            let policy = egress_policy(&declaration);
+            client.expect_get_sandbox().times(1).returning(move |_, id| {
+                let mut sandbox = running(id, policy.clone());
+                sandbox.vnet_connection_name = None;
+                Ok(sandbox)
+            });
+            let sandbox = sandbox_denying(client, declaration)
+                .get("existing-native")
+                .await
+                .expect("released native policy remains usable")
+                .expect("sandbox exists");
+            assert_eq!(sandbox.sandbox_id, "existing-native");
+            assert_eq!(sandbox.state, SandboxState::Running);
+        }
     }
 
     /// The declared image has to reach the create call, not a default chosen here.
@@ -3078,6 +3096,48 @@ mod tests {
             .expect_create_sandbox()
             .times(1)
             .returning(|_, request| {
+                assert!(request.customer_vnet_connection_name.is_none());
+                let policy = request.egress.expect("allowDomains must send a policy");
+                assert_eq!(policy.default_action, "Deny", "anything unlisted is denied");
+                assert_eq!(policy.traffic_inspection.as_deref(), Some("Full"));
+                assert_eq!(
+                    policy.host_rules,
+                    vec![EgressHostRule {
+                        pattern: "api.example.com".to_string(),
+                        action: "Allow".to_string(),
+                    }]
+                );
+                Ok(running("s1", Some(policy)))
+            });
+        settles_running(
+            &mut client,
+            Some(EgressPolicy {
+                default_action: "Deny".to_string(),
+                host_rules: vec![EgressHostRule {
+                    pattern: "api.example.com".to_string(),
+                    action: "Allow".to_string(),
+                }],
+                rules: Vec::new(),
+                unmodelled: Default::default(),
+                traffic_inspection: Some("Full".to_string()),
+            }),
+        );
+        sandbox_denying(
+            client,
+            SandboxEgress::AllowDomains {
+                domains: vec!["api.example.com".to_string()],
+            },
+        )
+        .create(CreateSandboxRequest::default())
+        .await
+        .expect("allowDomains should create");
+
+        let mut client = MockSandboxDataPlaneApi::new();
+        client
+            .expect_create_sandbox()
+            .times(1)
+            .returning(|_, request| {
+                assert!(request.customer_vnet_connection_name.is_none());
                 assert!(
                     request.egress.is_none(),
                     "an open sandbox sends no policy: Full inspection would block non-HTTP traffic"
@@ -3085,7 +3145,7 @@ mod tests {
                 Ok(running("s1", None))
             });
         settles_running(&mut client, None);
-        sandbox_denying(client, SandboxEgress::Internet)
+        sandbox_denying(client, SandboxEgress::Allow)
             .create(CreateSandboxRequest::default())
             .await
             .expect("allow should create");

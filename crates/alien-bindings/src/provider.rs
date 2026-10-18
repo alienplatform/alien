@@ -1855,6 +1855,15 @@ impl BindingsProviderApi for BindingsProvider {
         let binding: SandboxBinding = self.parse_binding(binding_name, "sandbox")?;
 
         let gateway = binding.egress().and_then(|value| value.gateway());
+        if gateway.is_none()
+            && binding
+                .egress()
+                .is_some_and(|egress| *egress.declaration() == alien_core::SandboxEgress::Internet)
+        {
+            return Err(crate::providers::sandbox::egress::unsupported(
+                "internet declaration",
+            ));
+        }
         let default_policy = binding.default_policy();
         if let Some(policy) = default_policy {
             policy
@@ -1884,12 +1893,25 @@ impl BindingsProviderApi for BindingsProvider {
                     ),
                 },
             )?;
-            let internal_url = container.get_internal_url();
+            let urls = container.get_internal_urls();
+            let port_url = |port| {
+                urls.get(&port).ok_or_else(|| {
+                    AlienError::new(ErrorData::SandboxEgressGatewayUnavailable {
+                        reason: format!(
+                            "gateway Container '{}' is missing internal URL for port {port}",
+                            config.container
+                        ),
+                    })
+                })
+            };
+            let proxy_url = port_url(3128)?;
+            let admin_url = port_url(3129)?;
             let vault = self.load_vault(&config.signing_key.vault).await?;
             Some(Arc::new(crate::sandbox_egress::SandboxEgressManager::new(
                 config.clone(),
                 vault,
-                internal_url,
+                proxy_url,
+                admin_url,
             )?))
         } else {
             None

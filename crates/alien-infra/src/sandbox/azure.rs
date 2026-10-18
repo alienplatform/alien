@@ -369,7 +369,7 @@ impl AzureSandboxController {
             BindingValue::value(region.clone()),
             BindingValue::value(resource_group.clone()),
             BindingValue::value(disk_image.clone()),
-            *egress.declaration(),
+            egress.declaration().clone(),
             self.idle_pause_seconds,
         );
 
@@ -1072,16 +1072,12 @@ mod tests {
         assert_eq!(restored.disk_image.as_deref(), Some("ubuntu"));
         assert_eq!(
             restored.egress.as_ref().unwrap().declaration(),
-            &SandboxEgress::Internet
+            &SandboxEgress::AllowDomains {
+                domains: vec!["api.example.com".into()],
+            }
         );
-        assert!(restored
-            .egress
-            .as_ref()
-            .unwrap()
-            .default_policy()
-            .unwrap()
-            .allows("api.example.com", 443)
-            .unwrap());
+        assert!(restored.egress.as_ref().unwrap().default_policy().is_none());
+        assert!(restored.egress.as_ref().unwrap().gateway().is_none());
         assert_eq!(restored.idle_pause_seconds, Some(300));
         assert_eq!(
             restored.limits,

@@ -15,17 +15,14 @@ try {
   ]) {
     await assert.rejects(
       call,
-      error => error.code === "SANDBOX_EGRESS_GATEWAY_UNAVAILABLE" && error.retryable === false,
+      error => error.code === "SANDBOX_EGRESS_REQUIRES_INTERNET" && error.retryable === false,
     )
   }
-  await assert.rejects(
-    () => box.create({ egress: { allow: ["169.254.169.254"] } }),
-    error => error.code === "SANDBOX_EGRESS_INVALID",
-  )
-  await assert.rejects(
-    () => box.create({ egress: { allow: Array(4097).fill("example.com") } }),
-    error => error.code === "SANDBOX_EGRESS_POLICY_TOO_LARGE" && error.retryable === false,
-  )
 } finally {
   await box.terminate(created.sandboxId)
 }
+
+await assert.rejects(
+  () => sandbox("egress-unsupported").create(),
+  error => error.code === "SANDBOX_EGRESS_GATEWAY_UNAVAILABLE" && error.retryable === false,
+)

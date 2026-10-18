@@ -141,6 +141,7 @@ export interface RawQueueHandle {
 }
 
 export interface RawContainerHandle {
+  getInternalUrls(): Promise<Record<number, string>>
   getInternalUrl(): Promise<string>
   getPublicUrl(): Promise<string | null>
 }

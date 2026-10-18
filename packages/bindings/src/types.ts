@@ -260,6 +260,7 @@ export interface Queue {
 /** Read-only service discovery for a linked container. */
 export interface Container {
   /** Get the URL reachable from the deployment's private network. */
+  getInternalUrls(): Promise<Record<number, string>>
   getInternalUrl(): Promise<string>
   /** Get the public URL when the container is publicly exposed. */
   getPublicUrl(): Promise<string | null>

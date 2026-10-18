@@ -231,6 +231,7 @@ export function localContainerBindingEnv(bindingName: string): void {
       service: "local",
       containerName: "database",
       internalUrl: "http://database.internal:5432",
+      internalUrls: { 5432: "http://database.internal:5432", 3129: "http://admin.internal:3129" },
       publicUrl: "http://localhost:15432",
     }),
   })

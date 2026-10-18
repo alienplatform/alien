@@ -831,7 +831,7 @@ impl AwsSandboxController {
             egress: self
                 .egress
                 .as_ref()
-                .map(|value| (*value.declaration()).into()),
+                .map(|value| value.declaration().clone().into()),
             image_arn: BindingValue::value(image_arn.clone()),
             image_version: BindingValue::value(image_version.clone()),
             region: BindingValue::value(region.clone()),

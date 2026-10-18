@@ -16,3 +16,31 @@ it("clears deployment choices when both resources become fixed", () => {
   })
   expect(resource.config).not.toHaveProperty("resourceChoices", expect.anything())
 })
+
+it("keeps internet egress opt-in and container ports reachable through links", () => {
+  const api = new Container("api")
+    .code({ type: "image", image: "example:latest" })
+    .cpu(1)
+    .memory("512Mi")
+    .permissions("app")
+    .port(3128)
+    .port(3129)
+    .security({
+      profile: "restricted",
+      runAsUser: 65532,
+      runAsGroup: 65532,
+      readOnlyRootFilesystem: true,
+    })
+    .egress("internet")
+    .build()
+  const caller = new Container("caller")
+    .code({ type: "image", image: "example:latest" })
+    .cpu(1)
+    .memory("512Mi")
+    .permissions("app")
+    .link(api)
+    .build()
+  expect(api.config).toMatchObject({ ports: [{ port: 3128 }, { port: 3129 }], egress: "internet" })
+  expect(caller.config).toMatchObject({ links: [{ type: "container", id: "api" }] })
+  expect(caller.config.egress).toBeUndefined()
+})

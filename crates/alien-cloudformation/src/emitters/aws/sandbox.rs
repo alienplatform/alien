@@ -273,7 +273,10 @@ impl CfEmitter for AwsSandboxEmitter {
             ),
             (
                 "allowEgress",
-                CfExpression::from(matches!(sandbox.cloud_egress(), SandboxEgress::Internet)),
+                CfExpression::from(matches!(
+                    sandbox.cloud_egress(),
+                    SandboxEgress::Internet | SandboxEgress::Allow
+                )),
             ),
             // Both `GetMicrovmImage` and `RunMicrovm` require the ARN — measured against the
             // live API, where a bare name is refused with "Malformed ARN - doesn't start with
@@ -321,7 +324,10 @@ impl CfEmitter for AwsSandboxEmitter {
             ),
             (
                 "allowEgress".to_string(),
-                CfExpression::from(matches!(sandbox.cloud_egress(), SandboxEgress::Internet)),
+                CfExpression::from(matches!(
+                    sandbox.cloud_egress(),
+                    SandboxEgress::Internet | SandboxEgress::Allow
+                )),
             ),
             (
                 "imageArn".to_string(),
@@ -576,7 +582,10 @@ fn runtime_import_ref(sandbox: &Sandbox, image_id: &str) -> Result<CfExpression>
         ),
         (
             "allowEgress",
-            CfExpression::from(matches!(sandbox.cloud_egress(), SandboxEgress::Internet)),
+            CfExpression::from(matches!(
+                sandbox.cloud_egress(),
+                SandboxEgress::Internet | SandboxEgress::Allow
+            )),
         ),
         ("buildRoleArn", CfExpression::get_att(&role_id, "Arn")),
         ("bundleUri", code_artifact_uri(artifact_uri(sandbox)?)),
@@ -905,7 +914,7 @@ fn egress_network(
 /// binding carries `allowEgress` alongside so the two cannot be confused.
 fn egress_connector_arns(sandbox: &Sandbox, image_id: &str) -> CfExpression {
     match sandbox.cloud_egress() {
-        SandboxEgress::Internet => CfExpression::list([]),
+        SandboxEgress::Internet | SandboxEgress::Allow => CfExpression::list([]),
         _ => CfExpression::list([CfExpression::get_att(
             format!("{image_id}EgressConnector"),
             "Arn",

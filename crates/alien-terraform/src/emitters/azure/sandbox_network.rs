@@ -79,7 +79,9 @@ fn emit_group(
     let nat = format!("{network}_nat");
     let via_gateway = gateway_enabled(ctx) && sandbox.egress == SandboxEgress::Internet;
     let ports = match sandbox.egress {
-        SandboxEgress::None => BTreeSet::new(),
+        SandboxEgress::None | SandboxEgress::Allow | SandboxEgress::AllowDomains { .. } => {
+            BTreeSet::new()
+        }
         SandboxEgress::Internet => BTreeSet::from(["*".to_string()]),
     };
     fragment.resource_blocks.push(resource_block(

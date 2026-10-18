@@ -23,7 +23,7 @@ use crate::traits::{
 };
 use alien_aws_clients::aws::lambda_microvms::{LambdaMicrovmsApi, Microvm, MAX_AUTH_TOKEN_MINUTES};
 use alien_core::{Platform, SandboxCapabilities};
-use alien_error::{AlienError, ContextError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use tracing::warn;
 
 /// Header the proxy reads to decide which port inside the MicroVM a request reaches.
@@ -150,7 +150,7 @@ impl AwsSandbox {
             .json(&serde_json::json!({"token": delivery.token}))
             .timeout(SANDBOX_READY_TIMEOUT);
         loop {
-            let response = request
+            let mut response = request
                 .try_clone()
                 .ok_or_else(|| {
                     AlienError::new(ErrorData::SandboxUnreachable {
@@ -169,6 +169,7 @@ impl AwsSandbox {
             if response.status().is_success() {
                 break;
             }
+            Self::check_egress_refusal(&mut response).await?;
             // AWS restores asynchronously. Retry only the proxy's documented startup responses.
             if !matches!(response.status().as_u16(), 502 | 503)
                 || std::time::Instant::now() >= deadline
@@ -454,6 +455,41 @@ impl AwsSandbox {
         Self::poll_until_healthy(probe, deadline, sandbox_id).await
     }
 
+    /// The agent uses a plain-text error-code prefix. Recognize only its explicit self-check
+    /// refusal, without retaining arbitrary response text or mistaking an AWS restore 503 for it.
+    async fn check_egress_refusal(response: &mut reqwest::Response) -> Result<()> {
+        if response.status() != reqwest::StatusCode::SERVICE_UNAVAILABLE {
+            return Ok(());
+        }
+        tokio::time::timeout(SANDBOX_READY_TIMEOUT, async {
+            const PREFIX: &[u8] = b"EGRESS_PATH_UNEXPECTED:";
+            let mut matched = 0;
+            while matched < PREFIX.len() {
+                let Some(chunk) = response.chunk().await.into_alien_error().context(
+                    ErrorData::SandboxUnreachable {
+                        operation: "sandbox.egress".into(),
+                        reason: "could not read the agent refusal code".into(),
+                    },
+                )?
+                else {
+                    return Ok(());
+                };
+                let count = chunk.len().min(PREFIX.len() - matched);
+                if chunk[..count] != PREFIX[matched..matched + count] {
+                    return Ok(());
+                }
+                matched += count;
+            }
+            Err(AlienError::new(ErrorData::SandboxEgressPathUnexpected))
+        })
+        .await
+        .into_alien_error()
+        .context(ErrorData::SandboxUnreachable {
+            operation: "sandbox.egress".into(),
+            reason: "agent refusal code did not arrive within the readiness bound".into(),
+        })?
+    }
+
     /// Repeats the health probe until it answers or the deadline passes.
     ///
     /// Separated from the endpoint wait so the restore window this absorbs — AWS answering 502
@@ -476,7 +512,10 @@ impl AwsSandbox {
 
             match request.send().await {
                 Ok(response) if response.status().is_success() => return Ok(()),
-                Ok(response) => last_seen = format!("the endpoint answered {}", response.status()),
+                Ok(mut response) => {
+                    Self::check_egress_refusal(&mut response).await?;
+                    last_seen = format!("the endpoint answered {}", response.status());
+                }
                 Err(error) => last_seen = error.to_string(),
             }
 
@@ -1236,11 +1275,13 @@ mod tests {
         let handler = move || {
             let seen = seen.clone();
             async move {
-                // Two 502s with an empty body — exactly what the proxy returns mid-restore.
-                if seen.fetch_add(1, Ordering::SeqCst) < 2 {
-                    axum::http::StatusCode::BAD_GATEWAY
-                } else {
-                    axum::http::StatusCode::OK
+                match seen.fetch_add(1, Ordering::SeqCst) {
+                    0 => (axum::http::StatusCode::BAD_GATEWAY, ""),
+                    1 => (
+                        axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                        "snapshot restoring",
+                    ),
+                    _ => (axum::http::StatusCode::OK, ""),
                 }
             }
         };
@@ -1258,11 +1299,11 @@ mod tests {
 
         AwsSandbox::poll_until_healthy(probe, deadline, "mvm-restoring")
             .await
-            .expect("the wait must outlast a restore that answers 502 before it answers 200");
+            .expect("the wait must outlast generic restore 502 and 503 responses");
         assert_eq!(
             attempts.load(Ordering::SeqCst),
             3,
-            "it must keep probing through the restore rather than give up on the first 502"
+            "it must keep probing through generic restore responses"
         );
     }
 

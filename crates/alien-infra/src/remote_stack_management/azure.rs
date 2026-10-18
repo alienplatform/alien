@@ -1428,7 +1428,7 @@ mod tests {
             .code(SandboxCode::Image {
                 image: "ubuntu".to_string(),
             })
-            .egress(SandboxEgress::Internet)
+            .egress(SandboxEgress::Allow)
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
@@ -1459,7 +1459,7 @@ mod tests {
                     .code(SandboxCode::Image {
                         image: "ubuntu".to_string(),
                     })
-                    .egress(SandboxEgress::Internet)
+                    .egress(SandboxEgress::Allow)
                     .lifecycle(alien_core::SandboxLifecyclePolicy {
                         max_lifetime_seconds: None,
                         idle_pause_seconds: None,

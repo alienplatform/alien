@@ -6,6 +6,7 @@
 import * as z from "zod";
 import { ContainerAutoscalingSchema } from "./container-autoscaling-schema.js";
 import { ContainerCodeSchema } from "./container-code-schema.js";
+import { ContainerEgressSchema } from "./container-egress-schema.js";
 import { ContainerGpuSpecSchema } from "./container-gpu-spec-schema.js";
 import { ContainerPortSchema } from "./container-port-schema.js";
 import { ContainerResourceChoicesSchema } from "./container-resource-choices-schema.js";
@@ -34,6 +35,9 @@ get "code"(){
 "commandsEnabled": z.optional(z.boolean().default(false).describe("Whether the container can receive remote commands via the Commands protocol.\nWhen enabled, an app-owned command receiver can lease pending commands\nfor this Container and execute registered handlers.")),
 get "cpu"(){
                 return ResourceSpecSchema.describe("Resource specification with min/desired values.")
+              },
+get "egress"(){
+                return z.union([ContainerEgressSchema, z.null()]).optional()
               },
 "environment": z.optional(z.object({
     
@@ -67,7 +71,7 @@ get "persistentStorage"(){
               },
 "pool": z.string().describe("Capacity group to run on (must exist in the cluster)\nIf not specified, containers are scheduled to any available group.").nullish(),
 get "ports"(){
-                return z.array(ContainerPortSchema.describe("Container port configuration.")).describe("Internal container ports (at least one required).")
+                return z.array(ContainerPortSchema.describe("Container port configuration.")).describe("Ports reachable by compute-cluster members and resources that link to this container.")
               },
 get "publicEndpoints"(){
                 return z.array(PublicEndpointSchema.describe("Public endpoint configuration for port-backed workload resources.")).describe("Public endpoints exposed by the container.").optional()
