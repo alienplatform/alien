@@ -58,6 +58,9 @@ const UNPROVISIONABLE_RECHECK_INTERVAL: chrono::Duration = chrono::Duration::min
 /// target-side token exchange retryable for a bounded window after setup hands
 /// the deployment to Provisioning.
 const GCP_CREDENTIAL_HANDOFF_GRACE_PERIOD: Duration = Duration::from_secs(10 * 60);
+/// Retry transient credential failures for at most ten minutes since the last
+/// persisted deployment progress. Waiting never checkpoints or moves this deadline.
+const CREDENTIAL_ERROR_GRACE_PERIOD: Duration = Duration::from_secs(10 * 60);
 
 /// Build a `HorizonMachineImage` from `ALIEN_BYO_HORIZON_AMI_AMD64`/`_ARM64`
 /// + `AWS_REGION` env vars. Returns `None` when no AMI env vars are set so
@@ -784,24 +787,35 @@ impl DeploymentLoop {
         {
             Ok(resolved) => resolved,
             Err(e) => {
-                let handoff_retry_remaining = gcp_credential_handoff_retry_remaining(
-                    status,
-                    &deployment,
-                    &e,
-                    chrono::Utc::now(),
-                );
+                let now = chrono::Utc::now();
+                let retry_remaining = credential_error_retry_remaining(&deployment, &e, now);
+                let handoff_retry_remaining =
+                    gcp_credential_handoff_retry_remaining(status, &deployment, &e, now);
                 if should_wait_for_credential_handoff(status, &deployment)
                     || handoff_retry_remaining.is_some()
+                    || retry_remaining.is_some()
                 {
                     warn!(
                         deployment_id = %deployment_id,
                         status = ?status,
                         platform = ?deployment.platform,
-                        retry_window_remaining_secs = ?handoff_retry_remaining.map(|duration| duration.as_secs()),
+                        retry_window_remaining_secs = ?retry_remaining.or(handoff_retry_remaining).map(|duration| duration.as_secs()),
+                        error_code = %e.code,
                         error = %e,
-                        "Credentials unavailable for deployment phase; waiting for another driver or credential handoff"
+                        "Credentials unavailable for deployment phase; waiting to retry or for credential handoff"
                     );
                 } else {
+                    let failed_status = failed_status_for_deployment_error(status);
+                    warn!(
+                        deployment_id = %deployment_id,
+                        status = ?status,
+                        failed_status = ?failed_status,
+                        platform = ?deployment.platform,
+                        retryable = e.retryable,
+                        error_code = %e.code,
+                        error = %e,
+                        "Credential resolution failed for manager-owned phase; checkpointing failed deployment state"
+                    );
                     let credential_error = e.into_generic();
                     let failed_state = failed_state_for_credential_error(
                         &deployment,
@@ -809,13 +823,6 @@ impl DeploymentLoop {
                         deployment_stack.as_ref(),
                         target_release_id,
                         credential_error,
-                    );
-                    warn!(
-                        deployment_id = %deployment_id,
-                        status = ?status,
-                        failed_status = ?failed_state.status,
-                        platform = ?deployment.platform,
-                        "Credential resolution failed for manager-owned phase; checkpointing failed deployment state"
                     );
                     self.checkpoint_without_step(
                         &deployment_id,
@@ -1412,6 +1419,28 @@ fn has_remote_stack_management_outputs(stack_state: &alien_core::StackState) -> 
         resource_state.resource_type == "remote-stack-management"
             && resource_state.outputs.as_ref().is_some()
     })
+}
+
+fn credential_error_retry_remaining(
+    deployment: &DeploymentRecord,
+    error: &AlienError,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<Duration> {
+    if !error.retryable
+        || (parse_status(&deployment.status).is_failed() && !deployment.retry_requested)
+    {
+        return None;
+    }
+    // Like the setup handoff window, the stored timestamp survives replica
+    // changes and restarts. Never use lease timestamps: acquisition moves them.
+    let last_progress = deployment.updated_at.unwrap_or(deployment.created_at);
+    let elapsed = now
+        .signed_duration_since(last_progress)
+        .to_std()
+        .unwrap_or(Duration::ZERO);
+    CREDENTIAL_ERROR_GRACE_PERIOD
+        .checked_sub(elapsed)
+        .filter(|remaining| !remaining.is_zero())
 }
 
 fn gcp_credential_handoff_retry_remaining(
@@ -2407,6 +2436,17 @@ mod tests {
                     "UPDATE deployments SET status = '{}', current_release_id = '{}', desired_release_id = '{}' WHERE id = '{}'",
                     deployment_status_str(status), release.id, release.id, deployment.id,
                 )).await.unwrap();
+                let metadata = serde_json::to_string(&alien_core::RuntimeMetadata {
+                    prepared_stack: Some(Stack::new("test".to_string()).build()),
+                    ..Default::default()
+                })
+                .unwrap();
+                db.execute(&format!(
+                    "UPDATE deployments SET runtime_metadata = '{}'",
+                    metadata.replace('\'', "''")
+                ))
+                .await
+                .unwrap();
                 db.execute("CREATE TABLE row_writes (n INTEGER)")
                     .await
                     .unwrap();
@@ -2465,7 +2505,10 @@ mod tests {
                         "test-session",
                         ProcessOptions {
                             max_steps: 1,
-                            require_heartbeats_enabled: false,
+                            require_heartbeats_enabled: matches!(
+                                self.record().await.status.as_str(),
+                                "running" | "refresh-failed"
+                            ),
                         },
                     )
                     .await;
