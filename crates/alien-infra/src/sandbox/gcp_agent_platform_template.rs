@@ -127,22 +127,15 @@ fn per_project_image_project_id(path: &str) -> Option<&str> {
     alien_core::gar_repository::project_id_for_path(repository_path, prefix)
 }
 
-/// The egress switch, or a refusal naming the sandbox and both accepted modes.
-///
-/// `AllowDomains` has no representation in the single internet-access switch, so it is refused
-/// rather than approximated. The mode→switch mapping is `SandboxEgress::internet_access_switch`, so
-/// this cannot disagree with the emitter or the provider on what a mode means.
+/// Refuse policies the backend cannot enforce before creating a template.
 fn internet_access_or_refuse(sandbox: &Sandbox) -> Result<bool> {
-    sandbox.egress.internet_access_switch().ok_or_else(|| {
-        AlienError::new(ErrorData::ResourceConfigInvalid {
-            message: format!(
-                "sandbox '{}' asked for domain-scoped egress, which Agent Platform cannot \
-                 express; it offers only 'allow' (open) and 'deny' (closed)",
-                sandbox.id()
-            ),
+    sandbox
+        .egress
+        .gcp_internet_access(sandbox.id())
+        .context(ErrorData::ResourceConfigInvalid {
+            message: "GCP sandbox egress requires a verified gateway path".to_string(),
             resource_id: Some(sandbox.id().to_string()),
         })
-    })
 }
 
 /// The egress switch a template reports. The API omits a false `internetAccess`, answering `{}`
@@ -1010,14 +1003,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_delete_allow_egress() {
-        create_then_delete(sandbox_with(
-            SandboxEgress::Internet,
-            "ubuntu:24.04",
-            None,
-            None,
-        ))
+    async fn create_refuses_open_egress_before_a_cloud_mutation() {
+        let mut client = MockAgentPlatformApi::new();
+        client.expect_create_template().never();
+        let mut executor = build_executor(
+            sandbox_with(SandboxEgress::Internet, "ubuntu:24.04", None, None),
+            provider_with(Arc::new(client)),
+        )
         .await;
+        executor
+            .run_until_terminal()
+            .await
+            .expect_err("open egress must fail");
     }
 
     #[tokio::test]
@@ -1040,7 +1037,7 @@ mod tests {
             max_processes: None,
         };
         create_then_delete(sandbox_with(
-            SandboxEgress::Internet,
+            SandboxEgress::None,
             "ghcr.io/org/sbx:v1",
             Some(1800),
             Some(limits),
@@ -1096,8 +1093,8 @@ mod tests {
     }
 
     /// The binding reports the egress of the template that is serving: the declared mode after
-    /// create, the new mode once a replacement that flips the switch goes ACTIVE, and on Ready what
-    /// the template itself says, whatever the desired config asks for.
+    /// create and, on Ready, what the template itself says. Legacy open templates remain visible
+    /// as open so their bindings can be refused instead of misreported as isolated.
     #[tokio::test]
     async fn the_binding_reports_the_serving_templates_egress() {
         use crate::core::ResourceController;
@@ -1114,52 +1111,13 @@ mod tests {
             }
         };
 
-        for egress in [SandboxEgress::Internet, SandboxEgress::None] {
-            let mut executor = build_executor(
-                sandbox_with(egress.clone(), "ubuntu:24.04", None, None),
-                provider_with(happy_client()),
-            )
-            .await;
-            executor.run_until_terminal().await.expect("create runs");
-            assert_eq!(
-                allow_egress(&executor),
-                egress == SandboxEgress::Internet,
-                "{egress:?}"
-            );
-        }
-
-        let mut m = MockAgentPlatformApi::new();
-        serve_created_egress(&mut m);
-        m.expect_get_operation().returning(|_| Ok(done_op("tpl2")));
-        m.expect_list_templates()
-            .returning(|_| Ok(vec![active_template("tpl1"), active_template("tpl2")]));
-        m.expect_delete_template().returning(|_, _| Ok(()));
-        let mut executor = SingleControllerExecutor::builder()
-            .resource(sandbox_with(
-                SandboxEgress::None,
-                "ubuntu:24.04",
-                None,
-                None,
-            ))
-            .controller(GcpAgentPlatformTemplateController::mock_ready(
-                "eng", "tpl1",
-            ))
-            .platform(Platform::Gcp)
-            .service_provider(provider_with(Arc::new(m)))
-            .with_test_dependencies()
-            .build()
-            .await
-            .expect("executor builds");
-        executor
-            .update(sandbox_with(
-                SandboxEgress::Internet,
-                "ubuntu:24.04",
-                None,
-                None,
-            ))
-            .expect("update accepted");
-        executor.run_until_terminal().await.expect("replace runs");
-        assert!(allow_egress(&executor), "the replacement opened egress");
+        let mut executor = build_executor(
+            sandbox_with(SandboxEgress::None, "ubuntu:24.04", None, None),
+            provider_with(happy_client()),
+        )
+        .await;
+        executor.run_until_terminal().await.expect("create runs");
+        assert!(!allow_egress(&executor));
 
         // Desired config is the opposite of what serves in both cases, and state saved before the
         // field existed reads as deny until the first Ready.
@@ -1402,7 +1360,7 @@ mod tests {
                 image == "ghcr.io/org/sbx:v9"
                     && limits.get("cpu").map(String::as_str) == Some("2")
                     && limits.get("memory").map(String::as_str) == Some("4Gi")
-                    && internet == Some(true)
+                    && internet == Some(false)
             })
             .returning(|_, _| Ok(pending_op()));
         m.expect_get_operation().returning(|_| Ok(done_op("tpl1")));
@@ -1420,7 +1378,7 @@ mod tests {
         };
         let mut executor = build_executor(
             sandbox_with(
-                SandboxEgress::Internet,
+                SandboxEgress::None,
                 "ghcr.io/org/sbx:v9",
                 None,
                 Some(limits),
@@ -1439,7 +1397,7 @@ mod tests {
     /// `None`, so a struct that looks right can still put a shape on the wire the API rejects.
     #[test]
     fn build_template_body_declares_the_port_the_agent_image_serves() {
-        let sandbox = sandbox_with(SandboxEgress::Internet, "ubuntu:24.04", None, None);
+        let sandbox = sandbox_with(SandboxEgress::None, "ubuntu:24.04", None, None);
         let body = build_template_body(&sandbox, "agent-sbx", &deployment_config(None, None))
             .expect("a valid sandbox builds a body");
         let wire = serde_json::to_value(&body).expect("the template body serializes");
@@ -1450,8 +1408,7 @@ mod tests {
         );
     }
 
-    /// Domain-scoped egress has no representation in the single switch, so the template body build
-    /// refuses it naming the sandbox and both accepted modes — it is never approximated.
+    /// A domain policy cannot be approximated by the provider's open internet switch.
     #[test]
     fn build_template_body_refuses_domain_egress_naming_the_sandbox_and_modes() {
         let sandbox = sandbox_with(
@@ -1471,8 +1428,8 @@ mod tests {
             "names the sandbox: {rendered}"
         );
         assert!(
-            rendered.contains("allow") && rendered.contains("deny"),
-            "names both accepted modes: {rendered}"
+            rendered.contains("gateway"),
+            "names the missing enforcement path: {rendered}"
         );
     }
 

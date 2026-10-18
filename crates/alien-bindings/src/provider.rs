@@ -395,7 +395,7 @@ impl BindingsProvider {
             _ => {
                 return Err(AlienError::new(invalid(
                     "accessKeyId and secretAccessKey must be set together",
-                )))
+                )));
             }
         };
 
@@ -740,7 +740,7 @@ impl BindingsProviderApi for BindingsProvider {
             KeyBinding::AwsKms(_) => {
                 return Err(AlienError::new(ErrorData::FeatureNotEnabled {
                     feature: "aws".to_string(),
-                }))
+                }));
             }
             #[cfg(feature = "gcp")]
             KeyBinding::GcpCloudKms(config) => {
@@ -771,7 +771,7 @@ impl BindingsProviderApi for BindingsProvider {
             KeyBinding::GcpCloudKms(_) => {
                 return Err(AlienError::new(ErrorData::FeatureNotEnabled {
                     feature: "gcp".to_string(),
-                }))
+                }));
             }
             #[cfg(feature = "azure")]
             KeyBinding::AzureKeyVault(config) => {
@@ -802,7 +802,7 @@ impl BindingsProviderApi for BindingsProvider {
             KeyBinding::AzureKeyVault(_) => {
                 return Err(AlienError::new(ErrorData::FeatureNotEnabled {
                     feature: "azure".to_string(),
-                }))
+                }));
             }
         };
 
@@ -1879,6 +1879,14 @@ impl BindingsProviderApi for BindingsProvider {
                 use crate::providers::sandbox::gcp_agent_platform::GcpAgentPlatformSandbox;
                 use alien_gcp_clients::agent_platform::AgentPlatformClient;
 
+                if gcp_binding.allow_egress {
+                    alien_core::SandboxEgress::Internet
+                        .gcp_internet_access(binding_name)
+                        .context(ErrorData::config_invalid(
+                            binding_name,
+                            "GCP sandbox binding permits unverified outbound access",
+                        ))?;
+                }
                 let gcp_config = self.client_config.gcp_config().ok_or_else(|| {
                     AlienError::new(ErrorData::ClientConfigInvalid {
                         platform: Platform::Gcp,
@@ -2394,6 +2402,28 @@ mod tests {
             "my-toolchain",
             "the declared image must reach the provider, not a literal chosen at construction"
         );
+    }
+
+    #[cfg(feature = "gcp")]
+    #[tokio::test]
+    async fn an_open_gcp_binding_is_refused_before_credentials_are_resolved() {
+        let bindings = HashMap::from([(
+            "box".to_string(),
+            serde_json::json!({
+                "service": "sandbox-gcp-agent-platform",
+                "engine": "projects/test/locations/us-central1/reasoningEngines/engine",
+                "template": "projects/test/locations/us-central1/reasoningEngines/engine/sandboxEnvironmentTemplates/template",
+                "region": "us-central1",
+                "allowEgress": true
+            }),
+        )]);
+        let error = BindingsProvider::new(ClientConfig::Test, bindings)
+            .expect("the legacy binding parses")
+            .load_sandbox("box")
+            .await
+            .expect_err("open bindings must fail closed");
+        assert_eq!(error.code, "BINDING_CONFIG_INVALID");
+        assert!(error.to_string().contains("gateway"), "{error}");
     }
 
     /// A MicroVM with no egress connector reaches the internet, so the binding's two egress

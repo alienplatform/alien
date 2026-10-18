@@ -154,13 +154,19 @@ impl SandboxEgress {
         }
     }
 
-    /// Boolean backend switch, or `None` when the backend needs a destination matcher.
-    pub fn internet_access_switch(&self) -> Option<bool> {
-        match self {
-            Self::None => Some(false),
-            Self::Internet => Some(true),
-            Self::Allow { .. } => None,
+    /// GCP's internet switch cannot enforce public-only or name-scoped egress.
+    /// Until the backend establishes a verified private gateway path, only `none` is safe.
+    pub fn gcp_internet_access(&self, sandbox_id: &str) -> Result<bool> {
+        if matches!(self, Self::None) {
+            return Ok(false);
         }
+        Err(AlienError::new(ErrorData::OperationNotSupported {
+            operation: format!("GCP sandbox '{sandbox_id}' egress"),
+            reason: "internet and allow policies require a verified deployment-network gateway \
+                     path. The GCP backend does not yet provide that path; internetAccess=true \
+                     also exposes link-local metadata. Use egress: none"
+                .to_string(),
+        }))
     }
 
     fn targets(&self) -> Result<Vec<Target>> {

@@ -1599,36 +1599,25 @@ async fn terminate_reports_unconfirmed_when_the_sandbox_stays_present() {
 
 // ---- unit guards ------------------------------------------------------------------------------
 
-/// AllowDomains is refused naming the sandbox and both accepted modes; the two expressible modes
-/// map to the boolean. Mutation check: return `Ok` for AllowDomains and this fails.
+/// A legacy open switch and a hostname policy both require the missing gateway path.
 #[test]
-fn egress_refuses_domain_scoping_and_names_the_modes() {
-    let error = egress_control_config(
-        "sbx-7",
-        &SandboxEgress::Allow {
-            allow: vec!["x.io".into()],
+fn egress_refuses_unverified_access_and_preserves_none() {
+    for egress in [
+        SandboxEgress::Internet,
+        SandboxEgress::Allow {
+            allow: vec!["api.example.com".into()],
         },
-    )
-    .expect_err("domain-scoped egress has no representation");
-    assert_eq!(error.code, "INVALID_INPUT", "{error}");
-    let rendered = error.to_string();
-    assert!(rendered.contains("sbx-7"), "names the sandbox: {rendered}");
-    assert!(
-        rendered.contains("allow") && rendered.contains("deny"),
-        "names both modes: {rendered}"
-    );
-
+    ] {
+        let error = egress_control_config("sbx-7", &egress)
+            .expect_err("unverified egress must not become an open switch");
+        assert_eq!(error.code, "INVALID_INPUT", "{error}");
+        assert!(error.to_string().contains("sbx-7"), "{error}");
+    }
     assert_eq!(
         egress_control_config("s", &SandboxEgress::None)
-            .expect("deny maps")
+            .expect("none maps")
             .internet_access,
         Some(false)
-    );
-    assert_eq!(
-        egress_control_config("s", &SandboxEgress::Internet)
-            .expect("allow maps")
-            .internet_access,
-        Some(true)
     );
 }
 

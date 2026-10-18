@@ -648,6 +648,10 @@ impl Sandbox {
             }));
         }
 
+        if platform == Platform::Gcp {
+            self.egress.gcp_internet_access(self.id())?;
+        }
+
         // Read before the limits, because the image is declared whether or not any are. A source
         // declaration has no image until `alien build` writes one.
         if platform == Platform::Azure && matches!(&self.code, SandboxCode::Image { .. }) {
@@ -1757,8 +1761,8 @@ mod tests {
         assert!(rendered.contains("gcp"), "names the platform: {rendered}");
     }
 
-    /// Azure matches on hostname; AWS and Kubernetes match CIDRs, and Local and GCP have a
-    /// switch rather than a filter. Accepting a hostname list on those four would leave a stack
+    /// Azure matches on hostname; AWS and Kubernetes match CIDRs, and Local has a
+    /// switch rather than a filter. Accepting a hostname list on those three would leave a stack
     /// reading as restricted while the sandbox reaches the whole internet.
     #[test]
     fn a_hostname_allowlist_is_refused_everywhere_it_would_be_approximated() {
@@ -1769,12 +1773,7 @@ mod tests {
             vec![],
         );
 
-        for platform in [
-            Platform::Aws,
-            Platform::Gcp,
-            Platform::Kubernetes,
-            Platform::Local,
-        ] {
+        for platform in [Platform::Aws, Platform::Kubernetes, Platform::Local] {
             let error = sandbox
                 .validate_for_platform(platform)
                 .expect_err("only Azure expresses a hostname allowlist");
@@ -1912,7 +1911,7 @@ mod tests {
     /// authenticating while the platform pulls `code.image` itself.
     #[test]
     fn a_private_base_image_is_refused_off_aws() {
-        let mut sandbox = sandbox_with(SandboxEgress::Internet, vec![]);
+        let mut sandbox = sandbox_with(SandboxEgress::None, vec![]);
         sandbox.code = SandboxCode::Image {
             image: "s3://acme-artifacts/agents/bundle.zip".to_string(),
         };
@@ -1942,7 +1941,7 @@ mod tests {
 
     #[test]
     fn gcp_accepts_a_sandbox_declaring_enforced_limits() {
-        let sandbox = sandbox_with(SandboxEgress::Internet, vec![]);
+        let sandbox = sandbox_with(SandboxEgress::None, vec![]);
         sandbox
             .validate_for_platform(Platform::Gcp)
             .expect("Agent Platform enforces declared ceilings, by terminating on breach");
@@ -2476,20 +2475,31 @@ mod tests {
             .expect("a named domain is what an allowlist is for");
     }
 
-    /// The two expressible modes map to the boolean; a host list maps to nothing so the caller has
-    /// to refuse rather than silently pick a side.
     #[test]
-    fn internet_access_switch_maps_only_the_two_expressible_modes() {
-        assert_eq!(SandboxEgress::Internet.internet_access_switch(), Some(true));
-        assert_eq!(SandboxEgress::None.internet_access_switch(), Some(false));
-        assert_eq!(
-            SandboxEgress::Allow {
-                allow: vec!["api.example.com".to_string()]
-            }
-            .internet_access_switch(),
-            None,
-            "a host list has no boolean and must not be approximated"
-        );
+    fn gcp_refuses_unverified_egress_including_legacy_aliases() {
+        for json in [
+            r#""internet""#,
+            r#"{"allow":["api.example.com"]}"#,
+            r#"{"mode":"allow"}"#,
+            r#"{"mode":"allowDomains","domains":["api.example.com"]}"#,
+        ] {
+            let egress: SandboxEgress = serde_json::from_str(json).expect("valid policy");
+            let sandbox = sandbox_with(egress, Vec::new());
+            let error = sandbox
+                .validate_for_platform(Platform::Gcp)
+                .expect_err("unverified egress must fail before provisioning");
+            assert_eq!(error.code, "OPERATION_NOT_SUPPORTED", "{json}: {error}");
+            assert!(error.to_string().contains("egress: none"), "{error}");
+        }
+        for json in [r#""none""#, r#"{"mode":"deny"}"#] {
+            let egress: SandboxEgress = serde_json::from_str(json).expect("valid policy");
+            assert!(!egress.gcp_internet_access("test").expect("closed switch"));
+            let mut sandbox = sandbox_with(egress, Vec::new());
+            sandbox.limits = None;
+            sandbox
+                .validate_for_platform(Platform::Gcp)
+                .expect("none remains supported");
+        }
     }
 
     /// A sandbox resource as a stack state recorded it before `session` became `lifecycle` and
