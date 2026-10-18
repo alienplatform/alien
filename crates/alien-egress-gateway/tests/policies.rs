@@ -11,11 +11,18 @@ fn record(
     version: u64,
     policy: Option<Policy>,
 ) -> (Record, HashMap<String, ed25519_compact::PublicKey>) {
+    record_for(version, policy, "box")
+}
+fn record_for(
+    version: u64,
+    policy: Option<Policy>,
+    sub: &str,
+) -> (Record, HashMap<String, ed25519_compact::PublicKey>) {
     let pair = KeyPair::from_seed(Seed::new([7; 32]));
     let claims = Claims {
         v: 1,
         aud: "p/r".into(),
-        sub: "box".into(),
+        sub: sub.into(),
         ver: (version, "0".repeat(32)),
         deleted: policy.is_none(),
         policy,
@@ -179,4 +186,53 @@ fn future_clock_guard_and_writer_ties_use_the_signed_version() {
     assert!(should_replace(Some(&lower), &higher));
     assert!(!should_replace(Some(&higher), &lower));
     assert!(!should_replace(Some(&higher), &higher));
+}
+
+#[tokio::test]
+async fn bounded_snapshot_pages_restore_every_large_signed_policy() {
+    let source = PolicyStore::new(true, 64 * 1024 * 1024);
+    let restored = PolicyStore::new(false, 64 * 1024 * 1024);
+    let policy = Policy::Allow {
+        allow: (0..4000)
+            .map(|i| format!("{i}.{}.example.com", "a".repeat(42)))
+            .collect(),
+    };
+    for index in 0..30 {
+        source
+            .apply(
+                record_for(1, Some(policy.clone()), &format!("box-{index}")).0,
+                false,
+            )
+            .unwrap();
+    }
+    let mut pages = 0;
+    loop {
+        let page = source.newer_than(&restored.summary().unwrap()).unwrap();
+        if page.is_empty() {
+            break;
+        }
+        assert!(
+            page.iter()
+                .map(|entry| entry.signed.len() + 4)
+                .sum::<usize>()
+                <= 8 * 1024 * 1024
+        );
+        pages += 1;
+        for entry in page {
+            let keys = record(1, Some(Policy::Internet)).1;
+            let verified = Record::verify(entry.signed, &keys, &["p/r".into()], 1000).unwrap();
+            restored.apply(verified, false).unwrap();
+        }
+    }
+    assert!(pages > 1);
+    assert_eq!(restored.summary().unwrap().len(), 30);
+    for index in 0..30 {
+        assert_eq!(
+            *restored
+                .resolve("p/r", &format!("box-{index}"))
+                .await
+                .unwrap(),
+            policy
+        );
+    }
 }

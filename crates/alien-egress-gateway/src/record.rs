@@ -15,7 +15,7 @@ pub type Version = (u64, String);
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Claims {
-    pub v: u8,
+    pub v: u64,
     pub aud: String,
     pub sub: String,
     pub ver: Version,

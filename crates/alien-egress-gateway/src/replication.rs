@@ -212,47 +212,55 @@ impl Replication {
             .snapshot()
             .ok_or_else(|| denied("config unavailable"))?;
         gateway.policies.expire_tombstones()?;
-        let summary = gateway.policies.summary()?;
-        let request = serde_json::to_vec(&summary)
-            .into_alien_error()
-            .context(unavailable("encode replica summary"))?;
         for peer in self.peers().await? {
-            let (status, bytes) = self
-                .request(peer, "/v1/replicas/pull", request.clone())
-                .await?;
-            if status != 200 {
-                return Err(AlienError::new(unavailable("replica snapshot unavailable")));
+            loop {
+                let request = serde_json::to_vec(&gateway.policies.summary()?)
+                    .into_alien_error()
+                    .context(unavailable("encode replica summary"))?;
+                let (status, bytes) = self.request(peer, "/v1/replicas/pull", request).await?;
+                if status != 200 {
+                    return Err(AlienError::new(unavailable("replica snapshot unavailable")));
+                }
+                let records: Vec<String> = serde_json::from_slice(&bytes)
+                    .into_alien_error()
+                    .context(unavailable("decode replica snapshot"))?;
+                if records.is_empty() {
+                    break;
+                }
+                for record in records {
+                    let record = Record::verify(
+                        record,
+                        &gateway.keys,
+                        &gateway.config.audiences,
+                        chrono::Utc::now().timestamp_millis().max(0) as u64,
+                    )?;
+                    gateway.policies.apply(record, false)?;
+                }
             }
-            let records: Vec<String> = serde_json::from_slice(&bytes)
-                .into_alien_error()
-                .context(unavailable("decode replica snapshot"))?;
-            for record in records {
-                let record = Record::verify(
-                    record,
-                    &gateway.keys,
-                    &gateway.config.audiences,
-                    chrono::Utc::now().timestamp_millis().max(0) as u64,
-                )?;
-                gateway.policies.apply(record, false)?;
-            }
-            // Send our newer records too, so a write racing this peer's restart is repaired.
-            let (status, bytes) = self
-                .request(peer, "/v1/replicas/summary", b"null".to_vec())
-                .await?;
-            if status != 200 {
-                return Err(AlienError::new(unavailable("replica summary unavailable")));
-            }
-            let known: Vec<Summary> = serde_json::from_slice(&bytes)
-                .into_alien_error()
-                .context(unavailable("decode replica summary"))?;
-            for record in gateway.policies.newer_than(&known)? {
-                let bytes = serde_json::to_vec(&Mutation {
-                    record: record.signed.clone(),
-                })
-                .into_alien_error()
-                .context(unavailable("encode replica update"))?;
-                if self.request(peer, "/v1/replicas/write", bytes).await?.0 != 204 {
-                    return Err(AlienError::new(unavailable("replica catch-up refused")));
+            // Fetch a new summary after each bounded page so all stored policies can synchronize.
+            loop {
+                let (status, bytes) = self
+                    .request(peer, "/v1/replicas/summary", b"null".to_vec())
+                    .await?;
+                if status != 200 {
+                    return Err(AlienError::new(unavailable("replica summary unavailable")));
+                }
+                let known: Vec<Summary> = serde_json::from_slice(&bytes)
+                    .into_alien_error()
+                    .context(unavailable("decode replica summary"))?;
+                let records = gateway.policies.newer_than(&known)?;
+                if records.is_empty() {
+                    break;
+                }
+                for record in records {
+                    let bytes = serde_json::to_vec(&Mutation {
+                        record: record.signed,
+                    })
+                    .into_alien_error()
+                    .context(unavailable("encode replica update"))?;
+                    if self.request(peer, "/v1/replicas/write", bytes).await?.0 != 204 {
+                        return Err(AlienError::new(unavailable("replica catch-up refused")));
+                    }
                 }
             }
         }

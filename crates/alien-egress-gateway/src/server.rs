@@ -306,13 +306,17 @@ async fn authorized_proxy(
     identity: &IdentityPermit,
 ) -> Result<()> {
     let Some(target) = target else {
-        return timeout(
+        audit.allowed = timeout(
             HEADER_TIMEOUT,
             crate::recovery::handle(stream, gateway, claims, &input, head_len),
         )
         .await
         .into_alien_error()
-        .context(unavailable("policy recovery timeout"))?;
+        .context(unavailable("policy recovery timeout"))??;
+        if audit.allowed {
+            log_open(audit);
+        }
+        return Ok(());
     };
     if let Err(error) = gateway.authorize(claims, &target).await {
         refuse(stream, error.code == "EGRESS_POLICY_DENIED").await?;

@@ -33,7 +33,8 @@ All JSON uses the following wire forms:
   `{aud,sub,ver:[millis,writerId]}`.
 - `POST /v1/replicas/pull` (alias `/snapshot`): body is an array of known summaries;
   returns an array of compact JWS strings newer than those summaries. An empty
-  array requests a full snapshot. Snapshot endpoints work before readiness.
+  array starts a full snapshot. Responses are bounded to 8 MiB; repeat with the
+  updated summary until the array is empty. Snapshot endpoints work before readiness.
 - `GET /health`: 200 only after synchronization, otherwise 503.
 
 Peer POSTs carry `x-alien-replica-time` (Unix seconds) and
