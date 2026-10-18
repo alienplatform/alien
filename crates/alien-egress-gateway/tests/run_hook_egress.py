@@ -4,6 +4,7 @@ import http.client
 import json
 import time
 
+from agent_capabilities import AGENT_CAP_ARGS
 from docker_conformance import AUD, PREFIX, docker
 
 
@@ -21,7 +22,7 @@ def check_run_hook_agents(suite, image, containers):
         declared = "none" if mode in ["none", "open-floor"] else "internet"
         network = "bridge" if mode == "open-floor" else PREFIX + "-guest"
         options = ["--security-opt", "seccomp=" + str(seccomp)] if mode == "netlink-failure" else []
-        docker("run", "-d", "--name", name, "--network", network, "--cap-add", "NET_ADMIN",
+        docker("run", "-d", "--name", name, "--network", network, *AGENT_CAP_ARGS,
                "-e", "ALIEN_SANDBOX_EGRESS_RUN_HOOK=true", "-e", "ALIEN_SANDBOX_EGRESS=" + declared,
                "-v", f"{suite.output / 'origin/ca.pem'}:/fixture-ca.pem:ro", *options, image)
         containers.append(name)

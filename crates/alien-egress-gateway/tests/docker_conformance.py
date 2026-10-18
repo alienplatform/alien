@@ -19,6 +19,8 @@ import statistics
 import subprocess
 import time
 
+from agent_capabilities import AGENT_CAP_ARGS, check_capabilities
+
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec, ed25519
@@ -392,7 +394,7 @@ class Suite:
         networks.append(network)
         docker("network", "connect", "--ip", "172.29.91.2", "--alias", "gateway.test", network, PREFIX + "-proxy1")
         name = PREFIX + "-agent"
-        docker("run", "-d", "--name", name, "--network", network, "--ip", "172.29.91.3", "--cap-add", "NET_ADMIN",
+        docker("run", "-d", "--name", name, "--network", network, "--ip", "172.29.91.3", *AGENT_CAP_ARGS,
                "-v", f"{self.output / 'origin/ca.pem'}:/fixture-ca.pem:ro", image)
         containers.append(name)
 
@@ -426,6 +428,7 @@ class Suite:
         self.record("agent refuses forged identity via authenticated health", lambda: equal(call("PUT", "/v1/egress", {"token": forged})[0], 503))
         self.record("agent token install and path self-check", lambda: equal(call("PUT", "/v1/egress", {"token": self.token()})[0], 204))
         self.record("agent ready health", lambda: equal(json.loads(call("GET", "/v1/health")[1])["status"], "ready"))
+        check_capabilities(self, name, call, docker, AGENT_UID)
         def child_socket_boundary():
             # Docker exec bypasses the agent's child setup: establish that IPv6 exists
             # in this namespace, then exercise the real command launch boundary.
@@ -509,7 +512,7 @@ else: raise AssertionError("unexpected egress")
 
         for mode, expected in [("none", 200), ("bridge", 503)]:
             closed = PREFIX + f"-floor-{mode}"
-            docker("run", "-d", "--name", closed, "--network", mode, "--cap-add", "NET_ADMIN", "-e", 'ALIEN_SANDBOX_EGRESS="none"', image)
+            docker("run", "-d", "--name", closed, "--network", mode, *AGENT_CAP_ARGS, "-e", 'ALIEN_SANDBOX_EGRESS="none"', image)
             containers.append(closed)
             health_script = '''import http.client,json,time
 deadline=time.monotonic()+8
