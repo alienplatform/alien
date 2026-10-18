@@ -893,6 +893,13 @@ impl ResourceDefinition for Container {
             }));
         }
 
+        if self.internal_load_balancer != new_container.internal_load_balancer {
+            return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
+                resource_id: self.id.clone(),
+                reason: "the 'internalLoadBalancer' field is immutable; replace the resource to change its network boundary".to_string(),
+            }));
+        }
+
         // Pool (capacity group) is immutable
         if self.pool != new_container.pool {
             return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
