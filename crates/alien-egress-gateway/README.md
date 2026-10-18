@@ -67,7 +67,9 @@ new replica unready. Version summaries repair missed writes every thirty seconds
 Missing policy always denies. Total replica loss also loses deletion/version
 history: agents can restore their saved signed record only while the entry is
 absent. An old signed record can be replayed during that absence; replication does
-not provide durable recovery of a newer restriction after total state loss.
+not provide durable recovery of a newer restriction after total state loss. If an
+older record fills the entry first, a newer management write is required to
+replace it; the agent poll does not bound this replay window.
 
 Each replica rechecks active identities every 30 seconds and closes tunnels whose
 destination is no longer allowed, including after deletion or a store failure.
