@@ -62,8 +62,10 @@ impl ImageUser<'_> {
         let account = self.passwd.lines().find_map(|line| {
             let fields: Vec<_> = line.split(':').collect();
             (fields.len() >= 4
-                && (fields[0] == user
-                    || numeric_uid.is_some_and(|uid| fields[2].parse::<u32>() == Ok(uid))))
+                && numeric_uid.map_or_else(
+                    || fields[0] == user,
+                    |uid| fields[2].parse::<u32>() == Ok(uid),
+                ))
             .then_some(fields)
         });
         let uid = match numeric_uid {

@@ -43,8 +43,8 @@ pub mod sandbox_capability_token;
 
 pub mod sandbox_build_role;
 pub mod sandbox_egress;
-pub mod sandbox_image;
 pub mod sandbox_identity;
+pub mod sandbox_image;
 pub mod sandbox_setup_inputs;
 
 #[cfg(feature = "sandbox-process")]

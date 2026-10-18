@@ -76,8 +76,8 @@ fn main() -> Result<()> {
                     "reduce supervisor capabilities",
                     "cannot restrict the supervisor grant".to_string(),
                 ))?;
-            // The directory was created for the image's default uid. The declaration owns the
-            // identity, so fix it before commands or uploaded files can exist.
+            // Ensure the writable root agrees with the built image's command identity before
+            // commands or uploaded files can exist.
             let path = std::ffi::CString::new(state.session_root.as_os_str().as_encoded_bytes())
                 .into_alien_error()
                 .context(failed("prepare session root", "invalid path".to_string()))?;

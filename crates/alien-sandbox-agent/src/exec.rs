@@ -41,7 +41,7 @@ pub struct ExecRequest {
     #[serde(default)]
     pub cwd: Option<String>,
     /// Environment for the command. The agent's own environment is never inherited, so this is
-    /// everything the command gets beyond `PATH`.
+    /// everything the command gets beyond `PATH` and the uid/gid/session-root contract.
     #[serde(default)]
     pub env: BTreeMap<String, String>,
 }

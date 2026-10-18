@@ -274,6 +274,7 @@ pub fn identity_setup(image: &SandboxImage) -> String {
     format!(
         r#"RUN test ! -L /etc/passwd && test ! -L /etc/group && test ! -L {root} \
  && touch /etc/passwd /etc/group \
+ && chown 0:0 /etc/passwd /etc/group && chmod 0644 /etc/passwd /etc/group \
  && (awk -F: '$3 == {uid} {{ found=1 }} END {{ exit !found }}' /etc/passwd || printf '{passwd}\n' >> /etc/passwd) \
  && (awk -F: '$3 == {gid} {{ found=1 }} END {{ exit !found }}' /etc/group || printf '{group}\n' >> /etc/group) \
  && mkdir -p {root} \

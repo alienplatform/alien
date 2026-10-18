@@ -214,7 +214,7 @@ mod tests {
             .unwrap()
             .data_with_owner(
                 "/etc/passwd",
-                b"root:x:0:0::/root:/bin/sh\napp:x:1001:2001::/home/app:/bin/sh\n",
+                b"root:x:0:0::/root:/bin/sh\n1001:x:9001:9001::/:/bin/sh\napp:x:1001:2001::/home/app:/bin/sh\n",
                 0o644,
                 0,
                 0,
