@@ -161,6 +161,17 @@ impl TfEmitter for AzureSandboxEmitter {
             fields.push(("disk", Expression::String(limits.disk.clone())));
         }
 
+        if let Some(policy) = &sandbox.default_policy {
+            fields.push((
+                "defaultPolicy",
+                hcl::to_expression(policy)
+                    .into_alien_error()
+                    .context(ErrorData::GenericError {
+                        message: "serializing sandbox default policy".into(),
+                    })?,
+            ));
+        }
+
         Ok(Some(expr::object(fields)))
     }
 }
@@ -760,13 +771,7 @@ mod tests {
     /// Azure receives policy through the binding, so prove the rendered HCL decodes to it.
     #[test]
     fn the_binding_carries_the_declared_egress() {
-        for policy in [
-            SandboxEgress::None,
-            SandboxEgress::Allow {
-                allow: vec!["api.example.com".to_string()],
-            },
-            SandboxEgress::Internet,
-        ] {
+        for policy in [SandboxEgress::None, SandboxEgress::Internet] {
             let rendered = binding_for(policy.clone());
             let expression: Expression = rendered.parse().expect("binding is valid HCL");
             let Expression::Object(fields) = expression else {
@@ -792,14 +797,10 @@ mod tests {
     /// rename on either side would otherwise surface as a deserialization failure at runtime.
     #[test]
     fn the_emitted_keys_are_the_ones_the_binding_deserializes() {
-        let rendered = binding_with(
-            SandboxEgress::Allow {
-                allow: vec!["api.example.com".to_string()],
-            },
-            Some(900),
-        );
+        let rendered = binding_with(SandboxEgress::Internet, Some(900));
 
         let binding = AzureSandboxBinding {
+            default_policy: None,
             sandbox_group: BindingValue::Value("sbg".to_string()),
             data_plane_endpoint: BindingValue::Value("https://example.invalid".to_string()),
             region: BindingValue::Value("eastus".to_string()),

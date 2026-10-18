@@ -5,7 +5,7 @@
 
 use std::fmt;
 
-use alien_core::SandboxEgress;
+use alien_core::EgressPolicy;
 use alien_error::{AlienError, Context, IntoAlienError};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use bon::Builder;
@@ -14,7 +14,6 @@ use pkcs8::der::Decode;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{ErrorData, Result};
-use crate::providers::sandbox::egress::check_bound;
 
 /// Wire claims checked by the egress gateway.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -26,15 +25,10 @@ pub struct EgressTokenClaims {
     pub aud: String,
     /// Runtime sandbox id.
     pub sub: String,
-    /// SHA-256 digest of the canonical policy stored by the gateway.
-    pub policy: String,
     /// Issue time, Unix seconds.
     pub iat: i64,
     /// Expiry, Unix seconds, at most 24 hours after issue and before sandbox expiry.
     pub exp: i64,
-    /// Monotonically increasing policy generation; independent of lifecycle generation.
-    #[serde(rename = "gen")]
-    pub generation: u64,
 }
 
 /// Inputs owned by the provider creating or updating the sandbox.
@@ -44,12 +38,6 @@ pub struct EgressTokenRequest<'a> {
     pub audience: &'a str,
     /// Runtime sandbox id.
     pub sandbox_id: &'a str,
-    /// Declaration's upper bound.
-    pub bound: &'a SandboxEgress,
-    /// Per-sandbox override; absence uses the bound.
-    pub egress: Option<&'a SandboxEgress>,
-    /// Policy generation allocated durably by the provider.
-    pub generation: u64,
     /// Time of issue, Unix seconds.
     pub now_unix: i64,
     /// Sandbox's absolute maximum lifetime deadline, Unix seconds.
@@ -132,14 +120,12 @@ impl EgressTokenIssuer {
         Ok(issuer)
     }
 
-    /// Signs an admin request for one sandbox generation, valid for only sixty seconds.
-    /// The gateway compares the signed identity, generation and policy digest with the request body.
+    /// Signs the operation and exact policy digest, with a sixty-second lifetime.
     pub fn mint_admin(
         &self,
         audience: &str,
         sandbox_id: &str,
-        generation: u64,
-        policy_digest: &str,
+        policy: Option<&EgressPolicy>,
         now_unix: i64,
     ) -> Result<String> {
         validate_identity(audience, sandbox_id)?;
@@ -149,23 +135,15 @@ impl EgressTokenIssuer {
         let exp = now_unix
             .checked_add(60)
             .ok_or_else(|| invalid("issue time is outside the supported range"))?;
-        if !policy_digest.strip_prefix("sha256:").is_some_and(|hex| {
-            hex.len() == 64
-                && hex
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        }) {
-            return Err(invalid(
-                "policy reference must be a lowercase SHA-256 digest",
-            ));
+        let mut claims = serde_json::json!({"iss":"alien-sandbox","aud":audience,"sub":sandbox_id,
+            "method":if policy.is_some() {"PUT"} else {"DELETE"},"iat":now_unix,"exp":exp});
+        if let Some(policy) = policy {
+            claims["policy"] = policy
+                .policy_digest()
+                .map_err(crate::providers::sandbox::egress::policy_error)?
+                .into();
         }
-        self.sign(
-            "alien-egress-admin",
-            &serde_json::json!({
-                "iss": "alien-sandbox", "aud": audience, "sub": sandbox_id,
-                "gen": generation, "policy": policy_digest, "iat": now_unix, "exp": exp
-            }),
-        )
+        self.sign("alien-egress-admin", &claims)
     }
 
     fn sign(&self, kind: &str, claims: &serde_json::Value) -> Result<String> {
@@ -186,7 +164,7 @@ impl EgressTokenIssuer {
         ))
     }
 
-    /// Signs the normalized effective policy after checking its declaration bound and lifetime.
+    /// Signs sandbox identity only, bounded by its absolute lifetime.
     pub fn mint(&self, request: EgressTokenRequest<'_>) -> Result<String> {
         validate_identity(request.audience, request.sandbox_id)?;
         if request.now_unix < 0 || request.sandbox_expires_at <= request.now_unix {
@@ -194,21 +172,15 @@ impl EgressTokenIssuer {
                 "sandbox lifetime must end after the token is issued",
             ));
         }
-        let egress = request.egress.unwrap_or(request.bound);
-        check_bound(egress, Some(request.bound))?;
         let claims = EgressTokenClaims {
             iss: "alien-sandbox".to_string(),
             aud: request.audience.to_string(),
             sub: request.sandbox_id.to_string(),
-            policy: egress
-                .policy_digest()
-                .map_err(crate::providers::sandbox::egress::policy_error)?,
             iat: request.now_unix,
             exp: request
                 .now_unix
                 .saturating_add(86_400)
                 .min(request.sandbox_expires_at),
-            generation: request.generation,
         };
         let claims = serde_json::to_value(claims).into_alien_error().context(
             ErrorData::SerializationFailed {
@@ -241,92 +213,46 @@ fn invalid(reason: &str) -> AlienError<ErrorData> {
 mod tests {
     use super::*;
     use ed25519_compact::Signature;
-
     #[test]
-    fn minted_jws_verifies_and_carries_the_bounded_policy_and_generation() {
-        let issuer = EgressTokenIssuer::from_seed("key-1".to_string(), [7; 32]).unwrap();
-        let bound = SandboxEgress::Internet;
-        let egress = SandboxEgress::Allow {
-            allow: vec!["API.Example.COM.".to_string()],
-        };
-        for (deadline, expected_expiry) in [(1200, 1200), (200000, 87400)] {
+    fn identity_tokens_verify_and_expire_with_the_sandbox() {
+        let issuer = EgressTokenIssuer::from_seed("key-1".into(), [7; 32]).unwrap();
+        for (deadline, exp) in [(1200, 1200), (200000, 87400)] {
             let token = issuer
                 .mint(
                     EgressTokenRequest::builder()
                         .audience("stack/box")
-                        .sandbox_id("session-1")
-                        .bound(&bound)
-                        .egress(&egress)
-                        .generation(42)
+                        .sandbox_id("s1")
                         .now_unix(1000)
                         .sandbox_expires_at(deadline)
                         .build(),
                 )
                 .unwrap();
             let parts: Vec<_> = token.split('.').collect();
-            assert_eq!(parts.len(), 3);
-            let header: serde_json::Value =
-                serde_json::from_slice(&URL_SAFE_NO_PAD.decode(parts[0]).unwrap()).unwrap();
-            assert_eq!(header["alg"], "EdDSA");
-            assert_eq!(header["kid"], "key-1");
-            let claims: EgressTokenClaims =
+            let claims: serde_json::Value =
                 serde_json::from_slice(&URL_SAFE_NO_PAD.decode(parts[1]).unwrap()).unwrap();
             assert_eq!(
-                (
-                    claims.iss.as_str(),
-                    claims.aud.as_str(),
-                    claims.sub.as_str()
-                ),
-                ("alien-sandbox", "stack/box", "session-1")
+                claims,
+                serde_json::json!({"iss":"alien-sandbox","aud":"stack/box","sub":"s1","iat":1000,"exp":exp})
             );
-            assert_eq!(
-                (claims.iat, claims.exp, claims.generation),
-                (1000, expected_expiry, 42)
-            );
-            assert_eq!(claims.policy, egress.policy_digest().unwrap());
             let payload = format!("{}.{}", parts[0], parts[1]);
             let signature =
                 Signature::from_slice(&URL_SAFE_NO_PAD.decode(parts[2]).unwrap()).unwrap();
-            let public = KeyPair::from_seed(Seed::new([7; 32])).pk;
-            public.verify(payload.as_bytes(), &signature).unwrap();
-            assert!(public
+            let key = KeyPair::from_seed(Seed::new([7; 32])).pk;
+            key.verify(payload.as_bytes(), &signature).unwrap();
+            assert!(key
                 .verify(format!("{payload}tampered").as_bytes(), &signature)
                 .is_err());
         }
-    }
-
-    #[test]
-    fn minting_refuses_widening_and_expired_sandboxes() {
-        let issuer = EgressTokenIssuer::from_seed("key-1".to_string(), [7; 32]).unwrap();
-        let bound = SandboxEgress::None;
-        let egress = SandboxEgress::Internet;
-        let error = issuer
-            .mint(
-                EgressTokenRequest::builder()
-                    .audience("stack/box")
-                    .sandbox_id("s1")
-                    .bound(&bound)
-                    .egress(&egress)
-                    .generation(0)
-                    .now_unix(1000)
-                    .sandbox_expires_at(1100)
-                    .build(),
-            )
-            .unwrap_err();
-        assert_eq!(error.code, "SANDBOX_EGRESS_WIDENS");
         assert!(issuer
             .mint(
                 EgressTokenRequest::builder()
                     .audience("stack/box")
                     .sandbox_id("s1")
-                    .bound(&bound)
-                    .generation(0)
                     .now_unix(1000)
                     .sandbox_expires_at(1000)
                     .build()
             )
             .is_err());
-        assert!(EgressTokenIssuer::from_seed("key-1".to_string(), [0; 32]).is_err());
     }
 }
 
@@ -342,13 +268,7 @@ mod admin_tests {
         let issuer = EgressTokenIssuer::from_vault_json(&secret, "rotation-2").unwrap();
         assert!(EgressTokenIssuer::from_vault_json(&secret, "wrong-kid").is_err());
         let token = issuer
-            .mint_admin(
-                "prefix/box",
-                "session",
-                17,
-                &SandboxEgress::None.policy_digest().unwrap(),
-                1000,
-            )
+            .mint_admin("prefix/box", "session", Some(&EgressPolicy::Internet), 1000)
             .unwrap();
         let parts: Vec<_> = token.split('.').collect();
         let header: serde_json::Value =
@@ -358,7 +278,7 @@ mod admin_tests {
             serde_json::from_slice(&URL_SAFE_NO_PAD.decode(parts[1]).unwrap()).unwrap();
         assert_eq!(
             claims,
-            serde_json::json!({"iss":"alien-sandbox", "aud":"prefix/box", "sub":"session", "gen":17, "policy": SandboxEgress::None.policy_digest().unwrap(), "iat":1000, "exp":1060})
+            serde_json::json!({"iss":"alien-sandbox", "aud":"prefix/box", "sub":"session", "method":"PUT", "policy": EgressPolicy::Internet.policy_digest().unwrap(), "iat":1000, "exp":1060})
         );
         key.pk
             .verify(

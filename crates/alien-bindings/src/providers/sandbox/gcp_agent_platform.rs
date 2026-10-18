@@ -102,19 +102,29 @@ const NO_GENERATION: u64 = 0;
 /// this task exists to prevent — where too loose only delays an already-broken sandbox.
 const AGENT_PROBE_BUDGET: Duration = Duration::from_secs(60);
 
-/// Builds a closed template configuration, refusing unverified outbound policies.
+/// Maps a declared egress mode onto the template's `egressControlConfig`, or refuses one the API
+/// cannot express.
+///
+/// `internetAccess` is a single boolean, so `AllowDomains` has no representation and is refused
+/// rather than approximated into `allow` (which would open more than was asked) or `deny` (which
+/// would close a caller out of hosts it named). Not called by the runtime verbs — the template is
+/// pre-created — but this is the mapping the template controller uses, kept beside the provider so
+/// the two agree on what a mode means. `sandbox_label` names the offending sandbox in the refusal.
 pub fn egress_control_config(
     sandbox_label: &str,
     egress: &SandboxEgress,
 ) -> Result<EgressControlConfig> {
-    let internet_access =
-        egress
-            .gcp_internet_access(sandbox_label)
-            .context(ErrorData::InvalidInput {
-                operation_context: "sandbox.template".to_string(),
-                details: format!("sandbox '{sandbox_label}' requires supported GCP egress"),
-                field_name: Some("egress".to_string()),
-            })?;
+    let Some(internet_access) = egress.internet_access_switch() else {
+        return Err(AlienError::new(ErrorData::InvalidInput {
+            operation_context: "sandbox.template".to_string(),
+            details: format!(
+                "sandbox '{sandbox_label}' asked for domain-scoped egress, which Agent \
+                 Platform cannot express; it offers only 'allow' (open) and 'deny' (closed)"
+            ),
+            field_name: Some("egress".to_string()),
+        }));
+    };
+
     Ok(EgressControlConfig {
         internet_access: Some(internet_access),
         extra: Default::default(),
@@ -565,7 +575,7 @@ impl Binding for GcpAgentPlatformSandbox {}
 
 #[async_trait]
 impl Sandbox for GcpAgentPlatformSandbox {
-    fn egress_bound(&self) -> Option<&alien_core::SandboxEgress> {
+    fn egress_declaration(&self) -> Option<&alien_core::SandboxEgress> {
         self.egress.as_ref()
     }
     fn as_any(&self) -> &dyn std::any::Any {
@@ -580,7 +590,7 @@ impl Sandbox for GcpAgentPlatformSandbox {
     }
 
     async fn create(&self, request: CreateSandboxRequest) -> Result<SandboxInstance> {
-        super::egress::require_default(request.egress.as_ref(), self.egress_bound())?;
+        super::egress::require_default(request.egress.as_ref(), self.egress_declaration())?;
         // A sandbox takes no environment of its own: `SandboxCreateRequest` has no env field,
         // so silently dropping one would run the caller's code without the variables it asked for.
         // They travel per command through `run_command` instead.
@@ -689,14 +699,14 @@ impl Sandbox for GcpAgentPlatformSandbox {
     }
 
     async fn get_or_create(&self, request: CreateSandboxRequest) -> Result<ResolvedSandbox> {
-        super::egress::require_default(request.egress.as_ref(), self.egress_bound())?;
+        super::egress::require_default(request.egress.as_ref(), self.egress_declaration())?;
         if let Some(id) = request.sandbox_id.as_deref() {
             // A running, reachable sandbox is handed back; anything else is served by a fresh
             // sandbox rather than by destroying one this call did not create, which may be
             // another revision's.
             match self.get(id).await {
                 Ok(Some(sandbox)) if sandbox.state == SandboxState::Running => {
-                    return Ok(ResolvedSandbox::found(sandbox));
+                    return Ok(ResolvedSandbox::found(sandbox))
                 }
                 // Still coming up, or already being woken by someone else. Waited for rather than
                 // replaced: the sandbox keeps starting either way, so a second one beside it would
@@ -715,7 +725,7 @@ impl Sandbox for GcpAgentPlatformSandbox {
                     return Err(error.context(ErrorData::SandboxCommandFailed {
                         failure: "getOrCreateFailed".to_string(),
                         reason: format!("{GET_OR_CREATE}: reaching sandbox '{id}' failed"),
-                    }));
+                    }))
                 }
             }
         }

@@ -395,7 +395,7 @@ impl BindingsProvider {
             _ => {
                 return Err(AlienError::new(invalid(
                     "accessKeyId and secretAccessKey must be set together",
-                )));
+                )))
             }
         };
 
@@ -740,7 +740,7 @@ impl BindingsProviderApi for BindingsProvider {
             KeyBinding::AwsKms(_) => {
                 return Err(AlienError::new(ErrorData::FeatureNotEnabled {
                     feature: "aws".to_string(),
-                }));
+                }))
             }
             #[cfg(feature = "gcp")]
             KeyBinding::GcpCloudKms(config) => {
@@ -771,7 +771,7 @@ impl BindingsProviderApi for BindingsProvider {
             KeyBinding::GcpCloudKms(_) => {
                 return Err(AlienError::new(ErrorData::FeatureNotEnabled {
                     feature: "gcp".to_string(),
-                }));
+                }))
             }
             #[cfg(feature = "azure")]
             KeyBinding::AzureKeyVault(config) => {
@@ -802,7 +802,7 @@ impl BindingsProviderApi for BindingsProvider {
             KeyBinding::AzureKeyVault(_) => {
                 return Err(AlienError::new(ErrorData::FeatureNotEnabled {
                     feature: "azure".to_string(),
-                }));
+                }))
             }
         };
 
@@ -1854,19 +1854,18 @@ impl BindingsProviderApi for BindingsProvider {
         // a missing backend, which would send a reader looking in the wrong place.
         let binding: SandboxBinding = self.parse_binding(binding_name, "sandbox")?;
 
-        let gateway = match &binding {
-            SandboxBinding::Aws(value) => value.egress.as_ref().and_then(|egress| egress.gateway()),
-            SandboxBinding::Azure(value) => value.egress.gateway(),
-            SandboxBinding::GcpAgentPlatform(value) => {
-                value.egress.as_ref().and_then(|egress| egress.gateway())
+        let gateway = binding.egress().and_then(|value| value.gateway());
+        let default_policy = binding.default_policy();
+        if let Some(policy) = default_policy {
+            policy
+                .validate()
+                .map_err(crate::providers::sandbox::egress::policy_error)?;
+            if gateway.is_none() {
+                return Err(crate::providers::sandbox::egress::unsupported(
+                    "defaultPolicy",
+                ));
             }
-            SandboxBinding::Kubernetes(value) => {
-                value.egress.as_ref().and_then(|egress| egress.gateway())
-            }
-            SandboxBinding::Local(value) => {
-                value.egress.as_ref().and_then(|egress| egress.gateway())
-            }
-        };
+        }
         // Do not silently treat a gateway binding as a legacy policy-only binding on backends
         // whose authenticated token-delivery path has not landed yet.
         if gateway.is_some() && !matches!(&binding, SandboxBinding::Aws(_)) {
@@ -1875,12 +1874,20 @@ impl BindingsProviderApi for BindingsProvider {
             ));
         }
         let egress_manager = if let Some(config) = gateway {
+            let container = self.load_container(&config.container).await.context(
+                ErrorData::SandboxEgressGatewayUnavailable {
+                    reason: format!(
+                        "linked gateway Container '{}' is unavailable",
+                        config.container
+                    ),
+                },
+            )?;
+            let internal_url = container.get_internal_url();
             let vault = self.load_vault(&config.signing_key.vault).await?;
-            let kv = self.load_kv(crate::sandbox_egress::STATE_BINDING).await?;
             Some(Arc::new(crate::sandbox_egress::SandboxEgressManager::new(
                 config.clone(),
                 vault,
-                kv,
+                internal_url,
             )?))
         } else {
             None
@@ -1911,14 +1918,6 @@ impl BindingsProviderApi for BindingsProvider {
                 use crate::providers::sandbox::gcp_agent_platform::GcpAgentPlatformSandbox;
                 use alien_gcp_clients::agent_platform::AgentPlatformClient;
 
-                if gcp_binding.allow_egress {
-                    alien_core::SandboxEgress::Internet
-                        .gcp_internet_access(binding_name)
-                        .context(ErrorData::config_invalid(
-                            binding_name,
-                            "GCP sandbox binding permits unverified outbound access",
-                        ))?;
-                }
                 let gcp_config = self.client_config.gcp_config().ok_or_else(|| {
                     AlienError::new(ErrorData::ClientConfigInvalid {
                         platform: Platform::Gcp,
@@ -1965,7 +1964,7 @@ impl BindingsProviderApi for BindingsProvider {
                         gcp_binding
                             .egress
                             .as_ref()
-                            .map(|egress| egress.bound().clone()),
+                            .map(|egress| egress.declaration().clone()),
                     ),
                 );
                 Ok(sandbox)
@@ -2033,7 +2032,7 @@ impl BindingsProviderApi for BindingsProvider {
                     Arc::new(client),
                     group,
                     disk_image,
-                    azure_binding.egress.bound().clone(),
+                    azure_binding.egress.declaration().clone(),
                     azure_binding.idle_pause_seconds,
                     cpu.unwrap_or_else(|| DEFAULT_AZURE_CPU.to_string()),
                     memory.unwrap_or_else(|| DEFAULT_AZURE_MEMORY.to_string()),
@@ -2153,8 +2152,15 @@ impl BindingsProviderApi for BindingsProvider {
                     aws_binding
                         .egress
                         .as_ref()
-                        .map(|egress| egress.bound().clone()),
+                        .map(|egress| egress.declaration().clone()),
                 );
+                let sandbox =
+                    sandbox.with_default_policy(aws_binding.default_policy.clone().or_else(|| {
+                        aws_binding
+                            .egress
+                            .as_ref()
+                            .and_then(|value| value.default_policy().cloned())
+                    }));
                 let sandbox = match egress_manager {
                     Some(manager) => sandbox.with_egress_manager(manager),
                     None => sandbox,
@@ -2463,28 +2469,6 @@ mod tests {
             "my-toolchain",
             "the declared image must reach the provider, not a literal chosen at construction"
         );
-    }
-
-    #[cfg(feature = "gcp")]
-    #[tokio::test]
-    async fn an_open_gcp_binding_is_refused_before_credentials_are_resolved() {
-        let bindings = HashMap::from([(
-            "box".to_string(),
-            serde_json::json!({
-                "service": "sandbox-gcp-agent-platform",
-                "engine": "projects/test/locations/us-central1/reasoningEngines/engine",
-                "template": "projects/test/locations/us-central1/reasoningEngines/engine/sandboxEnvironmentTemplates/template",
-                "region": "us-central1",
-                "allowEgress": true
-            }),
-        )]);
-        let error = BindingsProvider::new(ClientConfig::Test, bindings)
-            .expect("the legacy binding parses")
-            .load_sandbox("box")
-            .await
-            .expect_err("open bindings must fail closed");
-        assert_eq!(error.code, "BINDING_CONFIG_INVALID");
-        assert!(error.to_string().contains("gateway"), "{error}");
     }
 
     /// A MicroVM with no egress connector reaches the internet, so the binding's two egress

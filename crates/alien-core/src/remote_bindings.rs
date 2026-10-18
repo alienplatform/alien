@@ -138,6 +138,10 @@ pub fn remote_binding_undeliverable_reason(entry: &ResourceEntry) -> Option<&'st
         return Some("a remotely published sandbox cannot declare privilegedSupervisor; the raw grant can start retained image versions with a different command identity or egress policy; use an ordinary workload binding");
     }
 
+    if sandbox.default_policy.is_some() {
+        return Some("a remotely published sandbox cannot carry defaultPolicy; use an ordinary workload binding that supports gateway policies");
+    }
+
     if !matches!(sandbox.egress, SandboxEgress::Internet) {
         return Some(
             "a remotely published sandbox must declare egress 'allow'; the remote grant either \
@@ -220,13 +224,7 @@ mod tests {
 
     #[test]
     fn a_remote_grant_cannot_bypass_supervision_through_a_retained_version() {
-        for egress in [
-            SandboxEgress::Internet,
-            SandboxEgress::None,
-            SandboxEgress::Allow {
-                allow: vec!["example.com".to_string()],
-            },
-        ] {
+        for egress in [SandboxEgress::Internet, SandboxEgress::None] {
             let mut entry = remote_sandbox(egress, vec![]);
             let mut sandbox = entry
                 .config

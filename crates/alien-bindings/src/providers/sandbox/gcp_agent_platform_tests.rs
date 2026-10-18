@@ -1599,28 +1599,6 @@ async fn terminate_reports_unconfirmed_when_the_sandbox_stays_present() {
 
 // ---- unit guards ------------------------------------------------------------------------------
 
-/// A legacy open switch and a hostname policy both require the missing gateway path.
-#[test]
-fn egress_refuses_unverified_access_and_preserves_none() {
-    for egress in [
-        SandboxEgress::Internet,
-        SandboxEgress::Allow {
-            allow: vec!["api.example.com".into()],
-        },
-    ] {
-        let error = egress_control_config("sbx-7", &egress)
-            .expect_err("unverified egress must not become an open switch");
-        assert_eq!(error.code, "INVALID_INPUT", "{error}");
-        assert!(error.to_string().contains("sbx-7"), "{error}");
-    }
-    assert_eq!(
-        egress_control_config("s", &SandboxEgress::None)
-            .expect("none maps")
-            .internet_access,
-        Some(false)
-    );
-}
-
 /// A sandbox id that could address another sandbox never reaches a URL. Mutation check: weaken
 /// `is_addressable_id` to accept '/' and the traversal ids below stop being refused.
 #[tokio::test]

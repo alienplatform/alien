@@ -303,7 +303,7 @@ fn refuse_unsupported_create_fields(request: &CreateSandboxRequest, operation: &
 
 #[async_trait]
 impl Sandbox for AzureSandbox {
-    fn egress_bound(&self) -> Option<&SandboxEgress> {
+    fn egress_declaration(&self) -> Option<&SandboxEgress> {
         Some(&self.egress)
     }
     /// The platform's row, unnarrowed. `domainEgressRules` says what Azure can do, not what this
@@ -314,7 +314,7 @@ impl Sandbox for AzureSandbox {
     }
 
     async fn create(&self, request: CreateSandboxRequest) -> Result<SandboxInstance> {
-        super::egress::require_default(request.egress.as_ref(), self.egress_bound())?;
+        super::egress::require_default(request.egress.as_ref(), self.egress_declaration())?;
         checked_sandbox_env(CREATE, &request.env)?;
         refuse_unsupported_create_fields(&request, CREATE)?;
 
@@ -402,7 +402,7 @@ impl Sandbox for AzureSandbox {
     }
 
     async fn get_or_create(&self, request: CreateSandboxRequest) -> Result<ResolvedSandbox> {
-        super::egress::require_default(request.egress.as_ref(), self.egress_bound())?;
+        super::egress::require_default(request.egress.as_ref(), self.egress_declaration())?;
         if let Some(id) = request.sandbox_id.as_deref() {
             // `create` returns a sandbox that can take work, and reaching one someone else
             // started has to mean the same thing — so the same gate every other verb uses: bring
@@ -1301,15 +1301,6 @@ fn egress_policy(egress: &SandboxEgress) -> Option<EgressPolicy> {
             pattern: EVERY_HOST.to_string(),
             action: DENY.to_string(),
         }]),
-        SandboxEgress::Allow { allow: domains } => bounded(
-            domains
-                .iter()
-                .map(|domain| EgressHostRule {
-                    pattern: domain.clone(),
-                    action: ALLOW.to_string(),
-                })
-                .collect(),
-        ),
     }
 }
 
@@ -1491,9 +1482,6 @@ mod tests {
     use alien_azure_clients::azure::sandbox_data_plane::ExecResult;
     use alien_azure_clients::azure::sandbox_data_plane::MockSandboxDataPlaneApi;
     use alien_azure_clients::azure::sandbox_data_plane::{DiskImage, DiskImageStatus};
-    use alien_azure_clients::azure::sandbox_data_plane::{
-        EgressRule, EgressRuleAction, EgressRuleMatch,
-    };
     use alien_core::Platform;
     use futures::StreamExt;
 
@@ -2903,46 +2891,6 @@ mod tests {
             .expect_create_sandbox()
             .times(1)
             .returning(|_, request| {
-                let policy = request.egress.expect("allowDomains must send a policy");
-                assert_eq!(policy.default_action, "Deny", "anything unlisted is denied");
-                assert_eq!(policy.traffic_inspection.as_deref(), Some("Full"));
-                assert_eq!(
-                    policy.host_rules,
-                    vec![EgressHostRule {
-                        pattern: "api.example.com".to_string(),
-                        action: "Allow".to_string(),
-                    }]
-                );
-                Ok(running("s1", Some(policy)))
-            });
-        settles_running(
-            &mut client,
-            Some(EgressPolicy {
-                default_action: "Deny".to_string(),
-                host_rules: vec![EgressHostRule {
-                    pattern: "api.example.com".to_string(),
-                    action: "Allow".to_string(),
-                }],
-                rules: Vec::new(),
-                unmodelled: Default::default(),
-                traffic_inspection: Some("Full".to_string()),
-            }),
-        );
-        sandbox_denying(
-            client,
-            SandboxEgress::Allow {
-                allow: vec!["api.example.com".to_string()],
-            },
-        )
-        .create(CreateSandboxRequest::default())
-        .await
-        .expect("allowDomains should create");
-
-        let mut client = MockSandboxDataPlaneApi::new();
-        client
-            .expect_create_sandbox()
-            .times(1)
-            .returning(|_, request| {
                 assert!(
                     request.egress.is_none(),
                     "an open sandbox sends no policy: Full inspection would block non-HTTP traffic"
@@ -3001,46 +2949,6 @@ mod tests {
         }
     }
 
-    /// A host the declaration named that the sandbox is not running is the same failure as a
-    /// missing policy: the caller believes traffic to it is allowed and it is not, or worse, the
-    /// list came back holding something else.
-    #[tokio::test]
-    async fn a_missing_host_rule_fails_the_create() {
-        let mut client = MockSandboxDataPlaneApi::new();
-        let elsewhere = EgressPolicy {
-            default_action: "Deny".to_string(),
-            unmodelled: Default::default(),
-            rules: Vec::new(),
-            host_rules: vec![EgressHostRule {
-                pattern: "elsewhere.example.com".to_string(),
-                action: "Allow".to_string(),
-            }],
-            traffic_inspection: Some("Full".to_string()),
-        };
-        let echoed = elsewhere.clone();
-        client
-            .expect_create_sandbox()
-            .times(1)
-            .returning(move |_, _| Ok(running("s1", Some(echoed.clone()))));
-        settles_running(&mut client, Some(elsewhere));
-        client
-            .expect_delete_sandbox()
-            .times(1)
-            .returning(|_, _| Ok(()));
-
-        let error = sandbox_denying(
-            client,
-            SandboxEgress::Allow {
-                allow: vec!["api.example.com".to_string()],
-            },
-        )
-        .create(CreateSandboxRequest::default())
-        .await
-        .expect_err("a host the declaration named must be in the effective policy");
-
-        assert_eq!(error.code, "SANDBOX_NOT_AS_DECLARED", "{error}");
-    }
-
     /// A sandbox that is going away is not one to reconnect to.
     ///
     /// `get_or_create` hands back whatever `get` finds, and the id of a deleting sandbox will not
@@ -3088,119 +2996,6 @@ mod tests {
 
         assert_eq!(sandbox.sandbox.sandbox_id, "fresh");
         assert!(sandbox.created, "a replacement is a sandbox this call made");
-    }
-
-    /// A permission the declaration never asked for fails the create as surely as a missing one.
-    ///
-    /// The check looks outward as well as inward: an `Allow` the sandbox holds and the caller did
-    /// not name is the whole failure this path exists to catch, and a group-scoped policy is a
-    /// documented way for one to appear.
-    #[tokio::test]
-    async fn a_permission_nobody_asked_for_fails_the_create() {
-        let asked_for = || SandboxEgress::Allow {
-            allow: vec!["api.example.com".to_string()],
-        };
-        let declared = EgressHostRule {
-            pattern: "api.example.com".to_string(),
-            action: "Allow".to_string(),
-        };
-
-        for came_up_with in [
-            // A second host, allowed.
-            EgressPolicy {
-                default_action: "Deny".to_string(),
-                unmodelled: Default::default(),
-                host_rules: vec![
-                    declared.clone(),
-                    EgressHostRule {
-                        pattern: "exfil.example.com".to_string(),
-                        action: "Allow".to_string(),
-                    },
-                ],
-                rules: Vec::new(),
-                traffic_inspection: Some("Full".to_string()),
-            },
-            // Everything, through the list this client never writes.
-            EgressPolicy {
-                default_action: "Deny".to_string(),
-                unmodelled: Default::default(),
-                host_rules: vec![declared.clone()],
-                rules: vec![EgressRule {
-                    name: None,
-                    r#match: Some(EgressRuleMatch {
-                        host: "*".to_string(),
-                        path: None,
-                        methods: None,
-                    }),
-                    action: Some(EgressRuleAction {
-                        action_type: "Allow".to_string(),
-                        host: None,
-                        path: None,
-                        scheme: None,
-                        headers: None,
-                    }),
-                }],
-                traffic_inspection: Some("Full".to_string()),
-            },
-        ] {
-            let mut client = MockSandboxDataPlaneApi::new();
-            let effective = came_up_with.clone();
-            client
-                .expect_create_sandbox()
-                .times(1)
-                .returning(move |_, _| Ok(running("s1", Some(effective.clone()))));
-            settles_running(&mut client, Some(came_up_with.clone()));
-            client
-                .expect_delete_sandbox()
-                .times(1)
-                .returning(|_, _| Ok(()));
-
-            let error = sandbox_denying(client, asked_for())
-                .create(CreateSandboxRequest::default())
-                .await
-                .expect_err("a permission nobody asked for must fail the create");
-
-            assert_eq!(error.code, "SANDBOX_NOT_AS_DECLARED", "{error}");
-        }
-
-        // The same policy without the extra permission creates normally, so the rule above is
-        // refusing the addition rather than refusing everything.
-        let mut client = MockSandboxDataPlaneApi::new();
-        client
-            .expect_create_sandbox()
-            .times(1)
-            .returning(move |_, _| {
-                Ok(running(
-                    "s1",
-                    Some(EgressPolicy {
-                        default_action: "Deny".to_string(),
-                        unmodelled: Default::default(),
-                        host_rules: vec![EgressHostRule {
-                            pattern: "api.example.com".to_string(),
-                            action: "Allow".to_string(),
-                        }],
-                        rules: Vec::new(),
-                        traffic_inspection: Some("Full".to_string()),
-                    }),
-                ))
-            });
-        settles_running(
-            &mut client,
-            Some(EgressPolicy {
-                default_action: "Deny".to_string(),
-                unmodelled: Default::default(),
-                host_rules: vec![EgressHostRule {
-                    pattern: "api.example.com".to_string(),
-                    action: "Allow".to_string(),
-                }],
-                rules: Vec::new(),
-                traffic_inspection: Some("Full".to_string()),
-            }),
-        );
-        sandbox_denying(client, asked_for())
-            .create(CreateSandboxRequest::default())
-            .await
-            .expect("the policy that was asked for should create");
     }
 
     /// Pause and resume are one call each, and each has to reach the verb it names.
@@ -4649,9 +4444,7 @@ mod tests {
             std::sync::Arc::new(MockSandboxDataPlaneApi::new()),
             "grp".to_string(),
             "ubuntu".to_string(),
-            SandboxEgress::Allow {
-                allow: vec!["api.example.com".to_string()],
-            },
+            SandboxEgress::Internet,
             None,
             "1000m".to_string(),
             "2048Mi".to_string(),

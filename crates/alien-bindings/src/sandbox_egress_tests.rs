@@ -1,34 +1,33 @@
-//! Exercise policy ownership across real KV handles, a real vault and HTTP admin transport.
-
+//! Real vault and signed HTTP policy lifecycle, without a caller-side policy database.
 use super::*;
-use crate::providers::{kv::local::LocalKv, vault::local::LocalVault};
+use crate::providers::vault::local::LocalVault;
 use alien_core::bindings::SandboxEgressSigningKey;
 use axum::{
     extract::State,
-    http::{HeaderMap, StatusCode},
-    routing::post,
+    http::{HeaderMap, Method, StatusCode},
+    routing::put,
     Json, Router,
 };
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use ed25519_compact::{KeyPair, Seed, Signature};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Mutex,
+    Mutex as StdMutex,
 };
 
 struct AdminState {
     public: ed25519_compact::PublicKey,
-    highest: Mutex<std::collections::BTreeMap<String, u64>>,
+    policies: StdMutex<std::collections::BTreeMap<String, EgressPolicy>>,
+    writes: StdMutex<Vec<String>>,
     refuse: AtomicBool,
 }
-
-async fn fence(
+async fn policy_request(
     State(state): State<Arc<AdminState>>,
+    method: Method,
     headers: HeaderMap,
     Json(body): Json<serde_json::Value>,
 ) -> StatusCode {
-    let token = headers
-        .get("authorization")
-        .unwrap()
+    let token = headers["authorization"]
         .to_str()
         .unwrap()
         .strip_prefix("Bearer ")
@@ -46,30 +45,32 @@ async fn fence(
             &Signature::from_slice(&URL_SAFE_NO_PAD.decode(parts[2]).unwrap()).unwrap(),
         )
         .unwrap();
-    let policy: SandboxEgress = serde_json::from_value(body["policy"].clone()).unwrap();
-    assert_eq!(claims["policy"], policy.policy_digest().unwrap());
-    for field in ["aud", "sub", "gen"] {
+    assert_eq!(claims["method"], method.as_str());
+    for field in ["aud", "sub"] {
         assert_eq!(claims[field], body[field]);
     }
     assert!(claims["exp"].as_i64().unwrap() <= now_unix().unwrap() + 60);
+    let policy = if method == Method::PUT {
+        let policy: EgressPolicy = serde_json::from_value(body["policy"].clone()).unwrap();
+        assert_eq!(claims["policy"], policy.policy_digest().unwrap());
+        Some(policy)
+    } else {
+        assert!(claims.get("policy").is_none());
+        None
+    };
     if state.refuse.load(Ordering::SeqCst) {
         return StatusCode::SERVICE_UNAVAILABLE;
     }
-    let key = format!(
-        "{}/{}",
-        body["aud"].as_str().unwrap(),
-        body["sub"].as_str().unwrap()
-    );
-    let mut highest = state.highest.lock().unwrap();
-    let current = highest.entry(key).or_default();
-    let generation = body["gen"].as_u64().unwrap();
-    if generation < *current {
-        return StatusCode::CONFLICT;
+    let key = body["sub"].as_str().unwrap().to_string();
+    state.writes.lock().unwrap().push(method.to_string());
+    let mut policies = state.policies.lock().unwrap();
+    if let Some(policy) = policy {
+        policies.insert(key, policy);
+    } else {
+        policies.remove(&key);
     }
-    *current = generation;
     StatusCode::NO_CONTENT
 }
-
 pub(crate) struct Harness {
     manager: SandboxEgressManager,
     state: Arc<AdminState>,
@@ -78,57 +79,54 @@ pub(crate) struct Harness {
     directory: tempfile::TempDir,
     server: tokio::task::JoinHandle<()>,
 }
-
 impl Drop for Harness {
     fn drop(&mut self) {
         self.server.abort();
     }
 }
 impl Harness {
-    pub(crate) fn highest(&self, sub: &str) -> Option<u64> {
-        self.state
-            .highest
-            .lock()
-            .unwrap()
-            .get(&format!("prefix/box/{sub}"))
-            .copied()
+    pub(crate) fn policy(&self, id: &str) -> Option<EgressPolicy> {
+        self.state.policies.lock().unwrap().get(id).cloned()
     }
-
     pub(crate) async fn new() -> Self {
         let directory = tempfile::tempdir().unwrap();
         let vault = Arc::new(LocalVault::new(
-            "secrets".to_string(),
+            "secrets".into(),
             directory.path().join("vault"),
         ));
         let key = KeyPair::from_seed(Seed::new([29; 32]));
-        vault.set_secret("signing-key", &serde_json::json!({"kid":"key-1", "privateKey":base64::engine::general_purpose::STANDARD.encode(key.sk.to_der())}).to_string()).await.unwrap();
+        vault.set_secret("signing-key",&serde_json::json!({"kid":"key-1","privateKey":base64::engine::general_purpose::STANDARD.encode(key.sk.to_der())}).to_string()).await.unwrap();
         let state = Arc::new(AdminState {
             public: key.pk,
-            highest: Mutex::new(Default::default()),
+            policies: StdMutex::new(Default::default()),
+            writes: StdMutex::new(Vec::new()),
             refuse: AtomicBool::new(false),
         });
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let admin = format!("http://{}", listener.local_addr().unwrap());
         let router = Router::new()
-            .route("/v1/generations", post(fence))
+            .route("/v1/policies", put(policy_request).delete(policy_request))
             .with_state(state.clone());
         let server = tokio::spawn(async move {
             axum::serve(listener, router).await.unwrap();
         });
         let config = SandboxEgressGateway {
-            gateway: "127.0.0.1:3128".to_string(),
-            admin,
-            audience: "prefix/box".to_string(),
-            bound: SandboxEgress::Internet,
+            container: "sandbox-egress-gateway".into(),
+            audience: "prefix/box".into(),
             signing_key: SandboxEgressSigningKey {
-                vault: "secrets".to_string(),
-                key: "signing-key".to_string(),
+                vault: "secrets".into(),
+                key: "signing-key".into(),
             },
-            kid: "key-1".to_string(),
+            kid: "key-1".into(),
             admin_ca_pem: None,
         };
-        let kv = Arc::new(LocalKv::new(directory.path().join("kv")).await.unwrap());
-        let manager = SandboxEgressManager::new(config.clone(), vault.clone(), kv).unwrap();
+        let manager = SandboxEgressManager::with_endpoints(
+            config.clone(),
+            vault.clone(),
+            "127.0.0.1:3128".into(),
+            admin,
+        )
+        .unwrap();
         Self {
             manager,
             state,
@@ -139,19 +137,15 @@ impl Harness {
         }
     }
     pub(crate) async fn reopen(&self) -> SandboxEgressManager {
-        SandboxEgressManager::new(
+        SandboxEgressManager::with_endpoints(
             self.config.clone(),
             self.vault.clone(),
-            Arc::new(
-                LocalKv::new(self.directory.path().join("kv"))
-                    .await
-                    .unwrap(),
-            ),
+            self.manager.gateway.clone(),
+            self.manager.admin_url.clone(),
         )
         .unwrap()
     }
 }
-
 fn claims(delivery: &EgressDelivery) -> crate::sandbox_egress_token::EgressTokenClaims {
     serde_json::from_slice(
         &URL_SAFE_NO_PAD
@@ -160,196 +154,65 @@ fn claims(delivery: &EgressDelivery) -> crate::sandbox_egress_token::EgressToken
     )
     .unwrap()
 }
-
 #[tokio::test]
-async fn unused_policy_chunks_expire_without_resetting_generations_or_other_sandboxes() {
-    let harness = Harness::new().await;
-    let manager = &harness.manager;
-    let deadline = now_unix().unwrap() + 3;
-    manager
-        .create("short", &SandboxEgress::Internet, deadline)
+async fn policy_updates_and_renewal_use_one_gateway_store() {
+    let h = Harness::new().await;
+    let expires = now_unix().unwrap() + 1000;
+    let first = h
+        .manager
+        .create("s1", &EgressPolicy::Internet, expires)
         .await
         .unwrap();
-    manager.update("short", &SandboxEgress::None).await.unwrap();
-    let lost_policy = SandboxEgress::Allow {
-        allow: vec!["api.example.com".to_string()],
+    assert_eq!(h.policy("s1"), Some(EgressPolicy::Internet));
+    let policy = EgressPolicy::Allow {
+        allow: vec!["*.example.com".into()],
     };
-    assert_eq!(
-        manager
-            .create("short", &lost_policy, deadline)
-            .await
-            .unwrap_err()
-            .code,
-        "SANDBOX_EGRESS_CONFLICT"
-    );
-    manager
-        .create("long", &SandboxEgress::Internet, deadline + 1000)
-        .await
-        .unwrap();
-    let prefix = format!("sandbox-policy-content:{deadline}:");
-    let chunks = manager.kv.scan_prefix(&prefix, None, None).await.unwrap();
-    assert_eq!(
-        chunks.items.len(),
-        3,
-        "current, replaced and losing policies exist"
-    );
-
-    // Exercise the real store's expiry, allowing its millisecond TTL to pass the Unix deadline.
-    tokio::time::sleep(Duration::from_secs(4)).await;
-    for chunk in chunks.items {
-        assert!(manager.kv.get(&chunk.key).await.unwrap().is_none());
-    }
-    assert!(manager
-        .kv
-        .get(&manager.key("short"))
-        .await
-        .unwrap()
-        .is_some());
-    assert!(manager.renew("short").await.is_err());
-    assert_eq!(
-        manager
-            .create("short", &SandboxEgress::Internet, deadline + 1000)
-            .await
-            .unwrap_err()
-            .code,
-        "SANDBOX_EGRESS_CONFLICT"
-    );
-    let renewed = harness.reopen().await.renew("long").await.unwrap();
-    assert_eq!(
-        claims(&renewed).policy,
-        SandboxEgress::Internet.policy_digest().unwrap()
-    );
+    h.manager.update("s1", &policy).await.unwrap();
+    assert_eq!(h.policy("s1"), Some(policy));
+    let renewed = h.reopen().await.renew("s1", expires).await.unwrap();
+    assert_eq!(claims(&first).exp, claims(&renewed).exp);
+    assert_eq!(*h.state.writes.lock().unwrap(), vec!["PUT", "PUT"]);
+    h.manager.delete("s1").await.unwrap();
+    assert_eq!(h.policy("s1"), None);
+    h.manager.delete("s1").await.unwrap();
 }
-
 #[tokio::test]
-async fn policy_survives_reconnect_and_concurrent_updates_without_extending_lifetime() {
-    let harness = Harness::new().await;
-    let deadline = now_unix().unwrap() + 1000;
-    let first = harness
-        .manager
-        .create("session", &SandboxEgress::Internet, deadline)
-        .await
-        .unwrap();
-    assert_eq!(claims(&first).exp, deadline);
-    let other = harness.reopen().await;
-    let policy = SandboxEgress::Allow {
-        allow: vec!["api.example.com".to_string()],
-    };
-    let (a, b) = tokio::join!(
-        harness.manager.update("session", &policy),
-        other.update("session", &policy)
-    );
-    for result in [&a, &b] {
-        if let Err(error) = result {
-            assert_eq!(error.code, "SANDBOX_EGRESS_CONFLICT");
-        }
-    }
-    let reopened = harness.reopen().await;
-    let renewed = reopened.renew("session").await.unwrap();
-    assert!(renewed.generation >= 1);
-    assert_eq!(claims(&renewed).policy, policy.policy_digest().unwrap());
-    assert_eq!(claims(&renewed).exp, deadline);
-    assert_eq!(
-        harness
-            .manager
-            .confirm("session", first.generation)
-            .await
-            .unwrap_err()
-            .code,
-        "SANDBOX_EGRESS_CONFLICT"
-    );
-    assert_eq!(
-        harness
-            .manager
-            .create("session", &SandboxEgress::Internet, deadline + 999)
-            .await
-            .unwrap_err()
-            .code,
-        "SANDBOX_EGRESS_CONFLICT"
-    );
-}
-
-#[tokio::test]
-async fn failed_fence_returns_no_token_and_retry_renews_the_latest_policy() {
-    let harness = Harness::new().await;
-    harness
-        .manager
-        .create(
-            "session",
-            &SandboxEgress::Internet,
-            now_unix().unwrap() + 1000,
-        )
-        .await
-        .unwrap();
-    harness.state.refuse.store(true, Ordering::SeqCst);
-    assert!(harness
-        .manager
-        .update("session", &SandboxEgress::None)
-        .await
-        .is_err());
-    harness.state.refuse.store(false, Ordering::SeqCst);
-    let renewed = harness.reopen().await.renew("session").await.unwrap();
-    assert_eq!(
-        claims(&renewed).policy,
-        SandboxEgress::None.policy_digest().unwrap()
-    );
-    assert_eq!(renewed.generation, 1);
-}
-
-#[tokio::test]
-async fn all_256_long_targets_round_trip_through_real_kv_value_limits() {
-    let harness = Harness::new().await;
-    let policy = SandboxEgress::Allow {
-        allow: (0..256)
-            .map(|i| {
-                format!(
-                    "{i}.{}.{}.{}.example.com",
-                    "a".repeat(63),
-                    "b".repeat(63),
-                    "c".repeat(63)
-                )
-            })
-            .collect(),
-    };
-    assert!(serde_json::to_vec(&policy).unwrap().len() > 24 * 1024);
-    harness
-        .manager
-        .create("long-policy", &policy, now_unix().unwrap() + 1000)
-        .await
-        .unwrap();
-    let renewed = harness.reopen().await.renew("long-policy").await.unwrap();
-    assert_eq!(claims(&renewed).policy, policy.policy_digest().unwrap());
-}
-
-#[tokio::test]
-async fn maximum_target_count_uses_small_tokens_and_survives_reopen() {
-    let harness = Harness::new().await;
-    let policy = SandboxEgress::Allow {
+async fn full_size_policy_uses_a_small_identity_token_and_failures_propagate() {
+    let h = Harness::new().await;
+    let policy = EgressPolicy::Allow {
         allow: (0..4096)
             .map(|i| format!("{i}.{}.example.com", "a".repeat(32)))
             .collect(),
     };
-    let bytes = policy.canonical_json().unwrap();
-    assert!(bytes.len() > 192 * 1024 && bytes.len() <= 256 * 1024);
-    let initial = harness
+    assert!(policy.canonical_json().unwrap().len() > 192 * 1024);
+    let token = h
         .manager
-        .create("maximum-policy", &policy, now_unix().unwrap() + 1000)
+        .create("large", &policy, now_unix().unwrap() + 1000)
         .await
         .unwrap();
-    assert!(initial.token.len() < 4096);
-    let renewed = harness
-        .reopen()
+    assert!(token.token.len() < 4096);
+    assert_eq!(
+        h.policy("large").unwrap().canonical_json().unwrap(),
+        policy.canonical_json().unwrap()
+    );
+    h.state.refuse.store(true, Ordering::SeqCst);
+    assert!(h
+        .manager
+        .update("large", &EgressPolicy::Internet)
         .await
-        .renew("maximum-policy")
+        .is_err());
+    assert!(h.manager.delete("large").await.is_err());
+    assert!(h
+        .manager
+        .create("expired", &EgressPolicy::Internet, now_unix().unwrap())
         .await
-        .unwrap();
-    assert_eq!(claims(&renewed).policy, policy.policy_digest().unwrap());
-    assert_eq!(claims(&initial).policy, claims(&renewed).policy);
+        .is_err());
+    assert_eq!(h.policy("expired"), None);
 }
 
 #[tokio::test]
 #[ignore = "requires ALIEN_TEST_EGRESS_GATEWAY_BIN and public TCP access to one.one.one.one:443"]
-async fn released_gateway_accepts_minted_tokens_and_revokes_old_generations() {
+async fn released_gateway_updates_policy_without_changing_the_identity_token() {
     released_gateway_contract(false).await;
 }
 
@@ -368,9 +231,9 @@ async fn released_gateway_contract(long_policy: bool) {
     let admin = admin_reservation.local_addr().unwrap();
     let pair = KeyPair::from_seed(Seed::new([29; 32]));
     let config = serde_json::json!({
-        "listen":proxy.to_string(),"adminListen":admin.to_string(),"bounds":{"prefix/box":"internet"},
+        "listen":proxy.to_string(),"admin":admin.to_string(),"audiences":["prefix/box"],"defaultPolicies":{},
         "keys":[{"kid":"key-1","publicKey":base64::engine::general_purpose::STANDARD.encode(pair.pk.as_ref())}],
-        "deniedRanges":[],"generationBinding":STATE_BINDING,"credentials":[]
+        "deniedRanges":[],"generationStore":{"binding":"egress-state"},"credentials":[]
     });
     let kv =
         serde_json::json!({"service":"local-kv","dataDir":harness.directory.path().join("kv")});
@@ -407,27 +270,21 @@ async fn released_gateway_contract(long_policy: bool) {
         );
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }
-    let mut binding = harness.config.clone();
-    binding.admin = format!("http://{admin}");
-    binding.gateway = proxy.to_string();
-    let manager = SandboxEgressManager::new(
-        binding,
+    let manager = SandboxEgressManager::with_endpoints(
+        harness.config.clone(),
         harness.vault.clone(),
-        Arc::new(
-            LocalKv::new(harness.directory.path().join("kv"))
-                .await
-                .unwrap(),
-        ),
+        proxy.to_string(),
+        format!("http://{admin}"),
     )
     .unwrap();
     let policy = if long_policy {
-        SandboxEgress::Allow {
+        EgressPolicy::Allow {
             allow: std::iter::once("one.one.one.one".to_string())
                 .chain((0..4095).map(|i| format!("{i}.{}.example.com", "a".repeat(32))))
                 .collect(),
         }
     } else {
-        SandboxEgress::Internet
+        EgressPolicy::Internet
     };
     let initial = manager
         .create("gateway-session", &policy, now_unix().unwrap() + 600)
@@ -453,8 +310,8 @@ async fn released_gateway_contract(long_policy: bool) {
             .starts_with("HTTP/1.1 200"),
         "the real gateway must accept the bounded token before revocation"
     );
-    let narrowed = manager
-        .update("gateway-session", &SandboxEgress::None)
+    manager
+        .update("gateway-session", &EgressPolicy::Allow { allow: vec![] })
         .await
         .unwrap();
     assert!(
@@ -463,12 +320,60 @@ async fn released_gateway_contract(long_policy: bool) {
             .starts_with("HTTP/1.1 403"),
         "an older token must be fenced"
     );
+    manager.update("gateway-session", &policy).await.unwrap();
     assert!(
-        connect_status(proxy, &narrowed.token)
+        connect_status(proxy, &initial.token)
             .await
-            .starts_with("HTTP/1.1 403"),
-        "none must deny the same destination"
+            .starts_with("HTTP/1.1 200"),
+        "same identity token must use the updated policy"
     );
+    manager.delete("gateway-session").await.unwrap();
+    assert!(connect_status(proxy, &initial.token)
+        .await
+        .starts_with("HTTP/1.1 403"));
     process.kill().await.unwrap();
     process.wait().await.unwrap();
+}
+
+#[tokio::test]
+async fn linked_container_resolves_both_gateway_ports_without_storing_an_address_in_the_sandbox_binding(
+) {
+    use crate::traits::BindingsProviderApi;
+    let h = Harness::new().await;
+    let provider = crate::BindingsProvider::new(
+        alien_core::ClientConfig::Local {
+            state_directory: h.directory.path().display().to_string(),
+        },
+        [(
+            "sandbox-egress-gateway".into(),
+            serde_json::to_value(alien_core::bindings::ContainerBinding::local(
+                "gateway",
+                "http://gateway.internal:8080",
+            ))
+            .unwrap(),
+        )]
+        .into(),
+    )
+    .unwrap();
+    let container = provider.load_container(&h.config.container).await.unwrap();
+    let manager = SandboxEgressManager::new(
+        h.config.clone(),
+        h.vault.clone(),
+        container.get_internal_url(),
+    )
+    .unwrap();
+    assert_eq!(manager.gateway, "gateway.internal:3128");
+    assert_eq!(manager.admin_url, "http://gateway.internal:3129/");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&manager.bootstrap_payload()).unwrap()["gateway"],
+        "gateway.internal:3128"
+    );
+    for invalid in [
+        "http://user:secret@gateway",
+        "http://gateway/path",
+        "file:///tmp/gateway",
+        "http://gateway?token=secret",
+    ] {
+        assert!(SandboxEgressManager::new(h.config.clone(), h.vault.clone(), invalid).is_err());
+    }
 }

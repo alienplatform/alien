@@ -28,7 +28,7 @@ use napi_derive::napi;
 
 use crate::error::map_alien_error;
 
-fn parse_egress(value: serde_json::Value) -> napi::Result<alien_core::SandboxEgress> {
+fn parse_egress(value: serde_json::Value) -> napi::Result<alien_core::EgressPolicy> {
     serde_json::from_value(value)
         .into_alien_error()
         .context(alien_bindings::error::ErrorData::SandboxEgressInvalid {

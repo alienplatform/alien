@@ -476,7 +476,7 @@ class SandboxAllowEgress(TypedDict):
     allow: list[str]
 
 
-SandboxEgress = Literal["none", "internet"] | SandboxAllowEgress
+EgressPolicy = Literal["internet"] | SandboxAllowEgress
 
 
 class Sandbox:
@@ -495,7 +495,7 @@ class Sandbox:
         tenant_key: str | None = None,
         env: Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
-        egress: SandboxEgress | None = None,
+        egress: EgressPolicy | None = None,
     ) -> SandboxInfo:
         value = await (await self._handle.get()).create(
             sandbox_id,
@@ -519,7 +519,7 @@ class Sandbox:
         tenant_key: str | None = None,
         env: Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
-        egress: SandboxEgress | None = None,
+        egress: EgressPolicy | None = None,
     ) -> tuple[SandboxInfo, bool]:
         value = await (await self._handle.get()).get_or_create(
             sandbox_id,
@@ -531,7 +531,7 @@ class Sandbox:
         return _sandbox_info(value.sandbox), value.created
 
     @translate_errors
-    async def update_egress(self, sandbox_id: str, egress: SandboxEgress) -> None:
+    async def update_egress(self, sandbox_id: str, egress: EgressPolicy) -> None:
         await (await self._handle.get()).update_egress(sandbox_id, json.dumps(egress))
 
     @translate_errors

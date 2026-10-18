@@ -1,6 +1,6 @@
-import type { SandboxEgress } from "@alienplatform/core"
+import type { EgressPolicy } from "@alienplatform/core"
 
-export type { SandboxEgress } from "@alienplatform/core"
+export type { EgressPolicy } from "@alienplatform/core"
 /**
  * Public types for `@alienplatform/bindings`: the app-facing resource handle
  * interfaces and their operation option/result shapes. These mirror the Rust
@@ -434,8 +434,8 @@ export interface ResolvedSandbox {
 
 /** What a sandbox is created with. */
 export interface CreateSandboxOptions {
-  /** Narrows the declared policy for this sandbox. */
-  egress?: SandboxEgress
+  /** Sets the runtime policy; omission uses the resource default or public internet. */
+  egress?: EgressPolicy
   /**
    * A provider-scoped id to reconnect to when passed to `getOrCreate`, or a requested id when a
    * sandbox is created.
@@ -539,8 +539,8 @@ export interface Sandbox {
     sandboxId: string,
     options?: Omit<CreateSandboxOptions, "sandboxId">,
   ): Promise<ResolvedSandbox>
-  /** Changes the policy within the declaration; unsupported backends fail explicitly. */
-  updateEgress(sandboxId: string, egress: SandboxEgress): Promise<void>
+  /** Changes the runtime policy; backends without a gateway refuse explicitly. */
+  updateEgress(sandboxId: string, egress: EgressPolicy): Promise<void>
   /**
    * Lists this binding's sandboxes. Not offered on AWS, Azure or GCP — those raise rather than
    * enumerate. Reach a sandbox whose id you hold with `get`.
