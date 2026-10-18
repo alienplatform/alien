@@ -1877,7 +1877,9 @@ impl BindingsProviderApi for BindingsProvider {
         }
         // Do not silently treat a gateway binding as a legacy policy-only binding on backends
         // whose authenticated token-delivery path has not landed yet.
-        if gateway.is_some() && !matches!(&binding, SandboxBinding::Aws(_)) {
+        if gateway.is_some()
+            && !matches!(&binding, SandboxBinding::Aws(_) | SandboxBinding::Azure(_))
+        {
             return Err(crate::providers::sandbox::egress::unsupported(
                 "gateway-backed sandbox",
             ));
@@ -2050,7 +2052,7 @@ impl BindingsProviderApi for BindingsProvider {
                 let memory = declared(azure_binding.memory, "memory")?;
                 let disk = declared(azure_binding.disk, "disk")?;
 
-                let sandbox: Arc<dyn crate::traits::Sandbox> = Arc::new(AzureSandbox::new(
+                let mut sandbox = AzureSandbox::new(
                     Arc::new(client),
                     group,
                     disk_image,
@@ -2059,8 +2061,17 @@ impl BindingsProviderApi for BindingsProvider {
                     cpu.unwrap_or_else(|| DEFAULT_AZURE_CPU.to_string()),
                     memory.unwrap_or_else(|| DEFAULT_AZURE_MEMORY.to_string()),
                     disk,
-                ));
-                Ok(sandbox)
+                )
+                .with_lifetime_ceiling(azure_binding.max_lifetime_seconds);
+                if let Some(manager) = egress_manager {
+                    sandbox = sandbox.with_egress_manager(
+                        manager,
+                        azure_binding
+                            .default_policy
+                            .or_else(|| azure_binding.egress.default_policy().cloned()),
+                    );
+                }
+                Ok(Arc::new(sandbox))
             }
             #[cfg(feature = "aws")]
             SandboxBinding::Aws(aws_binding) => {

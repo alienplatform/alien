@@ -12,9 +12,11 @@
 //! with its own credential (which lacks Data Owner by design); the execute grant that opens the
 //! data plane is authored on that resource's permission set by a preflight, not verified here.
 //!
-//! It owns one data-plane object: the disk image built from a registry image, deleted once a
-//! changed reference replaces it; `sandbox/images` grants exactly those verbs. One build per
-//! reference string, so a tag pushed again is not rebuilt: a changed image needs a new tag or digest.
+//! It owns the disk image built from a registry image; `sandbox/images` grants those verbs.
+//! One build per reference string means a changed image needs a new tag or digest. Its existing
+//! `sandbox/management` grant also lists session metadata and deletes expired sessions on
+//! reconciliation, without granting exec or file access. This cleanup pauses in terminal failure
+//! states, when dependencies are unavailable, or when deployment reconciliation stops.
 
 use std::time::Duration;
 
@@ -99,6 +101,8 @@ pub struct AzureSandboxController {
     /// Idle seconds after which a sandbox pauses, if the declaration asked for one.
     #[serde(default)]
     pub(crate) idle_pause_seconds: Option<u32>,
+    #[serde(default)]
+    pub(crate) max_lifetime_seconds: Option<u32>,
     /// Ceilings every sandbox is created with, from the declaration.
     #[serde(default)]
     pub(crate) limits: Option<SandboxLimits>,
@@ -163,6 +167,7 @@ impl AzureSandboxController {
     )]
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
+        let lifetime_issue = self.reap_session_lifetimes(ctx, config).await;
         // Refresh the binding inputs against the declaration, but do not gate the heartbeat on
         // them: a bad `code.image` is a declaration error the create and update paths already
         // fail on, and must not flip a serving sandbox to a terminal RefreshFailed here. A
@@ -196,12 +201,14 @@ impl AzureSandboxController {
         self.sweep_disk_images(ctx, &config.id).await;
         self.reap_retired_disk_images(ctx, &config.id).await;
 
-        // The data plane has no sandbox list operation, so the heartbeat carries the group's ARM
-        // provisioning state rather than a sandbox count. A read failure here leaves the sandbox
+        // The heartbeat carries the group's ARM provisioning state. A read failure here leaves the sandbox
         // serving: the heartbeat is an observation, not a health gate.
         if let Ok((group, _region, resource_group)) = self.identity(&config.id) {
             let mut provisioning_state = None;
             let mut status = alien_core::SandboxHeartbeatStatus::default();
+            if let Some(issue) = lifetime_issue {
+                record_collection_issue(&mut status, issue);
+            }
 
             // sandboxGroups/read is granted, so a failure here is transient rather than a
             // permission gap. Report it as a partial collection instead of a default-Healthy
@@ -257,7 +264,7 @@ impl AzureSandboxController {
 
         Ok(HandlerAction::Continue {
             state: Ready,
-            suggested_delay: Some(Duration::from_secs(60)),
+            suggested_delay: Some(Duration::from_secs(5)),
         })
     }
 
@@ -335,6 +342,10 @@ impl AzureSandboxController {
         status = ResourceStatus::RefreshFailed
     );
 
+    fn requires_convergence_reconciliation(&self) -> bool {
+        true
+    }
+
     fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
         use alien_core::bindings::{BindingValue, SandboxBinding};
 
@@ -368,6 +379,7 @@ impl AzureSandboxController {
         // All three or none, as the declaration has them: the data plane reads a missing ceiling
         // as its own default, so filling one in alone would assert a size nobody declared.
         azure.default_policy = egress.default_policy().cloned();
+        azure.max_lifetime_seconds = self.max_lifetime_seconds;
         if let Some(limits) = self.limits.as_ref() {
             azure.cpu = Some(BindingValue::value(limits.cpu.clone()));
             azure.memory = Some(BindingValue::value(limits.memory.clone()));
@@ -398,6 +410,31 @@ impl AzureSandboxController {
 }
 
 impl AzureSandboxController {
+    /// Runs on Ready and image-build ticks. This is a reconciliation ceiling: terminal failures,
+    /// unavailable dependencies and a stopped deployment controller suspend enforcement.
+    async fn reap_session_lifetimes(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        config: &Sandbox,
+    ) -> Option<String> {
+        let result = async {
+            let (group, client) = self.data_plane(ctx, &config.id)?;
+            super::reap_expired_azure_sandboxes(
+                client.as_ref(),
+                &group,
+                config.lifecycle.max_lifetime_seconds,
+            )
+            .await
+        }
+        .await;
+        if let Err(error) = result {
+            // A transient list/delete error must not make the reaper itself terminal.
+            warn!(sandbox_id = %config.id, %error, "Azure sandbox lifetime cleanup failed; the next reconciliation will retry");
+            return Some(format!("sandbox lifetime cleanup failed: {error}"));
+        }
+        None
+    }
+
     /// Captures the image, egress, idle-pause and ceilings the binding carries from the
     /// declaration.
     ///
@@ -428,6 +465,7 @@ impl AzureSandboxController {
         }
         self.egress = Some(config.into());
         self.idle_pause_seconds = config.lifecycle.idle_pause_seconds;
+        self.max_lifetime_seconds = config.lifecycle.max_lifetime_seconds;
         self.limits = config.limits.clone();
         Ok(())
     }
@@ -449,6 +487,7 @@ impl AzureSandboxController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<AzureSandboxHandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
+        let _ = self.reap_session_lifetimes(ctx, config).await;
         // Nothing to build: `Ready` abandons any build left in flight.
         let Some(reference) = self.pending_image(config) else {
             return Ok(AzureSandboxHandlerAction::Continue {
@@ -900,6 +939,7 @@ mod tests {
     #[test]
     fn the_binding_carries_the_regional_data_plane_endpoint() {
         let controller = AzureSandboxController {
+            max_lifetime_seconds: None,
             state: AzureSandboxState::Ready,
             sandbox_group: Some("sbg".to_string()),
             region: Some("swedencentral".to_string()),
@@ -948,6 +988,7 @@ mod tests {
             })
             .build();
         let controller = AzureSandboxController {
+            max_lifetime_seconds: None,
             state: AzureSandboxState::Ready,
             sandbox_group: Some("sbg".to_string()),
             region: Some("swedencentral".to_string()),
@@ -982,6 +1023,7 @@ mod tests {
     #[test]
     fn controller_round_trips_by_tag() {
         let controller = AzureSandboxController {
+            max_lifetime_seconds: None,
             sandbox_group: Some("sbg1".to_string()),
             region: Some("swedencentral".to_string()),
             resource_group: Some("rg".to_string()),
@@ -1030,16 +1072,12 @@ mod tests {
         assert_eq!(restored.disk_image.as_deref(), Some("ubuntu"));
         assert_eq!(
             restored.egress.as_ref().unwrap().declaration(),
-            &SandboxEgress::Internet
+            &SandboxEgress::AllowDomains {
+                domains: vec!["api.example.com".into()],
+            }
         );
-        assert!(restored
-            .egress
-            .as_ref()
-            .unwrap()
-            .default_policy()
-            .unwrap()
-            .allows("api.example.com", 443)
-            .unwrap());
+        assert!(restored.egress.as_ref().unwrap().default_policy().is_none());
+        assert!(restored.egress.as_ref().unwrap().gateway().is_none());
         assert_eq!(restored.idle_pause_seconds, Some(300));
         assert_eq!(
             restored.limits,
@@ -1086,6 +1124,7 @@ mod tests {
     #[test]
     fn an_incomplete_import_is_refused_with_a_message_naming_what_is_missing() {
         let controller = AzureSandboxController {
+            max_lifetime_seconds: None,
             sandbox_group: Some("sbg1".to_string()),
             region: None,
             resource_group: Some("rg".to_string()),
@@ -1111,6 +1150,7 @@ mod tests {
     #[test]
     fn a_failed_capture_leaves_the_declaration_whole() {
         let mut controller = AzureSandboxController {
+            max_lifetime_seconds: None,
             state: AzureSandboxState::Ready,
             sandbox_group: Some("sbg".to_string()),
             region: Some("swedencentral".to_string()),
@@ -1156,6 +1196,7 @@ mod tests {
     #[test]
     fn a_failed_capture_does_not_apply_a_tightened_egress_either() {
         let mut controller = AzureSandboxController {
+            max_lifetime_seconds: None,
             state: AzureSandboxState::Ready,
             sandbox_group: Some("sbg".to_string()),
             region: Some("swedencentral".to_string()),
@@ -1204,6 +1245,7 @@ mod tests {
     #[test]
     fn the_binding_carries_the_declared_ceilings() {
         let controller = AzureSandboxController {
+            max_lifetime_seconds: None,
             state: AzureSandboxState::Ready,
             sandbox_group: Some("sbg".to_string()),
             region: Some("swedencentral".to_string()),
@@ -1239,6 +1281,7 @@ mod tests {
     #[test]
     fn a_sandbox_without_declared_ceilings_publishes_none() {
         let controller = AzureSandboxController {
+            max_lifetime_seconds: None,
             state: AzureSandboxState::Ready,
             sandbox_group: Some("sbg".to_string()),
             region: Some("swedencentral".to_string()),
@@ -1268,6 +1311,7 @@ mod tests {
     #[test]
     fn the_binding_carries_the_allowlist() {
         let controller = AzureSandboxController {
+            max_lifetime_seconds: None,
             state: AzureSandboxState::Ready,
             sandbox_group: Some("sbg".to_string()),
             region: Some("swedencentral".to_string()),
@@ -1367,6 +1411,7 @@ mod tests {
             disk_image_id: Option<&str>,
         ) -> AzureSandboxController {
             AzureSandboxController {
+                max_lifetime_seconds: None,
                 state: AzureSandboxState::Ready,
                 sandbox_group: Some("sbg".to_string()),
                 region: Some("westus2".to_string()),
@@ -1400,7 +1445,8 @@ mod tests {
 
         /// A provider handing out `client` for the data plane, and an ARM client whose read fails,
         /// which the heartbeat reports as a partial collection rather than an error.
-        fn provider_with(client: MockSandboxDataPlaneApi) -> Arc<MockPlatformServiceProvider> {
+        fn provider_with(mut client: MockSandboxDataPlaneApi) -> Arc<MockPlatformServiceProvider> {
+            client.expect_list_sandboxes().returning(|_| Ok(vec![]));
             let client: Arc<dyn SandboxDataPlaneApi> = Arc::new(client);
             let mut provider = MockPlatformServiceProvider::new();
             provider

@@ -21,7 +21,7 @@ pub use azure::{
     AzureFlexibleServerPostgresImportData, AzureKeyImportData, AzureKvImportData,
     AzureNetworkImportData, AzureQueueImportData, AzureRemoteBindingsImportData,
     AzureRemoteStackManagementImportData, AzureResourceGroupImportData, AzureSandboxImportData,
-    AzureServiceAccountImportData, AzureServiceActivationImportData,
+    AzureSandboxNetwork, AzureServiceAccountImportData, AzureServiceActivationImportData,
     AzureServiceBusNamespaceImportData, AzureStorageAccountImportData, AzureStorageImportData,
     AzureVaultImportData, AzureWorkerImportData,
 };

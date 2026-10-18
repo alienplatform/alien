@@ -37,3 +37,8 @@ test-group = 'e2e-tests'
 [[profile.default.overrides]]
 filter = 'binary_id(alien-local::worker_integration)'
 test-group = 'worker-integration-tests'
+
+[[profile.default.overrides]]
+# These live route tests share fixed sandbox resource names on the Docker daemon.
+filter = 'binary_id(alien-local::sandbox_route)'
+test-group = 'docker-access-tests'

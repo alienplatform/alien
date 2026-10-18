@@ -86,6 +86,10 @@ impl CfEmitter for AwsNetworkEmitter {
                             "eipAllocationId",
                             CfExpression::get_att(network_id(prefix, "NatEip"), "AllocationId"),
                         ),
+                        (
+                            "egressPublicIps",
+                            CfExpression::list([CfExpression::ref_(network_id(prefix, "NatEip"))]),
+                        ),
                         ("publicSubnetIds", subnet_refs(prefix, "PublicSubnet")),
                         ("privateSubnetIds", subnet_refs(prefix, "PrivateSubnet")),
                         (

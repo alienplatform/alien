@@ -21,7 +21,7 @@ use crate::traits::{
     ResolvedSandbox, RunCommandRequest, Sandbox, SandboxInstance, SandboxState,
 };
 use alien_core::bindings::LocalSandboxBinding;
-use alien_core::{Platform, SandboxCapabilities, SandboxCapability};
+use alien_core::{Platform, SandboxCapabilities};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 
 #[derive(Debug, Deserialize)]
@@ -254,20 +254,6 @@ impl LocalSandbox {
 
 impl Binding for LocalSandbox {}
 
-/// Refused rather than dropped: Docker has no wall-clock ceiling, so accepting one would report a
-/// bounded sandbox and leave an unbounded container running on the developer's machine.
-fn refuse_create_time_lifetime(request: &CreateSandboxRequest) -> Result<()> {
-    if request.timeout_ms.is_none() {
-        return Ok(());
-    }
-    Err(AlienError::new(ErrorData::OperationNotSupported {
-        operation: SandboxCapability::SandboxLifetime.as_str().to_string(),
-        reason: "local sandboxes run as Docker containers, which carry no wall-clock ceiling; \
-                 terminate the sandbox when the caller is done with it"
-            .to_string(),
-    }))
-}
-
 #[async_trait]
 impl Sandbox for LocalSandbox {
     fn egress_declaration(&self) -> Option<&alien_core::SandboxEgress> {
@@ -279,7 +265,6 @@ impl Sandbox for LocalSandbox {
 
     async fn create(&self, request: CreateSandboxRequest) -> Result<SandboxInstance> {
         super::egress::require_default(request.egress.as_ref(), self.egress_declaration())?;
-        refuse_create_time_lifetime(&request)?;
         let sandbox_id = request
             .sandbox_id
             .unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
@@ -290,7 +275,7 @@ impl Sandbox for LocalSandbox {
             .send(
                 self.client
                     .post(self.url("/v1/sessions"))
-                    .json(&json!({ "sessionId": sandbox_id })),
+                    .json(&json!({ "sessionId": sandbox_id, "timeoutMs": request.timeout_ms })),
                 "sandbox.create",
             )
             .await?;
@@ -312,9 +297,6 @@ impl Sandbox for LocalSandbox {
 
     async fn get_or_create(&self, request: CreateSandboxRequest) -> Result<ResolvedSandbox> {
         super::egress::require_default(request.egress.as_ref(), self.egress_declaration())?;
-        // Refused on the reconnect path too: an existing sandbox honors a lifetime no more than a
-        // fresh one would.
-        refuse_create_time_lifetime(&request)?;
         if let Some(id) = request.sandbox_id.as_deref() {
             if let Some(existing) = self.get(id).await? {
                 return Ok(ResolvedSandbox::found(existing));
@@ -545,21 +527,48 @@ impl Sandbox for LocalSandbox {
         Err(self.unsupported("snapshot"))
     }
 
-    async fn start_job(&self, _sandbox_id: &str, _request: RunCommandRequest) -> Result<JobStart> {
-        Err(self.unsupported("jobs"))
+    async fn start_job(&self, sandbox_id: &str, request: RunCommandRequest) -> Result<JobStart> {
+        self.send(
+            self.client
+                .post(self.url(&format!("/v1/sessions/{sandbox_id}/jobs")))
+                .json(&request),
+            "sandbox.jobStart",
+        )
+        .await
+        .context(ErrorData::SandboxOutcomeUnknown {
+            operation: "sandbox.jobStart".to_string(),
+            reason: "the local job start was not acknowledged".to_string(),
+        })
     }
 
     async fn poll_job(
         &self,
-        _sandbox_id: &str,
-        _job_id: &str,
-        _since_seq: Option<u64>,
+        sandbox_id: &str,
+        job_id: &str,
+        since_seq: Option<u64>,
     ) -> Result<JobPoll> {
-        Err(self.unsupported("jobs"))
+        self.send(
+            self.client
+                .get(self.url(&format!("/v1/sessions/{sandbox_id}/jobs/{job_id}")))
+                .query(
+                    &since_seq
+                        .map(|seq| ("sinceSeq", seq))
+                        .into_iter()
+                        .collect::<Vec<_>>(),
+                ),
+            "sandbox.jobPoll",
+        )
+        .await
     }
 
-    async fn cancel_job(&self, _sandbox_id: &str, _job_id: &str) -> Result<()> {
-        Err(self.unsupported("jobs"))
+    async fn cancel_job(&self, sandbox_id: &str, job_id: &str) -> Result<()> {
+        self.request(
+            self.client
+                .delete(self.url(&format!("/v1/sessions/{sandbox_id}/jobs/{job_id}"))),
+            "sandbox.jobCancel",
+        )
+        .await?;
+        Ok(())
     }
 
     async fn terminate(&self, sandbox_id: &str) -> Result<()> {

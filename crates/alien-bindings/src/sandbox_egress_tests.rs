@@ -146,6 +146,12 @@ impl Drop for Harness {
     }
 }
 impl Harness {
+    pub(crate) fn lose_policy_state(&self) {
+        self.state.policies.lock().unwrap().clear();
+    }
+    pub(crate) fn refuse_writes(&self, refuse: bool) {
+        self.state.refuse.store(refuse, Ordering::SeqCst);
+    }
     pub(crate) fn policy(&self, id: &str) -> Option<EgressPolicy> {
         self.state
             .policies
@@ -232,7 +238,7 @@ impl Harness {
             self.config.clone(),
             self.vault.clone(),
             self.manager.gateway.clone(),
-            self.manager.admin_url.clone(),
+            self.manager.admin_url.to_string(),
         )
         .unwrap()
     }
@@ -616,7 +622,7 @@ async fn linked_container_resolves_both_gateway_ports_without_storing_an_address
     )
     .unwrap();
     assert_eq!(manager.gateway, "proxy.internal:3128");
-    assert_eq!(manager.admin_url, "http://admin.internal:3129/");
+    assert_eq!(manager.admin_url.as_str(), "http://admin.internal:3129/");
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&manager.bootstrap_payload()).unwrap()["gateway"],
         "proxy.internal:3128"

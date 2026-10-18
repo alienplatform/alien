@@ -435,6 +435,14 @@ expression: schemas
           "null"
         ]
       },
+      "egressPublicIps": {
+        "default": [],
+        "description": "Public addresses allocated to this deployment's NAT; empty when unknown.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
       "eipAllocationId": {
         "description": "Elastic IP allocation ID backing the NAT gateway.",
         "type": [
@@ -1056,6 +1064,74 @@ expression: schemas
   },
   "azure_network": {
     "$schema": "http://json-schema.org/draft-07/schema#",
+    "definitions": {
+      "AzureSandboxNetwork": {
+        "description": "Setup-owned subnet coordinates consumed by an internal sandbox gateway load balancer.",
+        "properties": {
+          "gatewayCidrs": {
+            "description": "Gateway ranges allowed by the sandbox subnet NSGs on TCP3128 and TCP3129.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "gatewaySubnetIds": {
+            "description": "Undelegated subnet reserved for the gateway load balancer's frontend.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "sandboxCidrs": {
+            "description": "Sandbox source ranges allowed on the proxy listener.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "sandboxCidrsByResource": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "description": "Dedicated source ranges keyed by Sandbox resource id for exact linked-resource access.",
+            "type": "object"
+          },
+          "sandboxSubnetIds": {
+            "description": "Dedicated delegated subnets whose sandboxes use the gateway.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "vpcCidrs": {
+            "description": "Every VNet range excluded from gateway destinations.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "workloadCidrs": {
+            "description": "Workload source ranges allowed on the authenticated admin listener.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "gatewayCidrs",
+          "gatewaySubnetIds",
+          "sandboxCidrs",
+          "sandboxSubnetIds",
+          "vpcCidrs",
+          "workloadCidrs"
+        ],
+        "type": "object"
+      }
+    },
     "description": "Azure Network ImportData — VNet + subnets + NAT topology.",
     "properties": {
       "applicationGatewaySubnetId": {
@@ -1071,6 +1147,14 @@ expression: schemas
           "string",
           "null"
         ]
+      },
+      "egressPublicIps": {
+        "default": [],
+        "description": "NAT public addresses owned by setup; empty for an unknown external egress path.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
       },
       "isByoVnet": {
         "description": "True when the VNet is owned outside this stack.",
@@ -1100,6 +1184,17 @@ expression: schemas
       "resourceGroup": {
         "description": "Resource group containing the VNet.",
         "type": "string"
+      },
+      "sandboxNetwork": {
+        "anyOf": [
+          {
+            "$ref": "#/definitions/AzureSandboxNetwork"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "Setup-owned sandbox and internal gateway subnet coordinates."
       },
       "subnetIds": {
         "description": "Subnet resource ids in this VNet used by workloads.",

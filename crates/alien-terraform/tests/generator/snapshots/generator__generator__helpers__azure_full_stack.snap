@@ -241,7 +241,10 @@ locals {
         privateEndpointSubnetName    = azurerm_subnet.default_network_pe.name
         natGatewayId                 = azurerm_nat_gateway.default_network_nat.id
         networkSecurityGroupId       = azurerm_network_security_group.default_network_workload.id
-        isByoVnet                    = false
+        egressPublicIps = [
+          azurerm_public_ip.default_network_nat_pip.ip_address
+        ]
+        isByoVnet = false
       }
     },
     {
@@ -619,6 +622,11 @@ resource "azurerm_public_ip" "default_network_nat_pip" {
     resource        = "default-network"
     "resource-type" = "network"
   }
+
+  lifecycle {
+    prevent_destroy = true
+  }
+
   depends_on = [
     azurerm_resource_group.default_resource_group
   ]

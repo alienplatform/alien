@@ -34,6 +34,9 @@ pub struct AwsNetworkImportData {
     pub nat_gateway_id: Option<String>,
     /// Elastic IP allocation ID backing the NAT gateway.
     pub eip_allocation_id: Option<String>,
+    /// Public addresses allocated to this deployment's NAT; empty when unknown.
+    #[serde(default)]
+    pub egress_public_ips: Vec<String>,
     /// Public subnet IDs.
     #[serde(deserialize_with = "crate::network_ids::deserialize_ids")]
     pub public_subnet_ids: Vec<String>,

@@ -7,7 +7,7 @@
 
 use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
-use alien_core::{Platform, Sandbox, Stack};
+use alien_core::{Platform, Sandbox, SandboxEgress, Stack};
 
 /// Ensures every Sandbox can be delivered by the platform it targets.
 pub struct SandboxPlatformSupportCheck;
@@ -25,7 +25,7 @@ impl CompileTimeCheck for SandboxPlatformSupportCheck {
     }
 
     async fn check(&self, stack: &Stack, platform: Platform) -> Result<CheckResult> {
-        let errors: Vec<String> = stack
+        let mut errors: Vec<String> = stack
             .resources()
             .filter_map(|(_, entry)| entry.config.downcast_ref::<Sandbox>())
             .filter_map(|sandbox| {
@@ -39,6 +39,20 @@ impl CompileTimeCheck for SandboxPlatformSupportCheck {
             })
             .collect();
 
+        if platform == Platform::Azure {
+            for (_, entry) in stack.resources() {
+                let Some(sandbox) = entry.config.downcast_ref::<Sandbox>() else {
+                    continue;
+                };
+                if sandbox.egress == SandboxEgress::Internet {
+                    errors.push(format!(
+                        "Sandbox '{}': Azure gateway network setup and internal load balancing are not \
+                         available; egress \"internet\" requires a gateway and cannot use the native fallback",
+                        sandbox.id()
+                    ));
+                }
+            }
+        }
         if errors.is_empty() {
             Ok(CheckResult::success())
         } else {
@@ -51,8 +65,8 @@ impl CompileTimeCheck for SandboxPlatformSupportCheck {
 mod tests {
     use super::*;
     use alien_core::{
-        ResourceEntry, ResourceLifecycle, SandboxCode, SandboxEgress, SandboxLifecyclePolicy,
-        SandboxLimits,
+        Container, ResourceEntry, ResourceLifecycle, SandboxCode, SandboxEgress,
+        SandboxLifecyclePolicy, SandboxLimits,
     };
     use indexmap::IndexMap;
 
@@ -142,6 +156,75 @@ mod tests {
                 result.errors
             );
         }
+    }
+
+    #[tokio::test]
+    async fn azure_internet_never_falls_back_when_gateway_hosting_is_unavailable() {
+        let open = sandbox("agent", None, SandboxEgress::Internet);
+        let result = SandboxPlatformSupportCheck
+            .check(&stack_with(open.clone()), Platform::Azure)
+            .await
+            .expect("check runs");
+        assert!(!result.success);
+        assert!(result.warnings.is_empty());
+        assert!(result.errors[0].contains("requires a gateway"));
+        let mut restricted = open;
+        restricted.default_policy = Some(alien_core::EgressPolicy::Allow {
+            allow: vec!["example.com".into()],
+        });
+        let result = SandboxPlatformSupportCheck
+            .check(&stack_with(restricted), Platform::Azure)
+            .await
+            .expect("check runs");
+        assert!(!result.success);
+        assert!(result.errors[0].contains("requires a gateway"));
+        let result = SandboxPlatformSupportCheck
+            .check(
+                &stack_with(sandbox("closed", None, SandboxEgress::None)),
+                Platform::Azure,
+            )
+            .await
+            .expect("check runs");
+        assert!(result.success);
+        assert!(result.warnings.is_empty());
+    }
+
+    #[tokio::test]
+    async fn azure_gateway_deployment_is_refused_before_cloud_changes() {
+        let stack = Stack::new("private-egress".into())
+            .add(
+                sandbox("agent", None, SandboxEgress::Internet),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Container::new("sandbox-egress-gateway".into())
+                    .code(alien_core::ContainerCode::Image {
+                        image: "gateway:test".into(),
+                    })
+                    .cpu(alien_core::ResourceSpec {
+                        min: "0.5".into(),
+                        desired: "0.5".into(),
+                    })
+                    .memory(alien_core::ResourceSpec {
+                        min: "512Mi".into(),
+                        desired: "512Mi".into(),
+                    })
+                    .port(3128)
+                    .permissions("gateway".into())
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        let result = SandboxPlatformSupportCheck
+            .check(&stack, Platform::Azure)
+            .await
+            .expect("check runs");
+        assert!(!result.success);
+        assert!(result
+            .errors
+            .iter()
+            .any(|error| error.contains("gateway network setup and internal load balancing")));
+        assert!(result.warnings.is_empty());
     }
 
     #[tokio::test]

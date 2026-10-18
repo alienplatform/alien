@@ -101,6 +101,7 @@ export type { AzureResourceGroupImportData } from "./zod/azure-resource-group-im
 export type { AzureResourceProviderActivationHeartbeatData } from "./zod/azure-resource-provider-activation-heartbeat-data-schema.js";
 export type { AzureSandboxGroupHeartbeatData } from "./zod/azure-sandbox-group-heartbeat-data-schema.js";
 export type { AzureSandboxImportData } from "./zod/azure-sandbox-import-data-schema.js";
+export type { AzureSandboxNetwork } from "./zod/azure-sandbox-network-schema.js";
 export type { AzureServiceAccountImportData } from "./zod/azure-service-account-import-data-schema.js";
 export type { AzureServiceActivationImportData } from "./zod/azure-service-activation-import-data-schema.js";
 export type { AzureServiceBusNamespaceHeartbeatData } from "./zod/azure-service-bus-namespace-heartbeat-data-schema.js";
@@ -616,6 +617,7 @@ export { AzureResourceGroupImportDataSchema } from "./zod/azure-resource-group-i
 export { AzureResourceProviderActivationHeartbeatDataSchema } from "./zod/azure-resource-provider-activation-heartbeat-data-schema.js";
 export { AzureSandboxGroupHeartbeatDataSchema } from "./zod/azure-sandbox-group-heartbeat-data-schema.js";
 export { AzureSandboxImportDataSchema } from "./zod/azure-sandbox-import-data-schema.js";
+export { AzureSandboxNetworkSchema } from "./zod/azure-sandbox-network-schema.js";
 export { AzureServiceAccountImportDataSchema } from "./zod/azure-service-account-import-data-schema.js";
 export { AzureServiceActivationImportDataSchema } from "./zod/azure-service-activation-import-data-schema.js";
 export { AzureServiceBusNamespaceHeartbeatDataSchema } from "./zod/azure-service-bus-namespace-heartbeat-data-schema.js";
