@@ -27,8 +27,10 @@ pub fn has_sandbox_gateway(stack: &Stack) -> bool {
 /// Closed sandboxes retain their denying connector. Only the new internet
 /// declaration opts into the gateway, including in stacks with legacy sandboxes.
 pub fn sandbox_needs_connector(stack: &Stack, sandbox: &Sandbox) -> bool {
-    matches!(sandbox.cloud_egress(), SandboxEgress::None | SandboxEgress::AllowDomains { .. })
-        || (matches!(sandbox.egress, SandboxEgress::Internet) && has_sandbox_gateway(stack))
+    matches!(
+        sandbox.cloud_egress(),
+        SandboxEgress::None | SandboxEgress::AllowDomains { .. }
+    ) || (matches!(sandbox.egress, SandboxEgress::Internet) && has_sandbox_gateway(stack))
 }
 
 /// Activate the automatic agent guard only for the gateway opt-in. Existing
@@ -44,6 +46,9 @@ pub fn aws_sandbox_agent_environment(
             "ALIEN_SANDBOX_EGRESS".into(),
             serde_json::to_string(&sandbox.egress).expect("egress serializes"),
         );
+        // The platform must complete its bootstrap before the guest-wide firewall
+        // is installed. The authenticated run hook installs it before user code.
+        environment.insert("ALIEN_SANDBOX_EGRESS_RUN_HOOK".into(), "true".into());
     }
     environment
 }

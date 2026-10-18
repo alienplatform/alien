@@ -154,3 +154,26 @@ For an initial deployment smoke run, `floor` may contain only the fixtures alrea
 available. Omitted category/address pairs produce explicit unproven rows while
 the other probes run. An update API timeout fails its timing row and likewise
 leaves the remaining probes runnable; it does not discard later floor/NAT checks.
+
+For AWS setup upgrades and reapplies, record the actual NAT allocation IDs and
+public IPs before and after the completed apply. Use an owned test VPC and the
+same rendered setup package on both runs; then repeat with the upgrade package.
+The command must wait for deployment completion, and an unchanged apply must
+exit successfully. For example:
+
+```sh
+python3 crates/alien-sandbox-conformance/after/aws_nat_reapply.py \
+  --vpc-id "$TEST_VPC_ID" --report nat-reapply.json -- \
+  aws cloudformation deploy --stack-name "$TEST_STACK_NAME" \
+    --template-file template.yaml --capabilities CAPABILITY_NAMED_IAM \
+    --tags "${TEST_STACK_TAGS[@]}" --no-fail-on-empty-changeset
+```
+
+Set `TEST_STACK_TAGS` to all existing stack tags as `Key=Value` entries;
+CloudFormation deploy removes stack tags when they are omitted.
+
+For Terraform, pass `terraform -chdir=MODULE apply -auto-approve` instead.
+The report fails if the apply fails, a gateway or EIP allocation changes, or a
+public IP changes. It refuses a VPC with no available public NAT gateway and
+never overwrites an existing report. Run the runtime NAT echo probe again after
+the reapply: resource stability alone does not prove the sandbox used that route.

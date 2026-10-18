@@ -11,6 +11,7 @@ use std::{
     collections::BTreeMap,
     io::Write,
     net::{SocketAddr, ToSocketAddrs},
+    os::fd::AsRawFd,
     os::unix::fs::OpenOptionsExt,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -50,6 +51,7 @@ pub struct GatewayEgress {
     address: RwLock<Option<SocketAddr>>,
     token: RwLock<String>,
     privileged: bool,
+    routing_ready: AtomicBool,
     declared_none: bool,
     ready: AtomicBool,
     listeners_live: AtomicBool,
@@ -61,7 +63,18 @@ pub struct GatewayEgress {
 }
 
 impl GatewayEgress {
-    /// Prepare routing before dropping bootstrap capabilities. An absent token is pending until
+    /// Accepted control sockets inherit the agent mark. A Run hook can predate conntrack
+    /// activation, so its replies must not depend on the kernel recognizing reply direction.
+    pub fn protect_control_listener(&self, listener: &std::net::TcpListener) -> Result<()> {
+        if self.privileged {
+            redirect::mark(listener.as_raw_fd())
+                .into_alien_error()
+                .context(failed("mark agent control listener"))?;
+        }
+        Ok(())
+    }
+
+    /// Prepare routing, or defer it until the AWS Run hook. An absent token is pending until
     /// the authenticated policy endpoint delivers it outside the shared image snapshot.
     pub fn from_env() -> Result<Option<Arc<Self>>> {
         if crate::egress::legacy_from_env()?.is_some() {
@@ -91,19 +104,35 @@ impl GatewayEgress {
             .ok()
             .zip(std::env::var("ALIEN_SANDBOX_SESSION_ID").ok());
         let privileged = unsafe { libc::geteuid() } == 0;
+        let defer_routing = match std::env::var("ALIEN_SANDBOX_EGRESS_RUN_HOOK") {
+            Ok(value) if value == "true" => true,
+            Ok(value) if value == "false" => false,
+            Err(std::env::VarError::NotPresent) => false,
+            _ => {
+                return Err(invalid(
+                    "ALIEN_SANDBOX_EGRESS_RUN_HOOK must be true or false",
+                ))
+            }
+        };
+        if defer_routing && !privileged {
+            return Err(invalid("Run-hook firewall installation requires root"));
+        }
         if privileged {
             // IPv6 sockets can exist on kernels without IPv6 netfilter support.
             // Every image command and exec child installs the irreversible socket
             // filter before executing; an installation failure prevents its launch.
             crate::privilege::block_command_ipv6();
-            redirect::install()
-                .into_alien_error()
-                .context(failed("install transparent forwarding"))?;
+            if !defer_routing {
+                redirect::install()
+                    .into_alien_error()
+                    .context(failed("install transparent forwarding"))?;
+            }
         }
         Ok(Some(Arc::new(Self {
             address: RwLock::new(address),
             token: RwLock::new(token),
             privileged,
+            routing_ready: AtomicBool::new(!defer_routing),
             declared_none,
             ready: AtomicBool::new(false),
             listeners_live: AtomicBool::new(false),
@@ -149,6 +178,9 @@ impl GatewayEgress {
 
     /// Health remains available while create is waiting to deliver the policy.
     pub fn status(&self) -> Result<&'static str> {
+        if !self.routing_ready.load(Ordering::Acquire) {
+            return Ok("awaiting-run-hook");
+        }
         if !self.declared_none && self.current_token()?.is_empty() {
             return Ok("awaiting-egress-policy");
         }
@@ -164,11 +196,13 @@ impl GatewayEgress {
     /// Recheck the actual network after restoring a snapshot. Build-time network readiness must
     /// never authorize the restored sandbox, and a failed build-time check must be recoverable.
     pub async fn activate_declared_none(&self) -> Result<()> {
+        let _update = self.update_lock.lock().await;
         if !self.declared_none {
             return Err(invalid("gateway policy requires a token"));
         }
         self.ready.store(false, Ordering::Release);
         self.listeners_live.store(false, Ordering::Release);
+        self.install_routing_at_run().await?;
         self.self_check().await?;
         self.listeners_live.store(true, Ordering::Release);
         Ok(())
@@ -176,7 +210,10 @@ impl GatewayEgress {
 
     /// Gate session routes until the network path has been verified.
     pub fn ensure_ready(&self) -> Result<()> {
-        if self.ready.load(Ordering::Acquire) && self.listeners_live.load(Ordering::Acquire) {
+        if self.routing_ready.load(Ordering::Acquire)
+            && self.ready.load(Ordering::Acquire)
+            && self.listeners_live.load(Ordering::Acquire)
+        {
             Ok(())
         } else {
             Err(AlienError::new(ErrorData::EgressPathUnexpected))
@@ -195,7 +232,11 @@ impl GatewayEgress {
     async fn start_inner(self: &Arc<Self>) -> Result<()> {
         self.listeners_live.store(true, Ordering::Release);
         if self.declared_none {
-            return self.self_check().await;
+            return if self.routing_ready.load(Ordering::Acquire) {
+                self.self_check().await
+            } else {
+                Ok(())
+            };
         }
         let explicit = TcpListener::bind("127.0.0.1:15002")
             .await
@@ -263,6 +304,7 @@ impl GatewayEgress {
         audience: &str,
         sandbox_id: &str,
     ) -> Result<()> {
+        let _update = self.update_lock.lock().await;
         if self.declared_none {
             return Err(invalid("declared none cannot acquire a gateway"));
         }
@@ -297,6 +339,21 @@ impl GatewayEgress {
             .address
             .write()
             .map_err(|_| invalid("gateway lock poisoned"))? = Some(address);
+        self.install_routing_at_run().await?;
+        Ok(())
+    }
+
+    // The supervisor retains NET_ADMIN before creating worker threads. Installing here lets
+    // the platform finish snapshot restoration before guest-wide rules affect its bootstrap.
+    // Callers hold update_lock, so token installation cannot race this transaction.
+    async fn install_routing_at_run(&self) -> Result<()> {
+        if !self.routing_ready.load(Ordering::Acquire) {
+            redirect::install_at_run()
+                .await
+                .into_alien_error()
+                .context(failed("install Run-hook transparent forwarding"))?;
+            self.routing_ready.store(true, Ordering::Release);
+        }
         Ok(())
     }
 
@@ -311,6 +368,9 @@ impl GatewayEgress {
     /// the gateway; the self-check refuses invalid credentials before reopening session routes.
     pub async fn update(&self, token: String) -> Result<()> {
         let _update = self.update_lock.lock().await;
+        if !self.routing_ready.load(Ordering::Acquire) {
+            return Err(AlienError::new(ErrorData::EgressPathUnexpected));
+        }
         if self.declared_none {
             return Err(invalid("declared none cannot acquire an egress token"));
         }

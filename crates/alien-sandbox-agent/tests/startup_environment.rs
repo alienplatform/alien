@@ -36,6 +36,11 @@ fn runtime_defaults_do_not_become_the_startup_network_floor() {
     sandbox.default_policy = None;
     sandbox.egress = SandboxEgress::None;
     let env = sandbox.supervisor_environment();
-    let policy: serde_json::Value = serde_json::from_str(&env["ALIEN_SANDBOX_EGRESS"]).unwrap();
-    assert!(policy == "none");
+    // An explicitly configured legacy supervisor keeps the released UID filter.
+    let policy: alien_sandbox_agent::egress::LegacyEgress =
+        serde_json::from_str(&env["ALIEN_SANDBOX_EGRESS"]).unwrap();
+    assert!(matches!(
+        policy,
+        alien_sandbox_agent::egress::LegacyEgress::Deny
+    ));
 }
