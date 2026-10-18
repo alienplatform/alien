@@ -384,7 +384,7 @@ async fn released_gateway_contract(long_policy: bool) {
     let config = serde_json::json!({
         "listen":proxy.to_string(),"admin":admin.to_string(),"audiences":["prefix/box"],"defaultPolicies":{},
         "keys":[{"kid":"key-1","publicKey":base64::engine::general_purpose::STANDARD.encode(pair.pk.as_ref())}],
-        "deniedRanges":[],"credentials":[]
+        "deniedRanges":[],"credentials":[],"policyMemoryBytes":67108864
     });
     drop((proxy_reservation, admin_reservation));
     let binary =
