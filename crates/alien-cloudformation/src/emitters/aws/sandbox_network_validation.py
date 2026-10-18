@@ -73,6 +73,9 @@ def validate(ec2, properties):
         "WorkloadCidrs": [subnets[s]["CidrBlock"] for s in workload_ids],
         "VpcCidrs": [c["CidrBlock"] for c in vpc_data["CidrBlockAssociationSet"] if c.get("CidrBlockState", {}).get("State", "associated") == "associated"],
     }
+    # ToJsonString rewrites opaque GetAtt values as string substitutions. Return
+    # CSV; the importer normalizes it like the existing network subnet fields.
+    data = {name: ",".join(values) for name, values in data.items()}
     data["ConnectorEgress"] = [{"IpProtocol": "tcp", "FromPort": 3128, "ToPort": 3128, "CidrIp": subnets[s]["CidrBlock"]} for s in gateway_ids]
     return data
 

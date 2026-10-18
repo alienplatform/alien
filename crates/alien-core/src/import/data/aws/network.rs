@@ -25,16 +25,22 @@ pub struct AwsFailureDomainSubnets {
 #[serde(rename_all = "camelCase")]
 pub struct AwsSandboxNetwork {
     /// Route-less connector subnet identifiers.
+    #[serde(deserialize_with = "crate::network_ids::deserialize_ids_or_csv")]
     pub sandbox_subnet_ids: Vec<String>,
     /// Dedicated NAT-routed subnets for the gateway's internal load balancer.
+    #[serde(deserialize_with = "crate::network_ids::deserialize_ids_or_csv")]
     pub gateway_subnet_ids: Vec<String>,
     /// Source ranges permitted on the gateway proxy port.
+    #[serde(deserialize_with = "crate::network_ids::deserialize_ids_or_csv")]
     pub sandbox_cidrs: Vec<String>,
     /// Only destinations permitted by the connector security group.
+    #[serde(deserialize_with = "crate::network_ids::deserialize_ids_or_csv")]
     pub gateway_cidrs: Vec<String>,
     /// Source ranges permitted on the gateway admin port.
+    #[serde(deserialize_with = "crate::network_ids::deserialize_ids_or_csv")]
     pub workload_cidrs: Vec<String>,
     /// Every associated VPC IPv4 range, denied by the gateway.
+    #[serde(deserialize_with = "crate::network_ids::deserialize_ids_or_csv")]
     pub vpc_cidrs: Vec<String>,
 }
 
