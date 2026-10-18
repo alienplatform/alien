@@ -67,15 +67,13 @@ async fn install_rules() -> nlink::netlink::Result<()> {
     let mut batch = conn.transaction();
     // Replace only our tables, in one transaction. Until commit, an existing policy remains
     // effective. Any refused operation aborts the whole batch and prevents agent startup.
-    for family in [Family::Ip, Family::Ip6] {
-        if tables
-            .iter()
-            .any(|table| table.family == family && table.name == "alien_gateway")
-        {
-            batch = batch.del_table("alien_gateway", family);
-        }
-        batch = batch.add_table("alien_gateway", family);
+    if tables
+        .iter()
+        .any(|table| table.family == Family::Ip && table.name == "alien_gateway")
+    {
+        batch = batch.del_table("alien_gateway", Family::Ip);
     }
+    batch = batch.add_table("alien_gateway", Family::Ip);
     let nat = || Rule::new("alien_gateway", "guest_tcp").family(Family::Ip);
     let filter = || Rule::new("alien_gateway", "filter").family(Family::Ip);
     let returning = Expr::Verdict(Verdict::Return);
@@ -101,13 +99,22 @@ async fn install_rules() -> nlink::netlink::Result<()> {
                 .match_udp_sport(15053)
                 .expr(returning.clone()),
         )
-        .add_rule(nat().match_udp_dport(53).redirect(Some(15053)))
-        .add_rule(nat().match_tcp_dport(53).redirect(Some(15053)))
+        // Some VM kernels expose DNAT but not the separate redirect expression.
+        .add_rule(
+            nat()
+                .match_udp_dport(53)
+                .dnat(Ipv4Addr::LOCALHOST, Some(15053)),
+        )
+        .add_rule(
+            nat()
+                .match_tcp_dport(53)
+                .dnat(Ipv4Addr::LOCALHOST, Some(15053)),
+        )
         .add_rule(nat().match_daddr_v4(Ipv4Addr::LOCALHOST, 8).expr(returning))
         .add_rule(
             nat()
                 .match_l4proto(libc::IPPROTO_TCP as u8)
-                .redirect(Some(15001)),
+                .dnat(Ipv4Addr::LOCALHOST, Some(15001)),
         )
         .add_chain(
             Chain::new("alien_gateway", "filter")?
@@ -126,14 +133,6 @@ async fn install_rules() -> nlink::netlink::Result<()> {
         )
         .add_rule(filter().match_daddr_v4(Ipv4Addr::LOCALHOST, 32).accept())
         .add_rule(filter().match_oif("lo").accept())
-        .add_chain(
-            Chain::new("alien_gateway", "output")?
-                .family(Family::Ip6)
-                .chain_type(ChainType::Filter)
-                .hook(Hook::Output)
-                .priority(Priority::Filter)
-                .policy(Policy::Drop),
-        )
         .commit(&conn)
         .await
 }
