@@ -489,6 +489,7 @@ fn remote_sandbox_validation_refuses_a_sandbox_that_restricts_egress() {
         unreachable!("the fixture is the AWS variant")
     };
     let restricted = SandboxBinding::Aws(AwsSandboxBinding {
+        egress: None,
         allow_egress: false,
         egress_connector_arns: vec![BindingValue::value(
             "arn:aws:lambda:us-east-1:123456789012:network-connector:stack-agents".to_string(),

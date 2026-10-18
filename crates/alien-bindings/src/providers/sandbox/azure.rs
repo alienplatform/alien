@@ -303,6 +303,9 @@ fn refuse_unsupported_create_fields(request: &CreateSandboxRequest, operation: &
 
 #[async_trait]
 impl Sandbox for AzureSandbox {
+    fn egress_bound(&self) -> Option<&SandboxEgress> {
+        Some(&self.egress)
+    }
     /// The platform's row, unnarrowed. `domainEgressRules` says what Azure can do, not what this
     /// sandbox declared — narrowing it (as AWS does for `preview`) would read `false` on an
     /// `allow` sandbox as "can't do this at all".
@@ -311,6 +314,7 @@ impl Sandbox for AzureSandbox {
     }
 
     async fn create(&self, request: CreateSandboxRequest) -> Result<SandboxInstance> {
+        super::egress::require_default(request.egress.as_ref(), self.egress_bound())?;
         checked_sandbox_env(CREATE, &request.env)?;
         refuse_unsupported_create_fields(&request, CREATE)?;
 
@@ -399,6 +403,7 @@ impl Sandbox for AzureSandbox {
     }
 
     async fn get_or_create(&self, request: CreateSandboxRequest) -> Result<ResolvedSandbox> {
+        super::egress::require_default(request.egress.as_ref(), self.egress_bound())?;
         if let Some(id) = request.sandbox_id.as_deref() {
             // `create` returns a sandbox that can take work, and reaching one someone else
             // started has to mean the same thing — so the same gate every other verb uses: bring

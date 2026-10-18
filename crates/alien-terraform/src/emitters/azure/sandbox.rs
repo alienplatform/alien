@@ -24,9 +24,9 @@ use crate::{
 };
 use alien_core::{
     import::EmitContext, ErrorData, Network, PermissionProfile, PermissionSet,
-    PermissionSetReference, RemoteBindings, Result, Sandbox, SandboxEgress,
+    PermissionSetReference, RemoteBindings, Result, Sandbox,
 };
-use alien_error::{AlienError, Context};
+use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{
     generators::{AzureRoleDefinitionRef, AzureRuntimePermissionsGenerator},
     BindingTarget,
@@ -65,31 +65,6 @@ fn sandbox_group_name(ctx: &EmitContext<'_>) -> String {
 
 fn sandbox_group_expression(resource_id: &str) -> String {
     format!("replace(lower(\"${{local.resource_prefix}}-{resource_id}\"), \"_\", \"-\")")
-}
-
-/// The declared outbound policy, in the shape the binding carries.
-///
-/// The sandbox is created with it rather than a setup resource enforcing it — Azure's proxy takes
-/// the policy at create — so the declaration has to survive as far as the binding intact.
-fn egress(sandbox: &Sandbox) -> Expression {
-    match &sandbox.egress {
-        SandboxEgress::None => expr::object([("mode", Expression::String("deny".to_string()))]),
-        SandboxEgress::Internet => {
-            expr::object([("mode", Expression::String("allow".to_string()))])
-        }
-        SandboxEgress::Allow { allow: domains } => expr::object([
-            ("mode", Expression::String("allowDomains".to_string())),
-            (
-                "domains",
-                Expression::from(
-                    domains
-                        .iter()
-                        .map(|domain| Expression::String(domain.clone()))
-                        .collect::<Vec<_>>(),
-                ),
-            ),
-        ]),
-    }
 }
 
 impl TfEmitter for AzureSandboxEmitter {
@@ -215,7 +190,14 @@ impl TfEmitter for AzureSandboxEmitter {
             ("region", expr::raw("var.azure_location")),
             ("resourceGroup", expr::raw("var.azure_resource_group_name")),
             ("diskImage", Expression::String(disk_image)),
-            ("egress", egress(sandbox)),
+            (
+                "egress",
+                hcl::to_expression(&sandbox.egress)
+                    .into_alien_error()
+                    .context(ErrorData::GenericError {
+                        message: "serializing the sandbox egress bound".to_string(),
+                    })?,
+            ),
         ];
 
         if let Some(seconds) = sandbox.lifecycle.idle_pause_seconds {
@@ -738,6 +720,7 @@ mod tests {
     use super::*;
     use alien_core::bindings::{AzureSandboxBinding, BindingValue};
     use alien_core::SandboxCode;
+    use alien_core::SandboxEgress;
     use alien_core::{ResourceLifecycle, SandboxLifecyclePolicy, Stack, StackSettings};
     use indexmap::IndexMap;
 

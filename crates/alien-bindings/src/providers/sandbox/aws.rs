@@ -68,6 +68,7 @@ fn preview_lifetime_seconds() -> u64 {
 /// A Sandbox backed by Lambda MicroVMs.
 #[derive(Debug)]
 pub struct AwsSandbox {
+    egress: Option<alien_core::SandboxEgress>,
     microvms: Arc<dyn LambdaMicrovmsApi>,
     image_identifier: String,
     image_version: String,
@@ -87,6 +88,12 @@ pub struct AwsSandbox {
 }
 
 impl AwsSandbox {
+    /// Supplies the declaration carried by the resolved binding.
+    pub fn with_egress(mut self, egress: Option<alien_core::SandboxEgress>) -> Self {
+        self.egress = egress;
+        self
+    }
+
     /// Builds a provider over the MicroVMs API.
     pub fn new(
         microvms: Arc<dyn LambdaMicrovmsApi>,
@@ -98,6 +105,7 @@ impl AwsSandbox {
         max_lifetime_seconds: Option<u32>,
     ) -> Self {
         Self {
+            egress: None,
             microvms,
             image_identifier: image_identifier.into(),
             image_version: image_version.into(),
@@ -397,6 +405,9 @@ fn refuse_unsupported_create_fields(request: &CreateSandboxRequest, operation: &
 
 #[async_trait]
 impl Sandbox for AwsSandbox {
+    fn egress_bound(&self) -> Option<&alien_core::SandboxEgress> {
+        self.egress.as_ref()
+    }
     /// Narrows the platform ceiling to this instance: `preview` is false with no declared
     /// `preview_ports`, since `preview()` would refuse every port anyway and callers are meant
     /// to branch on this flag rather than call and fail.
@@ -415,6 +426,7 @@ impl Sandbox for AwsSandbox {
     /// start — observed against the live API. Reconnecting to an existing sandbox is
     /// [`Sandbox::get`]'s job, not an idempotency key's.
     async fn create(&self, request: CreateSandboxRequest) -> Result<SandboxInstance> {
+        super::egress::require_default(request.egress.as_ref(), self.egress_bound())?;
         let _ = request.sandbox_id;
         refuse_unsupported_create_fields(&request, "sandbox.create")?;
         let max_lifetime_seconds = self.lifetime_seconds(request.timeout_ms, "sandbox.create")?;
@@ -483,6 +495,7 @@ impl Sandbox for AwsSandbox {
     }
 
     async fn get_or_create(&self, request: CreateSandboxRequest) -> Result<ResolvedSandbox> {
+        super::egress::require_default(request.egress.as_ref(), self.egress_bound())?;
         // Refused on the reconnect path too: an existing sandbox honors these fields no more
         // than a fresh one would.
         refuse_unsupported_create_fields(&request, "sandbox.getOrCreate")?;

@@ -17,6 +17,7 @@ use alien_bindings::traits::{
     CommandOutput, CreateSandboxRequest, JobPoll, PreviewCapability, RunCommandRequest, Sandbox,
     SandboxInstance,
 };
+use alien_error::{Context, IntoAlienError};
 use futures::channel::oneshot;
 use futures::future::{select, Either, FutureExt, Shared};
 use futures::lock::Mutex;
@@ -26,6 +27,15 @@ use napi::bindgen_prelude::Buffer;
 use napi_derive::napi;
 
 use crate::error::map_alien_error;
+
+fn parse_egress(value: serde_json::Value) -> napi::Result<alien_core::SandboxEgress> {
+    serde_json::from_value(value)
+        .into_alien_error()
+        .context(alien_bindings::error::ErrorData::SandboxEgressInvalid {
+            reason: "expected none, internet, or an object containing an allow list".to_string(),
+        })
+        .map_err(map_alien_error)
+}
 
 /// Environment as the Rust side wants it. A `BTreeMap` so the order a caller supplied does not
 /// change what the sandbox sees.
@@ -335,10 +345,12 @@ impl SandboxHandle {
         tenant_key: Option<String>,
         env: Option<std::collections::HashMap<String, String>>,
         timeout_ms: Option<u32>,
+        egress: Option<serde_json::Value>,
     ) -> napi::Result<SandboxInstanceJs> {
         let sandbox = self.inner.clone();
         let created = sandbox
             .create(CreateSandboxRequest {
+                egress: egress.map(parse_egress).transpose()?,
                 sandbox_id,
                 tenant_key,
                 env: into_env(env),
@@ -347,6 +359,19 @@ impl SandboxHandle {
             .await
             .map_err(map_alien_error)?;
         Ok(sandbox_to_js(created))
+    }
+
+    /// Updates the sandbox's egress policy within its declaration.
+    #[napi]
+    pub async fn update_egress(
+        &self,
+        sandbox_id: String,
+        egress: serde_json::Value,
+    ) -> napi::Result<()> {
+        self.inner
+            .update_egress(&sandbox_id, parse_egress(egress)?)
+            .await
+            .map_err(map_alien_error)
     }
 
     /// Fetches a sandbox, or `null` if it does not exist.
@@ -368,10 +393,12 @@ impl SandboxHandle {
         tenant_key: Option<String>,
         env: Option<std::collections::HashMap<String, String>>,
         timeout_ms: Option<u32>,
+        egress: Option<serde_json::Value>,
     ) -> napi::Result<ResolvedSandboxJs> {
         let sandbox = self.inner.clone();
         let resolved = sandbox
             .get_or_create(CreateSandboxRequest {
+                egress: egress.map(parse_egress).transpose()?,
                 sandbox_id,
                 tenant_key,
                 env: into_env(env),

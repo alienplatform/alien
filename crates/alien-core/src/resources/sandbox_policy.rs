@@ -5,6 +5,8 @@ use std::net::Ipv4Addr;
 use alien_error::{AlienError, Context, IntoAlienError};
 use ipnet::Ipv4Net;
 use serde::{Deserialize, Deserializer, Serialize};
+#[cfg(feature = "openapi")]
+use utoipa::openapi::schema::{ArrayBuilder, ObjectBuilder, OneOfBuilder, Type};
 
 use crate::error::{ErrorData, Result};
 
@@ -29,7 +31,6 @@ pub enum SandboxEgress {
 #[cfg(feature = "openapi")]
 impl utoipa::PartialSchema for SandboxEgress {
     fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
-        use utoipa::openapi::schema::{ArrayBuilder, ObjectBuilder, OneOfBuilder, Type};
         OneOfBuilder::new()
             .item(
                 ObjectBuilder::new()

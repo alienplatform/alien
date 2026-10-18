@@ -305,6 +305,15 @@ impl CfEmitter for AwsSandboxEmitter {
         }
         let mut fields = vec![
             ("service".to_string(), CfExpression::from("sandbox-aws")),
+            (
+                "egress".to_string(),
+                serde_json::to_value(&sandbox.egress)
+                    .and_then(serde_json::from_value::<CfExpression>)
+                    .into_alien_error()
+                    .context(ErrorData::GenericError {
+                        message: "serializing the sandbox egress bound".to_string(),
+                    })?,
+            ),
             ("previewPorts".to_string(), preview_ports(sandbox)),
             (
                 "egressConnectorArns".to_string(),
@@ -1035,6 +1044,7 @@ mod tests {
 
         let emitted = declared(Some(600), Some(1800));
         let typed = serde_json::to_value(alien_core::AwsSandboxBinding {
+            egress: None,
             image_arn: alien_core::BindingValue::Value("arn".to_string()),
             image_version: alien_core::BindingValue::Value("1".to_string()),
             region: alien_core::BindingValue::Value("us-east-2".to_string()),

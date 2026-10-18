@@ -166,6 +166,7 @@ async fn kubernetes_declares_jobs_and_starts_one_end_to_end() {
     let sandbox = KubernetesSandbox::new(
         "sbx",
         &KubernetesSandboxBinding {
+            egress: None,
             namespace: BindingValue::Value("alien".to_string()),
             runtime_class: BindingValue::Value("gvisor".to_string()),
             selector: BindingValue::Value("alien/sandbox=sbx".to_string()),
@@ -261,6 +262,7 @@ async fn local_declares_no_jobs_and_asks_its_manager_for_nothing() {
     let sandbox = LocalSandbox::new(
         "sbx",
         &LocalSandboxBinding {
+            egress: None,
             manager_url: BindingValue::Value(manager),
             sandbox_key: BindingValue::Value("sbx".to_string()),
             token_path: BindingValue::Value(token.path().display().to_string()),

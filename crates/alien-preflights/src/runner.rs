@@ -963,11 +963,11 @@ mod setup_update_authorization_tests {
     #[cfg(feature = "runtime-checks")]
     #[tokio::test]
     async fn a_live_sandbox_setup_input_change_blocks_until_setup_reruns() {
-        use alien_core::SandboxEgress::{Allow, Deny};
+        use alien_core::SandboxEgress::{Internet, None as NoEgress};
         const BASE_A: &str = "123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base-a:1";
         const V1: &str = "s3://bucket/sandbox-bundle/v1/bundle.zip";
         const V2: &str = "s3://bucket/sandbox-bundle/v2/bundle.zip";
-        let old = live_sandbox_stack(V1, Some(BASE_A), Allow);
+        let old = live_sandbox_stack(V1, Some(BASE_A), Internet);
         let runner = PreflightRunner::with_registry({
             let mut registry = crate::PreflightRegistry::new();
             registry.add_compatibility_check(Box::new(
@@ -984,7 +984,7 @@ mod setup_update_authorization_tests {
         let tag_only = live_sandbox_stack(
             V2,
             Some("123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base-a:2"),
-            Allow,
+            Internet,
         );
         runner
             .run_deployment_time_preflights(
@@ -1004,11 +1004,11 @@ mod setup_update_authorization_tests {
                 live_sandbox_stack(
                     V2,
                     Some("123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base-b:1"),
-                    Allow,
+                    Internet,
                 ),
                 "build role policy",
             ),
-            (live_sandbox_stack(V2, Some(BASE_A), Deny), "egress"),
+            (live_sandbox_stack(V2, Some(BASE_A), NoEgress), "egress"),
         ] {
             let error = runner
                 .run_deployment_time_preflights(

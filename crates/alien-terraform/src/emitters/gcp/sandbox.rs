@@ -20,7 +20,7 @@ use alien_core::{
     import::EmitContext, ErrorData, GcpAgentPlatformEngine, RemoteBindings, RemoteStackManagement,
     ResourceLifecycle, Result, Sandbox, SandboxEgress,
 };
-use alien_error::{AlienError, Context};
+use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{
     generators::{GcpBindingResourceKind, GcpBindingTargetScope, GcpRuntimePermissionsGenerator},
     BindingTarget,
@@ -89,6 +89,14 @@ fn agent_platform_fields(
 ) -> Result<Vec<(&'static str, Expression)>> {
     let engine = engine_name(ctx, label)?;
     let mut fields = vec![
+        (
+            "egress",
+            hcl::to_expression(&sandbox.egress)
+                .into_alien_error()
+                .context(ErrorData::GenericError {
+                    message: "serializing the sandbox egress bound".to_string(),
+                })?,
+        ),
         ("engine", expr::template(engine.clone())),
         (
             "template",
@@ -608,6 +616,7 @@ mod tests {
             );
 
             let typed = serde_json::to_value(alien_core::GcpAgentPlatformSandboxBinding {
+                egress: None,
                 engine: alien_core::BindingValue::Value("engine".to_string()),
                 template: alien_core::BindingValue::Value("template".to_string()),
                 region: alien_core::BindingValue::Value("us-central1".to_string()),
