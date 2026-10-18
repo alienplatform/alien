@@ -181,6 +181,7 @@ mod tests {
             }
         }))
         .expect("legacy persisted output must remain readable");
+        assert!(outputs.aws_worker_gateway_cleanup_function_arn.is_none());
         assert_eq!(
             outputs
                 .legacy_remote_bindings_access

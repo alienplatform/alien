@@ -19,7 +19,7 @@ pub const BOOTSTRAP: &str = include_str!("aws_worker_gateway/envoy.json");
 pub const CLEANUP_HANDLER_SOURCE: &str = include_str!("aws_worker_gateway/cleanup.py");
 
 /// This namespace cannot match ordinary `<resource-prefix>-*` worker grants.
-pub const CLEANUP_FUNCTION_PREFIX: &str = "_alien-gateway-cleanup-";
+pub const CLEANUP_FUNCTION_PREFIX: &str = "_gateway-cleanup-";
 
 /// Validate setup registration before exposing the capability to runtime.
 pub fn validate_cleanup_function_arn(
@@ -69,7 +69,7 @@ mod cleanup_tests {
 
     const ROLE: &str = "arn:aws:iam::123456789012:role/example-management";
     const FUNCTION: &str =
-        "arn:aws:lambda:us-east-1:123456789012:function:_alien-gateway-cleanup-example:7";
+        "arn:aws:lambda:us-east-1:123456789012:function:_gateway-cleanup-example:7";
 
     #[test]
     fn cleanup_import_accepts_only_the_exact_published_setup_boundary() {
@@ -80,7 +80,7 @@ mod cleanup_tests {
             FUNCTION.replace("us-east-1", "eu-west-1"),
             FUNCTION.replace("arn:aws:", "arn:aws-cn:"),
             FUNCTION.replace("cleanup-example", "cleanup-example-extra"),
-            FUNCTION.replace("_alien-gateway-cleanup-example", "example-worker"),
+            FUNCTION.replace("_gateway-cleanup-example", "example-worker"),
             FUNCTION.replace(":7", ":$LATEST"),
             FUNCTION.replace(":7", ":current"),
             FUNCTION.replace(":7", ""),

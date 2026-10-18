@@ -77,8 +77,7 @@ fn aws_remote_stack_management_import_preserves_setup_ownership() {
 #[test]
 fn aws_gateway_cleanup_capability_survives_import_and_controller_reload() {
     let resource = frozen_entry(RemoteStackManagement::new("management".to_string()).build());
-    let function =
-        "arn:aws:lambda:us-east-1:123456789012:function:_alien-gateway-cleanup-example:7";
+    let function = "arn:aws:lambda:us-east-1:123456789012:function:_gateway-cleanup-example:7";
     let payload = json!({
         "roleName": "example-management",
         "roleArn": "arn:aws:iam::123456789012:role/example-management",
@@ -124,11 +123,17 @@ fn aws_gateway_cleanup_import_rejects_foreign_or_mutable_functions() {
         resource: &resource,
     };
     let registry = ImporterRegistry::built_in();
+    registry.run(&RemoteStackManagement::RESOURCE_TYPE, Platform::Aws, json!({
+        "roleName": "example-management",
+        "roleArn": "arn:aws:iam::123456789012:role/example-management",
+        "managementPermissionsApplied": false,
+        "workerGatewayCleanupFunctionArn": "arn:aws:lambda:us-east-1:123456789012:function:_gateway-cleanup-example:7",
+    }), &ctx).expect_err("an unapplied invocation grant must not be exposed to runtime");
     for function in [
-        "arn:aws:lambda:us-east-1:999999999999:function:_alien-gateway-cleanup-example:7",
-        "arn:aws:lambda:us-west-2:123456789012:function:_alien-gateway-cleanup-example:7",
-        "arn:aws:lambda:us-east-1:123456789012:function:_alien-gateway-cleanup-other:7",
-        "arn:aws:lambda:us-east-1:123456789012:function:_alien-gateway-cleanup-example:$LATEST",
+        "arn:aws:lambda:us-east-1:999999999999:function:_gateway-cleanup-example:7",
+        "arn:aws:lambda:us-west-2:123456789012:function:_gateway-cleanup-example:7",
+        "arn:aws:lambda:us-east-1:123456789012:function:_gateway-cleanup-other:7",
+        "arn:aws:lambda:us-east-1:123456789012:function:_gateway-cleanup-example:$LATEST",
     ] {
         registry
             .run(
