@@ -62,6 +62,11 @@ pub struct NetworkOutputs {
     /// Whether NAT gateway exists
     pub has_nat_gateway: bool,
 
+    /// Public addresses used by the deployment's NAT. Empty when unknown, including
+    /// bring-your-own networks whose egress is managed outside this deployment.
+    #[serde(default)]
+    pub egress_public_ips: Vec<String>,
+
     /// CIDR block (if created by Alien, None for BYO-VPC)
     pub cidr: Option<String>,
 }
