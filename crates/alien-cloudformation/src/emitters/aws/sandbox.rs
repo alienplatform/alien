@@ -7,10 +7,9 @@
 use crate::{
     emitter::CfEmitter,
     emitters::aws::helpers::{
-        cf_from_json, prefixed_permission_refs, private_subnet_ids_expr, required_logical_id,
-        resource_config, service_account_role_id, service_trust_policy, subnet_refs, tags,
+        cf_from_json, prefixed_permission_refs, required_logical_id, resource_config,
+        service_account_role_id, service_trust_policy, subnet_refs, tags,
         uniquify_iam_statement_sids, vpc_id_expr, CONDITION_NETWORK_MODE_CREATE,
-        PARAM_PRIVATE_SUBNET_IDS,
     },
     emitters::aws::service_account::permission_context,
     template::{CfExpression, CfResource},
@@ -79,10 +78,9 @@ impl CfEmitter for AwsSandboxEmitter {
         );
         role.properties.insert("Tags".to_string(), tags(ctx));
 
-        // An open sandbox routes nothing through a VPC, so none of this exists for it: no
-        // connector to attach, no group to deny with, and no role to manage interfaces.
         let mut egress_resources = Vec::new();
-        if let Some((vpc_id, subnet_ids)) = egress {
+        {
+            let (vpc_id, subnet_ids) = egress;
             // Lambda assumes this to manage the connector's network interfaces. AWS documents the
             // permissions it must hold; the property being optional is not a promise that AWS
             // provisions an equivalent role.
@@ -110,20 +108,17 @@ impl CfEmitter for AwsSandboxEmitter {
             security_group
                 .properties
                 .insert("VpcId".to_string(), vpc_id);
-            // EC2 adds an allow-all egress rule to any group whose template states none, so the deny
-            // has to be written down. Loopback-only is AWS's documented way to say it. Widening this
-            // rule is the one edit that turns `egress: deny` back into internet access.
-            security_group.properties.insert(
-                "SecurityGroupEgress".to_string(),
+            let egress_rules = if matches!(sandbox.egress, SandboxEgress::None) {
                 CfExpression::list([CfExpression::object([
                     ("IpProtocol", CfExpression::from("-1")),
                     ("CidrIp", CfExpression::from(LOOPBACK_ONLY_CIDR)),
-                    (
-                        "Description",
-                        CfExpression::from("Sandbox sessions reach nothing outbound"),
-                    ),
-                ])]),
-            );
+                ])])
+            } else {
+                super::network::gateway_egress_rules(ctx)?
+            };
+            security_group
+                .properties
+                .insert("SecurityGroupEgress".to_string(), egress_rules);
             security_group
                 .properties
                 .insert("Tags".to_string(), tags(ctx));
@@ -166,6 +161,20 @@ impl CfEmitter for AwsSandboxEmitter {
                     ]),
                 )]),
             );
+            let network = sandbox_egress_network(ctx.stack).map_err(|error| {
+                AlienError::new(ErrorData::OperationNotSupported {
+                    operation: "sandbox connector".into(),
+                    reason: error.to_string(),
+                })
+            })?;
+            let prefix = ctx.name_for(network.id).ok_or_else(|| {
+                AlienError::new(ErrorData::GenericError {
+                    message: format!("network '{}' has no generated name", network.id),
+                })
+            })?;
+            connector
+                .depends_on
+                .push(format!("{prefix}SandboxNetworkValidation"));
             connector.properties.insert("Tags".to_string(), tags(ctx));
             egress_resources.extend([operator_role, security_group, connector]);
         }
@@ -271,10 +280,7 @@ impl CfEmitter for AwsSandboxEmitter {
                 "egressConnectorArns",
                 egress_connector_arns(sandbox, image_id),
             ),
-            (
-                "allowEgress",
-                CfExpression::from(matches!(sandbox.cloud_egress(), SandboxEgress::Internet)),
-            ),
+            ("allowEgress", CfExpression::from(false)),
             // Both `GetMicrovmImage` and `RunMicrovm` require the ARN — measured against the
             // live API, where a bare name is refused with "Malformed ARN - doesn't start with
             // 'arn:'". `Ref` was measured to return it too, but the attribute says
@@ -319,10 +325,7 @@ impl CfEmitter for AwsSandboxEmitter {
                 "egressConnectorArns".to_string(),
                 egress_connector_arns(sandbox, image_id),
             ),
-            (
-                "allowEgress".to_string(),
-                CfExpression::from(matches!(sandbox.cloud_egress(), SandboxEgress::Internet)),
-            ),
+            ("allowEgress".to_string(), CfExpression::from(false)),
             (
                 "imageArn".to_string(),
                 CfExpression::get_att(image_id, "ImageArn"),
@@ -562,10 +565,7 @@ fn runtime_import_ref(sandbox: &Sandbox, image_id: &str) -> Result<CfExpression>
             "egressConnectorArns",
             egress_connector_arns(sandbox, image_id),
         ),
-        (
-            "allowEgress",
-            CfExpression::from(matches!(sandbox.cloud_egress(), SandboxEgress::Internet)),
-        ),
+        ("allowEgress", CfExpression::from(false)),
         ("buildRoleArn", CfExpression::get_att(&role_id, "Arn")),
         ("bundleUri", code_artifact_uri(artifact_uri(sandbox)?)),
     ]))
@@ -840,24 +840,21 @@ fn operator_policies() -> CfExpression {
     ])])
 }
 
-/// The VPC and private subnets the connector attaches to, or `None` for an open sandbox.
+/// The VPC and isolated subnets every session connector attaches to.
 ///
 /// Which network, and which stacks are refused, is [`sandbox_egress_network`]'s decision.
 fn egress_network(
     ctx: &EmitContext<'_>,
     sandbox: &Sandbox,
-) -> Result<Option<(CfExpression, CfExpression)>> {
+) -> Result<(CfExpression, CfExpression)> {
     let refuse = |reason: String| {
         AlienError::new(ErrorData::OperationNotSupported {
             operation: format!("cloudformation emit sandbox '{}'", sandbox.id()),
             reason,
         })
     };
-    let Some(network) = sandbox_egress_network(ctx.stack, sandbox.cloud_egress())
-        .map_err(|refusal| refuse(refusal.to_string()))?
-    else {
-        return Ok(None);
-    };
+    let network =
+        sandbox_egress_network(ctx.stack).map_err(|refusal| refuse(refusal.to_string()))?;
     let network_id = ctx.name_for(network.id).ok_or_else(|| {
         refuse(format!(
             "network '{}' has no logical id in this template",
@@ -865,7 +862,7 @@ fn egress_network(
         ))
     })?;
 
-    Ok(Some(match network.vpc {
+    Ok(match network.vpc {
         // Deliberately not `private_subnet_ids_expr`: its use-default branch resolves to
         // `AWS::NoValue`, and a connector with no subnets is a required property missing at
         // deploy — cfn-lint rejects it, and worse, it is the case where a session would run with
@@ -879,26 +876,22 @@ fn egress_network(
             ),
             CfExpression::if_(
                 CONDITION_NETWORK_MODE_CREATE,
-                subnet_refs(network_id, "PrivateSubnet"),
-                CfExpression::ref_(PARAM_PRIVATE_SUBNET_IDS),
+                subnet_refs(network_id, "SandboxSubnet"),
+                CfExpression::ref_("SandboxSubnetIds"),
             ),
         ),
-        SandboxEgressVpc::BroughtByCustomer => (vpc_id_expr(ctx), private_subnet_ids_expr(ctx)),
-    }))
+        SandboxEgressVpc::BroughtByCustomer => {
+            (vpc_id_expr(ctx), CfExpression::ref_("SandboxSubnetIds"))
+        }
+    })
 }
 
-/// The connectors a session starts with, which an open sandbox has none of.
-///
-/// Empty is not a missing value here: it is how `allow` is expressed on the wire, and the
-/// binding carries `allowEgress` alongside so the two cannot be confused.
-fn egress_connector_arns(sandbox: &Sandbox, image_id: &str) -> CfExpression {
-    match sandbox.cloud_egress() {
-        SandboxEgress::Internet => CfExpression::list([]),
-        _ => CfExpression::list([CfExpression::get_att(
-            format!("{image_id}EgressConnector"),
-            "Arn",
-        )]),
-    }
+/// Every session uses its setup-owned connector.
+fn egress_connector_arns(_sandbox: &Sandbox, image_id: &str) -> CfExpression {
+    CfExpression::list([CfExpression::get_att(
+        format!("{image_id}EgressConnector"),
+        "Arn",
+    )])
 }
 
 /// Resolves the S3 bundle the MicroVM image is built from.

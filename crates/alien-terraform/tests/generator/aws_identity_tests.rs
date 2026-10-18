@@ -781,9 +781,8 @@ fn a_deny_sandbox_attaches_to_the_first_of_two_networks() {
             )
             .build();
         let chosen =
-            alien_core::sandbox_egress::sandbox_egress_network(&stack, &SandboxEgress::None)
-                .expect("both networks are attachable")
-                .expect("deny attaches to a network");
+            alien_core::sandbox_egress::sandbox_egress_network(&stack)
+                .expect("both networks are attachable");
         assert_eq!(chosen.id, "first-net");
 
         let module = render(

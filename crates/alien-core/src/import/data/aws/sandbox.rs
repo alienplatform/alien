@@ -1,7 +1,7 @@
 use alien_error::AlienError;
 use serde::{Deserialize, Serialize};
 
-use crate::{parse_bundle_uri, BundleUri, ErrorData, Result, Sandbox, SandboxCode, SandboxEgress};
+use crate::{parse_bundle_uri, BundleUri, ErrorData, Result, Sandbox, SandboxCode};
 
 /// AWS Sandbox ImportData.
 ///
@@ -46,10 +46,8 @@ pub struct AwsSandboxImportData {
         deserialize_with = "crate::import::data::deserialize_u16_vec_from_numbers_or_strings"
     )]
     pub preview_ports: Vec<u16>,
-    /// Whether the declaration asked for open egress.
-    ///
-    /// The controller builds the binding from this, and an empty connector list cannot be read
-    /// without it: a stripped `deny` import would otherwise look exactly like an open sandbox.
+    /// Legacy marker for the managed internet path. New setup always writes false because
+    /// every sandbox uses a deployment connector; the declared policy travels separately.
     #[serde(
         default,
         skip_serializing_if = "std::ops::Not::not",
@@ -62,8 +60,7 @@ impl AwsSandboxImportData {
     /// What a runtime-built sandbox registers, with every template expression resolved. The
     /// setup emitters write the same fields as expressions, and parity tests hold them to this.
     ///
-    /// `deny` names the connector setup recorded; `allow` names none, whatever is recorded, so a
-    /// connector left over from an earlier `deny` never reaches a session.
+    /// Every policy names the setup-owned connector. Missing registration fails closed.
     pub fn runtime_built(
         sandbox: &Sandbox,
         build_role_arn: String,
@@ -85,21 +82,9 @@ impl AwsSandboxImportData {
             BundleUri::Literal(uri) => uri.to_string(),
             BundleUri::Regional { before, after } => format!("{before}{region}{after}"),
         };
-        // The cloud's half of the policy, as the setup emitters read it: a privileged supervisor
-        // enforces the declared egress in the guest, so the MicroVM itself gets open egress.
-        let egress_connector_arns = match sandbox.cloud_egress() {
-            SandboxEgress::Internet => Vec::new(),
-            SandboxEgress::None => vec![recorded_connector_arn
-                .ok_or_else(|| {
-                    refuse("egress: deny has no egress connector recorded yet".to_string())
-                })?
-                .to_string()],
-            SandboxEgress::Allow { .. } => {
-                return Err(refuse(
-                    "AWS has no connector configuration for egress: allowDomains".to_string(),
-                ))
-            }
-        };
+        let egress_connector_arns = vec![recorded_connector_arn
+            .ok_or_else(|| refuse("sandbox has no egress connector recorded yet".to_string()))?
+            .to_string()];
 
         Ok(Self {
             image_identifier: None,
@@ -109,7 +94,7 @@ impl AwsSandboxImportData {
             bundle_uri: Some(bundle_uri),
             egress_connector_arns,
             preview_ports: sandbox.preview_ports.clone(),
-            allow_egress: matches!(sandbox.cloud_egress(), SandboxEgress::Internet),
+            allow_egress: false,
         })
     }
 }

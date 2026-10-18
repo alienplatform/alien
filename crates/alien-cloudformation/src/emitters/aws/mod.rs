@@ -20,6 +20,7 @@ pub mod queue;
 pub mod remote_bindings;
 pub mod remote_stack_management;
 pub mod sandbox;
+mod sandbox_network_validation;
 pub mod service_account;
 pub mod storage;
 pub mod vault;

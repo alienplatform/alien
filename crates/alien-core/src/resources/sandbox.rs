@@ -523,7 +523,7 @@ pub fn stack_needs_named_subnets_at_setup(stack: &crate::Stack) -> bool {
         resource
             .config
             .downcast_ref::<Sandbox>()
-            .is_some_and(|sandbox| !matches!(sandbox.cloud_egress(), SandboxEgress::Internet))
+            .is_some()
     })
 }
 

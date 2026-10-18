@@ -1483,6 +1483,15 @@ fn add_network_parameters(
     network: Option<&NetworkSettings>,
     target: CloudFormationTarget,
 ) {
+    if !target.is_kubernetes() && stack.resources().any(|(_, entry)| entry.config.downcast_ref::<Sandbox>().is_some()) {
+        for (name, description) in [
+            ("SandboxSubnetIds", "Only used with use-existing. Dedicated sandbox connector subnets with no default route; at least two availability zones."),
+            ("SandboxGatewaySubnetIds", "Only used with use-existing. Exactly two dedicated gateway subnets, routed through the deployment NAT."),
+        ] {
+            template.parameters.insert(name.to_string(), comma_list_parameter(description, vec![]));
+        }
+
+    }
     let defaults = NetworkParameterDefaults::from_settings(network);
     let mut modes = vec![
         CfExpression::from("create-new"),
@@ -1537,7 +1546,7 @@ fn add_network_parameters(
                 number_parameter(
                     "Only used with create-new. Number of availability zones for the new VPC.",
                     u32::from(defaults.availability_zones),
-                    Some(if target.is_kubernetes() {
+                    Some(if target.is_kubernetes() || stack.resources().any(|(_, entry)| entry.config.downcast_ref::<Sandbox>().is_some()) {
                         vec![CfExpression::from(2u8), CfExpression::from(3u8)]
                     } else {
                         vec![

@@ -1,16 +1,19 @@
-//! What an AWS sandbox with `egress: deny` needs in the customer account, as concrete documents:
+//! AWS sandbox connector documents and gateway network boundaries:
 //! the operator role Lambda assumes to place the connector's network interfaces, and the
 //! `AWS::Lambda::NetworkConnector` those interfaces belong to.
 //!
 //! The CloudFormation and Terraform emitters write the same objects as template expressions; the
 //! generator parity tests fail if the resolved forms here ever disagree with them.
 
-use std::fmt;
+use alien_error::AlienError;
+use ipnet::Ipv4Net;
+use std::{collections::BTreeSet, fmt};
 
 use serde_json::{json, Value};
 
 use crate::{
-    setup_resource_tags, Network, NetworkSettings, ResourceEntry, Sandbox, SandboxEgress, Stack,
+    setup_resource_tags, ErrorData, Network, NetworkSettings, ResourceEntry, Sandbox,
+    SandboxEgress, Stack,
 };
 
 /// The name of the operator role's inline policy.
@@ -125,7 +128,7 @@ pub enum SandboxEgressVpc {
     BroughtByCustomer,
 }
 
-/// The network a deny sandbox's connector attaches to.
+/// The network every sandbox connector attaches to.
 #[derive(Debug, Clone, Copy)]
 pub struct SandboxEgressNetwork<'a> {
     /// The network's resource id in the stack.
@@ -138,8 +141,6 @@ pub struct SandboxEgressNetwork<'a> {
 /// Why an AWS sandbox's egress cannot be built from this stack.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SandboxEgressRefusal {
-    /// AWS has no domain filter at the connector, so `allowDomains` has nothing to render into.
-    DomainAllowList,
     /// The stack declares no network for the connector to attach to.
     NoNetwork,
     /// The network is the account's default VPC, which has no private subnets.
@@ -152,10 +153,6 @@ impl fmt::Display for SandboxEgressRefusal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("an AWS sandbox routes session traffic through a VPC egress connector")?;
         f.write_str(match self {
-            Self::DomainAllowList => {
-                ", which has no configuration for egress 'allowDomains'. Declare egress: deny for \
-                 a connector that reaches nothing, or egress: allow for no connector at all"
-            }
             Self::NoNetwork => ", and this stack declares no network for it to attach to",
             Self::DefaultVpc => {
                 ", which needs private subnets, and the account's default VPC has only public \
@@ -166,21 +163,11 @@ impl fmt::Display for SandboxEgressRefusal {
     }
 }
 
-/// The network an AWS sandbox's egress connector attaches to: none for `allow`, the stack's
-/// first network for `deny`.
-///
-/// A connector names one to sixteen private subnets, and only a created or bring-your-own VPC has
-/// any. Every other case is refused rather than rendered: a session started with no connector
-/// reaches the internet, and a dropped `allowDomains` leaves the customer believing it applies.
-pub fn sandbox_egress_network<'a>(
-    stack: &'a Stack,
-    egress: &SandboxEgress,
-) -> Result<Option<SandboxEgressNetwork<'a>>, SandboxEgressRefusal> {
-    match egress {
-        SandboxEgress::Internet => return Ok(None),
-        SandboxEgress::Allow { .. } => return Err(SandboxEgressRefusal::DomainAllowList),
-        SandboxEgress::None => {}
-    }
+/// Every AWS sandbox uses a connector, including internet and name-filtered policies.
+/// The gateway enforces the policy behind the isolated network boundary.
+pub fn sandbox_egress_network(
+    stack: &Stack,
+) -> Result<SandboxEgressNetwork<'_>, SandboxEgressRefusal> {
     let (id, entry, network) = stack
         .resources()
         .find_map(|(id, entry)| Some((id, entry, entry.config.downcast_ref::<Network>()?)))
@@ -193,20 +180,83 @@ pub fn sandbox_egress_network<'a>(
             return Err(SandboxEgressRefusal::OtherCloudNetwork)
         }
     };
-    Ok(Some(SandboxEgressNetwork { id, entry, vpc }))
+    Ok(SandboxEgressNetwork { id, entry, vpc })
+}
+
+/// TCP destination rules for gateway tasks. Splitting the public address space keeps
+/// private destinations unreachable even if the gateway process is compromised.
+pub fn gateway_task_egress(stack: &Stack) -> crate::Result<Vec<(String, u16)>> {
+    let mut ports = BTreeSet::from([443u16]);
+    for (_, entry) in stack.resources() {
+        let Some(sandbox) = entry.config.downcast_ref::<Sandbox>() else {
+            continue;
+        };
+        sandbox.egress.validate()?;
+        match &sandbox.egress {
+            SandboxEgress::None => {}
+            SandboxEgress::Internet => {
+                ports.insert(80);
+            }
+            SandboxEgress::Allow { allow } => {
+                for target in allow {
+                    if let Some((_, port)) = target.rsplit_once(':') {
+                        ports.insert(port.parse().expect("validated target port"));
+                    }
+                }
+            }
+        }
+    }
+    let denied: Vec<Ipv4Net> = [
+        "0.0.0.0/8",
+        "10.0.0.0/8",
+        "100.64.0.0/10",
+        "127.0.0.0/8",
+        "169.254.0.0/16",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "224.0.0.0/3",
+    ]
+    .into_iter()
+    .map(|cidr| cidr.parse().expect("constant CIDR"))
+    .collect();
+    let mut pending = vec!["0.0.0.0/0".parse::<Ipv4Net>().expect("constant CIDR")];
+    let mut public = Vec::new();
+    while let Some(network) = pending.pop() {
+        if denied.iter().any(|blocked| blocked.contains(&network)) {
+            continue;
+        }
+        if denied.iter().any(|blocked| network.contains(blocked)) {
+            pending.extend(
+                network
+                    .subnets(network.prefix_len() + 1)
+                    .expect("overlapping network can be split"),
+            );
+        } else {
+            public.push(network.to_string());
+        }
+    }
+    public.sort();
+    let rules: Vec<_> = ports
+        .into_iter()
+        .flat_map(|port| public.iter().map(move |cidr| (cidr.clone(), port)))
+        .collect();
+    if rules.len() > 300 {
+        return Err(AlienError::new(ErrorData::OperationNotSupported { operation: "AWS sandbox gateway networking".into(), reason: "Gateway destinations exceed the 300 outbound rules supported by five Fargate security groups; reduce the number of distinct outbound ports.".into() }));
+    }
+    Ok(rules)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ResourceLifecycle, SandboxCode, SandboxLifecyclePolicy};
-    use SandboxEgressRefusal::{DefaultVpc, DomainAllowList, NoNetwork, OtherCloudNetwork};
+    use crate::{ResourceLifecycle, SandboxCode, SandboxEgress, SandboxLifecyclePolicy};
+    use SandboxEgressRefusal::{DefaultVpc, NoNetwork, OtherCloudNetwork};
     use SandboxEgressVpc::{BroughtByCustomer, Created};
 
     fn outcome(
         egress: SandboxEgress,
         network: Option<NetworkSettings>,
-    ) -> Result<Option<SandboxEgressVpc>, SandboxEgressRefusal> {
+    ) -> Result<SandboxEgressVpc, SandboxEgressRefusal> {
         let sandbox = Sandbox::new("agents".to_string())
             .code(SandboxCode::Image {
                 image: "s3://acme/agents/bundle.zip".to_string(),
@@ -225,11 +275,9 @@ mod tests {
             );
         }
         let stack = stack.build();
-        let found = sandbox_egress_network(&stack, &egress)?;
-        if let Some(found) = &found {
-            assert_eq!(found.id, "net");
-        }
-        Ok(found.map(|found| found.vpc))
+        let found = sandbox_egress_network(&stack)?;
+        assert_eq!(found.id, "net");
+        Ok(found.vpc)
     }
 
     #[test]
@@ -258,9 +306,8 @@ mod tests {
                     ResourceLifecycle::Frozen,
                 )
                 .build();
-            let found = sandbox_egress_network(&stack, &SandboxEgress::None)
-                .expect("a created or brought VPC is attachable")
-                .expect("deny attaches to a network");
+            let found =
+                sandbox_egress_network(&stack).expect("a created or brought VPC is attachable");
             assert_eq!((found.id, found.vpc), ("first", expected));
         }
     }
@@ -307,22 +354,22 @@ mod tests {
         };
 
         let cases = [
-            (SandboxEgress::Internet, None, Ok(None)),
+            (SandboxEgress::Internet, None, Err(NoNetwork)),
             (
                 SandboxEgress::Internet,
                 Some(NetworkSettings::UseDefault),
-                Ok(None),
+                Err(DefaultVpc),
             ),
-            (SandboxEgress::Internet, Some(byo_gcp()), Ok(None)),
-            (domains(), None, Err(DomainAllowList)),
-            (domains(), Some(create()), Err(DomainAllowList)),
-            (SandboxEgress::None, None, Err(NoNetwork)),
-            (SandboxEgress::None, Some(create()), Ok(Some(Created))),
             (
-                SandboxEgress::None,
-                Some(byo_aws()),
-                Ok(Some(BroughtByCustomer)),
+                SandboxEgress::Internet,
+                Some(byo_gcp()),
+                Err(OtherCloudNetwork),
             ),
+            (domains(), None, Err(NoNetwork)),
+            (domains(), Some(create()), Ok(Created)),
+            (SandboxEgress::None, None, Err(NoNetwork)),
+            (SandboxEgress::None, Some(create()), Ok(Created)),
+            (SandboxEgress::None, Some(byo_aws()), Ok(BroughtByCustomer)),
             (
                 SandboxEgress::None,
                 Some(NetworkSettings::UseDefault),
