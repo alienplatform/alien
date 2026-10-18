@@ -98,10 +98,20 @@ impl StackMutation for ComputeClusterMutation {
             .resources
             .values()
             .any(|entry| entry.config.resource_type().as_ref() == "compute-cluster");
-        // Explicit clusters need their selected machines even when no workload
-        // references them, for example a pool reserved for remote commands.
-        if !has_containers && !has_daemon_cluster_ref && !has_cluster {
-            return false;
+        // Standalone pools need explicit setup choices too. Preserve a legacy
+        // idle pool's declared machine/profile when no choice changed: filling
+        // a missing profile alone can resize its disks during an unrelated release.
+        if !has_containers && !has_daemon_cluster_ref {
+            return stack.resources.values().any(|entry| {
+                entry.config.downcast_ref::<ComputeCluster>().is_some_and(|cluster| {
+                    cluster.capacity_groups.iter().any(|group| {
+                        group.instance_type.is_none()
+                            || (config.stack_settings.compute.as_ref().is_some_and(|settings| {
+                                settings.pools.contains_key(&group.group_id)
+                            }) && group_needs_materialization(group, stack_state.platform, config))
+                    })
+                })
+            });
         }
 
         if !has_cluster {
@@ -3957,7 +3967,12 @@ mod tests {
                 .add(cluster, ResourceLifecycle::Frozen)
                 .build();
             let state = StackState::new(platform);
-            let config = DeploymentConfig::builder().build();
+            let config = DeploymentConfig::builder()
+                .stack_settings(StackSettings::default())
+                .environment_variables(empty_env_snapshot())
+                .external_bindings(ExternalBindings::default())
+                .allow_frozen_changes(false)
+                .build();
             assert!(
                 !ComputeClusterMutation.should_run(&stack, &state, &config),
                 "{platform:?}: no workload or setup selection requests changing the installed machine profile"
