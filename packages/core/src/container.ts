@@ -20,11 +20,6 @@ import { type Resource, ResourceBuilder } from "./resource.js"
 /** Deployment-time choices for one resource dimension. */
 export type ContainerResourceRange<T> = { min: T; max: T; default: T }
 
-/** Resources allowed to connect to a named internal endpoint. */
-export interface InternalEndpointOptions {
-  from: readonly Resource[]
-}
-
 export type PublicEndpointOptions =
   | "http"
   | "tcp"
@@ -40,8 +35,6 @@ export type {
   ContainerCode,
   ContainerEgress,
   ContainerGpuSpec,
-  ContainerInternalEndpoint,
-  ContainerInternalEndpointOutput,
   ContainerOutputs,
   ContainerPort,
   ContainerSecurity,
@@ -286,7 +279,8 @@ export class Container extends ResourceBuilder {
 
   /**
    * Adds an internal-only port to the container.
-   * Automatically creates DNS records for service discovery.
+   * Reachable by this compute cluster and every resource that links to this container.
+   * A link grants access to all declared ports; users need a publicEndpoint.
    * @param port Port number (e.g., 3000, 8080, 5432).
    * @returns The Container builder instance.
    */
@@ -346,24 +340,6 @@ export class Container extends ResourceBuilder {
       hostLabel: endpoint.hostLabel,
       wildcardSubdomains: endpoint.wildcardSubdomains ?? false,
     } satisfies PublicEndpoint)
-    return this
-  }
-
-  /**
-   * Exposes a port only to the listed Sandbox, Worker, Container or Daemon resources.
-   * `from` is required and must not be empty. The endpoint is independent of
-   * public endpoints and the deployment's endpointAccess setting; a port can
-   * have both public and internal exposure. Allowed resources receive
-   * `internalEndpoints.<name>.url` in this container's binding.
-   * Backends that cannot enforce the source restriction refuse the plan.
-   */
-  public internalEndpoint(name: string, port: number, options: InternalEndpointOptions): this {
-    this._config.internalEndpoints ??= []
-    this._config.internalEndpoints.push({
-      name,
-      port,
-      from: options.from.map(resource => resource.ref()),
-    })
     return this
   }
 

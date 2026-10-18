@@ -328,9 +328,9 @@ class Container:
         self._handle = _LazyHandle[Any]("container", name)
 
     @translate_errors
-    async def internal_endpoints(self) -> dict[str, dict[str, str]]:
-        """Named endpoint URLs authorized for this workload."""
-        return (await self._handle.get()).internal_endpoints()
+    async def internal_urls(self) -> dict[int, str]:
+        """Internal URLs keyed by port for the linked container."""
+        return (await self._handle.get()).internal_urls()
 
     @translate_errors
     async def internal_url(self) -> str:

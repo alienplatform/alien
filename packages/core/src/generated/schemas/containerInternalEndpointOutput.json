@@ -1,1 +1,0 @@
-{"type":"object","description":"Runtime address of a named internal endpoint, shared only with its allowed resources.","required":["url"],"properties":{"url":{"type":"string","description":"URL reachable through this endpoint's private network path."}},"additionalProperties":false,"x-readme-ref-name":"ContainerInternalEndpointOutput"}

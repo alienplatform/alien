@@ -1891,12 +1891,25 @@ impl BindingsProviderApi for BindingsProvider {
                     ),
                 },
             )?;
-            let internal_url = container.get_internal_url();
+            let urls = container.get_internal_urls();
+            let port_url = |port| {
+                urls.get(&port).ok_or_else(|| {
+                    AlienError::new(ErrorData::SandboxEgressGatewayUnavailable {
+                        reason: format!(
+                            "gateway Container '{}' is missing internal URL for port {port}",
+                            config.container
+                        ),
+                    })
+                })
+            };
+            let proxy_url = port_url(3128)?;
+            let admin_url = port_url(3129)?;
             let vault = self.load_vault(&config.signing_key.vault).await?;
             Some(Arc::new(crate::sandbox_egress::SandboxEgressManager::new(
                 config.clone(),
                 vault,
-                internal_url,
+                proxy_url,
+                admin_url,
             )?))
         } else {
             None

@@ -4,7 +4,6 @@
  */
 
 import * as z from "zod"
-import { ContainerInternalEndpointOutputSchema } from "./container-internal-endpoint-output-schema.js"
 import { ContainerStatusSchema } from "./container-status-schema.js"
 import { PublicEndpointOutputSchema } from "./public-endpoint-output-schema.js"
 import { ReplicaStatusSchema } from "./replica-status-schema.js"
@@ -19,19 +18,11 @@ export const ContainerOutputsSchema = z
     currentReplicas: z.int().min(0).describe("Number of current replicas"),
     desiredReplicas: z.int().min(0).describe("Desired number of replicas"),
     internalDns: z.string().describe('Internal DNS name (e.g., "api.svc")'),
-    internalEndpoints: z.optional(
+    internalUrls: z.optional(
       z
         .object({})
-        .catchall(
-          z
-            .lazy(() => ContainerInternalEndpointOutputSchema)
-            .describe(
-              "Runtime address of a named internal endpoint, shared only with its allowed resources.",
-            ),
-        )
-        .describe(
-          "Internal endpoints resolved for the resources permitted by each endpoint's from list.",
-        ),
+        .catchall(z.string())
+        .describe("Internal URLs keyed by port for cluster members and linking resources."),
     ),
     name: z.string().describe("Container name in the managed container backend"),
     publicEndpoints: z.optional(
