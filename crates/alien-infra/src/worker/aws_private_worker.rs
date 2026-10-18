@@ -4,19 +4,20 @@ use std::collections::HashMap;
 
 use alien_aws_clients::acm::{ImportCertificateRequest, Tag};
 use alien_core::{
-    standard_resource_tags, CertificateStatus, DnsRecordStatus, ExposeProtocol, ManagedDomainInfo,
-    Network, PublicEndpointOutput, ResourceRef, Worker,
+    CertificateStatus, DnsRecordStatus, ExposeProtocol, ManagedDomainInfo, Network,
+    PublicEndpointOutput, ResourceRef, Worker, standard_resource_tags,
 };
 use alien_error::AlienError;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use super::aws_gateway_cleanup::{GatewayCleanup, installed_function};
 use super::aws_private_ingress::{
-    validate_worker_setup, PrivateIngressClients, PrivateIngressPlan, PrivateWorkerIngress,
+    PrivateIngressClients, PrivateIngressPlan, PrivateWorkerIngress, validate_worker_setup,
 };
 use crate::{
-    core::split_certificate_chain, AwsAcmImports, AwsNetworkController, ErrorData,
-    ResourceControllerContext, Result,
+    AwsAcmImports, AwsNetworkController, ErrorData, ResourceControllerContext, Result,
+    core::split_certificate_chain,
 };
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -67,7 +68,20 @@ impl AwsPrivateWorker {
                     .service_provider
                     .get_aws_ecs_client(ctx.get_aws_config()?)
                     .await?;
-                graph.maintain_retired_tasks(ecs.as_ref()).await?;
+                let function_arn = installed_function(ctx)?;
+                let lambda = ctx
+                    .service_provider
+                    .get_aws_lambda_client(ctx.get_aws_config()?)
+                    .await?;
+                graph
+                    .maintain_retired_tasks(
+                        ecs.as_ref(),
+                        &GatewayCleanup {
+                            lambda: lambda.as_ref(),
+                            function_arn: &function_arn,
+                        },
+                    )
+                    .await?;
             }
         }
         Ok(())
@@ -111,6 +125,7 @@ impl AwsPrivateWorker {
         {
             return self.delete(ctx).await;
         }
+        let cleanup_function_arn = installed_function(ctx)?;
         validate_worker_setup(ctx, &worker).await?;
         let Some(domains) = resolve_domains(ctx, &worker)? else {
             return Ok(false);
@@ -169,6 +184,7 @@ impl AwsPrivateWorker {
             iam: iam.as_ref(),
             elb: elb.as_ref(),
             lambda: lambda.as_ref(),
+            cleanup_function_arn: &cleanup_function_arn,
         };
         let Some(frontend) = graph.step_prepare(&clients, &certificate).await? else {
             return Ok(false);
@@ -206,6 +222,7 @@ impl AwsPrivateWorker {
         }
         let aws = ctx.get_aws_config()?;
         if let Some(graph) = &mut self.graph {
+            let cleanup_function_arn = installed_function(ctx)?;
             let api = ctx.service_provider.get_aws_apigateway_client(aws).await?;
             let ec2 = ctx.service_provider.get_aws_ec2_client(aws).await?;
             let ecs = ctx.service_provider.get_aws_ecs_client(aws).await?;
@@ -219,6 +236,7 @@ impl AwsPrivateWorker {
                 iam: iam.as_ref(),
                 elb: elb.as_ref(),
                 lambda: lambda.as_ref(),
+                cleanup_function_arn: &cleanup_function_arn,
             };
             if !graph.step_delete(&clients).await? {
                 return Ok(false);

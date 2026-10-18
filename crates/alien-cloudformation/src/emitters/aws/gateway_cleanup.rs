@@ -88,8 +88,8 @@ pub(super) fn emit(ctx: &EmitContext<'_>, management_role: &str) -> Vec<CfResour
         ),
         ("Tags".to_string(), tags(ctx)),
     ]);
-    // A new logical identity publishes after every code/configuration change;
-    // a mutable alias would allow an older registration to select new code.
+    // Description changes replace the version after code/configuration updates.
+    // Keep a stable template identity and register the resulting immutable ARN.
     let mut version = CfResource::new(
         version_id(management_role),
         "AWS::Lambda::Version".to_string(),
@@ -97,6 +97,9 @@ pub(super) fn emit(ctx: &EmitContext<'_>, management_role: &str) -> Vec<CfResour
     version
         .properties
         .insert("FunctionName".to_string(), E::ref_(&function_id));
+    version
+        .properties
+        .insert("Description".to_string(), E::from(cleanup_revision()));
     version.depends_on.push(function_id);
     let mut invoke = CfResource::new(
         format!("{management_role}GatewayCleanupInvoke"),

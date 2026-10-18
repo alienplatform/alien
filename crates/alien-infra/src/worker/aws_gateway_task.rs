@@ -4,18 +4,18 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use alien_aws_clients::ecs::{
-    ContainerDefinition, DeleteTaskDefinitionsRequest, EcsApi, ListTagsForResourceRequest,
-    ListTaskDefinitionsRequest, PortMapping, RegisterTaskDefinitionRequest, RuntimePlatform, Tag,
-    TaskDefinitionRequest, TaskDefinitionResponse,
+    ContainerDefinition, EcsApi, ListTagsForResourceRequest, ListTaskDefinitionsRequest,
+    PortMapping, RegisterTaskDefinitionRequest, RuntimePlatform, Tag, TaskDefinitionResponse,
 };
 use alien_core::standard_resource_tags;
 use alien_error::{AlienError, Context, ContextError};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use super::aws_gateway_cleanup::{CleanupAction, GatewayCleanup};
 use super::aws_gateway_config::{GATEWAY_HEALTH_PORT, GATEWAY_HTTP_PORT, GATEWAY_IMAGE};
 use crate::core::aws_tag_scoped::{
-    is_remote_not_found, preserve_composite_cleanup_error, CREATE_ATTEMPT_TAG,
+    CREATE_ATTEMPT_TAG, is_remote_not_found, preserve_composite_cleanup_error,
 };
 use crate::{ErrorData, Result};
 
@@ -68,31 +68,33 @@ impl GatewayTask {
             .collect();
         let request = RegisterTaskDefinitionRequest::builder()
             .family(family)
-            .container_definitions(vec![ContainerDefinition::builder()
-                .name("gateway".into())
-                .image(GATEWAY_IMAGE.into())
-                .essential(true)
-                .entry_point(vec!["/usr/local/bin/envoy".into()])
-                .command(vec![
-                    "--config-yaml".into(),
-                    bootstrap.to_string(),
-                    "--log-level".into(),
-                    "warn".into(),
-                ])
-                .port_mappings(
-                    [GATEWAY_HTTP_PORT, GATEWAY_HEALTH_PORT]
-                        .into_iter()
-                        .map(|port| {
-                            PortMapping::builder()
-                                .container_port(i32::from(port))
-                                .protocol("tcp".into())
-                                .build()
-                        })
-                        .collect(),
-                )
-                .readonly_root_filesystem(true)
-                .stop_timeout(120)
-                .build()])
+            .container_definitions(vec![
+                ContainerDefinition::builder()
+                    .name("gateway".into())
+                    .image(GATEWAY_IMAGE.into())
+                    .essential(true)
+                    .entry_point(vec!["/usr/local/bin/envoy".into()])
+                    .command(vec![
+                        "--config-yaml".into(),
+                        bootstrap.to_string(),
+                        "--log-level".into(),
+                        "warn".into(),
+                    ])
+                    .port_mappings(
+                        [GATEWAY_HTTP_PORT, GATEWAY_HEALTH_PORT]
+                            .into_iter()
+                            .map(|port| {
+                                PortMapping::builder()
+                                    .container_port(i32::from(port))
+                                    .protocol("tcp".into())
+                                    .build()
+                            })
+                            .collect(),
+                    )
+                    .readonly_root_filesystem(true)
+                    .stop_timeout(120)
+                    .build(),
+            ])
             .network_mode("awsvpc".into())
             .requires_compatibilities(vec!["FARGATE".into()])
             .cpu("256".into())
@@ -156,13 +158,21 @@ impl GatewayTask {
     }
 
     /// Caller must first prove no service or running task uses this definition.
-    pub async fn step_delete(&mut self, ecs: &dyn EcsApi) -> Result<bool> {
-        self.delete_inner(ecs)
+    pub async fn step_delete(
+        &mut self,
+        ecs: &dyn EcsApi,
+        cleanup: &GatewayCleanup<'_>,
+    ) -> Result<bool> {
+        self.delete_inner(ecs, cleanup)
             .await
             .map_err(preserve_composite_cleanup_error)
     }
 
-    async fn delete_inner(&mut self, ecs: &dyn EcsApi) -> Result<bool> {
+    async fn delete_inner(
+        &mut self,
+        ecs: &dyn EcsApi,
+        cleanup: &GatewayCleanup<'_>,
+    ) -> Result<bool> {
         self.retiring = true;
         if !self.registration_permitted {
             return Ok(true);
@@ -193,33 +203,14 @@ impl GatewayTask {
             };
             match status.as_str() {
                 "ACTIVE" => {
-                    ecs.deregister_task_definition(TaskDefinitionRequest {
-                        task_definition: arn.clone(),
-                    })
-                    .await
-                    .context(cloud("Deregister owned gateway task definition"))?;
+                    cleanup.retire(CleanupAction::Deregister, arn).await?;
                     return Ok(false);
                 }
                 "INACTIVE" => {
                     if self.delete_requested.insert(arn.clone()) {
                         return Ok(false); // Checkpoint before a delete can commit remotely.
                     }
-                    let response = ecs
-                        .delete_task_definitions(DeleteTaskDefinitionsRequest {
-                            task_definitions: vec![arn.clone()],
-                        })
-                        .await
-                        .context(cloud("Delete owned gateway task definition"))?;
-                    if !response.failures.is_empty() {
-                        return Err(invalid("Gateway task deletion reported batch failures"));
-                    }
-                    if response.task_definitions.len() != 1
-                        || response.task_definitions[0].task_definition_arn != *arn
-                    {
-                        return Err(invalid(
-                            "Gateway task deletion returned a different identity",
-                        ));
-                    }
+                    cleanup.retire(CleanupAction::Delete, arn).await?;
                     return Ok(false);
                 }
                 "DELETE_IN_PROGRESS" => {
@@ -375,6 +366,14 @@ fn cloud(message: &str) -> ErrorData {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_aws_clients::lambda::{LambdaApi, MockLambdaApi};
+
+    fn cleanup(lambda: &dyn LambdaApi) -> GatewayCleanup<'_> {
+        GatewayCleanup {
+            lambda,
+            function_arn: "arn:aws:lambda:us-east-1:123456789012:function:_gateway-cleanup-example:7",
+        }
+    }
     use alien_aws_clients::ecs::{
         ListTagsForResourceResponse, ListTaskDefinitionsResponse, MockEcsApi,
     };
@@ -470,29 +469,32 @@ mod tests {
 
     #[tokio::test]
     async fn persisted_pre_call_intent_is_not_forgotten_after_a_process_crash() {
+        let mut lambda = MockLambdaApi::new();
         let mut owner = owner();
         let mut ecs = MockEcsApi::new();
         assert!(owner.step_create(&ecs).await.unwrap().is_none());
         owner = reload(&owner);
         assert!(!owner.registration_attempted);
         inventory(&mut ecs, vec![]);
-        assert!(!owner.step_delete(&ecs).await.unwrap());
+        assert!(!owner.step_delete(&ecs, &cleanup(&lambda)).await.unwrap());
     }
 
     #[tokio::test]
     async fn uncertain_registration_cannot_be_forgotten_by_cleanup() {
+        let mut lambda = MockLambdaApi::new();
         let mut owner = owner();
         owner.registration_permitted = true;
         owner.registration_attempted = true;
         let mut ecs = MockEcsApi::new();
         inventory(&mut ecs, vec![]);
-        assert!(!owner.step_delete(&ecs).await.unwrap());
+        assert!(!owner.step_delete(&ecs, &cleanup(&lambda)).await.unwrap());
         assert!(reload(&owner).retiring);
         assert!(owner.step_create(&ecs).await.is_err());
     }
 
     #[tokio::test]
     async fn cleanup_rejects_foreign_generation_before_mutation() {
+        let mut lambda = MockLambdaApi::new();
         let mut owner = owner();
         owner.registration_permitted = true;
         owner.registration_attempted = true;
@@ -516,11 +518,12 @@ mod tests {
         ecs.expect_list_tags_for_resource()
             .times(1)
             .return_once(move |_| Ok(ListTagsForResourceResponse { tags: foreign.tags }));
-        assert!(owner.step_delete(&ecs).await.is_err());
+        assert!(owner.step_delete(&ecs, &cleanup(&lambda)).await.is_err());
     }
 
     #[tokio::test]
     async fn paginated_family_recovery_retains_every_revision_before_cleanup_mutates() {
+        let mut lambda = MockLambdaApi::new();
         let mut owner = owner();
         owner.registration_permitted = true;
         let first = response(&owner, 1, "ACTIVE");
@@ -560,15 +563,16 @@ mod tests {
                 };
                 Ok(ListTagsForResourceResponse { tags })
             });
-        ecs.expect_deregister_task_definition()
-            .times(1)
-            .return_once(|_| {
-                Err(AlienError::new(ClientError::RemoteAccessDenied {
-                    resource_type: "task definition".into(),
-                    resource_name: "owned".into(),
-                }))
-            });
-        let error = owner.step_delete(&ecs).await.unwrap_err();
+        lambda.expect_invoke().times(1).return_once(|_| {
+            Err(AlienError::new(ClientError::RemoteAccessDenied {
+                resource_type: "task definition".into(),
+                resource_name: "owned".into(),
+            }))
+        });
+        let error = owner
+            .step_delete(&ecs, &cleanup(&lambda))
+            .await
+            .unwrap_err();
         assert!(!matches!(error.http_status_code, Some(401 | 403 | 404)));
         assert_eq!(
             reload(&owner).revisions,
@@ -578,6 +582,7 @@ mod tests {
 
     #[tokio::test]
     async fn cleanup_keeps_identity_on_lost_delete_and_waits_for_inventory_absence() {
+        let mut lambda = MockLambdaApi::new();
         let mut owner = owner();
         owner.registration_permitted = true;
         owner.registration_attempted = true;
@@ -585,23 +590,21 @@ mod tests {
         let arn = task.task_definition.task_definition_arn.clone();
         let mut ecs = MockEcsApi::new();
         inventory(&mut ecs, vec![task.clone()]);
-        assert!(!owner.step_delete(&ecs).await.unwrap());
+        assert!(!owner.step_delete(&ecs, &cleanup(&lambda)).await.unwrap());
         owner = reload(&owner);
         ecs.checkpoint();
         inventory(&mut ecs, vec![task]);
-        ecs.expect_delete_task_definitions()
-            .times(1)
-            .return_once(|_| {
-                Err(AlienError::new(ClientError::RemoteServiceUnavailable {
-                    message: "lost delete reply".into(),
-                }))
-            });
-        assert!(owner.step_delete(&ecs).await.is_err());
+        lambda.expect_invoke().times(1).return_once(|_| {
+            Err(AlienError::new(ClientError::RemoteServiceUnavailable {
+                message: "lost delete reply".into(),
+            }))
+        });
+        assert!(owner.step_delete(&ecs, &cleanup(&lambda)).await.is_err());
         assert!(owner.delete_requested.contains(&arn));
         ecs.checkpoint();
         owner = reload(&owner);
         inventory(&mut ecs, vec![response(&owner, 1, "DELETE_IN_PROGRESS")]);
-        assert!(!owner.step_delete(&ecs).await.unwrap());
+        assert!(!owner.step_delete(&ecs, &cleanup(&lambda)).await.unwrap());
         ecs.checkpoint();
         owner = reload(&owner);
         inventory(&mut ecs, vec![]);
@@ -613,6 +616,6 @@ mod tests {
                     resource_name: "owned".into(),
                 }))
             });
-        assert!(owner.step_delete(&ecs).await.unwrap());
+        assert!(owner.step_delete(&ecs, &cleanup(&lambda)).await.unwrap());
     }
 }

@@ -5,6 +5,7 @@ mod aws_private_ingress;
 mod aws_private_worker;
 mod aws_gateway_config;
 mod aws_gateway_task;
+mod aws_gateway_cleanup;
 mod aws_gateway_service;
 mod aws_gateway_cluster;
 mod aws_gateway_permission;
