@@ -477,7 +477,7 @@ impl ResolvedRemoteBinding {
                         region: alien_core::BindingValue::Value(binding.region),
                         resource_group: alien_core::BindingValue::Value(binding.resource_group),
                         disk_image: alien_core::BindingValue::Value(binding.disk_image),
-                        egress: alien_core::SandboxEgress::Internet.into(),
+                        egress: alien_core::SandboxEgress::Allow.into(),
                         idle_pause_seconds: binding
                             .idle_pause_seconds
                             .map(|seconds| {

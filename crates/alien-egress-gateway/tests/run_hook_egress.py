@@ -30,7 +30,7 @@ def check_run_hook_agents(suite, image, containers, uid):
 
         def call(method, path, body=None):
             if method == "PUT" and path == "/v1/egress": body = suite.delivery(body)
-            connection = http.client.HTTPConnection(address, 8080, timeout=12)
+            connection = http.client.HTTPConnection(address, 8080, timeout=25)
             try:
                 connection.request(method, path, json.dumps(body) if body is not None else None,
                                    {"Content-Type": "application/json"})

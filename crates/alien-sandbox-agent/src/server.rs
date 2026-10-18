@@ -384,7 +384,7 @@ async fn run_command(
     headers: HeaderMap,
     Json(mut request): Json<ExecRequest>,
 ) -> std::result::Result<Response, ApiError> {
-    authorize(&state, peer, &headers, SandboxOperationClass::Execute)?;
+    authorize(&state, peer, &headers, SandboxOperationClass::Execute).await?;
 
     #[cfg(target_os = "linux")]
     if let Some(egress) = &state.gateway_egress {
@@ -444,7 +444,7 @@ async fn read_file(
     headers: HeaderMap,
     Query(query): Query<FileQuery>,
 ) -> std::result::Result<Json<ReadFileResponse>, ApiError> {
-    authorize(&state, peer, &headers, SandboxOperationClass::Execute)?;
+    authorize(&state, peer, &headers, SandboxOperationClass::Execute).await?;
 
     let contents = files::read(&state.session_root, &query.path).await?;
 
@@ -459,7 +459,7 @@ async fn write_file(
     headers: HeaderMap,
     Json(body): Json<WriteFileBody>,
 ) -> std::result::Result<StatusCode, ApiError> {
-    authorize(&state, peer, &headers, SandboxOperationClass::Execute)?;
+    authorize(&state, peer, &headers, SandboxOperationClass::Execute).await?;
 
     let contents = BASE64.decode(&body.contents_base64).map_err(|error| {
         AlienError::new(ErrorData::RequestInvalid {
@@ -482,7 +482,7 @@ async fn job_start(
     headers: HeaderMap,
     Json(mut request): Json<ExecRequest>,
 ) -> std::result::Result<Json<JobStartResponse>, ApiError> {
-    authorize(&state, peer, &headers, SandboxOperationClass::Execute)?;
+    authorize(&state, peer, &headers, SandboxOperationClass::Execute).await?;
 
     #[cfg(target_os = "linux")]
     if let Some(egress) = &state.gateway_egress {
@@ -512,7 +512,7 @@ async fn job_poll(
     headers: HeaderMap,
     Json(body): Json<JobPollBody>,
 ) -> std::result::Result<Json<JobPollResponse>, ApiError> {
-    authorize(&state, peer, &headers, SandboxOperationClass::Execute)?;
+    authorize(&state, peer, &headers, SandboxOperationClass::Execute).await?;
 
     let snapshot = state
         .jobs
@@ -533,7 +533,7 @@ async fn job_cancel(
     headers: HeaderMap,
     Json(body): Json<JobCancelBody>,
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
-    authorize(&state, peer, &headers, SandboxOperationClass::Execute)?;
+    authorize(&state, peer, &headers, SandboxOperationClass::Execute).await?;
 
     if !state.jobs.cancel(&body.job_id) {
         return Err(ApiError::from(AlienError::new(ErrorData::JobNotFound {
@@ -676,17 +676,18 @@ fn reparse<T: serde::de::DeserializeOwned>(body: &Bytes) -> std::result::Result<
 }
 
 /// Verifies the request may reach this session, or refuses it.
-fn authorize(
+async fn authorize(
     state: &AgentState,
     peer: SocketAddr,
     headers: &HeaderMap,
     required: SandboxOperationClass,
 ) -> std::result::Result<(), ApiError> {
+    authorize_control(state, peer, headers, required)?;
     #[cfg(target_os = "linux")]
     if let Some(egress) = &state.gateway_egress {
-        egress.ensure_ready()?;
+        egress.wait_ready().await?;
     }
-    authorize_control(state, peer, headers, required)
+    Ok(())
 }
 
 fn authorize_control(

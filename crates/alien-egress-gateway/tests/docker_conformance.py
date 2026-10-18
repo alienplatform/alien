@@ -471,7 +471,7 @@ class Suite:
         (self.output / "benchmark.json").write_text(json.dumps(result, indent=2))
         print(json.dumps({"benchmark": result}), flush=True)
 
-    def agent(self, image, containers, networks):
+    def agent(self, image, containers, networks, resume_only=False):
         def equal(actual, expected):
             assert actual == expected, (actual, expected)
         # The image provides ordinary app tools only; the agent owns firewall installation.
@@ -506,7 +506,7 @@ class Suite:
 
         def call(method, path, body=None):
             if method == "PUT" and path == "/v1/egress": body = self.delivery(body)
-            conn = http.client.HTTPConnection("172.29.91.3", 8080, timeout=12)
+            conn = http.client.HTTPConnection("172.29.91.3", 8080, timeout=25)
             conn.request(method, path, json.dumps(body) if body is not None else None, {"Content-Type": "application/json"})
             response = conn.getresponse()
             result = response.status, response.read()
@@ -535,6 +535,11 @@ class Suite:
         self.record("agent refuses forged identity via authenticated health", lambda: equal(call("PUT", "/v1/egress", {"token": forged})[0], 503))
         self.record("agent token install and path self-check", lambda: equal(call("PUT", "/v1/egress", {"token": self.token()})[0], 204))
         self.record("agent ready health", lambda: equal(json.loads(call("GET", "/v1/health")[1])["status"], "ready"))
+
+        from resume_ordering import check_resume_ordering
+        check_resume_ordering(self, name, call, docker, networks, PREFIX)
+        if resume_only:
+            return
 
         check_capabilities(self, name, call, docker, AGENT_UID)
         def child_socket_boundary():
@@ -638,7 +643,7 @@ else: raise AssertionError("unexpected egress")
         self.record("command UID honors stored policy replacement", lambda: equal(docker("exec", "-u", f"{AGENT_UID}:{AGENT_UID}", name, "python", "-c", denied), "denied"))
 
         from paused_policy import check_paused_policy, check_running_recovery
-        self.record("paused agent accepts gateway-only narrowing and Resume delivery gates commands",lambda:check_paused_policy(self,name,call,docker,AUD,SUB,AGENT_UID))
+        self.record("paused agent resumes with the current gateway policy",lambda:check_paused_policy(self,name,call,docker,AUD,SUB,AGENT_UID))
         self.record("running narrowing survives total gateway loss with the retained record",lambda:check_running_recovery(self,call,docker,AUD,SUB,PREFIX))
 
         for mode, expected in [("none", 200), ("bridge", 503)]:
@@ -726,7 +731,13 @@ def main():
     parser.add_argument("--vault-config", action="store_true")
     parser.add_argument("--replica-bootstrap-only", action="store_true")
     parser.add_argument("--connect-port80-only", action="store_true")
+    parser.add_argument("--range-refresh-only", action="store_true")
+    parser.add_argument("--resume-only", action="store_true")
     args = parser.parse_args()
+    if args.range_refresh_only and not args.vault_config:
+        parser.error("--range-refresh-only requires --vault-config")
+    if args.resume_only and not args.agent_image:
+        parser.error("--resume-only requires --agent-image")
     if args.agent_uid <= 0:
         parser.error("--agent-uid must be a non-root UID")
     AGENT_UID = args.agent_uid
@@ -790,11 +801,23 @@ def main():
         if args.connect_port80_only:
             suite.connect_port80()
             return
+        if args.range_refresh_only:
+            from denied_ranges import check_denied_range_refresh
+            check_denied_range_refresh(suite, config, docker, containers, PREFIX, AUD, ORIGIN, PROXY)
+            return
+        if args.resume_only:
+            from resume_ordering import check_run_ordering
+            check_run_ordering(suite, args.agent_image, containers, networks, PREFIX, AUD)
+            assert suite.admin("/v1/policies", {"aud": AUD, "sub": SUB, "policy": "internet"})[0] == 204
+            suite.agent(args.agent_image, containers, networks, resume_only=True)
+            return
         suite.run()
         check_live_connections(suite, AUD, ORIGIN, PROXY, "93.184.216.4", docker, PREFIX)
         if args.agent_image:
             from legacy_egress import check_legacy_agents
             check_legacy_agents(suite, args.agent_image, containers, AGENT_UID)
+            from resume_ordering import check_run_ordering
+            check_run_ordering(suite, args.agent_image, containers, networks, PREFIX, AUD)
             suite.agent(args.agent_image, containers, networks)
             suite.proxy_only(args.agent_image, containers, networks)
             from run_hook_egress import check_run_hook_agents
@@ -802,28 +825,8 @@ def main():
         if not args.vault_config:
             check_graceful_shutdown(suite, AUD, ORIGIN, "93.184.216.4", docker, PREFIX)
         if args.vault_config:
-            assert suite.admin("/v1/policies", {"aud":AUD,"sub":"reload","policy":"internet"})[0] == 204
-            suite.tunnel(token=suite.token(sub="reload")).close()
-            config["deniedRanges"].append(ORIGIN + "/32")
-            secret_file = output / "vault/secrets.json"
-            replacement = secret_file.with_suffix(".next")
-            replacement.write_text(json.dumps({"test":"fake-test-secret", "sandbox-egress-gateway-config":json.dumps(config)}))
-            replacement.replace(secret_file)
-            def reload_proof():
-                deadline = time.monotonic() + 75
-                pending = {PROXY, "93.184.216.4"}
-                while pending:
-                    for proxy in list(pending):
-                        conn = http.client.HTTPConnection(proxy, 3128, timeout=3)
-                        conn.request("CONNECT", "allowed.test:443", headers={"Host":"allowed.test:443", "Proxy-Authorization":"Bearer " + suite.token(sub="reload")})
-                        response = conn.getresponse()
-                        if response.status == 403: pending.remove(proxy)
-                        else: assert response.status == 200, response.status
-                        conn.close()
-                    if pending:
-                        assert time.monotonic() < deadline, pending
-                        time.sleep(1)
-            suite.record("vault config polls replace CIDRs on both running replicas", reload_proof)
+            from denied_ranges import check_denied_range_refresh
+            check_denied_range_refresh(suite, config, docker, containers, PREFIX, AUD, ORIGIN, PROXY)
     finally:
         secret_in_logs = False
         for name in reversed(containers):

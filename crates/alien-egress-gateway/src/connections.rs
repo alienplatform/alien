@@ -15,7 +15,7 @@ use tokio::sync::{watch, Semaphore};
 use crate::{
     error::{unavailable, ErrorData, Result},
     io::Counters,
-    policy::{PolicyExt, Target},
+    policy::{check_addresses, PolicyExt, Target},
     runtime::LiveGateway,
     token::Claims,
 };
@@ -44,6 +44,7 @@ struct Group {
 struct Session {
     claims: Claims,
     target: Option<Target>,
+    peer: Option<IpAddr>,
     counters: Arc<Counters>,
     cancel: watch::Sender<Option<&'static str>>,
 }
@@ -117,6 +118,7 @@ impl Connections {
             Session {
                 claims,
                 target,
+                peer: None,
                 counters,
                 cancel,
             },
@@ -188,12 +190,18 @@ impl Connections {
                         _ => None,
                     };
                     for session in sessions {
-                        if !policy.as_ref().is_some_and(|policy| {
+                        let policy_allowed = policy.as_ref().is_some_and(|policy| {
                             session
                                 .target
                                 .as_ref()
                                 .is_none_or(|target| policy.permits(target))
-                        }) {
+                        });
+                        let address_allowed = session.peer.is_none_or(|address| {
+                            gateway.as_ref().is_some_and(|gateway| {
+                                check_addresses(&[address], &gateway.config.denied_ranges).is_ok()
+                            })
+                        });
+                        if !policy_allowed || !address_allowed {
                             session
                                 .cancel
                                 .send_replace(Some("policy revoked or unavailable"));
@@ -219,6 +227,23 @@ impl Connections {
         }
     }
 }
+impl IdentityPermit {
+    /// Retain the actual checked peer for live address-range revocation, including named targets.
+    pub fn record_peer(&self, address: IpAddr) -> Result<()> {
+        let mut identities = self
+            .registry
+            .identities
+            .lock()
+            .map_err(|_| AlienError::new(unavailable("identity admission lock")))?;
+        let session = identities
+            .get_mut(&self.identity)
+            .and_then(|group| group.sessions.get_mut(&self.id))
+            .ok_or_else(|| AlienError::new(unavailable("connection registration missing")))?;
+        session.peer = Some(address);
+        Ok(())
+    }
+}
+
 impl Drop for SourcePermit {
     fn drop(&mut self) {
         if let Ok(mut sources) = self.registry.sources.lock() {

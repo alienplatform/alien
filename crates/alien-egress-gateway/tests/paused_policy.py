@@ -1,4 +1,4 @@
-"""Pause the real agent while management narrows policy, then verify Resume delivery."""
+"""Pause the real agent while management narrows policy, then verify current authorization."""
 import json
 import time
 from urllib.parse import urlencode
@@ -15,7 +15,7 @@ def check_paused_policy(suite, name, call, docker, aud, sub, uid):
     finally:
         docker("unpause",name)
     assert call("POST", "/aws/lambda-microvms/runtime/v1/resume", {})[0] == 200
-    assert call("POST", "/v1/exec", {"command":["true"],"timeoutMs":1000})[0] == 503
+    assert call("POST", "/v1/exec", {"command":["true"],"timeoutMs":1000})[0] == 200
     assert call("PUT", "/v1/egress", {"token":suite.token(sub=sub)})[0] == 204
     assert suite.version(aud,sub) > old_version
     probe = '''import socket,ssl,http.client
@@ -64,8 +64,8 @@ def check_running_recovery(suite, call, docker, aud, sub, prefix):
             time.sleep(.1)
         suite.tunnel(host="allowed.test",token=token,proxy=replica,expected=403).close()
         assert suite.tls(host="blocked.example.test",token=token,proxy=replica) == (200,b"controlled-origin-response\n")
-    # A record-only refresh cannot release the Resume gate.
+    # A valid installed identity can resume; a record-only refresh preserves readiness.
     assert call("POST", "/aws/lambda-microvms/runtime/v1/resume", {})[0] == 200
     assert call("PUT", "/v1/egress", {"policy":retained})[0] == 204
-    assert call("POST", "/v1/exec", {"command":["true"],"timeoutMs":1000})[0] == 503
+    assert call("POST", "/v1/exec", {"command":["true"],"timeoutMs":1000})[0] == 200
     assert call("PUT", "/v1/egress", {"token":token,"policy":retained})[0] == 204

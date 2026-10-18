@@ -73,6 +73,9 @@ replace it; the agent poll does not bound this replay window.
 
 Each replica rechecks active identities every 30 seconds and closes tunnels whose
 destination is no longer allowed, including after deletion or a store failure.
+The same sweep checks each tunnel's connected IP against the latest denied ranges,
+including IPs reached through DNS names. Range changes therefore close existing
+tunnels within 30 seconds after a successful configuration refresh.
 A stalled sweep has a 20-second deadline and closes the affected tunnels. Token
 expiry and 120-second idle limits are swept every second. Activity resets the idle
 clock; a one-hour absolute connection limit also applies. Admission permits at
@@ -145,8 +148,12 @@ For a gateway-backed resource the agent starts without a token. Health reports
 session routes are blocked until token installation and the external path check
 succeed. The agent checks supervisor TCP and UDP internet denial and runs metadata
 HTTP and unmarked network probes in a child with the command's dropped identity.
-It repeats these checks on authenticated Resume and waits for the SDK to deliver
-the token and latest signed policy before reopening commands or forwarding.
+Authenticated Resume repeats these checks and verifies the installed identity
+against the gateway's current policy. A valid identity reopens commands regardless
+of whether renewal arrives before or after the hook; a rejected identity waits
+for renewal. Session requests wait up to 15 seconds for an active check. Identity
+delivery arriving before Run waits up to 15 seconds for routing installation.
+Health reports `verifying-egress-path` while a check is in progress.
 Delivery calls authenticated `GET /health` on proxy port 3128. This verifies the identity and installed policy
 without requiring guest access to admin port 3129 or dialing an upstream. On AWS the Run hook receives the AWS envelope
 `{microvmId,runHookPayload}`; the payload is a JSON string `{gateway,audience}`.

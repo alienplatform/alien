@@ -91,6 +91,12 @@ impl GatewayEgress {
     pub(super) async fn check_policy(&self) -> Result<()> {
         match self.policy_request(None).await? {
             200 => Ok(()),
+            403 => {
+                self.awaiting_delivery.store(true, Ordering::Release);
+                Err(alien_error::AlienError::new(
+                    crate::error::ErrorData::EgressPathUnexpected,
+                ))
+            }
             404 => {
                 let record = self
                     .policy
