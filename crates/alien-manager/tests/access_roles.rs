@@ -21,6 +21,8 @@ use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
 use http::header;
 use tower::ServiceExt;
+use httpmock::{MockServer, Method::{GET, POST}};
+use serde_json::{json, Value};
 
 use alien_bindings::{providers::kv::local::LocalKv, providers::storage::local::LocalStorage};
 use alien_commands::dispatchers::NullCommandDispatcher;
@@ -484,4 +486,120 @@ async fn vault_routes_refuse_deployer_values_and_preserve_shared_secrets() {
         }
     }
     assert!(shared.get_secret("APP_SECRET").await.is_err());
+}
+
+
+struct VaultCredentials(ClientConfig);
+
+#[async_trait]
+impl CredentialResolver for VaultCredentials {
+    async fn resolve(&self, _deployment: &DeploymentRecord) -> Result<ClientConfig, AlienError> {
+        Ok(self.0.clone())
+    }
+}
+
+async fn vault_router(config: ClientConfig, binding: VaultBinding) -> (axum::Router, String) {
+    let (mut state, id) = state().await;
+    state.credential_resolver = Arc::new(VaultCredentials(config));
+    let mut stack_state = StackState::new(Platform::Kubernetes);
+    stack_state.resources.insert("secrets".to_string(), StackResourceState::builder()
+        .resource_type(Vault::RESOURCE_TYPE.to_string())
+        .status(ResourceStatus::Running)
+        .config(Resource::new(Vault::new("secrets".to_string()).build()))
+        .remote_binding_params(serde_json::to_value(binding).unwrap())
+        .dependencies(Vec::new()).build());
+    state.deployment_store.update_imported_stack_state(&Subject::system(), &id,
+        UpdateImportedDeploymentParams {
+            stack_settings: StackSettings::default(), stack_state, environment_info: None,
+            runtime_metadata: RuntimeMetadata::default(), setup_metadata: None,
+            current_release_id: None, setup_target: "test".to_string(),
+            setup_fingerprint: "test".to_string(), setup_fingerprint_version: 1,
+            activation_status: None, schedule_reconciliation: false, input_values: Default::default(),
+        }).await.unwrap();
+    (alien_manager::routes::vault::router().with_state(state), id)
+}
+
+async fn read_vault(router: &axum::Router, id: &str) -> (StatusCode, Value) {
+    let response = router.clone().oneshot(Request::builder()
+        .uri(format!("/v1/deployments/{id}/vault/secrets/secrets/TEST_KEY"))
+        .header(header::AUTHORIZATION, format!("Bearer {}", token(Role::ProjectDeveloper)))
+        .body(Body::empty()).unwrap()).await.unwrap();
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap())
+}
+
+#[tokio::test]
+async fn vault_get_local_missing_key_is_404_but_corrupt_storage_is_500() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().to_string_lossy().to_string();
+    let (router, id) = vault_router(ClientConfig::Local { state_directory: path.clone() },
+        VaultBinding::local("secrets", &path)).await;
+    let (status, body) = read_vault(&router, &id).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["code"], "VAULT_SECRET_NOT_FOUND");
+    assert_eq!(body["retryable"], false);
+    // A malformed file is not evidence that the requested key is absent.
+    std::fs::create_dir_all(&path).unwrap();
+    std::fs::write(directory.path().join("secrets.json"), "not json").unwrap();
+    let (status, _) = read_vault(&router, &id).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+async fn cloud_vault_get(backend: &str, missing: bool) {
+    let server = MockServer::start_async().await;
+    let (config, binding, method, path, status, body) = match backend {
+        "aws" => (json!({"platform":"aws", "accountId":"000000000000", "region":"us-east-1",
+            "credentials":{"type":"accessKeys", "accessKeyId":"test", "secretAccessKey":"test"},
+            "serviceOverrides":{"endpoints":{"ssm":server.base_url()}}}),
+            VaultBinding::parameter_store("test-secrets"), POST, "/".to_string(), 400,
+            json!({"__type":if missing {"ParameterNotFound"} else {"AccessDeniedException"}, "message":"synthetic failure"})),
+        "gcp" => (json!({"platform":"gcp", "projectId":"test-project", "region":"us-central1",
+            "credentials":{"type":"accessToken", "token":"test"},
+            "serviceOverrides":{"endpoints":{"secretmanager":server.base_url()}}}),
+            VaultBinding::secret_manager("test-secrets"), GET,
+            "/projects/test-project/secrets/test-secrets-TEST_KEY/versions/latest:access".to_string(),
+            if missing {404} else {403}, json!({"error":{"code":if missing {404} else {403},
+                "status":if missing {"NOT_FOUND"} else {"PERMISSION_DENIED"}, "message":"synthetic failure"}})),
+        "azure" => (json!({"platform":"azure", "subscriptionId":"test", "tenantId":"test",
+            "credentials":{"type":"accessToken", "token":"test"},
+            "serviceOverrides":{"endpoints":{"keyvault":server.base_url()}}}),
+            VaultBinding::key_vault("test-vault"), GET, "/secrets/TEST-KEY".to_string(),
+            if missing {404} else {403}, json!({"error":{"code":if missing {"SecretNotFound"} else {"Forbidden"},
+                "message":"synthetic failure"}})),
+        "kubernetes" => (json!({"platform":"kubernetes", "mode":"manual", "serverUrl":server.base_url(),
+            "token":"test", "namespace":"default", "additionalHeaders":{}}),
+            VaultBinding::kubernetes_secret("default", "test-secrets"), GET,
+            "/api/v1/namespaces/default/secrets/test-secrets-test-key".to_string(),
+            if missing {404} else {403}, json!({"apiVersion":"v1", "kind":"Status", "status":"Failure",
+                "reason":if missing {"NotFound"} else {"Forbidden"}, "message":"synthetic failure", "code":if missing {404} else {403}})),
+        _ => panic!("unknown backend"),
+    };
+    let read = server.mock_async(|when, then| {
+        when.method(method).path(path);
+        then.status(status).json_body(body);
+    }).await;
+    let (router, id) = vault_router(serde_json::from_value(config).unwrap(), binding).await;
+    let (status, body) = read_vault(&router, &id).await;
+    read.assert_async().await;
+    if missing {
+        assert_eq!(status, StatusCode::NOT_FOUND, "{backend}: {body}");
+        assert_eq!(body["code"], "VAULT_SECRET_NOT_FOUND");
+        assert_eq!(body["retryable"], false);
+    } else {
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{backend}: {body}");
+    }
+}
+
+#[tokio::test]
+async fn vault_get_aws_missing_key_is_404() { cloud_vault_get("aws", true).await; }
+#[tokio::test]
+async fn vault_get_gcp_missing_key_is_404() { cloud_vault_get("gcp", true).await; }
+#[tokio::test]
+async fn vault_get_azure_missing_key_is_404() { cloud_vault_get("azure", true).await; }
+#[tokio::test]
+async fn vault_get_kubernetes_missing_key_is_404() { cloud_vault_get("kubernetes", true).await; }
+#[tokio::test]
+async fn vault_get_provider_denials_stay_internal_errors() {
+    for backend in ["aws", "gcp", "azure", "kubernetes"] { cloud_vault_get(backend, false).await; }
 }
