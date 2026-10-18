@@ -90,15 +90,10 @@ fn a_sandbox_emits_its_network_policy_and_the_brokers_rbac() {
     assert_helm_valid(&chart, "sandbox_layer");
 }
 
-/// Under `allow` the policy must still close the metadata endpoint and the deployment's own
-/// private ranges — the sandbox reaching either is a lateral move, not egress.
-///
-/// The metadata server is excluded as a **`/32`**. Excluding the enclosing `169.254.0.0/16`
-/// agreed with nothing else: GKE's NodeLocal DNSCache sits at `169.254.20.10`, so the wide range
-/// takes DNS down and `allow` stops reaching anything at all. The GCE metadata server was
-/// observed answering from inside a gVisor pod on GKE, which is why it is denied in both modes.
+/// Internet sessions can only reach this release's gateway, which resolves names on
+/// their behalf. Helm/kubeconform validate the complete rendered resource set.
 #[test]
-fn a_sandbox_allowing_egress_still_denies_the_metadata_endpoint() {
+fn a_sandbox_allowing_egress_only_reaches_its_gateway() {
     let stack = Stack::new("sandbox-allow-chart".to_string())
         .add(
             Sandbox::new("agent".to_string())
@@ -120,27 +115,10 @@ fn a_sandbox_allowing_egress_still_denies_the_metadata_endpoint() {
         .files
         .get("templates/sandbox-agent-networkpolicy.yaml")
         .expect("the sandbox NetworkPolicy must render");
-    for denied in [
-        "169.254.169.254/32",
-        "10.0.0.0/8",
-        "172.16.0.0/12",
-        "192.168.0.0/16",
-    ] {
-        assert!(
-            policy.contains(denied),
-            "{denied} must stay closed even under allow:\n{policy}"
-        );
-    }
-    assert!(
-        !policy.contains("169.254.0.0/16"),
-        "denying all of link-local takes out NodeLocal DNS at 169.254.20.10:\n{policy}"
-    );
-    // The excepts above cover the ranges a cluster's DNS service lives in, so without a rule
-    // that names the resolver by selector, allow mode resolves no names off GKE.
-    assert!(
-        policy.contains("k8s-app: kube-dns") && policy.contains("port: 53"),
-        "allow must reach the cluster resolver, which the denied ranges otherwise cover:\n{policy}"
-    );
+    assert!(policy.contains("alien.dev/sandbox-egress-gateway: \"true\""));
+    assert!(policy.contains("port: 3128"));
+    assert!(!policy.contains("ipBlock:"));
+    assert!(!policy.contains("port: 53"));
     // Inbound is the agent port from this release's own pods. Denying it outright drops every
     // exec and file call on an enforcing CNI, which is what the application drives a session with.
     assert!(
