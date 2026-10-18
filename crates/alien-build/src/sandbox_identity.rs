@@ -12,6 +12,34 @@ use serde::Deserialize;
 
 use crate::error::{ErrorData, Result};
 
+/// Refuse a declaration/image mismatch before publishing a locally built sandbox artifact.
+pub(crate) async fn validate_declared_uid(
+    sandbox: &alien_core::Sandbox,
+    directory: &std::path::Path,
+) -> Result<()> {
+    let Some(supervisor) = &sandbox.privileged_supervisor else {
+        return Ok(());
+    };
+    let path = directory.join(format!(
+        "{}.oci.tar",
+        alien_core::BinaryTarget::LinuxArm64.runtime_platform_id()
+    ));
+    let image =
+        Image::from_tarball(path)
+            .into_alien_error()
+            .context(ErrorData::BuildConfigInvalid {
+                message: format!(
+                    "Cannot inspect the ARM64 image for sandbox '{}'",
+                    sandbox.id
+                ),
+            })?;
+    BaseIdentity::read(&image, &sandbox.id).await?.contract(
+        alien_core::sandbox_image::AWS_MICROVM,
+        Some(supervisor.command_uid),
+    )?;
+    Ok(())
+}
+
 /// The image's USER and account databases, read from the same immutable archive.
 pub struct BaseIdentity {
     pub user: String,

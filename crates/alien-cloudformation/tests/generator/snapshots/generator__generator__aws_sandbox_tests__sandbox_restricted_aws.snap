@@ -754,10 +754,6 @@ Resources:
         Value: '8971'
       - Key: ALIEN_SANDBOX_AUTHORIZATION
         Value: transport
-      - Key: ALIEN_SANDBOX_EXEC_UID
-        Value: '60000'
-      - Key: ALIEN_SANDBOX_EXEC_GID
-        Value: '60000'
       Tags:
       - Key: managed-by
         Value: setup

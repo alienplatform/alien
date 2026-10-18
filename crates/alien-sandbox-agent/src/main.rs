@@ -283,6 +283,15 @@ fn load_state() -> Result<AgentState> {
         gid: parse(ENV_EXEC_GID)?,
     };
 
+    // A prebuilt bundle cannot be inspected by a setup emitter. Treat an explicit declaration
+    // as an assertion, never an override of the identity selected from the image at build time.
+    if std::env::var_os("ALIEN_SANDBOX_EXPECTED_EXEC_UID").is_some() {
+        let declared: u32 = parse("ALIEN_SANDBOX_EXPECTED_EXEC_UID")?;
+        if declared != exec_identity.uid {
+            return Err(invalid("ALIEN_SANDBOX_EXPECTED_EXEC_UID", "privilegedSupervisor.commandUid disagrees with the built image; rebuild the bundle with the matching command uid"));
+        }
+    }
+
     let isolation = load_isolation()?;
 
     // SAFETY: both are always-successful getters with no arguments.

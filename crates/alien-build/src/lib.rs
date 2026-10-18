@@ -757,6 +757,16 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                             }
                         };
 
+                        let result = match result {
+                            Ok(image_uri) => sandbox_identity::validate_declared_uid(
+                                &sandbox,
+                                Path::new(&image_uri),
+                            )
+                            .await
+                            .map(|()| image_uri),
+                            Err(error) => Err(error),
+                        };
+
                         match &result {
                             Ok(image_uri) => {
                                 info!(

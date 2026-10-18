@@ -162,6 +162,13 @@ pub async fn stream(
         return;
     };
 
+    command
+        .env("ALIEN_SANDBOX_EXEC_UID", identity.uid.to_string())
+        .env("ALIEN_SANDBOX_EXEC_GID", identity.gid.to_string());
+    if let Some(root) = std::env::var_os("ALIEN_SANDBOX_ROOT") {
+        command.env("ALIEN_SANDBOX_ROOT", root);
+    }
+
     // Where a PID namespace is available the drop moves inside it, because `std` applies
     // `Command::uid` before `pre_exec` runs and an unprivileged process cannot unshare.
     if crate::pid_namespace::available() {
