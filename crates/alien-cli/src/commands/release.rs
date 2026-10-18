@@ -648,7 +648,7 @@ async fn release_task_core(
                         .await?
                 };
 
-            let needs_sandbox_push = platform == Platform::Aws && args.image_repo.is_none()
+            let needs_sandbox_push = platform == Platform::Aws && args.image_repo.is_none() && !ctx.is_dev()
                 && built_stack.resources().any(|(_, entry)| {
                     entry.config.downcast_ref::<Sandbox>().is_some_and(|sandbox| {
                         matches!(&sandbox.code, SandboxCode::Image { image } if Path::new(image).is_dir())
@@ -658,8 +658,13 @@ async fn release_task_core(
                 let manager = ctx
                     .resolve_manager(&project_link.project_id, platform_str)
                     .await?;
-                provision_sandbox_push_repository(&manager, &platform, &project_link.project_id)
-                    .await?
+                provision_sandbox_push_repository(
+                    &manager,
+                    &platform,
+                    &project_link.project_id,
+                    ctx.is_platform(),
+                )
+                .await?
             } else {
                 None
             };
@@ -1508,11 +1513,12 @@ async fn provision_sandbox_push_repository(
     manager: &ManagerContext,
     platform: &Platform,
     project_id: &str,
+    hosted: bool,
 ) -> Result<Option<String>> {
     let manager_url = &manager.manager_url;
     // An older standalone manager advertises no separate destination. Keep its existing
     // repository without issuing a request to an unsupported provisioning endpoint.
-    if manager.repository_name.is_none() {
+    if !hosted {
         let url = format!("{manager_url}/v1/build-config?platform={platform}");
         let mut request = manager.http_client.get(&url);
         if let Some(token) = &manager.auth_token {
@@ -1544,7 +1550,7 @@ async fn provision_sandbox_push_repository(
             return Ok(None);
         }
     }
-    let (url, body, key) = if manager.repository_name.is_some() {
+    let (url, body, key) = if hosted {
         (
             format!("{manager_url}/v1/artifact-registry/repositories?platform=aws"),
             serde_json::json!({ "name": project_id, "sandbox": true }),
@@ -3470,7 +3476,32 @@ mod tests {
         };
         let manager = ctx.resolve_manager("prj_a", "aws").await.unwrap();
         assert_eq!(
-            provision_sandbox_push_repository(&manager, &Platform::Aws, "prj_a")
+            provision_sandbox_push_repository(&manager, &Platform::Aws, "prj_a", false)
+                .await
+                .unwrap(),
+            None
+        );
+        config.assert_async().await;
+    }
+    #[tokio::test]
+    async fn dev_repository_name_does_not_select_the_hosted_endpoint() {
+        let server = httpmock::MockServer::start_async().await;
+        let config = server
+            .mock_async(|when, then| {
+                when.method("GET").path("/v1/build-config");
+                then.status(200)
+                    .json_body(serde_json::json!({"repositoryName": "artifacts/default"}));
+            })
+            .await;
+        let ctx = ExecutionMode::Standalone {
+            server_url: server.base_url(),
+            api_key: "test-token".to_string(),
+        };
+        let mut manager = ctx.resolve_manager("default", "aws").await.unwrap();
+        manager.repository_name = Some("artifacts/default".to_string());
+        manager.auth_token = None;
+        assert_eq!(
+            provision_sandbox_push_repository(&manager, &Platform::Aws, "default", false)
                 .await
                 .unwrap(),
             None

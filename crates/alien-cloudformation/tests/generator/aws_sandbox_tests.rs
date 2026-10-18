@@ -306,7 +306,7 @@ fn a_declared_private_base_is_the_only_repository_a_live_build_pulls() {
             &serde_json::json!({
                 "Sid": "PullSandboxBaseImage",
                 "Effect": "Allow",
-                "Action": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"],
+                "Action": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer", "ecr:BatchImportUpstreamImage", "ecr:GetImageCopyStatus"],
                 "Resource": {
                     "Fn::Sub":
                         "arn:${AWS::Partition}:ecr:${AWS::Region}:123456789012:repository/acme/agents-base"
