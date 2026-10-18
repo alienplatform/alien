@@ -726,7 +726,7 @@ fn network_validation(ctx: &EmitContext<'_>, label: &str) -> Result<TfFragment> 
             attr("id", expr::raw(format!("({expression})[count.index]"))),
         ];
         subnet_attributes.push(nested_block("lifecycle",vec![nested_block("postcondition",vec![
-            attr("condition",expr::raw(format!("self.vpc_id == {}",hcl::format::to_string(&vpc_id_expr(ctx)).expect("expression serializes")))),
+            attr("condition",expr::raw(format!("self.vpc_id == ({})",hcl::format::to_string(&vpc_id_expr(ctx)).expect("expression serializes")))),
             attr("error_message",Expression::from("Sandbox, gateway, and workload subnets must belong to the deployment VPC.")),
         ])]));
         fragment.data_blocks.push(crate::block::data_block(
