@@ -259,6 +259,7 @@ locals {
         securityGroupId     = try(compact([for id in var.default_network_security_group_ids : trimspace(id)])[0], null)
         availabilityZones   = data.aws_availability_zones.available.names
         isByoVpc            = true
+        sandboxNetwork      = null
       }
     }
   ]

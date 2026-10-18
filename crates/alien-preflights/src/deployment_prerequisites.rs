@@ -16,6 +16,44 @@ use alien_permissions::{
     generators::AwsRuntimePermissionsGenerator, BindingTarget, PermissionContext,
 };
 
+/// The internet declaration requires a prepared gateway; legacy paths stay unchanged.
+pub struct SandboxEgressGatewayCheck;
+
+#[async_trait::async_trait]
+impl DeploymentPrerequisiteCheck for SandboxEgressGatewayCheck {
+    fn code(&self) -> Option<&'static str> {
+        Some("SANDBOX_EGRESS_GATEWAY_UNAVAILABLE")
+    }
+
+    fn description(&self) -> &'static str {
+        "Sandbox internet egress capabilities"
+    }
+
+    fn should_run(&self, stack: &Stack, state: &StackState, _config: &DeploymentConfig) -> bool {
+        is_cloud_platform(state.platform)
+            && stack.resources().any(|(_, entry)| {
+                entry
+                    .config
+                    .downcast_ref::<alien_core::Sandbox>()
+                    .is_some_and(|sandbox| {
+                        matches!(sandbox.egress, alien_core::SandboxEgress::Internet)
+                    })
+            })
+    }
+
+    async fn check(
+        &self,
+        stack: &Stack,
+        _state: &StackState,
+        _config: &DeploymentConfig,
+    ) -> Result<CheckResult> {
+        if alien_core::sandbox_egress::has_sandbox_gateway(stack) {
+            return Ok(CheckResult::success());
+        }
+        Ok(CheckResult::failed(vec!["Sandbox egress internet requires a prepared gateway on a supported container runtime. Configure a supported compute backend and regenerate the deployment plan.".into()]))
+    }
+}
+
 /// Private endpoints must never silently become internet-facing on unsupported targets.
 pub struct PrivateEndpointAccessCheck;
 
@@ -1031,6 +1069,44 @@ mod tests {
             remote_access: false,
             enabled_when: None,
         }
+    }
+
+    #[tokio::test]
+    async fn sandbox_native_internet_is_reported_and_missing_managed_gateway_is_refused() {
+        let sandbox = alien_core::Sandbox::new("boxes".into())
+            .code(alien_core::SandboxCode::Image {
+                image: "s3://example/box.zip".into(),
+            })
+            .egress(alien_core::SandboxEgress::Internet)
+            .lifecycle(alien_core::SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build();
+        let stack = Stack::new("test".into())
+            .add(sandbox, ResourceLifecycle::Live)
+            .build();
+        let mut config = deployment_config();
+        let check = SandboxEgressGatewayCheck;
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            let state = stack_state(platform);
+            assert!(check.should_run(&stack, &state, &config));
+            let result = check.check(&stack, &state, &config).await.unwrap();
+            assert!(!result.success);
+            assert_eq!(result.status, Some(crate::CheckStatus::Failed));
+            assert!(result.warnings.is_empty());
+            assert_eq!(result.errors.len(), 1);
+        }
+        assert!(!check.should_run(&stack, &stack_state(Platform::Kubernetes), &config));
+        assert!(!check.should_run(&stack, &stack_state(Platform::Local), &config));
+        config.compute_backend = Some(horizon_backend());
+        let result = check
+            .check(&stack, &stack_state(Platform::Aws), &config)
+            .await
+            .unwrap();
+        assert!(!result.success);
+        assert_eq!(result.status, Some(crate::CheckStatus::Failed));
+        assert_eq!(result.errors.len(), 1);
     }
 
     #[tokio::test]

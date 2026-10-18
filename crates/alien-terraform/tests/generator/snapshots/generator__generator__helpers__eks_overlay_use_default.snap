@@ -290,6 +290,7 @@ locals {
         securityGroupId     = null
         availabilityZones   = []
         isByoVpc            = true
+        sandboxNetwork      = null
       }
     },
     {

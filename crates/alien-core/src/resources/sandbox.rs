@@ -636,11 +636,11 @@ pub fn restricts_network_mode(stack: &crate::Stack, targets_kubernetes: bool) ->
 /// [`restricts_network_mode`] instead:
 /// this one answers for the declaration, which on a Kubernetes target is not what gets emitted.
 pub fn stack_needs_named_subnets_at_setup(stack: &crate::Stack) -> bool {
-    stack.resources().any(|(_resource_id, resource)| {
-        resource
+    stack.resources().any(|(_, entry)| {
+        entry
             .config
             .downcast_ref::<Sandbox>()
-            .is_some_and(|sandbox| !matches!(sandbox.cloud_egress(), SandboxEgress::Allow))
+            .is_some_and(|sandbox| crate::sandbox_egress::sandbox_needs_connector(stack, sandbox))
     })
 }
 
