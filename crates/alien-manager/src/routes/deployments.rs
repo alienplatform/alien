@@ -1652,8 +1652,10 @@ mod tests {
                 .bytes()
                 .await
                 .expect("HTTP response body should load");
-            let json = if status == StatusCode::NO_CONTENT {
-                assert!(bytes.is_empty(), "204 response must be empty");
+            let json = if status == StatusCode::NO_CONTENT
+                || (status == StatusCode::ACCEPTED && bytes.is_empty())
+            {
+                assert!(bytes.is_empty(), "bodyless response must be empty");
                 serde_json::Value::Null
             } else {
                 serde_json::from_slice(&bytes).expect("HTTP response should contain JSON")
@@ -1738,6 +1740,8 @@ mod tests {
             assert_eq!(status, expected, "{body}");
             if !saved {
                 assert_eq!(body["code"], "ENDPOINT_ACCESS_NOT_SAVED");
+            } else {
+                assert_eq!(body, serde_json::Value::Null);
             }
         }
     }
