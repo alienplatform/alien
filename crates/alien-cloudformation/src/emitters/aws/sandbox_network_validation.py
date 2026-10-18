@@ -76,7 +76,8 @@ def validate(ec2, properties):
     # ToJsonString rewrites opaque GetAtt values as string substitutions. Return
     # CSV; the importer normalizes it like the existing network subnet fields.
     data = {name: ",".join(values) for name, values in data.items()}
-    data["ConnectorEgress"] = [{"IpProtocol": "tcp", "FromPort": 3128, "ToPort": 3128, "CidrIp": subnets[s]["CidrBlock"]} for s in gateway_ids]
+    # A link grants access to every declared gateway port, including authenticated admin.
+    data["ConnectorEgress"] = [{"IpProtocol": "tcp", "FromPort": 3128, "ToPort": 3129, "CidrIp": subnets[s]["CidrBlock"]} for s in gateway_ids]
     return data
 
 
