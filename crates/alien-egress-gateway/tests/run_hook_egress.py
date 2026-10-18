@@ -8,7 +8,7 @@ from agent_capabilities import AGENT_CAP_ARGS
 from docker_conformance import AUD, PREFIX, docker
 
 
-def check_run_hook_agents(suite, image, containers):
+def check_run_hook_agents(suite, image, containers, uid):
     # Keep NET_ADMIN but reject creation of netlink sockets: startup still serves the
     # hook, whose actual firewall transaction must fail without starting guest code.
     seccomp = suite.output / "refuse-netlink.json"
@@ -88,7 +88,7 @@ with ssl.create_default_context(cafile="/fixture-ca.pem").wrap_socket(socket.cre
  s.sendall(b"GET / HTTP/1.1\\r\\nHost: allowed.test\\r\\nConnection: close\\r\\n\\r\\n")
  r=http.client.HTTPResponse(s);r.begin();assert r.status==200 and r.read()==b"controlled-origin-response\\n"
 '''
-            suite.record("Run-hook internet: root TCP uses installed redirect", lambda: docker("exec", name, "python", "-c", probe))
+            suite.record("Run-hook internet: command TCP uses installed redirect", lambda: docker("exec", "-u", f"{uid}:{uid}", name, "python", "-c", probe))
         status, body = call("GET", "/v1/health")
         assert status == 200 and json.loads(body)["status"] == "ready", (status, body)
         suite.record(f"Run-hook {mode}: image starts only after activation", lambda: docker(
