@@ -1,8 +1,14 @@
 //! Inspect the final OCI filesystem, rather than trusting a base tag or inherited label.
 
 use crate::error::{ErrorData, Result};
+use alien_core::WorkerRuntimeImage;
 use alien_error::{AlienError, Context, IntoAlienError};
 use dockdash::Image;
+use oci_client::{
+    client::{Client, ClientConfig},
+    manifest::{IMAGE_MANIFEST_MEDIA_TYPE, OCI_IMAGE_MEDIA_TYPE},
+    Reference,
+};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
@@ -87,6 +93,60 @@ pub async fn inspect(
         config_digest: image.config_digest().to_owned(),
         executable_sha256,
         container_app_gateway_metadata_version: version,
+    }))
+}
+
+/// Bind final executable evidence to a registry manifest, refusing mutable tags.
+pub(crate) async fn published_capabilities(
+    image: &Image,
+    image_uri: &str,
+    resource_name: &str,
+    options: &dockdash::PushOptions,
+) -> Result<Option<WorkerRuntimeImage>> {
+    let Some(capabilities) = inspect(image, resource_name).await? else {
+        return Ok(None);
+    };
+    let invalid = |reason: &str| ErrorData::ImagePushFailed {
+        image: image_uri.to_owned(),
+        reason: reason.to_owned(),
+    };
+    let reference = Reference::try_from(image_uri)
+        .into_alien_error()
+        .context(invalid("Published worker image reference is invalid"))?;
+    let expected_digest = reference.digest().ok_or_else(|| {
+        AlienError::new(invalid(
+            "Worker capability evidence requires an immutable image",
+        ))
+    })?;
+    let client = Client::new(ClientConfig {
+        protocol: options.protocol.clone(),
+        ..Default::default()
+    });
+    let (manifest, digest) = client
+        .pull_manifest_raw(
+            &reference,
+            &options.auth,
+            &[OCI_IMAGE_MEDIA_TYPE, IMAGE_MANIFEST_MEDIA_TYPE],
+        )
+        .await
+        .into_alien_error()
+        .context(invalid("Cannot read the published worker manifest"))?;
+    if digest != expected_digest {
+        return Err(AlienError::new(invalid(
+            "Registry returned a different worker manifest",
+        )));
+    }
+    verify_pushed_manifest(
+        &manifest,
+        &digest,
+        &capabilities.config_digest,
+        resource_name,
+    )?;
+    Ok(Some(WorkerRuntimeImage {
+        image: image_uri.to_owned(),
+        config_digest: capabilities.config_digest,
+        executable_sha256: capabilities.executable_sha256,
+        container_app_gateway_metadata_version: capabilities.container_app_gateway_metadata_version,
     }))
 }
 

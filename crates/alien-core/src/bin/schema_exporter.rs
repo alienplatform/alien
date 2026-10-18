@@ -13,6 +13,7 @@ use utoipa::OpenApi;
 #[openapi(components(schemas(
     Worker,
     WorkerCode,
+    WorkerRuntimeImage,
     WorkerOutputs,
     ComputeCluster,
     HorizonReaderCapabilities,

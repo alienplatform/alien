@@ -30,6 +30,22 @@ pub enum WorkerCode {
     },
 }
 
+/// Build evidence bound to the exact published worker image. This does not prove
+/// that a serving revision has applied the image or loaded a gateway credential.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkerRuntimeImage {
+    /// Registry repository and immutable manifest digest inspected after publishing.
+    pub image: String,
+    /// OCI configuration digest binding the startup command and filesystem layers.
+    pub config_digest: String,
+    /// SHA256 of the actual runtime executable in the completed image.
+    pub executable_sha256: String,
+    /// Authenticated Container App gateway metadata protocol emitted by the runtime.
+    pub container_app_gateway_metadata_version: u32,
+}
+
 /// Configuration for different programming language toolchains.
 /// Each toolchain provides type-safe build configuration and auto-detection capabilities.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -166,6 +182,12 @@ pub struct Worker {
 
     /// Code for the worker, either a pre-built image or source code to be built.
     pub code: WorkerCode,
+
+    /// Optional build evidence for the published runtime. Consumers must match its
+    /// image to the applied immutable image before using its capabilities.
+    #[builder(field)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_image: Option<WorkerRuntimeImage>,
 
     /// Memory allocated to the worker in megabytes (MB).
     /// Default: 512

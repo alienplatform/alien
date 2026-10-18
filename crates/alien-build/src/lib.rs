@@ -1543,6 +1543,13 @@ fn apply_pushed_images(stack: &mut Stack, updates: Vec<(String, String)>) {
     for (resource_id, image_uri) in updates {
         if let Some(resource_entry) = stack.resources_mut().find(|(id, _)| *id == &resource_id) {
             if let Some(func) = resource_entry.1.config.downcast_mut::<Worker>() {
+                if func
+                    .runtime_image
+                    .as_ref()
+                    .is_some_and(|proof| proof.image != image_uri)
+                {
+                    func.runtime_image = None;
+                }
                 func.code = WorkerCode::Image { image: image_uri };
             } else if let Some(container) = resource_entry.1.config.downcast_mut::<Container>() {
                 container.code = ContainerCode::Image { image: image_uri };
@@ -1741,6 +1748,33 @@ pub async fn push_stack(
         completed_tasks
     );
 
+    if platform == Platform::Azure {
+        for (resource_id, image_uri) in &push_results {
+            let Some((_, entry)) = stack.resources_mut().find(|(id, _)| *id == resource_id) else {
+                return Err(AlienError::new(ErrorData::InvalidResourceConfig {
+                    resource_id: resource_id.clone(),
+                    reason: "Pushed resource is absent".to_owned(),
+                }));
+            };
+            if let Some(worker) = entry.config.downcast_mut::<Worker>() {
+                let WorkerCode::Image { image: directory } = &worker.code else {
+                    return Err(AlienError::new(ErrorData::InvalidResourceConfig {
+                        resource_id: resource_id.clone(),
+                        reason: "Pushed worker has no image".to_owned(),
+                    }));
+                };
+                let archive = Path::new(directory).join("linux-x64.oci.tar");
+                let image = DockDashImage::from_tarball(&archive).map_dockdash_err()?;
+                worker.runtime_image = worker_image::published_capabilities(
+                    &image,
+                    image_uri,
+                    &worker.id,
+                    &push_settings.options,
+                )
+                .await?;
+            }
+        }
+    }
     apply_pushed_images(&mut stack, push_results);
 
     info!(
@@ -4128,6 +4162,56 @@ async fn compute_function_content_hash(dir: &Path) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn worker_image_evidence_round_trips_and_is_cleared_when_image_changes() {
+        let uri = format!("registry.example.com/worker@sha256:{}", "a".repeat(64));
+        let mut worker = Worker::new("jobs".to_owned())
+            .code(WorkerCode::Image { image: uri.clone() })
+            .permissions("jobs".to_owned())
+            .build();
+        let legacy = serde_json::to_value(&worker).unwrap();
+        assert!(legacy.get("runtimeImage").is_none());
+        assert_eq!(serde_json::from_value::<Worker>(legacy).unwrap(), worker);
+        worker.runtime_image = Some(alien_core::WorkerRuntimeImage {
+            image: uri.clone(),
+            config_digest: format!("sha256:{}", "b".repeat(64)),
+            executable_sha256: "c".repeat(64),
+            container_app_gateway_metadata_version: 2,
+        });
+        let restored: Worker =
+            serde_json::from_value(serde_json::to_value(&worker).unwrap()).unwrap();
+        assert_eq!(restored, worker);
+        let mut stack = Stack::new("workers".to_owned())
+            .add(restored, alien_core::ResourceLifecycle::Live)
+            .build();
+        let id = stack.resources().next().unwrap().0.clone();
+        apply_pushed_images(&mut stack, vec![(id.clone(), uri)]);
+        assert!(stack
+            .resources()
+            .next()
+            .unwrap()
+            .1
+            .config
+            .downcast_ref::<Worker>()
+            .unwrap()
+            .runtime_image
+            .is_some());
+        apply_pushed_images(
+            &mut stack,
+            vec![(id, "registry.example.com/worker:replacement".to_owned())],
+        );
+        assert!(stack
+            .resources()
+            .next()
+            .unwrap()
+            .1
+            .config
+            .downcast_ref::<Worker>()
+            .unwrap()
+            .runtime_image
+            .is_none());
+    }
 
     #[tokio::test]
     async fn materializing_same_artifact_preserves_its_contents() {
