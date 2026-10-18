@@ -41,6 +41,8 @@ use utoipa::OpenApi;
     KubernetesHttpProbe,
     ContainerSecurity,
     ContainerInternalLoadBalancer,
+    ContainerLoadBalancerSourceGroup,
+    ContainerLoadBalancerSubnetGroup,
     ContainerSecurityProfile,
     HealthCheck,
     ResourceSpec,

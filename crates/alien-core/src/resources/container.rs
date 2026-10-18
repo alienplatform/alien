@@ -12,7 +12,10 @@
 //! - Load balancer registration for public-facing containers
 
 mod network;
-pub use network::ContainerInternalLoadBalancer;
+pub use network::{
+    ContainerInternalLoadBalancer, ContainerLoadBalancerSourceGroup,
+    ContainerLoadBalancerSubnetGroup,
+};
 
 use crate::error::{ErrorData, Result};
 use crate::resource::{ResourceDefinition, ResourceOutputsDefinition, ResourceRef, ResourceType};
@@ -802,6 +805,14 @@ impl ResourceDefinition for Container {
 
     fn get_dependencies(&self) -> Vec<ResourceRef> {
         let mut deps = self.links.clone();
+        if let Some(network) = self
+            .internal_load_balancer
+            .as_ref()
+            .and_then(ContainerInternalLoadBalancer::network)
+        {
+            deps.push(ResourceRef::new("network".into(), network));
+        }
+
         if let Some(key) = self
             .persistent_storage
             .as_ref()

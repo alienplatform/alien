@@ -7,18 +7,78 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::Ipv4Addr;
 
-/// A dedicated internal TCP load balancer for a single container.
+/// A dedicated internal TCP load balancer for one container. Its placement and
+/// source rules are immutable; replace the resource to change the boundary.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ContainerInternalLoadBalancer {
-    /// TCP listener ports, each matching a declared container port.
-    pub ports: Vec<u16>,
-    /// Existing subnet identifiers in the container's network.
-    pub subnets: Vec<String>,
-    /// Allowed IPv4 source CIDRs for each listener port. Every port must have
-    /// an entry. An empty list denies all clients on that port.
-    pub allowed_sources: BTreeMap<u16, Vec<String>>,
+#[serde(untagged, rename_all_fields = "camelCase", deny_unknown_fields)]
+pub enum ContainerInternalLoadBalancer {
+    /// Explicit, existing subnet identifiers and allowed IPv4 sources.
+    Subnets {
+        ports: Vec<u16>,
+        subnets: Vec<String>,
+        /// Exactly one entry per listener. An empty list denies every client.
+        #[serde(deserialize_with = "deserialize_ports")]
+        allowed_sources: BTreeMap<u16, Vec<String>>,
+    },
+    /// Resolve setup-created subnet identifiers and CIDRs from a Network.
+    Network {
+        ports: Vec<u16>,
+        network: String,
+        subnet_group: ContainerLoadBalancerSubnetGroup,
+        #[serde(deserialize_with = "deserialize_ports")]
+        allowed_source_groups: BTreeMap<u16, ContainerLoadBalancerSourceGroup>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum ContainerLoadBalancerSubnetGroup {
+    SandboxGateway,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum ContainerLoadBalancerSourceGroup {
+    Sandbox,
+    Runtime,
+}
+
+// Untagged deserialization buffers JSON keys as strings; decode them explicitly.
+fn deserialize_ports<'de, D, V>(deserializer: D) -> std::result::Result<BTreeMap<u16, V>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    V: Deserialize<'de>,
+{
+    BTreeMap::<String, V>::deserialize(deserializer)?
+        .into_iter()
+        .map(|(port, value)| {
+            let parsed = port.parse::<u16>().map_err(serde::de::Error::custom)?;
+            if parsed.to_string() != port {
+                return Err(serde::de::Error::custom(
+                    "listener port keys must be canonical decimal numbers",
+                ));
+            }
+            Ok((parsed, value))
+        })
+        .collect()
+}
+
+impl ContainerInternalLoadBalancer {
+    pub fn ports(&self) -> &[u16] {
+        match self {
+            Self::Subnets { ports, .. } | Self::Network { ports, .. } => ports,
+        }
+    }
+
+    pub fn network(&self) -> Option<&str> {
+        match self {
+            Self::Network { network, .. } => Some(network),
+            Self::Subnets { .. } => None,
+        }
+    }
 }
 
 impl Container {
@@ -48,10 +108,14 @@ impl Container {
                 "internalLoadBalancer cannot be combined with public endpoints or a tunnel",
             ));
         }
-        let ports: BTreeSet<_> = lb.ports.iter().copied().collect();
-        if ports.is_empty() || ports.len() != lb.ports.len() || ports.contains(&0) {
+        let ports: BTreeSet<_> = lb.ports().iter().copied().collect();
+        if ports.is_empty()
+            || ports.len() > 32
+            || ports.len() != lb.ports().len()
+            || ports.contains(&0)
+        {
             return Err(invalid(
-                "internalLoadBalancer.ports must contain unique nonzero ports",
+                "internalLoadBalancer.ports must contain 1-32 unique nonzero ports",
             ));
         }
         if ports
@@ -62,25 +126,43 @@ impl Container {
                 "internalLoadBalancer.ports must reference declared container ports",
             ));
         }
-        if ports != lb.allowed_sources.keys().copied().collect() {
-            return Err(invalid("internalLoadBalancer.allowedSources must have exactly one entry for each listener port"));
-        }
-        let subnets: BTreeSet<_> = lb.subnets.iter().collect();
-        if subnets.is_empty()
-            || subnets.len() != lb.subnets.len()
-            || subnets
-                .iter()
-                .any(|subnet| subnet.is_empty() || subnet.trim() != subnet.as_str())
-        {
-            return Err(invalid(
-                "internalLoadBalancer.subnets must contain unique nonempty subnet identifiers",
-            ));
-        }
-        for cidr in lb.allowed_sources.values().flatten() {
-            if !is_ipv4_network(cidr) {
-                return Err(invalid(&format!(
-                    "internalLoadBalancer.allowedSources contains an invalid IPv4 network: {cidr}"
-                )));
+        match lb {
+            ContainerInternalLoadBalancer::Subnets {
+                subnets,
+                allowed_sources,
+                ..
+            } => {
+                if ports != allowed_sources.keys().copied().collect() {
+                    return Err(invalid("internalLoadBalancer.allowedSources must have exactly one entry for each listener port"));
+                }
+                let unique: BTreeSet<_> = subnets.iter().collect();
+                if unique.is_empty()
+                    || unique.len() != subnets.len()
+                    || subnets
+                        .iter()
+                        .any(|subnet| subnet.is_empty() || subnet.trim() != subnet)
+                {
+                    return Err(invalid("internalLoadBalancer.subnets must contain unique nonempty subnet identifiers"));
+                }
+                for cidr in allowed_sources.values().flatten() {
+                    if !is_ipv4_network(cidr) {
+                        return Err(invalid(&format!("internalLoadBalancer.allowedSources contains an invalid IPv4 network: {cidr}")));
+                    }
+                }
+            }
+            ContainerInternalLoadBalancer::Network {
+                network,
+                allowed_source_groups,
+                ..
+            } => {
+                if network.is_empty() || network.trim() != network {
+                    return Err(invalid(
+                        "internalLoadBalancer.network must name a Network resource",
+                    ));
+                }
+                if ports != allowed_source_groups.keys().copied().collect() {
+                    return Err(invalid("internalLoadBalancer.allowedSourceGroups must have exactly one entry for each listener port"));
+                }
             }
         }
         Ok(())
@@ -123,38 +205,39 @@ mod tests {
     #[test]
     fn rejects_incomplete_or_ambiguous_listener_rules() {
         let mut config = container();
-        config.internal_load_balancer = Some(ContainerInternalLoadBalancer {
-            ports: vec![3128],
-            subnets: vec!["subnet-1".into()],
-            allowed_sources: BTreeMap::from([(3128, vec!["10.2.0.0/24".into()])]),
-        });
+        let valid = serde_json::json!({"ports":[3128],"subnets":["subnet-1"],"allowedSources":{"3128":["10.2.0.0/24"]}});
+        config.internal_load_balancer = Some(serde_json::from_value(valid.clone()).unwrap());
         config.validate_network_settings().unwrap();
-        let valid = config.internal_load_balancer.clone().unwrap();
-        for invalid in [
-            ContainerInternalLoadBalancer {
-                ports: vec![3128, 3128],
-                ..valid.clone()
-            },
-            ContainerInternalLoadBalancer {
-                ports: vec![3129],
-                ..valid.clone()
-            },
-            ContainerInternalLoadBalancer {
-                subnets: vec![],
-                ..valid.clone()
-            },
-            ContainerInternalLoadBalancer {
-                allowed_sources: BTreeMap::new(),
-                ..valid.clone()
-            },
-            ContainerInternalLoadBalancer {
-                allowed_sources: BTreeMap::from([(3128, vec!["10.2.0.1/24".into()])]),
-                ..valid.clone()
-            },
+        for patch in [
+            serde_json::json!({"ports":[3128,3128]}),
+            serde_json::json!({"ports":[3129]}),
+            serde_json::json!({"subnets":[]}),
+            serde_json::json!({"allowedSources":{}}),
+            serde_json::json!({"allowedSources":{"3128":["10.2.0.1/24"]}}),
         ] {
-            config.internal_load_balancer = Some(invalid);
+            let mut invalid = valid.clone();
+            invalid
+                .as_object_mut()
+                .unwrap()
+                .extend(patch.as_object().unwrap().clone());
+            config.internal_load_balancer = Some(serde_json::from_value(invalid).unwrap());
             assert!(config.validate_network_settings().is_err());
         }
+    }
+
+    #[test]
+    fn network_placement_is_unambiguous_and_adds_a_dependency() {
+        use crate::ResourceDefinition;
+        let mut config = container();
+        let mut network = serde_json::json!({"ports":[3128],"network":"default-network","subnetGroup":"sandbox-gateway","allowedSourceGroups":{"3128":"sandbox"}});
+        config.internal_load_balancer = Some(serde_json::from_value(network.clone()).unwrap());
+        config.validate_network_settings().unwrap();
+        assert!(config
+            .get_dependencies()
+            .iter()
+            .any(|dependency| dependency.id == "default-network"));
+        network["subnets"] = serde_json::json!(["subnet-1"]);
+        assert!(serde_json::from_value::<ContainerInternalLoadBalancer>(network).is_err());
     }
 
     #[test]
