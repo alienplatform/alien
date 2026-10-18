@@ -76,7 +76,12 @@ defers firewall installation until the authenticated Run hook, allowing the
 platform to finish restoring its snapshot first. Until installation succeeds,
 health reports `awaiting-run-hook`, token installation and session operations
 are refused, and the image command remains stopped. The hook installs the same
-rules with native netlink; no platform UID is exempted. Internet mode then waits
+rules with native netlink, scoped to the command UID. All image commands, execs,
+and jobs irreversibly drop to that identity before running. Other system identities
+retain their DNS, metadata and ingress traffic across snapshot restore; there is no
+hardcoded platform UID exemption. A command UID that collides with a platform UID
+is still filtered, never silently exempted. The external network boundary remains
+required even if guest root is compromised. Internet mode then waits
 for its token and network self-check before starting guest code. Other backends
 install the firewall at process startup by default. Legacy object policies keep
 their existing startup behavior.

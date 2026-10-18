@@ -6,7 +6,8 @@ use std::{
 
 use nlink::netlink::{
     nftables::{
-        Chain, ChainType, CtDirection, Expr, Family, Hook, Policy, Priority, Rule, Verdict,
+        Chain, ChainType, CmpOp, CtDirection, Expr, Family, Hook, MetaKey, Policy, Priority,
+        Register, Rule, Verdict,
     },
     Connection, Nftables,
 };
@@ -44,17 +45,18 @@ pub(super) fn original_destination(stream: &TcpStream) -> io::Result<SocketAddrV
     ))
 }
 
-/// All guest TCP, including root-owned processes, is redirected. Only explicitly marked agent
-/// sockets and TCP replies to incoming connections escape the redirect; no UID-wide exemption.
-pub(super) fn install() -> io::Result<()> {
-    crate::netfilter::install(install_rules())
+/// Every untrusted image command, exec and job runs as command_uid with an irreversible
+/// identity drop. Leave other identities untouched: platform restore uses its own DNS and
+/// metadata connections before it can reach the agent's Resume hook.
+pub(super) fn install(command_uid: u32) -> io::Result<()> {
+    crate::netfilter::install(install_rules(command_uid))
 }
 
-pub(super) async fn install_at_run() -> io::Result<()> {
-    crate::netfilter::apply(install_rules()).await
+pub(super) async fn install_at_run(command_uid: u32) -> io::Result<()> {
+    crate::netfilter::apply(install_rules(command_uid)).await
 }
 
-async fn install_rules() -> nlink::netlink::Result<()> {
+async fn install_rules(command_uid: u32) -> nlink::netlink::Result<()> {
     let conn = Connection::<Nftables>::new()?;
     let tables = conn.list_tables().await?;
     let mut batch = conn.transaction();
@@ -70,6 +72,17 @@ async fn install_rules() -> nlink::netlink::Result<()> {
     let nat = || Rule::new("alien_gateway", "guest_tcp").family(Family::Ip);
     let filter = || Rule::new("alien_gateway", "filter").family(Family::Ip);
     let returning = Expr::Verdict(Verdict::Return);
+    let system = |rule: Rule| {
+        rule.expr(Expr::Meta {
+            dreg: Register::R0,
+            key: MetaKey::SkUid,
+        })
+        .expr(Expr::Cmp {
+            sreg: Register::R0,
+            op: CmpOp::Neq,
+            data: command_uid.to_ne_bytes().to_vec(),
+        })
+    };
     batch
         .add_chain(
             Chain::new("alien_gateway", "guest_tcp")?
@@ -79,6 +92,7 @@ async fn install_rules() -> nlink::netlink::Result<()> {
                 .priority(Priority::DstNat)
                 .policy(Policy::Accept),
         )
+        .add_rule(system(nat()).expr(returning.clone()))
         .add_rule(nat().match_mark(MARK).expr(returning.clone()))
         .add_rule(
             nat()
@@ -117,6 +131,7 @@ async fn install_rules() -> nlink::netlink::Result<()> {
                 .priority(Priority::Filter)
                 .policy(Policy::Drop),
         )
+        .add_rule(system(filter()).accept())
         .add_rule(filter().match_mark(MARK).accept())
         .add_rule(
             filter()
