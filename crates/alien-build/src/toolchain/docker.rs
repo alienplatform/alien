@@ -1444,8 +1444,9 @@ mod tests {
         let manifest: Value = serde_json::from_slice(&contents["manifest.json"]).unwrap();
         assert_eq!(contents[manifest[0]["Config"].as_str().unwrap()], config);
         let layers = manifest[0]["Layers"].as_array().unwrap();
+        let config: Value = serde_json::from_slice(&config).unwrap();
         assert_eq!(layers.len(), 3);
-        for layer in layers {
+        for (position, layer) in layers.iter().enumerate() {
             assert_eq!(layer, &layers[0]);
             let compressed = &contents[layer.as_str().unwrap()];
             assert!(compressed.len() < 1024);
@@ -1454,6 +1455,10 @@ mod tests {
                 .read_to_end(&mut decoded)
                 .unwrap();
             assert_eq!(decoded, vec![0_u8; 1024]);
+            assert_eq!(
+                config["rootfs"]["diff_ids"][position],
+                format!("sha256:{:x}", Sha256::digest(&decoded))
+            );
         }
     }
 
@@ -1603,12 +1608,16 @@ mod tests {
         }
     }
 
+    /// Requires a running Docker daemon with the classic image store
+    /// (containerd image store disabled). Run explicitly with:
+    /// `cargo test -p alien-build --lib saved_image_preserves_config_and_layers_without_running_onbuild -- --ignored`
     #[test]
+    #[ignore = "requires a Docker daemon with the classic image store; see test documentation"]
     fn saved_image_preserves_config_and_layers_without_running_onbuild() {
-        if !docker_available() {
-            eprintln!("Docker is unavailable");
-            return;
-        }
+        assert!(
+            docker_available(),
+            "A running classic-store Docker daemon is required"
+        );
         let dir = tempdir().unwrap();
         let tag = format!("alien-export-onbuild-{}", rand::random::<u64>());
         std::fs::write(dir.path().join("payload"), "original layer").unwrap();
