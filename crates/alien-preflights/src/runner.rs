@@ -228,6 +228,22 @@ impl PreflightRunner {
                 })?;
         }
 
+        // Generated containers need the same capability checks as developer input.
+        let network_check = crate::compile_time::ContainerNetworkSettingsCheck;
+        if network_check.should_run(&current_stack, stack_state.platform) {
+            let result = network_check
+                .check(&current_stack, stack_state.platform)
+                .await?
+                .with_check_metadata(network_check.code(), network_check.description());
+            if !result.success {
+                return Err(AlienError::new(ErrorData::ValidationFailed {
+                    error_count: 1,
+                    warning_count: result.warnings.len(),
+                    results: vec![result],
+                }));
+            }
+        }
+
         let mut dependency_result =
             crate::compile_time::validate_stack_dependencies(&current_stack);
         dependency_result = dependency_result.with_check_metadata(
@@ -665,6 +681,80 @@ mod setup_update_authorization_tests {
             .expect_err("unknown allocation on a fresh install still fails");
     }
 
+    #[tokio::test]
+    async fn generated_container_cannot_bypass_network_capability_checks() {
+        struct AddEndpoint;
+        #[async_trait::async_trait]
+        impl crate::StackMutation for AddEndpoint {
+            fn description(&self) -> &'static str {
+                "test generated endpoint"
+            }
+            fn should_run(&self, _: &Stack, _: &StackState, _: &DeploymentConfig) -> bool {
+                true
+            }
+            async fn mutate(
+                &self,
+                stack: Stack,
+                _: &StackState,
+                _: &DeploymentConfig,
+            ) -> Result<Stack> {
+                let container = alien_core::Container::new("generated".into())
+                    .code(alien_core::ContainerCode::Image {
+                        image: "example:latest".into(),
+                    })
+                    .cpu(alien_core::ResourceSpec {
+                        min: "1".into(),
+                        desired: "1".into(),
+                    })
+                    .memory(alien_core::ResourceSpec {
+                        min: "128Mi".into(),
+                        desired: "128Mi".into(),
+                    })
+                    .permissions("app".into())
+                    .egress(alien_core::ContainerEgress::Internet)
+                    .security(alien_core::ContainerSecurity {
+                        profile: alien_core::ContainerSecurityProfile::Restricted,
+                        run_as_user: 1000,
+                        run_as_group: 1000,
+                        read_only_root_filesystem: false,
+                    })
+                    .build();
+                let mut result = stack;
+                result.resources.insert(
+                    "generated".into(),
+                    alien_core::ResourceEntry {
+                        config: alien_core::Resource::new(container),
+                        lifecycle: alien_core::ResourceLifecycle::Live,
+                        dependencies: vec![],
+                        enabled_when: None,
+                        remote_access: false,
+                    },
+                );
+                Ok(result)
+            }
+        }
+        let mut registry = PreflightRegistry::new();
+        registry.add_mutation(Box::new(AddEndpoint));
+        let runner = PreflightRunner::with_registry(registry);
+        let error = runner
+            .apply_mutations(
+                empty_stack(),
+                &StackState::new(Platform::Local),
+                &deployment_config(),
+            )
+            .await
+            .unwrap_err();
+        let Some(ErrorData::ValidationFailed { results, .. }) = error.error else {
+            panic!("expected capability validation failure")
+        };
+        assert!(
+            results[0]
+                .errors
+                .iter()
+                .any(|message| message.contains("CONTAINER_NETWORK_SETTINGS_UNSUPPORTED"))
+        );
+    }
+
     fn authorization(stack: &Stack) -> SetupUpdateAuthorization {
         SetupUpdateAuthorization {
             nonce: "revision".to_string(),
@@ -944,7 +1034,6 @@ mod setup_update_authorization_tests {
         stack
     }
 
-    #[cfg(feature = "runtime-checks")]
     fn deployment_config() -> DeploymentConfig {
         DeploymentConfig::builder()
             .stack_settings(alien_core::StackSettings::default())
