@@ -1839,6 +1839,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn endpoint_access_patch_refuses_viewers_before_writes() {
+        let mut store = MockDeploymentStore::new();
+        store
+            .expect_get_deployment()
+            .times(1)
+            .returning(|_, _| Ok(Some(deployment_record())));
+        let request = Request::builder()
+            .method("PATCH")
+            .uri("/v1/deployments/deployment-1/endpoint-access")
+            .header(http::header::AUTHORIZATION, "Bearer test-token")
+            .header(http::header::CONTENT_TYPE, "application/json")
+            .body(Body::from(r#"{"endpointAccess":"internet"}"#))
+            .unwrap();
+        let (status, body) =
+            send_with_validator(store, Arc::new(OverrideViewer), request, true).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        assert_eq!(body["code"], "FORBIDDEN");
+    }
+
+    #[tokio::test]
     async fn override_patch_requires_update_authority_before_validation_or_writes() {
         let mut store = MockDeploymentStore::new();
         store
