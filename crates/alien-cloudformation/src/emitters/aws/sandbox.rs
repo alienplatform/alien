@@ -228,7 +228,8 @@ impl CfEmitter for AwsSandboxEmitter {
                 CfExpression::Integer(tier.baseline_memory_mib),
             )])]),
         );
-        // AWS exposes only ALL; the agent reduces it before running image code or commands.
+        // AWS rejects named capabilities: only ALL is accepted. The agent drops to eight
+        // before creating worker threads; every image command and exec receives none.
         properties.insert(
             "AdditionalOsCapabilities".to_string(),
             CfExpression::list(if sandbox.privileged_supervisor.is_some() {

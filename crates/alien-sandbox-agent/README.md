@@ -31,8 +31,20 @@ transport after image restore. The iptables owner extension is unavailable on
 the guest kernel. This mode creates no egress connector, proxy, or
 firewall resources. AWS's extra capability grant is an implementation detail;
 the declaration exposes only the opt-in supervisor setting and the command uid.
-The supervisor retains network administration and the capabilities needed to
-prepare command-owned files, drop identities, and cancel commands.
+AWS accepts only `ALL` in `AdditionalOsCapabilities`; named capabilities such
+as `NET_ADMIN` are rejected by the image API. Omitting the grant leaves out
+`NET_ADMIN`, so the agent cannot install its firewall. See the
+[AWS capability contract](https://docs.aws.amazon.com/lambda/latest/dg/microvms-images.html#microvms-images-os-capabilities).
+
+Before creating worker threads, the supervisor reduces its effective, permitted,
+and bounding sets to `CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `KILL`, `SETGID`, `SETUID`,
+`SETPCAP`, and `NET_ADMIN`. It clears ambient and inheritable capabilities and sets
+`no_new_privs`. These allow file projection and transfer, command cancellation,
+irreversible identity drops, and firewall installation. Seccomp installation after
+`no_new_privs` needs no extra capability. The legacy `allowDomains` mode also uses
+`SYS_ADMIN` during bootstrap to replace AWS's read-only `/etc/hosts` mount; that
+capability is removed before worker threads or guest code start. Every image
+command, exec, and detached job receives zero capabilities in all five sets.
 
 `deny` grants commands no routed egress or DNS. `allowDomains` resolves the declared
 names before starting commands, pins public IPv4 addresses in `/etc/hosts`, and

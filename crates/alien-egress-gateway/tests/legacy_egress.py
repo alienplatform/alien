@@ -1,6 +1,7 @@
 """Released object policies keep their direct, UID-filtered supervisor path."""
 import json
 
+from agent_capabilities import AGENT_CAP_ARGS
 from docker_conformance import ORIGIN, PREFIX, docker
 
 
@@ -11,7 +12,7 @@ def check_legacy_agents(suite, image, containers, uid):
         if mode == "allowDomains":
             policy["domains"] = ["Allowed.TEST."]
         docker("run", "-d", "--name", name, "--network", PREFIX,
-               "--ip", f"93.184.216.{index}", "--dns", ORIGIN, "--cap-add", "NET_ADMIN",
+               "--ip", f"93.184.216.{index}", "--dns", ORIGIN, *AGENT_CAP_ARGS,
                "-e", "ALIEN_SANDBOX_EGRESS=" + json.dumps(policy), image)
         containers.append(name)
         docker("network", "connect", "--ip", f"10.77.91.{index}", PREFIX + "-private", name)
