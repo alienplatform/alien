@@ -363,6 +363,29 @@ class Suite:
         print(json.dumps({"benchmark": result}), flush=True)
 
     def agent(self, image, containers, networks):
+        def equal(actual, expected):
+            assert actual == expected, (actual, expected)
+        # The image provides ordinary app tools only; the agent owns firewall installation.
+        self.record("agent image needs no nft or iptables", lambda: equal(docker(
+            "run", "--rm", "--entrypoint", "python", image, "-c",
+            "import shutil; assert all(shutil.which(x) is None for x in ['nft','iptables','iptables-nft']); print('no firewall tools')"
+        ), "no firewall tools"))
+        failed = PREFIX + "-no-net-admin"
+        failed_root = self.output / "failed-agent"
+        failed_root.mkdir(mode=0o777)
+        failed_root.chmod(0o777)
+        docker("run", "-d", "--name", failed, "--network", "none",
+               "-v", f"{failed_root}:/data", image)
+        containers.append(failed)
+        def cannot_install():
+            deadline = time.monotonic() + 10
+            while docker("inspect", "--format", "{{.State.Running}}", failed) == "true":
+                assert time.monotonic() < deadline, "agent did not fail closed without NET_ADMIN"
+                time.sleep(.05)
+            assert int(docker("inspect", "--format", "{{.State.ExitCode}}", failed)) != 0
+            assert "install transparent forwarding" in docker("logs", failed)
+            assert not (failed_root / "image-env").exists(), "image command started without redirect"
+        self.record("refused netlink installation exits before serving or image code", cannot_install)
         network = PREFIX + "-guest"
         docker("network", "create", "--internal", "--subnet", "172.29.91.0/24", network)
         networks.append(network)
@@ -390,8 +413,6 @@ class Suite:
                 if time.monotonic() > deadline:
                     raise
                 time.sleep(0.1)
-        def equal(actual, expected):
-            assert actual == expected, (actual, expected)
         self.record("agent pending health", lambda: equal(json.loads(call("GET", "/v1/health")[1])["status"], "awaiting-egress-policy"))
         hook = {"microvmId": SUB, "runHookPayload": json.dumps({"gateway": "172.29.91.2:3128", "audience": AUD})}
         self.record("AWS run wrapper bootstrap", lambda: equal(call("POST", "/aws/lambda-microvms/runtime/v1/run", hook)[0], 200))
@@ -400,6 +421,17 @@ class Suite:
         self.record("agent refuses forged identity via authenticated health", lambda: equal(call("PUT", "/v1/egress", {"token": forged})[0], 503))
         self.record("agent token install and path self-check", lambda: equal(call("PUT", "/v1/egress", {"token": self.token()})[0], 204))
         self.record("agent ready health", lambda: equal(json.loads(call("GET", "/v1/health")[1])["status"], "ready"))
+        def reinstall():
+            # A second bootstrap replaces the existing tables before failing to bind the
+            # occupied control port. Subsequent packet probes exercise the replacement rules.
+            result = subprocess.run(
+                ["docker", "exec", "--privileged", name, "alien-sandbox-agent"],
+                env={**os.environ, "DOCKER_HOST": "unix:///var/run/docker.sock"},
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=10,
+            )
+            assert result.returncode != 0 and b"bind the agent listener" in result.stdout, result.stdout
+            assert b"install transparent forwarding" not in result.stdout, result.stdout
+        self.record("bootstrap atomically replaces its existing tables", reinstall)
         image_env = docker("exec", "-u", "60000:60000", name, "cat", "/data/image-env")
         assert "HTTP_PROXY=http://127.0.0.1:15002" in image_env
         assert "ALIEN_SANDBOX_EGRESS_TOKEN" not in image_env and "fake-test-secret" not in image_env

@@ -1,10 +1,16 @@
 use std::{
-    io::{self, Write},
+    io,
     net::{Ipv4Addr, SocketAddrV4},
     os::fd::AsRawFd,
-    process::{Command, Stdio},
+    time::Duration,
 };
 
+use nlink::netlink::{
+    nftables::{
+        Chain, ChainType, CtDirection, Expr, Family, Hook, Policy, Priority, Rule, Verdict,
+    },
+    Connection, Nftables,
+};
 use tokio::net::{TcpSocket, TcpStream};
 
 pub(super) const MARK: u32 = 0xa11e;
@@ -42,45 +48,94 @@ pub(super) fn original_destination(stream: &TcpStream) -> io::Result<SocketAddrV
 /// All guest TCP, including root-owned processes, is redirected. Only explicitly marked agent
 /// sockets and TCP replies to incoming connections escape the redirect; no UID-wide exemption.
 pub(super) fn install() -> io::Result<()> {
-    let rules = format!(
-        r#"add table ip alien_gateway
-flush table ip alien_gateway
-add chain ip alien_gateway guest_tcp {{ type nat hook output priority -100; policy accept; }}
-add rule ip alien_gateway guest_tcp meta mark {MARK} return
-add rule ip alien_gateway guest_tcp ct direction reply meta l4proto tcp return
-add rule ip alien_gateway guest_tcp ct direction reply udp sport 15053 return
-add rule ip alien_gateway guest_tcp udp dport 53 redirect to :15053
-add rule ip alien_gateway guest_tcp tcp dport 53 redirect to :15053
-add rule ip alien_gateway guest_tcp ip daddr 127.0.0.0/8 return
-add rule ip alien_gateway guest_tcp meta l4proto tcp redirect to :15001
-add chain ip alien_gateway filter {{ type filter hook output priority 0; policy drop; }}
-add rule ip alien_gateway filter meta mark {MARK} accept
-add rule ip alien_gateway filter ct direction reply meta l4proto tcp accept
-add rule ip alien_gateway filter ip daddr 127.0.0.1 accept
-add rule ip alien_gateway filter oifname "lo" accept
-add table ip6 alien_gateway
-flush table ip6 alien_gateway
-add chain ip6 alien_gateway output {{ type filter hook output priority 0; policy drop; }}
-"#
-    );
-    let mut child = Command::new("/usr/sbin/nft")
-        .args(["--file", "-"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()?;
-    child
-        .stdin
-        .take()
-        .ok_or_else(|| io::Error::other("missing nft stdin"))?
-        .write_all(rules.as_bytes())?;
-    let result = child.wait_with_output()?;
-    if !result.status.success() {
-        return Err(io::Error::other(
-            String::from_utf8_lossy(&result.stderr).into_owned(),
-        ));
+    // Bootstrap is deliberately single-threaded: worker threads must only be created after
+    // the supervisor drops its capabilities. This temporary runtime has no worker threads.
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?
+        .block_on(async {
+            tokio::time::timeout(Duration::from_secs(5), install_rules())
+                .await
+                .map_err(io::Error::other)?
+                .map_err(io::Error::other)
+        })
+}
+
+async fn install_rules() -> nlink::netlink::Result<()> {
+    let conn = Connection::<Nftables>::new()?;
+    let tables = conn.list_tables().await?;
+    let mut batch = conn.transaction();
+    // Replace only our tables, in one transaction. Until commit, an existing policy remains
+    // effective. Any refused operation aborts the whole batch and prevents agent startup.
+    for family in [Family::Ip, Family::Ip6] {
+        if tables
+            .iter()
+            .any(|table| table.family == family && table.name == "alien_gateway")
+        {
+            batch = batch.del_table("alien_gateway", family);
+        }
+        batch = batch.add_table("alien_gateway", family);
     }
-    Ok(())
+    let nat = || Rule::new("alien_gateway", "guest_tcp").family(Family::Ip);
+    let filter = || Rule::new("alien_gateway", "filter").family(Family::Ip);
+    let returning = Expr::Verdict(Verdict::Return);
+    batch
+        .add_chain(
+            Chain::new("alien_gateway", "guest_tcp")?
+                .family(Family::Ip)
+                .chain_type(ChainType::Nat)
+                .hook(Hook::Output)
+                .priority(Priority::DstNat)
+                .policy(Policy::Accept),
+        )
+        .add_rule(nat().match_mark(MARK).expr(returning.clone()))
+        .add_rule(
+            nat()
+                .match_ct_direction(CtDirection::Reply)
+                .match_l4proto(libc::IPPROTO_TCP as u8)
+                .expr(returning.clone()),
+        )
+        .add_rule(
+            nat()
+                .match_ct_direction(CtDirection::Reply)
+                .match_udp_sport(15053)
+                .expr(returning.clone()),
+        )
+        .add_rule(nat().match_udp_dport(53).redirect(Some(15053)))
+        .add_rule(nat().match_tcp_dport(53).redirect(Some(15053)))
+        .add_rule(nat().match_daddr_v4(Ipv4Addr::LOCALHOST, 8).expr(returning))
+        .add_rule(
+            nat()
+                .match_l4proto(libc::IPPROTO_TCP as u8)
+                .redirect(Some(15001)),
+        )
+        .add_chain(
+            Chain::new("alien_gateway", "filter")?
+                .family(Family::Ip)
+                .chain_type(ChainType::Filter)
+                .hook(Hook::Output)
+                .priority(Priority::Filter)
+                .policy(Policy::Drop),
+        )
+        .add_rule(filter().match_mark(MARK).accept())
+        .add_rule(
+            filter()
+                .match_ct_direction(CtDirection::Reply)
+                .match_l4proto(libc::IPPROTO_TCP as u8)
+                .accept(),
+        )
+        .add_rule(filter().match_daddr_v4(Ipv4Addr::LOCALHOST, 32).accept())
+        .add_rule(filter().match_oif("lo").accept())
+        .add_chain(
+            Chain::new("alien_gateway", "output")?
+                .family(Family::Ip6)
+                .chain_type(ChainType::Filter)
+                .hook(Hook::Output)
+                .priority(Priority::Filter)
+                .policy(Policy::Drop),
+        )
+        .commit(&conn)
+        .await
 }
 
 pub(super) fn mark(fd: std::os::fd::RawFd) -> io::Result<()> {

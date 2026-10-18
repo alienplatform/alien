@@ -28,6 +28,9 @@ path = "src/main.rs"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+nlink = "0.32"
+
 [dev-dependencies]
 tempfile = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }

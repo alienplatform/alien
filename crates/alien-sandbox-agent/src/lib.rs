@@ -10,9 +10,6 @@ pub mod pid_namespace;
 pub mod privilege;
 pub mod server;
 
-#[cfg(target_os = "linux")]
-pub mod egress;
-
 #[cfg(unix)]
 pub mod image_command;
 
