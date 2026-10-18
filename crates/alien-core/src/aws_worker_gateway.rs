@@ -13,6 +13,11 @@ pub const IMAGE: &str =
 /// Fixed bootstrap: no workload identity, IAM credentials or secrets are embedded.
 pub const BOOTSTRAP: &str = include_str!("aws_worker_gateway/envoy.json");
 
+/// Setup-owned task retirement capability. Publish an immutable Lambda version,
+/// bind `ALIEN_STACK_PREFIX` at setup, and authorize only that exact version.
+/// Its function name and role path must remain outside runtime worker grants.
+pub const CLEANUP_HANDLER_SOURCE: &str = include_str!("aws_worker_gateway/cleanup.py");
+
 /// Application traffic accepted only from the associated load balancer.
 pub const HTTP_PORT: u16 = 8080;
 
