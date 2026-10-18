@@ -1018,6 +1018,7 @@ impl AzureRemoteStackManagementController {
             Some(ResourceOutputs::new(RemoteStackManagementOutputs {
                 management_resource_id: uami_resource_id.clone(),
                 access_configuration: access_config.to_string(),
+                aws_worker_gateway_cleanup_function_arn: None,
                 legacy_remote_bindings_access: None,
             }))
         } else {

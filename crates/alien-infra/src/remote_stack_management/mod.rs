@@ -1,4 +1,5 @@
 mod aws;
+mod aws_gateway_setup;
 pub use aws::*;
 
 mod aws_import;

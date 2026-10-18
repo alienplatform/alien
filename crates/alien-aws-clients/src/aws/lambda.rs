@@ -20,6 +20,16 @@ pub trait LambdaApi: Send + Sync + std::fmt::Debug {
         &self,
         request: CreateFunctionRequest,
     ) -> Result<FunctionConfiguration>;
+    async fn publish_version(
+        &self,
+        function_name: &str,
+        request: PublishVersionRequest,
+    ) -> Result<FunctionConfiguration>;
+    async fn list_versions_by_function(
+        &self,
+        function_name: &str,
+        marker: Option<String>,
+    ) -> Result<ListVersionsByFunctionResponse>;
     async fn create_function_url_config(
         &self,
         function_name: &str,
@@ -236,8 +246,7 @@ impl LambdaClient {
             crate::aws::aws_request_utils::sign_send_no_response_once(builder, &self.sign_config())
                 .await
         } else {
-            crate::aws::aws_request_utils::sign_send_no_response(builder, &self.sign_config())
-                .await
+            crate::aws::aws_request_utils::sign_send_no_response(builder, &self.sign_config()).await
         };
 
         Self::map_result(result, operation, resource, None)
@@ -439,6 +448,44 @@ impl LambdaApi for LambdaClient {
             Some(body),
             "CreateFunction",
             &request.function_name,
+        )
+        .await
+    }
+
+    async fn publish_version(
+        &self,
+        function_name: &str,
+        request: PublishVersionRequest,
+    ) -> Result<FunctionConfiguration> {
+        let body = serde_json::to_string(&request).into_alien_error().context(
+            ErrorData::SerializationError {
+                message: "Serialize Lambda version publication".into(),
+            },
+        )?;
+        self.send_json(
+            Method::POST,
+            &format!("/2015-03-31/functions/{function_name}/versions"),
+            None,
+            Some(body),
+            "PublishVersion",
+            function_name,
+        )
+        .await
+    }
+
+    async fn list_versions_by_function(
+        &self,
+        function_name: &str,
+        marker: Option<String>,
+    ) -> Result<ListVersionsByFunctionResponse> {
+        let query = marker.map(|marker| vec![("Marker", marker)]);
+        self.send_json(
+            Method::GET,
+            &format!("/2015-03-31/functions/{function_name}/versions"),
+            query,
+            None,
+            "ListVersionsByFunction",
+            function_name,
         )
         .await
     }
@@ -655,7 +702,8 @@ impl LambdaApi for LambdaClient {
         function_name: &str,
         request: RemovePermissionRequest,
     ) -> Result<()> {
-        let encode = |value: &str| form_urlencoded::byte_serialize(value.as_bytes()).collect::<String>();
+        let encode =
+            |value: &str| form_urlencoded::byte_serialize(value.as_bytes()).collect::<String>();
         let path = format!(
             "/2015-03-31/functions/{}/policy/{}",
             encode(function_name),
@@ -976,6 +1024,10 @@ pub struct CreateFunctionRequest {
     #[builder(default = "Image".to_string())]
     pub package_type: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub handler: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout: Option<i32>,
@@ -1003,18 +1055,31 @@ pub struct CreateFunctionRequest {
 #[derive(Debug, Clone, Serialize, Builder)]
 #[serde(rename_all = "PascalCase")]
 pub struct FunctionCode {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub image_uri: Option<String>,
+    /// Base64-encoded ZIP bytes, mutually exclusive with ImageUri.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub zip_file: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Builder)]
+#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
 #[serde(rename_all = "PascalCase")]
 pub struct Environment {
     pub variables: Option<std::collections::HashMap<String, String>>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct FunctionConfiguration {
+    pub version: Option<String>,
+    pub revision_id: Option<String>,
+    pub code_sha256: Option<String>,
+    pub role: Option<String>,
+    pub runtime: Option<String>,
+    pub handler: Option<String>,
+    pub timeout: Option<i32>,
+    pub description: Option<String>,
+    pub environment: Option<Environment>,
     pub function_name: Option<String>,
     pub function_arn: Option<String>,
     pub state: Option<String>,
@@ -1088,13 +1153,40 @@ pub struct AddPermissionResponse {
 #[derive(Debug, Serialize, Builder)]
 #[serde(rename_all = "PascalCase")]
 pub struct UpdateFunctionCodeRequest {
-    pub image_uri: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_uri: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub zip_file: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision_id: Option<String>,
     pub publish: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Builder)]
 #[serde(rename_all = "PascalCase")]
+pub struct PublishVersionRequest {
+    pub code_sha256: String,
+    pub revision_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct ListVersionsByFunctionResponse {
+    pub versions: Vec<FunctionConfiguration>,
+    pub next_marker: Option<String>,
+}
+
+#[derive(Debug, Serialize, Builder)]
+#[serde(rename_all = "PascalCase")]
 pub struct UpdateFunctionConfigurationRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub handler: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1409,4 +1501,147 @@ pub struct AccountConcurrencyLimit {
 #[serde(rename_all = "PascalCase")]
 pub struct FunctionConcurrency {
     pub reserved_concurrent_executions: Option<u32>,
+}
+
+#[cfg(test)]
+mod setup_version_tests {
+    use super::*;
+    use crate::{AwsClientConfig, AwsCredentials, ServiceOverrides};
+    use httpmock::prelude::*;
+    use std::collections::HashMap;
+
+    fn client(server: &MockServer) -> LambdaClient {
+        LambdaClient::new(
+            Client::new(),
+            AwsCredentialProvider::from_config_sync(AwsClientConfig {
+                account_id: "123456789012".into(),
+                region: "us-east-1".into(),
+                credentials: AwsCredentials::AccessKeys {
+                    access_key_id: "test-key".into(),
+                    secret_access_key: "test-secret".into(),
+                    session_token: None,
+                },
+                service_overrides: Some(ServiceOverrides {
+                    endpoints: HashMap::from([("lambda".into(), server.base_url())]),
+                }),
+            }),
+        )
+    }
+
+    #[tokio::test]
+    async fn published_version_uses_revision_and_code_guards_and_reads_pagination() {
+        let server = MockServer::start_async().await;
+        let publish = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/2015-03-31/functions/setup-helper/versions")
+                    .json_body(
+                        serde_json::json!({"CodeSha256":"digest", "RevisionId":"revision",
+                    "Description":"source-version"}),
+                    );
+                then.status(201)
+                    .json_body(serde_json::json!({"FunctionName":"setup-helper",
+                "FunctionArn":"arn:aws:lambda:us-east-1:123456789012:function:setup-helper:7",
+                "Version":"7", "RevisionId":"published", "CodeSha256":"digest"}));
+            })
+            .await;
+        let list = server.mock_async(|when, then| {
+            when.method(GET).path("/2015-03-31/functions/setup-helper/versions")
+                .query_param("Marker", "next+page/=");
+            then.status(200).json_body(serde_json::json!({"NextMarker":"last", "Versions":[{
+                "Version":"7", "Role":"role", "Runtime":"python3.13", "Handler":"index.handler",
+                "Timeout":60, "CodeSha256":"digest", "Environment":{"Variables":{"ALIEN_STACK_PREFIX":"test"}}
+            }]}));
+        }).await;
+        let client = client(&server);
+        let published = client
+            .publish_version(
+                "setup-helper",
+                PublishVersionRequest::builder()
+                    .code_sha256("digest".into())
+                    .revision_id("revision".into())
+                    .description("source-version".into())
+                    .build(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(published.version.as_deref(), Some("7"));
+        assert_eq!(published.code_sha256.as_deref(), Some("digest"));
+        let page = client
+            .list_versions_by_function("setup-helper", Some("next+page/=".into()))
+            .await
+            .unwrap();
+        assert_eq!(page.next_marker.as_deref(), Some("last"));
+        assert_eq!(page.versions.len(), 1);
+        let version = &page.versions[0];
+        assert_eq!(version.version.as_deref(), Some("7"));
+        assert_eq!(version.role.as_deref(), Some("role"));
+        assert_eq!(version.handler.as_deref(), Some("index.handler"));
+        assert_eq!(version.runtime.as_deref(), Some("python3.13"));
+        assert_eq!(version.timeout, Some(60));
+        assert_eq!(
+            version
+                .environment
+                .as_ref()
+                .unwrap()
+                .variables
+                .as_ref()
+                .unwrap()["ALIEN_STACK_PREFIX"],
+            "test"
+        );
+        publish.assert_hits_async(1).await;
+        list.assert_hits_async(1).await;
+    }
+
+    #[tokio::test]
+    async fn zip_create_and_guarded_code_update_use_the_lambda_wire_contract() {
+        let server = MockServer::start_async().await;
+        let create = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/2015-03-31/functions").json_body(
+                    serde_json::json!({"FunctionName":"setup-helper", "Role":"role",
+                    "Code":{"ZipFile":"emlw"}, "PackageType":"Zip", "Runtime":"python3.13",
+                    "Handler":"index.handler", "Publish":false}),
+                );
+                then.status(201).json_body(
+                    serde_json::json!({"FunctionName":"setup-helper", "RevisionId":"first"}),
+                );
+            })
+            .await;
+        let update = server.mock_async(|when, then| {
+            when.method(PUT).path("/2015-03-31/functions/setup-helper/code")
+                .json_body(serde_json::json!({"ZipFile":"bmV3", "RevisionId":"first", "Publish":false}));
+            then.status(200).json_body(serde_json::json!({"FunctionName":"setup-helper", "RevisionId":"second"}));
+        }).await;
+        let client = client(&server);
+        let created = client
+            .create_function(
+                CreateFunctionRequest::builder()
+                    .function_name("setup-helper".into())
+                    .role("role".into())
+                    .code(FunctionCode::builder().zip_file("emlw".into()).build())
+                    .package_type("Zip".into())
+                    .runtime("python3.13".into())
+                    .handler("index.handler".into())
+                    .publish(false)
+                    .build(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(created.revision_id.as_deref(), Some("first"));
+        let updated = client
+            .update_function_code(
+                "setup-helper",
+                UpdateFunctionCodeRequest::builder()
+                    .zip_file("bmV3".into())
+                    .revision_id("first".into())
+                    .publish(false)
+                    .build(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(updated.revision_id.as_deref(), Some("second"));
+        create.assert_hits_async(1).await;
+        update.assert_hits_async(1).await;
+    }
 }

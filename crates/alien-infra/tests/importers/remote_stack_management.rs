@@ -6,6 +6,7 @@ fn aws_remote_stack_management_import_preserves_setup_ownership() {
     let data = AwsRemoteStackManagementImportData {
         role_arn: "arn:aws:iam::123456789012:role/alien-stack-mgmt".to_string(),
         role_name: "alien-stack-mgmt".to_string(),
+        worker_gateway_cleanup_function_arn: None,
         remote_bindings_role_arn: Some(
             "arn:aws:iam::123456789012:role/alien-stack-remote-bindings".to_string(),
         ),
@@ -71,6 +72,83 @@ fn aws_remote_stack_management_import_preserves_setup_ownership() {
         serde_json::Value::Null,
         "import must not claim setup-created grants are runtime-owned"
     );
+}
+
+#[test]
+fn aws_gateway_cleanup_capability_survives_import_and_controller_reload() {
+    let resource = frozen_entry(RemoteStackManagement::new("management".to_string()).build());
+    let function = "arn:aws:lambda:us-east-1:123456789012:function:_gateway-cleanup-example:7";
+    let payload = json!({
+        "roleName": "example-management",
+        "roleArn": "arn:aws:iam::123456789012:role/example-management",
+        "managementPermissionsApplied": true,
+        "workerGatewayCleanupFunctionArn": function,
+    });
+    let state = run_through_registry(
+        &RemoteStackManagement::RESOURCE_TYPE,
+        Platform::Aws,
+        payload,
+        &resource,
+        "us-east-1",
+        &aws_management_config(),
+    );
+    assert_eq!(state.status, ResourceStatus::Running);
+    assert_eq!(
+        internal_state(&state)["workerGatewayCleanupFunctionArn"],
+        function
+    );
+    let restored = alien_infra::deserialize_controller(internal_state(&state).clone())
+        .expect("capability must survive a manager restart");
+    let outputs = restored.get_outputs().expect("imported management output");
+    let outputs = outputs
+        .downcast_ref::<RemoteStackManagementOutputs>()
+        .unwrap();
+    assert_eq!(
+        outputs.aws_worker_gateway_cleanup_function_arn.as_deref(),
+        Some(function)
+    );
+}
+
+#[test]
+fn aws_gateway_cleanup_import_rejects_foreign_or_mutable_functions() {
+    let resource = frozen_entry(RemoteStackManagement::new("management".to_string()).build());
+    let settings = settings();
+    let management = aws_management_config();
+    let ctx = ImportContext {
+        resource_id: "management",
+        platform: Platform::Aws,
+        region: "us-east-1",
+        stack_settings: &settings,
+        management_config: Some(&management),
+        resource: &resource,
+    };
+    let registry = ImporterRegistry::built_in();
+    registry.run(&RemoteStackManagement::RESOURCE_TYPE, Platform::Aws, json!({
+        "roleName": "example-management",
+        "roleArn": "arn:aws:iam::123456789012:role/example-management",
+        "managementPermissionsApplied": false,
+        "workerGatewayCleanupFunctionArn": "arn:aws:lambda:us-east-1:123456789012:function:_gateway-cleanup-example:7",
+    }), &ctx).expect_err("an unapplied invocation grant must not be exposed to runtime");
+    for function in [
+        "arn:aws:lambda:us-east-1:999999999999:function:_gateway-cleanup-example:7",
+        "arn:aws:lambda:us-west-2:123456789012:function:_gateway-cleanup-example:7",
+        "arn:aws:lambda:us-east-1:123456789012:function:_gateway-cleanup-other:7",
+        "arn:aws:lambda:us-east-1:123456789012:function:_gateway-cleanup-example:$LATEST",
+    ] {
+        registry
+            .run(
+                &RemoteStackManagement::RESOURCE_TYPE,
+                Platform::Aws,
+                json!({
+                    "roleName": "example-management",
+                    "roleArn": "arn:aws:iam::123456789012:role/example-management",
+                    "managementPermissionsApplied": true,
+                    "workerGatewayCleanupFunctionArn": function,
+                }),
+                &ctx,
+            )
+            .expect_err("setup cannot register a foreign or mutable cleanup capability");
+    }
 }
 
 #[test]

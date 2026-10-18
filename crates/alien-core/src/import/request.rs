@@ -6,11 +6,12 @@ use std::collections::HashMap;
 pub const MIN_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION: u32 = 1;
 
 /// Setup import payload format this binary writes.
-pub const CURRENT_SETUP_IMPORT_FORMAT_VERSION: u32 = 2;
+pub const CURRENT_SETUP_IMPORT_FORMAT_VERSION: u32 = 3;
 
 /// Newest format accepted by upgraded readers. Version 2 carries exact GCP
-/// custom-role namespaces. Deploy compatible readers before version 2 writers.
-pub const MAX_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION: u32 = 2;
+/// custom-role namespaces. Version 3 preserves the setup-owned AWS gateway
+/// retirement capability. Deploy compatible readers before version 3 writers.
+pub const MAX_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION: u32 = 3;
 
 /// Package source that produced an import request. Observability label
 /// only — the manager does not branch on this value, and any new deployment

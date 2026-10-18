@@ -192,6 +192,7 @@ impl TestRemoteStackManagementController {
                 Some(ResourceOutputs::new(RemoteStackManagementOutputs {
                     management_resource_id: management_resource_id.clone(),
                     access_configuration: access_configuration.clone(),
+                    aws_worker_gateway_cleanup_function_arn: None,
                     legacy_remote_bindings_access: None,
                 }))
             }

@@ -21,14 +21,15 @@ use alien_aws_clients::{
     iam::IamApi,
     lambda::LambdaApi,
 };
-use alien_core::{standard_resource_tags, Network, ResourceRef, Worker};
+use alien_core::{Network, ResourceRef, Worker, standard_resource_tags};
 use alien_error::{AlienError, Context, ContextError};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::{
+    aws_gateway_cleanup::GatewayCleanup,
     aws_gateway_cluster::GatewayCluster,
-    aws_gateway_config::{bootstrap, GatewaySpec, GATEWAY_HEALTH_PORT, GATEWAY_HTTP_PORT},
+    aws_gateway_config::{GATEWAY_HEALTH_PORT, GATEWAY_HTTP_PORT, GatewaySpec, bootstrap},
     aws_gateway_permission::GatewayPermission,
     aws_gateway_service::GatewayService,
     aws_gateway_task::GatewayTask,
@@ -36,7 +37,7 @@ use super::{
     aws_private_rest_api::{PrivateRestApi, RestRoutePlan},
 };
 use crate::core::aws_tag_scoped::{
-    is_remote_not_found, preserve_composite_cleanup_error, CREATE_ATTEMPT_TAG,
+    CREATE_ATTEMPT_TAG, is_remote_not_found, preserve_composite_cleanup_error,
 };
 use crate::{
     AwsPreparedVmFrontend, AwsVmFrontend, AwsVmFrontendPlan, AwsVmSecurityGroup, ErrorData,
@@ -67,6 +68,7 @@ pub(super) struct PrivateIngressClients<'a> {
     pub iam: &'a dyn IamApi,
     pub elb: &'a dyn Elbv2Api,
     pub lambda: &'a dyn LambdaApi,
+    pub cleanup_function_arn: &'a str,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -572,7 +574,11 @@ impl PrivateWorkerIngress {
 
     /// ECS can retain deleted task definitions for 24 hours after a deployment.
     /// Maintain their receipts without delaying a healthy serving graph.
-    pub async fn maintain_retired_tasks(&mut self, ecs: &dyn EcsApi) -> Result<()> {
+    pub async fn maintain_retired_tasks(
+        &mut self,
+        ecs: &dyn EcsApi,
+        cleanup: &GatewayCleanup<'_>,
+    ) -> Result<()> {
         if !self.has_retired_tasks() {
             return Ok(());
         }
@@ -587,7 +593,7 @@ impl PrivateWorkerIngress {
             return Ok(());
         }
         if let Some(task) = self.retired_tasks.last_mut() {
-            if task.step_delete(ecs).await? {
+            if task.step_delete(ecs, cleanup).await? {
                 self.retired_tasks.pop();
             }
         }
@@ -722,14 +728,32 @@ impl PrivateWorkerIngress {
             }
         }
         if let Some(task) = &mut self.task {
-            if !task.step_delete(clients.ecs).await? {
+            if !task
+                .step_delete(
+                    clients.ecs,
+                    &GatewayCleanup {
+                        lambda: clients.lambda,
+                        function_arn: clients.cleanup_function_arn,
+                    },
+                )
+                .await?
+            {
                 return Ok(false);
             }
             self.task = None;
             return Ok(false);
         }
         if let Some(task) = self.retired_tasks.last_mut() {
-            if task.step_delete(clients.ecs).await? {
+            if task
+                .step_delete(
+                    clients.ecs,
+                    &GatewayCleanup {
+                        lambda: clients.lambda,
+                        function_arn: clients.cleanup_function_arn,
+                    },
+                )
+                .await?
+            {
                 self.retired_tasks.pop();
             }
             return Ok(false);
@@ -760,6 +784,7 @@ pub(super) async fn validate_worker_setup(
     {
         return Ok(());
     }
+    super::aws_gateway_cleanup::installed_function(ctx)?;
     let network = ctx.require_dependency::<crate::network::AwsNetworkController>(
         &ResourceRef::new(Network::RESOURCE_TYPE, "default-network"),
     )?;
@@ -948,7 +973,9 @@ async fn validate_gateway_routes(ec2: &dyn Ec2Api, vpc_id: &str, subnets: &[Stri
             || defaults[0].vpc_peering_connection_id.is_some()
             || defaults[0].transit_gateway_id.is_some()
         {
-            return Err(invalid("Private worker gateway requires setup with an active public-subnet internet-gateway route for image pulls"));
+            return Err(invalid(
+                "Private worker gateway requires setup with an active public-subnet internet-gateway route for image pulls",
+            ));
         }
     }
     Ok(())
@@ -1140,9 +1167,11 @@ mod tests {
             .times(3)
             .returning(|request| {
                 let filters = request.filters.unwrap();
-                assert!(filters
-                    .iter()
-                    .any(|filter| filter.name == "vpc-id" && filter.values == ["vpc-owned"]));
+                assert!(
+                    filters
+                        .iter()
+                        .any(|filter| filter.name == "vpc-id" && filter.values == ["vpc-owned"])
+                );
                 assert!(filters.iter().any(|filter| filter.name == "group-name"
                     && filter.values.len() == 1
                     && filter.values[0].starts_with("alien-ingress-")));
@@ -1159,12 +1188,22 @@ mod tests {
             iam: &iam,
             elb: &elb,
             lambda: &lambda,
+            cleanup_function_arn: "arn:aws:lambda:us-east-1:123456789012:function:_gateway-cleanup-test:7",
         };
         assert!(
             !owner.has_retired_tasks(),
             "old task remains protected until the new gateway is healthy"
         );
-        owner.maintain_retired_tasks(&ecs).await.unwrap();
+        owner
+            .maintain_retired_tasks(
+                &ecs,
+                &GatewayCleanup {
+                    lambda: &lambda,
+                    function_arn: clients.cleanup_function_arn,
+                },
+            )
+            .await
+            .unwrap();
         let mut deleted = false;
         for _ in 0..20 {
             deleted = owner.step_delete(&clients).await.unwrap();
@@ -1269,6 +1308,7 @@ mod tests {
                 iam: &iam,
                 elb: &elb,
                 lambda: &lambda,
+                cleanup_function_arn: "arn:aws:lambda:us-east-1:123456789012:function:_gateway-cleanup-test:7",
             };
             assert!(ingress.step_api(&clients).await.is_err(), "{scenario}");
             assert!(
@@ -1309,20 +1349,26 @@ mod tests {
                     message: "authorize committed; reply lost".into(),
                 }))
             });
-        assert!(ensure_rule(&ec2, "sg-gateway", 8080, 8081, Some("sg-alb"))
-            .await
-            .is_err());
-        assert!(ensure_rule(&ec2, "sg-gateway", 8080, 8081, Some("sg-alb"))
-            .await
-            .unwrap());
+        assert!(
+            ensure_rule(&ec2, "sg-gateway", 8080, 8081, Some("sg-alb"))
+                .await
+                .is_err()
+        );
+        assert!(
+            ensure_rule(&ec2, "sg-gateway", 8080, 8081, Some("sg-alb"))
+                .await
+                .unwrap()
+        );
         assert!(
             ensure_rule(&ec2, "sg-gateway", 8080, 8081, Some("sg-other"))
                 .await
                 .is_err()
         );
-        assert!(ensure_rule(&ec2, "sg-gateway", 8080, 8081, None)
-            .await
-            .is_err());
+        assert!(
+            ensure_rule(&ec2, "sg-gateway", 8080, 8081, None)
+                .await
+                .is_err()
+        );
     }
     #[tokio::test]
     async fn stream_attribute_updates_replay_after_lost_replies_and_checkpoint_independently() {

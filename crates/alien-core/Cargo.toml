@@ -62,3 +62,6 @@ required-features = ["clap", "openapi"]
 # Killing a process group needs `kill(2)` with a negative pid, which std does not expose.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[build-dependencies]
+zip = { workspace = true }

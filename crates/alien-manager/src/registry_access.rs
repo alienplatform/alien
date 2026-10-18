@@ -2037,6 +2037,7 @@ mod tests {
                 .outputs(ResourceOutputs::new(RemoteStackManagementOutputs {
                     management_resource_id: role_arn.to_string(),
                     access_configuration: role_arn.to_string(),
+                    aws_worker_gateway_cleanup_function_arn: None,
                     legacy_remote_bindings_access: None,
                 }))
                 .lifecycle(ResourceLifecycle::Frozen)

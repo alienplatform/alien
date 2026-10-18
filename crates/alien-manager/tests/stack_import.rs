@@ -292,6 +292,7 @@ fn aws_s3_import_request(
                     role_arn: "arn:aws:iam::123456789012:role/AlienManager".to_string(),
                     management_permissions_applied: true,
                     installed_management_grants: None,
+                    worker_gateway_cleanup_function_arn: None,
                     remote_bindings_role_arn: None,
                 })
                 .unwrap(),
@@ -367,6 +368,7 @@ fn aws_remote_management_import_request(
             import_data: serde_json::to_value(AwsRemoteStackManagementImportData {
                 role_name: format!("{deployment_name}-management"),
                 role_arn: format!("arn:aws:iam::{account_id}:role/{deployment_name}-management"),
+                worker_gateway_cleanup_function_arn: None,
                 remote_bindings_role_arn: None,
                 management_permissions_applied: true,
                 installed_management_grants: None,
@@ -456,6 +458,7 @@ fn eks_cluster_import_request(deployment_name: &str, region: &str) -> StackImpor
                     role_arn: format!(
                         "arn:aws:iam::123456789012:role/{deployment_name}-management"
                     ),
+                    worker_gateway_cleanup_function_arn: None,
                     remote_bindings_role_arn: None,
                     management_permissions_applied: true,
                     installed_management_grants: None,

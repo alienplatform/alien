@@ -555,10 +555,10 @@ impl AwsWorkerController {
         status = ResourceStatus::Provisioning,
     )]
     async fn create_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
-        let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
         let cfg = ctx.desired_resource_config::<Worker>()?;
         super::aws_private_ingress::validate_worker_setup(ctx, &cfg).await?;
+        let aws_cfg = ctx.get_aws_config()?;
+        let client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
         info!(name=%cfg.id, code=?cfg.code, "Initiating creation");
 
         // Product limitation: Only allow at most one queue trigger per worker
@@ -5865,6 +5865,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn missing_gateway_cleanup_setup_blocks_create_and_update_before_cloud_clients() {
+        for mode in [alien_core::EndpointAccess::Private, alien_core::EndpointAccess::Both] {
+            for phase in [AwsWorkerState::CreateStart, AwsWorkerState::UpdateImportingCertificate] {
+                let mut controller = AwsWorkerController::mock_ready("test-public-func");
+                controller.state = phase;
+                let original_arn = controller.arn.clone();
+                let mut executor = SingleControllerExecutor::builder()
+                    .resource(function_public_ingress())
+                    .controller(controller)
+                    .platform(Platform::Aws)
+                    // Acquiring any provider client is an unexpected call.
+                    .service_provider(Arc::new(MockPlatformServiceProvider::new()))
+                    .stack_settings(StackSettings {
+                        endpoint_access: mode,
+                        ..Default::default()
+                    })
+                    .build()
+                    .await
+                    .unwrap();
+                let error = executor.step().await.unwrap_err();
+                assert!(format!("{error:?}").contains("SETUP_REQUIRED"));
+                assert_eq!(executor.internal_state::<AwsWorkerController>().unwrap().arn, original_arn);
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn unexposed_worker_is_stable_but_legacy_function_url_requires_retirement() {
         for mode in [
             alien_core::EndpointAccess::Internet,
@@ -6069,6 +6096,8 @@ mod tests {
                     AwsWorkerController::default()
                 };
                 let expected_arn = controller.arn.clone();
+                let mut management = crate::remote_stack_management::AwsRemoteStackManagementController::mock_ready("test-management");
+                management.worker_gateway_cleanup_function_arn = Some("arn:aws:lambda:us-east-1:123456789012:function:_gateway-cleanup-test:7".into());
                 let mut executor = SingleControllerExecutor::builder()
                     .resource(desired)
                     .previous_resource(previous)
@@ -6079,6 +6108,10 @@ mod tests {
                         endpoint_access: alien_core::EndpointAccess::Both,
                         ..Default::default()
                     })
+                    .with_frozen_dependency(
+                        alien_core::RemoteStackManagement::new("management".into()).build(),
+                        management,
+                    )
                     .with_dependency(
                         alien_core::Network {
                             id: "default-network".into(),
@@ -6114,6 +6147,7 @@ mod tests {
             state: Some("Active".to_string()),
             last_update_status: Some("Successful".to_string()),
             kms_key_arn: None,
+            ..Default::default()
         }
     }
 
@@ -7646,6 +7680,7 @@ mod tests {
                         state: Some("Pending".to_string()),
                         last_update_status: Some("InProgress".to_string()),
                         kms_key_arn: None,
+                        ..Default::default()
                     });
                 }
 

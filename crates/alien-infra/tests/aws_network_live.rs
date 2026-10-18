@@ -205,6 +205,9 @@ macro_rules! faulty_ec2_api {
 }
 
 faulty_ec2_api! {
+    create_interface_vpc_endpoint(request: CreateInterfaceVpcEndpointRequest) -> CreateVpcEndpointResponse;
+    describe_vpc_endpoints(request: DescribeVpcEndpointsRequest) -> DescribeVpcEndpointsResponse;
+    delete_vpc_endpoints(endpoint_ids: &[String]) -> DeleteVpcEndpointsResponse;
     describe_vpcs(request: DescribeVpcsRequest) -> DescribeVpcsResponse;
     describe_vpc_attribute(request: DescribeVpcAttributeRequest) -> DescribeVpcAttributeResponse;
     create_vpc(request: CreateVpcRequest) -> CreateVpcResponse;
