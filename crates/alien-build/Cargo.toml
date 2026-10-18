@@ -10,7 +10,6 @@ license-file.workspace = true
 test-utils = ["alien-core/test-utils"]
 
 [dependencies]
-tempfile = { workspace = true }
 zip = { workspace = true }
 alien-core = { workspace = true, features = ["sandbox-process"] }
 alien-error = { workspace = true }
@@ -32,6 +31,7 @@ async-trait = "0.1"
 base64 = { workspace = true }
 object_store = { workspace = true }
 sha2 = { workspace = true }
+tempfile = { workspace = true }
 tar = "0.4"
 flate2 = "1.0"
 dirs = "5.0"
