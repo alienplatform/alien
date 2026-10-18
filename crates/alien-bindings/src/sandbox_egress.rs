@@ -1,11 +1,12 @@
 //! Signed policy writes and identity-token delivery shared by sandbox providers.
-use crate::sandbox_egress_token::{EgressTokenIssuer, EgressTokenRequest};
+use crate::sandbox_egress_token::{EgressAdminOperation, EgressTokenIssuer, EgressTokenRequest};
 use crate::{
     error::{ErrorData, Result},
     Vault,
 };
 use alien_core::{bindings::SandboxEgressGateway, EgressPolicy};
 use alien_error::AlienError;
+use serde::Deserialize;
 use std::{
     collections::HashMap,
     fmt,
@@ -163,11 +164,21 @@ impl SandboxEgressManager {
             }
         };
         let _guard = lock.lock().await;
-        let authorization =
-            self.issuer()
-                .await?
-                .mint_admin(&self.config.audience, id, policy, now_unix()?)?;
-        let mut body = serde_json::json!({"aud":self.config.audience,"sub":id});
+        let issuer = self.issuer().await?;
+        // Read the gateway's durable sequence so a restarted client cannot replay an old
+        // version. A concurrent writer can win this race; never retry with a newer version,
+        // since that could undo its restriction with our stale intent.
+        let version = self
+            .policy_version(id, &issuer)
+            .await?
+            .checked_add(1)
+            .ok_or_else(|| unavailable("gateway policy version is exhausted"))?;
+        let operation = match policy {
+            Some(policy) => EgressAdminOperation::Put { policy, version },
+            None => EgressAdminOperation::Delete { version },
+        };
+        let authorization = issuer.mint_admin(&self.config.audience, id, operation, now_unix()?)?;
+        let mut body = serde_json::json!({"aud":self.config.audience,"sub":id,"version":version});
         if let Some(policy) = policy {
             body["policy"] = serde_json::from_slice(
                 &policy
@@ -195,10 +206,56 @@ impl SandboxEgressManager {
             .send()
             .await
             .map_err(|_| unavailable("gateway policy request failed"))?;
-        if !response.status().is_success() {
+        if response.status() == reqwest::StatusCode::CONFLICT {
+            return Err(AlienError::new(ErrorData::SandboxEgressConflict {
+                sandbox_id: id.into(),
+            }));
+        }
+        if response.status() != reqwest::StatusCode::NO_CONTENT {
             return Err(unavailable("gateway refused the policy request"));
         }
         Ok(())
+    }
+
+    async fn policy_version(&self, id: &str, issuer: &EgressTokenIssuer) -> Result<u64> {
+        #[derive(Deserialize)]
+        struct PolicyVersion {
+            version: u64,
+        }
+        let authorization = issuer.mint_admin(
+            &self.config.audience,
+            id,
+            EgressAdminOperation::ReadVersion,
+            now_unix()?,
+        )?;
+        let mut response = self
+            .admin
+            .get(format!(
+                "{}/v1/policies",
+                self.admin_url.as_str().trim_end_matches('/')
+            ))
+            .query(&[("aud", self.config.audience.as_str()), ("sub", id)])
+            .bearer_auth(authorization)
+            .send()
+            .await
+            .map_err(|_| unavailable("gateway policy version request failed"))?;
+        if response.status() != reqwest::StatusCode::OK {
+            return Err(unavailable("gateway refused the policy version request"));
+        }
+        let mut body = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|_| unavailable("gateway policy version response failed"))?
+        {
+            if body.len() + chunk.len() > 1024 {
+                return Err(unavailable("gateway policy version response is too large"));
+            }
+            body.extend_from_slice(&chunk);
+        }
+        serde_json::from_slice::<PolicyVersion>(&body)
+            .map(|value| value.version)
+            .map_err(|_| unavailable("gateway returned an invalid policy version"))
     }
 }
 pub(crate) fn now_unix() -> Result<i64> {

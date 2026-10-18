@@ -174,14 +174,55 @@ impl AwsSandbox {
             if !matches!(response.status().as_u16(), 502 | 503)
                 || std::time::Instant::now() >= deadline
             {
+                let status = response.status();
+                let reason = Self::identity_refusal_reason(response, &delivery.token).await?;
                 return Err(AlienError::new(ErrorData::SandboxUnreachable {
                     operation: "sandbox.egress".to_string(),
-                    reason: format!("agent refused egress identity: HTTP {}", response.status()),
+                    reason: format!("agent refused egress identity: HTTP {status}: {reason}"),
                 }));
             }
             tokio::time::sleep(SANDBOX_READY_POLL).await;
         }
         Ok(())
+    }
+
+    /// Keep the agent's diagnosis without accepting an unbounded error body or echoing identity.
+    async fn identity_refusal_reason(
+        mut response: reqwest::Response,
+        token: &str,
+    ) -> Result<String> {
+        let status = response.status();
+        tokio::time::timeout(SANDBOX_READY_TIMEOUT, async {
+            let mut body = Vec::new();
+            while let Some(chunk) = response
+                .chunk()
+                .await
+                .into_alien_error()
+                .context(ErrorData::SandboxUnreachable {
+                operation: "sandbox.egress".into(),
+                reason: format!(
+                    "agent refused identity with HTTP {status}; response body could not be read"
+                ),
+            })? {
+                if body.len() + chunk.len() > 4096 {
+                    return Ok("agent refusal body exceeded 4096 bytes".to_string());
+                }
+                body.extend_from_slice(&chunk);
+            }
+            let body = String::from_utf8_lossy(&body).replace(token, "[redacted]");
+            let body: String = body.chars().filter(|c| !c.is_control()).collect();
+            Ok(if body.trim().is_empty() {
+                "empty agent refusal body".to_string()
+            } else {
+                body
+            })
+        })
+        .await
+        .into_alien_error()
+        .context(ErrorData::SandboxUnreachable {
+            operation: "sandbox.egress".into(),
+            reason: format!("agent refused identity with HTTP {status}; response body timed out"),
+        })?
     }
 
     async fn renew_egress(&self, sandbox_id: &str) -> Result<()> {
