@@ -309,7 +309,7 @@ mod tests {
         // Four distinct targets plus the base network group fit Lambda's limit.
         // Duplicate links and targets without listeners consume no extra slot.
         let mut many = stack.clone();
-        for index in 1..=5 {
+        for index in [5, 1, 2, 3, 4] {
             let mut entry = stack.resources["api"].clone();
             let target = entry.config.downcast_mut::<Container>().unwrap();
             target.id = format!("target-{index}");
@@ -327,8 +327,8 @@ mod tests {
                 .unwrap();
             caller.links.extend([link.clone(), link]);
             let result = check.check(&many, Platform::Aws).await.unwrap();
-            assert_eq!(result.success, index < 4, "{index}: {result:?}");
-            if index >= 4 {
+            assert_eq!(result.success, index != 4, "{index}: {result:?}");
+            if index == 4 {
                 assert!(
                     result
                         .errors
