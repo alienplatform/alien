@@ -32,7 +32,7 @@ async fn vault_refresh_rotates_keys_and_bounds_last_good_config() {
     let config = |pair: &KeyPair| {
         json!({"listen":"127.0.0.1:3128","admin":"127.0.0.1:3129",
         "audiences":["p/r"],"keys":[{"kid":"current","publicKey":STANDARD.encode(pair.pk.as_ref())}],
-        "deniedRanges":["10.244.0.0/16"]})
+        "deniedRanges":["10.244.0.0/16"],"policyMemoryBytes":67108864})
     };
     let sign = |pair: &KeyPair| {
         let input = format!(
@@ -46,7 +46,7 @@ async fn vault_refresh_rotates_keys_and_bounds_last_good_config() {
             URL_SAFE_NO_PAD.encode(pair.sk.sign(input.as_bytes(), None).as_ref())
         )
     };
-    // No signing-key entry exists: the gateway must only read the public config entry.
+    // No signing-key entry exists: the gateway must only read the gateway config entry.
     assert!(runtime::read_vault_config(&bindings).await.is_err());
     vault
         .set_secret("sandbox-egress-gateway-config", &config(&first).to_string())
@@ -108,6 +108,19 @@ async fn vault_refresh_rotates_keys_and_bounds_last_good_config() {
     assert!(live.snapshot().is_some());
     tokio::time::advance(runtime::MAX_CONFIG_AGE).await;
     assert!(live.snapshot().is_none());
+    for (field, value) in [
+        ("policyMemoryBytes", json!(1024)),
+        ("replicaSecret", json!(STANDARD.encode([7u8; 32]))),
+    ] {
+        let mut changed = config(&second);
+        changed[field] = value;
+        vault
+            .set_secret("sandbox-egress-gateway-config", &changed.to_string())
+            .await
+            .unwrap();
+        assert!(live.refresh(&bindings).await.is_err());
+        assert!(live.snapshot().is_none());
+    }
     vault
         .set_secret(
             "sandbox-egress-gateway-config",

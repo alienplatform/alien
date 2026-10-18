@@ -86,7 +86,7 @@ async fn concurrent_signed_versions_never_regress_and_recovery_only_fills_absenc
     let restarted = PolicyStore::new(false, 512 * 1024 * 1024);
     assert!(!restarted.ready());
     for entry in store.newer_than(&[]).unwrap() {
-        restarted.apply(entry, false).unwrap();
+        restarted.apply(entry.as_ref().clone(), false).unwrap();
     }
     restarted.set_ready();
     assert!(restarted.ready());
@@ -220,7 +220,8 @@ async fn bounded_snapshot_pages_restore_every_large_signed_policy() {
         pages += 1;
         for entry in page {
             let keys = record(1, Some(Policy::Internet)).1;
-            let verified = Record::verify(entry.signed, &keys, &["p/r".into()], 1000).unwrap();
+            let verified =
+                Record::verify(entry.signed.clone(), &keys, &["p/r".into()], 1000).unwrap();
             restored.apply(verified, false).unwrap();
         }
     }
@@ -235,4 +236,28 @@ async fn bounded_snapshot_pages_restore_every_large_signed_policy() {
             policy
         );
     }
+}
+
+#[test]
+fn cgroup_budget_requires_a_finite_limit_and_rejects_records_past_half_of_it() {
+    use alien_egress_gateway::memory::policy_budget;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("memory.max");
+    assert!(policy_budget(None, &path).is_err());
+    std::fs::write(&path, "max\n").unwrap();
+    assert!(policy_budget(None, &path).is_err());
+    assert_eq!(policy_budget(Some(1024), &path).unwrap(), 1024);
+    assert!(policy_budget(Some(0), &path).is_err());
+    std::fs::write(&path, "1024\n").unwrap();
+    let budget = policy_budget(None, &path).unwrap();
+    assert_eq!(budget, 512);
+    let store = PolicyStore::new(true, budget);
+    assert_eq!(
+        store
+            .apply(record(1, Some(Policy::Internet)).0, false)
+            .unwrap_err()
+            .code,
+        "SANDBOX_EGRESS_POLICY_STORE_FULL"
+    );
+    assert!(store.record("p/r", "box").unwrap().is_none());
 }

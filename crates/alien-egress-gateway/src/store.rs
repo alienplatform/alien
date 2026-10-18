@@ -17,7 +17,7 @@ type Identity = (String, String);
 const SNAPSHOT_PAGE_BYTES: usize = 8 * 1024 * 1024;
 
 struct Stored {
-    record: Record,
+    record: Arc<Record>,
     policy: Option<Arc<Policy>>,
     bytes: usize,
     expires: Option<tokio::time::Instant>,
@@ -66,7 +66,7 @@ impl PolicyStore {
             .get(&(aud.to_string(), sub.to_string()))
             .map(|entry| entry.record.claims.ver.clone()))
     }
-    pub fn record(&self, aud: &str, sub: &str) -> Result<Option<Record>> {
+    pub fn record(&self, aud: &str, sub: &str) -> Result<Option<Arc<Record>>> {
         Ok(self
             .state
             .read()
@@ -89,7 +89,7 @@ impl PolicyStore {
             })
             .collect())
     }
-    pub fn newer_than(&self, versions: &[Summary]) -> Result<Vec<Record>> {
+    pub fn newer_than(&self, versions: &[Summary]) -> Result<Vec<Arc<Record>>> {
         let mut page_bytes = 0;
         let known: BTreeMap<_, _> = versions
             .iter()
@@ -194,7 +194,7 @@ impl PolicyStore {
                     tokio::time::Instant::now()
                         + std::time::Duration::from_millis(TOMBSTONE_RETENTION_MS)
                 }),
-                record,
+                record: Arc::new(record),
                 bytes,
             },
         );

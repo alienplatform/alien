@@ -14,7 +14,7 @@ window can delay key or range revocation; policy reads never use stale fallback.
 The gateway reads only this entry; it never reads `sandbox-egress-signing-key`.
 Its service account needs read access to the config entry, which includes public
 verification keys and the gateway-only replica secret. Other workloads must not
-read this entry. Listener, replica-secret and discovery changes require a restart.
+read this entry. Listener, replica-secret, discovery and memory-budget changes require a restart.
 Keep old public verification keys until all records signed by them have been
 replaced or retired; retained records have no expiry.
 
@@ -27,7 +27,6 @@ periodic refresh. The config is:
   "admin": "0.0.0.0:3129",
   "peers": {"dns": "sandbox-egress-gateway.svc", "port": 3129},
   "replicaSecret": "BASE64_GATEWAY_ONLY_32_BYTE_SECRET",
-  "policyMemoryBytes": 536870912,
   "audiences": ["deployment/box"],
   "defaultPolicies": {},
   "keys": [{"kid": "current", "publicKey": "BASE64_RAW_ED25519_PUBLIC_KEY"}],
@@ -38,7 +37,11 @@ periodic refresh. The config is:
 
 The image runs as UID/GID 65532, needs no capabilities, and supports a read-only
 root filesystem. No policy KV, writable volume or policy-store permission is
-required. A config-file path is also accepted as a static override in the first
+required. Policy storage uses half the finite cgroup v2 `memory.max` limit; a
+1 GiB container therefore has a 512 MiB record budget. Set `policyMemoryBytes`
+explicitly when no finite cgroup limit is available; otherwise startup fails.
+Snapshots stream signed records in bounded pages without duplicating the store.
+A config-file path is also accepted as a static override in the first
 argument. `admin` defaults to 3129. Features select vault providers: `aws`, `cloud`
 (AWS, GCP, Azure and Kubernetes), and `local`. Omit `peers` for a single local
 replica. See [the replication protocol](REPLICATION.md) for static peers and wire
@@ -64,7 +67,9 @@ new replica unready. Version summaries repair missed writes every thirty seconds
 Missing policy always denies. Total replica loss also loses deletion/version
 history: agents can restore their saved signed record only while the entry is
 absent. An old signed record can be replayed during that absence; replication does
-not provide durable recovery of a newer restriction after total state loss.
+not provide durable recovery of a newer restriction after total state loss. If an
+older record fills the entry first, a newer management write is required to
+replace it; the agent poll does not bound this replay window.
 
 Each replica rechecks active identities every 30 seconds and closes tunnels whose
 destination is no longer allowed, including after deletion or a store failure.

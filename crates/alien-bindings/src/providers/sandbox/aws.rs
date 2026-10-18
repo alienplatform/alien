@@ -147,7 +147,7 @@ impl AwsSandbox {
         let request = self
             .authorized_request(sandbox_id, reqwest::Method::PUT, "/v1/egress")
             .await?
-            .json(&serde_json::json!({"token": delivery.token}))
+            .json(&serde_json::json!({"token": delivery.token,"policy":delivery.policy}))
             .timeout(SANDBOX_READY_TIMEOUT);
         loop {
             let mut response = request
@@ -194,16 +194,14 @@ impl AwsSandbox {
         let status = response.status();
         tokio::time::timeout(SANDBOX_READY_TIMEOUT, async {
             let mut body = Vec::new();
-            while let Some(chunk) = response
-                .chunk()
-                .await
-                .into_alien_error()
-                .context(ErrorData::SandboxUnreachable {
-                operation: "sandbox.egress".into(),
-                reason: format!(
+            while let Some(chunk) = response.chunk().await.into_alien_error().context(
+                ErrorData::SandboxUnreachable {
+                    operation: "sandbox.egress".into(),
+                    reason: format!(
                     "agent refused identity with HTTP {status}; response body could not be read"
                 ),
-            })? {
+                },
+            )? {
                 if body.len() + chunk.len() > 4096 {
                     return Ok("agent refusal body exceeded 4096 bytes".to_string());
                 }
@@ -755,16 +753,8 @@ impl Sandbox for AwsSandbox {
         refuse_unsupported_create_fields(&request, "sandbox.getOrCreate")?;
         if let Some(id) = request.sandbox_id.as_deref() {
             if let Some(existing) = self.fetch(id, "sandbox.getOrCreate").await? {
-                if self.egress_manager.is_some() {
-                    self.update_egress(
-                        id,
-                        request
-                            .egress
-                            .clone()
-                            .or_else(|| self.default_policy.clone())
-                            .unwrap_or(alien_core::EgressPolicy::Internet),
-                    )
-                    .await?;
+                if let Some(policy) = request.egress.clone() {
+                    self.update_egress(id, policy).await?;
                 }
                 // Reaching a sandbox someone else started still has to mean what `create` means,
                 // or the guarantee holds only for whoever won the race. Waited for here rather

@@ -152,7 +152,6 @@ pub async fn serve(
                     Err(error) => { tracing::warn!(%error, "proxy accept failed; retrying"); tokio::time::sleep(Duration::from_millis(100)).await; continue; }
                 };
                 let Some(gateway) = live.snapshot() else { drop(stream); continue; };
-                if !gateway.policies.ready() { drop(stream); continue; }
                 gateway.accepted.fetch_add(1, Ordering::Relaxed);
                 let admission = registry.source(peer.ip()).and_then(|source| {
                     limit.clone().try_acquire_owned().map(|permit| (source, permit)).map_err(|_| crate::connections::capacity())
@@ -254,6 +253,12 @@ async fn proxy(
         .await
         .into_alien_error()
         .context(unavailable("request header timeout"))??;
+    if !gateway.policies.ready() {
+        refuse(stream, false).await?;
+        return Err(alien_error::AlienError::new(unavailable(
+            "replica snapshot pending",
+        )));
+    }
     let checked = inspect_head(&input);
     let (target, bearer, connect, head_len) = match checked {
         Ok(head) => head,

@@ -28,7 +28,9 @@ tracing-subscriber = { workspace = true, features = ["json", "env-filter"] }
 url = { workspace = true }
 hickory-resolver = { workspace = true }
 hmac = { workspace = true }
-reqwest = { workspace = true, features = ["json"] }
+futures-util = { workspace = true }
+tokio-util = { workspace = true, features = ["io-util"] }
+reqwest = { workspace = true, features = ["json", "stream"] }
 httparse = "1.10"
 ipnet = { version = "2.12", features = ["serde"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
