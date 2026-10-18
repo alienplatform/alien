@@ -668,11 +668,8 @@ impl Sandbox {
             );
             env.insert(
                 "ALIEN_SANDBOX_EGRESS".to_string(),
-                match (&self.egress, &self.default_policy) {
-                    (SandboxEgress::Internet, Some(policy)) => serde_json::to_string(policy),
-                    _ => serde_json::to_string(&self.egress),
-                }
-                .expect("egress serializes"),
+                // A runtime default is mutable gateway policy, never a startup allowlist.
+                serde_json::to_string(&self.egress).expect("egress serializes"),
             );
         }
         env

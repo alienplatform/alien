@@ -227,3 +227,53 @@ pub fn install(policy: &StartupEgressPolicy, command_uid: u32) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_core::{
+        EgressPolicy, Platform, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy,
+        SandboxPrivilegedSupervisor,
+    };
+
+    #[test]
+    fn runtime_defaults_do_not_become_the_startup_network_floor() {
+        let mut sandbox = Sandbox::new("box".into())
+            .code(SandboxCode::Image {
+                image: "ubuntu".into(),
+            })
+            .egress(SandboxEgress::Internet)
+            .lifecycle(SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build();
+        sandbox.privileged_supervisor = Some(SandboxPrivilegedSupervisor { command_uid: 60001 });
+        for target in [
+            "*.example.com",
+            "8.8.8.0/24",
+            "bücher.de",
+            "api.example.com:8443",
+        ] {
+            sandbox.default_policy = Some(EgressPolicy::Allow {
+                allow: vec![target.into()],
+            });
+            sandbox.validate_for_platform(Platform::Aws).unwrap();
+            let env = sandbox.supervisor_environment();
+            let policy: StartupEgressPolicy =
+                serde_json::from_str(&env["ALIEN_SANDBOX_EGRESS"]).unwrap();
+            destinations(&policy)
+                .expect("accepted runtime targets must not stop legacy agent startup");
+            assert!(
+                matches!(policy, StartupEgressPolicy::Internet),
+                "a runtime default must not become a permanent startup allowlist"
+            );
+        }
+        sandbox.default_policy = None;
+        sandbox.egress = SandboxEgress::None;
+        let env = sandbox.supervisor_environment();
+        let policy: StartupEgressPolicy =
+            serde_json::from_str(&env["ALIEN_SANDBOX_EGRESS"]).unwrap();
+        assert!(matches!(policy, StartupEgressPolicy::None));
+    }
+}
