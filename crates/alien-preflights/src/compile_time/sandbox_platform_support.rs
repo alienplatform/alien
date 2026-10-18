@@ -7,7 +7,7 @@
 
 use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
-use alien_core::{Platform, Sandbox, Stack};
+use alien_core::{Container, Platform, Sandbox, SandboxEgress, Stack};
 
 /// Ensures every Sandbox can be delivered by the platform it targets.
 pub struct SandboxPlatformSupportCheck;
@@ -25,7 +25,7 @@ impl CompileTimeCheck for SandboxPlatformSupportCheck {
     }
 
     async fn check(&self, stack: &Stack, platform: Platform) -> Result<CheckResult> {
-        let errors: Vec<String> = stack
+        let mut errors: Vec<String> = stack
             .resources()
             .filter_map(|(_, entry)| entry.config.downcast_ref::<Sandbox>())
             .filter_map(|sandbox| {
@@ -39,8 +39,46 @@ impl CompileTimeCheck for SandboxPlatformSupportCheck {
             })
             .collect();
 
+        let mut warnings = Vec::new();
+        if platform == Platform::Azure {
+            let gateway_present = stack.resources().any(|(id, entry)| {
+                id == "sandbox-egress-gateway" && entry.config.downcast_ref::<Container>().is_some()
+            });
+            for (_, entry) in stack.resources() {
+                let Some(sandbox) = entry.config.downcast_ref::<Sandbox>() else {
+                    continue;
+                };
+                if sandbox.egress != SandboxEgress::Internet {
+                    continue;
+                }
+                if gateway_present {
+                    errors.push(format!(
+                        "Sandbox '{}': Azure gateway transport and create-time identity are not \
+                         available; gateway-backed egress cannot be deployed",
+                        sandbox.id()
+                    ));
+                } else if sandbox.default_policy.is_some() {
+                    errors.push(format!(
+                        "Sandbox '{}': defaultPolicy requires an egress gateway; \
+                         Azure native fallback cannot enforce per-sandbox policies",
+                        sandbox.id()
+                    ));
+                } else {
+                    warnings.push(format!(
+                        "Sandbox '{}': Azure native fallback has no per-sandbox policy or \
+                         gateway connection logs. Outbound traffic uses the deployment NAT \
+                         where configured",
+                        sandbox.id()
+                    ));
+                }
+            }
+        }
         if errors.is_empty() {
-            Ok(CheckResult::success())
+            Ok(if warnings.is_empty() {
+                CheckResult::success()
+            } else {
+                CheckResult::with_warnings(warnings)
+            })
         } else {
             Ok(CheckResult::failed(errors))
         }
@@ -142,6 +180,75 @@ mod tests {
                 result.errors
             );
         }
+    }
+
+    #[tokio::test]
+    async fn azure_native_fallback_warns_and_refuses_a_default_policy() {
+        let open = sandbox("agent", None, SandboxEgress::Internet);
+        let result = SandboxPlatformSupportCheck
+            .check(&stack_with(open.clone()), Platform::Azure)
+            .await
+            .expect("check runs");
+        assert!(result.success);
+        assert_eq!(result.warnings.len(), 1);
+        assert!(result.warnings[0].contains("no per-sandbox policy"));
+        let mut restricted = open;
+        restricted.default_policy = Some(alien_core::EgressPolicy::Allow {
+            allow: vec!["example.com".into()],
+        });
+        let result = SandboxPlatformSupportCheck
+            .check(&stack_with(restricted), Platform::Azure)
+            .await
+            .expect("check runs");
+        assert!(!result.success);
+        assert!(result.errors[0].contains("defaultPolicy requires"));
+        let result = SandboxPlatformSupportCheck
+            .check(
+                &stack_with(sandbox("closed", None, SandboxEgress::None)),
+                Platform::Azure,
+            )
+            .await
+            .expect("check runs");
+        assert!(result.success);
+        assert!(result.warnings.is_empty());
+    }
+
+    #[tokio::test]
+    async fn azure_gateway_deployment_is_refused_before_cloud_changes() {
+        let stack = Stack::new("private-egress".into())
+            .add(
+                sandbox("agent", None, SandboxEgress::Internet),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Container::new("sandbox-egress-gateway".into())
+                    .code(alien_core::ContainerCode::Image {
+                        image: "gateway:test".into(),
+                    })
+                    .cpu(alien_core::ResourceSpec {
+                        min: "0.5".into(),
+                        desired: "0.5".into(),
+                    })
+                    .memory(alien_core::ResourceSpec {
+                        min: "512Mi".into(),
+                        desired: "512Mi".into(),
+                    })
+                    .port(3128)
+                    .permissions("gateway".into())
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        let result = SandboxPlatformSupportCheck
+            .check(&stack, Platform::Azure)
+            .await
+            .expect("check runs");
+        assert!(!result.success);
+        assert!(result
+            .errors
+            .iter()
+            .any(|error| error.contains("gateway transport and create-time identity")));
+        assert!(result.warnings.is_empty());
     }
 
     #[tokio::test]
