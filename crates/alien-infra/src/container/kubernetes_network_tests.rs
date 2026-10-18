@@ -99,16 +99,14 @@ fn missing_sources_deny_ingress_and_foreign_deployments_cannot_own_policy() {
     let harness = KubernetesManifestTestHarness::new(Resource::new(target.clone()), vec![]);
     let ctx = harness.ctx();
     let mut policy = build_policy(&target, "target", "test-ns", &ctx);
-    assert!(
-        policy
-            .spec
-            .as_ref()
-            .unwrap()
-            .ingress
-            .as_ref()
-            .unwrap()
-            .is_empty()
-    );
+    assert!(policy
+        .spec
+        .as_ref()
+        .unwrap()
+        .ingress
+        .as_ref()
+        .unwrap()
+        .is_empty());
     require_owner(&policy, &ctx, &target.id).unwrap();
     policy
         .metadata
@@ -127,10 +125,31 @@ async fn live_policy_client_round_trip() {
     use alien_core::{ClientConfig, KubernetesClientConfig};
     let path = std::env::var("ALIEN_TEST_KUBECONFIG").expect("explicit test kubeconfig");
     let target = container("target", "primary");
-    let stack = source_stack(&target);
+    let mut stack = source_stack(&target);
+    // Optional public-address fixtures let the traffic probe distinguish these
+    // deployment exclusions from the built-in private/reserved-address floor.
+    if let Ok(cidr) = std::env::var("ALIEN_TEST_CONTAINER_OVERLAY_CIDR") {
+        let overlay = ComputeCluster::new("probe-overlay".into())
+            .container_cidr(cidr)
+            .build();
+        stack.resources.extend(
+            Stack::new("probe".into())
+                .add(overlay, ResourceLifecycle::Frozen)
+                .build()
+                .resources,
+        );
+    }
     let harness = KubernetesManifestTestHarness::new(Resource::new(target.clone()), vec![]);
     let mut ctx = harness.ctx();
     ctx.desired_stack = &stack;
+    let mut deployment_config = ctx.deployment_config.clone();
+    if let Ok(cidr) = std::env::var("ALIEN_TEST_DEPLOYMENT_CIDR") {
+        deployment_config.stack_settings.network = Some(alien_core::NetworkSettings::Create {
+            cidr: Some(cidr),
+            availability_zones: 1,
+        });
+    }
+    ctx.deployment_config = &deployment_config;
     ctx.client_config = ClientConfig::Kubernetes(Box::new(KubernetesClientConfig::Kubeconfig {
         kubeconfig_path: Some(path),
         context: None,

@@ -6,7 +6,7 @@ use crate::core::{
 };
 use crate::error::{ErrorData, Result};
 use alien_client_core::ErrorData as ClientError;
-use alien_core::{Container, Daemon, Stack};
+use alien_core::{ComputeCluster, Container, Daemon, Stack};
 use alien_error::{AlienError, Context, ContextError};
 use k8s_openapi::api::networking::v1::{
     IPBlock, NetworkPolicy, NetworkPolicyEgressRule, NetworkPolicyIngressRule, NetworkPolicyPeer,
@@ -251,6 +251,16 @@ impl KubernetesContainerController {
             {
                 if !cidr.contains(':') {
                     excluded.insert(cidr.clone());
+                }
+            }
+            // Compute overlays are internal even when their configured addresses
+            // are public or no Kubernetes node has been allocated in them yet.
+            for (_, entry) in ctx.desired_stack.resources() {
+                if let Some(cluster) = entry.config.downcast_ref::<ComputeCluster>() {
+                    let cidr = cluster.container_cidr();
+                    if !cidr.contains(':') {
+                        excluded.insert(cidr.to_string());
+                    }
                 }
             }
             if let Some(block) = desired
