@@ -49,6 +49,7 @@ impl ResourceImporter for AwsRemoteStackManagementImporter {
                 .installed_management_grants
                 .filter(|_| data.management_permissions_applied),
             worker_gateway_cleanup_function_arn: data.worker_gateway_cleanup_function_arn,
+            gateway_setup: None,
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)

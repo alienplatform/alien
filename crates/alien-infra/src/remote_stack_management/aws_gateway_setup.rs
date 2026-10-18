@@ -418,15 +418,7 @@ struct Boundary {
 impl Boundary {
     fn new(ctx: &ResourceControllerContext<'_>, generation: &str) -> Result<Self> {
         let resource = ctx.desired_resource_config::<RemoteStackManagement>()?;
-        if ctx.initial_setup_authority != InitialSetupAuthority::DirectSetup
-            || !ctx.desired_stack.resources().any(|(id, entry)| {
-                id == &resource.id && entry.lifecycle == ResourceLifecycle::Frozen
-            })
-        {
-            return Err(AlienError::new(ErrorData::SetupRequired {
-                message: "Gateway retirement capability requires administrator setup of frozen management".into(), resource_id: Some(resource.id.clone()),
-            }));
-        }
+        ensure_setup_authority(ctx)?;
         let mut tags: HashMap<_, _> =
             setup_resource_tags(ctx.resource_prefix, &resource.id, "remote-stack-management")
                 .into_iter()
@@ -509,4 +501,28 @@ impl Boundary {
         }
         Ok(())
     }
+}
+
+pub(super) fn ensure_setup_authority(ctx: &ResourceControllerContext<'_>) -> Result<()> {
+    let resource = ctx.desired_resource_config::<RemoteStackManagement>()?;
+    let frozen = ctx
+        .desired_stack
+        .resources()
+        .find(|(id, _)| *id == &resource.id)
+        .map(|(_, entry)| entry.lifecycle == ResourceLifecycle::Frozen)
+        .unwrap_or_else(|| {
+            ctx.state
+                .resources
+                .get(&resource.id)
+                .is_some_and(|entry| entry.lifecycle == Some(ResourceLifecycle::Frozen))
+        });
+    if ctx.initial_setup_authority != InitialSetupAuthority::DirectSetup || !frozen {
+        return Err(AlienError::new(ErrorData::SetupRequired {
+            message:
+                "Gateway retirement capability requires administrator setup of frozen management"
+                    .into(),
+            resource_id: Some(resource.id.clone()),
+        }));
+    }
+    Ok(())
 }

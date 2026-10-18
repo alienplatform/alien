@@ -49,6 +49,9 @@ pub struct AwsRemoteStackManagementController {
     /// Setup-owned, immutable task retirement capability; never created by runtime refresh.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) worker_gateway_cleanup_function_arn: Option<String>,
+    /// Direct setup ownership is absent on externally managed setup imports.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) gateway_setup: Option<super::aws_gateway_setup::GatewaySetup>,
 }
 
 #[controller]
@@ -65,6 +68,9 @@ impl AwsRemoteStackManagementController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
+        if requires_gateway_cleanup(ctx) {
+            super::aws_gateway_setup::ensure_setup_authority(ctx)?;
+        }
         let config = ctx.desired_resource_config::<RemoteStackManagement>()?;
         let aws_config = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
@@ -181,6 +187,14 @@ impl AwsRemoteStackManagementController {
         self.management_permissions_revision = super::management_permissions_revision(ctx)?;
         self.installed_management_grants = super::management_grant_revisions(ctx)?;
 
+        if requires_gateway_cleanup(ctx) {
+            self.gateway_setup
+                .get_or_insert_with(super::aws_gateway_setup::GatewaySetup::new);
+            return Ok(HandlerAction::Continue {
+                state: CreatingGatewaySetup,
+                suggested_delay: None,
+            });
+        }
         Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: None,
@@ -242,6 +256,10 @@ impl AwsRemoteStackManagementController {
         status = ResourceStatus::Updating,
     )]
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+        if requires_gateway_cleanup(ctx) || self.gateway_setup.is_some() {
+            super::aws_gateway_setup::ensure_setup_authority(ctx)?;
+        }
+
         let aws_config = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
         let role_name = self.role_name.as_ref().unwrap();
@@ -273,10 +291,64 @@ impl AwsRemoteStackManagementController {
         self.management_permissions_revision = super::management_permissions_revision(ctx)?;
         self.installed_management_grants = super::management_grant_revisions(ctx)?;
 
+        if requires_gateway_cleanup(ctx) || self.gateway_setup.is_some() {
+            self.gateway_setup
+                .get_or_insert_with(super::aws_gateway_setup::GatewaySetup::new);
+            return Ok(HandlerAction::Continue {
+                state: UpdatingGatewaySetup,
+                suggested_delay: None,
+            });
+        }
         Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: None,
         })
+    }
+
+    #[handler(state = CreatingGatewaySetup, on_failure = CreateFailed, status = ResourceStatus::Provisioning)]
+    async fn creating_gateway_setup(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let ready = self.advance_gateway_setup(ctx).await?;
+        Ok(HandlerAction::Continue {
+            state: if ready { Ready } else { CreatingGatewaySetup },
+            suggested_delay: (!ready).then_some(Duration::from_secs(2)),
+        })
+    }
+
+    #[handler(state = UpdatingGatewaySetup, on_failure = UpdateFailed, status = ResourceStatus::Updating)]
+    async fn updating_gateway_setup(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let ready = self.advance_gateway_setup(ctx).await?;
+        Ok(HandlerAction::Continue {
+            state: if ready { Ready } else { UpdatingGatewaySetup },
+            suggested_delay: (!ready).then_some(Duration::from_secs(2)),
+        })
+    }
+
+    async fn advance_gateway_setup(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        let setup = self.gateway_setup.as_mut().ok_or_else(|| {
+            AlienError::new(ErrorData::InfrastructureError {
+                message: "Missing gateway setup ownership intent".into(),
+                operation: Some("setup_gateway_retirement".into()),
+                resource_id: None,
+            })
+        })?;
+        let role = self.role_name.as_deref().ok_or_else(|| {
+            AlienError::new(ErrorData::InfrastructureError {
+                message: "Missing management role receipt".into(),
+                operation: Some("setup_gateway_retirement".into()),
+                resource_id: None,
+            })
+        })?;
+        if !setup.advance(ctx, role).await? {
+            return Ok(false);
+        }
+        self.worker_gateway_cleanup_function_arn = setup.published_arn().map(str::to_string);
+        Ok(true)
     }
 
     // ─────────────── DELETE FLOW ──────────────────────────────
@@ -288,6 +360,21 @@ impl AwsRemoteStackManagementController {
         status = ResourceStatus::Deleting,
     )]
     async fn delete_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+        if let Some(setup) = self.gateway_setup.as_mut() {
+            if !setup.delete_step(ctx).await? {
+                return Ok(HandlerAction::Continue {
+                    state: DeleteStart,
+                    suggested_delay: Some(Duration::from_secs(2)),
+                });
+            }
+            self.gateway_setup = None;
+            self.worker_gateway_cleanup_function_arn = None;
+            return Ok(HandlerAction::Continue {
+                state: DeleteStart,
+                suggested_delay: None,
+            });
+        }
+
         let role_name = match &self.role_name {
             Some(name) => name,
             None => {
@@ -496,6 +583,17 @@ impl AwsRemoteStackManagementController {
     );
 
     fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        if ctx.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
+            && ctx.deployment_config.setup_run
+            && (requires_gateway_cleanup(ctx) || self.gateway_setup.is_some())
+            && !self
+                .gateway_setup
+                .as_ref()
+                .is_some_and(|setup| setup.is_current())
+        {
+            return Ok(true);
+        }
+
         super::management_permissions_need_refresh(
             ctx,
             self.management_permissions_revision.as_deref(),
@@ -507,13 +605,25 @@ impl AwsRemoteStackManagementController {
             Some(ResourceOutputs::new(RemoteStackManagementOutputs {
                 management_resource_id: role_arn.clone(),
                 access_configuration: role_arn.clone(),
-                aws_worker_gateway_cleanup_function_arn: self.worker_gateway_cleanup_function_arn.clone(),
+                aws_worker_gateway_cleanup_function_arn: self
+                    .worker_gateway_cleanup_function_arn
+                    .clone(),
                 legacy_remote_bindings_access: None,
             }))
         } else {
             None
         }
     }
+}
+
+fn requires_gateway_cleanup(ctx: &ResourceControllerContext<'_>) -> bool {
+    !ctx.desired_stack
+        .resources()
+        .any(|(_, entry)| entry.config.downcast_ref::<KubernetesCluster>().is_some())
+        && ctx.desired_stack.resources().any(|(_, entry)| {
+            entry.lifecycle == ResourceLifecycle::Live
+                && entry.config.downcast_ref::<Worker>().is_some()
+        })
 }
 
 fn emit_aws_remote_stack_management_heartbeat(
@@ -1143,7 +1253,9 @@ fn is_remote_conflict(error: &alien_error::AlienError<alien_client_core::ErrorDa
     )
 }
 
-pub(super) fn is_remote_not_found(error: &alien_error::AlienError<alien_client_core::ErrorData>) -> bool {
+pub(super) fn is_remote_not_found(
+    error: &alien_error::AlienError<alien_client_core::ErrorData>,
+) -> bool {
     matches!(
         error.error,
         Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
