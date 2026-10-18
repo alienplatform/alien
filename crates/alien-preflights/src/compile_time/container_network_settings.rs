@@ -108,6 +108,71 @@ impl CompileTimeCheck for ContainerNetworkSettingsCheck {
     }
 }
 
+/// Private cloud listeners keep their identity across ordinary workload updates.
+/// A replacement is explicit when their immutable port/cluster placement changes.
+#[async_trait::async_trait]
+impl crate::StackCompatibilityCheck for ContainerNetworkSettingsCheck {
+    fn code(&self) -> Option<&'static str> {
+        Some("CONTAINER_PRIVATE_NETWORK_REPLACEMENT_REQUIRED")
+    }
+    fn description(&self) -> &'static str {
+        "Existing linked container listeners keep their ports and compute cluster"
+    }
+    async fn check(&self, old_stack: &Stack, new_stack: &Stack) -> Result<CheckResult> {
+        let mut errors = Vec::new();
+        for (id, old) in old_stack.resources() {
+            let Some(old) = old.config.downcast_ref::<Container>() else {
+                continue;
+            };
+            if old.ports.is_empty()
+                || !old_stack.container_linkers(id).iter().any(|link| {
+                    link.resource_type == Worker::RESOURCE_TYPE
+                        || link.resource_type == Sandbox::RESOURCE_TYPE
+                })
+            {
+                continue;
+            }
+            let Some(new) = new_stack
+                .resources
+                .get(id)
+                .and_then(|entry| entry.config.downcast_ref::<Container>())
+            else {
+                continue;
+            };
+            let ports = |container: &Container| {
+                container
+                    .ports
+                    .iter()
+                    .map(|port| port.port)
+                    .collect::<std::collections::BTreeSet<_>>()
+            };
+            if ports(old) != ports(new) || old.cluster != new.cluster {
+                errors.push(format!("CONTAINER_PRIVATE_NETWORK_REPLACEMENT_REQUIRED: Container '{id}' has private cloud listeners; changing its ports or compute cluster requires replacing the container resource"));
+            }
+        }
+        Ok(if errors.is_empty() {
+            CheckResult::success()
+        } else {
+            CheckResult::failed(errors)
+        })
+    }
+    async fn check_with_config(
+        &self,
+        old_stack: &Stack,
+        new_stack: &Stack,
+        config: &alien_core::DeploymentConfig,
+    ) -> Result<CheckResult> {
+        if matches!(
+            config.compute_backend,
+            Some(alien_core::ComputeBackend::Horizon(_))
+        ) {
+            crate::StackCompatibilityCheck::check(self, old_stack, new_stack).await
+        } else {
+            Ok(CheckResult::success())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -182,6 +247,38 @@ mod tests {
                 remote_access: false,
                 enabled_when: None,
             },
+        );
+        let previous = stack.clone();
+        let mut changed = stack.clone();
+        changed
+            .resources
+            .get_mut("caller")
+            .unwrap()
+            .config
+            .downcast_mut::<Worker>()
+            .unwrap()
+            .links
+            .clear();
+        assert!(
+            crate::StackCompatibilityCheck::check(&check, &previous, &changed)
+                .await
+                .unwrap()
+                .success
+        );
+        changed
+            .resources
+            .get_mut("api")
+            .unwrap()
+            .config
+            .downcast_mut::<Container>()
+            .unwrap()
+            .ports
+            .push(alien_core::ContainerPort { port: 9090 });
+        assert!(
+            !crate::StackCompatibilityCheck::check(&check, &previous, &changed)
+                .await
+                .unwrap()
+                .success
         );
         for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
             let result = check.check(&stack, platform).await.unwrap();

@@ -437,6 +437,7 @@ impl PreflightRegistry {
         // Add compatibility checks
         registry.add_compatibility_check(Box::new(compatibility::PermissionProfilesUnchangedCheck));
         registry.add_compatibility_check(Box::new(compatibility::SandboxSetupInputsUnchangedCheck));
+        registry.add_compatibility_check(Box::new(compile_time::ContainerNetworkSettingsCheck));
 
         // Add runtime checks
         #[cfg(feature = "runtime-checks")]
