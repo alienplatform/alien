@@ -166,7 +166,7 @@ impl GatewaySetup {
         };
         if let Some(role) = &role {
             boundary.verify_role(role, self.role_id.as_deref())?;
-        } else if !matches!(self.phase, Phase::Role) {
+        } else if self.role_id.is_some() || !matches!(self.phase, Phase::Role) {
             return Err(AlienError::new(
                 boundary.error("Recorded setup helper role is absent"),
             ));
@@ -595,6 +595,48 @@ mod tests {
             .build()
             .await
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn recorded_role_absence_refuses_recreation_after_reload() {
+        let mut setup = GatewaySetup::new();
+        setup.role_id = Some("original-role-id".into());
+        let mut iam = MockIamApi::new();
+        iam.expect_get_role().times(1).returning(|_| {
+            Err(AlienError::new(
+                alien_client_core::ErrorData::RemoteResourceNotFound {
+                    resource_type: "role".into(),
+                    resource_name: "_gateway-cleanup-example".into(),
+                },
+            ))
+        });
+        iam.expect_create_role().times(0);
+        let iam = Arc::new(iam);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        provider.expect_get_aws_lambda_client().times(0);
+        let mut controller = AwsRemoteStackManagementController::mock_ready("example-management");
+        controller.state = AwsRemoteStackManagementState::CreatingGatewaySetup;
+        controller.gateway_setup = Some(setup);
+        let restored = serde_json::from_value(serde_json::to_value(controller).unwrap()).unwrap();
+        let mut runner = executor(restored, Arc::new(provider)).await;
+        let error = runner
+            .step()
+            .await
+            .expect_err("recorded role cannot be recreated");
+        assert!(error
+            .to_string()
+            .contains("Recorded setup helper role is absent"));
+        let state = runner
+            .internal_state::<AwsRemoteStackManagementController>()
+            .unwrap();
+        assert_eq!(
+            state.gateway_setup.as_ref().unwrap().role_id.as_deref(),
+            Some("original-role-id")
+        );
+        assert!(state.worker_gateway_cleanup_function_arn.is_none());
     }
 
     #[tokio::test]
