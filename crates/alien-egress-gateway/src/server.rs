@@ -110,6 +110,13 @@ impl Gateway {
             .context(unavailable("destination timeout"))?
             .into_alien_error()
             .context(unavailable("connect destination"))?;
+        identity.record_peer(
+            stream
+                .peer_addr()
+                .into_alien_error()
+                .context(unavailable("read connected destination"))?
+                .ip(),
+        )?;
         stream
             .set_nodelay(true)
             .into_alien_error()

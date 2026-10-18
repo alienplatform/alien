@@ -2445,6 +2445,37 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "gcp")]
+    #[tokio::test]
+    async fn legacy_gcp_boolean_bindings_load_without_a_gateway() {
+        for allow_egress in [false, true] {
+            let binding = alien_core::SandboxBinding::gcp_agent_platform(
+                "projects/example/locations/us-central1/reasoningEngines/1",
+                "projects/example/locations/us-central1/sandboxEnvironmentTemplates/1",
+                "us-central1",
+                None,
+                allow_egress,
+            );
+            let provider = BindingsProvider::new(
+                alien_core::ClientConfig::Gcp(Box::new(alien_core::GcpClientConfig {
+                    project_id: "example".into(),
+                    region: "us-central1".into(),
+                    credentials: alien_core::GcpCredentials::AccessToken {
+                        token: "test-token".into(),
+                    },
+                    service_overrides: None,
+                    project_number: None,
+                })),
+                HashMap::from([("box".into(), serde_json::to_value(binding).unwrap())]),
+            )
+            .unwrap();
+            provider
+                .load_sandbox("box")
+                .await
+                .expect("legacy boolean binding loads without a gateway");
+        }
+    }
+
     /// The image in the binding has to be the image the provider uses.
     ///
     /// Asserted here because the failure is silent: a sandbox built from the wrong image still

@@ -9,8 +9,7 @@
       "dependencies": [],
       "environment": {
         "ALIEN_SANDBOX_EGRESS": "{\"mode\":\"deny\"}",
-        "ALIEN_SANDBOX_EXEC_GID": "60000",
-        "ALIEN_SANDBOX_EXEC_UID": "60000"
+        "ALIEN_SANDBOX_EXPECTED_EXEC_UID": "60000"
       },
       "setupInputs": [
         [
@@ -75,8 +74,7 @@
       "dependencies": [],
       "environment": {
         "ALIEN_SANDBOX_EGRESS": "{\"mode\":\"allowDomains\",\"domains\":[\"api.example.com\"]}",
-        "ALIEN_SANDBOX_EXEC_GID": "60000",
-        "ALIEN_SANDBOX_EXEC_UID": "60000"
+        "ALIEN_SANDBOX_EXPECTED_EXEC_UID": "60000"
       },
       "setupInputs": [
         [

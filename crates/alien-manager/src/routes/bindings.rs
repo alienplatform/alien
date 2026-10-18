@@ -1966,7 +1966,7 @@ fn remote_sandbox_binding(
             // that is not one. Same reference as the AWS arm for the full contrast.
             if !matches!(
                 binding.egress.declaration(),
-                alien_core::SandboxEgress::Internet
+                alien_core::SandboxEgress::Allow
             ) {
                 return Err(ErrorData::bad_request(format!(
                     "Sandbox resource '{resource_id}' restricts egress; Remote Bindings can only reach a sandbox declared with open egress"
@@ -2000,7 +2000,7 @@ fn remote_sandbox_binding(
                 // Checked immediately above, so this is the checked value rather than a literal.
                 allow_egress: matches!(
                     binding.egress.declaration(),
-                    alien_core::SandboxEgress::Internet
+                    alien_core::SandboxEgress::Allow
                 ),
                 idle_pause_seconds: binding.idle_pause_seconds,
                 cpu: optional(binding.cpu, "Azure sandbox cpu")?,

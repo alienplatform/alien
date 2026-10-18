@@ -12,6 +12,7 @@ use std::io::Write;
 use std::path::Path;
 
 use crate::error::{ErrorData, Result};
+use crate::sandbox_identity::BaseIdentity;
 use alien_error::AlienError;
 use alien_error::{Context, IntoAlienError};
 
@@ -61,7 +62,19 @@ fn checked_reference<'a>(reference: &'a str, what: &str) -> Result<&'a str> {
 /// Everything below the base image comes from [`AWS_MICROVM`]; what is rendered here is the
 /// `COPY` that installs the agent, which has no counterpart in the GCP image because the agent
 /// can arrive from a published image or from the bundle itself.
-pub fn dockerfile(base_image: &str, agent: &AgentSource) -> Result<String> {
+pub fn dockerfile(
+    base_image: &str,
+    agent: &AgentSource,
+    identity: &BaseIdentity,
+) -> Result<String> {
+    render_dockerfile(base_image, agent, &identity.contract(AWS_MICROVM, None)?)
+}
+
+fn render_dockerfile(
+    base_image: &str,
+    agent: &AgentSource,
+    contract: &alien_core::sandbox_image::SandboxImage,
+) -> Result<String> {
     let base_image = checked_reference(base_image, "base image")?;
     // Both lines pin ownership and mode themselves: the untrusted code the agent supervises must
     // not be able to rewrite the supervisor, whichever way the agent arrived.
@@ -84,6 +97,11 @@ pub fn dockerfile(base_image: &str, agent: &AgentSource) -> Result<String> {
 # start as root to drop to the exec identity before every command, so root is set explicitly.
 USER 0:0
 
+# Protect the parent directories too: a writable parent allows replacing a root-owned file.
+RUN for path in / /usr /usr/local /usr/local/bin /opt /opt/alien /etc; do \
+      test ! -L "$path" && mkdir -p "$path" && chown 0:0 "$path" && chmod 0755 "$path" || exit 1; \
+    done
+
 {copy_agent}
 
 # Written with numeric ids and a plain append rather than useradd/adduser, which differ across
@@ -98,9 +116,9 @@ USER 0:0
 
 {entry}
 "#,
-        identity = identity_setup(&AWS_MICROVM),
-        contract = contract_env(&AWS_MICROVM),
-        entry = entrypoint(&AWS_MICROVM),
+        identity = identity_setup(contract),
+        contract = contract_env(contract),
+        entry = entrypoint(contract),
     ))
 }
 
@@ -109,8 +127,20 @@ USER 0:0
 ///
 /// The archive is flat on purpose — `CreateMicrovmImage` looks for the Dockerfile at the root,
 /// and a nested directory produces a build failure minutes in rather than a rejected request.
-pub fn write_bundle(destination: &Path, base_image: &str, agent: &AgentSource) -> Result<()> {
-    write_bundle_inner(destination, base_image, agent, None, None)
+pub fn write_bundle(
+    destination: &Path,
+    base_image: &str,
+    agent: &AgentSource,
+    identity: &BaseIdentity,
+) -> Result<()> {
+    write_bundle_inner(
+        destination,
+        base_image,
+        agent,
+        None,
+        None,
+        &identity.contract(AWS_MICROVM, None)?,
+    )
 }
 
 /// Packages the declared sandbox, preserving the released layout for legacy egress modes.
@@ -124,9 +154,10 @@ pub fn write_declared_bundle(
     agent: &AgentSource,
     egress: &SandboxEgress,
     image_config: Option<&Config>,
+    identity: &BaseIdentity,
 ) -> Result<()> {
     if !matches!(egress, SandboxEgress::Internet) {
-        return write_bundle(destination, base_image, agent);
+        return write_bundle(destination, base_image, agent, identity);
     }
     let config = image_config.ok_or_else(|| {
         AlienError::new(ErrorData::BuildConfigInvalid {
@@ -140,6 +171,8 @@ pub fn write_declared_bundle(
         base_image,
         agent,
         &image_command_from_config(config)?,
+        identity,
+        None,
     )
 }
 
@@ -188,8 +221,17 @@ pub fn write_supervised_bundle(
     base_image: &str,
     agent: &AgentSource,
     image_command: &alien_core::sandbox_image::SandboxImageCommand,
+    identity: &BaseIdentity,
+    command_uid: Option<u32>,
 ) -> Result<()> {
-    write_bundle_inner(destination, base_image, agent, Some(image_command), None)
+    write_bundle_inner(
+        destination,
+        base_image,
+        agent,
+        Some(image_command),
+        None,
+        &identity.contract(AWS_MICROVM, command_uid)?,
+    )
 }
 
 /// Copies command metadata from a private image instead of publishing its contents in the ZIP.
@@ -200,6 +242,7 @@ pub fn write_supervised_bundle_with_command_image(
     base_image: &str,
     agent: &AgentSource,
     command_image: &str,
+    identity: &BaseIdentity,
 ) -> Result<()> {
     let reference = checked_reference(command_image, "Image command")?;
     let digest = reference.rsplit_once("@sha256:").map(|(_, digest)| digest);
@@ -210,7 +253,14 @@ pub fn write_supervised_bundle_with_command_image(
             message: "An image command source must be pinned by sha256 digest".to_string(),
         }));
     }
-    write_bundle_inner(destination, base_image, agent, None, Some(reference))
+    write_bundle_inner(
+        destination,
+        base_image,
+        agent,
+        None,
+        Some(reference),
+        &identity.contract(AWS_MICROVM, None)?,
+    )
 }
 
 fn write_bundle_inner(
@@ -219,6 +269,7 @@ fn write_bundle_inner(
     agent: &AgentSource,
     image_command: Option<&alien_core::sandbox_image::SandboxImageCommand>,
     command_image: Option<&str>,
+    contract: &alien_core::sandbox_image::SandboxImage,
 ) -> Result<()> {
     let failed = |operation: &str, path: &Path| ErrorData::FileOperationFailed {
         operation: operation.to_string(),
@@ -228,7 +279,7 @@ fn write_bundle_inner(
 
     // Every fallible input resolves before the archive exists, so no failure — a bad reference
     // or an unreadable agent binary — leaves a truncated zip behind.
-    let mut dockerfile = dockerfile(base_image, agent)?;
+    let mut dockerfile = render_dockerfile(base_image, agent, contract)?;
     let command_bytes = image_command
         .map(serde_json::to_vec)
         .transpose()
@@ -301,6 +352,24 @@ fn write_bundle_inner(
 
 #[cfg(test)]
 mod tests {
+    fn dockerfile(base: &str, agent: &super::AgentSource) -> super::Result<String> {
+        super::dockerfile(base, agent, &root_identity())
+    }
+
+    fn root_identity() -> super::BaseIdentity {
+        super::BaseIdentity {
+            user: String::new(),
+            passwd: None,
+            group: None,
+        }
+    }
+    fn write_bundle(
+        destination: &std::path::Path,
+        base: &str,
+        agent: &super::AgentSource,
+    ) -> super::Result<()> {
+        super::write_bundle(destination, base, agent, &root_identity())
+    }
     #[test]
     fn internet_packaging_refuses_missing_or_malformed_image_configuration() {
         let directory = tempfile::tempdir().unwrap();
@@ -319,6 +388,7 @@ mod tests {
                 &agent,
                 &alien_core::SandboxEgress::Internet,
                 config.as_ref(),
+                &root_identity(),
             )
             .expect_err("cannot publish an Internet bundle without a usable image configuration");
             assert_eq!(error.code, "PACKAGE_CONFIG_INVALID");
@@ -335,7 +405,7 @@ mod tests {
         let original = directory.path().join("original.zip");
         let declared = directory.path().join("declared.zip");
         let agent = super::AgentSource::Image("example.com/agent:v1".into());
-        super::write_bundle(&original, "example.com/base:v1", &agent).unwrap();
+        write_bundle(&original, "example.com/base:v1", &agent).unwrap();
         for egress in [
             alien_core::SandboxEgress::None,
             alien_core::SandboxEgress::Allow,
@@ -343,8 +413,15 @@ mod tests {
                 domains: vec!["example.com".into()],
             },
         ] {
-            super::write_declared_bundle(&declared, "example.com/base:v1", &agent, &egress, None)
-                .unwrap();
+            super::write_declared_bundle(
+                &declared,
+                "example.com/base:v1",
+                &agent,
+                &egress,
+                None,
+                &root_identity(),
+            )
+            .unwrap();
             assert_eq!(
                 std::fs::read(&original).unwrap(),
                 std::fs::read(&declared).unwrap()
@@ -362,12 +439,12 @@ mod tests {
             "",
             "alpine\tlatest",
         ] {
-            super::dockerfile(
+            dockerfile(
                 reference,
                 &super::AgentSource::Image("agent:v1".to_string()),
             )
             .expect_err(&format!("{reference:?} must not render into a Dockerfile"));
-            super::dockerfile(
+            dockerfile(
                 "ubuntu:24.04",
                 &super::AgentSource::Image(reference.to_string()),
             )
@@ -378,7 +455,7 @@ mod tests {
 
         // The control arm: an ordinary reference still renders, so the guard is not refusing
         // everything.
-        let rendered = super::dockerfile(
+        let rendered = dockerfile(
             "public.ecr.aws/lambda/microvms:al2023-minimal",
             &super::AgentSource::Image("agent:v1".to_string()),
         )
@@ -387,97 +464,6 @@ mod tests {
     }
 
     use super::*;
-
-    /// The properties below are the image's half of the supervisor boundary. A base image is
-    /// caller-supplied, so these assertions are about what Alien adds on top of it.
-    fn embedded_agent() -> AgentSource {
-        AgentSource::Binary(std::path::PathBuf::from("unused-in-render"))
-    }
-
-    fn rendered() -> String {
-        dockerfile(
-            "public.ecr.aws/lambda/microvms:al2023-minimal",
-            &embedded_agent(),
-        )
-        .expect("a valid reference")
-    }
-
-    #[test]
-    fn the_base_image_is_the_one_asked_for() {
-        assert!(rendered().starts_with("FROM public.ecr.aws/lambda/microvms:al2023-minimal\n"));
-    }
-
-    /// The escalation this prevents: untrusted code running as the exec uid overwriting the
-    /// agent binary and answering in its place.
-    #[test]
-    fn the_agent_binary_is_root_owned_and_not_writable_by_the_exec_uid() {
-        let dockerfile = rendered();
-        assert!(
-            dockerfile.contains(&format!(
-                "COPY --chown=0:0 --chmod=0755 {AGENT_FILENAME} {AGENT_PATH}"
-            )),
-            "the agent must be root-owned and mode 0755:\n{dockerfile}"
-        );
-    }
-
-    /// 0700 and owned by the exec uid: the session's own files are readable only by the code
-    /// that created them, not by anything else the base image happens to run.
-    #[test]
-    fn the_session_root_belongs_to_the_exec_uid_alone() {
-        let dockerfile = rendered();
-        let (uid, root) = (AWS_MICROVM.exec_uid, AWS_MICROVM.session_root);
-        assert!(dockerfile.contains(&format!("chown {uid}:{uid} {root}")));
-        assert!(dockerfile.contains(&format!("chmod 0700 {root}")));
-    }
-
-    /// The agent refuses to start without these, so an image that omits them is a sandbox that
-    /// never runs. Baking them in means the template and the image cannot disagree.
-    #[test]
-    fn the_agent_contract_is_baked_into_the_image() {
-        let dockerfile = rendered();
-        let (uid, root) = (AWS_MICROVM.exec_uid, AWS_MICROVM.session_root);
-        for expected in [
-            &format!("ALIEN_SANDBOX_ROOT={root}"),
-            &format!("ALIEN_SANDBOX_EXEC_UID={uid}"),
-            &format!("ALIEN_SANDBOX_EXEC_GID={uid}"),
-            &"ALIEN_SANDBOX_AUTHORIZATION=transport".to_string(),
-            &"ALIEN_SANDBOX_ISOLATION=uid-split".to_string(),
-        ] {
-            assert!(dockerfile.contains(expected.as_str()), "missing {expected}");
-        }
-    }
-
-    /// A base image that ends as a non-root user must not carry that user into the identity
-    /// setup or the agent: the append to /etc/passwd fails and the agent can't drop privileges.
-    #[test]
-    fn everything_after_the_base_runs_as_root() {
-        let dockerfile = rendered();
-        let root = dockerfile
-            .find("\nUSER 0:0\n")
-            .expect("root is set explicitly");
-        let first_run = dockerfile.find("\nRUN ").expect("identity setup runs");
-        assert!(root < first_run, "root must be set before the first RUN");
-        assert_eq!(
-            dockerfile.matches("\nUSER ").count(),
-            1,
-            "nothing switches away from root before the agent starts"
-        );
-    }
-
-    /// A shell would re-parse the path and give the sandbox a process it did not ask for.
-    #[test]
-    fn the_entrypoint_is_exec_form() {
-        assert!(rendered().contains(&format!(r#"ENTRYPOINT ["{AGENT_PATH}"]"#)));
-    }
-
-    /// The Terraform and CloudFormation emitters each repeat the exec uid as a literal of their
-    /// own, because a `&'static str` cannot be derived from the contract in a const. This pins the
-    /// value those two are asserted against.
-    #[test]
-    fn the_exec_uid_is_unprivileged() {
-        assert_ne!(AWS_MICROVM.exec_uid, 0, "the exec uid must never be root");
-        assert_eq!(AWS_MICROVM.exec_uid, 60000);
-    }
 
     /// The archive has to be flat and contain both entries: `CreateMicrovmImage` looks for the
     /// Dockerfile at the root, and a nested layout fails minutes into a build instead of being

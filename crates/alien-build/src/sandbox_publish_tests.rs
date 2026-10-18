@@ -51,10 +51,18 @@ async fn repeated_sandbox_pushes_preserve_the_arm64_bundle_identity() {
     let first = publish().await.unwrap();
     let second = publish().await.unwrap();
     let agent = AgentSource::Image("example.com/agent:v1".to_string());
+    let base = DockDashImage::from_tarball(images.path().join(format!(
+        "{}.oci.tar",
+        BinaryTarget::LinuxArm64.runtime_platform_id()
+    )))
+    .unwrap();
+    let identity = crate::sandbox_identity::BaseIdentity::read(&base, "sandbox")
+        .await
+        .unwrap();
     let first_bundle = images.path().join("first.zip");
     let second_bundle = images.path().join("second.zip");
-    write_bundle(&first_bundle, &first, &agent).unwrap();
-    write_bundle(&second_bundle, &second, &agent).unwrap();
+    write_bundle(&first_bundle, &first, &agent, &identity).unwrap();
+    write_bundle(&second_bundle, &second, &agent, &identity).unwrap();
     assert_eq!(
         std::fs::read(&first_bundle).unwrap(),
         std::fs::read(&second_bundle).unwrap(),
@@ -90,7 +98,7 @@ async fn repeated_sandbox_pushes_preserve_the_arm64_bundle_identity() {
         changed, first,
         "changed executable content requires a new version"
     );
-    write_bundle(&second_bundle, &changed, &agent).unwrap();
+    write_bundle(&second_bundle, &changed, &agent, &identity).unwrap();
     assert_ne!(
         std::fs::read(&first_bundle).unwrap(),
         std::fs::read(&second_bundle).unwrap()
@@ -99,6 +107,7 @@ async fn repeated_sandbox_pushes_preserve_the_arm64_bundle_identity() {
         &second_bundle,
         &first,
         &AgentSource::Image("example.com/agent:v2".to_string()),
+        &identity,
     )
     .unwrap();
     assert_ne!(

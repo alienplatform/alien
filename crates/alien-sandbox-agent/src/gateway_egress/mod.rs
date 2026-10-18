@@ -29,7 +29,7 @@ use base64::Engine;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt, BufReader},
     net::{TcpListener, TcpStream, UdpSocket},
-    sync::Semaphore,
+    sync::{MutexGuard, Semaphore},
     task::JoinSet,
     time::timeout,
 };
@@ -191,6 +191,9 @@ impl GatewayEgress {
 
     /// Health remains available while create is waiting to deliver the policy.
     pub fn status(&self) -> Result<&'static str> {
+        let Ok(_update) = self.update_lock.try_lock() else {
+            return Ok("verifying-egress-path");
+        };
         if !self.routing_ready.load(Ordering::Acquire) {
             return Ok("awaiting-run-hook");
         }
@@ -234,14 +237,52 @@ impl GatewayEgress {
         if !self.routing_ready.load(Ordering::Acquire) {
             return Err(AlienError::new(ErrorData::EgressPathUnexpected));
         }
-        self.awaiting_delivery
-            .store(!self.declared_none, Ordering::Release);
-        self.path_verified.store(false, Ordering::Release);
-        self.check_path().await?;
-        if self.declared_none {
-            self.ready.store(true, Ordering::Release);
+        // Delivery and the platform hook can arrive in either order. The token identifies
+        // this sandbox; the gateway's current policy remains the authorization authority.
+        self.awaiting_delivery.store(false, Ordering::Release);
+        match self.self_check().await {
+            Ok(()) => Ok(()),
+            Err(_)
+                if self.path_verified.load(Ordering::Acquire)
+                    && self.awaiting_delivery.load(Ordering::Acquire) =>
+            {
+                // An expired/rejected identity needs management renewal. Keep commands
+                // closed, but let the platform finish Resume so renewal can reach us.
+                Ok(())
+            }
+            Err(error) => Err(error),
         }
-        Ok(())
+    }
+
+    /// Session requests wait for an active lifecycle check, without retrying its result.
+    pub async fn wait_ready(&self) -> Result<()> {
+        let _update = self.wait_for_run().await?;
+        self.ensure_ready()
+    }
+
+    async fn wait_for_run(&self) -> Result<MutexGuard<'_, ()>> {
+        timeout(Duration::from_secs(15), async {
+            loop {
+                let update = self.update_lock.lock().await;
+                if self.routing_ready.load(Ordering::Acquire) {
+                    return update;
+                }
+                // Run needs this same lock to install routing. Do not hold it while
+                // waiting for a platform hook that may arrive after identity delivery.
+                drop(update);
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .map_err(|_| {
+            let cause = if self.routing_ready.load(Ordering::Acquire) {
+                "check-in-progress"
+            } else {
+                "awaiting-run-hook"
+            };
+            tracing::warn!(cause, "egress readiness wait expired");
+            AlienError::new(ErrorData::EgressPathUnexpected)
+        })
     }
 
     /// Gate session routes until the network path has been verified.
@@ -253,6 +294,16 @@ impl GatewayEgress {
         {
             Ok(())
         } else {
+            let cause = if !self.routing_ready.load(Ordering::Acquire) {
+                "awaiting-run-hook"
+            } else if self.awaiting_delivery.load(Ordering::Acquire)
+                && self.path_verified.load(Ordering::Acquire)
+            {
+                "token-rejected"
+            } else {
+                "check-failed"
+            };
+            tracing::warn!(cause, "egress session refused");
             Err(AlienError::new(ErrorData::EgressPathUnexpected))
         }
     }
@@ -405,10 +456,7 @@ impl GatewayEgress {
     /// Install a replacement signed token. Signature verification and policy lookup happen in
     /// the gateway; the self-check refuses invalid credentials before reopening session routes.
     pub async fn update(&self, token: Option<String>, policy: String) -> Result<()> {
-        let _update = self.update_lock.lock().await;
-        if !self.routing_ready.load(Ordering::Acquire) {
-            return Err(AlienError::new(ErrorData::EgressPathUnexpected));
-        }
+        let _update = self.wait_for_run().await?;
         if self.declared_none {
             return Err(invalid("declared none cannot acquire an egress token"));
         }
@@ -437,7 +485,7 @@ impl GatewayEgress {
             return self.retain_record(policy, &aud, &sub);
         }
         self.retain_record(policy, &aud, &sub)?;
-        self.awaiting_delivery.store(true, Ordering::Release);
+        self.awaiting_delivery.store(false, Ordering::Release);
         self.ready.store(false, Ordering::Release);
         *self
             .token
@@ -563,9 +611,18 @@ impl GatewayEgress {
     }
 
     async fn self_check(&self) -> Result<()> {
-        self.check_path().await?;
+        self.check_path().await.inspect_err(|error| {
+            tracing::warn!(cause = "check-failed", code = %error.code, "physical egress check failed");
+        })?;
         if !self.declared_none {
-            self.check_policy().await?;
+            self.check_policy().await.inspect_err(|error| {
+                let cause = if self.awaiting_delivery.load(Ordering::Acquire) {
+                    "token-rejected"
+                } else {
+                    "check-failed"
+                };
+                tracing::warn!(cause, code = %error.code, "gateway identity check failed");
+            })?;
         }
         self.ready.store(true, Ordering::Release);
         Ok(())

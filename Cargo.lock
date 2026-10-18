@@ -996,6 +996,7 @@ dependencies = [
  "dockdash",
  "futures",
  "futures-util",
+ "httpmock",
  "libc",
  "notify",
  "object_store",

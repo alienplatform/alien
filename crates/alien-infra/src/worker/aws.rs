@@ -165,6 +165,67 @@ fn replace_lambda_notification_config(
 }
 
 impl AwsWorkerController {
+    async fn renew_certificate(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<()> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+
+        if worker_config.public_endpoints.is_empty() || self.uses_custom_domain {
+            return Ok(());
+        }
+
+        let Some(resource) = ctx
+            .deployment_config
+            .domain_metadata
+            .as_ref()
+            .and_then(|meta| meta.resources.get(&worker_config.id))
+        else {
+            return Ok(());
+        };
+
+        if resource.issued_at.is_none() || resource.issued_at == self.certificate_issued_at {
+            return Ok(());
+        }
+
+        let Some(certificate_arn) = self.certificate_arn.clone() else {
+            return Ok(());
+        };
+        let certificate_chain = resource.certificate_chain.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "Certificate chain missing (certificate not issued)".to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })
+        })?;
+        let private_key = resource.private_key.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "Private key missing (certificate not issued)".to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })
+        })?;
+
+        let (leaf, chain) = split_certificate_chain(certificate_chain);
+        let aws_cfg = ctx.get_aws_config()?;
+        let acm_client = ctx.service_provider.get_aws_acm_client(aws_cfg).await?;
+
+        // ACM rejects tags on a reimport; the certificate keeps the ones it was imported with.
+        acm_client
+            .reimport_certificate(
+                alien_aws_clients::acm::ReimportCertificateRequest::builder()
+                    .certificate_arn(certificate_arn)
+                    .certificate(leaf)
+                    .private_key(private_key.clone())
+                    .maybe_certificate_chain(chain)
+                    .build(),
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to re-import renewed certificate to ACM".to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })?;
+
+        self.certificate_issued_at = resource.issued_at.clone();
+
+        Ok(())
+    }
+
     fn owns_network(ctx: &ResourceControllerContext<'_>) -> bool {
         matches!(
             ctx.deployment_config.stack_settings.network,
@@ -2597,37 +2658,9 @@ impl AwsWorkerController {
             }));
         }
 
-        // Check if certificate was renewed (for public workers with auto-managed domains)
-        if !worker_config.public_endpoints.is_empty() {
-            if let Some(domain_metadata) = &ctx.deployment_config.domain_metadata {
-                if let Some(resource_info) = domain_metadata.resources.get(&worker_config.id) {
-                    if let Some(new_issued_at) = &resource_info.issued_at {
-                        match &self.certificate_issued_at {
-                            Some(stored) if new_issued_at != stored => {
-                                // Certificate renewed! Trigger update flow to re-import
-                                info!(
-                                    name = %worker_config.id,
-                                    old_issued_at = %stored,
-                                    new_issued_at = %new_issued_at,
-                                    "Certificate renewed, triggering update"
-                                );
-                                return Ok(HandlerAction::Continue {
-                                    state: UpdateImportingCertificate,
-                                    suggested_delay: None,
-                                });
-                            }
-                            None => {
-                                // First heartbeat after deployment, store the timestamp
-                                self.certificate_issued_at = Some(new_issued_at.clone());
-                            }
-                            _ => {} // Same timestamp, no renewal
-                        }
-                    }
-                }
-            }
-        }
-
         emit_aws_lambda_worker_heartbeat(ctx, &worker_config, &aws_worker_name, &function_info);
+
+        self.renew_certificate(ctx).await?;
 
         debug!(name = %worker_config.id, "Heartbeat check passed");
         Ok(HandlerAction::Continue {
@@ -2660,73 +2693,7 @@ impl AwsWorkerController {
         )
         .await?;
 
-        if worker_config.public_endpoints.is_empty() || self.uses_custom_domain {
-            return Ok(HandlerAction::Continue {
-                state: UpdateCodeStart,
-                suggested_delay: None,
-            });
-        }
-
-        let Some(resource) = ctx
-            .deployment_config
-            .domain_metadata
-            .as_ref()
-            .and_then(|meta| meta.resources.get(&worker_config.id))
-        else {
-            return Ok(HandlerAction::Continue {
-                state: UpdateCodeStart,
-                suggested_delay: None,
-            });
-        };
-
-        if resource.issued_at == self.certificate_issued_at {
-            return Ok(HandlerAction::Continue {
-                state: UpdateCodeStart,
-                suggested_delay: None,
-            });
-        }
-
-        let Some(certificate_arn) = self.certificate_arn.clone() else {
-            return Ok(HandlerAction::Continue {
-                state: UpdateCodeStart,
-                suggested_delay: None,
-            });
-        };
-        let certificate_chain = resource.certificate_chain.as_ref().ok_or_else(|| {
-            AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: "Certificate chain missing (certificate not issued)".to_string(),
-                resource_id: Some(worker_config.id.clone()),
-            })
-        })?;
-        let private_key = resource.private_key.as_ref().ok_or_else(|| {
-            AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: "Private key missing (certificate not issued)".to_string(),
-                resource_id: Some(worker_config.id.clone()),
-            })
-        })?;
-
-        let (leaf, chain) = split_certificate_chain(certificate_chain);
-        let aws_cfg = ctx.get_aws_config()?;
-        let acm_client = ctx.service_provider.get_aws_acm_client(aws_cfg).await?;
-
-        // ACM rejects tags on a reimport; the certificate keeps the ones it was imported with.
-        acm_client
-            .reimport_certificate(
-                alien_aws_clients::acm::ReimportCertificateRequest::builder()
-                    .certificate_arn(certificate_arn)
-                    .certificate(leaf)
-                    .private_key(private_key.clone())
-                    .maybe_certificate_chain(chain)
-                    .build(),
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to re-import renewed certificate to ACM".to_string(),
-                resource_id: Some(worker_config.id.clone()),
-            })?;
-
-        self.certificate_issued_at = resource.issued_at.clone();
-
+        self.renew_certificate(ctx).await?;
         Ok(HandlerAction::Continue {
             state: UpdateCodeStart,
             suggested_delay: None,
@@ -2742,6 +2709,22 @@ impl AwsWorkerController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
+        // Older heartbeats entered this update state after installing a certificate,
+        // even though the executor had never planned an update for this worker.
+        if self.certificate_arn.is_some()
+            && self.certificate_issued_at.is_some()
+            && ctx
+                .state
+                .resources
+                .get(ctx.desired_config.id())
+                .is_some_and(|resource| resource.previous_config.is_none())
+        {
+            return Ok(HandlerAction::Continue {
+                state: Ready,
+                suggested_delay: Some(Duration::from_secs(30)),
+            });
+        }
+
         let current_config = ctx.desired_resource_config::<Worker>()?;
         let previous_config = ctx.previous_resource_config::<Worker>()?;
         let code_changed = current_config.code != previous_config.code;
@@ -4945,10 +4928,17 @@ impl AwsWorkerController {
 
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
 
-    terminal_state!(
+    #[handler(
         state = RefreshFailed,
-        status = ResourceStatus::RefreshFailed
-    );
+        on_failure = RefreshFailed,
+        status = ResourceStatus::RefreshFailed,
+    )]
+    async fn refresh_failed(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        self.ready(ctx).await
+    }
 
     fn build_outputs(&self) -> Option<ResourceOutputs> {
         self.arn.as_ref().map(|arn| {
@@ -9209,6 +9199,323 @@ mod tests {
             state.certificate_issued_at.as_deref(),
             Some("2024-01-01T00:00:00Z")
         );
+        executor.step().await.unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert_eq!(
+            executor
+                .internal_state::<AwsWorkerController>()
+                .unwrap()
+                .state,
+            AwsWorkerState::Ready
+        );
+    }
+
+    /// Heartbeats must not replay the last deployment's code/config/trigger diff.
+    #[rstest]
+    #[case::never_updated(false, false, false)]
+    #[case::previously_updated(true, false, false)]
+    #[case::old_update_checkpoint(false, true, false)]
+    #[case::pending_metadata(false, false, true)]
+    #[tokio::test]
+    async fn certificate_renewal_returns_to_ready_without_updating_worker(
+        #[case] previously_updated: bool,
+        #[case] old_checkpoint: bool,
+        #[case] pending_metadata: bool,
+    ) {
+        let mut lambda = MockLambdaApi::new();
+        lambda
+            .expect_get_function_configuration()
+            .returning(|name, _| Ok(create_successful_function_response(name)));
+        // Every mutation is deliberately left without an expectation.
+        let mut acm = MockAcmApi::new();
+        acm.expect_reimport_certificate()
+            .withf(|request| {
+                request.certificate_arn == imported_certificate_arn(1)
+                    && request.tags.is_none()
+                    && request.certificate.contains("MIIBtest")
+            })
+            .times(if pending_metadata { 0 } else { 1 })
+            .returning(|request| {
+                Ok(ImportCertificateResponse {
+                    certificate_arn: request.certificate_arn,
+                })
+            });
+        let provider = setup_mock_service_provider(Arc::new(lambda), Some(Arc::new(acm)), None);
+        let mut controller = AwsWorkerController {
+            state: AwsWorkerState::Ready,
+            certificate_arn: Some(imported_certificate_arn(1)),
+            event_source_mappings: vec!["live-mapping-uuid".to_string()],
+            certificate_issued_at: Some("2023-01-01T00:00:00Z".to_string()),
+            ..at_importing_certificate()
+        };
+        if old_checkpoint {
+            controller.state = AwsWorkerState::UpdateImportingCertificate;
+        }
+        let mut metadata = create_test_domain_metadata("public-func");
+        if pending_metadata {
+            let info = metadata.resources.get_mut("public-func").unwrap();
+            info.issued_at = None;
+            info.certificate_chain = None;
+            info.private_key = None;
+        }
+        let mut completed = false;
+        for _ in 0..10 {
+            // Each step starts from the serialized checkpoint, as a fresh process would.
+            let restored =
+                crate::core::deserialize_controller(serialize_controller(&controller).unwrap())
+                    .unwrap();
+            let mut builder = SingleControllerExecutor::builder()
+                .resource(function_public_ingress())
+                .controller(
+                    restored
+                        .as_any()
+                        .downcast_ref::<AwsWorkerController>()
+                        .unwrap()
+                        .clone(),
+                )
+                .platform(Platform::Aws)
+                .service_provider(provider.clone())
+                .domain_metadata(metadata.clone());
+            if previously_updated {
+                let mut previous = function_public_ingress();
+                previous.code = alien_core::WorkerCode::Image {
+                    image: "old-image:previous".to_string(),
+                };
+                previous.triggers = vec![alien_core::WorkerTrigger::Schedule {
+                    cron: "0 * * * *".to_string(),
+                }];
+                builder = builder.previous_resource(previous);
+            }
+            let mut executor = builder.build().await.unwrap();
+            let result = executor
+                .step()
+                .await
+                .expect("certificate renewal must succeed");
+            controller = executor
+                .internal_state::<AwsWorkerController>()
+                .unwrap()
+                .clone();
+            assert!(matches!(
+                executor.status(),
+                ResourceStatus::Running | ResourceStatus::Updating
+            ));
+            if controller.state == AwsWorkerState::Ready {
+                assert_eq!(controller.event_source_mappings, vec!["live-mapping-uuid"]);
+                assert_eq!(
+                    controller.certificate_issued_at.as_deref(),
+                    Some(if pending_metadata {
+                        "2023-01-01T00:00:00Z"
+                    } else {
+                        "2024-01-01T00:00:00Z"
+                    })
+                );
+                assert!(result.suggested_delay.is_some_and(|delay| !delay.is_zero()));
+                completed = true;
+                break;
+            }
+        }
+        assert!(completed, "renewal must finish at Ready");
+    }
+
+    #[rstest]
+    #[case::retry(false, 1, false)]
+    #[case::delete(true, 1, false)]
+    #[case::exhausted_retry_budget(false, 12, true)]
+    #[tokio::test]
+    async fn certificate_renewal_lost_response_recovers_or_deletes(
+        #[case] delete: bool,
+        #[case] failures: usize,
+        #[case] retryable: bool,
+    ) {
+        let installed = Arc::new(Mutex::new(Vec::new()));
+        let writes = installed.clone();
+        let mut acm = MockAcmApi::new();
+        acm.expect_reimport_certificate()
+            .times(if delete { failures } else { failures + 1 })
+            .returning(move |request| {
+                assert_eq!(request.certificate_arn, imported_certificate_arn(1));
+                let mut writes = writes.lock().unwrap();
+                writes.push(request.certificate.clone());
+                if writes.len() <= failures {
+                    // ACM committed the write, but the caller received an error. Use a
+                    // non-retryable error to exercise the terminal refresh recovery path.
+                    let mut error = access_denied();
+                    error.retryable = retryable;
+                    return Err(error);
+                }
+                Ok(ImportCertificateResponse {
+                    certificate_arn: request.certificate_arn,
+                })
+            });
+        let deleted_certificate = Arc::new(Mutex::new(false));
+        if delete {
+            let deleted = deleted_certificate.clone();
+            acm.expect_delete_certificate()
+                .times(1)
+                .returning(move |arn| {
+                    assert_eq!(arn, imported_certificate_arn(1));
+                    *deleted.lock().unwrap() = true;
+                    Ok(())
+                });
+        }
+        let deleted_function = Arc::new(Mutex::new(false));
+        let read_deleted = deleted_function.clone();
+        let mut lambda = MockLambdaApi::new();
+        lambda
+            .expect_get_function_configuration()
+            .returning(move |name, _| {
+                if *read_deleted.lock().unwrap() {
+                    Err(not_found("Function"))
+                } else {
+                    Ok(create_successful_function_response(name))
+                }
+            });
+        if delete {
+            lambda
+                .expect_delete_function()
+                .times(1)
+                .returning(move |name, _| {
+                    assert_eq!(name, "test-public-func");
+                    *deleted_function.lock().unwrap() = true;
+                    Ok(())
+                });
+        }
+        let mut logs = MockCloudWatchLogsApi::new();
+        if delete {
+            logs.expect_delete_log_group()
+                .times(1)
+                .returning(|_| Ok(()));
+        }
+        let provider = setup_mock_service_provider_with_logs(
+            Arc::new(lambda),
+            Some(Arc::new(acm)),
+            None,
+            Arc::new(logs),
+        );
+        let single = SingleControllerExecutor::builder()
+            .resource(function_public_ingress())
+            .controller(AwsWorkerController {
+                state: AwsWorkerState::Ready,
+                arn: Some(
+                    "arn:aws:lambda:us-east-1:123456789012:function:test-public-func".to_string(),
+                ),
+                certificate_arn: Some(imported_certificate_arn(1)),
+                certificate_issued_at: Some("2023-01-01T00:00:00Z".to_string()),
+                ..Default::default()
+            })
+            .platform(Platform::Aws)
+            .service_provider(provider.clone())
+            .domain_metadata(create_test_domain_metadata("public-func"))
+            .build()
+            .await
+            .unwrap();
+        let (mut stack, client, config) = single.with_context(|ctx| {
+            (
+                ctx.desired_stack.clone(),
+                ctx.client_config.clone(),
+                ctx.deployment_config.clone(),
+            )
+        });
+        let mut state = single.stack_state().clone();
+        for (id, entry) in &mut stack.resources {
+            if id != "public-func" {
+                entry.lifecycle = ResourceLifecycle::Frozen;
+            }
+        }
+        for (id, entry) in &mut state.resources {
+            if id != "public-func" {
+                entry.lifecycle = Some(ResourceLifecycle::Frozen);
+            }
+        }
+        let executor = StackExecutor::builder(&stack, client)
+            .deployment_config(&config)
+            .service_provider(provider.clone())
+            .lifecycle_filter(vec![ResourceLifecycle::Live])
+            .step_out_of_scope_resources(false)
+            .build()
+            .unwrap();
+        for attempt in 1..=failures {
+            let result = executor.refresh(state).await.unwrap();
+            assert_eq!(
+                result.heartbeats.len(),
+                1,
+                "failed renewal must preserve health telemetry"
+            );
+            assert!(result.suggested_delay_ms.is_some_and(|delay| delay > 0));
+            state =
+                serde_json::from_slice(&serde_json::to_vec(&result.next_state).unwrap()).unwrap();
+            let resource = &state.resources["public-func"];
+            assert!(resource
+                .error
+                .as_ref()
+                .unwrap()
+                .message
+                .contains("certificate"));
+            if !retryable || attempt >= 10 {
+                assert_eq!(resource.status, ResourceStatus::RefreshFailed);
+                assert!(result.suggested_delay_ms.unwrap() >= 30_000);
+            }
+            let restored =
+                crate::core::deserialize_controller(resource.internal_state.clone().unwrap())
+                    .unwrap();
+            assert_eq!(
+                restored
+                    .as_any()
+                    .downcast_ref::<AwsWorkerController>()
+                    .unwrap()
+                    .certificate_issued_at
+                    .as_deref(),
+                Some("2023-01-01T00:00:00Z")
+            );
+        }
+        let restored = crate::core::deserialize_controller(
+            state.resources["public-func"]
+                .internal_state
+                .clone()
+                .unwrap(),
+        )
+        .unwrap();
+        if delete {
+            let mut deleting = SingleControllerExecutor::builder()
+                .resource(function_public_ingress())
+                .controller(
+                    restored
+                        .as_any()
+                        .downcast_ref::<AwsWorkerController>()
+                        .unwrap()
+                        .clone(),
+                )
+                .platform(Platform::Aws)
+                .service_provider(provider)
+                .build()
+                .await
+                .unwrap();
+            deleting.delete().unwrap();
+            deleting.run_until_terminal().await.unwrap();
+            assert_eq!(deleting.status(), ResourceStatus::Deleted);
+            assert!(*deleted_certificate.lock().unwrap());
+        } else {
+            let recovered = executor.refresh(state).await.unwrap();
+            let resource = &recovered.next_state.resources["public-func"];
+            assert_eq!(resource.status, ResourceStatus::Running);
+            assert!(resource.error.is_none());
+            assert!(recovered.suggested_delay_ms.is_some_and(|delay| delay > 0));
+            let restored =
+                crate::core::deserialize_controller(resource.internal_state.clone().unwrap())
+                    .unwrap();
+            assert_eq!(
+                restored
+                    .as_any()
+                    .downcast_ref::<AwsWorkerController>()
+                    .unwrap()
+                    .certificate_issued_at
+                    .as_deref(),
+                Some("2024-01-01T00:00:00Z")
+            );
+            let writes = installed.lock().unwrap();
+            assert_eq!(writes.len(), failures + 1);
+            assert_eq!(writes[0], writes[1]);
+        }
     }
 
     // ─────────────── LOG GROUP ────────────────

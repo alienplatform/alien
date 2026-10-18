@@ -1090,8 +1090,6 @@ fn environment_variables(stack: &alien_core::Stack, sandbox: &Sandbox) -> Expres
             "ALIEN_SANDBOX_AUTHORIZATION",
             AWS_MICROVM.authorization.env_value().to_string(),
         ),
-        ("ALIEN_SANDBOX_EXEC_UID", AWS_MICROVM.exec_uid.to_string()),
-        ("ALIEN_SANDBOX_EXEC_GID", AWS_MICROVM.exec_uid.to_string()),
     ];
 
     let mut pairs: Vec<(String, String)> = pairs

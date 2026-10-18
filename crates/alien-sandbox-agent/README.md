@@ -92,7 +92,11 @@ UDP DNS to `8.8.8.8:53`, plus a child with the command's exact UID/GID and zero
 capabilities. The child checks metadata HTTP at `169.254.169.254:80`, public HTTP,
 and unmarked UDP DNS; only the synthetic local DNS answer is accepted. Supervisor
 metadata stays available to the platform's restore path. A failed check leaves
-session routes closed; a later successful Resume can recover.
+session routes closed; a later successful Resume can recover. Resume verifies
+the installed identity against the gateway's current policy, so renewal may arrive
+before or after the hook. A rejected identity waits for renewal. Session requests
+wait up to 15 seconds for lifecycle checks, and early identity delivery waits for
+Run to install routing. Health reports `verifying-egress-path` during checks.
 
 Gateway-mode command listeners cannot reply to external inbound connections.
 Otherwise an incoming socket would provide an uninspected outbound channel.

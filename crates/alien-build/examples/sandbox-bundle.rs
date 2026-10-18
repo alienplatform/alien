@@ -13,9 +13,10 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use alien_build::sandbox_bundle::{write_bundle, write_declared_bundle, AgentSource};
+use alien_build::sandbox_bundle::{write_bundle, write_supervised_bundle, AgentSource};
 
-fn main() -> ExitCode {
+#[tokio::main]
+async fn main() -> ExitCode {
     let mut arguments: Vec<String> = std::env::args().skip(1).collect();
     let declaration = if arguments.first().is_some_and(|arg| arg == "--sandbox") {
         if arguments.len() < 2 {
@@ -45,6 +46,22 @@ fn main() -> ExitCode {
     if supervised {
         arguments.remove(0);
     }
+    let command_uid = if arguments.first().is_some_and(|arg| arg == "--command-uid") {
+        arguments.remove(0);
+        if arguments.is_empty() {
+            eprintln!("--command-uid requires a numeric uid");
+            return ExitCode::FAILURE;
+        }
+        match arguments.remove(0).parse::<u32>() {
+            Ok(uid) => Some(uid),
+            Err(error) => {
+                eprintln!("invalid command uid: {error}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        None
+    };
     let usage = || {
         eprintln!(
             "usage: sandbox-bundle --agent-binary <path>|--agent-image <ref> \
@@ -62,30 +79,63 @@ fn main() -> ExitCode {
         _ => return usage(),
     };
 
-    let egress = declaration
-        .map(|sandbox| sandbox.egress)
-        .or_else(|| supervised.then_some(alien_core::SandboxEgress::Internet));
-    let result = if let Some(egress) = egress {
-        let config = if matches!(egress, alien_core::SandboxEgress::Internet) {
-            match inspect_config(base_image) {
-                Ok(config) => Some(config),
-                Err(error) => {
-                    eprintln!("{error}");
-                    return ExitCode::FAILURE;
-                }
+    let (image, build) = match dockdash::Image::builder()
+        .from(base_image)
+        .platform("linux", &dockdash::Arch::ARM64)
+        .build()
+        .await
+    {
+        Ok(image) => image,
+        Err(error) => {
+            eprintln!("inspect base image: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let identity = match alien_build::sandbox_identity::BaseIdentity::read(&image, base_image).await
+    {
+        Ok(identity) => identity,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    // Pin the inspected manifest so a tag cannot change users between inspection and AWS build.
+    let reference = match base_image.parse::<oci_client::Reference>() {
+        Ok(reference) => reference,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let pinned = format!(
+        "{}/{}@{}",
+        reference.registry(),
+        reference.repository(),
+        build.resolved_manifest_digest
+    );
+    let internet = declaration
+        .as_ref()
+        .is_some_and(|sandbox| matches!(sandbox.egress, alien_core::SandboxEgress::Internet));
+    let result = if supervised || internet {
+        match alien_build::sandbox_identity::image_command(&image) {
+            Ok(command) => write_supervised_bundle(
+                Path::new(destination),
+                &pinned,
+                &agent,
+                &command,
+                &identity,
+                command_uid,
+            ),
+            Err(error) => {
+                eprintln!("{error}");
+                return ExitCode::FAILURE;
             }
-        } else {
-            None
-        };
-        write_declared_bundle(
-            Path::new(destination),
-            base_image,
-            &agent,
-            &egress,
-            config.as_ref(),
-        )
+        }
+    } else if command_uid.is_some() {
+        eprintln!("--command-uid requires --privileged-supervisor");
+        return ExitCode::FAILURE;
     } else {
-        write_bundle(Path::new(destination), base_image, &agent)
+        write_bundle(Path::new(destination), &pinned, &agent, &identity)
     };
     match result {
         Ok(()) => {
@@ -97,16 +147,4 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
-}
-
-fn inspect_config(image: &str) -> Result<oci_client::config::Config, String> {
-    let output = std::process::Command::new("docker")
-        .args(["image", "inspect", "--format", "{{json .Config}}", image])
-        .output()
-        .map_err(|error| format!("inspect base image: {error}"))?;
-    if !output.status.success() {
-        return Err(format!("pull the base image before packaging: {image}"));
-    }
-    serde_json::from_slice(&output.stdout)
-        .map_err(|error| format!("read base image configuration: {error}"))
 }

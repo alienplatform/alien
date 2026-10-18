@@ -675,11 +675,7 @@ impl Sandbox {
         let mut env = std::collections::BTreeMap::new();
         if let Some(supervisor) = &self.privileged_supervisor {
             env.insert(
-                "ALIEN_SANDBOX_EXEC_UID".to_string(),
-                supervisor.command_uid.to_string(),
-            );
-            env.insert(
-                "ALIEN_SANDBOX_EXEC_GID".to_string(),
+                "ALIEN_SANDBOX_EXPECTED_EXEC_UID".to_string(),
                 supervisor.command_uid.to_string(),
             );
             env.insert(
@@ -2469,7 +2465,7 @@ mod tests {
             .expect("AWS can enforce the policy in the agent");
         assert_eq!(sandbox.cloud_egress(), &SandboxEgress::Allow);
         assert_eq!(
-            sandbox.supervisor_environment()["ALIEN_SANDBOX_EXEC_UID"],
+            sandbox.supervisor_environment()["ALIEN_SANDBOX_EXPECTED_EXEC_UID"],
             "60001"
         );
         for platform in [

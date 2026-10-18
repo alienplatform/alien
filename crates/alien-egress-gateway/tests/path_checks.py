@@ -30,8 +30,8 @@ def check_resume_path(suite, name, call, docker, networks, prefix, metadata, sub
         status,body=call("POST","/aws/lambda-microvms/runtime/v1/resume",{})
         assert status==200,(status,body)
         status,body=call("GET","/v1/health")
-        assert status==200 and json.loads(body)["status"]=="awaiting-egress-policy",(status,body)
-        assert call("POST","/v1/exec",{"command":["true"],"timeoutMs":1000})[0]==503
+        assert status==200 and json.loads(body)["status"]=="ready",(status,body)
+        assert call("POST","/v1/exec",{"command":["true"],"timeoutMs":1000})[0]==200
         assert call("PUT","/v1/egress",{"token":suite.token(sub=sub)})[0]==204
         assert json.loads(call("GET","/v1/health")[1])["status"]=="ready"
     suite.record(f"Resume recovers after closing {suffix}",recover)
