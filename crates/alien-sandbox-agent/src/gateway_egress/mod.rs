@@ -5,6 +5,8 @@
 )]
 
 mod dns;
+mod probe;
+pub use probe::command_path_is_closed;
 mod redirect;
 mod transport;
 
@@ -53,7 +55,7 @@ pub struct GatewayEgress {
     address: RwLock<Option<SocketAddr>>,
     token: RwLock<String>,
     privileged: bool,
-    command_uid: u32,
+    command_identity: crate::exec::ExecIdentity,
     routing_ready: AtomicBool,
     declared_none: bool,
     ready: AtomicBool,
@@ -79,7 +81,7 @@ impl GatewayEgress {
 
     /// Prepare routing, or defer it until the AWS Run hook. An absent token is pending until
     /// the authenticated policy endpoint delivers it outside the shared image snapshot.
-    pub fn from_env(command_uid: u32) -> Result<Option<Arc<Self>>> {
+    pub fn from_env(command_identity: crate::exec::ExecIdentity) -> Result<Option<Arc<Self>>> {
         if crate::egress::legacy_from_env()?.is_some() {
             return Ok(None);
         }
@@ -126,7 +128,7 @@ impl GatewayEgress {
             // filter before executing; an installation failure prevents its launch.
             crate::privilege::block_command_ipv6();
             if !defer_routing {
-                redirect::install(command_uid)
+                redirect::install(command_identity.uid)
                     .into_alien_error()
                     .context(failed("install transparent forwarding"))?;
             }
@@ -135,7 +137,7 @@ impl GatewayEgress {
             address: RwLock::new(address),
             token: RwLock::new(token),
             privileged,
-            command_uid,
+            command_identity,
             routing_ready: AtomicBool::new(!defer_routing),
             declared_none,
             ready: AtomicBool::new(false),
@@ -210,6 +212,16 @@ impl GatewayEgress {
         self.self_check().await?;
         self.listeners_live.store(true, Ordering::Release);
         Ok(())
+    }
+
+    /// Restored sessions must prove their current network path before accepting more work.
+    pub async fn resume(&self) -> Result<()> {
+        let _update = self.update_lock.lock().await;
+        self.ready.store(false, Ordering::Release);
+        if !self.routing_ready.load(Ordering::Acquire) {
+            return Err(AlienError::new(ErrorData::EgressPathUnexpected));
+        }
+        self.self_check().await
     }
 
     /// Gate session routes until the network path has been verified.
@@ -352,7 +364,7 @@ impl GatewayEgress {
     // Callers hold update_lock, so token installation cannot race this transaction.
     async fn install_routing_at_run(&self) -> Result<()> {
         if !self.routing_ready.load(Ordering::Acquire) {
-            redirect::install_at_run(self.command_uid)
+            redirect::install_at_run(self.command_identity.uid)
                 .await
                 .into_alien_error()
                 .context(failed("install Run-hook transparent forwarding"))?;
@@ -504,6 +516,8 @@ impl GatewayEgress {
         if matches!(direct, Ok(Ok(_))) {
             return Err(AlienError::new(ErrorData::EgressPathUnexpected));
         }
+        probe::supervisor_udp(self.privileged).await?;
+        probe::command(self.command_identity).await?;
         if self.declared_none {
             self.ready.store(true, Ordering::Release);
             return Ok(());

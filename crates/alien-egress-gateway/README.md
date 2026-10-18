@@ -125,7 +125,9 @@ never serve expired entries after a dependency failure.
 For a gateway-backed resource the agent starts without a token. Health reports
 `awaiting-egress-policy`, and
 session routes are blocked until token installation and the external path check
-succeed. The agent checks direct internet denial, then calls authenticated
+succeed. The agent checks supervisor TCP and UDP internet denial and runs metadata
+HTTP and unmarked network probes in a child with the command's dropped identity.
+It repeats these checks on authenticated Resume, then calls authenticated
 `GET /health` on proxy port 3128. This verifies the identity and installed policy
 without requiring guest access to admin port 3129 or dialing an upstream. On AWS the Run hook receives the AWS envelope
 `{microvmId,runHookPayload}`; the payload is a JSON string `{gateway,audience}`.
@@ -152,8 +154,10 @@ their released direct path and command-UID filter, including pinned allowlisted
 DNS and command IPv6 restrictions. They require no gateway token. These startup
 rules also use native netlink.
 
-Replies to incoming TCP connections, including preview servers, keep their established
-return path. New outbound TCP from the command UID is redirected regardless of source port.
+Command-UID replies to external inbound TCP are denied: an incoming connection
+must not become an unchecked outbound channel. Preview access uses the agent's
+loopback path. System/control listeners retain their own return path. New outbound
+TCP from the command UID is redirected regardless of source port.
 All image commands, execs and jobs drop irreversibly to that UID. Other system
 identities retain their own DNS and metadata traffic so snapshot restore can reach
 the agent. No platform UID has a hardcoded bypass: a colliding command UID remains

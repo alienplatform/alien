@@ -86,6 +86,20 @@ for its token and network self-check before starting guest code. Other backends
 install the firewall at process startup by default. Legacy object policies keep
 their existing startup behavior.
 
+The authenticated Resume hook clears readiness and repeats the path checks before
+accepting session operations. Checks include supervisor TCP to `1.1.1.1:443` and
+UDP DNS to `8.8.8.8:53`, plus a child with the command's exact UID/GID and zero
+capabilities. The child checks metadata HTTP at `169.254.169.254:80`, public HTTP,
+and unmarked UDP DNS; only the synthetic local DNS answer is accepted. Supervisor
+metadata stays available to the platform's restore path. A failed check leaves
+session routes closed; a later successful Resume can recover.
+
+Gateway-mode command listeners cannot reply to external inbound connections.
+Otherwise an incoming socket would provide an uninspected outbound channel.
+Reach previews through the agent's loopback path. System/control listeners retain
+their own return traffic. Released legacy object policies retain their existing
+inbound-reply behavior.
+
 Pull the intended ARM64 base image, then package it with the inspected command:
 
 ```sh

@@ -133,12 +133,8 @@ async fn install_rules(command_uid: u32) -> nlink::netlink::Result<()> {
         )
         .add_rule(system(filter()).accept())
         .add_rule(filter().match_mark(MARK).accept())
-        .add_rule(
-            filter()
-                .match_ct_direction(CtDirection::Reply)
-                .match_l4proto(libc::IPPROTO_TCP as u8)
-                .accept(),
-        )
+        // External inbound sockets must not become an uninspected outbound channel.
+        // Preview traffic reaches command listeners through the agent's loopback proxy.
         .add_rule(filter().match_daddr_v4(Ipv4Addr::LOCALHOST, 32).accept())
         .add_rule(filter().match_oif("lo").accept())
         .commit(&conn)

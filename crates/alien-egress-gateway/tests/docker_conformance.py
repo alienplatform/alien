@@ -22,6 +22,7 @@ from urllib.parse import urlencode
 
 from agent_capabilities import AGENT_CAP_ARGS, check_capabilities
 from system_egress import check_system_egress
+from path_checks import check_resume_path
 from live_connections import check_live_connections, check_graceful_shutdown
 
 from cryptography import x509
@@ -74,7 +75,7 @@ server.shutdown();print("loopback-http-ok")
 
 
 
-def check_remote_preview(container, uid, port):
+def check_remote_preview(container, uid, port, allowed=True):
     marker = f"/tmp/preview-{port}"
     script = f'''import http.server
 from pathlib import Path
@@ -94,11 +95,18 @@ server.handle_request();server.server_close()
         time.sleep(.05)
     conn = http.client.HTTPConnection("172.29.91.3", port, timeout=3)
     try:
-        conn.request("GET", "/")
-        response = conn.getresponse()
-        assert response.status == 200 and response.read() == b"remote-preview-ok"
+        try:
+            conn.request("GET", "/")
+            response = conn.getresponse()
+            assert allowed, "external inbound reply path remained usable"
+            assert response.status == 200 and response.read() == b"remote-preview-ok"
+        except (OSError, http.client.HTTPException):
+            assert not allowed, "expected system preview was blocked"
     finally:
         conn.close()
+    if not allowed:
+        # The agent can still reach the same command listener through loopback.
+        assert docker("exec", container, "python", "-c", f'import urllib.request;assert urllib.request.urlopen("http://127.0.0.1:{port}/",timeout=3).read()==b"remote-preview-ok"') == ""
 
 
 def policy_digest(policy):
@@ -504,7 +512,7 @@ print("IPv6 blocked; IPv4 available")
         assert "HTTP_PROXY=http://127.0.0.1:15002" in image_env
         assert "ALIEN_SANDBOX_EGRESS_TOKEN" not in image_env and "fake-test-secret" not in image_env
         self.record("gateway command environment preserves localhost HTTP", lambda: check_loopback_http(name))
-        self.record("remote client reaches command UID preview", lambda: check_remote_preview(name, f"{AGENT_UID}:{AGENT_UID}", 9090))
+        self.record("external inbound cannot carry command replies; loopback preview works", lambda: check_remote_preview(name, f"{AGENT_UID}:{AGENT_UID}", 9090, allowed=False))
         self.record("remote client reaches root preview", lambda: check_remote_preview(name, "0", 9091))
         new_connection = '''import socket
 s=socket.socket();s.settimeout(3);s.bind(("0.0.0.0",9092))
@@ -527,6 +535,7 @@ with c.wrap_socket(s,server_hostname="allowed.test") as t:
 print("command transparent TLS passed")
 '''
         check_system_egress(self, name, call, docker, AGENT_UID, PREFIX)
+        check_resume_path(self, name, call, docker, networks, PREFIX, metadata=False)
         self.record("command UID TCP uses synthetic DNS and gateway", lambda: equal(docker("exec", "-u", f"{AGENT_UID}:{AGENT_UID}", name, "python", "-c", script), "command transparent TLS passed"))
         equal(call("PUT", "/v1/egress", {"token": self.token(), "caCert": (self.output / "guest-ca.pem").read_text()})[0], 204)
         injected_script = script.replace('"allowed.test"', '"inject.test"').replace('/fixture-ca.pem', '/opt/alien/egress-ca-bundle.pem').replace('GET / HTTP', 'GET /v1/action HTTP').replace('Host: allowed.test', 'Host: inject.test')
@@ -590,7 +599,7 @@ while True:
                 self.record("open floor direct canary positive control", lambda: equal(docker("exec", closed, "python", "-c", control), "reachable"))
 
 
-    def proxy_only(self, image, containers):
+    def proxy_only(self, image, containers, networks):
         name = PREFIX + "-proxy-only"
         sub = "proxy-only"
         assert self.admin("/v1/policies", {"aud": AUD, "sub": sub, "policy": self.policy})[0] == 204
@@ -638,6 +647,7 @@ print("proxy-only passed")
         def probe():
             assert docker("exec", name, "python", "-c", script) == "proxy-only passed"
         self.record("unprivileged HTTPS_PROXY works and direct socket fails", probe)
+        check_resume_path(self, name, call, docker, networks, PREFIX, metadata=True)
         self.record("unprivileged localhost HTTP remains local", lambda: check_loopback_http(name))
 
 
@@ -710,7 +720,7 @@ def main():
             from legacy_egress import check_legacy_agents
             check_legacy_agents(suite, args.agent_image, containers, AGENT_UID)
             suite.agent(args.agent_image, containers, networks)
-            suite.proxy_only(args.agent_image, containers)
+            suite.proxy_only(args.agent_image, containers, networks)
             from run_hook_egress import check_run_hook_agents
             check_run_hook_agents(suite, args.agent_image, containers, AGENT_UID)
         if not args.vault_config:

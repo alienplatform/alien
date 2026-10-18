@@ -245,7 +245,7 @@ pub fn router(state: Arc<AgentState>) -> Router {
         .route(&hook_path("validate"), get(hook_ready).post(hook_ready))
         .route(
             &hook_path("resume"),
-            get(hook_lifecycle).post(hook_lifecycle),
+            get(resume_egress_hook).post(resume_egress_hook),
         )
         .route(
             &hook_path("suspend"),
@@ -361,6 +361,21 @@ async fn hook_ready() -> StatusCode {
 /// reset. This acknowledges and claims nothing more.
 async fn hook_lifecycle() -> StatusCode {
     StatusCode::OK
+}
+
+async fn resume_egress_hook(
+    State(state): State<Arc<AgentState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> std::result::Result<StatusCode, ApiError> {
+    #[cfg(target_os = "linux")]
+    if let Some(egress) = &state.gateway_egress {
+        authorize_control(&state, peer, &headers, SandboxOperationClass::Execute)?;
+        egress.resume().await?;
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = (state, peer, headers);
+    Ok(StatusCode::OK)
 }
 
 async fn run_command(
