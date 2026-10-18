@@ -67,6 +67,34 @@ server.shutdown();print("loopback-http-ok")
     assert docker("exec", "-u", "60000:60000", container, "python", "-c", script) == "loopback-http-ok"
 
 
+
+def check_remote_preview(container, uid, port):
+    marker = f"/tmp/preview-{port}"
+    script = f'''import http.server
+from pathlib import Path
+class Handler(http.server.BaseHTTPRequestHandler):
+ def do_GET(self):
+  self.send_response(200);self.end_headers();self.wfile.write(b"remote-preview-ok")
+ def log_message(self,*args): pass
+server=http.server.HTTPServer(("0.0.0.0",{port}),Handler)
+server.timeout=10
+Path({marker!r}).touch()
+server.handle_request();server.server_close()
+'''
+    docker("exec", "-d", "-u", uid, container, "python", "-c", script)
+    deadline = time.monotonic() + 5
+    while docker("exec", container, "sh", "-c", f"test -f {marker} && echo ready || true") != "ready":
+        assert time.monotonic() < deadline, "preview server failed to start"
+        time.sleep(.05)
+    conn = http.client.HTTPConnection("172.29.91.3", port, timeout=3)
+    try:
+        conn.request("GET", "/")
+        response = conn.getresponse()
+        assert response.status == 200 and response.read() == b"remote-preview-ok"
+    finally:
+        conn.close()
+
+
 def policy_digest(policy):
     if isinstance(policy, dict):
         policy = {"allow": sorted(policy["allow"])}
@@ -375,6 +403,18 @@ class Suite:
         assert "HTTP_PROXY=http://127.0.0.1:15002" in image_env
         assert "ALIEN_SANDBOX_EGRESS_TOKEN" not in image_env and "fake-test-secret" not in image_env
         self.record("gateway command environment preserves localhost HTTP", lambda: check_loopback_http(name))
+        self.record("remote client reaches command UID preview", lambda: check_remote_preview(name, "60000:60000", 9090))
+        self.record("remote client reaches root preview", lambda: check_remote_preview(name, "0", 9091))
+        new_connection = '''import socket
+s=socket.socket();s.settimeout(3);s.bind(("0.0.0.0",9092))
+try:
+ s.connect(("172.29.91.2",3128));s.sendall(b"GET /health HTTP/1.1\\r\\nHost: gateway\\r\\n\\r\\n")
+ data=s.recv(1024)
+ assert not data, data
+except (ConnectionError,TimeoutError): pass
+print("new outbound refused")
+'''
+        self.record("new outbound TCP cannot use incoming reply exception", lambda: equal(docker("exec", "-u", "60000:60000", name, "python", "-c", new_connection), "new outbound refused"))
         script = '''import socket,ssl,http.client
 ip=socket.gethostbyname("allowed.test")
 assert ip.startswith("198.18."),ip

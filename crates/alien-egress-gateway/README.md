@@ -116,6 +116,8 @@ and renewal. Updates affect new connections. Existing tunnels remain open until 
 A resource declared `none` uses a loopback-only network and has no gateway or token.
 The agent verifies that direct internet fails before serving. A closed runtime policy still requires the gateway and an identity token.
 
+Replies to incoming TCP connections, including preview servers, keep their established
+return path. New outbound TCP is still redirected regardless of the source port or UID.
 Proxy-aware commands bypass the proxy for localhost and loopback; declared `none`
 does not advertise a proxy. Synthetic DNS answers expire after 60 seconds and
 renew on lookup. The agent retains at most 4096 names, reclaims expired entries

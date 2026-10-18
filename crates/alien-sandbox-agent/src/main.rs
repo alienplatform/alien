@@ -300,9 +300,7 @@ fn load_state() -> Result<AgentState> {
         output_cap,
         jobs: JobRegistry::new(),
         #[cfg(target_os = "linux")]
-        gateway_egress: alien_sandbox_agent::gateway_egress::GatewayEgress::from_env(parse(
-            ENV_PORT,
-        )?)?,
+        gateway_egress: alien_sandbox_agent::gateway_egress::GatewayEgress::from_env()?,
     })
 }
 

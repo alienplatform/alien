@@ -63,7 +63,7 @@ pub struct GatewayEgress {
 impl GatewayEgress {
     /// Prepare routing before dropping bootstrap capabilities. An absent token is pending until
     /// the authenticated policy endpoint delivers it outside the shared image snapshot.
-    pub fn from_env(control_port: u16) -> Result<Option<Arc<Self>>> {
+    pub fn from_env() -> Result<Option<Arc<Self>>> {
         let declared_none = std::env::var("ALIEN_SANDBOX_EGRESS")
             .ok()
             .is_some_and(|policy| {
@@ -90,7 +90,7 @@ impl GatewayEgress {
             .zip(std::env::var("ALIEN_SANDBOX_SESSION_ID").ok());
         let privileged = unsafe { libc::geteuid() } == 0;
         if privileged {
-            redirect::install(control_port)
+            redirect::install()
                 .into_alien_error()
                 .context(failed("install transparent forwarding"))?;
         }
