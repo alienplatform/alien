@@ -19,7 +19,7 @@ use crate::{
     emitters::aws::helpers::{downcast, nested_block, required_label, tags},
     expr,
 };
-use alien_core::{import::EmitContext, ErrorData, Network, NetworkSettings, Result};
+use alien_core::{import::EmitContext, ErrorData, Network, NetworkSettings, Result, Sandbox};
 use alien_error::AlienError;
 use hcl::expr::Expression;
 
@@ -514,6 +514,153 @@ fn create_topology(
             attr("tags", tags(ctx, "network")),
         ],
     ));
+
+    if ctx
+        .stack
+        .resources()
+        .any(|(_, entry)| entry.config.downcast_ref::<Sandbox>().is_some())
+    {
+        let one = || {
+            attr(
+                "count",
+                expr::raw("var.network_mode == \"create-new\" ? 1 : 0"),
+            )
+        };
+        for (kind, offset) in [("sandbox", 6), ("sandbox_gateway", 9)] {
+            let subnet_label = format!("{label}_{kind}");
+            fragment.resource_blocks.push(resource_block(
+                "aws_route_table",
+                &subnet_label,
+                [
+                    one(),
+                    attr("vpc_id", expr::raw(format!("aws_vpc.{label}[0].id"))),
+                    attr("tags", tags(ctx, "network")),
+                ],
+            ));
+            if kind == "sandbox_gateway" {
+                fragment.resource_blocks.push(resource_block(
+                    "aws_route",
+                    &format!("{subnet_label}_nat"),
+                    [
+                        one(),
+                        attr(
+                            "route_table_id",
+                            expr::raw(format!("aws_route_table.{subnet_label}[0].id")),
+                        ),
+                        attr("destination_cidr_block", Expression::from("0.0.0.0/0")),
+                        attr(
+                            "nat_gateway_id",
+                            expr::raw(format!("aws_nat_gateway.{label}[0].id")),
+                        ),
+                    ],
+                ));
+            }
+            fragment.resource_blocks.push(resource_block(
+                "aws_subnet",
+                &subnet_label,
+                [
+                    attr(
+                        "count",
+                        expr::raw(
+                            "var.network_mode == \"create-new\" ? var.availability_zones : 0",
+                        ),
+                    ),
+                    attr("vpc_id", expr::raw(format!("aws_vpc.{label}[0].id"))),
+                    attr(
+                        "cidr_block",
+                        expr::raw(format!(
+                            "cidrsubnet(aws_vpc.{label}[0].cidr_block, 8, count.index + {offset})"
+                        )),
+                    ),
+                    attr(
+                        "availability_zone",
+                        expr::raw("data.aws_availability_zones.available.names[count.index]"),
+                    ),
+                    attr("map_public_ip_on_launch", Expression::Bool(false)),
+                    attr("tags", tags(ctx, "network")),
+                ],
+            ));
+            fragment.resource_blocks.push(resource_block(
+                "aws_route_table_association",
+                &subnet_label,
+                [
+                    attr(
+                        "count",
+                        expr::raw(
+                            "var.network_mode == \"create-new\" ? var.availability_zones : 0",
+                        ),
+                    ),
+                    attr(
+                        "subnet_id",
+                        expr::raw(format!("aws_subnet.{subnet_label}[count.index].id")),
+                    ),
+                    attr(
+                        "route_table_id",
+                        expr::raw(format!("aws_route_table.{subnet_label}[0].id")),
+                    ),
+                ],
+            ));
+        }
+        let gateway_label = format!("{label}_sandbox_gateway");
+        fragment.resource_blocks.push(resource_block(
+            "aws_lb",
+            &gateway_label,
+            [
+                one(),
+                attr("internal", Expression::Bool(true)),
+                attr("load_balancer_type", Expression::from("network")),
+                attr("ip_address_type", Expression::from("ipv4")),
+                attr(
+                    "subnets",
+                    expr::raw(format!("aws_subnet.{gateway_label}[*].id")),
+                ),
+                attr("enable_cross_zone_load_balancing", Expression::Bool(true)),
+                attr("tags", tags(ctx, "network")),
+            ],
+        ));
+        for (kind, port) in [("proxy", 3128), ("admin", 3129)] {
+            let target_label = format!("{gateway_label}_{kind}");
+            fragment.resource_blocks.push(resource_block(
+                "aws_lb_target_group",
+                &target_label,
+                [
+                    one(),
+                    attr("vpc_id", expr::raw(format!("aws_vpc.{label}[0].id"))),
+                    attr("target_type", Expression::from("ip")),
+                    attr("protocol", Expression::from("TCP")),
+                    attr("port", Expression::from(port)),
+                    nested_block(
+                        "health_check",
+                        vec![attr("protocol", Expression::from("TCP"))],
+                    ),
+                    attr("tags", tags(ctx, "network")),
+                ],
+            ));
+            fragment.resource_blocks.push(resource_block(
+                "aws_lb_listener",
+                &target_label,
+                [
+                    one(),
+                    attr(
+                        "load_balancer_arn",
+                        expr::raw(format!("aws_lb.{gateway_label}[0].arn")),
+                    ),
+                    attr("protocol", Expression::from("TCP")),
+                    attr("port", Expression::from(port)),
+                    nested_block(
+                        "default_action",
+                        vec![
+                            attr("type", Expression::from("forward")),
+                            attr(
+                                "target_group_arn",
+                                expr::raw(format!("aws_lb_target_group.{target_label}[0].arn")),
+                            ),
+                        ],
+                    ),
+                ],
+            ));
+        }
+    }
 
     fragment
 }

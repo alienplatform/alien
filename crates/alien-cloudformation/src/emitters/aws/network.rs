@@ -17,7 +17,7 @@ use crate::{
     },
     template::{CfExpression, CfResource},
 };
-use alien_core::{import::EmitContext, ErrorData, Network, NetworkSettings, Result};
+use alien_core::{import::EmitContext, ErrorData, Network, NetworkSettings, Result, Sandbox};
 use alien_error::AlienError;
 
 const CONDITION_NETWORK_MODE_CREATE: &str = "NetworkModeCreate";
@@ -371,6 +371,148 @@ fn created_network_resources(ctx: &EmitContext<'_>) -> Result<Vec<CfResource>> {
         .insert("Tags".to_string(), tags(ctx));
     resources.push(security_group);
 
+    if ctx
+        .stack
+        .resources()
+        .any(|(_, entry)| entry.config.downcast_ref::<Sandbox>().is_some())
+    {
+        // Connector subnets have only the VPC's local route. Gateway tasks and the
+        // internal NLB occupy dedicated subnets, with outbound traffic using the NAT.
+        for (kind, offset) in [("Sandbox", 6), ("SandboxGateway", 9)] {
+            let route_table_id = format!("{prefix}{kind}RouteTable");
+            let mut route_table =
+                CfResource::new(route_table_id.clone(), "AWS::EC2::RouteTable".to_string());
+            route_table
+                .properties
+                .insert("VpcId".to_string(), CfExpression::ref_(&vpc_id));
+            route_table.properties.insert("Tags".to_string(), tags(ctx));
+            resources.push(route_table);
+            if kind == "SandboxGateway" {
+                let mut route = CfResource::new(
+                    format!("{prefix}{kind}DefaultRoute"),
+                    "AWS::EC2::Route".to_string(),
+                );
+                route.properties.insert(
+                    "RouteTableId".to_string(),
+                    CfExpression::ref_(&route_table_id),
+                );
+                route.properties.insert(
+                    "DestinationCidrBlock".to_string(),
+                    CfExpression::from("0.0.0.0/0"),
+                );
+                route
+                    .properties
+                    .insert("NatGatewayId".to_string(), CfExpression::ref_(&nat_id));
+                resources.push(route);
+            }
+            for index in 0..3usize {
+                let subnet_id = format!("{prefix}{kind}Subnet{}", index + 1);
+                let mut subnet = CfResource::new(subnet_id.clone(), "AWS::EC2::Subnet".to_string());
+                subnet.condition = az_condition(index).map(str::to_string);
+                subnet
+                    .properties
+                    .insert("VpcId".to_string(), CfExpression::ref_(&vpc_id));
+                subnet
+                    .properties
+                    .insert(zone_property.to_string(), select(index, zones.clone()));
+                subnet.properties.insert(
+                    "CidrBlock".to_string(),
+                    select(index + offset, cidr_blocks(&vpc_id)),
+                );
+                subnet
+                    .properties
+                    .insert("MapPublicIpOnLaunch".to_string(), CfExpression::from(false));
+                subnet.properties.insert("Tags".to_string(), tags(ctx));
+                resources.push(subnet);
+                let mut association = CfResource::new(
+                    format!("{subnet_id}RouteTableAssociation"),
+                    "AWS::EC2::SubnetRouteTableAssociation".to_string(),
+                );
+                association.condition = az_condition(index).map(str::to_string);
+                association
+                    .properties
+                    .insert("SubnetId".to_string(), CfExpression::ref_(&subnet_id));
+                association.properties.insert(
+                    "RouteTableId".to_string(),
+                    CfExpression::ref_(&route_table_id),
+                );
+                resources.push(association);
+            }
+        }
+        let nlb_id = format!("{prefix}SandboxGatewayLoadBalancer");
+        let mut nlb = CfResource::new(
+            nlb_id.clone(),
+            "AWS::ElasticLoadBalancingV2::LoadBalancer".to_string(),
+        );
+        nlb.properties
+            .insert("Type".to_string(), CfExpression::from("network"));
+        nlb.properties
+            .insert("Scheme".to_string(), CfExpression::from("internal"));
+        nlb.properties
+            .insert("IpAddressType".to_string(), CfExpression::from("ipv4"));
+        nlb.properties.insert(
+            "Subnets".to_string(),
+            subnet_refs(prefix, "SandboxGatewaySubnet"),
+        );
+        nlb.properties.insert(
+            "LoadBalancerAttributes".to_string(),
+            CfExpression::list([CfExpression::object([
+                (
+                    "Key",
+                    CfExpression::from("load_balancing.cross_zone.enabled"),
+                ),
+                ("Value", CfExpression::from("true")),
+            ])]),
+        );
+        nlb.properties.insert("Tags".to_string(), tags(ctx));
+        resources.push(nlb);
+        for (kind, port) in [("Proxy", 3128), ("Admin", 3129)] {
+            let target_id = format!("{prefix}SandboxGateway{kind}Targets");
+            let mut target = CfResource::new(
+                target_id.clone(),
+                "AWS::ElasticLoadBalancingV2::TargetGroup".to_string(),
+            );
+            target
+                .properties
+                .insert("VpcId".to_string(), CfExpression::ref_(&vpc_id));
+            target
+                .properties
+                .insert("TargetType".to_string(), CfExpression::from("ip"));
+            target
+                .properties
+                .insert("Protocol".to_string(), CfExpression::from("TCP"));
+            target
+                .properties
+                .insert("Port".to_string(), CfExpression::Integer(port));
+            target
+                .properties
+                .insert("HealthCheckProtocol".to_string(), CfExpression::from("TCP"));
+            target.properties.insert("Tags".to_string(), tags(ctx));
+            resources.push(target);
+            let mut listener = CfResource::new(
+                format!("{prefix}SandboxGateway{kind}Listener"),
+                "AWS::ElasticLoadBalancingV2::Listener".to_string(),
+            );
+            listener
+                .properties
+                .insert("LoadBalancerArn".to_string(), CfExpression::ref_(&nlb_id));
+            listener
+                .properties
+                .insert("Protocol".to_string(), CfExpression::from("TCP"));
+            listener
+                .properties
+                .insert("Port".to_string(), CfExpression::Integer(port));
+            listener.properties.insert(
+                "DefaultActions".to_string(),
+                CfExpression::list([CfExpression::object([
+                    ("Type", CfExpression::from("forward")),
+                    ("TargetGroupArn", CfExpression::ref_(&target_id)),
+                ])]),
+            );
+            resources.push(listener);
+        }
+    }
+
     for resource in &mut resources {
         if resource.condition.is_none() {
             resource.condition = Some(CONDITION_NETWORK_MODE_CREATE.to_string());
@@ -389,7 +531,7 @@ fn cidr_blocks(vpc_id: &str) -> CfExpression {
         "Fn::Cidr",
         CfExpression::list([
             CfExpression::get_att(vpc_id, "CidrBlock"),
-            CfExpression::Integer(6),
+            CfExpression::Integer(12),
             CfExpression::Integer(8),
         ]),
     )])
