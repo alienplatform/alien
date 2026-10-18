@@ -282,8 +282,8 @@ fn resource_scoped_aws_permission_context(
     context.resource_name = None;
 
     if resource_entry.config.downcast_ref::<Worker>().is_some()
-            || resource_entry.config.downcast_ref::<Vault>().is_some()
-        {
+        || resource_entry.config.downcast_ref::<Vault>().is_some()
+    {
         return context.with_resource_name(format!("${{local.resource_prefix}}-{resource_id}"));
     }
 

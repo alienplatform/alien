@@ -218,6 +218,9 @@ faulty_ec2_api! {
     attach_internet_gateway(request: AttachInternetGatewayRequest) -> ();
     detach_internet_gateway(request: DetachInternetGatewayRequest) -> ();
     describe_internet_gateways(request: DescribeInternetGatewaysRequest) -> DescribeInternetGatewaysResponse;
+    create_interface_vpc_endpoint(request: CreateInterfaceVpcEndpointRequest) -> CreateVpcEndpointResponse;
+    describe_vpc_endpoints(request: DescribeVpcEndpointsRequest) -> DescribeVpcEndpointsResponse;
+    delete_vpc_endpoints(vpc_endpoint_ids: &[String]) -> DeleteVpcEndpointsResponse;
     create_nat_gateway(request: CreateNatGatewayRequest) -> CreateNatGatewayResponse;
     delete_nat_gateway(nat_gateway_id: &str) -> DeleteNatGatewayResponse;
     describe_nat_gateways(request: DescribeNatGatewaysRequest) -> DescribeNatGatewaysResponse;
