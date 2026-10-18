@@ -11,6 +11,9 @@
 //! - Service discovery and internal networking
 //! - Load balancer registration for public-facing containers
 
+mod network;
+pub use network::ContainerInternalLoadBalancer;
+
 use crate::error::{ErrorData, Result};
 use crate::resource::{ResourceDefinition, ResourceOutputsDefinition, ResourceRef, ResourceType};
 use crate::resources::{
@@ -412,6 +415,21 @@ pub struct Container {
     /// Security settings shared by supported container runtimes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub security: Option<ContainerSecurity>,
+
+    /// Dedicated internal TCP load balancer with per-port source CIDR restrictions.
+    /// The selected backend must support this setting or planning fails.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub internal_load_balancer: Option<ContainerInternalLoadBalancer>,
+
+    /// Restrict connections initiated by this container to public IPv4 destinations
+    /// and its runtime DNS resolver. Blocks private networks, the container overlay,
+    /// host services, and IPv6. The only metadata exception is the runtime proxy
+    /// for this container's own service-account credentials (169.254.169.254:80).
+    /// Requires the restricted security profile.
+    /// Enforcement is outside the container; unsupported backends fail planning.
+    #[builder(default)]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub internet_only_egress: bool,
 
     /// ComputeCluster resource ID that this container runs on.
     /// If None, will be auto-assigned by ComputeClusterMutation at deployment time.
@@ -820,6 +838,7 @@ impl ResourceDefinition for Container {
 
         // Validate the new config's public endpoints.
         new_container.validate_public_endpoints()?;
+        new_container.validate_network_settings()?;
 
         if self.id != new_container.id {
             return Err(AlienError::new(ErrorData::InvalidResourceUpdate {

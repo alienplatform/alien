@@ -40,6 +40,7 @@ use utoipa::OpenApi;
     KubernetesSecretMount,
     KubernetesHttpProbe,
     ContainerSecurity,
+    ContainerInternalLoadBalancer,
     ContainerSecurityProfile,
     HealthCheck,
     ResourceSpec,
