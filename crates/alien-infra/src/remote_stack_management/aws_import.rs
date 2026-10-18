@@ -5,6 +5,8 @@ use alien_core::{
     import::{ImportContext, data::AwsRemoteStackManagementImportData},
 };
 
+use alien_error::AlienError;
+
 use crate::import::ResourceImporter;
 use crate::import_helpers::make_imported_state;
 use crate::remote_stack_management::{
@@ -25,11 +27,10 @@ impl ResourceImporter for AwsRemoteStackManagementImporter {
     ) -> Result<StackResourceState> {
         if let Some(function_arn) = &data.worker_gateway_cleanup_function_arn {
             if !data.management_permissions_applied {
-                return Err(alien_core::ErrorData::GenericError {
+                return Err(AlienError::new(alien_core::ErrorData::GenericError {
                     message: "Worker gateway cleanup requires setup-applied management permissions"
                         .to_string(),
-                }
-                .into());
+                }));
             }
             alien_core::aws_worker_gateway::validate_cleanup_function_arn(
                 function_arn,

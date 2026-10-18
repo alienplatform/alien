@@ -6,6 +6,7 @@
 //! Its security group must accept traffic only from that load balancer, and its
 //! endpoint policy must allow only the associated API.
 
+use alien_error::AlienError;
 use sha2::{Digest, Sha256};
 
 /// Envoy v1.39.4, pinned to its published multi-platform manifest.
@@ -80,10 +81,9 @@ pub fn validate_cleanup_function_arn(
         && !function[7].starts_with('0')
         && function[7].bytes().all(|byte| byte.is_ascii_digit());
     if !valid {
-        return Err(crate::ErrorData::GenericError {
+        return Err(AlienError::new(crate::ErrorData::GenericError {
             message: "Worker gateway cleanup must name a published setup function version in the management account, deployment prefix and region".to_string(),
-        }
-        .into());
+        }));
     }
     Ok(())
 }
