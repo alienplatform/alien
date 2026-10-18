@@ -176,6 +176,7 @@ async fn exercise(delivery_status: StatusCode, delivery_body: &str) {
             })
         });
     let pause_state = paused.clone();
+    let terminated_state = terminated.clone();
     api.expect_get_microvm().returning(move |id| {
         Ok(Microvm {
             started_at: Some(crate::sandbox_egress::now_unix().unwrap().into()),
@@ -184,7 +185,9 @@ async fn exercise(delivery_status: StatusCode, delivery_body: &str) {
             endpoint: Some(endpoint.clone()),
             image_arn: Some("image".to_string()),
             state: Some(
-                if pause_state.load(Ordering::SeqCst) {
+                if terminated_state.load(Ordering::SeqCst) > 0 {
+                    "TERMINATED"
+                } else if pause_state.load(Ordering::SeqCst) {
                     "SUSPENDED"
                 } else {
                     "RUNNING"

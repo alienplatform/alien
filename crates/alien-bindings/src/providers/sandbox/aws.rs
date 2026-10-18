@@ -45,6 +45,21 @@ const SANDBOX_READY_TIMEOUT: std::time::Duration = std::time::Duration::from_mil
 #[cfg(test)]
 const SANDBOX_READY_POLL: std::time::Duration = std::time::Duration::from_millis(5);
 
+/// How long `terminate` waits for a MicroVM to reach `TERMINATED` after AWS accepts the request.
+///
+/// Alien's images declare no terminate hook, so there is no in-guest ceiling to wait out; this
+/// is the same bound Azure's terminate gives its asynchronous delete. A caller waiting forever is
+/// its own outage, and an unconfirmed termination is reported as unconfirmed rather than done.
+#[cfg(not(test))]
+const SANDBOX_TERMINATED_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+#[cfg(not(test))]
+const SANDBOX_TERMINATED_POLL: std::time::Duration = std::time::Duration::from_secs(2);
+
+#[cfg(test)]
+const SANDBOX_TERMINATED_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(40);
+#[cfg(test)]
+const SANDBOX_TERMINATED_POLL: std::time::Duration = std::time::Duration::from_millis(5);
+
 /// Side-effect free, which is what makes it safe to repeat while `run_command` is not.
 const HEALTH_PATH: &str = "/v1/health";
 
@@ -987,6 +1002,37 @@ impl Sandbox for AwsSandbox {
                 "sandbox.terminate",
                 &format!("could not terminate MicroVM '{sandbox_id}'"),
             )?;
+
+        // TerminateMicrovm returns once AWS accepts it, not once the MicroVM is gone. Returning
+        // here would report containment while the code inside is still running, which is the whole
+        // point of terminate. Only `TERMINATED` or an absent record confirms it: `TERMINATING` is
+        // the request in flight, and a read that fails says nothing about the sandbox, so it is
+        // an error rather than a confirmation.
+        let deadline = std::time::Instant::now() + SANDBOX_TERMINATED_TIMEOUT;
+        loop {
+            let state = match self
+                .fetched_microvm("sandbox.terminate", sandbox_id)
+                .await?
+            {
+                None => break,
+                Some(microvm) => microvm.state,
+            };
+            if state.as_deref() == Some("TERMINATED") {
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(AlienError::new(ErrorData::SandboxUnreachable {
+                    operation: "sandbox.terminate".to_string(),
+                    reason: format!(
+                        "termination of MicroVM '{sandbox_id}' was accepted but it was still \
+                         {} after {}s; it may still be running",
+                        state.as_deref().unwrap_or("in a state it did not report"),
+                        SANDBOX_TERMINATED_TIMEOUT.as_secs()
+                    ),
+                }));
+            }
+            tokio::time::sleep(SANDBOX_TERMINATED_POLL).await;
+        }
         policy_cleanup
     }
 
@@ -1091,6 +1137,63 @@ mod tests {
             error.to_string().contains("still-running"),
             "the failure names the sandbox it could not confirm gone: {error}"
         );
+    }
+
+    /// The record is read once for ownership and then until it says `TERMINATED`. The read count
+    /// is the assertion that `TERMINATING` is not taken for confirmation: accepting it would end
+    /// the poll one read early.
+    #[tokio::test]
+    async fn terminate_returns_once_the_record_says_terminated() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        let mut reads = 0;
+        client.expect_get_microvm().times(4).returning(move |id| {
+            reads += 1;
+            let state = match reads {
+                1 | 2 => "RUNNING",
+                3 => "TERMINATING",
+                _ => "TERMINATED",
+            };
+            Ok(owned(id, state))
+        });
+        client
+            .expect_terminate_microvm()
+            .times(1)
+            .returning(|_| Ok(()));
+
+        sandbox(client)
+            .terminate("winding-down")
+            .await
+            .expect("a record that reaches TERMINATED confirms the sandbox is gone");
+    }
+
+    /// AWS may reap the record before the poll reads `TERMINATED`; absent after an accepted
+    /// terminate is the sandbox gone, the same answer `terminating_an_absent_sandbox_succeeds`
+    /// pins before one.
+    #[tokio::test]
+    async fn terminate_returns_once_the_record_is_gone() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        let mut reads = 0;
+        client.expect_get_microvm().returning(move |id| {
+            reads += 1;
+            if reads == 1 {
+                return Ok(owned(id, "RUNNING"));
+            }
+            Err(alien_error::AlienError::new(
+                alien_client_core::ErrorData::RemoteResourceNotFound {
+                    resource_type: "Microvm".to_string(),
+                    resource_name: id.to_string(),
+                },
+            ))
+        });
+        client
+            .expect_terminate_microvm()
+            .times(1)
+            .returning(|_| Ok(()));
+
+        sandbox(client)
+            .terminate("reaped-quickly")
+            .await
+            .expect("a record AWS has reaped confirms the sandbox is gone");
     }
 
     /// Reconnecting must not report a sandbox this call did not make, or a caller runs its
