@@ -6147,6 +6147,7 @@ mod tests {
             state: Some("Active".to_string()),
             last_update_status: Some("Successful".to_string()),
             kms_key_arn: None,
+            ..Default::default()
         }
     }
 
@@ -7679,6 +7680,7 @@ mod tests {
                         state: Some("Pending".to_string()),
                         last_update_status: Some("InProgress".to_string()),
                         kms_key_arn: None,
+                        ..Default::default()
                     });
                 }
 
