@@ -20,6 +20,16 @@ pub enum ErrorData {
     )]
     DeploymentNotFound { deployment_id: String },
 
+    /// The requested vault key does not exist.
+    #[error(
+        code = "VAULT_SECRET_NOT_FOUND",
+        message = "Secret not found in vault '{vault_name}'",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 404
+    )]
+    VaultSecretNotFound { vault_name: String },
+
     /// Deployment is locked by another session
     #[error(
         code = "DEPLOYMENT_LOCKED",
