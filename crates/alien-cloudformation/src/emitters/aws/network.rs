@@ -50,7 +50,7 @@ impl CfEmitter for AwsNetworkEmitter {
                     (
                         "sandboxSubnetIds",
                         if created {
-                            subnet_refs(prefix, "SandboxSubnet")
+                            created_sandbox_subnet_values(prefix, "SandboxSubnet", None)
                         } else {
                             CfExpression::ref_("SandboxSubnetIds")
                         },
@@ -58,7 +58,7 @@ impl CfEmitter for AwsNetworkEmitter {
                     (
                         "gatewaySubnetIds",
                         if created {
-                            subnet_refs(prefix, "SandboxGatewaySubnet")
+                            created_sandbox_subnet_values(prefix, "SandboxGatewaySubnet", None)
                         } else {
                             CfExpression::ref_("SandboxGatewaySubnetIds")
                         },
@@ -67,7 +67,7 @@ impl CfEmitter for AwsNetworkEmitter {
                     (
                         "gatewayCidrs",
                         if created {
-                            created_gateway_cidrs(prefix)
+                            created_sandbox_subnet_values(prefix, "SandboxGatewaySubnet", Some("CidrBlock"))
                         } else {
                             CfExpression::ref_("SandboxGatewaySubnetCidrs")
                         },
@@ -524,16 +524,25 @@ fn cidr_blocks(vpc_id: &str, count: i64) -> CfExpression {
     )])
 }
 
-fn created_gateway_cidrs(prefix: &str) -> CfExpression {
-    CfExpression::list([
-        CfExpression::get_att(format!("{prefix}SandboxGatewaySubnet1"), "CidrBlock"),
-        CfExpression::get_att(format!("{prefix}SandboxGatewaySubnet2"), "CidrBlock"),
-        CfExpression::if_(
-            "NetworkCreateUseAz3",
-            CfExpression::get_att(format!("{prefix}SandboxGatewaySubnet3"), "CidrBlock"),
-            CfExpression::no_value(),
-        ),
-    ])
+// AWS::NoValue becomes JSON null inside Fn::ToJsonString. Select the complete
+// list so setup registration receives only the two or three real subnet values.
+fn created_sandbox_subnet_values(
+    prefix: &str,
+    suffix: &str,
+    attribute: Option<&str>,
+) -> CfExpression {
+    let value = |zone| {
+        let id = format!("{prefix}{suffix}{zone}");
+        match attribute {
+            Some(attribute) => CfExpression::get_att(id, attribute),
+            None => CfExpression::ref_(id),
+        }
+    };
+    CfExpression::if_(
+        "NetworkCreateUseAz3",
+        CfExpression::list([value(1), value(2), value(3)]),
+        CfExpression::list([value(1), value(2)]),
+    )
 }
 
 /// BYO setup supplies exact subnet CIDRs for the Frozen connector group; runtime
