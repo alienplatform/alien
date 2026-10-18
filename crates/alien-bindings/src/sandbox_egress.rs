@@ -225,7 +225,8 @@ impl SandboxEgressManager {
         unreachable!("every final attempt returns")
     }
 
-    async fn policy_record(&self, id: &str) -> Result<String> {
+    /// Read the recovery record without renewing the sandbox identity.
+    pub async fn policy_record(&self, id: &str) -> Result<String> {
         #[derive(Deserialize)]
         struct PolicyRecord {
             record: String,
