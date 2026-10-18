@@ -361,7 +361,17 @@ impl AwsRemoteStackManagementController {
     )]
     async fn delete_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         if let Some(setup) = self.gateway_setup.as_mut() {
-            if !setup.delete_step(ctx).await? {
+            if !setup
+                .delete_step(ctx)
+                .await
+                .context(ErrorData::ResourceCleanupIncomplete {
+                    resource_id: ctx
+                        .desired_resource_config::<RemoteStackManagement>()?
+                        .id
+                        .clone(),
+                    message: "Setup gateway retirement remains incomplete".into(),
+                })?
+            {
                 return Ok(HandlerAction::Continue {
                     state: DeleteStart,
                     suggested_delay: Some(Duration::from_secs(2)),

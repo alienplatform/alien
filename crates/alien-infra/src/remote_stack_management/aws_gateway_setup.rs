@@ -711,6 +711,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn helper_read_failure_retains_cleanup_ownership_for_executor_retry() {
+        let setup = GatewaySetup::new();
+        let generation = setup.generation.clone();
+        let mut lambda = MockLambdaApi::new();
+        lambda.expect_get_function().times(1).returning(|_| {
+            Err(AlienError::new(alien_client_core::ErrorData::Timeout {
+                message: "native ownership read timed out".into(),
+            }))
+        });
+        let lambda = Arc::new(lambda);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_lambda_client()
+            .returning(move |_| Ok(lambda.clone()));
+        let mut controller = AwsRemoteStackManagementController::mock_ready("example-management");
+        controller.state = AwsRemoteStackManagementState::DeleteStart;
+        controller.gateway_setup = Some(setup);
+        let mut executor = executor(controller, Arc::new(provider)).await;
+        assert_eq!(
+            executor.step().await.unwrap_err().code,
+            "RESOURCE_CLEANUP_INCOMPLETE"
+        );
+        let restored: AwsRemoteStackManagementController = serde_json::from_value(
+            serde_json::to_value(
+                executor
+                    .internal_state::<AwsRemoteStackManagementController>()
+                    .unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(restored.state, AwsRemoteStackManagementState::DeleteStart);
+        let ownership = restored.gateway_setup.unwrap();
+        assert_eq!(ownership.generation, generation);
+        assert!(!ownership.function_absent);
+        assert!(!ownership.policy_absent);
+    }
+
+    #[tokio::test]
     async fn setup_capability_refuses_imported_or_live_owners_before_provider_access() {
         for (authority, lifecycle) in [
             (
