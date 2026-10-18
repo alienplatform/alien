@@ -392,7 +392,7 @@ pub struct VaultRemoteArgs {
     #[command(subcommand)]
     pub action: VaultAction,
 
-    /// Target deployment ID or name (required). Global so it can follow the subcommand; clap
+    /// Target deployment ID, name, or group/name. Global so it can follow the subcommand; clap
     /// refuses a required global argument, so [`VaultRemoteArgs::deployment`] checks it.
     #[arg(long, global = true)]
     pub deployment: Option<String>,
@@ -416,11 +416,7 @@ pub async fn vault_remote_task(
     ctx: crate::execution_context::ExecutionMode,
 ) -> Result<()> {
     let deployment = args.deployment()?.to_string();
-    let manager_url = ctx.manager_url();
-    let http = ctx.auth_http().await?.client;
-
-    // Resolve deployment ID: if the user passed a name, look it up.
-    let deployment_id = resolve_deployment_id(&deployment, &http, &manager_url).await?;
+    let (manager_url, http, deployment_id) = resolve_vault_target(&ctx, &deployment).await?;
 
     match args.action {
         VaultAction::Set {
@@ -537,6 +533,54 @@ pub async fn vault_remote_task(
     }
 
     Ok(())
+}
+
+/// Use the deployment's manager and workspace, as other manager-routed commands do.
+async fn resolve_vault_target(
+    ctx: &crate::execution_context::ExecutionMode,
+    deployment: &str,
+) -> Result<(String, reqwest::Client, String)> {
+    #[cfg(feature = "platform")]
+    if ctx.is_platform() {
+        let reference = if deployment.starts_with("dep_") || deployment.contains('/') {
+            deployment.to_string()
+        } else {
+            let workspace = ctx.resolve_workspace_with_bootstrap(true).await?;
+            let (project_id, _) = ctx.resolve_project(None, true).await?;
+            let client = ctx.sdk_client().await?;
+            let matches = super::deploy::live_deployments_named(
+                &client,
+                Some(&workspace),
+                &project_id,
+                deployment,
+            )
+            .await?;
+            match matches.as_slice() {
+                [matched] => matched.id.to_string(),
+                [] => return Err(AlienError::new(ErrorData::ValidationError {
+                    field: "deployment".to_string(),
+                    message: format!("Deployment '{deployment}' not found"),
+                })),
+                _ => return Err(AlienError::new(ErrorData::ValidationError {
+                    field: "deployment".to_string(),
+                    message: format!("Multiple deployments are named '{deployment}'. Use a dep_ ID or <group>/<name>."),
+                })),
+            }
+        };
+        let resolved =
+            crate::platform_deployment_resolver::resolve_with_manager(ctx, &reference, None, true)
+                .await?;
+        return Ok((
+            resolved.manager.manager_url,
+            resolved.manager.http_client,
+            resolved.detail.id.to_string(),
+        ));
+    }
+
+    let manager_url = ctx.manager_url();
+    let http = ctx.auth_http().await?.client;
+    let deployment_id = resolve_deployment_id(deployment, &http, &manager_url).await?;
+    Ok((manager_url, http, deployment_id))
 }
 
 async fn delete_remote_secret(

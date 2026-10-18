@@ -68,6 +68,13 @@ Persistence uses a StorageClass the installation cluster already provides, or
 An empty storage class uses the cluster default; clusters without one need an
 explicit class. These settings do not install a storage driver.
 
+### Vault targets
+
+In platform mode, `alien vault --deployment <reference>` resolves the deployment's
+assigned manager and sends vault requests there with the selected workspace.
+Use a `dep_...` ID, `<group>/<name>`, or a unique name in the selected project.
+If several groups contain the same name, use the ID or qualified name.
+
 ### Local secrets
 
 `alien dev vault set <vault> <key> --stdin` reads the exact input bytes, including
