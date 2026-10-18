@@ -61,3 +61,22 @@ resource deletion with backend list calls before claiming cleanup. Kubernetes
 recovery after process exit requires its broker because its bindings currently
 keep session claims in memory; the recovery command refuses to silently skip
 those sessions.
+
+Check a Kubernetes cluster's actual NetworkPolicy enforcement with:
+
+```sh
+python3 crates/alien-sandbox-conformance/cni_probe.py --kubeconfig /path/to/config
+```
+
+This creates a fresh namespace containing a controlled HTTP listener, an
+unrestricted client, and a client selected by a deny-all egress policy. Three
+paired requests must return the exact fixture bytes from the control and fail
+at the network layer from the denied client. Failed controls are unproven;
+reachable denied clients fail. The command deletes its namespace before
+reporting success and returns a nonzero exit status for failed or unproven
+checks. `--image` can select an available Python 3 image.
+
+The report includes pod placements: this checks the selected nodes and address
+family, not every node or both IP families. It does not establish sandbox
+runtime isolation or qualify the sandbox's own network rules. Installation and
+an accepted NetworkPolicy object alone do not establish enforcement.
