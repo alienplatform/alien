@@ -668,6 +668,21 @@ struct ContainerHandle {
 
 #[pymethods]
 impl ContainerHandle {
+    fn internal_endpoints(
+        &self,
+    ) -> std::collections::HashMap<String, std::collections::HashMap<String, String>> {
+        self.inner
+            .get_internal_endpoints()
+            .into_iter()
+            .map(|(name, endpoint)| {
+                (
+                    name,
+                    std::collections::HashMap::from([("url".to_owned(), endpoint.url)]),
+                )
+            })
+            .collect()
+    }
+
     fn internal_url(&self) -> String {
         self.inner.get_internal_url().to_string()
     }

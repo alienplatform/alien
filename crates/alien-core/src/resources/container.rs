@@ -586,9 +586,9 @@ impl Container {
                     endpoint.name
                 )));
             }
-            if endpoint.port == 0 || !self.ports.iter().any(|port| port.port == endpoint.port) {
+            if endpoint.port == 0 {
                 return Err(invalid(format!(
-                    "internal endpoint '{}' requires a declared nonzero port",
+                    "internal endpoint '{}' requires a nonzero port",
                     endpoint.name
                 )));
             }
@@ -697,11 +697,6 @@ impl<S: container_builder::State> ContainerBuilder<S> {
     /// Exposes a named endpoint only to its listed deployment resources.
     /// The access list does not add a dependency from this container to its callers.
     pub fn internal_endpoint(mut self, endpoint: ContainerInternalEndpoint) -> Self {
-        if !self.ports.iter().any(|port| port.port == endpoint.port) {
-            self.ports.push(ContainerPort {
-                port: endpoint.port,
-            });
-        }
         self.internal_endpoints.push(endpoint);
         self
     }

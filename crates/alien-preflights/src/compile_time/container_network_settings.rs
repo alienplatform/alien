@@ -2,41 +2,61 @@ use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
 use alien_core::{Container, Platform, Stack};
 
-/// Refuse network guarantees on runtimes that cannot enforce them.
+/// Validates endpoint source identities and refuses unenforced network settings.
 pub struct ContainerNetworkSettingsCheck;
 
 #[async_trait::async_trait]
 impl CompileTimeCheck for ContainerNetworkSettingsCheck {
+    fn code(&self) -> Option<&'static str> {
+        Some("CONTAINER_NETWORK_SETTINGS_UNSUPPORTED")
+    }
+
     fn description(&self) -> &'static str {
-        "Container network boundaries must be validated and supported by the runtime"
+        "Container endpoints and egress require valid sources and backend enforcement"
     }
 
     fn should_run(&self, stack: &Stack, _platform: Platform) -> bool {
-        stack.resources().any(|(_, entry)| {
+        stack.resources.values().any(|entry| {
             entry
                 .config
                 .downcast_ref::<Container>()
                 .is_some_and(|container| {
-                    container.internal_load_balancer.is_some() || container.internet_only_egress()
+                    !container.internal_endpoints.is_empty() || container.egress.is_some()
                 })
         })
     }
 
-    async fn check(&self, stack: &Stack, _platform: Platform) -> Result<CheckResult> {
+    async fn check(&self, stack: &Stack, platform: Platform) -> Result<CheckResult> {
         let mut errors = Vec::new();
         for (id, entry) in stack.resources() {
             let Some(container) = entry.config.downcast_ref::<Container>() else {
                 continue;
             };
-            if container.internal_load_balancer.is_some() || container.internet_only_egress() {
-                errors.push(format!("Container '{id}': internalLoadBalancer and security.egress are Alien-internal settings; only deployment preflight may assign them to the managed sandbox gateway"));
+            if let Err(error) = container.validate_network_settings() {
+                errors.push(format!("Container '{id}': {error}"));
+            }
+            for endpoint in &container.internal_endpoints {
+                for source in &endpoint.from {
+                    if !stack
+                        .resources
+                        .get(source.id())
+                        .is_some_and(|entry| entry.config.resource_type() == source.resource_type)
+                    {
+                        errors.push(format!("Container '{id}' internal endpoint '{}' references missing or wrong-type source '{}:{}'", endpoint.name, source.resource_type, source.id()));
+                    }
+                }
+            }
+            // Backend implementations must remove their refusal only when source
+            // filtering and the outbound address floor are both enforced.
+            if !container.internal_endpoints.is_empty() || container.egress.is_some() {
+                errors.push(format!("CONTAINER_NETWORK_SETTINGS_UNSUPPORTED: {platform} does not yet enforce Container '{id}' internalEndpoints/egress"));
             }
         }
-        Ok(if errors.is_empty() {
-            CheckResult::success()
+        if errors.is_empty() {
+            Ok(CheckResult::success())
         } else {
-            CheckResult::failed(errors)
-        })
+            Ok(CheckResult::failed(errors))
+        }
     }
 }
 
@@ -45,49 +65,40 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn requested_isolation_is_never_silently_ignored() {
-        let mut stack: Stack = serde_json::from_value(serde_json::json!({
-            "id": "network-test",
-            "resources": {"gateway": {
-                "config": {"type": "container", "id": "gateway",
-                    "code": {"type": "image", "image": "example:latest"},
-                    "cpu": {"min": "1", "desired": "1"},
-                    "memory": {"min": "128Mi", "desired": "128Mi"},
-                    "permissions": "gateway", "links": [], "ports": [{"port": 3128}],
-                    "internalLoadBalancer": {"ports": [3128], "network": "default-network",
-                        "subnetGroup":"sandbox-gateway", "allowedSourceGroups": {"3128": "sandbox"}}
-                }, "lifecycle": "live", "dependencies": []
-            }},
-            "permissions": {"profiles": {}}
-        }))
-        .expect("valid stack");
-        // A developer cannot bypass the guard by using the reserved gateway ID.
-        let entry = stack.resources.remove("gateway").unwrap();
+    async fn validates_source_identity_and_refuses_unenforced_settings() {
+        let mut stack: Stack = serde_json::from_value(serde_json::json!({"id":"test", "resources": {
+            "api": {"lifecycle":"live", "dependencies":[], "config": {"type":"container", "id":"api",
+                "code":{"type":"image","image":"example:latest"}, "permissions":"app",
+                "cpu":{"min":"1","desired":"1"}, "memory":{"min":"512Mi","desired":"512Mi"},
+                "internalEndpoints":[{"name":"admin","port":3129,"from":[{"type":"worker","id":"missing"}]}]}}
+        }})).unwrap();
+        let check = ContainerNetworkSettingsCheck;
+        let invalid = check.check(&stack, Platform::Local).await.unwrap();
+        assert!(invalid
+            .errors
+            .iter()
+            .any(|error| error.contains("missing or wrong-type")));
+        let container = stack
+            .resources
+            .get_mut("api")
+            .unwrap()
+            .config
+            .downcast_mut::<Container>()
+            .unwrap();
+        container.internal_endpoints[0].from[0] =
+            alien_core::ResourceRef::new(Container::RESOURCE_TYPE, "api");
+        let valid = check.check(&stack, Platform::Local).await.unwrap();
+        assert_eq!(valid.errors.len(), 1);
+        assert!(valid.errors[0].contains("CONTAINER_NETWORK_SETTINGS_UNSUPPORTED"));
         stack
             .resources
-            .insert("sandbox-egress-gateway".into(), entry);
-        for platform in [
-            Platform::Aws,
-            Platform::Gcp,
-            Platform::Azure,
-            Platform::Kubernetes,
-            Platform::Local,
-        ] {
-            assert!(ContainerNetworkSettingsCheck.should_run(&stack, platform));
-            let result = ContainerNetworkSettingsCheck
-                .check(&stack, platform)
-                .await
-                .unwrap();
-            assert!(
-                !result.success,
-                "must refuse unsupported isolation on {platform}"
-            );
-            assert!(
-                result
-                    .errors
-                    .iter()
-                    .any(|error| error.contains("Alien-internal"))
-            );
-        }
+            .get_mut("api")
+            .unwrap()
+            .config
+            .downcast_mut::<Container>()
+            .unwrap()
+            .internal_endpoints
+            .clear();
+        assert!(check.check(&stack, Platform::Local).await.unwrap().success);
     }
 }

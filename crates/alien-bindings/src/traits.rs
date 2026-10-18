@@ -1020,6 +1020,13 @@ pub trait Worker: Binding {
 /// A trait for container bindings that enable container-to-container communication
 #[async_trait]
 pub trait Container: Binding {
+    /// Named endpoint addresses authorized for this binding's receiving resource.
+    fn get_internal_endpoints(
+        &self,
+    ) -> std::collections::HashMap<String, alien_core::ContainerInternalEndpointOutput> {
+        std::collections::HashMap::new()
+    }
+
     /// Get the internal URL for container-to-container communication.
     ///
     /// This returns the internal service discovery URL that other containers
