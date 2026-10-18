@@ -163,6 +163,67 @@ fn replace_lambda_notification_config(
 }
 
 impl AwsWorkerController {
+    async fn renew_certificate(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<()> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+
+        if worker_config.public_endpoints.is_empty() || self.uses_custom_domain {
+            return Ok(());
+        }
+
+        let Some(resource) = ctx
+            .deployment_config
+            .domain_metadata
+            .as_ref()
+            .and_then(|meta| meta.resources.get(&worker_config.id))
+        else {
+            return Ok(());
+        };
+
+        if resource.issued_at == self.certificate_issued_at {
+            return Ok(());
+        }
+
+        let Some(certificate_arn) = self.certificate_arn.clone() else {
+            return Ok(());
+        };
+        let certificate_chain = resource.certificate_chain.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "Certificate chain missing (certificate not issued)".to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })
+        })?;
+        let private_key = resource.private_key.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "Private key missing (certificate not issued)".to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })
+        })?;
+
+        let (leaf, chain) = split_certificate_chain(certificate_chain);
+        let aws_cfg = ctx.get_aws_config()?;
+        let acm_client = ctx.service_provider.get_aws_acm_client(aws_cfg).await?;
+
+        // ACM rejects tags on a reimport; the certificate keeps the ones it was imported with.
+        acm_client
+            .reimport_certificate(
+                alien_aws_clients::acm::ReimportCertificateRequest::builder()
+                    .certificate_arn(certificate_arn)
+                    .certificate(leaf)
+                    .private_key(private_key.clone())
+                    .maybe_certificate_chain(chain)
+                    .build(),
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to re-import renewed certificate to ACM".to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })?;
+
+        self.certificate_issued_at = resource.issued_at.clone();
+
+        Ok(())
+    }
+
     fn owns_network(ctx: &ResourceControllerContext<'_>) -> bool {
         matches!(
             ctx.deployment_config.stack_settings.network,
@@ -2595,35 +2656,7 @@ impl AwsWorkerController {
             }));
         }
 
-        // Check if certificate was renewed (for public workers with auto-managed domains)
-        if !worker_config.public_endpoints.is_empty() {
-            if let Some(domain_metadata) = &ctx.deployment_config.domain_metadata {
-                if let Some(resource_info) = domain_metadata.resources.get(&worker_config.id) {
-                    if let Some(new_issued_at) = &resource_info.issued_at {
-                        match &self.certificate_issued_at {
-                            Some(stored) if new_issued_at != stored => {
-                                // Certificate renewed! Trigger update flow to re-import
-                                info!(
-                                    name = %worker_config.id,
-                                    old_issued_at = %stored,
-                                    new_issued_at = %new_issued_at,
-                                    "Certificate renewed, triggering update"
-                                );
-                                return Ok(HandlerAction::Continue {
-                                    state: UpdateImportingCertificate,
-                                    suggested_delay: None,
-                                });
-                            }
-                            None => {
-                                // First heartbeat after deployment, store the timestamp
-                                self.certificate_issued_at = Some(new_issued_at.clone());
-                            }
-                            _ => {} // Same timestamp, no renewal
-                        }
-                    }
-                }
-            }
-        }
+        self.renew_certificate(ctx).await?;
 
         emit_aws_lambda_worker_heartbeat(ctx, &worker_config, &aws_worker_name, &function_info);
 
@@ -2658,73 +2691,7 @@ impl AwsWorkerController {
         )
         .await?;
 
-        if worker_config.public_endpoints.is_empty() || self.uses_custom_domain {
-            return Ok(HandlerAction::Continue {
-                state: UpdateCodeStart,
-                suggested_delay: None,
-            });
-        }
-
-        let Some(resource) = ctx
-            .deployment_config
-            .domain_metadata
-            .as_ref()
-            .and_then(|meta| meta.resources.get(&worker_config.id))
-        else {
-            return Ok(HandlerAction::Continue {
-                state: UpdateCodeStart,
-                suggested_delay: None,
-            });
-        };
-
-        if resource.issued_at == self.certificate_issued_at {
-            return Ok(HandlerAction::Continue {
-                state: UpdateCodeStart,
-                suggested_delay: None,
-            });
-        }
-
-        let Some(certificate_arn) = self.certificate_arn.clone() else {
-            return Ok(HandlerAction::Continue {
-                state: UpdateCodeStart,
-                suggested_delay: None,
-            });
-        };
-        let certificate_chain = resource.certificate_chain.as_ref().ok_or_else(|| {
-            AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: "Certificate chain missing (certificate not issued)".to_string(),
-                resource_id: Some(worker_config.id.clone()),
-            })
-        })?;
-        let private_key = resource.private_key.as_ref().ok_or_else(|| {
-            AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: "Private key missing (certificate not issued)".to_string(),
-                resource_id: Some(worker_config.id.clone()),
-            })
-        })?;
-
-        let (leaf, chain) = split_certificate_chain(certificate_chain);
-        let aws_cfg = ctx.get_aws_config()?;
-        let acm_client = ctx.service_provider.get_aws_acm_client(aws_cfg).await?;
-
-        // ACM rejects tags on a reimport; the certificate keeps the ones it was imported with.
-        acm_client
-            .reimport_certificate(
-                alien_aws_clients::acm::ReimportCertificateRequest::builder()
-                    .certificate_arn(certificate_arn)
-                    .certificate(leaf)
-                    .private_key(private_key.clone())
-                    .maybe_certificate_chain(chain)
-                    .build(),
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to re-import renewed certificate to ACM".to_string(),
-                resource_id: Some(worker_config.id.clone()),
-            })?;
-
-        self.certificate_issued_at = resource.issued_at.clone();
-
+        self.renew_certificate(ctx).await?;
         Ok(HandlerAction::Continue {
             state: UpdateCodeStart,
             suggested_delay: None,
@@ -2740,6 +2707,22 @@ impl AwsWorkerController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
+        // Older heartbeats entered this update state after installing a certificate,
+        // even though the executor had never planned an update for this worker.
+        if self.certificate_arn.is_some()
+            && self.certificate_issued_at.is_some()
+            && ctx
+                .state
+                .resources
+                .get(ctx.desired_config.id())
+                .is_some_and(|resource| resource.previous_config.is_none())
+        {
+            return Ok(HandlerAction::Continue {
+                state: Ready,
+                suggested_delay: Some(Duration::from_secs(30)),
+            });
+        }
+
         let current_config = ctx.desired_resource_config::<Worker>()?;
         let previous_config = ctx.previous_resource_config::<Worker>()?;
         let code_changed = current_config.code != previous_config.code;
@@ -4943,10 +4926,17 @@ impl AwsWorkerController {
 
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
 
-    terminal_state!(
+    #[handler(
         state = RefreshFailed,
-        status = ResourceStatus::RefreshFailed
-    );
+        on_failure = RefreshFailed,
+        status = ResourceStatus::RefreshFailed,
+    )]
+    async fn refresh_failed(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        self.ready(ctx).await
+    }
 
     fn build_outputs(&self) -> Option<ResourceOutputs> {
         self.arn.as_ref().map(|arn| {

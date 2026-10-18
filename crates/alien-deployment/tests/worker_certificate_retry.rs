@@ -59,6 +59,7 @@ async fn unchanged_deployment_retry_recovers_legacy_certificate_update_failure()
             .code(WorkerCode::Image {
                 image: "example.com/worker:v1".to_string(),
             })
+            .permissions("default-profile".to_string())
             .public_endpoint(WorkerPublicEndpoint {
                 name: "api".to_string(),
                 host_label: None,

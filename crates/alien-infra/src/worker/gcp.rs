@@ -343,6 +343,140 @@ pub struct GcpWorkerController {
 }
 
 impl GcpWorkerController {
+    async fn renew_certificate(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<()> {
+        let cfg = ctx.desired_resource_config::<Worker>()?;
+
+        if cfg.public_endpoints.is_empty() || self.uses_custom_domain {
+            return Ok(());
+        }
+
+        let Some(resource) = ctx
+            .deployment_config
+            .domain_metadata
+            .as_ref()
+            .and_then(|meta| meta.resources.get(&cfg.id))
+        else {
+            return Ok(());
+        };
+
+        if resource.issued_at == self.certificate_issued_at {
+            return Ok(());
+        }
+
+        let Some(proxy_name) = self.target_https_proxy_name.clone() else {
+            return Ok(());
+        };
+
+        let certificate_chain = resource.certificate_chain.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "Certificate chain missing (certificate not issued)".to_string(),
+                resource_id: Some(cfg.id.clone()),
+            })
+        })?;
+        let private_key = resource.private_key.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "Private key missing (certificate not issued)".to_string(),
+                resource_id: Some(cfg.id.clone()),
+            })
+        })?;
+
+        let issued_suffix = resource
+            .issued_at
+            .as_deref()
+            .unwrap_or("renewed")
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .take(16)
+            .collect::<String>()
+            .to_lowercase();
+        let ssl_cert_name = get_gcp_worker_resource_name(
+            ctx.resource_prefix,
+            &cfg.id,
+            &format!("cert-{issued_suffix}"),
+        );
+        let gcp_config = ctx.get_gcp_config()?;
+        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+
+        let ssl_certificate = SslCertificate::builder()
+            .name(ssl_cert_name.clone())
+            .description(format!("Renewed SSL certificate for worker {}", cfg.id))
+            .r#type("SELF_MANAGED".to_string())
+            .self_managed(
+                SslCertificateSelfManaged::builder()
+                    .certificate(certificate_chain.clone())
+                    .private_key(private_key.clone())
+                    .build(),
+            )
+            .build();
+
+        match compute_client.insert_ssl_certificate(ssl_certificate).await {
+            Ok(_) => {}
+            Err(e) if is_remote_resource_conflict(&e) => {
+                info!(
+                    worker=%cfg.id,
+                    cert_name=%ssl_cert_name,
+                    "Renewed SSL certificate already exists; treating as imported"
+                );
+            }
+            Err(e) => {
+                return Err(e.context(ErrorData::CloudPlatformError {
+                    message: "Failed to import renewed SSL certificate to GCP".to_string(),
+                    resource_id: Some(cfg.id.clone()),
+                }));
+            }
+        }
+
+        let ssl_cert_url = format!(
+            "projects/{}/global/sslCertificates/{}",
+            gcp_config.project_id, ssl_cert_name
+        );
+        compute_client
+            .set_target_https_proxy_ssl_certificates(proxy_name, vec![ssl_cert_url])
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to bind renewed SSL certificate to target HTTPS proxy".to_string(),
+                resource_id: Some(cfg.id.clone()),
+            })?;
+
+        let previous_ssl_certificate_name = self.ssl_certificate_name.clone();
+
+        self.ssl_certificate_name = Some(ssl_cert_name);
+        self.certificate_issued_at = resource.issued_at.clone();
+
+        if let Some(previous_ssl_certificate_name) = previous_ssl_certificate_name {
+            if self.ssl_certificate_name.as_deref() != Some(previous_ssl_certificate_name.as_str())
+            {
+                match compute_client
+                    .delete_ssl_certificate(previous_ssl_certificate_name.clone())
+                    .await
+                {
+                    Ok(_) => {
+                        info!(
+                            worker=%cfg.id,
+                            cert_name=%previous_ssl_certificate_name,
+                            "Deleted previous SSL certificate after renewal"
+                        );
+                    }
+                    Err(e)
+                        if matches!(
+                            e.error,
+                            Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                        ) => {}
+                    Err(e) => {
+                        warn!(
+                            worker=%cfg.id,
+                            cert_name=%previous_ssl_certificate_name,
+                            error=%e,
+                            "Failed to delete previous SSL certificate after renewal"
+                        );
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     fn record_compute_operation(
         &mut self,
         operation: ComputeOperation,
@@ -2056,7 +2190,7 @@ impl GcpWorkerController {
         let gcp_config = ctx.get_gcp_config()?;
         let client = ctx.service_provider.get_gcp_cloudrun_client(gcp_config)?;
         let worker_config = ctx.desired_resource_config::<Worker>()?;
-        let service_name = self.service_name.as_ref().ok_or_else(|| {
+        let service_name = self.service_name.clone().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceControllerConfigError {
                 resource_id: worker_config.id.clone(),
                 message: "Service name not set in state".to_string(),
@@ -2123,34 +2257,9 @@ impl GcpWorkerController {
             }
         }
 
-        // Check for certificate renewal on auto-managed public domains.
-        if !worker_config.public_endpoints.is_empty() && !self.uses_custom_domain {
-            let metadata = ctx
-                .deployment_config
-                .domain_metadata
-                .as_ref()
-                .and_then(|meta| meta.resources.get(&worker_config.id));
+        self.renew_certificate(ctx).await?;
 
-            if let Some(resource) = metadata {
-                // Check if certificate has been renewed (issued_at timestamp changed)
-                if let Some(new_issued_at) = &resource.issued_at {
-                    if self.certificate_issued_at.as_ref() != Some(new_issued_at) {
-                        info!(
-                            worker=%worker_config.id,
-                            old_issued_at=?self.certificate_issued_at,
-                            new_issued_at=%new_issued_at,
-                            "Certificate renewed, triggering update to re-import certificate"
-                        );
-                        return Ok(HandlerAction::Continue {
-                            state: UpdateImportingSslCertificate,
-                            suggested_delay: None,
-                        });
-                    }
-                }
-            }
-        }
-
-        emit_gcp_cloud_run_worker_heartbeat(ctx, &worker_config, service_name, &service);
+        emit_gcp_cloud_run_worker_heartbeat(ctx, &worker_config, &service_name, &service);
 
         debug!(name = %worker_config.id, "Heartbeat check passed");
         Ok(HandlerAction::Continue {
@@ -2170,148 +2279,7 @@ impl GcpWorkerController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
-        let cfg = ctx.desired_resource_config::<Worker>()?;
-
-        if cfg.public_endpoints.is_empty() || self.uses_custom_domain {
-            return Ok(HandlerAction::Continue {
-                state: UpdateStart,
-                suggested_delay: None,
-            });
-        }
-
-        let Some(resource) = ctx
-            .deployment_config
-            .domain_metadata
-            .as_ref()
-            .and_then(|meta| meta.resources.get(&cfg.id))
-        else {
-            return Ok(HandlerAction::Continue {
-                state: UpdateStart,
-                suggested_delay: None,
-            });
-        };
-
-        if resource.issued_at == self.certificate_issued_at {
-            return Ok(HandlerAction::Continue {
-                state: UpdateStart,
-                suggested_delay: None,
-            });
-        }
-
-        let Some(proxy_name) = self.target_https_proxy_name.clone() else {
-            return Ok(HandlerAction::Continue {
-                state: UpdateStart,
-                suggested_delay: None,
-            });
-        };
-
-        let certificate_chain = resource.certificate_chain.as_ref().ok_or_else(|| {
-            AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: "Certificate chain missing (certificate not issued)".to_string(),
-                resource_id: Some(cfg.id.clone()),
-            })
-        })?;
-        let private_key = resource.private_key.as_ref().ok_or_else(|| {
-            AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: "Private key missing (certificate not issued)".to_string(),
-                resource_id: Some(cfg.id.clone()),
-            })
-        })?;
-
-        let issued_suffix = resource
-            .issued_at
-            .as_deref()
-            .unwrap_or("renewed")
-            .chars()
-            .filter(|c| c.is_ascii_alphanumeric())
-            .take(16)
-            .collect::<String>()
-            .to_lowercase();
-        let ssl_cert_name = get_gcp_worker_resource_name(
-            ctx.resource_prefix,
-            &cfg.id,
-            &format!("cert-{issued_suffix}"),
-        );
-        let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
-
-        let ssl_certificate = SslCertificate::builder()
-            .name(ssl_cert_name.clone())
-            .description(format!("Renewed SSL certificate for worker {}", cfg.id))
-            .r#type("SELF_MANAGED".to_string())
-            .self_managed(
-                SslCertificateSelfManaged::builder()
-                    .certificate(certificate_chain.clone())
-                    .private_key(private_key.clone())
-                    .build(),
-            )
-            .build();
-
-        match compute_client.insert_ssl_certificate(ssl_certificate).await {
-            Ok(_) => {}
-            Err(e) if is_remote_resource_conflict(&e) => {
-                info!(
-                    worker=%cfg.id,
-                    cert_name=%ssl_cert_name,
-                    "Renewed SSL certificate already exists; treating as imported"
-                );
-            }
-            Err(e) => {
-                return Err(e.context(ErrorData::CloudPlatformError {
-                    message: "Failed to import renewed SSL certificate to GCP".to_string(),
-                    resource_id: Some(cfg.id.clone()),
-                }));
-            }
-        }
-
-        let ssl_cert_url = format!(
-            "projects/{}/global/sslCertificates/{}",
-            gcp_config.project_id, ssl_cert_name
-        );
-        compute_client
-            .set_target_https_proxy_ssl_certificates(proxy_name, vec![ssl_cert_url])
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to bind renewed SSL certificate to target HTTPS proxy".to_string(),
-                resource_id: Some(cfg.id.clone()),
-            })?;
-
-        let previous_ssl_certificate_name = self.ssl_certificate_name.clone();
-
-        self.ssl_certificate_name = Some(ssl_cert_name);
-        self.certificate_issued_at = resource.issued_at.clone();
-
-        if let Some(previous_ssl_certificate_name) = previous_ssl_certificate_name {
-            if self.ssl_certificate_name.as_deref() != Some(previous_ssl_certificate_name.as_str())
-            {
-                match compute_client
-                    .delete_ssl_certificate(previous_ssl_certificate_name.clone())
-                    .await
-                {
-                    Ok(_) => {
-                        info!(
-                            worker=%cfg.id,
-                            cert_name=%previous_ssl_certificate_name,
-                            "Deleted previous SSL certificate after renewal"
-                        );
-                    }
-                    Err(e)
-                        if matches!(
-                            e.error,
-                            Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                        ) => {}
-                    Err(e) => {
-                        warn!(
-                            worker=%cfg.id,
-                            cert_name=%previous_ssl_certificate_name,
-                            error=%e,
-                            "Failed to delete previous SSL certificate after renewal"
-                        );
-                    }
-                }
-            }
-        }
-
+        self.renew_certificate(ctx).await?;
         Ok(HandlerAction::Continue {
             state: UpdateStart,
             suggested_delay: None,
@@ -2324,6 +2292,22 @@ impl GcpWorkerController {
         status = ResourceStatus::Updating,
     )]
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+        // Older heartbeats entered this update state after installing a certificate,
+        // even though the executor had never planned an update for this worker.
+        if self.ssl_certificate_name.is_some()
+            && self.certificate_issued_at.is_some()
+            && ctx
+                .state
+                .resources
+                .get(ctx.desired_config.id())
+                .is_some_and(|resource| resource.previous_config.is_none())
+        {
+            return Ok(HandlerAction::Continue {
+                state: Ready,
+                suggested_delay: Some(Duration::from_secs(30)),
+            });
+        }
+
         let cfg = ctx.desired_resource_config::<Worker>()?;
         let previous_cfg = ctx.previous_resource_config::<Worker>()?;
         if cfg == previous_cfg {
@@ -4171,10 +4155,17 @@ impl GcpWorkerController {
 
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
 
-    terminal_state!(
+    #[handler(
         state = RefreshFailed,
-        status = ResourceStatus::RefreshFailed
-    );
+        on_failure = RefreshFailed,
+        status = ResourceStatus::RefreshFailed,
+    )]
+    async fn refresh_failed(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        self.ready(ctx).await
+    }
 
     fn build_outputs(&self) -> Option<ResourceOutputs> {
         self.url.as_ref().map(|url| {
