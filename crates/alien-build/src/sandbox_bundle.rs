@@ -110,7 +110,7 @@ USER 0:0
 /// The archive is flat on purpose — `CreateMicrovmImage` looks for the Dockerfile at the root,
 /// and a nested directory produces a build failure minutes in rather than a rejected request.
 pub fn write_bundle(destination: &Path, base_image: &str, agent: &AgentSource) -> Result<()> {
-    write_bundle_inner(destination, base_image, agent, None)
+    write_bundle_inner(destination, base_image, agent, None, None)
 }
 
 /// Packages the declared sandbox, preserving the released layout for legacy egress modes.
@@ -128,14 +128,28 @@ pub fn write_declared_bundle(
     if !matches!(egress, SandboxEgress::Internet) {
         return write_bundle(destination, base_image, agent);
     }
+    let config = image_config.ok_or_else(|| {
+        AlienError::new(ErrorData::BuildConfigInvalid {
+            message:
+                "An internet sandbox bundle requires the base image's inspected OCI configuration"
+                    .to_string(),
+        })
+    })?;
+    write_supervised_bundle(
+        destination,
+        base_image,
+        agent,
+        &image_command_from_config(config)?,
+    )
+}
+
+/// Extracts the original execution configuration without exposing it in a public artifact.
+pub fn image_command_from_config(config: &Config) -> Result<SandboxImageCommand> {
     let invalid = |message: &str| {
         AlienError::new(ErrorData::BuildConfigInvalid {
             message: message.to_string(),
         })
     };
-    let config = image_config.ok_or_else(|| {
-        invalid("An internet sandbox bundle requires the base image's inspected OCI configuration")
-    })?;
     let mut env = std::collections::BTreeMap::new();
     for entry in config.env.iter().flatten() {
         let (key, value) = entry.split_once('=').ok_or_else(|| {
@@ -164,7 +178,7 @@ pub fn write_declared_bundle(
             .unwrap_or("/")
             .to_string(),
     };
-    write_supervised_bundle(destination, base_image, agent, &command)
+    Ok(command)
 }
 
 /// Writes a bundle preserving the base image's OCI command for unprivileged startup.
@@ -175,7 +189,28 @@ pub fn write_supervised_bundle(
     agent: &AgentSource,
     image_command: &alien_core::sandbox_image::SandboxImageCommand,
 ) -> Result<()> {
-    write_bundle_inner(destination, base_image, agent, Some(image_command))
+    write_bundle_inner(destination, base_image, agent, Some(image_command), None)
+}
+
+/// Copies command metadata from a private image instead of publishing its contents in the ZIP.
+/// The image must hold the inspected command at `IMAGE_COMMAND_PATH` and be pullable by the
+/// image build role. A digest reference keeps the command tied to the packaged base image.
+pub fn write_supervised_bundle_with_command_image(
+    destination: &Path,
+    base_image: &str,
+    agent: &AgentSource,
+    command_image: &str,
+) -> Result<()> {
+    let reference = checked_reference(command_image, "Image command")?;
+    let digest = reference.rsplit_once("@sha256:").map(|(_, digest)| digest);
+    if !digest.is_some_and(|digest| {
+        digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+    }) {
+        return Err(AlienError::new(ErrorData::BuildConfigInvalid {
+            message: "An image command source must be pinned by sha256 digest".to_string(),
+        }));
+    }
+    write_bundle_inner(destination, base_image, agent, None, Some(reference))
 }
 
 fn write_bundle_inner(
@@ -183,6 +218,7 @@ fn write_bundle_inner(
     base_image: &str,
     agent: &AgentSource,
     image_command: Option<&alien_core::sandbox_image::SandboxImageCommand>,
+    command_image: Option<&str>,
 ) -> Result<()> {
     let failed = |operation: &str, path: &Path| ErrorData::FileOperationFailed {
         operation: operation.to_string(),
@@ -202,6 +238,12 @@ fn write_bundle_inner(
         dockerfile.push_str(&format!(
             "\nCOPY --chown=0:0 --chmod=0444 image-command.json {}\n",
             alien_core::sandbox_image::IMAGE_COMMAND_PATH
+        ));
+    }
+    if let Some(image) = command_image {
+        dockerfile.push_str(&format!(
+            "\nCOPY --from={image} --chown=0:0 --chmod=0444 {path} {path}\n",
+            path = alien_core::sandbox_image::IMAGE_COMMAND_PATH,
         ));
     }
     let agent_bytes = match agent {
