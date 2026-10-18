@@ -88,6 +88,23 @@ pub(crate) fn validate_installed_management_permissions(
     if expected.is_empty() {
         return Ok(());
     }
+    // Older automatic AWS setup installed vault data access across the stack.
+    // Narrowing the requested scope must revoke that access through setup, rather
+    // than treating the old broader policy as a sufficient installed grant.
+    let vault_data_grants = if state.platform == Platform::Aws {
+        let profile = alien_core::permissions::PermissionProfile::new()
+            .global(["vault/data-read", "vault/data-write"]);
+        alien_permissions::management_grant_revisions(Some(&profile), Platform::Aws)
+            .context(ErrorData::InfrastructureError {
+                message: "Failed to resolve vault permission revisions".to_string(),
+                operation: Some("validate_installed_management_permissions".to_string()),
+                resource_id: None,
+            })?
+            .and_then(|mut scopes| scopes.remove("*"))
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     for (id, resource) in stack.resources() {
         if resource
             .config
@@ -122,6 +139,17 @@ pub(crate) fn validate_installed_management_permissions(
             }
             _ => continue,
         };
+        if applied.as_ref().and_then(|grants| grants.get("*")).is_some_and(|global| {
+            vault_data_grants.iter().any(|grant| {
+                global.contains(grant)
+                    && !expected.get("*").is_some_and(|desired| desired.contains(grant))
+            })
+        }) {
+            return Err(AlienError::new(ErrorData::SetupRequired {
+                message: "Rerun setup to remove obsolete stack-wide vault data access before applying this release".to_string(),
+                resource_id: Some(id.to_string()),
+            }));
+        }
         if !applied.as_ref().is_some_and(|installed| {
             expected.iter().all(|(scope, grants)| {
                 grants.iter().all(|grant| {
@@ -461,4 +489,42 @@ mod tests {
             }
         }
     }
+    #[tokio::test]
+    async fn narrowing_legacy_vault_access_requires_setup_but_preserves_explicit_grants() {
+        let fixture = executor(
+            Platform::Aws,
+            AwsRemoteStackManagementController::mock_ready("management"),
+            InitialSetupAuthority::ImportedHandoff,
+            false,
+        ).await;
+        let mut stack = fixture.with_context(|ctx| ctx.desired_stack.clone());
+        let global = alien_core::permissions::PermissionProfile::new()
+            .global(["vault/data-read", "vault/data-write"]);
+        stack.permissions.management = ManagementPermissions::Override(global.clone());
+        let installed = alien_permissions::management_grant_revisions(Some(&global), Platform::Aws)
+            .unwrap().unwrap();
+        let mut state = fixture.stack_state().clone();
+        state.resources.get_mut("management").unwrap().internal_state.as_mut().unwrap()
+            ["installedManagementGrants"] = serde_json::json!(installed);
+        validate_installed_management_permissions(&stack, &state, InitialSetupAuthority::ImportedHandoff)
+            .expect("explicit global data grants remain supported");
+        let mut scoped = global;
+        let grants = scoped.0.shift_remove("*").unwrap();
+        scoped.0.insert("secrets".to_string(), grants);
+        stack.permissions.management = ManagementPermissions::Override(scoped.clone());
+        assert_eq!(
+            validate_installed_management_permissions(&stack, &state, InitialSetupAuthority::ImportedHandoff)
+                .unwrap_err().code,
+            "DEPLOYMENT_SETUP_REQUIRED",
+        );
+        validate_installed_management_permissions(&stack, &state, InitialSetupAuthority::DirectSetup)
+            .expect("installer may replace the obsolete grant");
+        let installed = alien_permissions::management_grant_revisions(Some(&scoped), Platform::Aws)
+            .unwrap().unwrap();
+        state.resources.get_mut("management").unwrap().internal_state.as_mut().unwrap()
+            ["installedManagementGrants"] = serde_json::json!(installed);
+        validate_installed_management_permissions(&stack, &state, InitialSetupAuthority::ImportedHandoff)
+            .expect("registered concrete grants authorize runtime after setup");
+    }
+
 }
