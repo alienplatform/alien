@@ -329,28 +329,6 @@ impl AwsRemoteStackManagementController {
         })
     }
 
-    async fn advance_gateway_setup(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
-        let setup = self.gateway_setup.as_mut().ok_or_else(|| {
-            AlienError::new(ErrorData::InfrastructureError {
-                message: "Missing gateway setup ownership intent".into(),
-                operation: Some("setup_gateway_retirement".into()),
-                resource_id: None,
-            })
-        })?;
-        let role = self.role_name.as_deref().ok_or_else(|| {
-            AlienError::new(ErrorData::InfrastructureError {
-                message: "Missing management role receipt".into(),
-                operation: Some("setup_gateway_retirement".into()),
-                resource_id: None,
-            })
-        })?;
-        if !setup.advance(ctx, role).await? {
-            return Ok(false);
-        }
-        self.worker_gateway_cleanup_function_arn = setup.published_arn().map(str::to_string);
-        Ok(true)
-    }
-
     // ─────────────── DELETE FLOW ──────────────────────────────
 
     #[flow_entry(Delete)]
@@ -674,6 +652,28 @@ fn emit_aws_remote_stack_management_heartbeat(
 
 // Separate impl block for helper methods
 impl AwsRemoteStackManagementController {
+    async fn advance_gateway_setup(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        let setup = self.gateway_setup.as_mut().ok_or_else(|| {
+            AlienError::new(ErrorData::InfrastructureError {
+                message: "Missing gateway setup ownership intent".into(),
+                operation: Some("setup_gateway_retirement".into()),
+                resource_id: None,
+            })
+        })?;
+        let role = self.role_name.as_deref().ok_or_else(|| {
+            AlienError::new(ErrorData::InfrastructureError {
+                message: "Missing management role receipt".into(),
+                operation: Some("setup_gateway_retirement".into()),
+                resource_id: None,
+            })
+        })?;
+        if !setup.advance(ctx, role).await? {
+            return Ok(false);
+        }
+        self.worker_gateway_cleanup_function_arn = setup.published_arn().map(str::to_string);
+        Ok(true)
+    }
+
     /// Generate trust policy for cross-account access with specific role restriction
     fn generate_cross_account_trust_policy(managing_role_arn: &str) -> String {
         format!(
@@ -1238,6 +1238,7 @@ impl AwsRemoteStackManagementController {
             management_permissions_revision: None,
             installed_management_grants: None,
             worker_gateway_cleanup_function_arn: None,
+            gateway_setup: None,
             _internal_stay_count: None,
         }
     }

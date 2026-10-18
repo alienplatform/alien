@@ -3,9 +3,9 @@
 use std::collections::HashMap;
 
 use alien_aws_clients::{
-    iam::{CreateRoleRequest, CreateRoleTag, IamApi, Role},
+    iam::{CreateRoleRequest, CreateRoleTag, Role},
     lambda::{
-        CreateFunctionRequest, Environment, FunctionCode, FunctionConfiguration, LambdaApi,
+        CreateFunctionRequest, Environment, FunctionCode, FunctionConfiguration,
         PublishVersionRequest, UpdateFunctionCodeRequest, UpdateFunctionConfigurationRequest,
     },
 };
@@ -15,7 +15,7 @@ use alien_core::{
     },
     setup_resource_tags, InitialSetupAuthority, RemoteStackManagement, ResourceLifecycle,
 };
-use alien_error::{AlienError, Context};
+use alien_error::{AlienError, Context, ErrorContext};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
