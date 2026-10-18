@@ -81,7 +81,16 @@ pub(crate) fn consolidate_role_inline_policies(template: &mut CfTemplate) -> Res
             };
 
             statements.extend(policy_statements.iter().cloned());
-            dependencies.extend(policy.depends_on.iter().cloned());
+            // Dependencies between grants disappear when those grants become
+            // one policy group. Keeping them would make the replacement depend
+            // on itself, or make its size-limited chunks depend on each other.
+            dependencies.extend(
+                policy
+                    .depends_on
+                    .iter()
+                    .filter(|dependency| !group.policy_ids.contains(dependency))
+                    .cloned(),
+            );
         }
 
         let policy_documents = chunk_managed_policy_statements(compact_statements(statements))?;
