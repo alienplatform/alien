@@ -791,10 +791,12 @@ pub(crate) fn gateway_subnet_ids(ctx: &EmitContext<'_>) -> Result<Expression> {
 }
 
 fn has_sandboxes(ctx: &EmitContext<'_>) -> bool {
-    ctx.stack
-        .resources()
-        .find(|(_, entry)| entry.config.downcast_ref::<Network>().is_some())
-        .is_some_and(|(id, _)| id == ctx.resource_id)
+    !ctx.targets_kubernetes
+        && ctx
+            .stack
+            .resources()
+            .find(|(_, entry)| entry.config.downcast_ref::<Network>().is_some())
+            .is_some_and(|(id, _)| id == ctx.resource_id)
         && ctx
             .stack
             .resources()

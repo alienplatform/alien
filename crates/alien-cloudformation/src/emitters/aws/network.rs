@@ -226,9 +226,10 @@ fn created_network_resources(ctx: &EmitContext<'_>) -> Result<Vec<CfResource>> {
         public_subnet
             .properties
             .insert(zone_property.to_string(), select(index, zones.clone()));
-        public_subnet
-            .properties
-            .insert("CidrBlock".to_string(), select(index, cidr_blocks(&vpc_id)));
+        public_subnet.properties.insert(
+            "CidrBlock".to_string(),
+            select(index, cidr_blocks(&vpc_id, 6)),
+        );
         public_subnet
             .properties
             .insert("MapPublicIpOnLaunch".to_string(), CfExpression::from(true));
@@ -250,7 +251,7 @@ fn created_network_resources(ctx: &EmitContext<'_>) -> Result<Vec<CfResource>> {
             .insert(zone_property.to_string(), select(index, zones.clone()));
         private_subnet.properties.insert(
             "CidrBlock".to_string(),
-            select(index + 3, cidr_blocks(&vpc_id)),
+            select(index + 3, cidr_blocks(&vpc_id, 6)),
         );
         private_subnet
             .properties
@@ -424,7 +425,7 @@ fn created_network_resources(ctx: &EmitContext<'_>) -> Result<Vec<CfResource>> {
                     .insert(zone_property.to_string(), select(index, zones.clone()));
                 subnet.properties.insert(
                     "CidrBlock".to_string(),
-                    select(index + offset, cidr_blocks(&vpc_id)),
+                    select(index + offset, cidr_blocks(&vpc_id, 12)),
                 );
                 subnet
                     .properties
@@ -461,12 +462,12 @@ fn network_id(prefix: &str, suffix: &str) -> String {
     format!("{prefix}{suffix}")
 }
 
-fn cidr_blocks(vpc_id: &str) -> CfExpression {
+fn cidr_blocks(vpc_id: &str, count: i64) -> CfExpression {
     CfExpression::object([(
         "Fn::Cidr",
         CfExpression::list([
             CfExpression::get_att(vpc_id, "CidrBlock"),
-            CfExpression::Integer(12),
+            CfExpression::Integer(count),
             CfExpression::Integer(8),
         ]),
     )])
@@ -690,10 +691,12 @@ pub(crate) fn sandbox_subnet_ids(ctx: &EmitContext<'_>) -> Result<CfExpression> 
 }
 
 fn has_sandboxes(ctx: &EmitContext<'_>) -> bool {
-    ctx.stack
-        .resources()
-        .find(|(_, entry)| entry.config.downcast_ref::<Network>().is_some())
-        .is_some_and(|(id, _)| id == ctx.resource_id)
+    !ctx.targets_kubernetes
+        && ctx
+            .stack
+            .resources()
+            .find(|(_, entry)| entry.config.downcast_ref::<Network>().is_some())
+            .is_some_and(|(id, _)| id == ctx.resource_id)
         && ctx
             .stack
             .resources()
