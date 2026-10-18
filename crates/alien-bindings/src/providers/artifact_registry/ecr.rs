@@ -611,40 +611,36 @@ impl ArtifactRegistry for EcrArtifactRegistry {
             "Getting ECR repository details"
         );
 
-        // Assume the pull role for repository reads
-        let pull_role_arn = self.pull_role_arn.as_ref().ok_or_else(|| {
-            AlienError::new(ErrorData::BindingConfigInvalid {
-                env_var: binding_env_var(&self.binding_name),
-                binding_name: self.binding_name.clone(),
-                reason: "Pull role ARN not available".to_string(),
-            })
-        })?;
-        let impersonated = self
-            .credentials
-            .config()
-            .impersonate(alien_aws_clients::AwsImpersonationConfig {
-                role_arn: pull_role_arn.clone(),
-                session_name: Some("alien-ecr-describe".to_string()),
-                duration_seconds: None,
-                external_id: None,
-                target_region: None,
-            })
-            .await
-            .map_err(|e| {
-                map_cloud_client_error(
-                    e,
-                    "Failed to assume ECR pull role".to_string(),
-                    Some(repo_id.to_string()),
-                )
-            })?;
-        let ecr_client = alien_aws_clients::ecr::EcrClient::new(
+        // A configured pull role owns reads across accounts. Single-account bindings use
+        // their own credentials, just as repository creation and policy management do.
+        let read_config = match &self.pull_role_arn {
+            Some(pull_role_arn) => self
+                .credentials
+                .config()
+                .impersonate(alien_aws_clients::AwsImpersonationConfig {
+                    role_arn: pull_role_arn.clone(),
+                    session_name: Some("alien-ecr-describe".to_string()),
+                    duration_seconds: None,
+                    external_id: None,
+                    target_region: None,
+                })
+                .await
+                .map_err(|e| {
+                    map_cloud_client_error(
+                        e,
+                        "Failed to assume ECR pull role".to_string(),
+                        Some(repo_id.to_string()),
+                    )
+                })?,
+            None => self.credentials.config().clone(),
+        };
+        let ecr_client = EcrClient::new(
             crate::http_client::create_http_client(),
-            AwsCredentialProvider::from_config(impersonated)
+            AwsCredentialProvider::from_config(read_config)
                 .await
                 .context(ErrorData::BindingSetupFailed {
                     binding_type: "artifact_registry.ecr".to_string(),
-                    reason: "Failed to create credential provider for impersonated role"
-                        .to_string(),
+                    reason: "Failed to create credential provider for repository reads".to_string(),
                 })?,
         );
 
