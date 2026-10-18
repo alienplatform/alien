@@ -10,6 +10,7 @@ pub mod merge;
 pub mod plan;
 pub mod registry;
 pub mod sandbox_bundle;
+pub mod sandbox_identity;
 #[cfg(test)]
 mod sandbox_publish_tests;
 pub mod settings;

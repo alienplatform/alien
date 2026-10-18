@@ -114,6 +114,11 @@ impl ImageUser<'_> {
                 None => 0,
             },
         };
+        if gid == 0 {
+            return Err(AlienError::new(invalid(
+                "the root group is not permitted for sandbox commands; declare USER with a non-root primary group".to_string(),
+            )));
+        }
         Ok(ExecIdentity { uid, gid })
     }
 }

@@ -272,8 +272,10 @@ pub const DEFAULT_SANDBOX_TOOLS: &[SandboxTool] = &[
 /// The `RUN` step creating the exec identity and the session root it owns.
 pub fn identity_setup(image: &SandboxImage) -> String {
     format!(
-        r#"RUN printf '{passwd}\n' >> /etc/passwd \
- && printf '{group}\n' >> /etc/group \
+        r#"RUN test ! -L /etc/passwd && test ! -L /etc/group && test ! -L {root} \
+ && touch /etc/passwd /etc/group \
+ && (awk -F: '$3 == {uid} {{ found=1 }} END {{ exit !found }}' /etc/passwd || printf '{passwd}\n' >> /etc/passwd) \
+ && (awk -F: '$3 == {gid} {{ found=1 }} END {{ exit !found }}' /etc/group || printf '{group}\n' >> /etc/group) \
  && mkdir -p {root} \
  && chown {uid}:{gid} {root} \
  && chmod {SESSION_ROOT_MODE:04o} {root}"#,

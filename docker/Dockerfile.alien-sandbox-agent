@@ -29,8 +29,10 @@ COPY --from=binary-selector --chown=0:0 --chmod=0755 \
 
 # Numeric ids and a plain append rather than adduser, which differs across base distributions.
 # Linux runs a process under a uid with no passwd entry, but tooling inside the sandbox reads one.
-RUN printf 'sandbox:x:1000:1000::/sandbox:/sbin/nologin\n' >> /etc/passwd \
- && printf 'sandbox:x:1000:\n' >> /etc/group \
+RUN test ! -L /etc/passwd && test ! -L /etc/group && test ! -L /sandbox \
+ && touch /etc/passwd /etc/group \
+ && (awk -F: '$3 == 1000 { found=1 } END { exit !found }' /etc/passwd || printf 'sandbox:x:1000:1000::/sandbox:/sbin/nologin\n' >> /etc/passwd) \
+ && (awk -F: '$3 == 1000 { found=1 } END { exit !found }' /etc/group || printf 'sandbox:x:1000:\n' >> /etc/group) \
  && mkdir -p /sandbox \
  && chown 1000:1000 /sandbox \
  && chmod 0700 /sandbox
