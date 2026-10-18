@@ -89,7 +89,7 @@ async fn concurrent_signed_versions_never_regress_and_recovery_only_fills_absenc
     assert!(!store.apply(wide.clone(), true).unwrap());
     let restarted = PolicyStore::new(false, 512 * 1024 * 1024);
     assert!(!restarted.ready());
-    for entry in store.newer_than(&[]).unwrap() {
+    for entry in store.newer_than(&[], &["p/r".into()]).unwrap() {
         restarted.apply(entry.as_ref().clone(), false).unwrap();
     }
     restarted.set_ready();
@@ -109,7 +109,7 @@ async fn concurrent_signed_versions_never_regress_and_recovery_only_fills_absenc
     store.apply(recreated, false).unwrap();
     assert_eq!(
         store
-            .newer_than(&restarted.summary().unwrap())
+            .newer_than(&restarted.summary().unwrap(), &["p/r".into()])
             .unwrap()
             .len(),
         1
@@ -199,7 +199,9 @@ async fn bounded_snapshot_pages_restore_every_large_signed_policy() {
     assert!(accepted >= 30, "fixture must span multiple snapshot pages");
     let mut pages = 0;
     loop {
-        let page = source.newer_than(&restored.summary().unwrap()).unwrap();
+        let page = source
+            .newer_than(&restored.summary().unwrap(), &["p/r".into()])
+            .unwrap();
         if page.is_empty() {
             break;
         }

@@ -1,3 +1,5 @@
+#![cfg(target_os = "linux")]
+
 use alien_core::{
     EgressPolicy, Platform, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy,
     SandboxPrivilegedSupervisor,

@@ -292,7 +292,9 @@ impl Replication {
                 let known: Vec<Summary> = serde_json::from_slice(&bytes)
                     .into_alien_error()
                     .context(unavailable("decode replica summary"))?;
-                let records = gateway.policies.newer_than(&known)?;
+                let records = gateway
+                    .policies
+                    .newer_than(&known, &gateway.config.audiences)?;
                 if records.is_empty() {
                     break;
                 }
