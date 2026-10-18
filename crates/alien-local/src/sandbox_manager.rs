@@ -150,7 +150,7 @@ impl LocalSandboxManager {
         }
 
         self.ensure_image(&config.image).await?;
-        let image = crate::sandbox_identity::inspect(&self.docker, &config.image).await?;
+        let image = crate::sandbox_identity::inspect(&self.docker, &config.image, sandbox).await?;
 
         let network_mode = match config.egress {
             // "none" gives no interface at all, which is a stronger and simpler guarantee than
@@ -640,13 +640,13 @@ impl LocalSandboxManager {
         }
     }
 
-    /// Removes every session belonging to a sandbox.
+    /// Removes every session and temporary image inspection belonging to a sandbox.
     ///
     /// Run at manager startup so a CLI restart does not leave containers behind, and at
     /// teardown so the Frozen parent's children go first.
     pub async fn reap(&self, sandbox: &str) -> Result<usize> {
         let sessions = self.list_sessions(sandbox).await?;
-        let count = sessions.len();
+        let count = sessions.len() + crate::sandbox_identity::reap(&self.docker, sandbox).await?;
 
         for session in sessions {
             self.terminate(sandbox, &session.session_id).await?;
