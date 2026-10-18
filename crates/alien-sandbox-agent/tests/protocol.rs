@@ -37,6 +37,11 @@ fn test_identity() -> ExecIdentity {
 }
 const GENERATION: u64 = 3;
 
+/// The real agent binary, so the validate hook's identity probe runs what an image runs.
+fn agent_binary() -> PathBuf {
+    PathBuf::from(env!("CARGO_BIN_EXE_alien-sandbox-agent"))
+}
+
 struct Agent {
     base_url: String,
     keys: KeyPair,
@@ -65,6 +70,7 @@ impl Agent {
             exec_identity: test_identity(),
             output_cap: 1 << 20,
             jobs: JobRegistry::new(),
+            agent_binary: agent_binary(),
         });
 
         let served = Arc::clone(&state);
@@ -447,6 +453,7 @@ async fn transport_authorization_needs_no_capability() {
         },
         output_cap: 1 << 20,
         jobs: JobRegistry::new(),
+        agent_binary: agent_binary(),
     });
 
     let listener = TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().expect("literal"))
@@ -493,6 +500,7 @@ async fn transport_authorization_refuses_the_code_the_agent_runs() {
         exec_identity: test_identity(),
         output_cap: 1 << 20,
         jobs: JobRegistry::new(),
+        agent_binary: agent_binary(),
     });
 
     let listener = TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().expect("literal"))
@@ -544,6 +552,153 @@ async fn the_lifecycle_hooks_answer_without_a_capability() {
             "{path} is called by the MicroVM service, not a session caller, so it cannot require a capability"
         );
     }
+}
+
+// --- The validate hook ---
+//
+// AWS calls it on a MicroVM run from the finished snapshot; 200 passes the build and any other
+// status fails it with the body as the reason. These prove a working agent passes without a trace
+// left in the session, and that each check fails by name.
+
+/// Serves `state` on loopback and returns the base URL.
+async fn serve(state: Arc<AgentState>) -> String {
+    let listener = TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().expect("literal"))
+        .await
+        .expect("bind loopback");
+    let address = listener.local_addr().expect("address");
+    tokio::spawn(async move {
+        axum::serve(
+            listener,
+            router(state).into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .expect("serve");
+    });
+    format!("http://{address}")
+}
+
+/// A working agent passes, and the probe file it wrote is gone again: the hook runs on a VM the
+/// build throws away, but it is also reachable on a live session, where a leftover would be a
+/// file the caller never wrote.
+#[tokio::test]
+async fn the_validate_hook_passes_and_leaves_the_session_root_empty() {
+    let agent = Agent::start().await;
+
+    let response = reqwest::get(format!(
+        "{}{}",
+        agent.base_url,
+        alien_sandbox_agent::server::hook_path("validate")
+    ))
+    .await
+    .expect("responds");
+
+    let status = response.status();
+    let body = response.text().await.expect("body");
+    assert_eq!(status, 200, "a working agent must validate: {body}");
+    let left: Vec<_> = std::fs::read_dir(&agent.root)
+        .expect("the root is readable")
+        .collect();
+    assert!(left.is_empty(), "the probe file must be removed: {left:?}");
+}
+
+/// The file check fails when the confined write cannot land, and the body says which check.
+#[cfg(unix)]
+#[tokio::test]
+async fn the_validate_hook_names_the_file_check_when_the_session_root_is_not_writable() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = TempDir::new().expect("temp dir");
+    let root = dir.path().canonicalize().expect("canonical root");
+    // Enterable but not writable, so the identity probe's chdir into it still succeeds and the
+    // failure is the file check's alone.
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o500)).expect("chmod");
+
+    let base_url = serve(Arc::new(AgentState {
+        #[cfg(target_os = "linux")]
+        gateway_egress: None,
+        session_root: root.clone(),
+        authorization: AgentAuthorization::Transport,
+        exec_identity: test_identity(),
+        output_cap: 1 << 20,
+        jobs: JobRegistry::new(),
+        agent_binary: agent_binary(),
+    }))
+    .await;
+
+    let response = reqwest::get(format!(
+        "{base_url}{}",
+        alien_sandbox_agent::server::hook_path("validate")
+    ))
+    .await
+    .expect("responds");
+    let status = response.status();
+    let body = response.text().await.expect("body");
+
+    // Root writes through a 0500 directory, so the refusal cannot be provoked there; what can be
+    // asserted is that the hook still answers rather than hanging or panicking.
+    if unsafe { libc::geteuid() } == 0 {
+        assert_eq!(status, 200, "{body}");
+        return;
+    }
+
+    assert_eq!(
+        status, 500,
+        "an unwritable root must fail the build: {body}"
+    );
+    assert!(
+        body.contains("file check"),
+        "the body must name the check that failed: {body}"
+    );
+}
+
+/// The identity check fails when the probe cannot run as the configured identity, and the body
+/// says so. Unprivileged, the drop to 65534 is refused by the kernel; as root the drop succeeds
+/// and the probe then cannot enter a root-owned `0700` session root. Either way the probe never
+/// reports an identity, and that is the identity check's failure to name.
+#[cfg(unix)]
+#[tokio::test]
+async fn the_validate_hook_names_the_identity_check_when_the_probe_cannot_run_as_the_exec_identity()
+{
+    let dir = TempDir::new().expect("temp dir");
+    let root = dir.path().canonicalize().expect("canonical root");
+
+    let base_url = serve(Arc::new(AgentState {
+        #[cfg(target_os = "linux")]
+        gateway_egress: None,
+        session_root: root.clone(),
+        authorization: AgentAuthorization::Transport,
+        exec_identity: ExecIdentity {
+            uid: 65534,
+            gid: 65534,
+        },
+        output_cap: 1 << 20,
+        jobs: JobRegistry::new(),
+        agent_binary: agent_binary(),
+    }))
+    .await;
+
+    let response = reqwest::get(format!(
+        "{base_url}{}",
+        alien_sandbox_agent::server::hook_path("validate")
+    ))
+    .await
+    .expect("responds");
+    let status = response.status();
+    let body = response.text().await.expect("body");
+
+    assert_eq!(
+        status, 500,
+        "a probe that cannot run must fail the build: {body}"
+    );
+    assert!(
+        body.contains("identity check"),
+        "the body must name the check that failed: {body}"
+    );
+    let left: Vec<_> = std::fs::read_dir(&root).expect("readable").collect();
+    assert!(
+        left.is_empty(),
+        "a failed identity check must not have gone on to write: {left:?}"
+    );
 }
 
 // --- The GCP Agent Platform envelope on `POST /` ---
@@ -760,6 +915,7 @@ async fn the_envelope_refuses_the_code_the_agent_runs_under_transport() {
         exec_identity: test_identity(),
         output_cap: 1 << 20,
         jobs: JobRegistry::new(),
+        agent_binary: agent_binary(),
     });
 
     let listener = TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().expect("literal"))

@@ -59,6 +59,9 @@ for attempt in range(50):
         if attempt==49: raise
         time.sleep(.1)
 
+# The image build's validate hook, under the restricted supervisor with the image command alive.
+assert opener.open('http://127.0.0.1:8971/aws/lambda-microvms/runtime/v1/validate',timeout=20).status==200
+assert not [name for name in os.listdir('/sandbox') if name.startswith('.validate-')], 'validate must remove its probe file'
 out,terminal=execute(['/bin/sh','-c','id -u; grep "^Cap" /proc/self/status; cat image-uid'])
 assert terminal['code']==0 and out.startswith('60001\n'),(out,terminal)
 assert 'CapEff:\t0000000000000000' in out and 'CapBnd:\t0000000000000000' in out,out

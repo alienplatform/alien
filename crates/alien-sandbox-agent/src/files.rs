@@ -118,6 +118,20 @@ pub async fn write(root: &Path, requested: &str, contents: &[u8]) -> Result<()> 
     .context(failed("write", "", "waiting for the filesystem"))?
 }
 
+/// Removes a file from the sandbox.
+pub async fn remove(root: &Path, requested: &str) -> Result<()> {
+    let root = root.to_path_buf();
+    let requested = requested.to_string();
+
+    tokio::task::spawn_blocking(move || {
+        confine::remove_beneath(&root, &requested, 0)
+            .map_err(|error| refused_or_failed(error, &requested, "removing the file"))
+    })
+    .await
+    .into_alien_error()
+    .context(failed("remove", "", "waiting for the filesystem"))?
+}
+
 /// The directory part of a caller's path, if it names one.
 fn parent_of(requested: &str) -> Option<String> {
     let trimmed = requested.trim_end_matches('/');
