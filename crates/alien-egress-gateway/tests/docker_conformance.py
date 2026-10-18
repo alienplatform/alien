@@ -648,6 +648,8 @@ def main():
             check_legacy_agents(suite, args.agent_image, containers, AGENT_UID)
             suite.agent(args.agent_image, containers, networks)
             suite.proxy_only(args.agent_image, containers)
+            from run_hook_egress import check_run_hook_agents
+            check_run_hook_agents(suite, args.agent_image, containers)
         if args.vault_config:
             assert suite.admin("/v1/policies", {"aud":AUD,"sub":"reload","policy":"internet"})[0] == 204
             suite.tunnel(token=suite.token(sub="reload")).close()

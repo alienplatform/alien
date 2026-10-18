@@ -59,6 +59,16 @@ The agent programs nftables through native netlink; the image needs no `nft` or
 process needs `NET_ADMIN`. Older bundles cannot enable this setting: startup fails
 unless they preserve the base image's OCI command as root-owned metadata.
 
+Managed gateway images on AWS set `ALIEN_SANDBOX_EGRESS_RUN_HOOK=true`. This
+defers firewall installation until the authenticated Run hook, allowing the
+platform to finish restoring its snapshot first. Until installation succeeds,
+health reports `awaiting-run-hook`, token installation and session operations
+are refused, and the image command remains stopped. The hook installs the same
+rules with native netlink; no platform UID is exempted. Internet mode then waits
+for its token and network self-check before starting guest code. Other backends
+install the firewall at process startup by default. Legacy object policies keep
+their existing startup behavior.
+
 Pull the intended ARM64 base image, then package it with the inspected command:
 
 ```sh

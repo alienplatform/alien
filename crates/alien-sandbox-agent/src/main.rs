@@ -108,6 +108,10 @@ fn main() -> Result<()> {
             "bind the agent listener",
             "the agent could not take its port".to_string(),
         ))?;
+    #[cfg(target_os = "linux")]
+    if let Some(egress) = &state.gateway_egress {
+        egress.protect_control_listener(&std_listener)?;
+    }
 
     // Linux capabilities are per thread. Build the runtime only after bootstrap reduction,
     // so every worker inherits the reduced set rather than keeping AWS's ALL grant.
