@@ -42,6 +42,7 @@ pub(crate) fn resources(ctx: &EmitContext<'_>) -> Result<Vec<CfResource>> {
                             (
                                 "Action",
                                 CfExpression::list([
+                                    CfExpression::from("ec2:DescribeVpcs"),
                                     CfExpression::from("ec2:DescribeSubnets"),
                                     CfExpression::from("ec2:DescribeRouteTables"),
                                 ]),
@@ -105,9 +106,14 @@ pub(crate) fn resources(ctx: &EmitContext<'_>) -> Result<Vec<CfResource>> {
             CfExpression::list([])
         },
     );
-    validation
-        .properties
-        .insert("WorkloadSubnetIds".into(), private_subnet_ids_expr(ctx));
+    validation.properties.insert(
+        "WorkloadSubnetIds".into(),
+        if network::needs_gateway(ctx) {
+            private_subnet_ids_expr(ctx)
+        } else {
+            CfExpression::list([])
+        },
+    );
     if ctx
         .resource
         .config

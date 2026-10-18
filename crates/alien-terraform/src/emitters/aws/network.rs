@@ -81,6 +81,18 @@ impl TfEmitter for AwsNetworkEmitter {
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {
         let network = downcast::<Network>(ctx, Network::RESOURCE_TYPE)?;
         let label = required_label(ctx)?;
+        let sandbox_network = if has_sandboxes(ctx) {
+            expr::object([
+                ("sandboxSubnetIds", sandbox_subnet_ids(ctx)?),
+                ("gatewaySubnetIds", if needs_gateway(ctx) { gateway_subnet_ids(ctx)? } else { Expression::from(Vec::<Expression>::new()) }),
+                ("sandboxCidrs", expr::raw(format!("data.aws_subnet.{label}_sandbox[*].cidr_block"))),
+                ("gatewayCidrs", if needs_gateway(ctx) { expr::raw(format!("data.aws_subnet.{label}_sandbox_gateway[*].cidr_block")) } else { Expression::from(Vec::<Expression>::new()) }),
+                ("workloadCidrs", if needs_gateway(ctx) { expr::raw(format!("data.aws_subnet.{label}_private[*].cidr_block")) } else { Expression::from(Vec::<Expression>::new()) }),
+                ("vpcCidrs", expr::raw(format!("[for association in data.aws_vpc.{label}_sandbox_vpc.cidr_block_associations : association.cidr_block]"))),
+            ])
+        } else {
+            Expression::Null
+        };
         Ok(match &network.settings {
             NetworkSettings::UseDefault => expr::object([
                 ("vpcId", Expression::Null),
@@ -95,6 +107,7 @@ impl TfEmitter for AwsNetworkEmitter {
                 ("securityGroupId", Expression::Null),
                 ("availabilityZones", Expression::Array(vec![])),
                 ("isByoVpc", Expression::Bool(true)),
+                ("sandboxNetwork", sandbox_network.clone()),
             ]),
             NetworkSettings::ByoVpcAws { .. } => expr::object([
                 ("vpcId", expr::raw(format!("var.{label}_vpc_id"))),
@@ -121,8 +134,10 @@ impl TfEmitter for AwsNetworkEmitter {
                     expr::raw("data.aws_availability_zones.available.names"),
                 ),
                 ("isByoVpc", Expression::Bool(true)),
+                ("sandboxNetwork", sandbox_network.clone()),
             ]),
             NetworkSettings::Create { .. } => expr::object([
+                ("sandboxNetwork", sandbox_network.clone()),
                 ("vpcId", expr::raw(format!(
                     "var.network_mode == \"create-new\" ? aws_vpc.{label}[0].id : var.network_mode == \"use-existing\" ? var.vpc_id : null"
                 ))),
@@ -670,6 +685,11 @@ pub(crate) fn sandbox_subnet_ids(ctx: &EmitContext<'_>) -> Result<Expression> {
 
 fn network_validation(ctx: &EmitContext<'_>, label: &str) -> Result<TfFragment> {
     let mut fragment = TfFragment::default();
+    fragment.data_blocks.push(crate::block::data_block(
+        "aws_vpc",
+        &format!("{label}_sandbox_vpc"),
+        [attr("id", vpc_id_expr(ctx))],
+    ));
     let main = format!("{label}_sandbox_main");
     fragment.data_blocks.push(crate::block::data_block(
         "aws_route_table",

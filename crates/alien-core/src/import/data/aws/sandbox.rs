@@ -46,8 +46,8 @@ pub struct AwsSandboxImportData {
         deserialize_with = "crate::import::data::deserialize_u16_vec_from_numbers_or_strings"
     )]
     pub preview_ports: Vec<u16>,
-    /// Legacy marker for the managed internet path. New setup always writes false because
-    /// every sandbox uses a deployment connector; the declared policy travels separately.
+    /// Whether sessions use native cloud internet without a deployment gateway.
+    /// Isolated sessions must instead name their setup-owned connector.
     #[serde(
         default,
         skip_serializing_if = "std::ops::Not::not",

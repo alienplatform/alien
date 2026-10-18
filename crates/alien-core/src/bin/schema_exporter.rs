@@ -231,6 +231,7 @@ use utoipa::OpenApi;
     AwsKeyImportData,
     AwsVaultImportData,
     AwsNetworkImportData,
+    AwsSandboxNetwork,
     AwsServiceAccountImportData,
     AwsRemoteStackManagementImportData,
     AwsRemoteBindingsImportData,

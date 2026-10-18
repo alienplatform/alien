@@ -47,12 +47,41 @@ impl CfEmitter for AwsNetworkEmitter {
 
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<CfExpression> {
         let network = resource_config::<Network>(ctx, Network::RESOURCE_TYPE)?;
+        let sandbox_network = if has_sandboxes(ctx) {
+            let validation = format!("{}SandboxNetworkValidation", required_logical_id(ctx)?);
+            CfExpression::object([
+                (
+                    "sandboxSubnetIds",
+                    CfExpression::get_att(&validation, "SandboxSubnetIds"),
+                ),
+                (
+                    "gatewaySubnetIds",
+                    CfExpression::get_att(&validation, "GatewaySubnetIds"),
+                ),
+                (
+                    "sandboxCidrs",
+                    CfExpression::get_att(&validation, "SandboxCidrs"),
+                ),
+                (
+                    "gatewayCidrs",
+                    CfExpression::get_att(&validation, "GatewayCidrs"),
+                ),
+                (
+                    "workloadCidrs",
+                    CfExpression::get_att(&validation, "WorkloadCidrs"),
+                ),
+                ("vpcCidrs", CfExpression::get_att(&validation, "VpcCidrs")),
+            ])
+        } else {
+            CfExpression::Null
+        };
         let import_data = match &network.settings {
             NetworkSettings::UseDefault => CfExpression::object([
                 ("publicSubnetIds", CfExpression::list([])),
                 ("privateSubnetIds", CfExpression::list([])),
                 ("availabilityZones", CfExpression::list([])),
                 ("isByoVpc", CfExpression::from(true)),
+                ("sandboxNetwork", sandbox_network.clone()),
             ]),
             NetworkSettings::ByoVpcAws { .. } => CfExpression::object([
                 ("vpcId", CfExpression::ref_("VpcId")),
@@ -67,6 +96,7 @@ impl CfEmitter for AwsNetworkEmitter {
                 ("securityGroupId", existing_security_group_id()),
                 ("availabilityZones", CfExpression::list([])),
                 ("isByoVpc", CfExpression::from(true)),
+                ("sandboxNetwork", sandbox_network.clone()),
             ]),
             NetworkSettings::Create { .. } => {
                 let prefix = required_logical_id(ctx)?;
@@ -110,6 +140,7 @@ impl CfEmitter for AwsNetworkEmitter {
                         ),
                         ("availabilityZones", availability_zone_names(ctx)),
                         ("isByoVpc", CfExpression::from(false)),
+                        ("sandboxNetwork", sandbox_network.clone()),
                     ]),
                     {
                         let byo = CfExpression::object([
@@ -125,6 +156,7 @@ impl CfEmitter for AwsNetworkEmitter {
                             ("securityGroupId", existing_security_group_id()),
                             ("availabilityZones", CfExpression::list([])),
                             ("isByoVpc", CfExpression::from(true)),
+                            ("sandboxNetwork", sandbox_network.clone()),
                         ]);
                         if ctx.targets_kubernetes
                             || alien_core::restricts_network_mode(ctx.stack, false)
@@ -139,6 +171,7 @@ impl CfEmitter for AwsNetworkEmitter {
                                     ("privateSubnetIds", CfExpression::list([])),
                                     ("availabilityZones", CfExpression::list([])),
                                     ("isByoVpc", CfExpression::from(true)),
+                                    ("sandboxNetwork", sandbox_network.clone()),
                                 ]),
                             )
                         }

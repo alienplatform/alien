@@ -1096,6 +1096,9 @@ pub struct AwsNetworkController {
     /// NAT addresses learned during creation or handed off by setup.
     #[serde(default)]
     pub egress_public_ips: Vec<String>,
+    /// Setup-validated connector and gateway subnet coordinates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox_network: Option<alien_core::import::data::AwsSandboxNetwork>,
 
     // Subnets
     #[serde(deserialize_with = "alien_core::network_ids::deserialize_ids")]
@@ -5478,6 +5481,7 @@ impl AwsNetworkController {
             nat_gateway_id: Some(format!("nat-{}", vpc_id)),
             eip_allocation_id: Some(format!("eipalloc-{}", vpc_id)),
             egress_public_ips: vec!["203.0.113.10".to_string()],
+            sandbox_network: None,
             public_subnet_ids: (0..az_count)
                 .map(|i| format!("subnet-pub-{}-{}", vpc_id, i))
                 .collect(),
@@ -5534,6 +5538,7 @@ impl AwsNetworkController {
             nat_gateway_id: None,
             eip_allocation_id: None,
             egress_public_ips: Vec::new(),
+            sandbox_network: None,
             public_subnet_ids,
             private_subnet_ids: private_subnet_ids.clone(),
             public_route_table_id: None,

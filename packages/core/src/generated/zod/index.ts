@@ -60,6 +60,7 @@ export type { AwsRemoteStackManagementHeartbeatData } from "./aws-remote-stack-m
 export type { AwsRemoteStackManagementImportData } from "./aws-remote-stack-management-import-data-schema.js";
 export type { AwsS3StorageHeartbeatData } from "./aws-s3-storage-heartbeat-data-schema.js";
 export type { AwsSandboxImportData } from "./aws-sandbox-import-data-schema.js";
+export type { AwsSandboxNetwork } from "./aws-sandbox-network-schema.js";
 export type { AwsServiceAccountImportData } from "./aws-service-account-import-data-schema.js";
 export type { AwsSqsQueueHeartbeatData } from "./aws-sqs-queue-heartbeat-data-schema.js";
 export type { AwsStorageImportData } from "./aws-storage-import-data-schema.js";
@@ -573,6 +574,7 @@ export { AwsRemoteStackManagementHeartbeatDataSchema } from "./aws-remote-stack-
 export { AwsRemoteStackManagementImportDataSchema } from "./aws-remote-stack-management-import-data-schema.js";
 export { AwsS3StorageHeartbeatDataSchema } from "./aws-s3-storage-heartbeat-data-schema.js";
 export { AwsSandboxImportDataSchema } from "./aws-sandbox-import-data-schema.js";
+export { AwsSandboxNetworkSchema } from "./aws-sandbox-network-schema.js";
 export { AwsServiceAccountImportDataSchema } from "./aws-service-account-import-data-schema.js";
 export { AwsSqsQueueHeartbeatDataSchema } from "./aws-sqs-queue-heartbeat-data-schema.js";
 export { AwsStorageImportDataSchema } from "./aws-storage-import-data-schema.js";

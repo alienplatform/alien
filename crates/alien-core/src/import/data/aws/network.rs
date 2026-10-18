@@ -18,6 +18,26 @@ pub struct AwsFailureDomainSubnets {
     pub private_subnet_ids: Vec<String>,
 }
 
+/// Setup-validated network coordinates for the sandbox connector and gateway.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "jsonschema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct AwsSandboxNetwork {
+    /// Route-less connector subnet identifiers.
+    pub sandbox_subnet_ids: Vec<String>,
+    /// Dedicated NAT-routed subnets for the gateway's internal load balancer.
+    pub gateway_subnet_ids: Vec<String>,
+    /// Source ranges permitted on the gateway proxy port.
+    pub sandbox_cidrs: Vec<String>,
+    /// Only destinations permitted by the connector security group.
+    pub gateway_cidrs: Vec<String>,
+    /// Source ranges permitted on the gateway admin port.
+    pub workload_cidrs: Vec<String>,
+    /// Every associated VPC IPv4 range, denied by the gateway.
+    pub vpc_cidrs: Vec<String>,
+}
+
 /// AWS Network ImportData.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -37,6 +57,9 @@ pub struct AwsNetworkImportData {
     /// Public addresses allocated to this deployment's NAT; empty when unknown.
     #[serde(default)]
     pub egress_public_ips: Vec<String>,
+    /// Isolated sandbox networking verified during setup; absent on older imports.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox_network: Option<AwsSandboxNetwork>,
     /// Public subnet IDs.
     #[serde(deserialize_with = "crate::network_ids::deserialize_ids")]
     pub public_subnet_ids: Vec<String>,
@@ -49,7 +72,10 @@ pub struct AwsNetworkImportData {
     pub private_route_table_id: Option<String>,
     /// Security group ID for private workloads.
     // Keeps the published schema unchanged: without it, `default` adds `"default": null`.
-    #[cfg_attr(feature = "jsonschema", schemars(skip_serializing_if = "Option::is_none"))]
+    #[cfg_attr(
+        feature = "jsonschema",
+        schemars(skip_serializing_if = "Option::is_none")
+    )]
     #[serde(
         default,
         deserialize_with = "crate::network_ids::deserialize_optional_id"

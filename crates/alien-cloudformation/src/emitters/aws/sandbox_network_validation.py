@@ -16,6 +16,7 @@ def validate(ec2, properties):
         raise ValueError("Sandbox connector subnets must be dedicated and nonempty")
     if set(gateway_ids) & set(workload_ids):
         raise ValueError("Gateway subnets must be dedicated")
+    vpc_data = ec2.describe_vpcs(VpcIds=[vpc])["Vpcs"][0]
     ids = sorted(set(sandbox_ids + gateway_ids + workload_ids))
     subnets = {
         subnet["SubnetId"]: subnet
@@ -64,7 +65,14 @@ def validate(ec2, properties):
         raise ValueError("Gateway and workloads must share the deployment NAT gateway")
     if gateway_ids and len(gateway_ids) not in (2, 3):
         raise ValueError("Provide two or three dedicated gateway subnets")
-    data = {}
+    data = {
+        "SandboxSubnetIds": sandbox_ids,
+        "GatewaySubnetIds": gateway_ids,
+        "SandboxCidrs": [subnets[s]["CidrBlock"] for s in sandbox_ids],
+        "GatewayCidrs": [subnets[s]["CidrBlock"] for s in gateway_ids],
+        "WorkloadCidrs": [subnets[s]["CidrBlock"] for s in workload_ids],
+        "VpcCidrs": [c["CidrBlock"] for c in vpc_data["CidrBlockAssociationSet"] if c.get("CidrBlockState", {}).get("State", "associated") == "associated"],
+    }
     data["ConnectorEgress"] = [{"IpProtocol": "tcp", "FromPort": 3128, "ToPort": 3128, "CidrIp": subnets[s]["CidrBlock"]} for s in gateway_ids]
     return data
 
