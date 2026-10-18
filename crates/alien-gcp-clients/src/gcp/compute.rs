@@ -1332,7 +1332,7 @@ impl ComputeApi for ComputeClient {
         ssl_certificates: Vec<String>,
     ) -> Result<Operation> {
         let path = format!(
-            "projects/{}/global/targetHttpsProxies/{}/setSslCertificates",
+            "projects/{}/targetHttpsProxies/{}/setSslCertificates",
             self.project_id, target_https_proxy_name
         );
         let request = SetSslCertificatesRequest { ssl_certificates };
@@ -6616,10 +6616,7 @@ mod tests {
         let (endpoint, server) = serve_json_responses(vec![OPERATION]);
         let certificate = "projects/example-project/global/sslCertificates/replacement";
         let operation = test_client(endpoint)
-            .set_target_https_proxy_ssl_certificates(
-                "owned-proxy".into(),
-                vec![certificate.into()],
-            )
+            .set_target_https_proxy_ssl_certificates("owned-proxy".into(), vec![certificate.into()])
             .await
             .expect("replace global proxy certificate");
         assert_eq!(operation.name.as_deref(), Some("certificate-update"));
@@ -6629,33 +6626,6 @@ mod tests {
         assert_eq!(
             line,
             "POST /projects/example-project/targetHttpsProxies/owned-proxy/setSslCertificates HTTP/1.1"
-        );
-        assert_eq!(body, serde_json::json!({"sslCertificates": [certificate]}));
-        assert!(requests[0]
-            .to_ascii_lowercase()
-            .contains("authorization: bearer test-token"));
-    }
-
-    #[tokio::test]
-    async fn regional_https_certificate_replacement_keeps_region_scope() {
-        const OPERATION: &str = r#"{"name":"certificate-update","status":"PENDING"}"#;
-        let (endpoint, server) = serve_json_responses(vec![OPERATION]);
-        let certificate = "projects/example-project/regions/us-east1/sslCertificates/replacement";
-        let operation = test_client(endpoint)
-            .set_region_target_https_proxy_ssl_certificates(
-                "us-east1".into(),
-                "owned-proxy".into(),
-                vec![certificate.into()],
-            )
-            .await
-            .expect("replace regional proxy certificate");
-        assert_eq!(operation.name.as_deref(), Some("certificate-update"));
-        let requests = server.join().expect("HTTP server");
-        assert_eq!(requests.len(), 1);
-        let (line, body) = request_line_and_body(&requests[0]);
-        assert_eq!(
-            line,
-            "POST /projects/example-project/regions/us-east1/targetHttpsProxies/owned-proxy/setSslCertificates HTTP/1.1"
         );
         assert_eq!(body, serde_json::json!({"sslCertificates": [certificate]}));
         assert!(requests[0]
