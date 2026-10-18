@@ -10,6 +10,7 @@ license-file.workspace = true
 test-utils = ["alien-core/test-utils"]
 
 [dependencies]
+tempfile = { workspace = true }
 zip = { workspace = true }
 alien-core = { workspace = true, features = ["sandbox-process"] }
 alien-error = { workspace = true }
@@ -40,6 +41,7 @@ which = "6.0"
 
 
 [dev-dependencies]
+object_store = { workspace = true, features = ["aws", "tls-webpki-roots"] }
 container-registry = { workspace = true, features = ["test-support"] }
 httpmock = { workspace = true }
 dockdash = { workspace = true, features = ["test-utils"] }
@@ -47,6 +49,5 @@ alien-build = { path = ".", features = ["test-utils"] }
 workspace_root = { workspace = true }
 dotenvy = { workspace = true }
 tracing-subscriber = { workspace = true }
-tempfile = { workspace = true }
 serde_json = { workspace = true }
 zstd = { workspace = true }

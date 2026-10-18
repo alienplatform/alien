@@ -35,7 +35,6 @@ use oci_client::manifest::{
 use oci_client::Reference;
 use rand::distr::Alphanumeric;
 use rand::Rng;
-use reqwest::Url;
 use settings::{BinaryTargetExt, BuildSettings, PlatformBuildSettings, PushSettings};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
@@ -3199,25 +3198,7 @@ async fn build_target_to_file(
         target.runtime_platform_id()
     );
 
-    // Parse cache store from cache URL if provided
-    let cache_store = if let Some(cache_url) = &settings.cache_url {
-        let url =
-            Url::parse(cache_url)
-                .into_alien_error()
-                .context(ErrorData::BuildConfigInvalid {
-                    message: format!("Invalid cache URL: {}", cache_url),
-                })?;
-
-        let (store, _path) = object_store::parse_url(&url).into_alien_error().context(
-            ErrorData::BuildConfigInvalid {
-                message: format!("Failed to parse cache URL: {}", cache_url),
-            },
-        )?;
-
-        Some(std::sync::Arc::from(store))
-    } else {
-        None
-    };
+    let cache_store = toolchain::cache_utils::store_from_url(settings.cache_url.as_deref())?;
 
     // The build directory is the parent of output_path (e.g., .alien/build/local/function-name/)
     // This is where intermediate artifacts (bootstrap files, compiled binaries) should go.

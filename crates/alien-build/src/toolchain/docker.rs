@@ -5,7 +5,7 @@ use crate::settings::BinaryTargetExt;
 use alien_core::AlienEvent;
 use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -14,7 +14,7 @@ use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
 use tokio::process::Command;
-use tracing::{info, warn};
+use tracing::info;
 
 /// Docker toolchain implementation using Docker buildx for multi-architecture builds.
 ///
@@ -35,7 +35,6 @@ pub struct DockerToolchain {
 
 struct BuildxBuilder {
     name: String,
-    owned: bool,
 }
 
 impl DockerToolchain {
@@ -50,19 +49,6 @@ impl DockerToolchain {
     pub fn has_dockerfile(src_dir: &Path, dockerfile: Option<&String>) -> bool {
         let dockerfile_name = dockerfile.map(|s| s.as_str()).unwrap_or("Dockerfile");
         src_dir.join(dockerfile_name).exists()
-    }
-
-    fn generate_builder_name() -> String {
-        use rand::distr::Alphanumeric;
-        use rand::Rng;
-
-        let suffix: String = rand::rng()
-            .sample_iter(&Alphanumeric)
-            .take(8)
-            .map(char::from)
-            .collect::<String>()
-            .to_lowercase();
-        format!("alien-build-{}-{suffix}", std::process::id())
     }
 
     pub(crate) fn absolute_path(path: &Path) -> Result<PathBuf> {
@@ -300,7 +286,6 @@ impl DockerToolchain {
             Self::bootstrap_builder(name).await?;
             return Ok(BuildxBuilder {
                 name: name.to_string(),
-                owned: false,
             });
         }
         if driver != "docker" {
@@ -309,30 +294,50 @@ impl DockerToolchain {
             ))));
         }
 
-        let name = Self::generate_builder_name();
-        if let Err(error) = Self::create_builder(&name).await {
-            let _ = Self::remove_builder(&name).await;
-            return Err(error);
-        }
-        Ok(BuildxBuilder { name, owned: true })
-    }
-
-    async fn remove_builder(builder_name: &str) -> Result<()> {
-        let output = Command::new("docker")
-            .args(["buildx", "rm", "--force", builder_name])
+        // Scope the persistent fallback to the actual daemon, not the current source
+        // path or process. BuildKit validates content and manages its own cache GC.
+        let daemon = Command::new("docker")
+            .args(["info", "--format", "{{.ID}}"])
             .output()
             .await
             .into_alien_error()
             .context(Self::docker_build_error(
-                "Could not remove the scoped buildx builder",
+                "Could not identify the Docker daemon",
             ))?;
-        if !output.status.success() {
-            return Err(AlienError::new(Self::docker_build_error(format!(
-                "Could not remove the scoped buildx builder: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            ))));
+        if !daemon.status.success() || daemon.stdout.iter().all(u8::is_ascii_whitespace) {
+            return Err(AlienError::new(Self::docker_build_error(
+                "Docker did not report a daemon ID for the build cache",
+            )));
         }
-        Ok(())
+        let digest = format!("{:x}", Sha256::digest(&daemon.stdout));
+        let name = format!("alien-cache-v1-{}", &digest[..16]);
+        let existing = Command::new("docker")
+            .args(["buildx", "inspect", &name])
+            .output()
+            .await
+            .into_alien_error()
+            .context(Self::docker_build_error(
+                "Could not inspect the cached builder",
+            ))?;
+        if !existing.status.success() {
+            if let Err(error) = Self::create_builder(&name).await {
+                // Another process can create the same daemon-scoped builder first.
+                // Never remove it: concurrent builds may already be using it.
+                let raced = Command::new("docker")
+                    .args(["buildx", "inspect", &name])
+                    .output()
+                    .await
+                    .into_alien_error()
+                    .context(Self::docker_build_error(
+                        "Could not inspect the shared builder",
+                    ))?;
+                if !raced.status.success() {
+                    return Err(error);
+                }
+            }
+        }
+        Self::bootstrap_builder(&name).await?;
+        Ok(BuildxBuilder { name })
     }
 }
 
@@ -383,14 +388,8 @@ impl DockerToolchain {
         let platform_str = format!("linux/{}", arch_str);
 
         let builder = Self::select_builder().await?;
-        if let Err(error) = Self::ensure_builder_supports_arch(&builder.name, arch_str).await {
-            if builder.owned {
-                if let Err(cleanup_error) = Self::remove_builder(&builder.name).await {
-                    warn!(%cleanup_error, builder_name = %builder.name, "failed to clean up buildx builder");
-                }
-            }
-            return Err(error);
-        }
+        Self::ensure_builder_supports_arch(&builder.name, arch_str).await?;
+        let cache = super::docker_cache::DockerCache::restore(context, self).await?;
 
         let mut args = vec![
             "buildx".to_string(),
@@ -404,6 +403,10 @@ impl DockerToolchain {
             "-f".to_string(),
             dockerfile_name.to_string(),
         ];
+
+        if let Some(cache) = &cache {
+            cache.append_args(&mut args);
+        }
 
         if lambda_worker {
             // Lambda accepts a single architecture and no attestation manifest.
@@ -514,18 +517,10 @@ impl DockerToolchain {
         })
         .await;
 
-        let cleanup_result = if builder.owned {
-            Self::remove_builder(&builder.name).await
-        } else {
-            Ok(())
-        };
-        if let Err(build_error) = build_result {
-            if let Err(cleanup_error) = cleanup_result {
-                warn!(%cleanup_error, builder_name = %builder.name, "failed to clean up buildx builder after a failed build");
-            }
-            return Err(build_error);
+        build_result?;
+        if let Some(cache) = cache {
+            cache.save().await?;
         }
-        cleanup_result?;
 
         // Buildx may wrap the image manifest in an index alongside provenance attestations.
         // Flatten the archive before the runtime OCI reader sees it.
@@ -1741,8 +1736,7 @@ CMD ["true"]
         );
 
         // A machine with QEMU registered (Docker Desktop / OrbStack) lists emulated platforms too.
-        let emulated =
-            "Nodes:\nName: default\nPlatforms: linux/arm64, linux/amd64, linux/amd64/v2, linux/arm/v7\n";
+        let emulated = "Nodes:\nName: default\nPlatforms: linux/arm64, linux/amd64, linux/amd64/v2, linux/arm/v7\n";
         assert!(DockerToolchain::inspect_reports_platform(emulated, "arm64"));
         assert!(DockerToolchain::inspect_reports_platform(emulated, "amd64"));
 
