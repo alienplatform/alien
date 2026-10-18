@@ -122,6 +122,9 @@ pub struct AdminClaims {
     /// Required for policy mutation; CA and metrics grants may omit it.
     #[serde(default)]
     pub policy: Option<String>,
+    /// Required and request-bound for PUT and DELETE.
+    #[serde(default)]
+    pub version: Option<u64>,
 }
 
 /// Verify a short-lived admin JWS, distinct from proxy tokens by its mandatory type.

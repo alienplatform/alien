@@ -7,8 +7,10 @@ deployment/overlay ranges are always denied. IPv6 is not an outbound candidate.
 
 At boot, `alien-egress-gateway` reads `sandbox-egress-gateway-config` from its
 `secrets` vault binding. It refreshes every 60 seconds and atomically publishes
-a validated config/key snapshot. A failed or timed-out refresh denies new
-connections and returns 503 from admin health until a later refresh succeeds.
+a validated config/key snapshot. A failed or timed-out refresh retains the last
+successful snapshot for at most ten minutes. After that window, new connections
+are denied and admin health returns 503 until refresh succeeds. This bounded
+window can delay key or range revocation; policy reads never use stale fallback.
 The gateway reads only this entry; it never reads `sandbox-egress-signing-key`.
 Its service account needs read access to the config entry, which includes public
 verification keys. Listener changes require a container restart.
@@ -43,17 +45,26 @@ Tokens contain only `{iss,aud,sub,iat,exp}`, with `iss: "alien-sandbox"`, a maxi
 appears in a proxy token. Missing policy records deny access, even if the config
 contains a create default. The binding applies create defaults explicitly.
 
-Every new connection reads the policy reference from KV; only verified content
-is cached, in at most 128 entries. Updates and deletion therefore need no token
-replacement and do not wait for a cache TTL. Store failures deny access. Up to
-16 immutable 16 KiB chunks per policy version support the 256 KiB / 4096-target
-limit on every KV provider. Content is published before an atomic reference
-replacement, so concurrent callers cannot mix chunks. The last reference write
-wins; repeated identical policies reuse content. Distinct policy versions remain
-until sandbox deletion, which removes authorization and all versions. This
-avoids a cleanup race with overlapping writers without introducing a lock service,
-at the cost of retained versions during the sandbox lifetime. The binding must
-serialize termination with its writes.
+Every new connection reads the policy reference from KV; verified content uses a
+128-entry LRU cache. Store failures deny access. Up to sixteen immutable 16 KiB
+chunks support the 256 KiB / 4096-target policy limit on every KV provider.
+An atomic compare-and-swap publishes a signed monotonic version after the content.
+Older versions and equal versions with different content return 409; identical
+retries succeed. DELETE leaves a durable version tombstone. A deliberately
+recreated identity may publish a higher version. Content chunks remain until the
+deployment store is removed, because deletion could race readers or a recreated
+identity using the same content. Repeated identical policies reuse chunks.
+
+Each replica rechecks active identities every 30 seconds and closes tunnels whose
+destination is no longer allowed, including after deletion or a store failure.
+A stalled sweep has a 20-second deadline and closes the affected tunnels. Token
+expiry and 120-second idle limits are swept every second. Activity resets the idle
+clock; a one-hour absolute connection limit also applies. Admission permits at
+most 32 unauthenticated connections per source IP, 128 authenticated connections
+per sandbox identity and 1024 total connections. Per-identity DNS concurrency is
+eight. DNS uses an async resolver, absolute names without search suffixes, and
+fresh address validation before dialing. SIGTERM and SIGINT stop admission and
+allow existing proxy connections up to fifteen seconds to drain.
 
 The proxy accepts `Proxy-Authorization: Bearer <JWS>` and Basic credentials from
 `http://alien:<JWS>@gateway:3128`. DNS-name grants require TLS with matching SNI
@@ -67,21 +78,27 @@ Headers, ClientHello, connection concurrency and connection lifetime are bounded
 
 Admin port 3129 is plain HTTP restricted to management workloads. Requests carry
 an Ed25519 JWS in `Authorization: Bearer`, with header
-`typ: "alien-egress-admin"` and claims `{iss,aud,sub,iat,exp,method,policy?}`.
-The lifetime is at most 60 seconds. `method` binds the HTTP method; for PUT,
+`typ: "alien-egress-admin"` and claims `{iss,aud,sub,iat,exp,method,policy?,version?}`.
+The lifetime is at most 60 seconds. Issuance tolerates 60 seconds of clock skew;
+expiry is never extended. Proxy tokens use the same issuance allowance. `method` binds the HTTP method; for PUT,
 `policy` is `sha256:<hex>` of the normalized, sorted, compact policy JSON.
 It is an admin-body authenticator, never a proxy-token claim.
 
-- `PUT /v1/policies {aud,sub,policy}` replaces the policy and returns 204.
-- `DELETE /v1/policies {aud,sub}` removes authorization and content; returns 204
-  even when already absent. Its grant must not contain `policy`.
+- `GET /v1/policies?aud=...&sub=...` returns `{version}` with an identity-bound
+  GET grant. An absent identity starts at zero; tombstones retain their version.
+- `PUT /v1/policies {aud,sub,version,policy}` replaces the policy and returns 204.
+- `DELETE /v1/policies {aud,sub,version}` removes authorization and returns 204.
+  Its grant must contain the same version and must not contain `policy`.
 - `GET /health` is unauthenticated. `GET /metrics` requires an admin grant.
 
-Identity, method and policy must match the signed request. The binding serializes
-updates per sandbox; writes use last-write-wins semantics. A captured admin
-request remains replayable during its 60-second validity, so the admin network
-must be inaccessible to guests. Logs contain one JSON record per connection,
-without tokens, request headers or secret values.
+Identity, method, version and policy must match the signed request. The binding
+serializes updates per sandbox, reads the current version and submits the next
+one. Conflicts fail explicitly; clients must not automatically retry older intent
+with a new version. The admin network must remain inaccessible to guests.
+Logs separate authorization from the close reason, with open and close events.
+Refusal logs are limited to twenty per second per replica; fixed-category counters
+still count every refusal. Metrics include active connections, without host or
+sandbox labels. Tokens, request headers and secret values are never logged.
 
 Optional credential rules contain `aud`, exact `host`, `port`, uppercase `method`,
 `path`, `header`, `vaultBinding`, `secret`, and optional `valuePrefix`. Paths match
@@ -98,7 +115,12 @@ shared KV. The gateway therefore needs explicit data-read/write permission on th
 store, and data-read permission on each configured credential vault. Deliver the
 public CA through the agent's `PUT /v1/egress {token,caCert?}`. Trust bundle paths
 are passed to standard tools; applications with their own trust stores must import
-the public CA explicitly.
+the public CA explicitly. The CA is constrained to the audience's configured
+credential host names and excludes IP certificates. Changing this host set issues
+a different scoped CA, so clients must fetch and install its new public certificate.
+Leaf TLS configurations are cached per sandbox and host for one hour; vault values
+are cached for at most sixty seconds. Both caches retain at most 256 entries and
+never serve expired entries after a dependency failure.
 
 For a gateway-backed resource the agent starts without a token. Health reports
 `awaiting-egress-policy`, and
@@ -111,7 +133,7 @@ The injected MicroVM ID is checked against the token subject. Elsewhere the back
 sets `ALIEN_SANDBOX_SESSION_ID`, `ALIEN_SANDBOX_EGRESS_AUDIENCE`, and
 `ALIEN_SANDBOX_EGRESS_GATEWAY`. Tokens are never supplied through environment or
 image state. Policy updates go only to the gateway; token installation happens at create
-and renewal. Updates affect new connections. Existing tunnels remain open until close or the connection deadline.
+and renewal. Updates affect new connections immediately and existing tunnels at the next policy sweep.
 
 A resource declared `none` uses a loopback-only network and has no gateway or token.
 The agent verifies that direct internet fails before serving. A closed runtime policy still requires the gateway and an identity token.
@@ -142,7 +164,7 @@ does not advertise a proxy. Synthetic DNS replies advertise a 60-second TTL, but
 until evicted for capacity. The agent retains at most 4096 names, reclaims expired entries
 when full, and never reuses an
 issued synthetic address, so stale answers cannot connect to a different name.
-Clients must resolve again after expiry. After 131070 allocations in one agent
+Clients must resolve again after eviction. After 131070 allocations in one agent
 lifetime, new names fail closed; create a fresh sandbox to reset that limit.
 
 Validation tools live in `tests/` and `fuzz/`. Build the two release binaries, build

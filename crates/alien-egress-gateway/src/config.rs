@@ -50,7 +50,7 @@ pub struct VerificationKey {
 }
 
 /// Header injection scope. Matching is exact host/method and path-prefix at a slash boundary.
-#[derive(Clone, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CredentialRule {
     /// Audience permitted to use this credential.

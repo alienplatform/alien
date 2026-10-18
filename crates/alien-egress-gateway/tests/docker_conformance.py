@@ -18,9 +18,11 @@ import ssl
 import statistics
 import subprocess
 import time
+from urllib.parse import urlencode
 
 from agent_capabilities import AGENT_CAP_ARGS, check_capabilities
 from system_egress import check_system_egress
+from live_connections import check_live_connections, check_graceful_shutdown
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -185,7 +187,10 @@ class Suite:
 
     def admin(self, path, body, token=None, proxy=PROXY, method=None):
         method = method or ("PUT" if path == "/v1/policies" else "POST")
-        claims = {k: v for k, v in body.items() if k in ["aud", "sub"]}
+        body = dict(body)
+        if path == "/v1/policies" and method in ["PUT", "DELETE"] and "version" not in body:
+            body["version"] = self.version(body["aud"], body["sub"], proxy)+1
+        claims = {k: v for k, v in body.items() if k in ["aud", "sub", "version"]}
         claims["method"] = method
         if "policy" in body:
             claims["policy"] = policy_digest(body["policy"])
@@ -195,6 +200,11 @@ class Suite:
         result = response.status, response.read()
         conn.close()
         return result
+
+    def version(self, aud, sub, proxy=PROXY):
+        status, response = self.admin("/v1/policies?"+urlencode({"aud":aud,"sub":sub}), {"aud":aud,"sub":sub}, proxy=proxy, method="GET")
+        assert status == 200, (status,response)
+        return json.loads(response)["version"]
 
     def denied_tls(self, **kwargs):
         try:
@@ -314,6 +324,23 @@ class Suite:
         self.record("signed admin policy cannot change", lambda: equal(self.admin("/v1/policies", {**policy_body, "policy":"internet"}, self.token(admin=True, method="PUT", policy=policy_digest(self.policy)))[0], 403))
         self.record("signed admin identity cannot change", lambda: equal(self.admin("/v1/policies", {**policy_body, "sub":"other"}, self.token(admin=True, method="PUT", policy=policy_digest(self.policy)))[0], 403))
         self.record("PUT grant cannot DELETE", lambda: equal(self.admin("/v1/policies", identity, self.token(admin=True, method="PUT", policy=policy_digest(self.policy)), method="DELETE")[0], 403))
+        def policy_versions():
+            identity = {"aud":AUD,"sub":"versioned"}
+            equal(self.version(**identity),0)
+            body = {**identity,"version":1,"policy":{"allow":["allowed.test"]}}
+            equal(self.admin("/v1/policies", body)[0],204)
+            equal(self.admin("/v1/policies", body, proxy="93.184.216.4")[0],204)
+            equal(self.version(**identity,proxy="93.184.216.4"),1)
+            equal(self.admin("/v1/policies", {**body,"policy":"internet"})[0],409)
+            equal(self.admin("/v1/policies", {**body,"version":0})[0],409)
+            wrong_version = self.token(admin=True, sub="versioned", method="PUT", version=3, policy=policy_digest(body["policy"]))
+            equal(self.admin("/v1/policies", {**body,"version":2}, wrong_version)[0],403)
+            equal(self.admin("/v1/policies", {**identity,"version":2}, method="DELETE")[0],204)
+            equal(self.admin("/v1/policies", {**identity,"version":2}, method="DELETE")[0],204)
+            equal(self.version(**identity),2)
+            equal(self.admin("/v1/policies", body)[0],409)
+            equal(self.admin("/v1/policies", {**body,"version":3})[0],204)
+        self.record("signed versions reject reordering, conflicting replay and resurrection", policy_versions)
         status, response = self.admin("/v1/ca", identity)
         assert status == 200, response
         ca = self.output / "guest-ca.pem"
@@ -349,10 +376,12 @@ class Suite:
         self.record("second replica observes replacement", lambda: self.tunnel(token=unchanged_token, proxy="93.184.216.4", expected=403))
         equal(self.admin("/v1/policies", policy_body)[0], 204)
         self.record("same token observes widening", lambda: equal(self.tls(token=unchanged_token), (200, BODY)))
-        equal(self.admin("/v1/policies", identity, method="DELETE")[0], 204)
-        self.record("deleted policy denies previously accepted token", lambda: self.tunnel(token=unchanged_token, expected=403))
-        self.record("second replica denies deleted policy", lambda: self.tunnel(token=unchanged_token, proxy="93.184.216.4", expected=403))
-        equal(self.admin("/v1/policies", policy_body)[0], 204)
+        deleted_identity = {"aud":AUD,"sub":"deleted-basic"}
+        equal(self.admin("/v1/policies", {**deleted_identity,"policy":self.policy})[0],204)
+        deleted_token = self.token(sub="deleted-basic")
+        equal(self.admin("/v1/policies", deleted_identity, method="DELETE")[0], 204)
+        self.record("deleted policy denies previously accepted token", lambda: self.tunnel(token=deleted_token, expected=403))
+        self.record("second replica denies deleted policy", lambda: self.tunnel(token=deleted_token, proxy="93.184.216.4", expected=403))
         large = {"allow": [f"host{i}.example.test" for i in range(4096)]}
         self.record("4096-target policy delivered over admin HTTP", lambda: equal(self.admin("/v1/policies", {"aud": AUD, "sub": "large", "policy": large})[0], 204))
         self.record("small token resolves 4096-target policy", lambda: equal(self.tls(host="host4095.example.test", token=self.token(sub="large")), (200, BODY)))
@@ -676,6 +705,7 @@ def main():
                     raise
                 time.sleep(0.1)
         suite.run()
+        check_live_connections(suite, AUD, ORIGIN, PROXY, "93.184.216.4", docker, PREFIX)
         if args.agent_image:
             from legacy_egress import check_legacy_agents
             check_legacy_agents(suite, args.agent_image, containers, AGENT_UID)
@@ -683,6 +713,8 @@ def main():
             suite.proxy_only(args.agent_image, containers)
             from run_hook_egress import check_run_hook_agents
             check_run_hook_agents(suite, args.agent_image, containers, AGENT_UID)
+        if not args.vault_config:
+            check_graceful_shutdown(suite, AUD, ORIGIN, "93.184.216.4", docker, PREFIX)
         if args.vault_config:
             assert suite.admin("/v1/policies", {"aud":AUD,"sub":"reload","policy":"internet"})[0] == 204
             suite.tunnel(token=suite.token(sub="reload")).close()

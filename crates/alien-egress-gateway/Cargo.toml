@@ -11,7 +11,7 @@ cloud = ["alien-bindings/aws", "alien-bindings/gcp", "alien-bindings/azure", "al
 local = ["alien-bindings/local"]
 
 [dependencies]
-axum = { workspace = true, features = ["tokio", "http1", "json"] }
+axum = { workspace = true, features = ["tokio", "http1", "json", "query"] }
 alien-core = { workspace = true }
 alien-error = { workspace = true }
 alien-bindings = { workspace = true }
@@ -26,6 +26,7 @@ tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["json", "env-filter"] }
 url = { workspace = true }
+hickory-resolver = { workspace = true }
 httparse = "1.10"
 ipnet = { version = "2.12", features = ["serde"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }

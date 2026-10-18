@@ -5,6 +5,8 @@
 )]
 pub mod admin;
 pub mod config;
+pub mod connections;
+mod credential_cache;
 pub mod credentials;
 pub mod error;
 pub mod http_proxy;
