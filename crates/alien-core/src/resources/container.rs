@@ -330,12 +330,15 @@ pub struct ContainerPort {
 }
 
 /// Outbound network restriction enforced outside the container.
+/// Internet access also permits this container's own replicas on declared TCP ports,
+/// own-service discovery, and the credential proxy for its own identity.
 /// Absence preserves the runtime's existing full-network behavior.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub enum ContainerEgress {
-    /// Public addresses and DNS only, plus the platform credential proxy for this identity.
+    /// Public addresses and DNS, plus own replicas on declared TCP ports and
+    /// the platform credential proxy for this identity.
     /// Requires the restricted security profile and backend enforcement.
     Internet,
 }
