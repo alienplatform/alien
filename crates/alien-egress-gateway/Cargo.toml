@@ -42,6 +42,9 @@ hyper = { workspace = true, features = ["http1", "client", "server"] }
 hyper-util = { workspace = true, features = ["tokio"] }
 http-body-util = { workspace = true }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 proptest = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }

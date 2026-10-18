@@ -73,6 +73,7 @@ where
     });
     let result = hyper::server::conn::http1::Builder::new()
         .keep_alive(false)
+        .max_headers(crate::protocol::MAX_HEADERS)
         .max_buf_size(crate::protocol::MAX_HEADER_BYTES)
         .timer(TokioTimer::new())
         .header_read_timeout(HEADER_TIMEOUT)

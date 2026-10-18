@@ -22,7 +22,7 @@ use crate::{
     error::{denied, invalid, unavailable, Result},
     io::{Counters, Metered, Prefixed},
     policy::{check_addresses, PolicyExt, Target},
-    protocol::{read_client_hello, request_target, MAX_HEADER_BYTES},
+    protocol::{read_client_hello, request_target, MAX_HEADERS, MAX_HEADER_BYTES},
     store::PolicyStore,
     token::{self, Claims},
 };
@@ -81,6 +81,7 @@ impl Gateway {
         let addresses: Vec<_> = if let Ok(ip) = target.host.parse::<std::net::Ipv4Addr>() {
             vec![SocketAddr::new(ip.into(), target.port)]
         } else {
+            let _timer = self.connections.dns_latency.start();
             // An absolute DNS name never applies deployment search domains.
             timeout(
                 HEADER_TIMEOUT,
@@ -103,13 +104,12 @@ impl Gateway {
             &addresses.iter().map(SocketAddr::ip).collect::<Vec<_>>(),
             &self.config.denied_ranges,
         )?;
-        // Address failover is delegated to TcpStream, with only the validated addresses supplied.
-        let stream = timeout(HEADER_TIMEOUT, TcpStream::connect(addresses.as_slice()))
+        let timer = self.connections.connect_latency.start();
+        let stream = crate::dial::connect(&addresses)
             .await
             .into_alien_error()
-            .context(unavailable("destination timeout"))?
-            .into_alien_error()
             .context(unavailable("connect destination"))?;
+        drop(timer);
         identity.record_peer(
             stream
                 .peer_addr()
@@ -362,6 +362,7 @@ async fn authorized_proxy(
         .into_alien_error()
         .context(unavailable("acknowledge CONNECT"))?;
     let mut guest = Prefixed::new(input[head_len..].to_vec(), stream);
+    drop(input);
     let rules: Vec<_> = gateway
         .config
         .credentials
@@ -373,7 +374,12 @@ async fn authorized_proxy(
         .collect();
     if target.host.parse::<std::net::Ipv4Addr>().is_ok() {
         // Explicit IP/CIDR rules are the only grants for opaque, including server-first, protocols.
-        tokio::io::copy_bidirectional(&mut guest, &mut upstream)
+        let guest = guest
+            .flush_prefix(&mut upstream)
+            .await
+            .into_alien_error()
+            .context(unavailable("forward buffered IP payload"))?;
+        crate::tunnel::relay(guest, &mut upstream)
             .await
             .into_alien_error()
             .context(unavailable("relay IP connection"))?;
@@ -414,7 +420,17 @@ async fn authorized_proxy(
         .await
         .into_alien_error()
         .context(unavailable("forward ClientHello"))?;
-    tokio::io::copy_bidirectional(&mut guest, &mut upstream)
+    drop(hello);
+    let guest = guest
+        .flush_prefix(&mut upstream)
+        .await
+        .into_alien_error()
+        .context(unavailable("forward protocol prefix"))?
+        .flush_prefix(&mut upstream)
+        .await
+        .into_alien_error()
+        .context(unavailable("forward buffered TLS payload"))?;
+    crate::tunnel::relay(guest, &mut upstream)
         .await
         .into_alien_error()
         .context(unavailable("relay connection"))?;
@@ -462,7 +478,7 @@ async fn read_head(stream: &mut (impl tokio::io::AsyncRead + Unpin)) -> Result<V
 }
 
 fn inspect_head(input: &[u8]) -> Result<(Option<Target>, String, bool, usize)> {
-    let mut headers = [httparse::EMPTY_HEADER; 64];
+    let mut headers = [httparse::EMPTY_HEADER; MAX_HEADERS];
     let mut request = httparse::Request::new(&mut headers);
     let head_len = request
         .parse(input)

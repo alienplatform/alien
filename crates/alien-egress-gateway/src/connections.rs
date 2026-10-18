@@ -34,6 +34,8 @@ pub struct Connections {
     next_id: AtomicU64,
     pub active: AtomicU64,
     pub denials: [AtomicU64; 5],
+    pub dns_latency: crate::metrics::Histogram,
+    pub connect_latency: crate::metrics::Histogram,
     log_window: Mutex<Option<(tokio::time::Instant, u32)>>,
 }
 struct Group {

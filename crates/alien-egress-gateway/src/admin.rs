@@ -357,6 +357,16 @@ async fn metrics(State(live): State<Arc<LiveGateway>>, headers: HeaderMap) -> Re
             admin.gateway.connections.denials[index].load(Ordering::Relaxed)
         ));
     }
+    admin
+        .gateway
+        .connections
+        .dns_latency
+        .render("alien_egress_dns_duration_seconds", &mut metrics);
+    admin
+        .gateway
+        .connections
+        .connect_latency
+        .render("alien_egress_connect_duration_seconds", &mut metrics);
     metrics.into_response()
 }
 
