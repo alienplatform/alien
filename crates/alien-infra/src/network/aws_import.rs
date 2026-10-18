@@ -458,7 +458,6 @@ mod tests {
         };
         changed.sandbox_network = Some(sandbox_network.clone());
 
-
         let (merged, internal) = rerun(&settings, existing, changed);
 
         assert_eq!(merged.status, ResourceStatus::Running);

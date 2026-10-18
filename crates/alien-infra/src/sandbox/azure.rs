@@ -1031,7 +1031,7 @@ mod tests {
         assert_eq!(
             restored.egress.as_ref().unwrap().declaration(),
             &SandboxEgress::AllowDomains {
-                domains: vec!["api.example.com".into()]
+                domains: vec!["api.example.com".to_string()],
             }
         );
         assert!(restored.egress.as_ref().unwrap().default_policy().is_none());

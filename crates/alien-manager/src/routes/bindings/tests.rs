@@ -584,6 +584,55 @@ fn remote_sandbox_validation_refuses_platforms_without_a_durable_parent() {
     );
 }
 
+#[test]
+fn remote_sandbox_never_erases_a_new_internet_declaration() {
+    for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+        let mut binding = open_sandbox_binding_for(platform);
+        match &mut binding {
+            SandboxBinding::Aws(value) => value.egress = Some(SandboxEgress::Internet.into()),
+            SandboxBinding::GcpAgentPlatform(value) => {
+                value.egress = Some(SandboxEgress::Internet.into())
+            }
+            SandboxBinding::Azure(value) => value.egress = SandboxEgress::Internet.into(),
+            _ => unreachable!(),
+        }
+        let deployment = deployment_on_platform(sandbox_stack_state(binding, platform), platform);
+        assert!(
+            remote_sandbox_binding(&deployment, "agents").is_err(),
+            "{platform} cannot encode Internet in a legacy remote lease"
+        );
+    }
+}
+
+#[test]
+fn azure_remote_sandbox_accepts_only_legacy_open_egress() {
+    for (egress, allowed) in [
+        (SandboxEgress::Allow, true),
+        (SandboxEgress::Internet, false),
+        (SandboxEgress::None, false),
+        (
+            SandboxEgress::AllowDomains {
+                domains: vec!["example.com".into()],
+            },
+            false,
+        ),
+    ] {
+        let SandboxBinding::Azure(mut binding) = open_sandbox_binding_for(Platform::Azure) else {
+            unreachable!();
+        };
+        binding.egress = egress.into();
+        let deployment = deployment_on_platform(
+            sandbox_stack_state(SandboxBinding::Azure(binding), Platform::Azure),
+            Platform::Azure,
+        );
+        let result = remote_sandbox_binding(&deployment, "agents");
+        assert_eq!(result.is_ok(), allowed);
+        if let Ok(RemoteSandboxBinding::Azure(binding)) = result {
+            assert!(binding.allow_egress);
+        }
+    }
+}
+
 /// The wire contract remote clients decode. `service` selects the variant, so a rename is a silent
 /// breakage for every remote client.
 #[test]

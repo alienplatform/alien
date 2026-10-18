@@ -14,7 +14,8 @@ use std::process::ExitCode;
 
 use alien_build::sandbox_bundle::{write_bundle, write_supervised_bundle, AgentSource};
 
-fn main() -> ExitCode {
+#[tokio::main]
+async fn main() -> ExitCode {
     let mut arguments: Vec<String> = std::env::args().skip(1).collect();
     let supervised = arguments
         .first()
@@ -22,6 +23,22 @@ fn main() -> ExitCode {
     if supervised {
         arguments.remove(0);
     }
+    let command_uid = if arguments.first().is_some_and(|arg| arg == "--command-uid") {
+        arguments.remove(0);
+        if arguments.is_empty() {
+            eprintln!("--command-uid requires a numeric uid");
+            return ExitCode::FAILURE;
+        }
+        match arguments.remove(0).parse::<u32>() {
+            Ok(uid) => Some(uid),
+            Err(error) => {
+                eprintln!("invalid command uid: {error}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        None
+    };
     let usage = || {
         eprintln!(
             "usage: sandbox-bundle --agent-binary <path>|--agent-image <ref> \
@@ -39,18 +56,60 @@ fn main() -> ExitCode {
         _ => return usage(),
     };
 
+    let (image, build) = match dockdash::Image::builder()
+        .from(base_image)
+        .platform("linux", &dockdash::Arch::ARM64)
+        .build()
+        .await
+    {
+        Ok(image) => image,
+        Err(error) => {
+            eprintln!("inspect base image: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let identity = match alien_build::sandbox_identity::BaseIdentity::read(&image, base_image).await
+    {
+        Ok(identity) => identity,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    // Pin the inspected manifest so a tag cannot change users between inspection and AWS build.
+    let reference = match base_image.parse::<oci_client::Reference>() {
+        Ok(reference) => reference,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let pinned = format!(
+        "{}/{}@{}",
+        reference.registry(),
+        reference.repository(),
+        build.resolved_manifest_digest
+    );
     let result = if supervised {
-        match inspect_command(base_image) {
-            Ok(command) => {
-                write_supervised_bundle(Path::new(destination), base_image, &agent, &command)
-            }
+        match alien_build::sandbox_identity::image_command(&image) {
+            Ok(command) => write_supervised_bundle(
+                Path::new(destination),
+                &pinned,
+                &agent,
+                &command,
+                &identity,
+                command_uid,
+            ),
             Err(error) => {
                 eprintln!("{error}");
                 return ExitCode::FAILURE;
             }
         }
+    } else if command_uid.is_some() {
+        eprintln!("--command-uid requires --privileged-supervisor");
+        return ExitCode::FAILURE;
     } else {
-        write_bundle(Path::new(destination), base_image, &agent)
+        write_bundle(Path::new(destination), &pinned, &agent, &identity)
     };
     match result {
         Ok(()) => {
@@ -62,52 +121,4 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
-}
-
-fn inspect_command(image: &str) -> Result<alien_core::sandbox_image::SandboxImageCommand, String> {
-    let output = std::process::Command::new("docker")
-        .args(["image", "inspect", "--format", "{{json .Config}}", image])
-        .output()
-        .map_err(|error| format!("inspect base image: {error}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "pull the ARM64 base image before packaging: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-    let config: serde_json::Value = serde_json::from_slice(&output.stdout)
-        .map_err(|error| format!("read base image configuration: {error}"))?;
-    let mut command = vec![];
-    for field in ["Entrypoint", "Cmd"] {
-        if let Some(args) = config[field].as_array() {
-            for arg in args {
-                command.push(
-                    arg.as_str()
-                        .ok_or_else(|| "image command must contain strings".to_string())?
-                        .to_string(),
-                );
-            }
-        }
-    }
-    let mut env = std::collections::BTreeMap::new();
-    if let Some(entries) = config["Env"].as_array() {
-        for entry in entries {
-            let text = entry
-                .as_str()
-                .ok_or_else(|| "image environment must contain strings".to_string())?;
-            let (key, value) = text
-                .split_once('=')
-                .ok_or_else(|| "image environment entry must contain '='".to_string())?;
-            env.insert(key.to_string(), value.to_string());
-        }
-    }
-    let cwd = config["WorkingDir"]
-        .as_str()
-        .filter(|value| !value.is_empty())
-        .unwrap_or("/");
-    Ok(alien_core::sandbox_image::SandboxImageCommand {
-        command,
-        env,
-        working_directory: cwd.to_string(),
-    })
 }

@@ -23,7 +23,10 @@ async fn aws_egress_updates_paused_policy_without_redelivering_identity() {
 
 #[tokio::test]
 async fn aws_egress_failed_initial_delivery_terminates_the_unreturned_microvm() {
-    exercise(StatusCode::BAD_REQUEST, "refused").await;
+    exercise(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "AGENT_OPERATION_FAILED: Agent operation 'sandbox gateway egress' failed: token audience or sandbox ID mismatch",
+    ).await;
 }
 
 #[tokio::test]
@@ -35,23 +38,60 @@ async fn aws_egress_self_check_refusal_is_typed_and_never_retried() {
     .await;
 }
 
-async fn exercise(delivery_status: StatusCode, delivery_body: &'static str) {
+#[tokio::test]
+async fn aws_egress_transport_refusal_preserves_the_agent_reason() {
+    exercise(
+        StatusCode::FORBIDDEN,
+        "the agent does not serve the code it is running",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn aws_egress_refusal_redacts_an_echoed_identity_token() {
+    exercise(StatusCode::BAD_REQUEST, "invalid identity: $TOKEN").await;
+}
+
+#[tokio::test]
+async fn aws_egress_refusal_body_is_bounded() {
+    exercise(StatusCode::BAD_REQUEST, &"x".repeat(8192)).await;
+}
+
+async fn exercise(delivery_status: StatusCode, delivery_body: &str) {
     let refuse_delivery = !delivery_status.is_success();
     let harness = Arc::new(Harness::new().await);
     let policies = Arc::new(Mutex::new(Vec::<EgressTokenClaims>::new()));
     let seen = policies.clone();
+    let installed = Arc::new(Mutex::new((String::new(), String::new())));
+    let agent_copy = installed.clone();
+    let record_only = Arc::new(AtomicUsize::new(0));
+    let record_only_seen = record_only.clone();
     let fences = harness.clone();
+    let response_body = delivery_body.to_string();
     let agent = Router::new()
         .route(
             "/v1/egress",
             put(
                 move |headers: HeaderMap, Json(body): Json<serde_json::Value>| {
                     let seen = seen.clone();
+                    let installed = agent_copy.clone();
+                    let record_only_seen = record_only_seen.clone();
                     let fences = fences.clone();
+                    let response_body = response_body.clone();
                     async move {
                         assert_eq!(headers["x-aws-proxy-auth"], "test-endpoint-token");
                         assert_eq!(headers[PROXY_PORT_HEADER], AGENT_PORT.to_string());
-                        let token = body["token"].as_str().unwrap();
+                        let mut installed = installed.lock().unwrap();
+                        if let Some(token) = body["token"].as_str() {
+                            installed.0 = token.to_owned();
+                        } else {
+                            record_only_seen.fetch_add(1, Ordering::SeqCst);
+                        }
+                        assert!(
+                            !installed.0.is_empty(),
+                            "record-only updates require an installed identity"
+                        );
+                        let token = &installed.0;
                         let claims: EgressTokenClaims = serde_json::from_slice(
                             &URL_SAFE_NO_PAD
                                 .decode(token.split('.').nth(1).unwrap())
@@ -64,8 +104,27 @@ async fn exercise(delivery_status: StatusCode, delivery_body: &'static str) {
                             fences.policy(&claims.sub).is_some(),
                             "policy must precede identity delivery"
                         );
+                        let record = body["policy"]
+                            .as_str()
+                            .expect("agent must receive its recovery record");
+                        let record_claims: serde_json::Value = serde_json::from_slice(
+                            &URL_SAFE_NO_PAD
+                                .decode(record.split('.').nth(1).unwrap())
+                                .unwrap(),
+                        )
+                        .unwrap();
+                        assert_eq!(record_claims["sub"], claims.sub);
+                        let policy: EgressPolicy =
+                            serde_json::from_value(record_claims["policy"].clone()).unwrap();
+                        assert_eq!(
+                            Some(policy),
+                            fences.policy(&claims.sub),
+                            "resume must deliver the latest policy"
+                        );
                         seen.lock().unwrap().push(claims);
-                        (delivery_status, delivery_body)
+                        let body = response_body.replace("$TOKEN", token);
+                        installed.1 = record.to_owned();
+                        (delivery_status, body)
                     }
                 },
             ),
@@ -194,6 +253,19 @@ async fn exercise(delivery_status: StatusCode, delivery_body: &'static str) {
                 "self-check refusal must not redeliver identity"
             );
         }
+        if delivery_status != StatusCode::SERVICE_UNAVAILABLE {
+            let expected = if delivery_body.len() > 4096 {
+                "agent refusal body exceeded 4096 bytes".to_string()
+            } else {
+                delivery_body.replace("$TOKEN", "[redacted]")
+            };
+            assert!(error.to_string().contains(&expected), "{error}");
+            assert!(
+                !error.to_string().contains("eyJ"),
+                "identity must not appear in errors"
+            );
+            assert_eq!(policies.lock().unwrap().len(), 1);
+        }
         assert_eq!(terminated.load(Ordering::SeqCst), 1);
         assert_eq!(harness.policy("mvm-policy"), None);
     } else {
@@ -209,6 +281,34 @@ async fn exercise(delivery_status: StatusCode, delivery_body: &'static str) {
             delivered,
             "ordinary operations reuse the identity token"
         );
+        let original_token = installed.lock().unwrap().0.clone();
+        provider
+            .update_egress(&created.sandbox_id, EgressPolicy::Allow { allow: vec![] })
+            .await
+            .unwrap();
+        assert_eq!(
+            policies.lock().unwrap().len(),
+            delivered + 1,
+            "running updates must refresh the agent recovery record"
+        );
+        assert_eq!(
+            installed.lock().unwrap().0,
+            original_token,
+            "record-only delivery must preserve the actual identity token"
+        );
+        assert_eq!(
+            record_only.load(Ordering::SeqCst),
+            1,
+            "running update must omit token, not mint a replacement in the same second"
+        );
+        let recovery_record = installed.lock().unwrap().1.clone();
+        harness.recover_after_total_loss(&recovery_record).await;
+        assert_eq!(
+            harness.policy(&created.sandbox_id),
+            Some(EgressPolicy::Allow { allow: vec![] }),
+            "the agent's delivered record must recover the narrowed policy after total loss"
+        );
+        let delivered = policies.lock().unwrap().len();
         paused.store(true, Ordering::SeqCst);
         provider
             .update_egress(&created.sandbox_id, EgressPolicy::Allow { allow: vec![] })
@@ -229,6 +329,19 @@ async fn exercise(delivery_status: StatusCode, delivery_body: &'static str) {
             policies.lock().unwrap().len(),
             delivered + 1,
             "resume may renew identity"
+        );
+        let found = provider
+            .get_or_create(CreateSandboxRequest {
+                sandbox_id: Some(created.sandbox_id.clone()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!(!found.created);
+        assert_eq!(
+            harness.policy(&created.sandbox_id),
+            Some(EgressPolicy::Allow { allow: vec![] }),
+            "reconnect without egress must preserve the narrowed policy"
         );
         let recovered = provider
             .get_or_create(CreateSandboxRequest {

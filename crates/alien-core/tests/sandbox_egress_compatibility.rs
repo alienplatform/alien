@@ -61,7 +61,8 @@ fn released_plans_and_frozen_setup_digest_are_identical() {
         entry.lifecycle = alien_core::ResourceLifecycle::Frozen;
     }
     let actual = serde_json::json!({"liveDigest":live, "frozenDigest":stack.setup_owned_digest(), "plans":plans});
-    // Produced by the pre-change core (c542f8f1b) from the actual released SDK fixture.
+    // Produced by main core (374cc95f3) from the actual released SDK fixture.
+    // This includes the image USER contract while keeping egress and setup unchanged.
     let expected: serde_json::Value = serde_json::from_str(include_str!(
         "fixtures/sandbox-egress-core-3.3.34-expected-plan.json"
     ))

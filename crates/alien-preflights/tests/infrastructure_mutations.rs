@@ -396,9 +396,11 @@ async fn an_azure_sandbox_only_stack_depends_only_on_resources_it_defines() {
         .apply_mutations(sandbox_only, &stack_state, &config)
         .await
         .expect("mutations apply");
-    assert!(!sandbox_only
-        .resources
-        .contains_key("default-resource-group"));
+    assert!(
+        !sandbox_only.resources.contains_key("default-resource-group"),
+        "unexpected resources: {:?}",
+        sandbox_only.resources.keys().collect::<Vec<_>>()
+    );
     assert!(sandbox_only.resources.contains_key("enable-app"));
     for (id, entry) in sandbox_only.resources() {
         for dependency in &entry.dependencies {

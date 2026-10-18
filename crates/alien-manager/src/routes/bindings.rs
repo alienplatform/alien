@@ -1928,9 +1928,10 @@ fn remote_sandbox_binding(
             })?;
 
     if binding.default_policy().is_some()
-        || binding
-            .egress()
-            .is_some_and(|value| value.declaration() == &alien_core::SandboxEgress::Internet)
+        || binding.egress().is_some_and(|value| {
+            value.gateway().is_some()
+                || *value.declaration() == alien_core::SandboxEgress::Internet
+        })
     {
         return Err(ErrorData::bad_request(format!("Sandbox resource '{resource_id}' requires gateway policy support; use an ordinary workload binding")));
     }

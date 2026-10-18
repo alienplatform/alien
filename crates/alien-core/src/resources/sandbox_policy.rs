@@ -12,12 +12,19 @@ use utoipa::openapi::schema::{ArrayBuilder, ObjectBuilder, OneOfBuilder, Type};
 use crate::error::{ErrorData, Result};
 
 /// Per-sandbox outbound policy enforced by the gateway.
+///
+/// Mail ports 25, 465 and 587 require an explicit port in an allowlist target,
+/// such as `smtp.example.com:587`; `internet` and portless targets exclude them.
+/// This protects the deployment's shared outbound IP from mail abuse and blocklisting,
+/// which could disrupt every tenant's access through that IP.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum EgressPolicy {
-    /// Public internet access. Private and link-local destinations remain forbidden.
+    /// Public internet access except mail ports 25, 465 and 587.
+    /// Private and link-local destinations remain forbidden.
     Internet,
-    /// Explicit destinations; unspecified ports match any port and wildcards include the apex.
+    /// Explicit destinations; unspecified ports exclude 25, 465 and 587.
+    /// Wildcards include the apex. An explicit port can allow a mail destination.
     #[serde(untagged)]
     Allow {
         /// Hostnames, wildcard hostnames, IPv4 literals or IPv4 CIDRs, optionally with a port.
@@ -30,6 +37,7 @@ pub enum EgressPolicy {
 impl utoipa::PartialSchema for EgressPolicy {
     fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
         OneOfBuilder::new()
+            .description(Some("Per-sandbox outbound policy. Mail ports 25, 465 and 587 require an explicit allowlist port, such as smtp.example.com:587; internet and portless targets exclude them. This protects the deployment's shared outbound IP from mail abuse and blocklisting that could disrupt every tenant."))
             .item(
                 ObjectBuilder::new()
                     .schema_type(Type::String)

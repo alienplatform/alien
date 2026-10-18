@@ -2572,6 +2572,13 @@ impl StackExecutor {
                     )
                 };
 
+            // RefreshFailed controllers remain scheduled, even after their retry budget
+            // is exhausted. Preserve a delay instead of retrying on every manager tick.
+            if next_error.is_some() && next_status == ResourceStatus::RefreshFailed {
+                let delay = Duration::from_secs(30);
+                resource_min_delay = Some(resource_min_delay.map_or(delay, |d| d.max(delay)));
+            }
+
             // Set the internal controller outside the closure to handle errors properly
             let mut next_state = current_resource_state.clone();
             next_state

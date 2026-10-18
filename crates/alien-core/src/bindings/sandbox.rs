@@ -383,7 +383,8 @@ impl SandboxBinding {
         })
     }
 
-    /// Creates a legacy GCP Agent Platform binding from the native egress flag.
+    /// Creates a GCP Agent Platform binding from the legacy template switch.
+    /// Gateway-backed declarations must supply their explicit egress configuration.
     pub fn gcp_agent_platform(
         engine: impl Into<BindingValue<String>>,
         template: impl Into<BindingValue<String>>,

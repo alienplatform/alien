@@ -698,6 +698,18 @@ async fn remote_sandbox_decodes_every_declared_field_and_reaches_the_azure_provi
     })
     .await;
 
+    #[cfg(feature = "azure")]
+    RemoteBindings::from_manager_access(
+        DEPLOYMENT_ID,
+        &manager_url,
+        GENERATED_MANAGER_TOKEN,
+        expires_at,
+    )
+    .expect("construct remote sandbox bindings")
+    .sandbox("agent")
+    .await
+    .expect("the generated lease must load the Azure sandbox provider");
+
     let manager = DiscoveredManager {
         deployment_id: DEPLOYMENT_ID.to_string(),
         url: reqwest::Url::parse(&manager_url).expect("valid manager URL"),

@@ -538,6 +538,119 @@ pub struct AzureWorkerController {
 }
 
 impl AzureWorkerController {
+    async fn renew_certificate(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<()> {
+        let func_cfg = ctx.desired_resource_config::<Worker>()?;
+
+        if func_cfg.public_endpoints.is_empty()
+            || self.uses_custom_domain
+            || self.container_apps_certificate_id.is_none()
+        {
+            return Ok(());
+        }
+
+        let Some(resource) = ctx
+            .deployment_config
+            .domain_metadata
+            .as_ref()
+            .and_then(|meta| meta.resources.get(&func_cfg.id))
+        else {
+            return Ok(());
+        };
+
+        if resource.issued_at.is_none() || resource.issued_at == self.certificate_issued_at {
+            return Ok(());
+        }
+
+        let certificate_chain = resource.certificate_chain.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "Certificate chain missing (certificate not issued)".to_string(),
+                resource_id: Some(func_cfg.id.clone()),
+            })
+        })?;
+        let private_key = resource.private_key.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "Private key missing (certificate not issued)".to_string(),
+                resource_id: Some(func_cfg.id.clone()),
+            })
+        })?;
+
+        let pkcs12_data = pem_to_pkcs12(private_key, certificate_chain)?;
+        let pkcs12_base64 = base64::engine::general_purpose::STANDARD.encode(&pkcs12_data);
+        let azure_cfg = ctx.get_azure_config()?;
+        let resource_group_name = get_resource_group_name(ctx.state)?;
+        let environment_name = get_container_apps_environment_name(ctx.state)?;
+        let certificate_name =
+            get_container_apps_certificate_name(ctx.resource_prefix, &func_cfg.id);
+        let certificate = ManagedEnvironmentCertificate {
+            location: azure_cfg.region.as_deref().unwrap_or("East US").to_string(),
+            properties: Some(ManagedEnvironmentCertificateProperties {
+                value: Some(pkcs12_base64),
+                password: Some(String::new()),
+                certificate_key_vault_properties: None,
+            }),
+            tags: HashMap::new(),
+        };
+
+        let container_apps_client = ctx
+            .service_provider
+            .get_azure_container_apps_client(azure_cfg)?;
+        let response = container_apps_client
+            .create_or_update_managed_environment_certificate(
+                &resource_group_name,
+                &environment_name,
+                &certificate_name,
+                &certificate,
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to re-import certificate to Azure Container Apps Environment"
+                    .to_string(),
+                resource_id: Some(func_cfg.id.clone()),
+            })?;
+
+        let container_apps_certificate_id = response.id.ok_or_else(|| {
+            AlienError::new(ErrorData::CloudPlatformError {
+                message: "Azure Container Apps Environment certificate response missing ID"
+                    .to_string(),
+                resource_id: Some(func_cfg.id.clone()),
+            })
+        })?;
+
+        if self.fqdn.is_some() {
+            let container_app_name = self.container_app_name.as_ref().ok_or_else(|| {
+                AlienError::new(ErrorData::ResourceControllerConfigError {
+                    resource_id: func_cfg.id.clone(),
+                    message: "Container app name not set in state".to_string(),
+                })
+            })?;
+            let fqdn = self.fqdn.clone().unwrap();
+            let environment_name = get_container_apps_environment_name(ctx.state)?;
+            let mut app = self
+                .build_container_app(
+                    func_cfg,
+                    &environment_name,
+                    container_app_name,
+                    azure_cfg,
+                    ctx,
+                )
+                .await?;
+            Self::set_custom_domain(&mut app, fqdn, container_apps_certificate_id.clone());
+
+            container_apps_client
+                .create_or_update_container_app(&resource_group_name, container_app_name, &app)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to bind renewed certificate to custom domain".to_string(),
+                    resource_id: Some(func_cfg.id.clone()),
+                })?;
+        }
+
+        self.container_apps_certificate_id = Some(container_apps_certificate_id);
+        self.certificate_issued_at = resource.issued_at.clone();
+
+        Ok(())
+    }
+
     fn wait_for_container_apps_environment_wake_retry(
         &mut self,
         worker_id: &str,
@@ -2184,7 +2297,7 @@ impl AzureWorkerController {
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let azure_cfg = ctx.get_azure_config()?;
         let func_cfg = ctx.desired_resource_config::<Worker>()?;
-        let container_app_name = self.container_app_name.as_ref().ok_or_else(|| {
+        let container_app_name = self.container_app_name.clone().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceControllerConfigError {
                 resource_id: func_cfg.id.clone(),
                 message: "Container app name not set in state".to_string(),
@@ -2198,7 +2311,7 @@ impl AzureWorkerController {
 
         // Heartbeat check: verify Container App still exists and is in correct state
         let container_app = client
-            .get_container_app(&resource_group_name, container_app_name)
+            .get_container_app(&resource_group_name, &container_app_name)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to get Container App during heartbeat check".to_string(),
@@ -2222,39 +2335,14 @@ impl AzureWorkerController {
         // host (the DNS CNAME target — see `container_app_url`).
         self.container_app_url = self.extract_url_from_container_app(&container_app);
 
-        // Check for certificate renewal on auto-managed public domains.
-        if !func_cfg.public_endpoints.is_empty() && !self.uses_custom_domain {
-            let metadata = ctx
-                .deployment_config
-                .domain_metadata
-                .as_ref()
-                .and_then(|meta| meta.resources.get(&func_cfg.id));
-
-            if let Some(resource) = metadata {
-                // Check if certificate has been renewed (issued_at timestamp changed)
-                if let Some(new_issued_at) = &resource.issued_at {
-                    if self.certificate_issued_at.as_ref() != Some(new_issued_at) {
-                        info!(
-                            worker=%func_cfg.id,
-                            old_issued_at=?self.certificate_issued_at,
-                            new_issued_at=%new_issued_at,
-                            "Certificate renewed, triggering update to re-import certificate"
-                        );
-                        return Ok(HandlerAction::Continue {
-                            state: UpdateImportingCertificate,
-                            suggested_delay: None,
-                        });
-                    }
-                }
-            }
-        }
-
         emit_azure_container_apps_worker_heartbeat(
             ctx,
             &func_cfg,
-            container_app_name,
+            &container_app_name,
             &container_app,
         );
+
+        self.renew_certificate(ctx).await?;
 
         debug!(name = %func_cfg.id, "Heartbeat check passed");
         Ok(HandlerAction::Continue {
@@ -2275,121 +2363,7 @@ impl AzureWorkerController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
-        let func_cfg = ctx.desired_resource_config::<Worker>()?;
-
-        if func_cfg.public_endpoints.is_empty() || self.uses_custom_domain {
-            return Ok(HandlerAction::Continue {
-                state: UpdateStart,
-                suggested_delay: None,
-            });
-        }
-
-        let Some(resource) = ctx
-            .deployment_config
-            .domain_metadata
-            .as_ref()
-            .and_then(|meta| meta.resources.get(&func_cfg.id))
-        else {
-            return Ok(HandlerAction::Continue {
-                state: UpdateStart,
-                suggested_delay: None,
-            });
-        };
-
-        if resource.issued_at == self.certificate_issued_at {
-            return Ok(HandlerAction::Continue {
-                state: UpdateStart,
-                suggested_delay: None,
-            });
-        }
-
-        let certificate_chain = resource.certificate_chain.as_ref().ok_or_else(|| {
-            AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: "Certificate chain missing (certificate not issued)".to_string(),
-                resource_id: Some(func_cfg.id.clone()),
-            })
-        })?;
-        let private_key = resource.private_key.as_ref().ok_or_else(|| {
-            AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: "Private key missing (certificate not issued)".to_string(),
-                resource_id: Some(func_cfg.id.clone()),
-            })
-        })?;
-
-        let pkcs12_data = pem_to_pkcs12(private_key, certificate_chain)?;
-        let pkcs12_base64 = base64::engine::general_purpose::STANDARD.encode(&pkcs12_data);
-        let azure_cfg = ctx.get_azure_config()?;
-        let resource_group_name = get_resource_group_name(ctx.state)?;
-        let environment_name = get_container_apps_environment_name(ctx.state)?;
-        let certificate_name =
-            get_container_apps_certificate_name(ctx.resource_prefix, &func_cfg.id);
-        let certificate = ManagedEnvironmentCertificate {
-            location: azure_cfg.region.as_deref().unwrap_or("East US").to_string(),
-            properties: Some(ManagedEnvironmentCertificateProperties {
-                value: Some(pkcs12_base64),
-                password: Some(String::new()),
-                certificate_key_vault_properties: None,
-            }),
-            tags: HashMap::new(),
-        };
-
-        let container_apps_client = ctx
-            .service_provider
-            .get_azure_container_apps_client(azure_cfg)?;
-        let response = container_apps_client
-            .create_or_update_managed_environment_certificate(
-                &resource_group_name,
-                &environment_name,
-                &certificate_name,
-                &certificate,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to re-import certificate to Azure Container Apps Environment"
-                    .to_string(),
-                resource_id: Some(func_cfg.id.clone()),
-            })?;
-
-        let container_apps_certificate_id = response.id.ok_or_else(|| {
-            AlienError::new(ErrorData::CloudPlatformError {
-                message: "Azure Container Apps Environment certificate response missing ID"
-                    .to_string(),
-                resource_id: Some(func_cfg.id.clone()),
-            })
-        })?;
-
-        if self.fqdn.is_some() {
-            let container_app_name = self.container_app_name.as_ref().ok_or_else(|| {
-                AlienError::new(ErrorData::ResourceControllerConfigError {
-                    resource_id: func_cfg.id.clone(),
-                    message: "Container app name not set in state".to_string(),
-                })
-            })?;
-            let fqdn = self.fqdn.clone().unwrap();
-            let environment_name = get_container_apps_environment_name(ctx.state)?;
-            let mut app = self
-                .build_container_app(
-                    func_cfg,
-                    &environment_name,
-                    container_app_name,
-                    azure_cfg,
-                    ctx,
-                )
-                .await?;
-            Self::set_custom_domain(&mut app, fqdn, container_apps_certificate_id.clone());
-
-            container_apps_client
-                .create_or_update_container_app(&resource_group_name, container_app_name, &app)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: "Failed to bind renewed certificate to custom domain".to_string(),
-                    resource_id: Some(func_cfg.id.clone()),
-                })?;
-        }
-
-        self.container_apps_certificate_id = Some(container_apps_certificate_id);
-        self.certificate_issued_at = resource.issued_at.clone();
-
+        self.renew_certificate(ctx).await?;
         Ok(HandlerAction::Continue {
             state: UpdateStart,
             suggested_delay: None,
@@ -2402,6 +2376,22 @@ impl AzureWorkerController {
         status = ResourceStatus::Updating,
     )]
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+        // Older heartbeats entered this update state after installing a certificate,
+        // even though the executor had never planned an update for this worker.
+        if self.container_apps_certificate_id.is_some()
+            && self.certificate_issued_at.is_some()
+            && ctx
+                .state
+                .resources
+                .get(ctx.desired_config.id())
+                .is_some_and(|resource| resource.previous_config.is_none())
+        {
+            return Ok(HandlerAction::Continue {
+                state: Ready,
+                suggested_delay: Some(Duration::from_secs(30)),
+            });
+        }
+
         let func_cfg = ctx.desired_resource_config::<Worker>()?;
         let previous_cfg = ctx.previous_resource_config::<Worker>()?;
         self.ready_rbac_wait_until_epoch_secs = None;
@@ -3473,10 +3463,17 @@ impl AzureWorkerController {
     );
     terminal_state!(state = UpdateFailed, status = ResourceStatus::UpdateFailed);
     terminal_state!(state = DeleteFailed, status = ResourceStatus::DeleteFailed);
-    terminal_state!(
+    #[handler(
         state = RefreshFailed,
-        status = ResourceStatus::RefreshFailed
-    );
+        on_failure = RefreshFailed,
+        status = ResourceStatus::RefreshFailed,
+    )]
+    async fn refresh_failed(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        self.ready(ctx).await
+    }
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
 
     // Implementation of get_outputs trait method
@@ -5657,6 +5654,279 @@ mod tests {
             managed_by: None,
             system_data: None,
             type_: None,
+        }
+    }
+
+    fn create_test_domain_metadata(resource_id: &str) -> alien_core::DomainMetadata {
+        let mut resources = std::collections::HashMap::new();
+        resources.insert(
+            resource_id.to_string(),
+            alien_core::ResourceDomainInfo {
+                fqdn: format!("{}.test.example.com", resource_id),
+                certificate_id: "test-cert-id".to_string(),
+                certificate_status: alien_core::CertificateStatus::Issued,
+                dns_status: alien_core::DnsRecordStatus::Active,
+                dns_error: None,
+                certificate_chain: Some(
+                    "-----BEGIN CERTIFICATE-----\nMIIBtest\n-----END CERTIFICATE-----\n"
+                        .to_string(),
+                ),
+                private_key: Some(
+                    "-----BEGIN PRIVATE KEY-----\nMIIBtest\n-----END PRIVATE KEY-----\n"
+                        .to_string(),
+                ),
+                endpoints: std::collections::HashMap::new(),
+                issued_at: Some("2024-01-01T00:00:00Z".to_string()),
+                aliases: Vec::new(),
+            },
+        );
+        alien_core::DomainMetadata {
+            base_domain: "test.example.com".to_string(),
+            public_subdomain: "test".to_string(),
+            hosted_zone_id: "Z1234567890ABC".to_string(),
+            resources,
+        }
+    }
+
+    #[rstest]
+    #[case::never_updated(false, false, false, false)]
+    #[case::previously_updated(true, false, false, false)]
+    #[case::old_update_checkpoint(false, true, false, false)]
+    #[case::pending_metadata(false, false, true, false)]
+    #[case::missing_certificate(false, false, false, true)]
+    #[tokio::test]
+    async fn certificate_renewal_returns_to_ready_without_updating_worker(
+        #[case] previously_updated: bool,
+        #[case] old_checkpoint: bool,
+        #[case] pending_metadata: bool,
+        #[case] missing_certificate: bool,
+    ) {
+        let mut apps = MockContainerAppsApi::new();
+        apps.expect_get_container_app()
+            .returning(|_, name| Ok(create_successful_container_app_response(name, true)));
+        apps.expect_create_or_update_managed_environment_certificate()
+            .times(if pending_metadata || missing_certificate {
+                0
+            } else {
+                1
+            })
+            .returning(|_, _, _, cert| {
+                assert!(!cert
+                    .properties
+                    .as_ref()
+                    .unwrap()
+                    .value
+                    .as_ref()
+                    .unwrap()
+                    .is_empty());
+                Ok(
+                    alien_azure_clients::container_apps::ManagedEnvironmentCertificateResponse {
+                        id: Some("test-certificate-id".to_string()),
+                    },
+                )
+            });
+        apps.expect_create_or_update_container_app()
+            .times(if pending_metadata || missing_certificate {
+                0
+            } else {
+                1
+            })
+            .returning(|_, name, app| {
+                assert!(app
+                    .properties
+                    .as_ref()
+                    .unwrap()
+                    .configuration
+                    .as_ref()
+                    .unwrap()
+                    .ingress
+                    .as_ref()
+                    .unwrap()
+                    .custom_domains
+                    .iter()
+                    .any(|domain| domain.certificate_id.as_deref() == Some("test-certificate-id")));
+                Ok(OperationResult::Completed(
+                    create_successful_container_app_response(name, true),
+                ))
+            });
+        let provider = setup_mock_service_provider(Arc::new(apps), None);
+        let mut controller = AzureWorkerController {
+            container_apps_certificate_id: Some("test-certificate-id".to_string()),
+            certificate_issued_at: Some("2023-01-01T00:00:00Z".to_string()),
+            fqdn: Some("public-func.test.example.com".to_string()),
+            ..AzureWorkerController::mock_ready("test-public-func")
+        };
+        if missing_certificate {
+            controller.container_apps_certificate_id = None;
+        }
+        if old_checkpoint {
+            controller.state = AzureWorkerState::UpdateImportingCertificate;
+        }
+        let mut metadata = create_test_domain_metadata("public-func");
+        if pending_metadata {
+            let info = metadata.resources.get_mut("public-func").unwrap();
+            info.issued_at = None;
+            info.certificate_chain = None;
+            info.private_key = None;
+        }
+        let mut completed = false;
+        for _ in 0..10 {
+            controller = serde_json::from_value(serde_json::to_value(controller).unwrap()).unwrap();
+            let mut builder = SingleControllerExecutor::builder()
+                .resource(function_public_ingress())
+                .controller(controller)
+                .platform(Platform::Azure)
+                .service_provider(provider.clone())
+                .with_test_dependencies()
+                .domain_metadata(metadata.clone());
+            if previously_updated {
+                let mut previous = function_public_ingress();
+                previous.code = alien_core::WorkerCode::Image {
+                    image: "old-image:previous".to_string(),
+                };
+                builder = builder.previous_resource(previous);
+            }
+            let mut executor = builder.build().await.unwrap();
+            let result = executor.step().await.expect("certificate renewal succeeds");
+            controller = executor
+                .internal_state::<AzureWorkerController>()
+                .unwrap()
+                .clone();
+            if controller.state == AzureWorkerState::Ready {
+                assert_eq!(
+                    controller.certificate_issued_at.as_deref(),
+                    Some(if pending_metadata || missing_certificate {
+                        "2023-01-01T00:00:00Z"
+                    } else {
+                        "2024-01-01T00:00:00Z"
+                    })
+                );
+                assert!(result.suggested_delay.is_some_and(|delay| !delay.is_zero()));
+                completed = true;
+                break;
+            }
+        }
+        assert!(completed, "renewal must finish at Ready");
+    }
+
+    #[rstest]
+    #[case::lost_import(false, false)]
+    #[case::lost_binding(true, false)]
+    #[case::fail_then_delete(false, true)]
+    #[tokio::test]
+    async fn certificate_renewal_lost_response(#[case] fail_binding: bool, #[case] delete: bool) {
+        let imports = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let binds = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut apps = MockContainerAppsApi::new();
+        apps.expect_get_container_app()
+            .returning(|_, name| Ok(create_successful_container_app_response(name, true)));
+        let writes = imports.clone();
+        apps.expect_create_or_update_managed_environment_certificate()
+            .returning(move |_, _, name, _| {
+                assert_eq!(name, "test-public-func");
+                let attempt = writes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if attempt == 0 && !fail_binding {
+                    return Err(AlienError::new(CloudClientErrorData::InvalidInput {
+                        message: "lost import response".to_string(),
+                        field_name: None,
+                    }));
+                }
+                Ok(
+                    alien_azure_clients::container_apps::ManagedEnvironmentCertificateResponse {
+                        id: Some("test-certificate-id".to_string()),
+                    },
+                )
+            });
+        let writes = binds.clone();
+        apps.expect_create_or_update_container_app()
+            .returning(move |_, name, _| {
+                let attempt = writes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if attempt == 0 && fail_binding {
+                    return Err(AlienError::new(CloudClientErrorData::InvalidInput {
+                        message: "lost binding response".to_string(),
+                        field_name: None,
+                    }));
+                }
+                Ok(OperationResult::Completed(
+                    create_successful_container_app_response(name, true),
+                ))
+            });
+        if delete {
+            apps.expect_delete_container_app()
+                .times(1)
+                .returning(|_, _| Ok(OperationResult::Completed(())));
+            apps.expect_delete_managed_environment_certificate()
+                .times(1)
+                .returning(|_, _, name| {
+                    assert_eq!(name, "test-public-func");
+                    Ok(OperationResult::Completed(()))
+                });
+        }
+        let provider = setup_mock_service_provider(Arc::new(apps), None);
+        let controller = AzureWorkerController {
+            container_apps_certificate_id: Some("test-certificate-id".to_string()),
+            certificate_issued_at: Some("2023-01-01T00:00:00Z".to_string()),
+            fqdn: Some("public-func.test.example.com".to_string()),
+            ..AzureWorkerController::mock_ready("test-public-func")
+        };
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(function_public_ingress())
+            .controller(controller)
+            .platform(Platform::Azure)
+            .service_provider(provider.clone())
+            .with_test_dependencies()
+            .domain_metadata(create_test_domain_metadata("public-func"))
+            .build()
+            .await
+            .unwrap();
+        let error = executor
+            .step()
+            .await
+            .expect_err("lost response must surface");
+        assert!(error.source.unwrap().message.contains("lost"));
+        let mut failed = executor
+            .internal_state::<AzureWorkerController>()
+            .unwrap()
+            .clone();
+        assert_eq!(
+            failed.certificate_issued_at.as_deref(),
+            Some("2023-01-01T00:00:00Z")
+        );
+        crate::core::ResourceController::transition_to_failure(&mut failed);
+        assert_eq!(failed.state, AzureWorkerState::RefreshFailed);
+        let restored: AzureWorkerController =
+            serde_json::from_value(serde_json::to_value(failed).unwrap()).unwrap();
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(function_public_ingress())
+            .controller(restored)
+            .platform(Platform::Azure)
+            .service_provider(provider)
+            .with_test_dependencies()
+            .domain_metadata(create_test_domain_metadata("public-func"))
+            .build()
+            .await
+            .unwrap();
+        if delete {
+            executor.delete().unwrap();
+            executor.run_until_terminal().await.unwrap();
+            assert_eq!(executor.status(), ResourceStatus::Deleted);
+        } else {
+            let result = executor.step().await.unwrap();
+            assert_eq!(executor.status(), ResourceStatus::Running);
+            assert!(result.suggested_delay.is_some_and(|delay| !delay.is_zero()));
+            assert_eq!(
+                executor
+                    .internal_state::<AzureWorkerController>()
+                    .unwrap()
+                    .certificate_issued_at
+                    .as_deref(),
+                Some("2024-01-01T00:00:00Z")
+            );
+            assert_eq!(imports.load(std::sync::atomic::Ordering::SeqCst), 2);
+            assert_eq!(
+                binds.load(std::sync::atomic::Ordering::SeqCst),
+                if fail_binding { 2 } else { 1 }
+            );
         }
     }
 
