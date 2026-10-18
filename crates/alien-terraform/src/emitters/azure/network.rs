@@ -27,7 +27,9 @@ use crate::{
     emitters::azure::helpers::{downcast, required_label, tags},
     expr,
 };
-use alien_core::{import::EmitContext, ErrorData, Network, NetworkSettings, Result};
+use alien_core::{
+    ErrorData, Network, NetworkSettings, Result, Sandbox, SandboxEgress, import::EmitContext,
+};
 use alien_error::AlienError;
 use hcl::expr::Expression;
 
@@ -39,11 +41,25 @@ impl TfEmitter for AzureNetworkEmitter {
         let network = downcast::<Network>(ctx, Network::RESOURCE_TYPE)?;
         let label = required_label(ctx)?;
 
+        if !ctx.targets_kubernetes
+            && matches!(network.settings, NetworkSettings::ByoVnetAzure { .. })
+            && ctx.stack.resources().any(|(_, entry)| {
+                entry
+                    .config
+                    .downcast_ref::<Sandbox>()
+                    .is_some_and(|sandbox| sandbox.egress == SandboxEgress::Internet)
+            })
+        {
+            return Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: "Azure sandbox network setup".to_string(),
+                reason: "sandbox isolation requires a dedicated delegated subnet, NSG and NAT; use a create network until dedicated BYO sandbox subnets are supported".to_string(),
+            }));
+        }
         match &network.settings {
             // Azure has no default VNet, so even `UseDefault` lands a
             // create-mode topology. Match the runtime controller's docs.
-            NetworkSettings::UseDefault => Ok(create_topology(ctx, label, None)),
-            NetworkSettings::Create { cidr, .. } => Ok(create_topology(ctx, label, cidr.clone())),
+            NetworkSettings::UseDefault => create_topology(ctx, label, None),
+            NetworkSettings::Create { cidr, .. } => create_topology(ctx, label, cidr.clone()),
             NetworkSettings::ByoVnetAzure {
                 vnet_resource_id,
                 public_subnet_name,
@@ -76,46 +92,60 @@ impl TfEmitter for AzureNetworkEmitter {
         let nsg_label = format!("{label}_workload");
 
         Ok(match &network.settings {
-            NetworkSettings::UseDefault | NetworkSettings::Create { .. } => expr::object([
-                ("subscriptionId", expr::raw("var.azure_subscription_id")),
-                ("resourceGroup", expr::raw("var.azure_resource_group_name")),
-                (
-                    "vnetId",
-                    expr::traversal(["azurerm_virtual_network", label, "id"]),
-                ),
-                (
-                    "vnetName",
-                    expr::traversal(["azurerm_virtual_network", label, "name"]),
-                ),
-                (
-                    "subnetIds",
-                    Expression::Array(vec![
-                        expr::traversal(["azurerm_subnet", &public_subnet_label, "id"]),
-                        expr::traversal(["azurerm_subnet", &private_subnet_label, "id"]),
-                    ]),
-                ),
-                (
-                    "applicationGatewaySubnetId",
-                    expr::traversal(["azurerm_subnet", &format!("{label}_appgw"), "id"]),
-                ),
-                (
-                    "applicationGatewaySubnetName",
-                    expr::traversal(["azurerm_subnet", &format!("{label}_appgw"), "name"]),
-                ),
-                (
-                    "privateEndpointSubnetName",
-                    expr::traversal(["azurerm_subnet", &format!("{label}_pe"), "name"]),
-                ),
-                (
-                    "natGatewayId",
-                    expr::traversal(["azurerm_nat_gateway", &nat_label, "id"]),
-                ),
-                (
-                    "networkSecurityGroupId",
-                    expr::traversal(["azurerm_network_security_group", &nsg_label, "id"]),
-                ),
-                ("isByoVnet", Expression::Bool(false)),
-            ]),
+            NetworkSettings::UseDefault | NetworkSettings::Create { .. } => {
+                let mut fields = vec![
+                    ("subscriptionId", expr::raw("var.azure_subscription_id")),
+                    ("resourceGroup", expr::raw("var.azure_resource_group_name")),
+                    (
+                        "vnetId",
+                        expr::traversal(["azurerm_virtual_network", label, "id"]),
+                    ),
+                    (
+                        "vnetName",
+                        expr::traversal(["azurerm_virtual_network", label, "name"]),
+                    ),
+                    (
+                        "subnetIds",
+                        Expression::Array(vec![
+                            expr::traversal(["azurerm_subnet", &public_subnet_label, "id"]),
+                            expr::traversal(["azurerm_subnet", &private_subnet_label, "id"]),
+                        ]),
+                    ),
+                    (
+                        "applicationGatewaySubnetId",
+                        expr::traversal(["azurerm_subnet", &format!("{label}_appgw"), "id"]),
+                    ),
+                    (
+                        "applicationGatewaySubnetName",
+                        expr::traversal(["azurerm_subnet", &format!("{label}_appgw"), "name"]),
+                    ),
+                    (
+                        "privateEndpointSubnetName",
+                        expr::traversal(["azurerm_subnet", &format!("{label}_pe"), "name"]),
+                    ),
+                    (
+                        "natGatewayId",
+                        expr::traversal(["azurerm_nat_gateway", &nat_label, "id"]),
+                    ),
+                    (
+                        "networkSecurityGroupId",
+                        expr::traversal(["azurerm_network_security_group", &nsg_label, "id"]),
+                    ),
+                    (
+                        "egressPublicIps",
+                        Expression::Array(vec![expr::traversal([
+                            "azurerm_public_ip",
+                            &format!("{label}_nat_pip"),
+                            "ip_address",
+                        ])]),
+                    ),
+                    ("isByoVnet", Expression::Bool(false)),
+                ];
+                if let Some(handoff) = super::sandbox_network::gateway_handoff(ctx, label)? {
+                    fields.push(("sandboxNetwork", handoff));
+                }
+                expr::object(fields)
+            }
             NetworkSettings::ByoVnetAzure { .. } => expr::object([
                 ("subscriptionId", expr::raw("var.azure_subscription_id")),
                 ("resourceGroup", expr::raw("var.azure_resource_group_name")),
@@ -151,7 +181,7 @@ impl TfEmitter for AzureNetworkEmitter {
     }
 }
 
-fn create_topology(ctx: &EmitContext<'_>, label: &str, cidr: Option<String>) -> TfFragment {
+fn create_topology(ctx: &EmitContext<'_>, label: &str, cidr: Option<String>) -> Result<TfFragment> {
     let cidr = cidr.unwrap_or_else(|| "10.46.0.0/16".to_string());
     let public_label = format!("{label}_public");
     let private_label = format!("{label}_private");
@@ -418,6 +448,10 @@ fn create_topology(ctx: &EmitContext<'_>, label: &str, cidr: Option<String>) -> 
             ),
             attr("sku", Expression::String("Standard".to_string())),
             attr("tags", tags(ctx, "network")),
+            nested(crate::block::block(
+                "lifecycle",
+                [attr("prevent_destroy", Expression::Bool(true))],
+            )),
         ],
     ));
 
@@ -528,7 +562,8 @@ fn create_topology(ctx: &EmitContext<'_>, label: &str, cidr: Option<String>) -> 
         ],
     ));
 
-    fragment
+    super::sandbox_network::emit(ctx, label, &cidr, &mut fragment)?;
+    Ok(fragment)
 }
 
 fn byo_topology(

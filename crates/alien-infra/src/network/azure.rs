@@ -32,8 +32,9 @@ use alien_azure_clients::azure::models::{
 use alien_azure_clients::long_running_operation::OperationResult;
 use alien_core::{
     AzureVnetNetworkHeartbeatData, HeartbeatBackend, Network, NetworkHeartbeatData,
-    NetworkHeartbeatStatus, NetworkSettings, ObservedHealth, Platform, Postgres,
-    ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceStatus,
+    NetworkHeartbeatStatus, NetworkOutputs, NetworkSettings, ObservedHealth, Platform, Postgres,
+    ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
+    ResourceStatus,
 };
 use alien_error::{AlienError, Context};
 use alien_macros::controller;
@@ -117,6 +118,9 @@ fn stack_contains_postgres(ctx: &ResourceControllerContext<'_>) -> bool {
 pub struct AzureNetworkController {
     // Configuration from Network resource
     pub desired_settings: Option<NetworkSettings>,
+    /// Setup-owned subnet coordinates for an internal sandbox gateway load balancer.
+    #[serde(default)]
+    pub sandbox_network: Option<alien_core::import::data::AzureSandboxNetwork>,
 
     // Created or imported network details
     pub vnet_name: Option<String>,
@@ -133,6 +137,9 @@ pub struct AzureNetworkController {
     pub private_endpoint_subnet_name: Option<String>,
     pub(crate) nat_gateway_name: Option<String>,
     pub nat_gateway_id: Option<String>,
+    /// Static addresses used by this network's NAT gateway.
+    #[serde(default)]
+    pub egress_public_ips: Vec<String>,
     pub(crate) public_ip_name: Option<String>,
     pub(crate) public_ip_id: Option<String>,
     pub(crate) nsg_name: Option<String>,
@@ -274,6 +281,8 @@ impl AzureNetworkController {
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/natGateways/test-{}-nat",
                 subscription_id, resource_group, network_id
             )),
+            egress_public_ips: Vec::new(),
+            sandbox_network: None,
             public_ip_name: Some(format!("test-{}-pip", network_id)),
             public_ip_id: Some(format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/publicIPAddresses/test-{}-pip",
@@ -979,6 +988,11 @@ impl AzureNetworkController {
 
         match result {
             OperationResult::Completed(created_ip) => {
+                self.egress_public_ips = created_ip
+                    .properties
+                    .and_then(|p| p.ip_address)
+                    .into_iter()
+                    .collect();
                 self.public_ip_id = created_ip.id;
                 Ok(HandlerAction::Continue {
                     state: CreatingNatGateway,
@@ -1019,6 +1033,11 @@ impl AzureNetworkController {
                 resource_id: Some(config.id.clone()),
             })?;
 
+        self.egress_public_ips = public_ip
+            .properties
+            .and_then(|p| p.ip_address)
+            .into_iter()
+            .collect();
         self.public_ip_id = public_ip.id;
         info!(public_ip_name = %public_ip_name, "Public IP created");
 
@@ -1762,7 +1781,7 @@ impl AzureNetworkController {
                 return Ok(HandlerAction::Continue {
                     state: DeletingVNet,
                     suggested_delay: None,
-                })
+                });
             }
         };
 
@@ -1786,6 +1805,7 @@ impl AzureNetworkController {
             OperationResult::Completed(()) => {
                 self.public_ip_name = None;
                 self.public_ip_id = None;
+                self.egress_public_ips.clear();
                 Ok(HandlerAction::Continue {
                     state: DeletingVNet,
                     suggested_delay: None,
@@ -1829,6 +1849,7 @@ impl AzureNetworkController {
             Err(_) => {
                 self.public_ip_name = None;
                 self.public_ip_id = None;
+                self.egress_public_ips.clear();
                 Ok(HandlerAction::Continue {
                     state: DeletingVNet,
                     suggested_delay: None,
@@ -1919,14 +1940,28 @@ impl AzureNetworkController {
         }
     }
 
+    fn build_outputs(&self) -> Option<ResourceOutputs> {
+        self.vnet_resource_id.as_ref().map(|id| {
+            ResourceOutputs::new(NetworkOutputs {
+                network_id: id.clone(),
+                // Azure subnets are regional and this controller does not assign zones.
+                availability_zones: 1,
+                has_public_subnets: self.public_subnet_name.is_some(),
+                has_nat_gateway: self.nat_gateway_id.is_some(),
+                egress_public_ips: self.egress_public_ips.clone(),
+                cidr: self.cidr_block.clone(),
+            })
+        })
+    }
+
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
 }
 
 #[cfg(test)]
 mod tests {
     use super::AzureNetworkController;
-    use crate::core::controller_test::{test_azure_resource_group, SingleControllerExecutor};
     use crate::core::MockPlatformServiceProvider;
+    use crate::core::controller_test::{SingleControllerExecutor, test_azure_resource_group};
     use crate::infra_requirements::AzureResourceGroupController;
     use alien_azure_clients::azure::models::{
         nat_gateway::NatGateway,

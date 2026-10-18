@@ -5439,6 +5439,7 @@ impl AwsNetworkController {
                 availability_zones: self.availability_zones.len() as u8,
                 has_public_subnets: !self.public_subnet_ids.is_empty(),
                 has_nat_gateway: self.nat_gateway_id.is_some(),
+                egress_public_ips: Vec::new(),
                 cidr: self.cidr_block.clone(),
             })
         })
