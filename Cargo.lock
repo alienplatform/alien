@@ -1263,6 +1263,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "alien-sandbox-conformance"
+version = "3.3.34"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "alien-sdk"
 version = "3.3.34"
 dependencies = [

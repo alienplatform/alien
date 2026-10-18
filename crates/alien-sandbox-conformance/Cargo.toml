@@ -1,0 +1,13 @@
+[package]
+name = "alien-sandbox-conformance"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+publish = false
+description = "Live sandbox egress conformance probes"
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+serde_json = { workspace = true }
