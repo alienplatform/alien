@@ -1,5 +1,3 @@
-/workspace/workspace/alien-deployment-selector/crates/alien-cli/tests/vault_deployment_selector.rs:
-
 #![cfg(target_os = "linux")]
 
 use httpmock::{Method::GET, MockServer};
