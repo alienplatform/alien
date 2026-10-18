@@ -5660,6 +5660,107 @@ mod tests {
         }
     }
 
+    fn create_test_domain_metadata(resource_id: &str) -> alien_core::DomainMetadata {
+        let mut resources = HashMap::new();
+        resources.insert(
+            resource_id.to_string(),
+            alien_core::ResourceDomainInfo {
+                fqdn: format!("{}.test.example.com", resource_id),
+                certificate_id: "test-cert-id".to_string(),
+                certificate_status: alien_core::CertificateStatus::Issued,
+                dns_status: alien_core::DnsRecordStatus::Active,
+                dns_error: None,
+                certificate_chain: Some(
+                    "-----BEGIN CERTIFICATE-----\nMIIBtest\n-----END CERTIFICATE-----\n"
+                        .to_string(),
+                ),
+                private_key: Some(
+                    "-----BEGIN PRIVATE KEY-----\nMIIBtest\n-----END PRIVATE KEY-----\n"
+                        .to_string(),
+                ),
+                endpoints: HashMap::new(),
+                issued_at: Some("2024-01-01T00:00:00Z".to_string()),
+                aliases: Vec::new(),
+            },
+        );
+        alien_core::DomainMetadata {
+            base_domain: "test.example.com".to_string(),
+            public_subdomain: "test".to_string(),
+            hosted_zone_id: "Z1234567890ABC".to_string(),
+            resources,
+        }
+    }
+
+    #[rstest]
+    #[case::never_updated(false)]
+    #[case::previously_updated(true)]
+    #[tokio::test]
+    async fn certificate_renewal_returns_to_ready_without_updating_worker(
+        #[case] previously_updated: bool,
+    ) {
+        let mut apps = MockContainerAppsApi::new();
+        apps.expect_get_container_app()
+            .returning(|_, name| Ok(create_successful_container_app_response(name, true)));
+        apps.expect_create_or_update_managed_environment_certificate()
+            .times(1)
+            .returning(|_, _, _, cert| {
+                assert!(!cert
+                    .properties
+                    .as_ref()
+                    .unwrap()
+                    .value
+                    .as_ref()
+                    .unwrap()
+                    .is_empty());
+                Ok(
+                    alien_azure_clients::container_apps::ManagedEnvironmentCertificateResponse {
+                        id: Some("test-certificate-id".to_string()),
+                    },
+                )
+            });
+        let provider = setup_mock_service_provider(Arc::new(apps), None);
+        let mut controller = AzureWorkerController {
+            container_apps_certificate_id: Some("test-certificate-id".to_string()),
+            certificate_issued_at: Some("2023-01-01T00:00:00Z".to_string()),
+            fqdn: Some("public-func.test.example.com".to_string()),
+            ..AzureWorkerController::mock_ready("test-public-func")
+        };
+        let mut completed = false;
+        for _ in 0..10 {
+            controller = serde_json::from_value(serde_json::to_value(controller).unwrap()).unwrap();
+            let mut builder = SingleControllerExecutor::builder()
+                .resource(function_public_ingress())
+                .controller(controller)
+                .platform(Platform::Azure)
+                .service_provider(provider.clone())
+                .with_test_dependencies()
+                .domain_metadata(create_test_domain_metadata("public-func"));
+            if previously_updated {
+                let mut previous = function_public_ingress();
+                previous.code = alien_core::WorkerCode::Image {
+                    image: "old-image:previous".to_string(),
+                };
+                builder = builder.previous_resource(previous);
+            }
+            let mut executor = builder.build().await.unwrap();
+            let result = executor.step().await.expect("certificate renewal succeeds");
+            controller = executor
+                .internal_state::<AzureWorkerController>()
+                .unwrap()
+                .clone();
+            if controller.state == AzureWorkerState::Ready {
+                assert_eq!(
+                    controller.certificate_issued_at.as_deref(),
+                    Some("2024-01-01T00:00:00Z")
+                );
+                assert!(result.suggested_delay.is_some_and(|delay| !delay.is_zero()));
+                completed = true;
+                break;
+            }
+        }
+        assert!(completed, "renewal must finish at Ready");
+    }
+
     fn setup_mock_client_for_creation_and_update(
         app_name: &str,
         has_url: bool,

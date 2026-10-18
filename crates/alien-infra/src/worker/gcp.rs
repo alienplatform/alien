@@ -5767,6 +5767,85 @@ mod tests {
         );
     }
 
+    #[rstest]
+    #[case::never_updated(false)]
+    #[case::previously_updated(true)]
+    #[tokio::test]
+    async fn certificate_renewal_returns_to_ready_without_updating_worker(
+        #[case] previously_updated: bool,
+    ) {
+        let mut cloudrun = MockCloudRunApi::new();
+        cloudrun
+            .expect_get_service()
+            .returning(|_, name| Ok(create_successful_service_response(&name)));
+        let mut compute = MockComputeApi::new();
+        compute
+            .expect_insert_ssl_certificate()
+            .times(1)
+            .returning(|cert| {
+                assert!(cert
+                    .self_managed
+                    .unwrap()
+                    .certificate
+                    .unwrap()
+                    .contains("MIIBtest"));
+                Ok(Operation::default())
+            });
+        compute
+            .expect_set_target_https_proxy_ssl_certificates()
+            .times(1)
+            .returning(|proxy, certs| {
+                assert_eq!(proxy, "test-proxy");
+                assert_eq!(certs.len(), 1);
+                Ok(Operation::default())
+            });
+        compute
+            .expect_delete_ssl_certificate()
+            .times(1)
+            .returning(|name| {
+                assert_eq!(name, "old-cert");
+                Ok(Operation::default())
+            });
+        let provider = setup_mock_service_provider(Arc::new(cloudrun), Some(Arc::new(compute)));
+        let mut controller = GcpWorkerController {
+            ssl_certificate_name: Some("old-cert".to_string()),
+            target_https_proxy_name: Some("test-proxy".to_string()),
+            certificate_issued_at: Some("2023-01-01T00:00:00Z".to_string()),
+            ..GcpWorkerController::mock_ready("test-public-func")
+        };
+        let mut completed = false;
+        for _ in 0..10 {
+            controller = serde_json::from_value(serde_json::to_value(controller).unwrap()).unwrap();
+            let mut builder = SingleControllerExecutor::builder()
+                .resource(function_public_ingress())
+                .controller(controller)
+                .platform(Platform::Gcp)
+                .service_provider(provider.clone())
+                .domain_metadata(create_test_domain_metadata("public-func"));
+            if previously_updated {
+                let mut previous = function_public_ingress();
+                previous.code = alien_core::WorkerCode::Image {
+                    image: "old-image:previous".to_string(),
+                };
+                builder = builder.previous_resource(previous);
+            }
+            let mut executor = builder.build().await.unwrap();
+            let result = executor.step().await.expect("certificate renewal succeeds");
+            controller = executor
+                .internal_state::<GcpWorkerController>()
+                .unwrap()
+                .clone();
+            if controller.state == GcpWorkerState::Ready
+                && controller.certificate_issued_at.as_deref() == Some("2024-01-01T00:00:00Z")
+            {
+                assert!(result.suggested_delay.is_some_and(|delay| !delay.is_zero()));
+                completed = true;
+                break;
+            }
+        }
+        assert!(completed, "renewal must finish at Ready");
+    }
+
     fn create_test_domain_metadata(resource_id: &str) -> DomainMetadata {
         let mut resources = HashMap::new();
         resources.insert(

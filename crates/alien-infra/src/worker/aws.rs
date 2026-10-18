@@ -9276,7 +9276,10 @@ mod tests {
                 .internal_state::<AwsWorkerController>()
                 .unwrap()
                 .clone();
-            assert!(!executor.status().is_failed());
+            assert!(matches!(
+                executor.status(),
+                ResourceStatus::Running | ResourceStatus::Updating
+            ));
             if controller.state == AwsWorkerState::Ready {
                 assert_eq!(
                     controller.certificate_issued_at.as_deref(),
