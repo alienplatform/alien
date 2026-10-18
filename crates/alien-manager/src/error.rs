@@ -144,7 +144,7 @@ pub enum ErrorData {
     #[error(
         code = "REMOTE_CREDENTIAL_HANDOFF_FAILED",
         message = "Remote credential handoff failed for deployment '{deployment_id}' on '{platform}'",
-        retryable = "true",
+        retryable = "inherit",
         internal = "inherit",
         human = "transparent"
     )]

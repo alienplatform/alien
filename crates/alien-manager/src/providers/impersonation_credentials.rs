@@ -670,6 +670,65 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn gcp_credential_handoff_preserves_token_error_retryability() {
+        let server = httpmock::MockServer::start_async().await;
+        let directory = tempfile::tempdir().unwrap();
+        let token_path = directory.path().join("subject-token");
+        std::fs::write(&token_path, "synthetic-token").unwrap();
+        let base_config = ClientConfig::Gcp(Box::new(GcpClientConfig {
+            project_id: "managing-project".to_string(),
+            region: "us-central1".to_string(),
+            credentials: GcpCredentials::ExternalAccount {
+                audience: "synthetic-audience".to_string(),
+                subject_token_type: "urn:ietf:params:oauth:token-type:jwt".to_string(),
+                token_url: server.url("/token"),
+                credential_source_file: token_path.to_string_lossy().to_string(),
+                service_account_impersonation_url: None,
+            },
+            service_overrides: Some(GcpServiceOverrides {
+                endpoints: HashMap::from([("iamcredentials".to_string(), server.base_url())]),
+            }),
+            project_number: Some("123456789".to_string()),
+        }));
+        let provider: Arc<dyn BindingsProviderApi> = Arc::new(
+            BindingsProvider::new(
+                base_config,
+                HashMap::from([(
+                    "management".to_string(),
+                    serde_json::to_value(ServiceAccountBinding::gcp_service_account(
+                        "management@example.invalid",
+                        "synthetic-id",
+                    ))
+                    .unwrap(),
+                )]),
+            )
+            .unwrap(),
+        );
+        let resolver = ImpersonationCredentialResolver::new(
+            provider.clone(),
+            HashMap::from([(Platform::Gcp, provider)]),
+            HashSet::from([Platform::Gcp]),
+        );
+        for (status, retryable) in [(403, false), (503, true)] {
+            let response = server
+                .mock_async(|when, then| {
+                    when.method(httpmock::Method::POST).path("/token");
+                    then.status(status).body("synthetic rejection");
+                })
+                .await;
+            let error = resolver
+                .resolve_from_env(&gcp_handoff_deployment(), HashMap::new())
+                .await
+                .unwrap_err();
+            response.assert_hits_async(1).await;
+            assert_eq!(error.code, "REMOTE_CREDENTIAL_HANDOFF_FAILED");
+            assert_eq!(error.retryable, retryable, "HTTP {status}: {error}");
+            assert!(error.to_string().contains(&status.to_string()));
+            response.delete_async().await;
+        }
+    }
+
     #[test]
     fn initial_setup_switches_impersonated_credentials_when_remote_management_is_ready() {
         let mut deployment = gcp_handoff_deployment();

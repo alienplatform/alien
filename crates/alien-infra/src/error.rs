@@ -423,7 +423,7 @@ pub enum ErrorData {
     #[error(
         code = "AUTHENTICATION_FAILED",
         message = "Authentication failed: {message}",
-        retryable = "false",
+        retryable = "inherit",
         internal = "false"
     )]
     AuthenticationFailed {
