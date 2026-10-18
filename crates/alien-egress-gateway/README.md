@@ -199,6 +199,38 @@ issued synthetic address, so stale answers cannot connect to a different name.
 Clients must resolve again after eviction. After 131070 allocations in one agent
 lifetime, new names fail closed; create a fresh sandbox to reset that limit.
 
+Proxy-only agents cannot firewall a resolver allowed by their backend network.
+Gateway destination policies therefore do not constrain UDP or TCP DNS names sent
+directly to that resolver. A sandbox can encode data in those names even when
+ordinary direct connections are blocked. This is an accepted boundary, not an
+enforced DNS allowlist; deployments requiring DNS confidentiality must restrict
+resolver access at the backend network. The privileged Linux agent paths used by
+AWS and Local redirect command-UID UDP and TCP port 53 to the synthetic resolver,
+which never forwards query names. System/control DNS and protection against
+guest-root compromise still depend on the external network boundary.
+
+A controlled local Docker measurement on 2026-10-18 used the real agent exec
+endpoint and command UID 1001. The reachable resolver received all 128 unique
+names over UDP and all 128 over TCP from a proxy-only sandbox, with 96 bytes of
+fake data encoded per name. At the configured rate of 100 queries/s, that carried
+about 9,599 payload bytes/s per transport; query messages used about 20,798 bytes/s
+over UDP and 20,998 bytes/s over TCP (including its two-byte DNS framing, excluding
+IP/transport headers and responses). The privileged agent returned synthetic
+answers to the same 256 requests, and the external resolver received zero names.
+Positive UDP/TCP controls still worked afterward. These are observed rates in a
+controlled local network, not maximum rates or cloud-provider measurements. Run
+`--dns-limit-only --agent-image AGENT_IMAGE --agent-uid 1001` with the Docker
+conformance runner to reproduce it; names and counters stay in its output directory.
+
+The gateway accepts at most 128 HTTP header fields within the existing 32 KiB
+byte limit. The explicit agent proxy reserves one field for its identity header.
+Malformed DNS queries get FORMERR when a response header can be formed; invalid
+host labels get NXDOMAIN and non-IN questions get REFUSED, without allocating a
+synthetic address. Checked IPv4 addresses get at most one second each within a
+five-second total connection deadline. Every DNS answer is checked before any
+address is dialed. Authenticated metrics expose unlabeled DNS and connect latency
+histograms in seconds, including failed or cancelled operations.
+
 Validation tools live in `tests/` and `fuzz/`. Build the two release binaries, build
 `tests/Dockerfile.agent` with `alien-sandbox-agent` in its Docker build context, then
 run `python3 tests/docker_conformance.py --image IMAGE --agent-image AGENT_IMAGE

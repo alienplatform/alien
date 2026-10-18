@@ -735,11 +735,14 @@ def main():
     parser.add_argument("--resume-only", action="store_true")
     parser.add_argument("--edges-only", action="store_true")
     parser.add_argument("--splice-only", action="store_true")
+    parser.add_argument("--dns-limit-only", action="store_true")
     args = parser.parse_args()
     if args.range_refresh_only and not args.vault_config:
         parser.error("--range-refresh-only requires --vault-config")
     if args.resume_only and not args.agent_image:
         parser.error("--resume-only requires --agent-image")
+    if args.dns_limit_only and not args.agent_image:
+        parser.error("--dns-limit-only requires --agent-image")
     if args.agent_uid <= 0:
         parser.error("--agent-uid must be a non-root UID")
     AGENT_UID = args.agent_uid
@@ -807,6 +810,13 @@ def main():
         if args.splice_only:
             from splice_relay import check_splice
             check_splice(suite, AUD, SUB, PROXY, ORIGIN, docker, PREFIX)
+            return
+        if args.dns_limit_only:
+            assert suite.admin("/v1/policies", {"aud": AUD, "sub": SUB, "policy": suite.policy})[0] == 204
+            suite.agent(args.agent_image, containers, networks, resume_only=True)
+            suite.proxy_only(args.agent_image, containers, networks)
+            from dns_resolver_limit import check_dns_limit
+            check_dns_limit(suite, docker, containers, PREFIX)
             return
         if args.connect_port80_only:
             suite.connect_port80()
