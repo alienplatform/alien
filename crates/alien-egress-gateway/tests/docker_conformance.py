@@ -20,6 +20,7 @@ import subprocess
 import time
 
 from agent_capabilities import AGENT_CAP_ARGS, check_capabilities
+from system_egress import check_system_egress
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -483,20 +484,20 @@ c=ssl.create_default_context(cafile="/fixture-ca.pem")
 with c.wrap_socket(s,server_hostname="allowed.test") as t:
  t.sendall(b"GET / HTTP/1.1\\r\\nHost: allowed.test\\r\\nConnection: close\\r\\n\\r\\n")
  r=http.client.HTTPResponse(t);r.begin();assert r.status==200 and r.read()==b"controlled-origin-response\\n"
-print("root transparent TLS passed")
+print("command transparent TLS passed")
 '''
-        self.record("root-owned TCP uses synthetic DNS and gateway", lambda: equal(docker("exec", "-u", "0", name, "python", "-c", script), "root transparent TLS passed"))
-        self.record("command UID TCP uses synthetic DNS and gateway", lambda: equal(docker("exec", "-u", f"{AGENT_UID}:{AGENT_UID}", name, "python", "-c", script), "root transparent TLS passed"))
+        check_system_egress(self, name, call, docker, AGENT_UID, PREFIX)
+        self.record("command UID TCP uses synthetic DNS and gateway", lambda: equal(docker("exec", "-u", f"{AGENT_UID}:{AGENT_UID}", name, "python", "-c", script), "command transparent TLS passed"))
         equal(call("PUT", "/v1/egress", {"token": self.token(), "caCert": (self.output / "guest-ca.pem").read_text()})[0], 204)
         injected_script = script.replace('"allowed.test"', '"inject.test"').replace('/fixture-ca.pem', '/opt/alien/egress-ca-bundle.pem').replace('GET / HTTP', 'GET /v1/action HTTP').replace('Host: allowed.test', 'Host: inject.test')
-        self.record("command UID uses installed CA for intercepted TLS", lambda: equal(docker("exec", "-u", f"{AGENT_UID}:{AGENT_UID}", name, "python", "-c", injected_script), "root transparent TLS passed"))
+        self.record("command UID uses installed CA for intercepted TLS", lambda: equal(docker("exec", "-u", f"{AGENT_UID}:{AGENT_UID}", name, "python", "-c", injected_script), "command transparent TLS passed"))
         memory_check = '''try:
  open("/proc/1/mem","rb")
 except PermissionError: print("agent memory inaccessible")
 else: raise AssertionError("command can read agent memory")
 '''
         self.record("command UID cannot read agent memory", lambda: equal(docker("exec", "-u", f"{AGENT_UID}:{AGENT_UID}", name, "python", "-c", memory_check), "agent memory inaccessible"))
-        docker("exec", name, "python", "-c", 'import socket; assert socket.gethostbyname("exfil-test.test").startswith("198.18.")')
+        docker("exec", "-u", f"{AGENT_UID}:{AGENT_UID}", name, "python", "-c", 'import socket; assert socket.gethostbyname("exfil-test.test").startswith("198.18.")')
         queries = [json.loads(line)["name"] for line in (self.output / "origin/dns.jsonl").read_text().splitlines()]
         assert "allowed.test" in queries and "exfil-test.test" not in queries
         self.record("guest DNS stays synthetic with working gateway DNS control", lambda: equal("exfil-test.test" in queries, False))
@@ -508,7 +509,7 @@ try:
 except (ssl.SSLError,ConnectionError): print("denied")
 else: raise AssertionError("unexpected egress")
 '''
-        self.record("root-owned TCP honors stored policy replacement", lambda: equal(docker("exec", "-u", "0", name, "python", "-c", denied), "denied"))
+        self.record("command UID honors stored policy replacement", lambda: equal(docker("exec", "-u", f"{AGENT_UID}:{AGENT_UID}", name, "python", "-c", denied), "denied"))
 
         for mode, expected in [("none", 200), ("bridge", 503)]:
             closed = PREFIX + f"-floor-{mode}"
@@ -652,7 +653,7 @@ def main():
             suite.agent(args.agent_image, containers, networks)
             suite.proxy_only(args.agent_image, containers)
             from run_hook_egress import check_run_hook_agents
-            check_run_hook_agents(suite, args.agent_image, containers)
+            check_run_hook_agents(suite, args.agent_image, containers, AGENT_UID)
         if args.vault_config:
             assert suite.admin("/v1/policies", {"aud":AUD,"sub":"reload","policy":"internet"})[0] == 204
             suite.tunnel(token=suite.token(sub="reload")).close()
