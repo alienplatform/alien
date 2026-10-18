@@ -2524,6 +2524,41 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "gcp")]
+    #[tokio::test]
+    async fn regenerated_legacy_gcp_sandbox_bindings_load_without_a_gateway() {
+        for allow_egress in [false, true] {
+            let binding = alien_core::SandboxBinding::gcp_agent_platform(
+                "projects/p/locations/us-central1/reasoningEngines/123",
+                "projects/p/locations/us-central1/reasoningEngines/123/sandboxEnvironmentTemplates/1",
+                "us-central1",
+                Some(3600),
+                allow_egress,
+            );
+            let provider = BindingsProvider::new(
+                ClientConfig::Gcp(Box::new(alien_core::GcpClientConfig {
+                    project_id: "p".into(),
+                    project_number: None,
+                    region: "us-central1".into(),
+                    credentials: alien_core::GcpCredentials::AccessToken {
+                        token: "test-token".into(),
+                    },
+                    service_overrides: None,
+                })),
+                HashMap::from([("box".into(), serde_json::to_value(binding).unwrap())]),
+            )
+            .unwrap();
+            let sandbox = provider
+                .load_sandbox("box")
+                .await
+                .expect("released GCP allowEgress must not opt into the gateway");
+            assert!(sandbox
+                .as_any()
+                .is::<crate::providers::sandbox::gcp_agent_platform::GcpAgentPlatformSandbox>(
+            ));
+        }
+    }
+
     /// A MicroVM with no egress connector reaches the internet, so the binding's two egress
     /// fields have to agree: an empty list is how `allow` travels, and it is a fail-open default
     /// unless `allowEgress` says so. Both disagreements are refused, and `deny` still loads.

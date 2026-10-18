@@ -449,16 +449,26 @@ mod tests {
                 true,
             ),
         ] {
-            let mut resources = IndexMap::new();
-            resources.insert("runner".to_string(), create_sandbox_entry(egress.clone()));
-            let stack = create_stack(resources);
-
-            assert_eq!(
-                stack_requires_network(&stack),
-                expected,
-                "egress {egress:?} should {} a network",
-                if expected { "require" } else { "not require" }
-            );
+            for supervisor in [false, true] {
+                let mut entry = create_sandbox_entry(egress.clone());
+                if supervisor {
+                    entry
+                        .config
+                        .downcast_mut::<Sandbox>()
+                        .unwrap()
+                        .privileged_supervisor =
+                        Some(alien_core::SandboxPrivilegedSupervisor { command_uid: 60001 });
+                }
+                let mut resources = IndexMap::new();
+                resources.insert("runner".to_string(), entry);
+                let stack = create_stack(resources);
+                let expected = expected && (!supervisor || egress == SandboxEgress::Internet);
+                assert_eq!(
+                    stack_requires_network(&stack),
+                    expected,
+                    "egress {egress:?}, privileged supervisor {supervisor}"
+                );
+            }
         }
     }
 

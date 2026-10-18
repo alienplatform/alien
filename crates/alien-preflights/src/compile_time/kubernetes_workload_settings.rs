@@ -21,7 +21,7 @@ impl CompileTimeCheck for KubernetesWorkloadSettingsCheck {
                         !container.kubernetes_secret_mounts.is_empty()
                             || container.kubernetes_liveness_probe.is_some()
                             || container.kubernetes_readiness_probe.is_some()
-                            || container.security.is_some()
+                            || (platform == Platform::Local && container.security.is_some())
                     })
             })
     }
@@ -37,7 +37,7 @@ impl CompileTimeCheck for KubernetesWorkloadSettingsCheck {
                         !container.kubernetes_secret_mounts.is_empty()
                             || container.kubernetes_liveness_probe.is_some()
                             || container.kubernetes_readiness_probe.is_some()
-                            || container.security.is_some()
+                            || (platform == Platform::Local && container.security.is_some())
                     })
                     .map(|_| {
                         format!(
@@ -168,9 +168,13 @@ mod tests {
         };
 
         assert!(!KubernetesWorkloadSettingsCheck.should_run(&stack, Platform::Kubernetes));
-        assert!(KubernetesWorkloadSettingsCheck.should_run(&stack, Platform::Aws));
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            assert!(!KubernetesWorkloadSettingsCheck.should_run(&stack, platform));
+            assert!(KubernetesWorkloadSettingsCheck.check(&stack, platform).await.unwrap().success);
+        }
+        assert!(KubernetesWorkloadSettingsCheck.should_run(&stack, Platform::Local));
         let result = KubernetesWorkloadSettingsCheck
-            .check(&stack, Platform::Aws)
+            .check(&stack, Platform::Local)
             .await
             .expect("preflight succeeds");
         assert!(!result.success);

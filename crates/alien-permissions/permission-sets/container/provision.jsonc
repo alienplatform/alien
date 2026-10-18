@@ -646,7 +646,8 @@
           "actions": [
             "ec2:DeleteSecurityGroup",
             "ec2:AuthorizeSecurityGroupIngress",
-            "ec2:RevokeSecurityGroupIngress"
+            "ec2:RevokeSecurityGroupIngress",
+            "ec2:RevokeSecurityGroupEgress"
           ]
         },
         "binding": {
