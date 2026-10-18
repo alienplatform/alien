@@ -33,6 +33,26 @@ impl CompileTimeCheck for ContainerNetworkSettingsCheck {
     async fn check(&self, stack: &Stack, platform: Platform) -> Result<CheckResult> {
         let mut errors = Vec::new();
         for (id, entry) in stack.resources() {
+            if platform == Platform::Aws {
+                if let Some(worker) = entry.config.downcast_ref::<Worker>() {
+                    let targets = worker
+                        .links
+                        .iter()
+                        .filter(|link| link.resource_type == Container::RESOURCE_TYPE)
+                        .filter(|link| {
+                            stack
+                                .resources
+                                .get(link.id())
+                                .and_then(|entry| entry.config.downcast_ref::<Container>())
+                                .is_some_and(|target| !target.ports.is_empty())
+                        })
+                        .map(|link| link.id())
+                        .collect::<std::collections::BTreeSet<_>>();
+                    if targets.len() > 4 {
+                        errors.push(format!("CONTAINER_NETWORK_SETTINGS_UNSUPPORTED: AWS Worker '{id}' links to more than four Containers with ports; Lambda has five security group slots including its network group"));
+                    }
+                }
+            }
             if let Some(sandbox) = entry.config.downcast_ref::<Sandbox>() {
                 for link in &sandbox.links {
                     if link.resource_type != Container::RESOURCE_TYPE
@@ -77,9 +97,7 @@ impl CompileTimeCheck for ContainerNetworkSettingsCheck {
                     if !matches!(sandbox.egress, alien_core::SandboxEgress::Internet) {
                         errors.push(format!("CONTAINER_NETWORK_SETTINGS_UNSUPPORTED: Sandbox '{}' requires the dedicated internet connector to link to Container '{id}'", linker.id()));
                     }
-                } else if source.downcast_ref::<Worker>().is_some() {
-                    errors.push(format!("CONTAINER_NETWORK_SETTINGS_UNSUPPORTED: AWS Worker '{}' requires client security group attachment before it can reach Container '{id}'", linker.id()));
-                } else {
+                } else if source.downcast_ref::<Worker>().is_none() {
                     errors.push(format!("CONTAINER_NETWORK_SETTINGS_UNSUPPORTED: AWS {} '{}' has no supported private source identity for Container '{id}'", linker.resource_type, linker.id()));
                 }
             }
@@ -280,7 +298,8 @@ mod tests {
                 .unwrap()
                 .success
         );
-        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+        assert!(check.check(&stack, Platform::Aws).await.unwrap().success);
+        for platform in [Platform::Gcp, Platform::Azure] {
             let result = check.check(&stack, platform).await.unwrap();
             assert!(
                 !result.success && result.errors.iter().any(|error| error.contains("caller")),
