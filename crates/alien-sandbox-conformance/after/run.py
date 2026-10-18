@@ -147,8 +147,11 @@ async def fingerprint(command, sandbox_id):
         *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
     )
     try:
-        output = await asyncio.wait_for(proc.stdout.read(66), 10)
-        if len(output) > 65:
+        try:
+            await asyncio.wait_for(proc.stdout.readexactly(66), 10)
+        except asyncio.IncompleteReadError as end:
+            output = end.partial
+        else:
             raise RuntimeError("identity observer exceeded fingerprint output bound")
         await asyncio.wait_for(proc.wait(), 10)
         value = output.decode().strip()
@@ -159,6 +162,33 @@ async def fingerprint(command, sandbox_id):
         if proc.returncode is None:
             proc.kill()
             await proc.wait()
+
+
+async def sample_identity(command, sandbox, endpoint):
+    if not command:
+        return None, []
+    observer = asyncio.create_task(fingerprint(command, sandbox[1]))
+    probes = []
+    try:
+        # Repeated real requests also accommodate remote observer startup. The observer
+        # has its own deadline; capture failure leaves this claim unproven.
+        while not observer.done():
+            probes.append(
+                await asyncio.wait_for(observe(*sandbox, http(endpoint["url"])), 10)
+            )
+            await asyncio.sleep(0.1)
+        result = await observer
+        if not all(
+            response(item["observation"], endpoint["bodySha256"]) for item in probes
+        ):
+            return None, probes
+        return result, probes
+    except (OSError, RuntimeError, TimeoutError, ValueError):
+        return None, probes
+    finally:
+        if not observer.done():
+            observer.cancel()
+        await asyncio.gather(observer, return_exceptions=True)
 
 
 class Run:
@@ -215,7 +245,9 @@ class Run:
         changing = await self.create(suite["binding"], {"allow": targets})
         before_a = await self.paired("before-update-retained", control, changing, a)
         before_b = await self.paired("before-update-removed", control, changing, b)
-        before_token = await fingerprint(suite.get("identityCommand"), changing[1])
+        before_token, before_witness = await sample_identity(
+            suite.get("identityCommand"), changing, a
+        )
         start = time.monotonic()
         started_at = now()
         try:
@@ -247,7 +279,9 @@ class Run:
                 break
             await asyncio.sleep(min(0.1, max(0, 10 - (time.monotonic() - start))))
         elapsed = time.monotonic() - start
-        after_token = await fingerprint(suite.get("identityCommand"), changing[1])
+        after_token, after_witness = await sample_identity(
+            suite.get("identityCommand"), changing, a
+        )
         retained = await self.paired("after-update-retained", control, changing, a)
         healthy = all(
             item["verdict"] == "pass" for item in (before_a, before_b, retained)
@@ -274,6 +308,7 @@ class Run:
                 "name": "update-without-new-token",
                 "before": before_token,
                 "after": after_token,
+                "witnessProbes": before_witness + after_witness,
                 "verdict": "unproven"
                 if not (healthy and timely and before_token and after_token)
                 else "pass"

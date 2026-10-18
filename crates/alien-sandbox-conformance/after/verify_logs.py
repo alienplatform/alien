@@ -13,7 +13,7 @@ def observations(report):
         for key in ("control", "subject"):
             if key in case:
                 yield case["name"], case[key]
-        for attempt in case.get("attempts", []):
+        for attempt in case.get("attempts", []) + case.get("witnessProbes", []):
             yield case["name"], attempt
 
 

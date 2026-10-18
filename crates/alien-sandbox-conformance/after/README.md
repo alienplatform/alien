@@ -50,8 +50,8 @@ positive control. Do not use a static response containing the expected NAT IP.
 `identityCommand` is optional: it must inspect the actual active agent token from
 a trusted host observer and emit exactly its lowercase SHA-256 plus an optional
 newline. It receives the sandbox ID as an argument; no shell is used. It must not
-print the token or other diagnostics. Samples immediately before and after the
-update prove token continuity; without both samples that row stays **unproven**.
+print the token or other diagnostics. The runner makes retained-destination requests while each observer is active.
+Samples immediately before and after the update prove token continuity; without both samples that row stays **unproven**.
 A constant hash, a hash of the sandbox ID, or a newly minted witness token is not
 valid evidence. The runner does not grant the guest access to the agent token.
 
@@ -118,3 +118,25 @@ python3 -m unittest discover -s crates/alien-sandbox-conformance/after -p test_a
 These exercise real guest processes, CONNECT and TLS sockets, mutable policy,
 failed controls, ignored policy, token observer validation, and missing/stale/
 wrong-sandbox log events. They validate the probes, not cloud enforcement.
+
+A provided observer, `capture_identity.py`, runs with `CAP_NET_RAW` on the trusted
+Linux gateway or agent host. Invoke it through a narrow host-access wrapper in
+`identityCommand`; do not grant that capability to a guest or alter the gateway
+container's production security profile. For example, the wrapper runs:
+
+```sh
+python3 capture_identity.py --audience deployment-prefix/resource \
+  --sandbox-id "$1" --interface eth0
+```
+
+It watches only IPv4 TCP requests to gateway port 3128 and selects identity claims
+by issuer, audience and sandbox ID before emitting the SHA-256. It neither stores
+pcaps nor prints headers/tokens. The observer does not verify the JWT signature;
+the paired successful gateway request supplies authentication evidence. Run on
+the trusted network boundary and export the matching connection logs.
+
+This small observer accepts only a complete CONNECT header within one unfragmented
+packet. Segmentation, VLAN framing or an unsuitable capture interface can prevent
+a sample; the result is unproven, never an invented fingerprint. Use a trusted
+reassembling observer through the same command interface if the environment
+requires it. Observer failure leaves other policy probes runnable.

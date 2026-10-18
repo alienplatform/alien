@@ -1,14 +1,18 @@
 """Exercise the after runner through real guest processes and TLS proxy sockets."""
 
 import asyncio
+import base64
 import hashlib
+import json
 import os
+import socket
 import socketserver
 import ssl
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from datetime import UTC, datetime
 from pathlib import Path
@@ -224,6 +228,65 @@ class After(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(
                     5, len((root / "sessions.jsonl").read_text().splitlines())
                 )
+
+    @unittest.skipUnless(os.geteuid() == 0, "host packet witness requires CAP_NET_RAW")
+    async def test_packet_witness_captures_only_selected_identity(self):
+        def token(subject):
+            claims = json.dumps(
+                {"iss": "alien-sandbox", "aud": "test/resource", "sub": subject}
+            ).encode()
+            return (
+                b"header."
+                + base64.urlsafe_b64encode(claims).rstrip(b"=")
+                + b".test-signature"
+            )
+
+        expected = token("selected")
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen()
+            listener.settimeout(2)
+            port = listener.getsockname()[1]
+            observer = await asyncio.create_subprocess_exec(
+                sys.executable,
+                str(Path(__file__).with_name("capture_identity.py")),
+                "--audience",
+                "test/resource",
+                "--sandbox-id",
+                "selected",
+                "--interface",
+                "lo",
+                "--port",
+                str(port),
+                "--timeout",
+                "2",
+                stdout=asyncio.subprocess.PIPE,
+            )
+            try:
+                deadline = time.monotonic() + 2
+                while observer.returncode is None and time.monotonic() < deadline:
+                    for identity in (token("wrong-sandbox"), expected):
+                        with (
+                            socket.create_connection(
+                                listener.getsockname(), timeout=2
+                            ) as client,
+                            listener.accept()[0] as server,
+                        ):
+                            client.sendall(
+                                b"CONNECT allowed.test:443 HTTP/1.1\r\n"
+                                b"Proxy-Authorization: Bearer " + identity + b"\r\n\r\n"
+                            )
+                            server.recv(8192)
+                    await asyncio.sleep(0.05)
+                output, _ = await asyncio.wait_for(observer.communicate(), 3)
+                self.assertEqual(0, observer.returncode)
+                self.assertEqual(
+                    hashlib.sha256(expected).hexdigest() + "\n", output.decode()
+                )
+            finally:
+                if observer.returncode is None:
+                    observer.kill()
+                    await observer.wait()
 
     async def test_fingerprint_rejects_secret_or_failed_observer(self):
         self.assertIsNone(await run.fingerprint(None, "sandbox"))
