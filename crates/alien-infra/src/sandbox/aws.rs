@@ -56,6 +56,9 @@ pub(crate) struct RetiredVersion {
 /// AWS Sandbox controller.
 #[controller]
 pub struct AwsSandboxController {
+    /// Withhold new internet bindings until actual EC2 routes have passed verification.
+    #[serde(default)]
+    pub(crate) egress_network_verified: bool,
     /// Bound installed with the parent and published to runtime bindings.
     #[serde(default)]
     pub(crate) egress: Option<alien_core::bindings::SandboxEgressBinding>,
@@ -146,6 +149,7 @@ impl AwsSandboxController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
+        self.egress_network_verified = false;
         self.egress = Some(config.into());
 
         // Direct setup steps a Frozen sandbox before its build role exists; the registration lands
@@ -484,6 +488,7 @@ impl AwsSandboxController {
             ));
         } else {
             self.egress_public_key = None;
+            self.egress_network_verified = false;
             self.egress = Some(config.into());
         }
         Ok(HandlerAction::Continue {
@@ -498,7 +503,9 @@ impl AwsSandboxController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         if let Some(key) = &self.egress_public_key {
+            self.egress_network_verified = false;
             super::egress::publish_aws_config(ctx, key).await?;
+            self.egress_network_verified = true;
         }
         Ok(HandlerAction::Continue {
             state: Ready,
@@ -513,6 +520,12 @@ impl AwsSandboxController {
     )]
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
+
+        if matches!(config.egress, alien_core::SandboxEgress::Internet) {
+            self.egress_network_verified = false;
+            super::egress::validate_aws_network(ctx).await?;
+            self.egress_network_verified = true;
+        }
 
         if let Some(image_identifier) = self.image_identifier.clone() {
             let aws_config = ctx.get_aws_config()?;
@@ -607,7 +620,9 @@ impl AwsSandboxController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         if let Some(key) = &self.egress_public_key {
+            self.egress_network_verified = false;
             super::egress::publish_aws_config(ctx, key).await?;
+            self.egress_network_verified = true;
         }
         Ok(HandlerAction::Continue {
             state: Ready,
@@ -628,6 +643,7 @@ impl AwsSandboxController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
+        self.egress_network_verified = false;
         self.egress = Some(config.into());
 
         // The session-policy ceilings feed the binding and cost nothing to refresh.
@@ -904,6 +920,13 @@ impl AwsSandboxController {
 
     fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
         use alien_core::bindings::{AwsSandboxBinding, BindingValue, SandboxBinding};
+
+        if self.egress.as_ref().is_some_and(|egress| {
+            matches!(egress.declaration(), alien_core::SandboxEgress::Internet)
+        }) && !self.egress_network_verified
+        {
+            return Ok(None);
+        }
 
         // Only the active version is publishable. It is set when a build is observed ACTIVE,
         // ~160s after the create call returns every other field below — and during a roll it
@@ -2883,7 +2906,7 @@ mod tests {
                         .environment_variables
                         .get("ALIEN_SANDBOX_EGRESS")
                         .map(String::as_str)
-                        == Some("\"none\"")
+                        == Some(r#"{"mode":"deny"}"#)
             })
             .times(1)
             .returning(|_, _| {

@@ -195,14 +195,9 @@ pub(crate) fn internet_sandbox_ids(stack: &alien_core::Stack) -> Vec<String> {
 }
 
 #[cfg(feature = "aws")]
-pub(crate) async fn publish_aws_config(
+pub(crate) async fn validate_aws_network(
     ctx: &crate::core::ResourceControllerContext<'_>,
-    key: &GatewayPublicKey,
-) -> Result<()> {
-    let ids = internet_sandbox_ids(ctx.desired_stack);
-    if ids.first().map(String::as_str) != Some(ctx.desired_config.id()) {
-        return Ok(());
-    }
+) -> Result<alien_core::import::data::AwsSandboxNetwork> {
     let network_id = alien_core::sandbox_egress::sandbox_egress_network(ctx.desired_stack)
         .map_err(|error| {
             AlienError::new(ErrorData::ResourceConfigInvalid {
@@ -222,7 +217,42 @@ pub(crate) async fn publish_aws_config(
             })
         })?
         .get_internal_controller_typed::<crate::network::AwsNetworkController>()?;
-    let facts = network.sandbox_network.as_ref().filter(|facts| !facts.vpc_cidrs.is_empty()).ok_or_else(|| AlienError::new(ErrorData::ResourceConfigInvalid { message: "Sandbox network setup must publish the deployment VPC CIDRs before starting the gateway".into(), resource_id: Some(network_id.into()) }))?;
+    let declared = network.sandbox_network.as_ref().ok_or_else(|| {
+        AlienError::new(ErrorData::ResourceConfigInvalid {
+            message: "Sandbox setup must provide dedicated connector and gateway subnet IDs".into(),
+            resource_id: Some(network_id.into()),
+        })
+    })?;
+    let vpc_id = network.vpc_id.as_deref().ok_or_else(|| {
+        AlienError::new(ErrorData::DependencyNotReady {
+            resource_id: ctx.desired_config.id().into(),
+            dependency_id: network_id.into(),
+        })
+    })?;
+    let client = ctx
+        .service_provider
+        .get_aws_ec2_client(ctx.get_aws_config()?)
+        .await?;
+    crate::network::validate_aws_sandbox_network(
+        client.as_ref(),
+        network_id,
+        vpc_id,
+        declared,
+        &network.private_subnet_ids,
+    )
+    .await
+}
+
+#[cfg(feature = "aws")]
+pub(crate) async fn publish_aws_config(
+    ctx: &crate::core::ResourceControllerContext<'_>,
+    key: &GatewayPublicKey,
+) -> Result<()> {
+    let facts = validate_aws_network(ctx).await?;
+    let ids = internet_sandbox_ids(ctx.desired_stack);
+    if ids.first().map(String::as_str) != Some(ctx.desired_config.id()) {
+        return Ok(());
+    }
     let mut denied: Vec<String> = [
         "10.0.0.0/8",
         "172.16.0.0/12",
