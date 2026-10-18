@@ -5,12 +5,13 @@ use crate::settings::BinaryTargetExt;
 use alien_core::AlienEvent;
 use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
+use flate2::{write::GzEncoder, Compression};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fs::File;
-use std::io::Read;
+use std::io::{Read, Seek, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
 use tokio::process::Command;
@@ -529,10 +530,14 @@ impl DockerToolchain {
 
         // Buildx may wrap the image manifest in an index alongside provenance attestations.
         // Flatten the archive before the runtime OCI reader sees it.
-        Self::normalize_oci_archive(&output_tarball, arch_str)?;
-
-        // Extract CMD from the built image for the runtime_command field
-        let runtime_command = Self::extract_cmd_from_tarball(&output_tarball)?;
+        let archive_path = output_tarball.clone();
+        let runtime_command = tokio::task::spawn_blocking(move || {
+            Self::normalize_oci_archive(&archive_path, arch_str)?;
+            Self::extract_cmd_from_tarball(&archive_path)
+        })
+        .await
+        .into_alien_error()
+        .context(docker_read_error("Image archive normalization task failed"))??;
 
         info!("Extracted CMD from Docker image: {:?}", runtime_command);
 
@@ -693,8 +698,38 @@ impl DockerToolchain {
     }
 }
 
+struct HashingWriter<W> {
+    inner: W,
+    digest: Sha256,
+    size: u64,
+}
+
+impl<W> HashingWriter<W> {
+    fn new(inner: W) -> Self {
+        Self {
+            inner,
+            digest: Sha256::new(),
+            size: 0,
+        }
+    }
+}
+
+impl<W: Write> Write for HashingWriter<W> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let written = self.inner.write(bytes)?;
+        self.digest.update(&bytes[..written]);
+        self.size += written as u64;
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
 /// Convert a classic `docker save` archive without executing or altering the image.
 /// Keep the original config (including ONBUILD) and stream layers instead of buffering them.
+/// Gzip layers like the buildx OCI exporter; config diff IDs still name the uncompressed tar.
 fn convert_docker_archive(path: &Path, target_arch: &str, saved: &Value) -> Result<()> {
     let failure = || docker_read_error("Invalid single-image Docker archive");
     let images = saved
@@ -710,7 +745,12 @@ fn convert_docker_archive(path: &Path, target_arch: &str, saved: &Value) -> Resu
         .iter()
         .map(|layer| layer.as_str().ok_or_else(|| AlienError::new(failure())))
         .collect::<Result<Vec<_>>>()?;
+    let directory = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
     let mut descriptors = HashMap::new();
+    let mut compressed_layers = HashMap::new();
     let mut layer_links = HashMap::new();
     let mut layer_diff_ids = HashMap::new();
     let mut expected_diff_ids: Option<Vec<String>> = None;
@@ -754,7 +794,7 @@ fn convert_docker_archive(path: &Path, target_arch: &str, saved: &Value) -> Resu
         if !entry.header().entry_type().is_file() {
             return Err(AlienError::new(failure()));
         }
-        let size = entry.size();
+        let mut size = entry.size();
         let mut digest = Sha256::new();
         if name == config_path {
             if size > 1 << 20 {
@@ -788,16 +828,36 @@ fn convert_docker_archive(path: &Path, target_arch: &str, saved: &Value) -> Resu
             );
             digest.update(&bytes);
         } else {
-            std::io::copy(&mut entry, &mut digest)
+            let compressed = tempfile::tempfile_in(directory)
                 .into_alien_error()
                 .context(failure())?;
+            // Hash each side of gzip as bytes pass through; diff IDs refer to the input,
+            // while OCI descriptors refer to the compressed bytes stored in the archive.
+            let mut uncompressed = HashingWriter::new(GzEncoder::new(
+                HashingWriter::new(compressed),
+                Compression::default(),
+            ));
+            std::io::copy(&mut entry, &mut uncompressed)
+                .into_alien_error()
+                .context(failure())?;
+            layer_diff_ids.insert(
+                name.clone(),
+                format!("sha256:{:x}", uncompressed.digest.finalize()),
+            );
+            let compressed = uncompressed
+                .inner
+                .finish()
+                .into_alien_error()
+                .context(failure())?;
+            size = compressed.size;
+            digest = compressed.digest;
+            let mut compressed = compressed.inner;
+            compressed.rewind().into_alien_error().context(failure())?;
+            compressed_layers.insert(name.clone(), compressed);
         }
         let digest = format!("sha256:{:x}", digest.finalize());
-        if name != config_path {
-            layer_diff_ids.insert(name.clone(), digest.clone());
-        }
         descriptors.insert(name.clone(), json!({
-            "mediaType": if name == config_path { "application/vnd.oci.image.config.v1+json" } else { "application/vnd.oci.image.layer.v1.tar" },
+            "mediaType": if name == config_path { "application/vnd.oci.image.config.v1+json" } else { "application/vnd.oci.image.layer.v1.tar+gzip" },
             "digest": digest, "size": size,
         }));
     }
@@ -849,12 +909,10 @@ fn convert_docker_archive(path: &Path, target_arch: &str, saved: &Value) -> Resu
     };
     let docker_manifest = json!([{"Config": blob_path(config)?, "RepoTags": images[0]["RepoTags"],
         "Layers": layer_descriptors.iter().map(blob_path).collect::<Result<Vec<_>>>()?}]);
-    let temporary = path.with_extension("tar.normalizing");
-    let mut builder = tar::Builder::new(
-        File::create(&temporary)
-            .into_alien_error()
-            .context(failure())?,
-    );
+    let mut temporary = tempfile::NamedTempFile::new_in(directory)
+        .into_alien_error()
+        .context(failure())?;
+    let mut builder = tar::Builder::new(temporary.as_file_mut());
     let mut archive = tar::Archive::new(File::open(path).into_alien_error().context(failure())?);
     for entry in archive.entries().into_alien_error().context(failure())? {
         let mut entry = entry.into_alien_error().context(failure())?;
@@ -866,8 +924,19 @@ fn convert_docker_archive(path: &Path, target_arch: &str, saved: &Value) -> Resu
             .into_owned();
         if let Some(descriptor) = descriptors.get(&name) {
             let mut header = entry.header().clone();
+            let source: &mut dyn Read = if let Some(compressed) = compressed_layers.get_mut(&name) {
+                header.set_size(
+                    descriptor["size"]
+                        .as_u64()
+                        .ok_or_else(|| AlienError::new(failure()))?,
+                );
+                compressed
+            } else {
+                &mut entry
+            };
+            header.set_cksum();
             builder
-                .append_data(&mut header, blob_path(descriptor)?, &mut entry)
+                .append_data(&mut header, blob_path(descriptor)?, source)
                 .into_alien_error()
                 .context(failure())?;
         }
@@ -904,7 +973,10 @@ fn convert_docker_archive(path: &Path, target_arch: &str, saved: &Value) -> Resu
             .context(failure())?;
     }
     builder.finish().into_alien_error().context(failure())?;
-    std::fs::rename(temporary, path)
+    drop(builder);
+    temporary
+        .persist(path)
+        .map(|_| ())
         .into_alien_error()
         .context(failure())
 }
@@ -1327,11 +1399,9 @@ mod tests {
         change_saved_entry(&path, "original/layer.tar", |_, bytes| bytes[0] ^= 1);
         let original = std::fs::read(&path).unwrap();
         let error = DockerToolchain::normalize_oci_archive(&path, "arm64").unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("layer digest does not match config rootfs.diff_ids")
-        );
+        assert!(error
+            .to_string()
+            .contains("layer digest does not match config rootfs.diff_ids"));
         assert_eq!(std::fs::read(&path).unwrap(), original);
     }
 
@@ -1377,10 +1447,21 @@ mod tests {
         let manifest: Value = serde_json::from_slice(&contents["manifest.json"]).unwrap();
         assert_eq!(contents[manifest[0]["Config"].as_str().unwrap()], config);
         let layers = manifest[0]["Layers"].as_array().unwrap();
+        let config: Value = serde_json::from_slice(&config).unwrap();
         assert_eq!(layers.len(), 3);
-        for layer in layers {
+        for (position, layer) in layers.iter().enumerate() {
             assert_eq!(layer, &layers[0]);
-            assert_eq!(contents[layer.as_str().unwrap()], vec![0_u8; 1024]);
+            let compressed = &contents[layer.as_str().unwrap()];
+            assert!(compressed.len() < 1024);
+            let mut decoded = Vec::new();
+            flate2::read::GzDecoder::new(compressed.as_slice())
+                .read_to_end(&mut decoded)
+                .unwrap();
+            assert_eq!(decoded, vec![0_u8; 1024]);
+            assert_eq!(
+                config["rootfs"]["diff_ids"][position],
+                format!("sha256:{:x}", Sha256::digest(&decoded))
+            );
         }
     }
 
@@ -1459,27 +1540,38 @@ mod tests {
         let manifest_path =
             digest_to_blob_path(index["manifests"][0]["digest"].as_str().unwrap()).unwrap();
         let oci: Value = serde_json::from_slice(&contents[&manifest_path]).unwrap();
-        let actual: Vec<_> = oci["layers"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|layer| layer["digest"].as_str().unwrap())
-            .collect();
-        assert_eq!(actual, expected);
+        assert_eq!(oci["layers"].as_array().unwrap().len(), 4);
+        let mut expected_paths = Vec::new();
+        for (layer, expected_bytes) in oci["layers"].as_array().unwrap().iter().zip([
+            first.as_slice(),
+            second.as_slice(),
+            first.as_slice(),
+            second.as_slice(),
+        ]) {
+            assert_eq!(
+                layer["mediaType"],
+                "application/vnd.oci.image.layer.v1.tar+gzip"
+            );
+            let path = digest_to_blob_path(layer["digest"].as_str().unwrap()).unwrap();
+            let compressed = &contents[&path];
+            assert_eq!(layer["size"], compressed.len());
+            assert_eq!(
+                layer["digest"],
+                format!("sha256:{:x}", Sha256::digest(compressed))
+            );
+            let mut decoded = Vec::new();
+            flate2::read::GzDecoder::new(compressed.as_slice())
+                .read_to_end(&mut decoded)
+                .unwrap();
+            assert_eq!(decoded, expected_bytes);
+            expected_paths.push(path);
+        }
+        assert_eq!(expected_paths.len(), 4);
+        assert_eq!(expected_paths[0], expected_paths[2]);
+        assert_eq!(expected_paths[1], expected_paths[3]);
         let docker: Value = serde_json::from_slice(&contents["manifest.json"]).unwrap();
-        let expected_paths: Vec<_> = expected
-            .iter()
-            .map(|digest| digest_to_blob_path(digest).unwrap())
-            .collect();
         assert_eq!(docker[0]["Layers"], json!(expected_paths));
-        assert_eq!(
-            contents[&digest_to_blob_path(&first_digest).unwrap()],
-            first
-        );
-        assert_eq!(
-            contents[&digest_to_blob_path(&second_digest).unwrap()],
-            second
-        );
+        assert_eq!(contents[docker[0]["Config"].as_str().unwrap()], config);
     }
 
     #[test]
@@ -1519,12 +1611,16 @@ mod tests {
         }
     }
 
+    /// Requires a running Docker daemon with the classic image store
+    /// (containerd image store disabled). Run explicitly with:
+    /// `cargo test -p alien-build --lib saved_image_preserves_config_and_layers_without_running_onbuild -- --ignored`
     #[test]
+    #[ignore = "requires a Docker daemon with the classic image store; see test documentation"]
     fn saved_image_preserves_config_and_layers_without_running_onbuild() {
-        if !docker_available() {
-            eprintln!("Docker is unavailable");
-            return;
-        }
+        assert!(
+            docker_available(),
+            "A running classic-store Docker daemon is required"
+        );
         let dir = tempdir().unwrap();
         let tag = format!("alien-export-onbuild-{}", rand::random::<u64>());
         std::fs::write(dir.path().join("payload"), "original layer").unwrap();
@@ -1556,25 +1652,93 @@ mod tests {
             .arg(&tag)
             .output()
             .unwrap();
-        assert!(save.status.success());
+        assert!(
+            save.status.success(),
+            "{}",
+            String::from_utf8_lossy(&save.stderr)
+        );
+        let mut saved = HashMap::new();
+        for entry in tar::Archive::new(File::open(&archive_path).unwrap())
+            .entries()
+            .unwrap()
+        {
+            let mut entry = entry.unwrap();
+            let name = entry.path().unwrap().to_string_lossy().into_owned();
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).unwrap();
+            saved.insert(name, bytes);
+        }
+        assert!(
+            !saved.contains_key("index.json"),
+            "expected classic docker save format"
+        );
+        let saved_manifest: Value = serde_json::from_slice(&saved["manifest.json"]).unwrap();
+        let layer_name = saved_manifest[0]["Layers"][0].as_str().unwrap();
+        let tampered_path = dir.path().join("tampered.tar");
+        std::fs::copy(&archive_path, &tampered_path).unwrap();
+        change_saved_entry(&tampered_path, layer_name, |_, bytes| {
+            *bytes.last_mut().unwrap() ^= 1;
+        });
+        let tampered = std::fs::read(&tampered_path).unwrap();
+        let error = DockerToolchain::normalize_oci_archive(&tampered_path, "amd64").unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("does not match config rootfs.diff_ids"));
+        assert_eq!(std::fs::read(&tampered_path).unwrap(), tampered);
+
         DockerToolchain::normalize_oci_archive(&archive_path, "amd64").unwrap();
         let image = Image::from_tarball(&archive_path).unwrap();
         assert_eq!(image.get_metadata().unwrap().cmd.unwrap(), vec!["/payload"]);
         let mut archive = tar::Archive::new(File::open(&archive_path).unwrap());
         let config_path = digest_to_blob_path(&original_id).unwrap();
-        let mut config = Vec::new();
+        let mut contents = HashMap::new();
         for entry in archive.entries().unwrap() {
             let mut entry = entry.unwrap();
-            if entry.path().unwrap().as_ref() == Path::new(&config_path) {
-                entry.read_to_end(&mut config).unwrap();
-            }
+            let name = entry.path().unwrap().to_string_lossy().into_owned();
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).unwrap();
+            contents.insert(name, bytes);
         }
+        let config = &contents[&config_path];
         assert_eq!(format!("sha256:{:x}", Sha256::digest(&config)), original_id);
         let value: Value = serde_json::from_slice(&config).unwrap();
         assert_eq!(
             value["config"]["OnBuild"],
             json!(["RUN false", "COPY missing /missing"])
         );
+        let index: Value = serde_json::from_slice(&contents["index.json"]).unwrap();
+        let manifest_path =
+            digest_to_blob_path(index["manifests"][0]["digest"].as_str().unwrap()).unwrap();
+        let manifest: Value = serde_json::from_slice(&contents[&manifest_path]).unwrap();
+        let layers = manifest["layers"].as_array().unwrap();
+        assert_eq!(
+            layers.len(),
+            value["rootfs"]["diff_ids"].as_array().unwrap().len()
+        );
+        for (position, layer) in layers.iter().enumerate() {
+            assert_eq!(
+                layer["mediaType"],
+                "application/vnd.oci.image.layer.v1.tar+gzip"
+            );
+            let blob = &contents[&digest_to_blob_path(layer["digest"].as_str().unwrap()).unwrap()];
+            assert_eq!(layer["size"], blob.len());
+            assert_eq!(
+                layer["digest"],
+                format!("sha256:{:x}", Sha256::digest(blob))
+            );
+            let mut decoded = Vec::new();
+            flate2::read::GzDecoder::new(blob.as_slice())
+                .read_to_end(&mut decoded)
+                .unwrap();
+            assert_eq!(
+                value["rootfs"]["diff_ids"][position],
+                format!("sha256:{:x}", Sha256::digest(&decoded))
+            );
+            assert_eq!(
+                decoded,
+                saved[saved_manifest[0]["Layers"][position].as_str().unwrap()]
+            );
+        }
         let load = Command::new("docker")
             .args(["load", "-i"])
             .arg(&archive_path)

@@ -4012,10 +4012,20 @@ async fn pull_and_export_image(
         drop(image_guard);
 
         // Flatten the saved archive to a single image manifest before the OCI reader sees it.
-        crate::toolchain::docker::DockerToolchain::normalize_oci_archive(
-            &output_tarball,
-            arch_str,
-        )?;
+        let archive_path = output_tarball.clone();
+        tokio::task::spawn_blocking(move || {
+            crate::toolchain::docker::DockerToolchain::normalize_oci_archive(
+                &archive_path,
+                arch_str,
+            )
+        })
+        .await
+        .into_alien_error()
+        .context(ErrorData::ImageBuildFailed {
+            resource_name: container_name.to_string(),
+            reason: "Image archive normalization task failed".to_string(),
+            build_output: None,
+        })??;
 
         info!(
             "Successfully exported {} to {}",
