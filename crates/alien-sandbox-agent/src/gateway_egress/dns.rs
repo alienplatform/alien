@@ -22,9 +22,11 @@ impl Names {
 
     pub(super) fn answer(&self, packet: &[u8]) -> Option<Vec<u8>> {
         if packet.len() < 12
-            || packet.len() > 512
+            || packet.len() > 4096
             || packet[2] & 0xf8 != 0
-            || packet[4..12] != [0, 1, 0, 0, 0, 0, 0, 0]
+            || packet[4..10] != [0, 1, 0, 0, 0, 0]
+            || packet[10] != 0
+            || packet[11] > 1
         {
             return None;
         }
@@ -50,15 +52,25 @@ impl Names {
             offset += len;
         }
         let name = labels.join(".");
-        if name.is_empty()
-            || name.len() > 253
-            || packet.get(offset + 2..offset + 4)? != [0, 1]
-            || offset + 4 != packet.len()
-        {
+        if name.is_empty() || name.len() > 253 || packet.get(offset + 2..offset + 4)? != [0, 1] {
+            return None;
+        }
+        let question_end = offset + 4;
+        if packet[11] == 1 {
+            // Accept one EDNS OPT pseudo-record, but do not copy arbitrary options into replies.
+            let opt = packet.get(question_end..)?;
+            if opt.len() < 11
+                || opt[..3] != [0, 0, 41]
+                || 11 + usize::from(u16::from_be_bytes([opt[9], opt[10]])) != opt.len()
+            {
+                return None;
+            }
+        } else if question_end != packet.len() {
             return None;
         }
         let qtype = u16::from_be_bytes([packet[offset], packet[offset + 1]]);
-        let mut reply = packet.to_vec();
+        let mut reply = packet[..question_end].to_vec();
+        reply[11] = 0;
         reply[2] = 0x81;
         reply[3] = 0x80;
         if qtype != 1 {
@@ -107,6 +119,18 @@ mod tests {
             Some("a.example.com")
         );
         assert!(names.answer(&[0; 512]).is_none());
+    }
+
+    #[test]
+    fn edns_queries_preserve_name_mapping_without_forwarding_options() {
+        let names = Names::default();
+        let plain = question("example.com");
+        let mut edns = plain.clone();
+        edns[11] = 1;
+        edns.extend_from_slice(&[0, 0, 41, 4, 208, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(names.answer(&plain), names.answer(&edns));
+        edns.pop();
+        assert!(names.answer(&edns).is_none());
     }
 }
 

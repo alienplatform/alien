@@ -84,6 +84,7 @@ async fn advance(
         .await
     {
         Ok(()) => StatusCode::NO_CONTENT,
+        Err(error) if error.code == "EGRESS_GENERATION_SUPERSEDED" => StatusCode::CONFLICT,
         Err(_) => StatusCode::SERVICE_UNAVAILABLE,
     }
 }

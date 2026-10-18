@@ -89,6 +89,16 @@ pub fn normalize_host(host: &str) -> Result<String> {
 }
 
 impl Policy {
+    /// Both policies must permit the target. A literal needs an explicit rule in at least one
+    /// policy; Internet is the upper bound for an explicitly narrowed literal grant.
+    pub fn intersection_permits(&self, other: &Self, target: &Target) -> bool {
+        let left = self.permits(target);
+        let right = other.permits(target);
+        (left && right)
+            || (left && matches!(other, Self::Mode(Mode::Internet)))
+            || (right && matches!(self, Self::Mode(Mode::Internet)))
+    }
+
     /// Check the policy against a destination. Internet never authorizes literal IPs.
     pub fn permits(&self, target: &Target) -> bool {
         match self {
@@ -173,6 +183,11 @@ mod tests {
         }
         assert!(policy.permits(&Target::parse("8.8.8.8:53", None).unwrap()));
         assert!(!Policy::Mode(Mode::Internet).permits(&Target::parse("8.8.8.8:443", None).unwrap()));
+        let literal = Target::parse("8.8.8.8:53", None).unwrap();
+        let internet = Policy::Mode(Mode::Internet);
+        assert!(internet.intersection_permits(&policy, &literal));
+        assert!(policy.intersection_permits(&internet, &literal));
+        assert!(!internet.intersection_permits(&internet, &literal));
     }
 
     #[test]

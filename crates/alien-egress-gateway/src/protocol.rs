@@ -10,7 +10,7 @@ use crate::{
 };
 
 /// Limit for the entire CONNECT/request header block.
-pub const MAX_HEADER_BYTES: usize = 32 * 1024;
+pub const MAX_HEADER_BYTES: usize = 192 * 1024;
 /// Limit for a fragmented TLS ClientHello, including TLS record framing.
 pub const MAX_HELLO_BYTES: usize = 64 * 1024;
 
@@ -98,6 +98,7 @@ pub async fn read_client_hello(
     target: &Target,
 ) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
+    let mut acceptor = Acceptor::default();
     loop {
         let mut chunk = [0u8; 4096];
         let n = stream
@@ -109,12 +110,30 @@ pub async fn read_client_hello(
             return Err(denied("incomplete ClientHello"));
         }
         bytes.extend_from_slice(&chunk[..n]);
-        if let Some(name) = client_hello_name(&bytes)? {
-            let sni = Target::parse(&name, Some(target.port))?;
-            if sni != *target {
-                return Err(denied("SNI mismatch"));
+        if bytes.len() > MAX_HELLO_BYTES {
+            return Err(denied("ClientHello too large"));
+        }
+        // Feed each byte once, even when a peer fragments every TLS record.
+        let mut cursor = Cursor::new(&chunk[..n]);
+        while (cursor.position() as usize) < n {
+            let read = acceptor
+                .read_tls(&mut cursor)
+                .into_alien_error()
+                .context(unavailable("parse ClientHello"))?;
+            if let Some(accepted) = acceptor
+                .accept()
+                .map_err(|_| denied("invalid ClientHello"))?
+            {
+                let hello = accepted.client_hello();
+                let name = hello.server_name().ok_or_else(|| denied("SNI required"))?;
+                if Target::parse(name, Some(target.port))? != *target {
+                    return Err(denied("SNI mismatch"));
+                }
+                return Ok(bytes);
             }
-            return Ok(bytes);
+            if read == 0 {
+                break;
+            }
         }
     }
 }

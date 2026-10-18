@@ -788,7 +788,11 @@ async fn run_egress_hook(
     headers: HeaderMap,
     body: bytes::Bytes,
 ) -> std::result::Result<StatusCode, ApiError> {
-    if state.gateway_egress.is_none() {
+    if state
+        .gateway_egress
+        .as_ref()
+        .is_none_or(|egress| !egress.requires_token())
+    {
         return Ok(StatusCode::OK);
     }
     authorize_control(&state, peer, &headers, SandboxOperationClass::Execute)?;

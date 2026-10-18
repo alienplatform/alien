@@ -29,7 +29,7 @@ use crate::error::{ErrorData, Result};
 use dns::Names;
 
 const TIMEOUT: Duration = Duration::from_secs(5);
-const MAX_HEADER: usize = 32 * 1024;
+const MAX_HEADER: usize = 192 * 1024;
 
 fn failed(reason: &str) -> ErrorData {
     ErrorData::OperationFailed {
@@ -46,7 +46,9 @@ pub struct GatewayEgress {
     address: RwLock<Option<SocketAddr>>,
     token: RwLock<String>,
     privileged: bool,
+    declared_none: bool,
     ready: AtomicBool,
+    listeners_live: AtomicBool,
     names: Names,
     image_started: AtomicBool,
     ca_path: RwLock<Option<String>>,
@@ -56,8 +58,16 @@ pub struct GatewayEgress {
 
 impl GatewayEgress {
     /// Prepare routing before dropping bootstrap capabilities. An absent token is pending until
-    /// the authenticated Run hook delivers it outside the shared image snapshot.
+    /// the authenticated policy endpoint delivers it outside the shared image snapshot.
     pub fn from_env(control_port: u16) -> Result<Option<Arc<Self>>> {
+        let declared_none = std::env::var("ALIEN_SANDBOX_EGRESS")
+            .ok()
+            .is_some_and(|policy| {
+                policy == "none"
+                    || serde_json::from_str::<serde_json::Value>(&policy).is_ok_and(|value| {
+                        value == "none" || value == serde_json::json!({"mode":"deny"})
+                    })
+            });
         let address = match std::env::var("ALIEN_SANDBOX_EGRESS_GATEWAY") {
             Ok(value) => Some(
                 value
@@ -84,7 +94,9 @@ impl GatewayEgress {
             address: RwLock::new(address),
             token: RwLock::new(token),
             privileged,
+            declared_none,
             ready: AtomicBool::new(false),
+            listeners_live: AtomicBool::new(false),
             names: Names::default(),
             image_started: AtomicBool::new(false),
             ca_path: RwLock::new(None),
@@ -101,9 +113,20 @@ impl GatewayEgress {
         {
             return Ok(());
         }
-        let mut env = BTreeMap::new();
-        self.command_environment(&mut env)?;
-        if let Some(mut child) = crate::image_command::start_with_env(identity, &env)? {
+        let start = || {
+            let mut env = BTreeMap::new();
+            self.command_environment(&mut env)?;
+            crate::image_command::start_with_env(identity, &env)
+        };
+        let child = match start() {
+            Ok(child) => child,
+            Err(error) => {
+                self.image_started.store(false, Ordering::Release);
+                self.ready.store(false, Ordering::Release);
+                return Err(error);
+            }
+        };
+        if let Some(mut child) = child {
             tokio::spawn(async move {
                 match child.wait().await {
                     Ok(status) => tracing::info!(%status, "image command exited"),
@@ -116,16 +139,21 @@ impl GatewayEgress {
 
     /// Health remains available while create is waiting to deliver the policy.
     pub fn status(&self) -> Result<&'static str> {
-        if self.current_token()?.is_empty() {
+        if !self.declared_none && self.current_token()?.is_empty() {
             return Ok("awaiting-egress-policy");
         }
         self.ensure_ready()?;
         Ok("ready")
     }
 
+    /// An immutable deny declaration needs no gateway bootstrap or token.
+    pub fn requires_token(&self) -> bool {
+        !self.declared_none
+    }
+
     /// Gate session routes until the network path has been verified.
     pub fn ensure_ready(&self) -> Result<()> {
-        if self.ready.load(Ordering::Acquire) {
+        if self.ready.load(Ordering::Acquire) && self.listeners_live.load(Ordering::Acquire) {
             Ok(())
         } else {
             Err(AlienError::new(ErrorData::EgressPathUnexpected))
@@ -134,6 +162,18 @@ impl GatewayEgress {
 
     /// Start the forwarders. Any listener task failure closes readiness immediately.
     pub async fn start(self: &Arc<Self>) -> Result<()> {
+        let result = self.start_inner().await;
+        if result.is_err() {
+            self.listeners_live.store(false, Ordering::Release);
+        }
+        result
+    }
+
+    async fn start_inner(self: &Arc<Self>) -> Result<()> {
+        self.listeners_live.store(true, Ordering::Release);
+        if self.declared_none {
+            return self.self_check().await;
+        }
         let explicit = TcpListener::bind("127.0.0.1:15002")
             .await
             .into_alien_error()
@@ -142,6 +182,7 @@ impl GatewayEgress {
         tokio::spawn(async move {
             if let Err(error) = this.clone().serve(explicit, false).await {
                 this.ready.store(false, Ordering::Release);
+                this.listeners_live.store(false, Ordering::Release);
                 tracing::error!(code = %error.code, "egress forwarder stopped");
             }
         });
@@ -162,6 +203,7 @@ impl GatewayEgress {
             tokio::spawn(async move {
                 if this.clone().serve(transparent, true).await.is_err() {
                     this.ready.store(false, Ordering::Release);
+                    this.listeners_live.store(false, Ordering::Release);
                     tracing::error!("transparent forwarder stopped");
                 }
             });
@@ -169,6 +211,7 @@ impl GatewayEgress {
             tokio::spawn(async move {
                 if this.dns_udp(udp).await.is_err() {
                     this.ready.store(false, Ordering::Release);
+                    this.listeners_live.store(false, Ordering::Release);
                     tracing::error!("DNS forwarder stopped");
                 }
             });
@@ -176,6 +219,7 @@ impl GatewayEgress {
             tokio::spawn(async move {
                 if this.dns_tcp(tcp).await.is_err() {
                     this.ready.store(false, Ordering::Release);
+                    this.listeners_live.store(false, Ordering::Release);
                     tracing::error!("DNS TCP forwarder stopped");
                 }
             });
@@ -196,6 +240,9 @@ impl GatewayEgress {
         audience: &str,
         sandbox_id: &str,
     ) -> Result<()> {
+        if self.declared_none {
+            return Err(invalid("declared none cannot acquire a gateway"));
+        }
         if self.ready.load(Ordering::Acquire) {
             return Err(invalid("gateway already active"));
         }
@@ -241,6 +288,9 @@ impl GatewayEgress {
     /// the gateway; the self-check refuses invalid credentials before reopening session routes.
     pub async fn update(&self, token: String) -> Result<()> {
         let _update = self.update_lock.lock().await;
+        if self.declared_none {
+            return Err(invalid("declared none cannot acquire an egress token"));
+        }
         validate_token(&token)?;
         let (aud, sub) = token_identity(&token)?;
         if self
@@ -356,6 +406,10 @@ impl GatewayEgress {
         let direct = timeout(Duration::from_secs(3), self.connect(canary)).await;
         if matches!(direct, Ok(Ok(_))) {
             return Err(AlienError::new(ErrorData::EgressPathUnexpected));
+        }
+        if self.declared_none {
+            self.ready.store(true, Ordering::Release);
+            return Ok(());
         }
         let mut gateway = self.connect(self.gateway_address()?).await?;
         self.send_connect(&mut gateway, "one.one.one.one:443")
@@ -519,7 +573,7 @@ impl GatewayEgress {
 
 fn validate_token(token: &str) -> Result<()> {
     if token.is_empty()
-        || token.len() > 24 * 1024
+        || token.len() > 128 * 1024
         || !token
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))

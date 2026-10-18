@@ -53,7 +53,7 @@ fn main() -> Result<()> {
     let mut run_image_command = false;
     if std::env::var_os("ALIEN_SANDBOX_EGRESS").is_some() {
         #[cfg(target_os = "linux")]
-        {
+        if unsafe { libc::geteuid() } == 0 {
             alien_sandbox_agent::privilege::prepare_identity(
                 state.exec_identity,
                 &state.session_root,

@@ -14,7 +14,6 @@ local = ["alien-bindings/local"]
 axum = { workspace = true, features = ["tokio", "http1", "json"] }
 alien-error = { workspace = true }
 alien-bindings = { workspace = true }
-async-trait = { workspace = true }
 base64 = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }

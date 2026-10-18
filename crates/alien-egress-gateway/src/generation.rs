@@ -46,7 +46,13 @@ impl GenerationFence {
             .context(unavailable("read generation fence"))?;
         let condition = match current {
             Some(entry) => {
-                if decode(&entry.value)? >= generation {
+                let highest = decode(&entry.value)?;
+                if highest > generation {
+                    return Err(AlienError::new(
+                        crate::error::ErrorData::GenerationSuperseded,
+                    ));
+                }
+                if highest == generation {
                     return Ok(());
                 }
                 PutCondition::Version(entry.version)

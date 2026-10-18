@@ -10,7 +10,7 @@ use crate::{
 };
 
 /// Maximum token size, before decoding. Bounds allocation before signature verification.
-pub const MAX_TOKEN_BYTES: usize = 24 * 1024;
+pub const MAX_TOKEN_BYTES: usize = 128 * 1024;
 
 /// Signed identity and narrowed egress grant.
 #[derive(Clone, Serialize, Deserialize)]
@@ -175,6 +175,31 @@ mod tests {
         let mut wrong = payload;
         wrong["iss"] = "other".into();
         assert!(verify(&signed(&pair, wrong), &keys, 100).is_err());
+    }
+
+    #[test]
+    fn maximum_policy_fits_the_token_and_proxy_header_limits() {
+        let pair = KeyPair::from_seed(Seed::new([7; 32]));
+        let keys = HashMap::from([("test".into(), pair.pk)]);
+        let allow: Vec<_> = (0..256)
+            .map(|i| {
+                format!(
+                    "{}.{}.{}.{}.test:65535",
+                    "a".repeat(63),
+                    "b".repeat(63),
+                    "c".repeat(63),
+                    format!("{i:03}{}", "d".repeat(53))
+                )
+            })
+            .collect();
+        let payload = serde_json::json!({"iss":"alien-sandbox", "aud":"prefix/resource", "sub":"box", "egress":{"allow":allow}, "iat":100, "exp":200, "gen":0});
+        let token = signed(&pair, payload);
+        assert!(token.len() > 65536);
+        verify(&token, &keys, 100).unwrap();
+        let request = format!("CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\nProxy-Authorization: Bearer {token}\r\n\r\n");
+        assert!(crate::protocol::request_target(request.as_bytes())
+            .unwrap()
+            .is_some());
     }
 }
 

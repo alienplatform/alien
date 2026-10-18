@@ -33,9 +33,11 @@ local SQLite provider does not support multi-host network filesystems. Kubernete
 uses its base-cloud KV; the Redis binding is not implemented by Alien bindings.
 
 The proxy port accepts `Proxy-Authorization: Bearer <JWS>`. Port 443 requires a TLS
-ClientHello whose SNI equals the CONNECT destination. Port 80, including CONNECT
+ClientHello whose SNI equals the CONNECT destination. TLS on other explicit ports
+also checks its initial ClientHello. Port 80, including CONNECT
 on port 80, requires matching Host and request authority. Other explicit ports
-support opaque TCP protocols such as SSH. Spliced TLS does not inspect encrypted
+support opaque TCP protocols such as SSH, including server-first greetings. Upgrades
+inside an opaque protocol are not inspected. Spliced TLS does not inspect encrypted
 HTTP Host; use credential interception when HTTP authority inspection is required.
 Plain and intercepted HTTP handle one request per connection and advertise close.
 Interception offers HTTP/1.1 only. Headers and ClientHello have size and time limits;
@@ -47,7 +49,7 @@ JWS in `Authorization: Bearer`, using the deployment's signing keys and mandator
 header `typ: "alien-egress-admin"`. Claims are
 `{iss:"alien-sandbox",aud,sub,gen,iat,exp}`; the lifetime is at most 60 seconds.
 `POST /v1/generations {aud,sub,gen}` must exactly match the signed claims. Successful
-updates return 204; a concurrent conditional-write conflict returns 503 for the
+updates return 204; a superseded update returns 409, and a concurrent conditional-write conflict returns 503 for the
 caller to retry. Captured updates are idempotent and cannot be retargeted. This
 listener returns no private key or injected secret. `/health` is unauthenticated;
 `/metrics` requires an admin JWS. Logs contain one JSON record per proxy connection.
@@ -69,7 +71,7 @@ public CA through the agent's `PUT /v1/egress {token,caCert?}`. Trust bundle pat
 are passed to standard tools; applications with their own trust stores must import
 the public CA explicitly.
 
-The agent starts without a token. Health reports `awaiting-egress-policy`, and
+For a gateway-backed resource the agent starts without a token. Health reports `awaiting-egress-policy`, and
 session routes are blocked until token installation and the external path check
 succeed. On AWS the Run hook receives the AWS envelope
 `{microvmId,runHookPayload}`; the payload is a JSON string `{gateway,audience}`.
@@ -78,3 +80,16 @@ sets `ALIEN_SANDBOX_SESSION_ID`, `ALIEN_SANDBOX_EGRESS_AUDIENCE`, and
 `ALIEN_SANDBOX_EGRESS_GATEWAY`. Tokens are never supplied through environment or
 image state. Updates are serialized, checked through the gateway, and affect new
 connections. Existing tunnels remain open until close or the connection deadline.
+
+A resource declared `none` uses a loopback-only network and has no gateway or token.
+The agent verifies that direct internet fails before serving. Narrowing a resource
+declared `internet` or `allow` to `none` still requires the gateway and a token.
+
+Validation tools live in `tests/` and `fuzz/`. Build the two release binaries, build
+`tests/Dockerfile.agent` with `alien-sandbox-agent` in its Docker build context, then
+run `python3 tests/docker_conformance.py --image IMAGE --agent-image AGENT_IMAGE
+--output /tmp/egress-proof`. The runner requires Python `cryptography` and a Docker
+daemon, uses only isolated controlled origins, benchmarks verified TLS transfers,
+and removes its containers/networks. Run each parser with `cargo +nightly fuzz run
+connect -- -max_total_time=60` and `cargo +nightly fuzz run client_hello --
+-max_total_time=60` from this crate directory. Keep output outside the repository.

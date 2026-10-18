@@ -1,4 +1,8 @@
 //! Sandbox egress authorization and proxy enforcement.
+#![expect(
+    clippy::result_large_err,
+    reason = "Alien errors retain structured metadata and causal context"
+)]
 pub mod admin;
 pub mod config;
 pub mod credentials;

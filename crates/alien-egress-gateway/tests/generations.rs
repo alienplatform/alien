@@ -22,10 +22,14 @@ async fn replicas_and_restarts_observe_monotonic_updates() {
             .code,
         "EGRESS_DENIED"
     );
-    second
-        .advance("deployment/resource", "box", 3)
-        .await
-        .unwrap();
+    assert_eq!(
+        second
+            .advance("deployment/resource", "box", 3)
+            .await
+            .unwrap_err()
+            .code,
+        "EGRESS_GENERATION_SUPERSEDED"
+    );
     assert!(first.check("deployment/resource", "box", 6).await.is_err());
     second
         .check("deployment/resource", "another", 0)

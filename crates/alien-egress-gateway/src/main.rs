@@ -22,6 +22,10 @@ fn failed(operation: &str) -> ErrorData {
 }
 
 #[tokio::main]
+#[expect(
+    clippy::result_large_err,
+    reason = "Alien errors retain structured metadata and causal context"
+)]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .json()
