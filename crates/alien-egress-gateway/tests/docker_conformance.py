@@ -390,7 +390,7 @@ class Suite:
         network = PREFIX + "-guest"
         docker("network", "create", "--internal", "--subnet", "172.29.91.0/24", network)
         networks.append(network)
-        docker("network", "connect", "--ip", "172.29.91.2", network, PREFIX + "-proxy1")
+        docker("network", "connect", "--ip", "172.29.91.2", "--alias", "gateway.test", network, PREFIX + "-proxy1")
         name = PREFIX + "-agent"
         docker("run", "-d", "--name", name, "--network", network, "--ip", "172.29.91.3", "--cap-add", "NET_ADMIN",
                "-v", f"{self.output / 'origin/ca.pem'}:/fixture-ca.pem:ro", image)
@@ -417,6 +417,10 @@ class Suite:
         self.record("agent pending health", lambda: equal(json.loads(call("GET", "/v1/health")[1])["status"], "awaiting-egress-policy"))
         hook = {"microvmId": SUB, "runHookPayload": json.dumps({"gateway": "172.29.91.2:3128", "audience": AUD})}
         self.record("AWS run wrapper bootstrap", lambda: equal(call("POST", "/aws/lambda-microvms/runtime/v1/run", hook)[0], 200))
+        # Resolve through the marked control socket after the guest DNS redirect is active.
+        # The subsequent token self-check must reach the real gateway, not a synthetic IP.
+        hook["runHookPayload"] = json.dumps({"gateway": "gateway.test:3128", "audience": AUD})
+        self.record("AWS run hook resolves gateway hostname through control DNS", lambda: equal(call("POST", "/aws/lambda-microvms/runtime/v1/run", hook)[0], 200))
         self.record("agent refuses other sandbox token", lambda: equal(call("PUT", "/v1/egress", {"token": self.token(sub="other")})[0], 500))
         forged = self.token().rsplit(".", 1)[0] + "." + encoded(bytes(64))
         self.record("agent refuses forged identity via authenticated health", lambda: equal(call("PUT", "/v1/egress", {"token": forged})[0], 503))
