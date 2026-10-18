@@ -198,7 +198,7 @@ impl PolicyStore {
             }
             _ => 0,
         };
-        let bytes = policy_bytes
+        let allocated_bytes = policy_bytes
             + record.signed.capacity()
             + record.claims.aud.capacity()
             + record.claims.sub.capacity()
@@ -206,6 +206,10 @@ impl PolicyStore {
             + record.claims.sub.len()
             + record.claims.ver.1.capacity()
             + 512;
+        // Release-load measurements show allocator size classes and fragmentation can
+        // nearly double resident memory. Charge that overhead inside the policy budget,
+        // leaving the other half of the container for connections and transient requests.
+        let bytes = allocated_bytes.saturating_mul(2);
         let key = (record.claims.aud.clone(), record.claims.sub.clone());
         let mut state = self
             .state
