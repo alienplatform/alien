@@ -46,6 +46,9 @@ pub fn aws_sandbox_agent_environment(
             "ALIEN_SANDBOX_EGRESS".into(),
             serde_json::to_string(&sandbox.egress).expect("egress serializes"),
         );
+        // The platform must complete its bootstrap before the guest-wide firewall
+        // is installed. The authenticated run hook installs it before user code.
+        environment.insert("ALIEN_SANDBOX_EGRESS_RUN_HOOK".into(), "true".into());
     }
     environment
 }
