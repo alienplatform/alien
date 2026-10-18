@@ -13,6 +13,7 @@ pub mod kubernetes_client;
 pub mod kubernetes_request_utils;
 pub mod metrics;
 pub mod nodes;
+pub mod network_policies;
 pub mod optional;
 pub mod pods;
 pub mod routes;
