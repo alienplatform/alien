@@ -32,7 +32,6 @@ use alien_local::{LocalBindingsProvider, LocalContainerManager};
 
 use crate::auth::Subject;
 use crate::config::ManagerConfig;
-use crate::error::REMOTE_CREDENTIAL_HANDOFF_FAILED_CODE;
 use crate::traits::deployment_store::{DeploymentFilter, DeploymentRecord, ReconcileData};
 use crate::traits::{CredentialResolver, DeploymentStore, ReleaseStore, ServerBindings};
 use crate::transports::ManagerTransport;
@@ -229,6 +228,7 @@ pub struct DeploymentLoop {
 
 /// The backoff and retry flag left by this processing attempt.
 struct AcquisitionBackoff {
+    status: DeploymentStatus,
     delay: chrono::Duration,
     retry_requested: bool,
 }
@@ -237,7 +237,7 @@ struct AcquisitionBackoff {
 #[derive(Debug, Clone)]
 struct DeferredDeployment {
     /// The status it was skipped in.
-    status: String,
+    status: DeploymentStatus,
     updated_at: Option<chrono::DateTime<chrono::Utc>>,
     retry_requested: bool,
     /// When the loop may acquire it again if the record has not changed.
@@ -302,43 +302,67 @@ impl DeploymentLoop {
         }
     }
 
-    /// Exclude unchanged deployments until their acquisition backoff expires.
-    /// Query only when needed, and retain entries outside this loop's filter:
-    /// heartbeat and deployment ticks share this cache but acquire different statuses.
+    /// Add acquisition exclusions without enumerating a possibly capped candidate list.
+    /// Refresh cached revisions once per tick; later batches only add newly deferred IDs.
     pub(crate) async fn exclude_deferred(
         &self,
         caller: &Subject,
         filter: &mut DeploymentFilter,
+        refresh: bool,
     ) -> Result<bool, AlienError> {
         let now = chrono::Utc::now();
-        {
+        let cached = {
             let mut deferred = self.deferred.lock().expect("deferred poisoned");
             deferred.retain(|_, entry| entry.recheck_after > now);
-            if deferred.is_empty() {
-                return Ok(true);
+            deferred.clone()
+        };
+        if refresh {
+            let mut revisions = stream::iter(cached.into_iter().filter(|(_, entry)| {
+                filter.statuses.as_ref().is_none_or(|statuses| {
+                    statuses
+                        .iter()
+                        .any(|status| parse_status(status) == entry.status)
+                })
+            }))
+            .map(|(id, entry)| async move {
+                let record = self.deployment_store.get_deployment(caller, &id).await;
+                (id, entry, record)
+            })
+            .buffer_unordered(MAX_CONCURRENT_DEPLOYMENTS);
+            while let Some((id, entry, record)) = revisions.next().await {
+                let unchanged = match record {
+                    Ok(Some(record)) => {
+                        entry.status == parse_status(&record.status)
+                            && entry.updated_at == record.updated_at
+                            && entry.retry_requested == record.retry_requested
+                    }
+                    Ok(None) => false,
+                    Err(error) => {
+                        warn!(deployment_id = %id, %error, "Could not refresh acquisition backoff; allowing a recheck");
+                        false
+                    }
+                };
+                if !unchanged {
+                    let mut deferred = self.deferred.lock().expect("deferred poisoned");
+                    if deferred
+                        .get(&id)
+                        .is_some_and(|current| current.recheck_after == entry.recheck_after)
+                    {
+                        deferred.remove(&id);
+                    }
+                }
             }
         }
-        let candidates = self
-            .deployment_store
-            .list_deployments(caller, filter)
-            .await?;
-        let mut deferred = self.deferred.lock().expect("deferred poisoned");
-        let mut ids = Vec::with_capacity(candidates.len());
-        for candidate in candidates {
-            let unchanged = deferred.get(&candidate.id).is_some_and(|entry| {
-                entry.status == candidate.status
-                    && entry.updated_at == candidate.updated_at
-                    && entry.retry_requested == candidate.retry_requested
-                    && entry.recheck_after > now
-            });
-            if !unchanged {
-                deferred.remove(&candidate.id);
-                ids.push(candidate.id);
-            }
-        }
-        let has_candidates = !ids.is_empty();
-        filter.deployment_ids = Some(ids);
-        Ok(has_candidates)
+        filter.excluded_deployment_ids.extend(
+            self.deferred
+                .lock()
+                .expect("deferred poisoned")
+                .keys()
+                .cloned(),
+        );
+        filter.excluded_deployment_ids.sort();
+        filter.excluded_deployment_ids.dedup();
+        Ok(true)
     }
 
     /// Run the deployment loop forever.
@@ -490,7 +514,7 @@ impl DeploymentLoop {
         // no caller passthrough is available.
         let caller = Subject::system();
 
-        match self.exclude_deferred(&caller, &mut filter).await {
+        match self.exclude_deferred(&caller, &mut filter, true).await {
             Ok(true) => {}
             Ok(false) => return,
             Err(error) => {
@@ -544,35 +568,9 @@ impl DeploymentLoop {
                         })
                         .await;
                     let skipped = skipped_ids.lock().expect("skipped IDs poisoned").clone();
-                    if !skipped.is_empty() {
-                        // Snapshot remaining candidates only after the first skip.
-                        // ID filtering prevents re-acquisition without holding a CLI's lease
-                        // across unrelated work. New arrivals can wait for the next tick.
-                        if filter.deployment_ids.is_none() {
-                            match self
-                                .deployment_store
-                                .list_deployments(&caller, &filter)
-                                .await
-                            {
-                                Ok(candidates) => {
-                                    filter.deployment_ids =
-                                        Some(candidates.into_iter().map(|item| item.id).collect());
-                                }
-                                Err(error) => {
-                                    error!(%error, "Failed to list remaining deployment candidates");
-                                    break;
-                                }
-                            }
-                        }
-                        let ids = filter
-                            .deployment_ids
-                            .as_mut()
-                            .expect("candidate IDs set above");
-                        ids.retain(|id| !skipped.contains(id));
-                        if ids.is_empty() {
-                            break;
-                        }
-                    }
+                    filter.excluded_deployment_ids.extend(skipped);
+                    filter.excluded_deployment_ids.sort();
+                    filter.excluded_deployment_ids.dedup();
                 }
                 Err(e) => {
                     error!(error = %e, "Failed to acquire deployments");
@@ -641,7 +639,7 @@ impl DeploymentLoop {
                     self.deferred.lock().expect("deferred poisoned").insert(
                         deployment_id.clone(),
                         DeferredDeployment {
-                            status: record.status,
+                            status: backoff.status,
                             updated_at: record.updated_at,
                             // The reread can already contain a new user retry. Comparing
                             // against our own checkpoint must let that request through.
@@ -687,15 +685,8 @@ impl DeploymentLoop {
             .as_ref()
             .expect("stored deployment carries stack_settings");
 
-        // Pull-mode deployments are entirely driven by the alien-operator running in the
-        // target environment. The manager must not attempt to provision or deploy them.
-        if stack_settings.deployment_model == alien_core::DeploymentModel::Pull {
-            debug!(
-                deployment_id = %deployment_id,
-                "Skipping pull-mode deployment — handled by alien-operator"
-            );
-            return Ok(None);
-        }
+        let skip_credentials = stack_settings.deployment_model == alien_core::DeploymentModel::Pull
+            || (options.require_heartbeats_enabled && !stack_settings.heartbeats.is_enabled());
 
         let status = parse_status(&deployment.status);
         let had_credential_retry = deployment
@@ -712,11 +703,12 @@ impl DeploymentLoop {
             }
         }
 
-        if options.require_heartbeats_enabled && !stack_settings.heartbeats.is_enabled() {
-            debug!(
-                deployment_id = %deployment_id,
-                "Skipping heartbeat because heartbeats are disabled for this deployment"
-            );
+        if skip_credentials {
+            if had_credential_retry {
+                self.clear_skipped_credential_retry(&deployment, session, execution_claim)
+                    .await?;
+            }
+            debug!(deployment_id = %deployment_id, "Skipping credentials for pull-mode or disabled heartbeat work");
             return Ok(None);
         }
 
@@ -815,15 +807,11 @@ impl DeploymentLoop {
         {
             Ok(resolved) => resolved,
             Err(e) => {
+                let e = crate::providers::credential_errors::classify_credential_error(e);
                 let now = chrono::Utc::now();
                 let retry_remaining = credential_error_retry_remaining(&deployment, &e, now);
-                let handoff_retry_remaining =
-                    gcp_credential_handoff_retry_remaining(status, &deployment, &e, now);
                 let waiting_for_driver = should_wait_for_credential_handoff(status, &deployment);
-                if waiting_for_driver
-                    || handoff_retry_remaining.is_some()
-                    || retry_remaining.is_some()
-                {
+                if waiting_for_driver || retry_remaining.is_some() {
                     let retry = deployment
                         .runtime_metadata
                         .as_ref()
@@ -832,6 +820,7 @@ impl DeploymentLoop {
                     // the lease. Expected setup-driver waits retain their existing semantics.
                     let checkpoint_retry_state = (!waiting_for_driver && retry.is_none())
                         || (waiting_for_driver && had_credential_retry);
+                    let mut retry_state_saved = true;
                     if checkpoint_retry_state {
                         recorded_state
                             .runtime_metadata
@@ -841,28 +830,56 @@ impl DeploymentLoop {
                             status,
                         });
                         recorded_state.error = deployment_record_error(&deployment.error);
-                        self.checkpoint_without_step(
-                            &deployment_id,
-                            session,
-                            recorded_state,
-                            execution_claim.clone(),
-                        )
-                        .await?;
+                        let expected_retry = recorded_state
+                            .runtime_metadata
+                            .as_ref()
+                            .and_then(|metadata| metadata.credential_retry.clone());
+                        let saved = self
+                            .checkpoint_without_step(
+                                &deployment_id,
+                                session,
+                                recorded_state,
+                                execution_claim.clone(),
+                            )
+                            .await;
+                        retry_state_saved = match saved {
+                            Ok(record)
+                                if record
+                                    .runtime_metadata
+                                    .as_ref()
+                                    .and_then(|metadata| metadata.credential_retry.as_ref())
+                                    == expected_retry.as_ref() =>
+                            {
+                                true
+                            }
+                            Ok(_) => {
+                                warn!(%deployment_id, "Store dropped credential retry state; failing with the credential error");
+                                false
+                            }
+                            Err(error) => {
+                                warn!(%deployment_id, %error, "Store rejected credential retry state; failing with the credential error");
+                                false
+                            }
+                        };
                     }
-                    warn!(
-                        deployment_id = %deployment_id,
-                        status = ?status,
-                        platform = ?deployment.platform,
-                        retry_window_remaining_secs = ?retry_remaining.or(handoff_retry_remaining).map(|duration| duration.as_secs()),
-                        error_code = %e.code,
-                        error = %e,
-                        "Credentials unavailable for deployment phase; waiting to retry or for credential handoff"
-                    );
-                    return Ok(Some(AcquisitionBackoff {
-                        delay: CREDENTIAL_RETRY_INTERVAL,
-                        retry_requested: checkpoint_retry_state && deployment.retry_requested,
-                    }));
-                } else {
+                    if retry_state_saved {
+                        warn!(
+                            deployment_id = %deployment_id,
+                            status = ?status,
+                            platform = ?deployment.platform,
+                            retry_window_remaining_secs = ?retry_remaining.map(|duration| duration.as_secs()),
+                            error_code = %e.code,
+                            error = %e,
+                            "Credentials unavailable for deployment phase; waiting to retry or for credential handoff"
+                        );
+                        return Ok(Some(AcquisitionBackoff {
+                            status,
+                            delay: CREDENTIAL_RETRY_INTERVAL,
+                            retry_requested: checkpoint_retry_state && deployment.retry_requested,
+                        }));
+                    }
+                }
+                {
                     let failed_status = failed_status_for_deployment_error(status);
                     let unchanged = status == failed_status
                         && !deployment.retry_requested
@@ -877,6 +894,7 @@ impl DeploymentLoop {
                             "Credential resolution still failing; leaving unchanged failure checkpoint and backing off"
                         );
                         return Ok(Some(AcquisitionBackoff {
+                            status: failed_status,
                             delay: CREDENTIAL_FAILURE_RECHECK_INTERVAL,
                             retry_requested: false,
                         }));
@@ -908,6 +926,7 @@ impl DeploymentLoop {
                     .await?;
                 }
                 return Ok(Some(AcquisitionBackoff {
+                    status: failed_status_for_deployment_error(status),
                     delay: CREDENTIAL_FAILURE_RECHECK_INTERVAL,
                     retry_requested: false,
                 }));
@@ -955,6 +974,7 @@ impl DeploymentLoop {
                 .await?;
             }
             return Ok(Some(AcquisitionBackoff {
+                status,
                 delay: UNPROVISIONABLE_RECHECK_INTERVAL,
                 retry_requested: deployment.retry_requested,
             }));
@@ -1194,14 +1214,73 @@ impl DeploymentLoop {
         runner_result.map(|_| None).map_err(|e| e.into_generic())
     }
 
+    async fn clear_skipped_credential_retry(
+        &self,
+        deployment: &DeploymentRecord,
+        session: &str,
+        execution_claim: Option<crate::traits::deployment_store::ExecutionClaim>,
+    ) -> Result<(), AlienError> {
+        let mut state = state_from_record(deployment, parse_status(&deployment.status), None, "");
+        state.error = deployment_record_error(&deployment.error);
+        if let Some(metadata) = state.runtime_metadata.as_mut() {
+            metadata.credential_retry = None;
+        }
+        // A metadata-only checkpoint must preserve both release snapshots, including
+        // a pending target different from the currently installed release.
+        let (target_stack, current_stack) = supplied_release_stacks(deployment);
+        for (is_current, id, supplied) in [
+            (true, deployment.current_release_id.as_ref(), current_stack),
+            (
+                false,
+                deployment
+                    .desired_release_id
+                    .as_ref()
+                    .or(deployment.current_release_id.as_ref()),
+                target_stack,
+            ),
+        ] {
+            let Some(id) = id else { continue };
+            let stack = if let Some(stack) = supplied {
+                stack
+            } else {
+                self.release_store
+                    .get_release(&Subject::system(), id)
+                    .await?
+                    .and_then(|release| release.stacks.get(&deployment.platform).cloned())
+                    .ok_or_else(|| {
+                        AlienError::new(GenericError {
+                            message: format!(
+                                "Release {id} is unavailable while clearing credential retry state"
+                            ),
+                        })
+                    })?
+            };
+            let release = Some(ReleaseInfo {
+                release_id: Some(id.clone()),
+                version: None,
+                description: None,
+                stack,
+            });
+            if is_current {
+                state.current_release = release;
+            } else {
+                state.target_release = release;
+            }
+        }
+        self.checkpoint_without_step(&deployment.id, session, state, execution_claim)
+            .await?;
+        Ok(())
+    }
+
     async fn checkpoint_without_step(
         &self,
         deployment_id: &str,
         session: &str,
         state: DeploymentState,
         execution_claim: Option<crate::traits::deployment_store::ExecutionClaim>,
-    ) -> Result<(), AlienError> {
-        self.deployment_store
+    ) -> Result<DeploymentRecord, AlienError> {
+        let outcome = self
+            .deployment_store
             .reconcile(
                 &Subject::system(),
                 ReconcileData {
@@ -1219,7 +1298,7 @@ impl DeploymentLoop {
                 },
             )
             .await?;
-        Ok(())
+        Ok(outcome.record)
     }
 }
 
@@ -1550,26 +1629,6 @@ fn credential_retry_remaining(
         .filter(|remaining| !remaining.is_zero())
 }
 
-fn gcp_credential_handoff_retry_remaining(
-    status: DeploymentStatus,
-    deployment: &DeploymentRecord,
-    error: &AlienError,
-    now: chrono::DateTime<chrono::Utc>,
-) -> Option<Duration> {
-    if status != DeploymentStatus::Provisioning
-        || deployment.platform != alien_core::Platform::Gcp
-        || error.code != REMOTE_CREDENTIAL_HANDOFF_FAILED_CODE
-        || !deployment
-            .stack_state
-            .as_ref()
-            .is_some_and(has_remote_stack_management_outputs)
-    {
-        return None;
-    }
-
-    credential_retry_remaining(deployment, now)
-}
-
 fn failed_state_for_credential_error(
     deployment: &DeploymentRecord,
     status: DeploymentStatus,
@@ -1647,7 +1706,7 @@ fn supplied_release_stacks(deployment: &DeploymentRecord) -> (Option<Stack>, Opt
 mod tests {
     use super::{
         active_work_statuses, build_monitoring_config, commands_receiver_env_vars,
-        gcp_credential_handoff_retry_remaining, get_or_create_local_bindings_provider,
+        credential_error_retry_remaining, get_or_create_local_bindings_provider,
         has_remote_stack_management_outputs, manager_candidate_statuses,
         needs_provision_capability, parse_status, retryable_failed_statuses,
         should_wait_for_credential_handoff, supplied_release_stacks, worker_commands_push_env_vars,
@@ -2848,6 +2907,165 @@ mod tests {
             assert_eq!(fixture.credentials.visits.load(Ordering::SeqCst), 3);
         }
 
+        async fn incompatible_retry_metadata_store_fails_safely(trigger: &str) {
+            let error = transient_error();
+            let fixture = Fixture::new(DeploymentStatus::UpdatePending, error.clone()).await;
+            fixture.db.execute(trigger).await.unwrap();
+            let runner = fixture.runner();
+            runner.tick().await;
+            let record = fixture.record().await;
+            assert_eq!(record.status, "update-failed");
+            assert_eq!(record.error, Some(serde_json::to_value(error).unwrap()));
+            assert!(record.runtime_metadata.unwrap().credential_retry.is_none());
+            let writes = fixture.writes().await;
+            runner.tick().await;
+            assert_eq!(fixture.writes().await, writes);
+        }
+
+        #[tokio::test]
+        async fn rejected_retry_metadata_falls_back_to_credential_failure() {
+            incompatible_retry_metadata_store_fails_safely(
+                "CREATE TRIGGER reject_retry BEFORE UPDATE OF runtime_metadata ON deployments WHEN json_extract(NEW.runtime_metadata, '$.credentialRetry') IS NOT NULL BEGIN SELECT RAISE(ABORT, 'unsupported credential retry field'); END"
+            ).await;
+        }
+
+        #[tokio::test]
+        async fn stripped_retry_metadata_falls_back_to_credential_failure() {
+            incompatible_retry_metadata_store_fails_safely(
+                "CREATE TRIGGER strip_retry AFTER UPDATE OF runtime_metadata ON deployments WHEN json_extract(NEW.runtime_metadata, '$.credentialRetry') IS NOT NULL BEGIN UPDATE deployments SET runtime_metadata = json_remove(NEW.runtime_metadata, '$.credentialRetry') WHERE id = NEW.id; END"
+            ).await;
+        }
+
+        #[tokio::test]
+        async fn skipped_credentials_clear_an_old_retry_window() {
+            for pull in [true, false] {
+                let fixture = Fixture::new(DeploymentStatus::Running, transient_error()).await;
+                fixture
+                    .db
+                    .execute("UPDATE deployments SET desired_release_id = NULL")
+                    .await
+                    .unwrap();
+                let before = fixture.record().await;
+                let mut metadata = before.runtime_metadata.clone().unwrap();
+                metadata.credential_retry = Some(alien_core::CredentialRetry {
+                    started_at: Utc::now() - chrono::Duration::minutes(11),
+                    status: DeploymentStatus::Running,
+                });
+                let mut settings = before.stack_settings.clone().unwrap();
+                if pull {
+                    settings.deployment_model = alien_core::DeploymentModel::Pull;
+                } else {
+                    settings.heartbeats = alien_core::HeartbeatsMode::Off;
+                }
+                fixture
+                    .db
+                    .execute(&format!(
+                        "UPDATE deployments SET runtime_metadata = '{}', stack_settings = '{}'",
+                        serde_json::to_string(&metadata)
+                            .unwrap()
+                            .replace('\'', "''"),
+                        serde_json::to_string(&settings).unwrap()
+                    ))
+                    .await
+                    .unwrap();
+                fixture.process(&fixture.runner()).await;
+                let cleared = fixture.record().await;
+                assert!(cleared.runtime_metadata.unwrap().credential_retry.is_none());
+                assert_eq!(cleared.status, "running");
+                assert_eq!(cleared.current_release_id, before.current_release_id);
+                assert_eq!(cleared.desired_release_id, before.desired_release_id);
+                assert_eq!(fixture.credentials.visits.load(Ordering::SeqCst), 0);
+                fixture
+                    .db
+                    .execute(&format!(
+                        "UPDATE deployments SET stack_settings = '{}'",
+                        serde_json::to_string(&before.stack_settings).unwrap()
+                    ))
+                    .await
+                    .unwrap();
+                fixture.process(&fixture.runner()).await;
+                assert_eq!(fixture.record().await.status, "running");
+                assert!(
+                    fixture
+                        .record()
+                        .await
+                        .runtime_metadata
+                        .unwrap()
+                        .credential_retry
+                        .unwrap()
+                        .started_at
+                        > metadata.credential_retry.unwrap().started_at
+                );
+            }
+        }
+
+        #[tokio::test]
+        async fn capped_list_does_not_limit_heartbeat_acquisition() {
+            let fixture = Fixture::new(
+                DeploymentStatus::Running,
+                AlienError::new(alien_error::GenericError {
+                    message: "missing credentials".to_string(),
+                }),
+            )
+            .await;
+            let runner = fixture.runner();
+            fixture.process(&runner).await;
+            fixture.db.execute(&format!("WITH RECURSIVE numbers(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM numbers WHERE n < 150) INSERT INTO deployments (id, name, deployment_group_id, platform, deployment_protocol_version, status, stack_settings, retry_requested, created_at, input_values) SELECT 'candidate-' || n, 'candidate-' || n, deployment_group_id, platform, deployment_protocol_version, 'running', stack_settings, 0, created_at, input_values FROM numbers CROSS JOIN deployments WHERE id = '{}'", fixture.id)).await.unwrap();
+            let caller = Subject::system();
+            let mut filter = DeploymentFilter {
+                statuses: Some(vec!["running".to_string(), "refresh-failed".to_string()]),
+                limit: Some(100),
+                ..Default::default()
+            };
+            assert_eq!(
+                fixture
+                    .manager
+                    .deployment_store
+                    .list_deployments(&caller, &filter)
+                    .await
+                    .unwrap()
+                    .len(),
+                100
+            );
+            runner
+                .exclude_deferred(&caller, &mut filter, true)
+                .await
+                .unwrap();
+            let acquired = fixture
+                .manager
+                .deployment_store
+                .acquire(&caller, "beyond-page", &filter, 200)
+                .await
+                .unwrap();
+            assert_eq!(
+                acquired.len(),
+                150,
+                "a capped listing must not constrain acquisition"
+            );
+            assert!(acquired.iter().all(|item| item.deployment.id != fixture.id));
+            assert!(acquired
+                .iter()
+                .any(|item| item.deployment.id == "candidate-150"));
+        }
+
+        #[tokio::test]
+        async fn delete_requested_during_failure_checkpoint_bypasses_backoff() {
+            let fixture = Fixture::new(
+                DeploymentStatus::Running,
+                AlienError::new(alien_error::GenericError {
+                    message: "missing credentials".to_string(),
+                }),
+            )
+            .await;
+            let runner = fixture.runner();
+            fixture.db.execute("CREATE TRIGGER delete_after_failure AFTER UPDATE OF status ON deployments WHEN OLD.status = 'running' AND NEW.status = 'refresh-failed' BEGIN UPDATE deployments SET status = 'delete-pending' WHERE id = NEW.id; END").await.unwrap();
+            fixture.process(&runner).await;
+            assert_eq!(fixture.record().await.status, "delete-pending");
+            runner.tick().await;
+            assert_eq!(fixture.credentials.visits.load(Ordering::SeqCst), 2);
+            assert_eq!(fixture.record().await.status, "delete-failed");
+        }
+
         #[tokio::test]
         async fn retry_requested_during_failure_checkpoint_bypasses_backoff() {
             let error = AlienError::new(alien_gcp_clients::ErrorData::InvalidClientConfig {
@@ -2989,19 +3207,15 @@ mod tests {
             }),
             ..Default::default()
         });
-        let error = AlienError::new(ErrorData::RemoteCredentialHandoffFailed {
+        let mut error = AlienError::new(ErrorData::RemoteCredentialHandoffFailed {
             deployment_id: deployment.id.clone(),
             platform: Platform::Gcp,
         })
         .into_generic();
+        error.retryable = true;
 
-        let remaining = gcp_credential_handoff_retry_remaining(
-            DeploymentStatus::Provisioning,
-            &deployment,
-            &error,
-            now,
-        )
-        .expect("fresh GCP handoff failure should remain retryable");
+        let remaining = credential_error_retry_remaining(&deployment, &error, now)
+            .expect("fresh GCP handoff failure should remain retryable");
 
         assert_eq!(
             remaining,
@@ -3025,19 +3239,15 @@ mod tests {
             }),
             ..Default::default()
         });
-        let error = AlienError::new(ErrorData::RemoteCredentialHandoffFailed {
+        let mut error = AlienError::new(ErrorData::RemoteCredentialHandoffFailed {
             deployment_id: deployment.id.clone(),
             platform: Platform::Gcp,
         })
         .into_generic();
+        error.retryable = true;
 
         assert_eq!(
-            gcp_credential_handoff_retry_remaining(
-                DeploymentStatus::Provisioning,
-                &deployment,
-                &error,
-                now,
-            ),
+            credential_error_retry_remaining(&deployment, &error, now,),
             None,
             "handoff retry must be bounded"
         );
@@ -3070,12 +3280,7 @@ mod tests {
         });
 
         assert_eq!(
-            gcp_credential_handoff_retry_remaining(
-                DeploymentStatus::Provisioning,
-                &deployment,
-                &error,
-                now,
-            ),
+            credential_error_retry_remaining(&deployment, &error, now,),
             None
         );
     }

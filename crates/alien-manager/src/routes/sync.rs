@@ -2162,6 +2162,7 @@ async fn agent_sync(
             deployment_group_id: None,
             name: None,
             deployment_ids: Some(vec![req.deployment_id.clone()]),
+            excluded_deployment_ids: Vec::new(),
             statuses: Some(vec![deployment.status.clone()]),
             platforms: Some(vec![deployment.platform]),
             setup_method: None,

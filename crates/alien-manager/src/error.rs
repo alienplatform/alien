@@ -4,8 +4,6 @@ use alien_core::Platform;
 use alien_error::AlienErrorData;
 use serde::{Deserialize, Serialize};
 
-pub(crate) const REMOTE_CREDENTIAL_HANDOFF_FAILED_CODE: &str = "REMOTE_CREDENTIAL_HANDOFF_FAILED";
-
 /// Errors for alien-manager operations.
 #[derive(Debug, Clone, AlienErrorData, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

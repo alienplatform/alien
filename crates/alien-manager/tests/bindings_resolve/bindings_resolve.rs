@@ -672,3 +672,77 @@ async fn the_ai_selector_reveals_nothing_to_a_caller_without_a_claim() {
 
 #[path = "bindings_resolve_token_kinds.rs"]
 mod token_kinds;
+
+struct FirstHopAwsResolver {
+    provider: Arc<dyn alien_bindings::BindingsProviderApi>,
+}
+
+#[async_trait]
+impl CredentialResolver for FirstHopAwsResolver {
+    async fn resolve(&self, _: &DeploymentRecord) -> Result<ClientConfig, AlienError> {
+        alien_manager::providers::impersonation_credentials::impersonate_management_sa(
+            self.provider.as_ref(),
+            Platform::Aws,
+        )
+        .await
+    }
+
+    async fn resolve_remote_storage_source(
+        &self,
+        deployment: &DeploymentRecord,
+        _: &str,
+    ) -> Result<RemoteStorageCredentialSource, AlienError> {
+        self.resolve(deployment)
+            .await
+            .map(RemoteStorageCredentialSource::Direct)
+    }
+}
+
+#[tokio::test]
+async fn aws_first_hop_classification_survives_the_binding_route() {
+    let server = httpmock::MockServer::start_async().await;
+    let ClientConfig::Aws(mut config) = managed_aws_config() else {
+        unreachable!()
+    };
+    config.service_overrides = Some(alien_core::AwsServiceOverrides {
+        endpoints: HashMap::from([("sts".to_string(), server.base_url())]),
+    });
+    let provider = Arc::new(
+        alien_bindings::BindingsProvider::new(
+            ClientConfig::Aws(config),
+            HashMap::from([(
+                "management".to_string(),
+                serde_json::to_value(alien_core::ServiceAccountBinding::aws_iam(
+                    "management",
+                    "arn:aws:iam::123456789012:role/management",
+                ))
+                .unwrap(),
+            )]),
+        )
+        .unwrap(),
+    );
+    let fixture = build(Arc::new(FirstHopAwsResolver { provider })).await;
+    persist_remote_storage_state(&fixture).await;
+    for (status, code, retryable) in [
+        (503, "ServiceUnavailable", true),
+        (400, "Throttling", true),
+        (403, "AccessDenied", false),
+    ] {
+        let response = server.mock_async(|when, then| {
+            when.method(httpmock::Method::POST).body_contains("Action=AssumeRole");
+            then.status(status).header("Content-Type", "text/xml").body(format!(
+                "<ErrorResponse><Error><Type>Sender</Type><Code>{code}</Code><Message>synthetic credential rejection</Message></Error><RequestId>synthetic</RequestId></ErrorResponse>"
+            ));
+        }).await;
+        let (http_status, _, body) = post_resolve_binding(
+            &fixture,
+            &fixture.admin_token,
+            resolve_body(&fixture, "files"),
+        )
+        .await;
+        assert!(!http_status.is_success(), "{body}");
+        assert_eq!(body["retryable"], retryable, "AWS {code}: {body}");
+        assert!(response.hits_async().await > 0);
+        response.delete_async().await;
+    }
+}

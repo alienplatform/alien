@@ -31,6 +31,7 @@ pub(crate) trait HeartbeatDeploymentProcessor: Send + Sync {
     async fn exclude_deferred(
         &self,
         _filter: &mut DeploymentFilter,
+        _refresh: bool,
     ) -> Result<bool, alien_error::AlienError> {
         Ok(true)
     }
@@ -41,8 +42,10 @@ impl HeartbeatDeploymentProcessor for DeploymentLoop {
     async fn exclude_deferred(
         &self,
         filter: &mut DeploymentFilter,
+        refresh: bool,
     ) -> Result<bool, alien_error::AlienError> {
-        self.exclude_deferred(&Subject::system(), filter).await
+        self.exclude_deferred(&Subject::system(), filter, refresh)
+            .await
     }
 
     async fn process_heartbeat_deployment(&self, item: AcquiredDeployment, session: &str) {
@@ -110,10 +113,10 @@ impl HeartbeatLoop {
         // is only renewed once its deployment is being processed, so a larger
         // batch would leave the surplus holding leases that nothing extends.
         let batches = HEARTBEAT_DEPLOYMENTS_PER_TICK.div_ceil(MAX_CONCURRENT_DEPLOYMENTS);
-        for _ in 0..batches {
+        for batch in 0..batches {
             match self
                 .deployment_processor
-                .exclude_deferred(&mut filter)
+                .exclude_deferred(&mut filter, batch == 0)
                 .await
             {
                 Ok(true) => {}

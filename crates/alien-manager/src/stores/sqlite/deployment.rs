@@ -1024,6 +1024,12 @@ impl DeploymentStore for SqliteDeploymentStore {
                 let status_strs: Vec<&str> = statuses.iter().map(|s| s.as_str()).collect();
                 query.and_where(Expr::col(Deployments::Status).is_in(status_strs));
             }
+            if !filter.excluded_deployment_ids.is_empty() {
+                query.and_where(
+                    Expr::col(Deployments::Id)
+                        .is_not_in(filter.excluded_deployment_ids.iter().map(String::as_str)),
+                );
+            }
             if let Some(platforms) = &filter.platforms {
                 let platform_strs: Vec<&str> = platforms.iter().map(|p| p.as_str()).collect();
                 query.and_where(Expr::col(Deployments::Platform).is_in(platform_strs));
@@ -1313,6 +1319,12 @@ impl DeploymentStore for SqliteDeploymentStore {
                 let id_strs: Vec<&str> = ids.iter().map(|s| s.as_str()).collect();
                 query.and_where(Expr::col(Deployments::Id).is_in(id_strs));
             }
+            if !filter.excluded_deployment_ids.is_empty() {
+                query.and_where(
+                    Expr::col(Deployments::Id)
+                        .is_not_in(filter.excluded_deployment_ids.iter().map(String::as_str)),
+                );
+            }
             if let Some(platforms) = &filter.platforms {
                 let platform_strs: Vec<&str> = platforms.iter().map(|p| p.as_str()).collect();
                 query.and_where(Expr::col(Deployments::Platform).is_in(platform_strs));
@@ -1494,7 +1506,9 @@ impl DeploymentStore for SqliteDeploymentStore {
                     explicit_status_filter,
                 ) {
                     DeploymentAcquireUnavailableReason::StatusMismatch
-                } else if retry_after.is_some_and(|available_at| available_at > now) {
+                } else if filter.excluded_deployment_ids.contains(&deployment_id)
+                    || retry_after.is_some_and(|available_at| available_at > now)
+                {
                     DeploymentAcquireUnavailableReason::Deferred
                 } else if locked_by.is_some()
                     && locked_at.is_some_and(|locked_at| locked_at >= now - Duration::minutes(5))

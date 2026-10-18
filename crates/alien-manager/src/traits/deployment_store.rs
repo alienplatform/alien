@@ -293,6 +293,8 @@ pub struct DeploymentFilter {
     pub deployment_group_id: Option<String>,
     pub name: Option<String>,
     pub deployment_ids: Option<Vec<String>>,
+    /// IDs acquisition must skip, applied before its limit.
+    pub excluded_deployment_ids: Vec<String>,
     pub statuses: Option<Vec<String>>,
     pub platforms: Option<Vec<Platform>>,
     pub setup_method: Option<String>,
