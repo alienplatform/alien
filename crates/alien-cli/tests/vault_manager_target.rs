@@ -17,7 +17,8 @@ fn check_platform_vault(selector: &str, action: &str, ambiguous: bool, missing_u
     let api = MockServer::start();
     let manager = MockServer::start();
     api.mock(|when, then| {
-        when.method(GET).path(format!("/v1/projects/{PROJECT}"));
+        when.method(GET).path(format!("/v1/projects/{PROJECT}"))
+            .query_param("workspace", "demo");
         then.status(200)
             .json_body(json!({"id":PROJECT,"name":"demo-project",
                     "workspaceId":"ws_000000000000000000000000", "createdAt":"2026-01-01T00:00:00Z"}));
@@ -25,7 +26,8 @@ fn check_platform_vault(selector: &str, action: &str, ambiguous: bool, missing_u
     api.mock(|when, then| {
         when.method(GET)
             .path("/v1/deployment-groups")
-            .query_param("search", "demo");
+            .query_param("search", "demo")
+            .query_param("project", PROJECT).query_param("workspace", "demo");
         then.status(200)
             .json_body(json!({"items":[{"id":GROUP,"name":"demo",
                     "projectId":PROJECT,"workspaceId":"ws_000000000000000000000000", "createdAt":"2026-01-01T00:00:00Z",
@@ -37,8 +39,16 @@ fn check_platform_vault(selector: &str, action: &str, ambiguous: bool, missing_u
                 "releaseChannel":"production","retryRequested":false,
                 "createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z",
                 "managerId":MANAGER,"workspaceId":"ws_000000000000000000000000"});
-    api.mock(|when, then| {
-        when.method(GET).path("/v1/deployments");
+    let list = api.mock(|when, then| {
+        let when = when
+            .method(GET)
+            .path("/v1/deployments")
+            .query_param("project", PROJECT)
+            .query_param("workspace", "demo")
+            .query_param("search", "app");
+        if selector.contains('/') {
+            when.query_param("deploymentGroup", GROUP);
+        }
         let mut items = vec![deployment.clone()];
         if ambiguous {
             let mut duplicate = deployment.clone();
@@ -151,6 +161,7 @@ fn check_platform_vault(selector: &str, action: &str, ambiguous: bool, missing_u
             "synthetic-value"
         );
     }
+    list.assert_hits(usize::from(selector != DEPLOYMENT));
     detail.assert_hits(1);
     discovery.assert_hits(1);
     request.assert_hits(1);
