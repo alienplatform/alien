@@ -14,6 +14,15 @@ pub enum ErrorData {
         http_status_code = 400
     )]
     Invalid { reason: String },
+    /// An authenticated request is outside the effective destination policy.
+    #[error(
+        code = "EGRESS_POLICY_DENIED",
+        message = "Egress target outside bound or token",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 403
+    )]
+    PolicyDenied,
     /// The authenticated request does not satisfy policy.
     #[error(
         code = "EGRESS_DENIED",

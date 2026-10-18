@@ -52,6 +52,8 @@ fn main() -> Result<()> {
     let port: u16 = parse(ENV_PORT)?;
     let mut run_image_command = false;
     if let Ok(encoded) = std::env::var("ALIEN_SANDBOX_EGRESS") {
+        #[cfg(target_os = "linux")]
+        let use_legacy_filter = state.gateway_egress.is_none();
         let policy = serde_json::from_str(&encoded)
             .into_alien_error()
             .context(failed(
@@ -69,7 +71,9 @@ fn main() -> Result<()> {
                 "prepare declared command identity",
                 "cannot write the image's passwd/group entries".to_string(),
             ))?;
-            alien_sandbox_agent::egress::install(&policy, state.exec_identity.uid)?;
+            if use_legacy_filter {
+                alien_sandbox_agent::egress::install(&policy, state.exec_identity.uid)?;
+            }
             alien_sandbox_agent::privilege::restrict_supervisor()
                 .into_alien_error()
                 .context(failed(
@@ -123,6 +127,14 @@ fn main() -> Result<()> {
             "could not create the runtime".to_string(),
         ))?;
     runtime.block_on(async move {
+        #[cfg(target_os = "linux")]
+        if let Some(egress) = &state.gateway_egress {
+            match egress.start().await {
+                Ok(()) => { if egress.ensure_ready().is_ok() { egress.start_image_once(state.exec_identity)?; } }
+                Err(error) => tracing::error!(code = %error.code, "egress startup failed; session routes remain unavailable"),
+            }
+            run_image_command = false;
+        }
         let image_child = if run_image_command {
             alien_sandbox_agent::image_command::start(state.exec_identity)?
         } else {
@@ -298,6 +310,10 @@ fn load_state() -> Result<AgentState> {
         exec_identity,
         output_cap,
         jobs: JobRegistry::new(),
+        #[cfg(target_os = "linux")]
+        gateway_egress: alien_sandbox_agent::gateway_egress::GatewayEgress::from_env(parse(
+            ENV_PORT,
+        )?)?,
     })
 }
 

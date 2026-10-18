@@ -60,7 +60,9 @@ impl Gateway {
             .get(&claims.aud)
             .ok_or_else(|| denied("unknown audience"))?;
         if !bound.permits(target) || !claims.egress.permits(target) {
-            return Err(denied("target outside bound or token"));
+            return Err(alien_error::AlienError::new(
+                crate::error::ErrorData::PolicyDenied,
+            ));
         }
         self.generations
             .check(&claims.aud, &claims.sub, claims.gen)
@@ -166,7 +168,7 @@ async fn proxy(
     let (target, bearer, connect, head_len) = match checked {
         Ok(head) => head,
         Err(error) => {
-            refuse(stream).await?;
+            refuse(stream, error.code == "EGRESS_POLICY_DENIED").await?;
             return Err(error);
         }
     };
@@ -175,7 +177,7 @@ async fn proxy(
     let claims = match gateway.authorize(&bearer, &target).await {
         Ok(claims) => claims,
         Err(error) => {
-            refuse(stream).await?;
+            refuse(stream, error.code == "EGRESS_POLICY_DENIED").await?;
             return Err(error);
         }
     };
@@ -190,7 +192,7 @@ async fn proxy(
     let mut upstream = match gateway.connect(&target).await {
         Ok(stream) => stream,
         Err(error) => {
-            refuse(stream).await?;
+            refuse(stream, error.code == "EGRESS_POLICY_DENIED").await?;
             return Err(error);
         }
     };
@@ -242,9 +244,14 @@ async fn proxy(
     Ok(())
 }
 
-async fn refuse(stream: &mut (impl tokio::io::AsyncWrite + Unpin)) -> Result<()> {
+async fn refuse(stream: &mut (impl tokio::io::AsyncWrite + Unpin), policy: bool) -> Result<()> {
+    let response = if policy {
+        b"HTTP/1.1 403 Forbidden\r\nX-Alien-Egress-Reason: policy\r\nConnection: close\r\nContent-Length: 0\r\n\r\n".as_slice()
+    } else {
+        b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n".as_slice()
+    };
     stream
-        .write_all(b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n")
+        .write_all(response)
         .await
         .into_alien_error()
         .context(unavailable("send denial"))

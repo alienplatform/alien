@@ -9,12 +9,29 @@ use alien_error::{Context, IntoAlienError};
 use std::{ffi::CString, fs, os::unix::process::CommandExt, process::Stdio};
 
 pub fn start(identity: ExecIdentity) -> Result<Option<tokio::process::Child>> {
-    start_from(std::path::Path::new(IMAGE_COMMAND_PATH), identity)
+    start_with_env(identity, &Default::default())
 }
 
+/// Start the saved OCI command with supervisor-owned environment additions.
+pub fn start_with_env(
+    identity: ExecIdentity,
+    env: &std::collections::BTreeMap<String, String>,
+) -> Result<Option<tokio::process::Child>> {
+    start_from_with_env(std::path::Path::new(IMAGE_COMMAND_PATH), identity, env)
+}
+
+#[cfg(test)]
 fn start_from(
     path: &std::path::Path,
     identity: ExecIdentity,
+) -> Result<Option<tokio::process::Child>> {
+    start_from_with_env(path, identity, &Default::default())
+}
+
+fn start_from_with_env(
+    path: &std::path::Path,
+    identity: ExecIdentity,
+    env: &std::collections::BTreeMap<String, String>,
 ) -> Result<Option<tokio::process::Child>> {
     let failed = || ErrorData::OperationFailed {
         operation: "start image command".to_string(),
@@ -37,6 +54,8 @@ fn start_from(
         .args(&image.command[1..])
         .env_clear()
         .envs(image.env)
+        .envs(env)
+        .env_remove("ALIEN_SANDBOX_EGRESS_TOKEN")
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());

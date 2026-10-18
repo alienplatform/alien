@@ -86,6 +86,9 @@ pub struct AgentState {
     pub output_cap: usize,
     /// Detached jobs this session is running or retaining for later polls
     pub jobs: JobRegistry,
+    /// Gateway forwarding and readiness; absent only for legacy images.
+    #[cfg(target_os = "linux")]
+    pub gateway_egress: Option<Arc<crate::gateway_egress::GatewayEgress>>,
 }
 
 /// Liveness, the version the agent speaks, and the container it runs in.
@@ -234,11 +237,10 @@ pub fn router(state: Arc<AgentState>) -> Router {
     // would reject writes far below the limit `files` documents and enforces itself.
     let body_limit = (crate::files::MAX_TRANSFER_BYTES as usize / 3) * 4 + 4096;
 
-    Router::new()
+    let router = Router::new()
         .route("/v1/health", get(health))
         .route(&hook_path("ready"), get(hook_ready).post(hook_ready))
         .route(&hook_path("validate"), get(hook_ready).post(hook_ready))
-        .route(&hook_path("run"), get(hook_lifecycle).post(hook_lifecycle))
         .route(
             &hook_path("resume"),
             get(hook_lifecycle).post(hook_lifecycle),
@@ -262,7 +264,15 @@ pub fn router(state: Arc<AgentState>) -> Router {
         // ceiling as `/v1/files` rather than falling back to axum's default.
         .route("/", post(agent_platform))
         .layer(axum::extract::DefaultBodyLimit::max(body_limit))
-        .with_state(state)
+        .with_state(state.clone());
+    #[cfg(target_os = "linux")]
+    let router = router
+        .route("/v1/egress", axum::routing::put(update_egress))
+        .route(&hook_path("run"), get(hook_lifecycle).post(run_egress_hook))
+        .with_state(state);
+    #[cfg(not(target_os = "linux"))]
+    let router = router.route(&hook_path("run"), get(hook_lifecycle).post(hook_lifecycle));
+    router
 }
 
 /// Liveness, and the one place protocol versions are reconciled.
@@ -270,8 +280,13 @@ pub fn router(state: Arc<AgentState>) -> Router {
 /// Unauthenticated: it reports the version and the container boot id — kernel identity, not session
 /// contents — so requiring a capability would only stop a liveness probe from working.
 async fn health(
+    State(state): State<Arc<AgentState>>,
     Query(query): Query<HealthQuery>,
 ) -> std::result::Result<Json<HealthResponse>, ApiError> {
+    #[cfg(target_os = "linux")]
+    if let Some(egress) = &state.gateway_egress {
+        egress.ensure_ready()?;
+    }
     // A mismatch is named, not negotiated down. Guessing which fields an older peer understands
     // is how a protocol acquires undocumented dialects.
     if let Some(requested) = query.version {
@@ -343,10 +358,14 @@ async fn run_command(
     State(state): State<Arc<AgentState>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
-    Json(request): Json<ExecRequest>,
+    Json(mut request): Json<ExecRequest>,
 ) -> std::result::Result<Response, ApiError> {
     authorize(&state, peer, &headers, SandboxOperationClass::Execute)?;
 
+    #[cfg(target_os = "linux")]
+    if let Some(egress) = &state.gateway_egress {
+        egress.command_environment(&mut request.env)?;
+    }
     // Resolved before anything is spawned, so a refused directory is an error response rather
     // than a stream whose first frame is a failure.
     let working_directory = match &request.cwd {
@@ -437,10 +456,14 @@ async fn job_start(
     State(state): State<Arc<AgentState>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
-    Json(request): Json<ExecRequest>,
+    Json(mut request): Json<ExecRequest>,
 ) -> std::result::Result<Json<JobStartResponse>, ApiError> {
     authorize(&state, peer, &headers, SandboxOperationClass::Execute)?;
 
+    #[cfg(target_os = "linux")]
+    if let Some(egress) = &state.gateway_egress {
+        egress.command_environment(&mut request.env)?;
+    }
     // Resolved here, as in `run_command`, so a refused directory answers with an error rather than a
     // job whose first frame is a failure.
     let working_directory = match &request.cwd {
@@ -587,7 +610,28 @@ async fn agent_platform(
         )
         .await?
         .into_response()),
-        "health" => Ok(health(Query(HealthQuery { version: None }))
+        #[cfg(target_os = "linux")]
+        "updateEgress" => {
+            #[derive(Deserialize)]
+            struct Envelope {
+                token: String,
+                #[serde(rename = "caCertificate")]
+                ca_certificate: Option<String>,
+            }
+            let envelope: Envelope = reparse(&body)?;
+            Ok(update_egress(
+                State(state),
+                ConnectInfo(peer),
+                headers,
+                Json(EgressUpdate {
+                    token: envelope.token,
+                    ca_certificate: envelope.ca_certificate,
+                }),
+            )
+            .await?
+            .into_response())
+        }
+        "health" => Ok(health(State(state), Query(HealthQuery { version: None }))
             .await?
             .into_response()),
         other => Err(ApiError::from(AlienError::new(ErrorData::RequestInvalid {
@@ -607,6 +651,19 @@ fn reparse<T: serde::de::DeserializeOwned>(body: &Bytes) -> std::result::Result<
 
 /// Verifies the request may reach this session, or refuses it.
 fn authorize(
+    state: &AgentState,
+    peer: SocketAddr,
+    headers: &HeaderMap,
+    required: SandboxOperationClass,
+) -> std::result::Result<(), ApiError> {
+    #[cfg(target_os = "linux")]
+    if let Some(egress) = &state.gateway_egress {
+        egress.ensure_ready()?;
+    }
+    authorize_control(state, peer, headers, required)
+}
+
+fn authorize_control(
     state: &AgentState,
     peer: SocketAddr,
     headers: &HeaderMap,
@@ -683,4 +740,49 @@ impl axum::response::IntoResponse for ApiError {
     fn into_response(self) -> Response {
         (self.status, self.message).into_response()
     }
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct EgressUpdate {
+    token: String,
+    #[serde(default)]
+    ca_certificate: Option<String>,
+}
+
+#[cfg(target_os = "linux")]
+async fn update_egress(
+    State(state): State<Arc<AgentState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(update): Json<EgressUpdate>,
+) -> std::result::Result<StatusCode, ApiError> {
+    authorize_control(&state, peer, &headers, SandboxOperationClass::Manage)?;
+    let egress = state
+        .gateway_egress
+        .as_ref()
+        .ok_or_else(|| ApiError::from(AlienError::new(ErrorData::EgressPathUnexpected)))?;
+    if let Some(certificate) = update.ca_certificate {
+        egress.install_ca(&certificate)?;
+    }
+    egress.update(update.token).await?;
+    egress.start_image_once(state.exec_identity)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[cfg(target_os = "linux")]
+async fn run_egress_hook(
+    State(state): State<Arc<AgentState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    body: bytes::Bytes,
+) -> std::result::Result<StatusCode, ApiError> {
+    if state.gateway_egress.is_none() {
+        return Ok(StatusCode::OK);
+    }
+    authorize_control(&state, peer, &headers, SandboxOperationClass::Manage)?;
+    let update: EgressUpdate = serde_json::from_slice(&body)
+        .map_err(|_| ApiError::from(AlienError::new(ErrorData::EgressPathUnexpected)))?;
+    update_egress(State(state), ConnectInfo(peer), headers, Json(update)).await
 }
