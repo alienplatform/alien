@@ -435,7 +435,11 @@ export interface ResolvedSandbox {
 
 /** What a sandbox is created with. */
 export interface CreateSandboxOptions {
-  /** Sets the runtime policy; omission uses the resource default or public internet. */
+  /**
+   * Sets the runtime policy; omission uses the resource default or public internet.
+   * Mail ports 25, 465 and 587 require an explicit allowlist port (for example,
+   * `smtp.example.com:587`) to protect the deployment's shared outbound IP from blocklisting.
+   */
   egress?: EgressPolicy
   /**
    * A provider-scoped id to reconnect to when passed to `getOrCreate`, or a requested id when a
@@ -540,7 +544,11 @@ export interface Sandbox {
     sandboxId: string,
     options?: Omit<CreateSandboxOptions, "sandboxId">,
   ): Promise<ResolvedSandbox>
-  /** Changes the runtime policy; backends without a gateway refuse explicitly. */
+  /**
+   * Changes the runtime policy; backends without a gateway refuse explicitly.
+   * Mail ports 25, 465 and 587 require an explicit allowlist port (for example,
+   * `smtp.example.com:587`); `internet` and portless targets exclude them.
+   */
   updateEgress(sandboxId: string, egress: EgressPolicy): Promise<void>
   /**
    * Lists this binding's sandboxes. Not offered on AWS, Azure or GCP — those raise rather than

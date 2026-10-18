@@ -23,7 +23,10 @@ async fn aws_egress_updates_paused_policy_without_redelivering_identity() {
 
 #[tokio::test]
 async fn aws_egress_failed_initial_delivery_terminates_the_unreturned_microvm() {
-    exercise(StatusCode::BAD_REQUEST, "refused").await;
+    exercise(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "AGENT_OPERATION_FAILED: Agent operation 'sandbox gateway egress' failed: token audience or sandbox ID mismatch",
+    ).await;
 }
 
 #[tokio::test]
@@ -35,12 +38,32 @@ async fn aws_egress_self_check_refusal_is_typed_and_never_retried() {
     .await;
 }
 
-async fn exercise(delivery_status: StatusCode, delivery_body: &'static str) {
+#[tokio::test]
+async fn aws_egress_transport_refusal_preserves_the_agent_reason() {
+    exercise(
+        StatusCode::FORBIDDEN,
+        "the agent does not serve the code it is running",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn aws_egress_refusal_redacts_an_echoed_identity_token() {
+    exercise(StatusCode::BAD_REQUEST, "invalid identity: $TOKEN").await;
+}
+
+#[tokio::test]
+async fn aws_egress_refusal_body_is_bounded() {
+    exercise(StatusCode::BAD_REQUEST, &"x".repeat(8192)).await;
+}
+
+async fn exercise(delivery_status: StatusCode, delivery_body: &str) {
     let refuse_delivery = !delivery_status.is_success();
     let harness = Arc::new(Harness::new().await);
     let policies = Arc::new(Mutex::new(Vec::<EgressTokenClaims>::new()));
     let seen = policies.clone();
     let fences = harness.clone();
+    let response_body = delivery_body.to_string();
     let agent = Router::new()
         .route(
             "/v1/egress",
@@ -48,6 +71,7 @@ async fn exercise(delivery_status: StatusCode, delivery_body: &'static str) {
                 move |headers: HeaderMap, Json(body): Json<serde_json::Value>| {
                     let seen = seen.clone();
                     let fences = fences.clone();
+                    let response_body = response_body.clone();
                     async move {
                         assert_eq!(headers["x-aws-proxy-auth"], "test-endpoint-token");
                         assert_eq!(headers[PROXY_PORT_HEADER], AGENT_PORT.to_string());
@@ -65,7 +89,8 @@ async fn exercise(delivery_status: StatusCode, delivery_body: &'static str) {
                             "policy must precede identity delivery"
                         );
                         seen.lock().unwrap().push(claims);
-                        (delivery_status, delivery_body)
+                        let body = response_body.replace("$TOKEN", token);
+                        (delivery_status, body)
                     }
                 },
             ),
@@ -193,6 +218,19 @@ async fn exercise(delivery_status: StatusCode, delivery_body: &'static str) {
                 1,
                 "self-check refusal must not redeliver identity"
             );
+        }
+        if delivery_status != StatusCode::SERVICE_UNAVAILABLE {
+            let expected = if delivery_body.len() > 4096 {
+                "agent refusal body exceeded 4096 bytes".to_string()
+            } else {
+                delivery_body.replace("$TOKEN", "[redacted]")
+            };
+            assert!(error.to_string().contains(&expected), "{error}");
+            assert!(
+                !error.to_string().contains("eyJ"),
+                "identity must not appear in errors"
+            );
+            assert_eq!(policies.lock().unwrap().len(), 1);
         }
         assert_eq!(terminated.load(Ordering::SeqCst), 1);
         assert_eq!(harness.policy("mvm-policy"), None);
