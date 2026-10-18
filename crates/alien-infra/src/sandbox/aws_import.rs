@@ -75,14 +75,25 @@ impl ResourceImporter for AwsSandboxImporter {
                         })
                     })?;
                 let controller = AwsSandboxController {
-                    state: AwsSandboxState::Ready,
+                    state: if !base.allow_egress
+                        && !matches!(sandbox.egress, alien_core::SandboxEgress::None)
+                    {
+                        AwsSandboxState::InitializingEgressKey
+                    } else {
+                        AwsSandboxState::Ready
+                    },
                     image_identifier: Some(image_identifier),
                     image_arn: Some(image_arn),
                     active_version: Some(image_version),
                     region: Some(region),
                     ..base
                 };
-                make_imported_state_with_status(controller, ctx, ResourceStatus::Running)
+                let status = if controller.state == AwsSandboxState::Ready {
+                    ResourceStatus::Running
+                } else {
+                    ResourceStatus::Provisioning
+                };
+                make_imported_state_with_status(controller, ctx, status)
             }
             // Setup registered the build inputs; the controller builds the image once
             // the deployment loop steps it, which is why this imports Provisioning at the

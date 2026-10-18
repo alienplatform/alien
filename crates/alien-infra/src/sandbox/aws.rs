@@ -59,6 +59,9 @@ pub struct AwsSandboxController {
     /// Bound installed with the parent and published to runtime bindings.
     #[serde(default)]
     pub(crate) egress: Option<alien_core::SandboxEgress>,
+    /// Public signing material; the private key remains only in the secrets vault.
+    #[serde(default)]
+    pub(crate) egress_public_key: Option<super::egress::GatewayPublicKey>,
     /// Startup security contract of the active version (empty for legacy images).
     #[serde(default)]
     pub(crate) supervisor_environment: BTreeMap<String, String>,
@@ -431,6 +434,46 @@ impl AwsSandboxController {
         .await?;
 
         Ok(HandlerAction::Continue {
+            state: InitializingEgressKey,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(state = InitializingEgressKey, on_failure = ProvisionFailed, status = ResourceStatus::Provisioning)]
+    async fn initializing_egress_key(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let ids = super::egress::internet_sandbox_ids(ctx.desired_stack);
+        if alien_core::sandbox_egress::has_sandbox_gateway(ctx.desired_stack)
+            && ids.iter().any(|id| id == ctx.desired_config.id())
+        {
+            let vault = super::egress::deployment_vault(ctx).await?;
+            self.egress_public_key = Some(
+                if ids.first().map(String::as_str) == Some(ctx.desired_config.id()) {
+                    super::egress::ensure_signing_key(vault.as_ref()).await?
+                } else {
+                    super::egress::read_signing_public_key(vault.as_ref()).await?
+                },
+            );
+        } else {
+            self.egress_public_key = None;
+        }
+        Ok(HandlerAction::Continue {
+            state: PublishingEgressConfig,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(state = PublishingEgressConfig, on_failure = ProvisionFailed, status = ResourceStatus::Provisioning)]
+    async fn publishing_egress_config(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        if let Some(key) = &self.egress_public_key {
+            super::egress::publish_aws_config(ctx, key).await?;
+        }
+        Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: None,
         })
@@ -549,7 +592,7 @@ impl AwsSandboxController {
         if !self.owns_image_builds(ctx, &config.id) {
             info!(sandbox_id = %config.id, "Updated AWS sandbox configuration");
             return Ok(HandlerAction::Continue {
-                state: Ready,
+                state: InitializingEgressKey,
                 suggested_delay: None,
             });
         }
@@ -562,7 +605,7 @@ impl AwsSandboxController {
         {
             info!(sandbox_id = %config.id, "Updated AWS sandbox configuration");
             return Ok(HandlerAction::Continue {
-                state: Ready,
+                state: InitializingEgressKey,
                 suggested_delay: None,
             });
         }
