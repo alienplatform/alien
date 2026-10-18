@@ -21,6 +21,9 @@ pub struct GcpNetworkImportData {
     pub router_self_link: Option<String>,
     /// Cloud NAT name (when created).
     pub nat_name: Option<String>,
+    /// Reserved public addresses used by the deployment Cloud NAT. Empty when unknown.
+    #[serde(default)]
+    pub egress_public_ips: Vec<String>,
     /// True when the VPC is owned outside this stack.
     pub is_byo_vpc: bool,
 }

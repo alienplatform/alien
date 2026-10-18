@@ -695,6 +695,7 @@ fn gcp_network_import_derives_subnetwork_name() {
         cidr_block: Some("10.0.0.0/20".to_string()),
         router_self_link: None,
         nat_name: None,
+        egress_public_ips: Vec::new(),
         is_byo_vpc: false,
     };
     let state = run_through_registry(

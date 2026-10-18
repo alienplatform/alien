@@ -1124,7 +1124,11 @@ mod tests {
             }
         };
 
-        for egress in [SandboxEgress::Internet, SandboxEgress::None] {
+        for egress in [
+            SandboxEgress::Internet,
+            SandboxEgress::Allow,
+            SandboxEgress::None,
+        ] {
             let mut executor = build_executor(
                 sandbox_with(egress.clone(), "ubuntu:24.04", None, None),
                 provider_with(happy_client()),
@@ -1133,43 +1137,48 @@ mod tests {
             executor.run_until_terminal().await.expect("create runs");
             assert_eq!(
                 allow_egress(&executor),
-                egress == SandboxEgress::Internet,
+                egress
+                    .internet_access_switch()
+                    .expect("supported declaration"),
                 "{egress:?}"
             );
         }
 
-        let mut m = MockAgentPlatformApi::new();
-        serve_created_egress(&mut m);
-        m.expect_get_operation().returning(|_| Ok(done_op("tpl2")));
-        m.expect_list_templates()
-            .returning(|_| Ok(vec![active_template("tpl1"), active_template("tpl2")]));
-        m.expect_delete_template().returning(|_, _| Ok(()));
-        let mut executor = SingleControllerExecutor::builder()
-            .resource(sandbox_with(
-                SandboxEgress::None,
-                "ubuntu:24.04",
-                None,
-                None,
-            ))
-            .controller(GcpAgentPlatformTemplateController::mock_ready(
-                "eng", "tpl1",
-            ))
-            .platform(Platform::Gcp)
-            .service_provider(provider_with(Arc::new(m)))
-            .with_test_dependencies()
-            .build()
-            .await
-            .expect("executor builds");
-        executor
-            .update(sandbox_with(
-                SandboxEgress::Internet,
-                "ubuntu:24.04",
-                None,
-                None,
-            ))
-            .expect("update accepted");
-        executor.run_until_terminal().await.expect("replace runs");
-        assert!(allow_egress(&executor), "the replacement opened egress");
+        for (previous, desired) in [
+            (SandboxEgress::None, SandboxEgress::Internet),
+            (SandboxEgress::Internet, SandboxEgress::None),
+            (SandboxEgress::Allow, SandboxEgress::None),
+            (SandboxEgress::None, SandboxEgress::Allow),
+        ] {
+            let mut m = MockAgentPlatformApi::new();
+            serve_created_egress(&mut m);
+            m.expect_get_operation().returning(|_| Ok(done_op("tpl2")));
+            m.expect_list_templates()
+                .returning(|_| Ok(vec![active_template("tpl1"), active_template("tpl2")]));
+            m.expect_delete_template().returning(|_, _| Ok(()));
+            let mut executor = SingleControllerExecutor::builder()
+                .resource(sandbox_with(previous, "ubuntu:24.04", None, None))
+                .controller(GcpAgentPlatformTemplateController::mock_ready(
+                    "eng", "tpl1",
+                ))
+                .platform(Platform::Gcp)
+                .service_provider(provider_with(Arc::new(m)))
+                .with_test_dependencies()
+                .build()
+                .await
+                .expect("executor builds");
+            executor
+                .update(sandbox_with(desired.clone(), "ubuntu:24.04", None, None))
+                .expect("update accepted");
+            executor.run_until_terminal().await.expect("replace runs");
+            assert_eq!(
+                allow_egress(&executor),
+                desired
+                    .internet_access_switch()
+                    .expect("supported declaration"),
+                "the replacement serves the requested egress mode"
+            );
+        }
 
         // Desired config is the opposite of what serves in both cases, and state saved before the
         // field existed reads as deny until the first Ready.

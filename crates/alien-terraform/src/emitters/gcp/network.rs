@@ -15,7 +15,9 @@ use crate::{
     emitters::gcp::helpers::{downcast, required_label},
     expr,
 };
-use alien_core::{import::EmitContext, ErrorData, Network, NetworkSettings, Result};
+use alien_core::{
+    import::EmitContext, ErrorData, Network, NetworkSettings, Result, Sandbox, SandboxEgress,
+};
 use alien_error::AlienError;
 use hcl::expr::Expression;
 
@@ -75,7 +77,11 @@ impl TfEmitter for GcpNetworkEmitter {
                 ));
                 Ok(fragment)
             }
-            NetworkSettings::Create { cidr, .. } => Ok(dynamic_topology(label, cidr.clone())),
+            NetworkSettings::Create { cidr, .. } => Ok(dynamic_topology(
+                label,
+                cidr.clone(),
+                needs_reserved_nat(ctx),
+            )),
             NetworkSettings::ByoVpcAws { .. } | NetworkSettings::ByoVnetAzure { .. } => {
                 Err(AlienError::new(ErrorData::OperationNotSupported {
                     operation: "generate_terraform_module".to_string(),
@@ -122,6 +128,7 @@ impl TfEmitter for GcpNetworkEmitter {
                     ),
                     ("routerSelfLink", Expression::Null),
                     ("natName", Expression::Null),
+                    ("egressPublicIps", Expression::Array(Vec::new())),
                     ("isByoVpc", Expression::Bool(true)),
                 ])
             }
@@ -168,6 +175,16 @@ impl TfEmitter for GcpNetworkEmitter {
                             "var.network_mode == \"create-new\" ? google_compute_router_nat.{nat_label}[0].name : null"
                         )),
                     ),
+                    (
+                        "egressPublicIps",
+                        if needs_reserved_nat(ctx) {
+                            expr::raw(format!(
+                                "var.network_mode == \"create-new\" ? [google_compute_address.{label}_nat_ip[0].address] : []"
+                            ))
+                        } else {
+                            Expression::Array(Vec::new())
+                        },
+                    ),
                     ("isByoVpc", expr::raw("var.network_mode != \"create-new\"")),
                 ])
             }
@@ -176,8 +193,17 @@ impl TfEmitter for GcpNetworkEmitter {
     }
 }
 
-fn dynamic_topology(label: &str, cidr: Option<String>) -> TfFragment {
-    let mut fragment = create_topology(label, cidr, true);
+fn needs_reserved_nat(ctx: &EmitContext<'_>) -> bool {
+    ctx.stack.resources().any(|(_, entry)| {
+        entry
+            .config
+            .downcast_ref::<Sandbox>()
+            .is_some_and(|sandbox| sandbox.egress == SandboxEgress::Internet)
+    })
+}
+
+fn dynamic_topology(label: &str, cidr: Option<String>, reserved_nat: bool) -> TfFragment {
+    let mut fragment = create_topology(label, cidr, true, reserved_nat);
     for resource in &mut fragment.resource_blocks {
         let existing = std::mem::take(&mut resource.body);
         resource.body = hcl::structure::Body::from(
@@ -226,7 +252,12 @@ fn dynamic_topology(label: &str, cidr: Option<String>) -> TfFragment {
     fragment
 }
 
-fn create_topology(label: &str, cidr: Option<String>, counted: bool) -> TfFragment {
+fn create_topology(
+    label: &str,
+    cidr: Option<String>,
+    counted: bool,
+    reserved_nat: bool,
+) -> TfFragment {
     let cidr_str = cidr.unwrap_or_else(|| "10.44.0.0/16".to_string());
     let subnet_label = format!("{label}_workload");
     let router_label = format!("{label}_router");
@@ -284,30 +315,63 @@ fn create_topology(label: &str, cidr: Option<String>, counted: bool) -> TfFragme
         ],
     ));
 
+    let mut nat_fields = vec![
+        attr("name", nat_name),
+        attr("project", expr::raw("var.gcp_project")),
+        attr("region", expr::raw("var.gcp_region")),
+        attr("router", router_name),
+        attr(
+            "source_subnetwork_ip_ranges_to_nat",
+            Expression::String("ALL_SUBNETWORKS_ALL_IP_RANGES".into()),
+        ),
+        nested(block(
+            "log_config",
+            [
+                attr("enable", Expression::Bool(true)),
+                attr("filter", Expression::String("ERRORS_ONLY".into())),
+            ],
+        )),
+    ];
+    if reserved_nat {
+        let nat_ip_label = format!("{label}_nat_ip");
+        fragment.resource_blocks.push(resource_block(
+            "google_compute_address",
+            &nat_ip_label,
+            [
+                attr("name", gcp_network_name(label, "-nat-ip")),
+                attr("project", expr::raw("var.gcp_project")),
+                attr("region", expr::raw("var.gcp_region")),
+                attr("address_type", Expression::String("EXTERNAL".to_string())),
+                nested(block(
+                    "lifecycle",
+                    [attr("prevent_destroy", Expression::Bool(true))],
+                )),
+            ],
+        ));
+        let nat_ip = if counted {
+            expr::raw(format!(
+                "google_compute_address.{nat_ip_label}[0].self_link"
+            ))
+        } else {
+            expr::traversal(["google_compute_address", &nat_ip_label, "self_link"])
+        };
+        nat_fields.push(attr(
+            "nat_ip_allocate_option",
+            Expression::String("MANUAL_ONLY".into()),
+        ));
+        nat_fields.push(attr("nat_ips", Expression::Array(vec![nat_ip])));
+    } else {
+        // Existing deployments retain automatic allocation until they opt into gateway egress.
+        nat_fields.push(attr(
+            "nat_ip_allocate_option",
+            Expression::String("AUTO_ONLY".into()),
+        ));
+    }
+
     fragment.resource_blocks.push(resource_block(
         "google_compute_router_nat",
         &nat_label,
-        [
-            attr("name", nat_name),
-            attr("project", expr::raw("var.gcp_project")),
-            attr("region", expr::raw("var.gcp_region")),
-            attr("router", router_name),
-            attr(
-                "nat_ip_allocate_option",
-                Expression::String("AUTO_ONLY".to_string()),
-            ),
-            attr(
-                "source_subnetwork_ip_ranges_to_nat",
-                Expression::String("ALL_SUBNETWORKS_ALL_IP_RANGES".to_string()),
-            ),
-            nested(block(
-                "log_config",
-                [
-                    attr("enable", Expression::Bool(true)),
-                    attr("filter", Expression::String("ERRORS_ONLY".to_string())),
-                ],
-            )),
-        ],
+        nat_fields,
     ));
 
     fragment.resource_blocks.push(resource_block(

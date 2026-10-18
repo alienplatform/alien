@@ -435,6 +435,14 @@ expression: schemas
           "null"
         ]
       },
+      "egressPublicIps": {
+        "default": [],
+        "description": "Public addresses allocated to this deployment's NAT; empty when unknown.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
       "eipAllocationId": {
         "description": "Elastic IP allocation ID backing the NAT gateway.",
         "type": [
@@ -1793,6 +1801,14 @@ expression: schemas
           "string",
           "null"
         ]
+      },
+      "egressPublicIps": {
+        "default": [],
+        "description": "Reserved public addresses used by the deployment Cloud NAT. Empty when unknown.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
       },
       "isByoVpc": {
         "description": "True when the VPC is owned outside this stack.",

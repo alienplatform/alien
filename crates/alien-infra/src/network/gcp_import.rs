@@ -49,6 +49,7 @@ impl ResourceImporter for GcpNetworkImporter {
             subnetwork_self_link,
             router_name: None,
             cloud_nat_name: data.nat_name,
+            egress_public_ips: data.egress_public_ips,
             firewall_name: None,
             // Region is still resolved from stack settings or the cloud
             // self-link; the CIDR comes from the imported subnetwork so
@@ -64,5 +65,59 @@ impl ResourceImporter for GcpNetworkImporter {
         // + region + name when needed.
         let _ = data.router_self_link;
         make_imported_state(controller, ctx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_core::{
+        Network, NetworkOutputs, Platform, Resource, ResourceEntry, ResourceLifecycle,
+        StackSettings,
+    };
+
+    #[test]
+    fn setup_nat_addresses_survive_import_and_old_imports_remain_readable() {
+        let entry = ResourceEntry {
+            config: Resource::new(
+                Network::new("network".to_string())
+                    .settings(alien_core::NetworkSettings::UseDefault)
+                    .build(),
+            ),
+            lifecycle: ResourceLifecycle::Frozen,
+            dependencies: Vec::new(),
+            remote_access: false,
+            enabled_when: None,
+        };
+        let settings = StackSettings::default();
+        let ctx = ImportContext {
+            resource_id: "network",
+            platform: Platform::Gcp,
+            region: "us-central1",
+            stack_settings: &settings,
+            management_config: None,
+            resource: &entry,
+        };
+        let mut json = serde_json::json!({
+            "projectId":"project", "vpcSelfLink":"/projects/project/global/networks/network",
+            "vpcName":"network", "subnetSelfLinks":["/regions/us-central1/subnetworks/workload"],
+            "natName":"nat", "isByoVpc":false, "egressPublicIps":["203.0.113.8"],
+        });
+        for expected in [vec!["203.0.113.8".to_string()], Vec::new()] {
+            let data = serde_json::from_value(json.clone()).expect("typed import");
+            let state = GcpNetworkImporter.import(data, &ctx).expect("import");
+            let outputs = state
+                .outputs
+                .as_ref()
+                .unwrap()
+                .downcast_ref::<NetworkOutputs>()
+                .unwrap();
+            assert_eq!(outputs.egress_public_ips, expected);
+            assert!(outputs.has_nat_gateway);
+            let restored: GcpNetworkController =
+                serde_json::from_value(state.internal_state.unwrap()).expect("controller state");
+            assert_eq!(restored.egress_public_ips, expected);
+            json.as_object_mut().unwrap().remove("egressPublicIps");
+        }
     }
 }

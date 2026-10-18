@@ -400,7 +400,7 @@ mod tests {
         #[test]
         fn the_engine_grant_references_the_created_engine() {
             let stack = stack_with(
-                SandboxEgress::Internet,
+                SandboxEgress::Allow,
                 None,
                 ResourceLifecycle::Frozen,
                 true,
@@ -516,7 +516,7 @@ mod tests {
         /// template never renders.
         #[test]
         fn a_live_remote_sandbox_is_refused_naming_the_lifecycle() {
-            let stack = stack_with(SandboxEgress::Internet, None, ResourceLifecycle::Live, true);
+            let stack = stack_with(SandboxEgress::Allow, None, ResourceLifecycle::Live, true);
             let error = with_context(&stack, |ctx| {
                 GcpAgentPlatformSandboxEmitter
                     .emit(ctx)

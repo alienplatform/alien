@@ -215,6 +215,7 @@ locals {
         cidrBlock       = var.network_mode == "create-new" ? google_compute_subnetwork.default_network_workload[0].ip_cidr_range : data.google_compute_subnetwork.default_network_existing_subnet[0].ip_cidr_range
         routerSelfLink  = var.network_mode == "create-new" ? google_compute_router.default_network_router[0].self_link : null
         natName         = var.network_mode == "create-new" ? google_compute_router_nat.default_network_nat[0].name : null
+        egressPublicIps = []
         isByoVpc        = var.network_mode != "create-new"
       }
     }
@@ -267,13 +268,14 @@ resource "google_compute_router_nat" "default_network_nat" {
   project                            = var.gcp_project
   region                             = var.gcp_region
   router                             = google_compute_router.default_network_router[0].name
-  nat_ip_allocate_option             = "AUTO_ONLY"
   source_subnetwork_ip_ranges_to_nat = "ALL_SUBNETWORKS_ALL_IP_RANGES"
 
   log_config {
     enable = true
     filter = "ERRORS_ONLY"
   }
+
+  nat_ip_allocate_option = "AUTO_ONLY"
 }
 
 resource "google_compute_firewall" "default_network_internal" {
