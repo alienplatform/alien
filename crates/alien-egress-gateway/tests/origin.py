@@ -55,11 +55,11 @@ def dns():
             log.write(json.dumps({"name": name, "type": packet[offset : offset + 2].hex()}) + "\n")
         ips = ["93.184.216.2"]
         if name == "private.test":
-            ips = ["10.77.0.2"]
+            ips = ["10.77.91.2"]
         elif name == "metadata.test":
             ips = ["169.254.169.254"]
         elif name == "mixed.test":
-            ips += ["10.77.0.2"]
+            ips += ["10.77.91.2"]
         elif name == "rebind.test":
             ips = [Path("/fixture/rebind").read_text().strip()]
         if packet[offset : offset + 2] != b"\x00\x01":

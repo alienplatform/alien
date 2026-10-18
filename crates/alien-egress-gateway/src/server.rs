@@ -85,12 +85,17 @@ impl Gateway {
             &self.config.denied_ranges,
         )?;
         // Address failover is delegated to TcpStream, with only the validated addresses supplied.
-        timeout(HEADER_TIMEOUT, TcpStream::connect(addresses.as_slice()))
+        let stream = timeout(HEADER_TIMEOUT, TcpStream::connect(addresses.as_slice()))
             .await
             .into_alien_error()
             .context(unavailable("destination timeout"))?
             .into_alien_error()
-            .context(unavailable("connect destination"))
+            .context(unavailable("connect destination"))?;
+        stream
+            .set_nodelay(true)
+            .into_alien_error()
+            .context(unavailable("configure destination socket"))?;
+        Ok(stream)
     }
 }
 
@@ -167,6 +172,11 @@ async fn proxy(
     gateway: Arc<Gateway>,
     audit: &mut Audit,
 ) -> Result<()> {
+    stream
+        .inner
+        .set_nodelay(true)
+        .into_alien_error()
+        .context(unavailable("configure guest socket"))?;
     let input = timeout(HEADER_TIMEOUT, read_head(stream))
         .await
         .into_alien_error()

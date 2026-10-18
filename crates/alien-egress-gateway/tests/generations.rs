@@ -71,7 +71,7 @@ async fn chunks_preserve_a_policy_above_the_portable_kv_item_limit() {
     let dir = tempfile::tempdir().unwrap();
     let store = GenerationFence::new(Arc::new(LocalKv::new(dir.path().into()).await.unwrap()));
     let policy = Policy::Allow {
-        allow: (0..256)
+        allow: (0..1500)
             .map(|i| format!("{i}.{}.{}.example.com", "a".repeat(63), "b".repeat(63)))
             .collect(),
     };
@@ -93,5 +93,25 @@ async fn chunks_preserve_a_policy_above_the_portable_kv_item_limit() {
     assert_eq!(
         canonical(&store.resolve("p/r", "box", 0, &hash).await.unwrap()).unwrap(),
         bytes
+    );
+    let maximum = Policy::Allow {
+        allow: (0..4096).map(|i| format!("{i}.example.com")).collect(),
+    };
+    let max_hash = digest(&canonical(&maximum).unwrap());
+    store
+        .advance("p/r", "box", 1, &maximum, &max_hash)
+        .await
+        .unwrap();
+    assert_eq!(
+        canonical(&store.resolve("p/r", "box", 1, &max_hash).await.unwrap()).unwrap(),
+        canonical(&maximum).unwrap()
+    );
+    let mut too_many = maximum;
+    if let Policy::Allow { allow } = &mut too_many {
+        allow.push("overflow.example.com".into());
+    }
+    assert_eq!(
+        canonical(&too_many).unwrap_err().code,
+        "SANDBOX_EGRESS_POLICY_TOO_LARGE"
     );
 }

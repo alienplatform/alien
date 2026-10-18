@@ -185,10 +185,12 @@ class Suite:
         self.record("explicit IP HTTP", lambda: equal(self.plain(target=ORIGIN, host=ORIGIN), (200, BODY)))
         self.record("forged HTTP Host", lambda: equal(self.plain(host="denied.test")[0], 403))
         self.record("CONNECT cannot bypass HTTP Host", lambda: equal(self.plain(host="denied.test", connect=True)[0], 403))
+        private_control = 'import http.client; c=http.client.HTTPConnection("10.77.91.2",80,timeout=3);c.request("GET","/");r=c.getresponse();assert r.status==200 and r.read()==b"controlled-origin-response\\n";print("private listener reachable")'
+        self.record("private listener control from gateway network", lambda: equal(docker("run", "--rm", "--name", PREFIX + "-private-control", "--network", "container:" + PREFIX + "-proxy1", "python:3.13-slim", "python", "-c", private_control), "private listener reachable"))
         for host in ["private.test", "mixed.test", "metadata.test"]:
             self.record(host, lambda h=host: self.tunnel(h, expected=403))
         self.record("rebinding public control", lambda: equal(self.tls(host="rebind.test"), (200, BODY)))
-        (self.output / "origin/rebind").write_text("10.77.0.2")
+        (self.output / "origin/rebind").write_text("10.77.91.2")
         self.record("rebinding private next connection", lambda: self.tunnel("rebind.test", expected=403))
         for name, overrides in [("expired", {"iat": 1, "exp": 2}), ("future", {"iat": int(time.time()) + 60}), ("wrong audience", {"aud": "other/box"}), ("excess lifetime", {"exp": int(time.time()) + 90000})]:
             self.record(name, lambda o=overrides: self.tunnel(token=self.token(**o), expected=403))
@@ -304,6 +306,15 @@ print("root transparent TLS passed")
 '''
         self.record("root-owned TCP uses synthetic DNS and gateway", lambda: equal(docker("exec", "-u", "0", name, "python", "-c", script), "root transparent TLS passed"))
         self.record("command UID TCP uses synthetic DNS and gateway", lambda: equal(docker("exec", "-u", "60000:60000", name, "python", "-c", script), "root transparent TLS passed"))
+        equal(call("PUT", "/v1/egress", {"token": self.token(gen=2), "caCert": (self.output / "guest-ca.pem").read_text()})[0], 204)
+        injected_script = script.replace('"allowed.test"', '"inject.test"').replace('/fixture-ca.pem', '/opt/alien/egress-ca-bundle.pem').replace('GET / HTTP', 'GET /v1/action HTTP').replace('Host: allowed.test', 'Host: inject.test')
+        self.record("command UID uses installed CA for intercepted TLS", lambda: equal(docker("exec", "-u", "60000:60000", name, "python", "-c", injected_script), "root transparent TLS passed"))
+        memory_check = '''try:
+ open("/proc/1/mem","rb")
+except PermissionError: print("agent memory inaccessible")
+else: raise AssertionError("command can read agent memory")
+'''
+        self.record("command UID cannot read agent memory", lambda: equal(docker("exec", "-u", "60000:60000", name, "python", "-c", memory_check), "agent memory inaccessible"))
         docker("exec", name, "python", "-c", 'import socket; assert socket.gethostbyname("exfil-test.test").startswith("198.18.")')
         queries = [json.loads(line)["name"] for line in (self.output / "origin/dns.jsonl").read_text().splitlines()]
         assert "allowed.test" in queries and "exfil-test.test" not in queries
@@ -363,10 +374,14 @@ def main():
     try:
         docker("network", "create", "--internal", "--subnet", "93.184.216.0/24", PREFIX)
         networks.append(PREFIX)
+        private_network = PREFIX + "-private"
+        docker("network", "create", "--internal", "--subnet", "10.77.91.0/24", private_network)
+        networks.append(private_network)
         name = PREFIX + "-origin"
         docker("run", "-d", "--name", name, "--network", PREFIX, "--ip", ORIGIN,
                "-v", f"{output / 'origin'}:/fixture", "-v", f"{Path(__file__).with_name('origin.py')}:/origin.py:ro", "python:3.13-slim", "python", "/origin.py")
         containers.append(name)
+        docker("network", "connect", "--ip", "10.77.91.2", private_network, name)
         for number, ip in [(1, PROXY), (2, "93.184.216.4")]:
             name = PREFIX + f"-proxy{number}"
             binary = ["-v", f"{args.gateway_binary.resolve()}:/usr/local/bin/alien-egress-gateway:ro"] if args.gateway_binary else []
@@ -376,6 +391,7 @@ def main():
                    "-e", "ALIEN_TEST_VAULT_BINDING=" + json.dumps({"service": "local-vault", "dataDir": "/vault", "vaultName": "test"}),
                    "-e", "ALIEN_EGRESS_GATEWAY_CONFIG=" + json.dumps(config), args.image)
             containers.append(name)
+            docker("network", "connect", "--ip", f"10.77.91.{number + 2}", private_network, name)
         deadline = time.monotonic() + 30
         while True:
             try:
@@ -391,15 +407,17 @@ def main():
         if args.agent_image:
             suite.agent(args.agent_image, containers, networks)
     finally:
+        secret_in_logs = False
         for name in reversed(containers):
             logs = docker("logs", name)
             (output / f"{name}.log").write_text(logs)
-            assert "fake-test-secret" not in logs
+            secret_in_logs |= "fake-test-secret" in logs
             docker("rm", "-f", name)
         for name in networks:
             docker("network", "rm", name)
         remaining = docker("ps", "-a", "--filter", f"name={PREFIX}", "--format", "{{.Names}}")
         assert remaining == "", remaining
+        assert not secret_in_logs, "credential leaked to container logs"
         (output / "cleanup.txt").write_text("Owned containers and network deleted; scoped container list empty.\n")
 
 

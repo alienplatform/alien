@@ -1,6 +1,6 @@
 use std::net::{IpAddr, Ipv4Addr};
 
-use alien_error::{Context, IntoAlienError};
+use alien_error::ContextError;
 use ipnet::Ipv4Net;
 use sha2::{Digest, Sha256};
 
@@ -106,25 +106,16 @@ impl PolicyExt for Policy {
 
 /// Canonical bytes used for the signed policy digest and immutable storage.
 pub fn canonical(policy: &Policy) -> Result<Vec<u8>> {
-    let mut policy = policy
-        .normalized()
-        .context(crate::error::ErrorData::Invalid {
-            reason: "invalid policy".into(),
-        })?;
-    if let Policy::Allow { allow } = &mut policy {
-        allow.sort();
-    }
-    let bytes = serde_json::to_vec(&policy).into_alien_error().context(
-        crate::error::ErrorData::Invalid {
-            reason: "encode policy".into(),
-        },
-    )?;
-    if bytes.len() > MAX_POLICY_BYTES {
-        return Err(alien_error::AlienError::new(
-            crate::error::ErrorData::PolicyTooLarge,
-        ));
-    }
-    Ok(bytes)
+    policy.canonical_json().map_err(|error| {
+        let data = if error.code == "SANDBOX_EGRESS_POLICY_TOO_LARGE" {
+            crate::error::ErrorData::PolicyTooLarge
+        } else {
+            crate::error::ErrorData::Invalid {
+                reason: "invalid policy".into(),
+            }
+        };
+        error.context(data)
+    })
 }
 
 /// Digest includes its algorithm name to prevent format ambiguity.

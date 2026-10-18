@@ -11,6 +11,7 @@ RUN case "$TARGETARCH" in \
 
 FROM docker.io/chainguard/wolfi-base:latest
 COPY --from=binary-selector --chmod=0755 /tmp/alien-egress-gateway /usr/local/bin/alien-egress-gateway
+LABEL org.opencontainers.image.source="https://github.com/alienplatform/alien"
 ENV RUST_LOG=info
 USER 65532:65532
 EXPOSE 3128/tcp 3129/tcp

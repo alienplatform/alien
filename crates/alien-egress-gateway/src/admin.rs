@@ -70,24 +70,33 @@ async fn advance(
     State(admin): State<Arc<Admin>>,
     headers: HeaderMap,
     Json(update): Json<Update>,
-) -> StatusCode {
+) -> Response {
     let Some(grant) = admin.authorized(&headers) else {
-        return StatusCode::UNAUTHORIZED;
+        return StatusCode::UNAUTHORIZED.into_response();
     };
     if grant.aud != update.aud || grant.sub != update.sub || grant.gen != update.gen {
-        return StatusCode::FORBIDDEN;
+        return StatusCode::FORBIDDEN.into_response();
     }
     if !identity_valid(&admin, &update.aud, &update.sub) {
-        return StatusCode::BAD_REQUEST;
+        return StatusCode::BAD_REQUEST.into_response();
     }
     let Some(digest) = grant.policy else {
-        return StatusCode::FORBIDDEN;
+        return StatusCode::FORBIDDEN.into_response();
     };
     let Some(bound) = admin.gateway.config.bounds.get(&update.aud) else {
-        return StatusCode::BAD_REQUEST;
+        return StatusCode::BAD_REQUEST.into_response();
     };
-    if update.policy.ensure_subset_of(bound).is_err() {
-        return StatusCode::FORBIDDEN;
+    if let Err(error) = update.policy.ensure_subset_of(bound) {
+        let status = if error.code == "SANDBOX_EGRESS_WIDENS" {
+            StatusCode::FORBIDDEN
+        } else {
+            StatusCode::BAD_REQUEST
+        };
+        return (
+            status,
+            Json(serde_json::json!({"code": error.code, "message": error.message})),
+        )
+            .into_response();
     }
     match admin
         .gateway
@@ -112,6 +121,7 @@ async fn advance(
         }
         Err(_) => StatusCode::SERVICE_UNAVAILABLE,
     }
+    .into_response()
 }
 
 async fn issue_ca(
