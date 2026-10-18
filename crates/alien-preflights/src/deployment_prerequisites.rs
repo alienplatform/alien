@@ -16,7 +16,7 @@ use alien_permissions::{
     generators::AwsRuntimePermissionsGenerator, BindingTarget, PermissionContext,
 };
 
-/// Reports the weaker native-internet path when no managed gateway can be hosted.
+/// The internet declaration requires a prepared gateway; legacy paths stay unchanged.
 pub struct SandboxEgressGatewayCheck;
 
 #[async_trait::async_trait]
@@ -36,7 +36,7 @@ impl DeploymentPrerequisiteCheck for SandboxEgressGatewayCheck {
                     .config
                     .downcast_ref::<alien_core::Sandbox>()
                     .is_some_and(|sandbox| {
-                        !matches!(sandbox.egress, alien_core::SandboxEgress::None)
+                        matches!(sandbox.egress, alien_core::SandboxEgress::Internet)
                     })
             })
     }
@@ -45,15 +45,12 @@ impl DeploymentPrerequisiteCheck for SandboxEgressGatewayCheck {
         &self,
         stack: &Stack,
         _state: &StackState,
-        config: &DeploymentConfig,
+        _config: &DeploymentConfig,
     ) -> Result<CheckResult> {
         if alien_core::sandbox_egress::has_sandbox_gateway(stack) {
             return Ok(CheckResult::success());
         }
-        if config.compute_backend.is_some() {
-            return Ok(CheckResult::failed(vec!["Internet sandboxes require a prepared egress gateway on this managed container deployment. The gateway was not added; regenerate the deployment plan with a supported container runtime.".into()]));
-        }
-        Ok(CheckResult::with_warnings(vec!["Sandbox internet traffic will use the cloud's native internet path because this deployment has no managed container backend. There is no fixed outbound IP, per-sandbox egress policy, or gateway connection logging. Creating a sandbox with an egress policy or updating its policy will be refused.".into()]))
+        Ok(CheckResult::failed(vec!["Sandbox egress internet requires a prepared gateway on a supported container runtime. Configure a supported compute backend and regenerate the deployment plan.".into()]))
     }
 }
 
@@ -1095,10 +1092,10 @@ mod tests {
             let state = stack_state(platform);
             assert!(check.should_run(&stack, &state, &config));
             let result = check.check(&stack, &state, &config).await.unwrap();
-            assert!(result.success);
-            assert_eq!(result.status, Some(crate::CheckStatus::Warning));
-            assert_eq!(result.warnings.len(), 1);
-            assert!(result.errors.is_empty());
+            assert!(!result.success);
+            assert_eq!(result.status, Some(crate::CheckStatus::Failed));
+            assert!(result.warnings.is_empty());
+            assert_eq!(result.errors.len(), 1);
         }
         assert!(!check.should_run(&stack, &stack_state(Platform::Kubernetes), &config));
         assert!(!check.should_run(&stack, &stack_state(Platform::Local), &config));
