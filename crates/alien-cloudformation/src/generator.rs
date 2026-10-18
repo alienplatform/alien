@@ -1571,7 +1571,7 @@ fn add_network_parameters(
                     u32::from(defaults.availability_zones),
                     Some(
                         if target.is_kubernetes()
-                            || alien_core::stack_needs_named_subnets_at_setup(stack)
+                            || alien_core::sandbox_egress::has_sandbox_gateway(stack)
                         {
                             vec![CfExpression::from(2u8), CfExpression::from(3u8)]
                         } else {
