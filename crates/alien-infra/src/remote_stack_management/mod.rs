@@ -313,6 +313,7 @@ mod tests {
                         platform,
                         AwsRemoteStackManagementController::mock_ready("management"),
                         InitialSetupAuthority::ImportedHandoff,
+                        false,
                     )
                     .await
                 }
@@ -321,6 +322,7 @@ mod tests {
                         platform,
                         GcpRemoteStackManagementController::mock_ready("management"),
                         InitialSetupAuthority::ImportedHandoff,
+                        false,
                     )
                     .await
                 }
@@ -329,6 +331,7 @@ mod tests {
                         platform,
                         AzureRemoteStackManagementController::mock_ready("management"),
                         InitialSetupAuthority::ImportedHandoff,
+                        false,
                     )
                     .await
                 }
