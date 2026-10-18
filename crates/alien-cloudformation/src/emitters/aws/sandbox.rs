@@ -167,22 +167,6 @@ impl CfEmitter for AwsSandboxEmitter {
                     ]),
                 )]),
             );
-            if matches!(sandbox.egress, SandboxEgress::Internet) {
-                let network = sandbox_egress_network(ctx.stack).map_err(|error| {
-                    AlienError::new(ErrorData::OperationNotSupported {
-                        operation: "sandbox connector".into(),
-                        reason: error.to_string(),
-                    })
-                })?;
-                let prefix = ctx.name_for(network.id).ok_or_else(|| {
-                    AlienError::new(ErrorData::GenericError {
-                        message: format!("network '{}' has no generated name", network.id),
-                    })
-                })?;
-                connector
-                    .depends_on
-                    .push(format!("{prefix}SandboxNetworkValidation"));
-            }
             connector.properties.insert("Tags".to_string(), tags(ctx));
             egress_resources.extend([operator_role, security_group, connector]);
         }

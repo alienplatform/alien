@@ -18,7 +18,7 @@ pub struct AwsFailureDomainSubnets {
     pub private_subnet_ids: Vec<String>,
 }
 
-/// Setup-validated network coordinates for the sandbox connector and gateway.
+/// Setup network coordinates; the deployment controller verifies actual EC2 routes and CIDRs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "jsonschema", derive(schemars::JsonSchema))]
@@ -63,7 +63,7 @@ pub struct AwsNetworkImportData {
     /// Public addresses allocated to this deployment's NAT; empty when unknown.
     #[serde(default)]
     pub egress_public_ips: Vec<String>,
-    /// Isolated sandbox networking verified during setup; absent on older imports.
+    /// Dedicated sandbox networking to verify after setup; absent on older imports.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sandbox_network: Option<AwsSandboxNetwork>,
     /// Public subnet IDs.
