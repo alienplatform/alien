@@ -48,17 +48,23 @@ pub(super) fn emit(
             reason: "the dedicated subnet layout requires an IPv4 VNet /16 or larger and at most 120 sandbox resources".to_string(),
         }));
     }
-    if gateway_enabled(ctx) {
-        emit_gateway_subnet(network, fragment);
+    if !gateway_enabled(ctx) {
+        return Err(AlienError::new(ErrorData::OperationNotSupported {
+            operation: "Azure sandbox network setup".into(),
+            reason:
+                "egress internet requires the deployment gateway; native fallback is unavailable"
+                    .into(),
+        }));
     }
-    for (index, (id, sandbox)) in sandboxes.into_iter().enumerate() {
+    emit_gateway_subnet(network, fragment);
+    for (index, (id, _sandbox)) in sandboxes.into_iter().enumerate() {
         let name = ctx.name_for(id).ok_or_else(|| {
             AlienError::new(ErrorData::OperationNotSupported {
                 operation: "Azure sandbox network setup".to_string(),
                 reason: format!("sandbox {id} has no Terraform resource name"),
             })
         })?;
-        emit_group(ctx, network, name, index + 8, sandbox, fragment)?;
+        emit_group(ctx, network, name, index + 8, fragment)?;
     }
     Ok(())
 }
@@ -72,18 +78,10 @@ fn emit_group(
     network: &str,
     sandbox_name: &str,
     subnet_index: usize,
-    sandbox: &Sandbox,
     fragment: &mut TfFragment,
 ) -> Result<()> {
     let label = subnet_label(network, sandbox_name);
     let nat = format!("{network}_nat");
-    let via_gateway = gateway_enabled(ctx) && sandbox.egress == SandboxEgress::Internet;
-    let ports = match sandbox.egress {
-        SandboxEgress::None | SandboxEgress::Allow | SandboxEgress::AllowDomains { .. } => {
-            BTreeSet::new()
-        }
-        SandboxEgress::Internet => BTreeSet::from(["*".to_string()]),
-    };
     fragment.resource_blocks.push(resource_block(
         "azurerm_subnet",
         &label,
@@ -152,22 +150,20 @@ fn emit_group(
             attr("tags", tags(ctx, "sandbox-network")),
         ],
     ));
-    if via_gateway {
-        rule(
-            fragment,
-            &label,
-            Rule {
-                name: "gateway",
-                priority: 100,
-                destination: expr::raw(format!(
-                    "azurerm_subnet.{network}_sandbox_gateway.address_prefixes[0]"
-                )),
-                allowed_ports: Some(BTreeSet::from(["3128".to_string()])),
-            },
-        );
-    }
+    rule(
+        fragment,
+        &label,
+        Rule {
+            name: "gateway",
+            priority: 100,
+            destination: expr::raw(format!(
+                "azurerm_subnet.{network}_sandbox_gateway.address_prefixes[0]"
+            )),
+            allowed_ports: Some(BTreeSet::from(["3128".to_string()])),
+        },
+    );
     // Azure's platform metadata/DNS addresses need their service tags: ordinary range denies
-    // do not apply to these platform services. DNS remains necessary for native host policies.
+    // do not apply to these platform services. The gateway uses a numeric internal address.
     for (name, priority, destination) in [
         ("metadata", 101, "AzurePlatformIMDS"),
         ("vnet", 110, "VirtualNetwork"),
@@ -192,29 +188,16 @@ fn emit_group(
             },
         );
     }
-    if ports.is_empty() || via_gateway {
-        rule(
-            fragment,
-            &label,
-            Rule {
-                name: "dns",
-                priority: 140,
-                destination: Expression::String("AzurePlatformDNS".to_string()),
-                allowed_ports: None,
-            },
-        );
-    } else {
-        rule(
-            fragment,
-            &label,
-            Rule {
-                name: "internet",
-                priority: 200,
-                destination: Expression::String("Internet".to_string()),
-                allowed_ports: Some(ports),
-            },
-        );
-    }
+    rule(
+        fragment,
+        &label,
+        Rule {
+            name: "dns",
+            priority: 140,
+            destination: Expression::String("AzurePlatformDNS".to_string()),
+            allowed_ports: None,
+        },
+    );
     for (resource, field, target) in [
         (
             "azurerm_subnet_nat_gateway_association",
@@ -348,6 +331,7 @@ pub(super) fn gateway_handoff(ctx: &EmitContext<'_>, network: &str) -> Result<Op
     }
     let mut ids = Vec::new();
     let mut cidrs = Vec::new();
+    let mut cidrs_by_resource = Vec::new();
     for (id, entry) in ctx.stack.resources() {
         let Some(sandbox) = entry.config.downcast_ref::<Sandbox>() else {
             continue;
@@ -363,9 +347,9 @@ pub(super) fn gateway_handoff(ctx: &EmitContext<'_>, network: &str) -> Result<Op
         })?;
         let label = subnet_label(network, name);
         ids.push(expr::traversal(["azurerm_subnet", &label, "id"]));
-        cidrs.push(expr::raw(format!(
-            "azurerm_subnet.{label}.address_prefixes[0]"
-        )));
+        let cidr = expr::raw(format!("azurerm_subnet.{label}.address_prefixes[0]"));
+        cidrs.push(cidr.clone());
+        cidrs_by_resource.push((id.to_string(), Expression::Array(vec![cidr])));
     }
     let gateway = format!("{network}_sandbox_gateway");
     Ok(Some(expr::object([
@@ -375,6 +359,7 @@ pub(super) fn gateway_handoff(ctx: &EmitContext<'_>, network: &str) -> Result<Op
             Expression::Array(vec![expr::traversal(["azurerm_subnet", &gateway, "id"])]),
         ),
         ("sandboxCidrs", Expression::Array(cidrs)),
+        ("sandboxCidrsByResource", expr::object(cidrs_by_resource)),
         (
             "gatewayCidrs",
             expr::traversal(["azurerm_subnet", &gateway, "address_prefixes"]),

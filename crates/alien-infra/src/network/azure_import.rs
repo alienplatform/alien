@@ -111,12 +111,18 @@ mod tests {
                 "sandboxSubnetIds": ["/vnet/network/subnets/sandbox"],
                 "gatewaySubnetIds": ["/vnet/network/subnets/gateway"],
                 "sandboxCidrs": ["10.0.16.0/23"],
+                "sandboxCidrsByResource": {"box": ["10.0.16.0/23"]},
                 "gatewayCidrs": ["10.0.6.0/24"],
                 "workloadCidrs": ["10.0.0.0/24", "10.0.1.0/24"],
                 "vpcCidrs": ["10.0.0.0/16"]
             },
         });
-        for expected in [vec!["203.0.113.8".to_string()], Vec::new()] {
+        for version in 0..3 {
+            let expected = if version < 2 {
+                vec!["203.0.113.8".to_string()]
+            } else {
+                Vec::new()
+            };
             let expected_network = json.get("sandboxNetwork").cloned();
             let data = serde_json::from_value(json.clone()).expect("typed import");
             let state = AzureNetworkImporter.import(data, &ctx).expect("import");
@@ -137,8 +143,15 @@ mod tests {
                     .map(|network| serde_json::to_value(network).unwrap()),
                 expected_network,
             );
-            json.as_object_mut().unwrap().remove("sandboxNetwork");
-            json.as_object_mut().unwrap().remove("egressPublicIps");
+            if version == 0 {
+                json["sandboxNetwork"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("sandboxCidrsByResource");
+            } else {
+                json.as_object_mut().unwrap().remove("sandboxNetwork");
+                json.as_object_mut().unwrap().remove("egressPublicIps");
+            }
         }
     }
 }

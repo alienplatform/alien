@@ -12,6 +12,9 @@ export const AzureSandboxNetworkSchema = z.object({
     "gatewayCidrs": z.array(z.string()).describe("Gateway ranges allowed by the sandbox subnet NSGs on TCP3128."),
 "gatewaySubnetIds": z.array(z.string()).describe("Undelegated subnet reserved for the gateway load balancer's frontend."),
 "sandboxCidrs": z.array(z.string()).describe("Sandbox source ranges allowed on the proxy listener."),
+"sandboxCidrsByResource": z.optional(z.object({
+    
+    }).catchall(z.array(z.string())).describe("Dedicated source ranges keyed by Sandbox resource id for exact linked-resource access.")),
 "sandboxSubnetIds": z.array(z.string()).describe("Dedicated delegated subnets whose sandboxes use the gateway."),
 "vpcCidrs": z.array(z.string()).describe("Every VNet range excluded from gateway destinations."),
 "workloadCidrs": z.array(z.string()).describe("Workload source ranges allowed on the authenticated admin listener.")

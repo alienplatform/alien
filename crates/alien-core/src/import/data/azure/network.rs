@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// Azure Network ImportData — VNet + subnets + NAT topology.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -53,6 +54,9 @@ pub struct AzureSandboxNetwork {
     pub gateway_subnet_ids: Vec<String>,
     /// Sandbox source ranges allowed on the proxy listener.
     pub sandbox_cidrs: Vec<String>,
+    /// Dedicated source ranges keyed by Sandbox resource id for exact linked-resource access.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub sandbox_cidrs_by_resource: BTreeMap<String, Vec<String>>,
     /// Gateway ranges allowed by the sandbox subnet NSGs on TCP3128.
     pub gateway_cidrs: Vec<String>,
     /// Workload source ranges allowed on the authenticated admin listener.

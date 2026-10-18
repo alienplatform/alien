@@ -1,9 +1,12 @@
 //! Real Terraform plans with mocked providers exercise input evaluation without
 //! cloud credentials or creating infrastructure.
-use alien_core::{Network, NetworkSettings, ResourceLifecycle, Stack, StackSettings};
+use alien_core::{
+    Container, ContainerCode, Network, NetworkSettings, ResourceLifecycle, ResourceSpec, Sandbox,
+    SandboxCode, SandboxEgress, SandboxLifecyclePolicy, Stack, StackSettings,
+};
 use alien_terraform::TerraformTarget;
 
-use super::helpers::{render, test_utils};
+use super::helpers::{render, test_utils, try_render};
 
 #[test]
 fn mocked_network_plans_normalize_empty_ids_in_registration() {
@@ -138,7 +141,6 @@ run "network_{index}" {{
 /// Generation refuses subnet layouts that cannot hold the dedicated sandbox allocation.
 #[test]
 fn azure_sandbox_network_rejects_small_or_non_ipv4_networks() {
-    use alien_core::{Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy};
     for (cidr, supported) in [
         ("10.46.0.0/16", true),
         ("10.46.0.0/20", false),
@@ -167,6 +169,23 @@ fn azure_sandbox_network_rejects_small_or_non_ipv4_networks() {
                     .build(),
                 ResourceLifecycle::Frozen,
             )
+            .add(
+                Container::new("sandbox-egress-gateway".into())
+                    .code(ContainerCode::Image {
+                        image: "gateway:test".into(),
+                    })
+                    .cpu(ResourceSpec {
+                        min: "0.25".into(),
+                        desired: "0.25".into(),
+                    })
+                    .memory(ResourceSpec {
+                        min: "256Mi".into(),
+                        desired: "256Mi".into(),
+                    })
+                    .permissions("gateway".into())
+                    .build(),
+                ResourceLifecycle::Live,
+            )
             .build();
         let result =
             super::helpers::try_render(&stack, TerraformTarget::Azure, StackSettings::default());
@@ -184,7 +203,6 @@ fn azure_sandbox_network_rejects_small_or_non_ipv4_networks() {
 
 #[test]
 fn aks_sandboxes_do_not_require_a_native_azure_subnet() {
-    use alien_core::{Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy};
     let settings = NetworkSettings::ByoVnetAzure {
         vnet_resource_id: "/subscriptions/test/resourceGroups/test/providers/Microsoft.Network/virtualNetworks/test".into(),
         public_subnet_name: "public".into(),
@@ -229,4 +247,113 @@ fn aks_sandboxes_do_not_require_a_native_azure_subnet() {
         error.to_string().contains("dedicated BYO sandbox subnets"),
         "{error}"
     );
+}
+
+/// A linker must select its own delegated range rather than every Sandbox range.
+#[test]
+fn azure_sandbox_source_handoff_keeps_resource_ranges_distinct() {
+    let settings = NetworkSettings::Create {
+        cidr: Some("10.61.0.0/16".into()),
+        availability_zones: 1,
+    };
+    let mut stack = Stack::new("linked-sources".into()).add(
+        Network::new("default-network".into())
+            .settings(settings.clone())
+            .build(),
+        ResourceLifecycle::Frozen,
+    );
+    for (id, egress) in [
+        ("alpha", SandboxEgress::Internet),
+        ("beta", SandboxEgress::Internet),
+        ("legacy", SandboxEgress::Allow),
+    ] {
+        stack = stack.add(
+            Sandbox::new(id.into())
+                .code(SandboxCode::Image {
+                    image: "ubuntu".into(),
+                })
+                .egress(egress)
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build(),
+            ResourceLifecycle::Frozen,
+        );
+    }
+    let stack = stack
+        .add(
+            Container::new("sandbox-egress-gateway".into())
+                .code(ContainerCode::Image {
+                    image: "gateway:test".into(),
+                })
+                .cpu(ResourceSpec {
+                    min: "0.25".into(),
+                    desired: "0.25".into(),
+                })
+                .memory(ResourceSpec {
+                    min: "256Mi".into(),
+                    desired: "256Mi".into(),
+                })
+                .permissions("gateway".into())
+                .build(),
+            ResourceLifecycle::Live,
+        )
+        .build();
+    let module = render(
+        &stack,
+        TerraformTarget::Azure,
+        StackSettings {
+            network: Some(settings.clone()),
+            ..Default::default()
+        },
+    );
+    let mut files: test_utils::LinterFiles = module
+        .iter()
+        .filter(|(path, _)| path.ends_with(".tf"))
+        .map(|(path, content)| (path.to_string(), content.to_string()))
+        .collect();
+    files.insert("sources.tftest.hcl".into(), r#"
+mock_provider "azurerm" {}
+mock_provider "azapi" {}
+mock_provider "random" {}
+variables {
+  name = "linked-sources"
+  token = "test"
+  resource_prefix = "linked-sources"
+  azure_resource_group_name = "test-group"
+  azure_location = "eastus"
+  azure_subscription_id = "00000000-0000-0000-0000-000000000001"
+}
+run "source_ranges" {
+  command = plan
+  assert {
+    condition = jsonencode(local.deployment_resources[0].importData.sandboxNetwork.sandboxCidrsByResource) == jsonencode({alpha = ["10.61.16.0/23"], beta = ["10.61.18.0/23"]})
+    error_message = "Each new Internet Sandbox must keep its own exact source range; legacy sandboxes must not acquire one."
+  }
+  assert {
+    condition = length(local.deployment_resources[0].importData.sandboxNetwork.sandboxSubnetIds) == 2
+    error_message = "The handoff must contain exactly the two opt-in delegated subnets."
+  }
+}
+"#.into());
+    test_utils::terraform_test(&files).assert_ok("Azure exact Sandbox source handoff");
+
+    let mut without_gateway = stack;
+    without_gateway
+        .resources
+        .shift_remove("sandbox-egress-gateway");
+    let error = try_render(
+        &without_gateway,
+        TerraformTarget::Azure,
+        StackSettings {
+            network: Some(settings),
+            ..Default::default()
+        },
+    )
+    .err()
+    .expect("new Internet without a gateway must not emit a native fallback");
+    assert!(error
+        .to_string()
+        .contains("requires the deployment gateway"));
 }

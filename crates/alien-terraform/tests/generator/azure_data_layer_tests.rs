@@ -561,7 +561,7 @@ fn azure_remote_sandbox_grants_the_access_identity_its_own_group_and_nothing_wid
         .code(SandboxCode::Image {
             image: "ubuntu".to_string(),
         })
-        .egress(SandboxEgress::Internet)
+        .egress(SandboxEgress::Allow)
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,
@@ -711,7 +711,7 @@ fn azure_sandbox_image_grant_reaches_the_manager_on_its_own_group_only() {
         .code(SandboxCode::Image {
             image: "docker.io/library/python:3.14-slim".to_string(),
         })
-        .egress(SandboxEgress::Internet)
+        .egress(SandboxEgress::Allow)
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,
@@ -801,7 +801,7 @@ fn frozen_sandbox(id: &str) -> Sandbox {
         .code(SandboxCode::Image {
             image: "ubuntu".to_string(),
         })
-        .egress(SandboxEgress::Internet)
+        .egress(SandboxEgress::Allow)
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,
@@ -1443,7 +1443,7 @@ fn an_aks_package_is_not_told_about_a_sandbox_group_it_does_not_get() {
         .code(SandboxCode::Image {
             image: "ubuntu".to_string(),
         })
-        .egress(SandboxEgress::Internet)
+        .egress(SandboxEgress::Allow)
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,
@@ -1502,7 +1502,7 @@ fn an_azure_remote_sandbox_uses_the_supplied_resource_group() {
         .code(SandboxCode::Image {
             image: "ubuntu".to_string(),
         })
-        .egress(SandboxEgress::Internet)
+        .egress(SandboxEgress::Allow)
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,

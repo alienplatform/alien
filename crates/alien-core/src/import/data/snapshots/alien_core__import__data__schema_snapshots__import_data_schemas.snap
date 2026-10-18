@@ -1089,6 +1089,16 @@ expression: schemas
             },
             "type": "array"
           },
+          "sandboxCidrsByResource": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "description": "Dedicated source ranges keyed by Sandbox resource id for exact linked-resource access.",
+            "type": "object"
+          },
           "sandboxSubnetIds": {
             "description": "Dedicated delegated subnets whose sandboxes use the gateway.",
             "items": {
