@@ -69,7 +69,11 @@ async fn main() -> Result<()> {
         .await
         .into_alien_error()
         .context(failed("bind admin"))?;
-    let gateway = Arc::new(LiveGateway::new(gateway));
+    let gateway = Arc::new(if refresh {
+        LiveGateway::new(gateway)
+    } else {
+        LiveGateway::static_config(gateway)
+    });
     let refresh_config = async {
         if !refresh {
             std::future::pending::<()>().await;
@@ -81,7 +85,7 @@ async fn main() -> Result<()> {
             interval.tick().await;
             if let Err(error) = gateway.refresh(&bindings).await {
                 // Do not log vault content or nested errors that might contain its value.
-                tracing::error!(code = %error.code, "gateway config unavailable; new requests denied");
+                tracing::error!(code = %error.code, "gateway config refresh failed; last-good window applies");
             }
         }
     };

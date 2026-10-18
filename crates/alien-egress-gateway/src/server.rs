@@ -38,7 +38,7 @@ pub struct Gateway {
     /// Parsed public keys.
     pub keys: HashMap<String, PublicKey>,
     /// Current policies shared by all replicas.
-    pub policies: PolicyStore,
+    pub policies: Arc<PolicyStore>,
     /// Gateway-only CA and vault access.
     pub credentials: crate::credentials::Credentials,
     /// Total accepted proxy connections.

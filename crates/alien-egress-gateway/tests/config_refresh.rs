@@ -19,8 +19,8 @@ use base64::{
 use ed25519_compact::{KeyPair, Seed};
 use serde_json::json;
 
-#[tokio::test]
-async fn vault_refresh_rotates_keys_and_closes_on_missing_or_invalid_config() {
+#[tokio::test(start_paused = true)]
+async fn vault_refresh_rotates_keys_and_bounds_last_good_config() {
     let dir = tempfile::tempdir().unwrap();
     let bindings = Arc::new(Bindings::from_env_map(HashMap::from([
         ("ALIEN_DEPLOYMENT_TYPE".into(), "local".into()),
@@ -83,7 +83,7 @@ async fn vault_refresh_rotates_keys_and_closes_on_missing_or_invalid_config() {
         .await
         .unwrap();
     assert!(live.refresh(&bindings).await.is_err());
-    assert!(live.snapshot().is_none());
+    assert!(live.snapshot().is_some());
     vault
         .set_secret(
             "sandbox-egress-gateway-config",
@@ -100,11 +100,22 @@ async fn vault_refresh_rotates_keys_and_closes_on_missing_or_invalid_config() {
         .await
         .unwrap();
     assert!(live.refresh(&bindings).await.is_err());
-    assert!(live.snapshot().is_none());
+    assert!(live.snapshot().is_some());
     vault
         .delete_secret("sandbox-egress-gateway-config")
         .await
         .unwrap();
     assert!(live.refresh(&bindings).await.is_err());
+    assert!(live.snapshot().is_some());
+    tokio::time::advance(runtime::MAX_CONFIG_AGE).await;
     assert!(live.snapshot().is_none());
+    vault
+        .set_secret(
+            "sandbox-egress-gateway-config",
+            &config(&second).to_string(),
+        )
+        .await
+        .unwrap();
+    live.refresh(&bindings).await.unwrap();
+    assert!(live.snapshot().is_some());
 }
