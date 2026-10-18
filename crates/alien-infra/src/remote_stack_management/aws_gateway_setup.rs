@@ -330,9 +330,25 @@ impl GatewaySetup {
                         }) && boundary.matches_configuration(&version, role_arn)
                             && version.code_sha256.as_deref() == Some(boundary.code_hash.as_str())
                         {
-                            published.push(version.function_arn.ok_or_else(|| {
+                            let arn = version.function_arn.as_ref().ok_or_else(|| {
                                 AlienError::new(boundary.error("Published helper has no ARN"))
-                            })?);
+                            })?;
+                            let expected = format!(
+                                "arn:{}:lambda:{}:{}:function:{}:{}",
+                                role_arn.split(':').nth(1).unwrap(),
+                                boundary.region,
+                                boundary.account_id,
+                                boundary.name,
+                                version.version.as_ref().unwrap()
+                            );
+                            if arn != &expected
+                                || version.function_name.as_deref() != Some(boundary.name.as_str())
+                            {
+                                return Err(AlienError::new(
+                                    boundary.error("Published helper version identity differs"),
+                                ));
+                            }
+                            published.push(arn.clone());
                         }
                     }
                     marker = page.next_marker;
@@ -411,6 +427,8 @@ struct Boundary {
     name: String,
     resource_id: String,
     prefix: String,
+    account_id: String,
+    region: String,
     tags: HashMap<String, String>,
     code_hash: String,
 }
@@ -419,6 +437,13 @@ impl Boundary {
     fn new(ctx: &ResourceControllerContext<'_>, generation: &str) -> Result<Self> {
         let resource = ctx.desired_resource_config::<RemoteStackManagement>()?;
         ensure_setup_authority(ctx)?;
+        let config = ctx.get_aws_config()?;
+        if !alien_core::is_valid_resource_prefix(ctx.resource_prefix) {
+            return Err(AlienError::new(ErrorData::SetupRequired {
+                message: "A valid resource prefix is required for gateway setup".into(),
+                resource_id: Some(resource.id.clone()),
+            }));
+        }
         let mut tags: HashMap<_, _> =
             setup_resource_tags(ctx.resource_prefix, &resource.id, "remote-stack-management")
                 .into_iter()
@@ -428,6 +453,8 @@ impl Boundary {
             name: format!("{CLEANUP_FUNCTION_PREFIX}{}", ctx.resource_prefix),
             resource_id: resource.id.clone(),
             prefix: ctx.resource_prefix.into(),
+            account_id: config.account_id.clone(),
+            region: config.region.clone(),
             tags,
             code_hash: STANDARD.encode(Sha256::digest(CLEANUP_HANDLER_ARCHIVE)),
         })
@@ -490,6 +517,17 @@ impl Boundary {
             }
         }
         self.verify_tags(Some(&tags))?;
+        let parts: Vec<_> = role.arn.split(':').collect();
+        if parts.len() != 6
+            || parts[0] != "arn"
+            || parts[1].is_empty()
+            || parts[2] != "iam"
+            || !parts[3].is_empty()
+            || parts[4] != self.account_id
+            || parts[5] != format!("role/setup/{}", self.name)
+        {
+            return Err(AlienError::new(self.error("Setup helper role ARN differs")));
+        }
         if role.path != "/setup/"
             || role.role_name != self.name
             || role.role_id.is_empty()
