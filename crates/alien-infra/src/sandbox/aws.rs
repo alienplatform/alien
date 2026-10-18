@@ -136,6 +136,12 @@ pub struct AwsSandboxController {
 
 #[controller]
 impl AwsSandboxController {
+    fn has_runtime_setup_inputs(&self) -> bool {
+        // Built-image imports omit the role. Runtime registrations and resumed
+        // runtime builds retain it, including Frozen-to-Live handoffs.
+        self.build_role_arn.is_some()
+    }
+
     // ─────────────── CREATE FLOW ──────────────────────────────────────────
 
     #[flow_entry(Create)]

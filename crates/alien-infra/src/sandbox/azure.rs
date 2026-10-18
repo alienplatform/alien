@@ -106,6 +106,11 @@ pub struct AzureSandboxController {
 
 #[controller]
 impl AzureSandboxController {
+    fn has_runtime_setup_inputs(&self) -> bool {
+        // Setup owns the group; runtime owns registry-image builds within it.
+        self.sandbox_group.is_some() && self.region.is_some() && self.resource_group.is_some()
+    }
+
     // ─────────────── CREATE FLOW ───────────────────────────────────────────
 
     #[flow_entry(Create)]

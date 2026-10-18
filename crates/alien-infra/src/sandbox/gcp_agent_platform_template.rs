@@ -235,6 +235,11 @@ pub struct GcpAgentPlatformTemplateController {
 
 #[controller]
 impl GcpAgentPlatformTemplateController {
+    fn has_runtime_setup_inputs(&self) -> bool {
+        // Setup registers a region but never creates the runtime-owned template.
+        self.region.is_some()
+    }
+
     // ─────────────── CREATE FLOW ──────────────────────────────
 
     #[flow_entry(Create)]
