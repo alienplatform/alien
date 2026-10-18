@@ -24,6 +24,7 @@ pub mod remote_bindings;
 pub mod remote_stack_management;
 pub mod resource_group;
 pub mod sandbox;
+mod sandbox_network;
 pub mod service_account;
 pub mod service_activation;
 pub mod service_bus_namespace;

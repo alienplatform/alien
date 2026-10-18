@@ -78,6 +78,10 @@ impl StackMutation for NetworkMutation {
             kubernetes_requires_cloud_network(stack, config)
         } else {
             stack_requires_network(stack)
+                || (target_platform == Platform::Azure
+                    && stack
+                        .resources()
+                        .any(|(_, entry)| entry.config.resource_type().as_ref() == "sandbox"))
         }
     }
 

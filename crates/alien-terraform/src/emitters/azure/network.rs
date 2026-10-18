@@ -27,7 +27,7 @@ use crate::{
     emitters::azure::helpers::{downcast, required_label, tags},
     expr,
 };
-use alien_core::{import::EmitContext, ErrorData, Network, NetworkSettings, Result};
+use alien_core::{import::EmitContext, ErrorData, Network, NetworkSettings, Result, Sandbox};
 use alien_error::AlienError;
 use hcl::expr::Expression;
 
@@ -39,11 +39,22 @@ impl TfEmitter for AzureNetworkEmitter {
         let network = downcast::<Network>(ctx, Network::RESOURCE_TYPE)?;
         let label = required_label(ctx)?;
 
+        if matches!(network.settings, NetworkSettings::ByoVnetAzure { .. })
+            && ctx
+                .stack
+                .resources()
+                .any(|(_, entry)| entry.config.downcast_ref::<Sandbox>().is_some())
+        {
+            return Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: "Azure sandbox network setup".to_string(),
+                reason: "sandbox isolation requires a dedicated delegated subnet, NSG and NAT; use a create network until dedicated BYO sandbox subnets are supported".to_string(),
+            }));
+        }
         match &network.settings {
             // Azure has no default VNet, so even `UseDefault` lands a
             // create-mode topology. Match the runtime controller's docs.
-            NetworkSettings::UseDefault => Ok(create_topology(ctx, label, None)),
-            NetworkSettings::Create { cidr, .. } => Ok(create_topology(ctx, label, cidr.clone())),
+            NetworkSettings::UseDefault => create_topology(ctx, label, None),
+            NetworkSettings::Create { cidr, .. } => create_topology(ctx, label, cidr.clone()),
             NetworkSettings::ByoVnetAzure {
                 vnet_resource_id,
                 public_subnet_name,
@@ -151,7 +162,7 @@ impl TfEmitter for AzureNetworkEmitter {
     }
 }
 
-fn create_topology(ctx: &EmitContext<'_>, label: &str, cidr: Option<String>) -> TfFragment {
+fn create_topology(ctx: &EmitContext<'_>, label: &str, cidr: Option<String>) -> Result<TfFragment> {
     let cidr = cidr.unwrap_or_else(|| "10.46.0.0/16".to_string());
     let public_label = format!("{label}_public");
     let private_label = format!("{label}_private");
@@ -528,7 +539,8 @@ fn create_topology(ctx: &EmitContext<'_>, label: &str, cidr: Option<String>) -> 
         ],
     ));
 
-    fragment
+    super::sandbox_network::emit(ctx, label, &mut fragment)?;
+    Ok(fragment)
 }
 
 fn byo_topology(

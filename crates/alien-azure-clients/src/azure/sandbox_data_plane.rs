@@ -167,6 +167,8 @@ pub struct CreateSandbox {
     /// Outbound policy, applied from the moment the sandbox starts. Absent leaves the data
     /// plane's own default, which is open.
     pub egress: Option<EgressPolicy>,
+    /// Group VNet connection used for every outbound flow. Absent uses the provider network.
+    pub customer_vnet_connection_name: Option<String>,
     /// Idle seconds after which the sandbox pauses itself, sent as the data plane's
     /// `autoSuspendPolicy`. Absent leaves its own policy rather than asserting one.
     pub idle_pause_seconds: Option<u32>,
@@ -201,6 +203,10 @@ fn create_body(request: &CreateSandbox) -> serde_json::Value {
         body["egressPolicy"] = serde_json::json!(egress);
     }
 
+    if let Some(connection) = &request.customer_vnet_connection_name {
+        body["customerVnetConnectionName"] = serde_json::json!(connection);
+    }
+
     // `Memory` is the SDK's own default for `auto_suspend_mode`, and the mode a session wants:
     // what `Disk` does differently is not documented, so the default stands rather than a guess.
     if let Some(seconds) = request.idle_pause_seconds {
@@ -218,6 +224,9 @@ fn create_body(request: &CreateSandbox) -> serde_json::Value {
 pub struct Sandbox {
     /// Sandbox id within its group
     pub id: String,
+    /// VNet connection Azure actually attached, absent for the provider-managed network.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vnet_connection_name: Option<String>,
     /// The policy the sandbox is actually running under, which is the only way to tell that the
     /// one that was asked for took effect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -974,6 +983,7 @@ mod tests {
                     environment: Default::default(),
                     egress: None,
                     idle_pause_seconds: None,
+                    customer_vnet_connection_name: None,
                 },
             )
             .await
@@ -1238,6 +1248,7 @@ mod tests {
                 traffic_inspection: Some("Full".to_string()),
             }),
             idle_pause_seconds: None,
+            customer_vnet_connection_name: None,
         });
 
         assert_eq!(body["environment"]["TOKEN"], "t");

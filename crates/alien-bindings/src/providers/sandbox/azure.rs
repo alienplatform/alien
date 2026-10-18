@@ -326,6 +326,7 @@ impl Sandbox for AzureSandbox {
                 environment: request.env,
                 egress: asked.clone(),
                 idle_pause_seconds: self.idle_pause_seconds,
+                customer_vnet_connection_name: Some("default".to_string()),
             })
             .await?;
 
@@ -854,6 +855,13 @@ impl AzureSandbox {
         &self,
         sandbox: &alien_azure_clients::azure::sandbox_data_plane::Sandbox,
     ) -> Result<()> {
+        if sandbox.vnet_connection_name.as_deref() != Some("default") {
+            return Err(AlienError::new(ErrorData::SandboxNotAsDeclared {
+                sandbox_id: sandbox.id.clone(),
+                restriction: "deployment network".to_string(),
+                reason: "the sandbox is not attached to the setup-owned default VNet connection; rerun setup and create a new sandbox".to_string(),
+            }));
+        }
         let Some(asked) = egress_policy(&self.egress) else {
             return Ok(());
         };
@@ -1522,6 +1530,22 @@ mod tests {
         )
     }
 
+    #[tokio::test]
+    async fn a_sandbox_outside_the_deployment_network_is_refused() {
+        let mut client = MockSandboxDataPlaneApi::new();
+        client.expect_get_sandbox().returning(|_, id| {
+            let mut sandbox = running(id, None);
+            sandbox.vnet_connection_name = None;
+            Ok(sandbox)
+        });
+        let error = sandbox_with(client)
+            .get("s1")
+            .await
+            .expect_err("provider-network sandbox must not be handed out");
+        assert_eq!(error.code, "SANDBOX_NOT_AS_DECLARED");
+        assert!(error.to_string().contains("deployment network"));
+    }
+
     /// The declared image has to reach the create call, not a default chosen here.
     ///
     /// Asserted on the argument the client receives, because the failure this pins is silent:
@@ -1532,11 +1556,15 @@ mod tests {
         let mut client = MockSandboxDataPlaneApi::new();
         client
             .expect_create_sandbox()
-            .withf(|_, request| request.disk_image == "my-toolchain")
+            .withf(|_, request| {
+                request.disk_image == "my-toolchain"
+                    && request.customer_vnet_connection_name.as_deref() == Some("default")
+            })
             .times(1)
             .returning(|_, _| {
                 Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
                     id: "s1".to_string(),
+                    vnet_connection_name: Some("default".to_string()),
                     egress_policy: None,
                     state: Some("Running".to_string()),
                 })
@@ -1613,6 +1641,7 @@ mod tests {
             .returning(|_, _| {
                 Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
                     id: "s1".to_string(),
+                    vnet_connection_name: Some("default".to_string()),
                     egress_policy: None,
                     state: Some("Running".to_string()),
                 })
@@ -1665,6 +1694,7 @@ mod tests {
             .returning(|_, _| {
                 Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
                     id: "s1".to_string(),
+                    vnet_connection_name: Some("default".to_string()),
                     egress_policy: None,
                     state: Some("Running".to_string()),
                 })
@@ -1833,6 +1863,7 @@ mod tests {
             .returning(|_, _| {
                 Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
                     id: "s1".to_string(),
+                    vnet_connection_name: Some("default".to_string()),
                     egress_policy: None,
                     state: Some("Running".to_string()),
                 })
@@ -1863,6 +1894,7 @@ mod tests {
         client.expect_get_sandbox().returning(|_, id| {
             Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
                 id: id.to_string(),
+                vnet_connection_name: Some("default".to_string()),
                 egress_policy: None,
                 state: Some("Running".to_string()),
             })
@@ -2029,6 +2061,7 @@ mod tests {
             }
             Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
                 id: sandbox_id.to_string(),
+                vnet_connection_name: Some("default".to_string()),
                 egress_policy: None,
                 state: Some("Running".to_string()),
             })
@@ -2743,6 +2776,7 @@ mod tests {
             client.expect_get_sandbox().times(1).returning(move |_, _| {
                 Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
                     id: "s1".to_string(),
+                    vnet_connection_name: Some("default".to_string()),
                     egress_policy: None,
                     state: Some(state.clone()),
                 })
@@ -2768,6 +2802,7 @@ mod tests {
             client.expect_get_sandbox().times(1).returning(move |_, _| {
                 Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
                     id: "s1".to_string(),
+                    vnet_connection_name: Some("default".to_string()),
                     egress_policy: None,
                     state: state.clone(),
                 })
@@ -2794,6 +2829,7 @@ mod tests {
             .returning(|_, _| {
                 Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
                     id: "s1".to_string(),
+                    vnet_connection_name: Some("default".to_string()),
                     egress_policy: None,
                     state: Some("Creating".to_string()),
                 })
@@ -2826,6 +2862,7 @@ mod tests {
     ) -> alien_azure_clients::azure::sandbox_data_plane::Sandbox {
         alien_azure_clients::azure::sandbox_data_plane::Sandbox {
             id: id.to_string(),
+            vnet_connection_name: Some("default".to_string()),
             egress_policy: egress,
             state: Some("Running".to_string()),
         }
@@ -3337,6 +3374,7 @@ mod tests {
         let unreadable = || {
             Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
                 id: "orphan".to_string(),
+                vnet_connection_name: Some("default".to_string()),
                 egress_policy: None,
                 state: Some("Hibernated".to_string()),
             })
@@ -4613,6 +4651,7 @@ mod tests {
         client.expect_get_sandbox().times(1).returning(|_, _| {
             Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
                 id: "s1".to_string(),
+                vnet_connection_name: Some("default".to_string()),
                 egress_policy: None,
                 state: Some("Hibernated".to_string()),
             })

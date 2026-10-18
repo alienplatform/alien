@@ -23,8 +23,8 @@ use crate::{
     expr,
 };
 use alien_core::{
-    import::EmitContext, ErrorData, PermissionProfile, PermissionSet, PermissionSetReference,
-    RemoteBindings, Result, Sandbox, SandboxEgress,
+    import::EmitContext, ErrorData, Network, PermissionProfile, PermissionSet,
+    PermissionSetReference, RemoteBindings, Result, Sandbox, SandboxEgress,
 };
 use alien_error::{AlienError, Context};
 use alien_permissions::{
@@ -123,6 +123,61 @@ impl TfEmitter for AzureSandboxEmitter {
                 // fails with "can't be found" though ARM creates it fine. Only this client-side
                 // pre-check is disabled; remove once azapi's index catches up.
                 attr("schema_validation_enabled", Expression::Bool(false)),
+            ],
+        ));
+
+        let network = ctx
+            .stack
+            .resources()
+            .find_map(|(id, entry)| {
+                (entry.config.resource_type() == Network::RESOURCE_TYPE).then_some(id)
+            })
+            .and_then(|id| ctx.name_for(id))
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::OperationNotSupported {
+                    operation: "Azure sandbox network setup".to_string(),
+                    reason: "every Azure sandbox requires a deployment network".to_string(),
+                })
+            })?;
+        let subnet = format!("{network}_sandbox");
+        fragment.resource_blocks.push(resource_block(
+            "azapi_resource",
+            &format!("{label}_vnet"),
+            [
+                attr(
+                    "type",
+                    Expression::String(
+                        "Microsoft.App/sandboxGroups/vnetConnections@2026-02-01-preview"
+                            .to_string(),
+                    ),
+                ),
+                attr("name", Expression::String("default".to_string())),
+                attr(
+                    "parent_id",
+                    expr::traversal(["azapi_resource", label, "id"]),
+                ),
+                attr("location", expr::raw("var.azure_location")),
+                attr(
+                    "body",
+                    expr::object([(
+                        "properties",
+                        expr::object([(
+                            "subnetId",
+                            expr::traversal(["azurerm_subnet", &subnet, "id"]),
+                        )]),
+                    )]),
+                ),
+                attr("schema_validation_enabled", Expression::Bool(false)),
+                attr(
+                    "depends_on",
+                    Expression::Array(vec![
+                        expr::traversal(["azurerm_subnet_nat_gateway_association", &subnet]),
+                        expr::traversal([
+                            "azurerm_subnet_network_security_group_association",
+                            &subnet,
+                        ]),
+                    ]),
+                ),
             ],
         ));
 
@@ -688,41 +743,6 @@ mod tests {
 
     fn binding_for(egress: SandboxEgress) -> String {
         binding_with(egress, None)
-    }
-
-    fn emit_for(lifecycle: ResourceLifecycle) -> TfFragment {
-        let stack = Stack::new("acme".to_string())
-            .add(
-                Sandbox::new("agents".to_string())
-                    .code(SandboxCode::Image {
-                        image: "ubuntu".to_string(),
-                    })
-                    .egress(SandboxEgress::Internet)
-                    .lifecycle(SandboxLifecyclePolicy {
-                        max_lifetime_seconds: None,
-                        idle_pause_seconds: None,
-                    })
-                    .build(),
-                lifecycle,
-            )
-            .build();
-        let resource = stack
-            .resources
-            .get("agents")
-            .expect("the sandbox is in the stack");
-        let names = IndexMap::from([("agents".to_string(), "agents".to_string())]);
-        let settings = StackSettings::default();
-        let ctx = EmitContext {
-            stack: &stack,
-            resource,
-            resource_id: "agents",
-            platform: alien_core::Platform::Azure,
-            targets_kubernetes: false,
-            stack_settings: &settings,
-            names: &names,
-        };
-
-        AzureSandboxEmitter.emit(&ctx).expect("the sandbox renders")
     }
 
     fn binding_with(egress: SandboxEgress, idle_pause_seconds: Option<u32>) -> String {
