@@ -42,6 +42,16 @@ pub enum ErrorData {
     )]
     SandboxEgressGatewayUnavailable { reason: String },
 
+    /// The agent's self-check found an unsafe or unverified outbound path.
+    #[error(
+        code = "EGRESS_PATH_UNEXPECTED",
+        message = "Sandbox egress path is not verified",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 503
+    )]
+    SandboxEgressPathUnexpected,
+
     /// An egress target is invalid.
     #[error(
         code = "SANDBOX_EGRESS_INVALID",
