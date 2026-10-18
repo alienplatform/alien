@@ -73,6 +73,9 @@ explicit class. These settings do not install a storage driver.
 `alien dev vault set <vault> <key> --stdin` reads the exact input bytes, including
 any trailing newline. It keeps the value out of command arguments. The same
 option works with `alien vault --deployment <name> set`.
+Both local and standalone vault commands accept a deployment name or `dep_...`
+ID with `--deployment`. For example, `alien dev vault --deployment dep_... set
+secrets API_TOKEN --stdin` writes to that deployment's existing vault.
 
 For a hidden prompt in bash or zsh:
 

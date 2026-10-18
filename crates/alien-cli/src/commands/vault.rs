@@ -54,7 +54,7 @@ pub struct VaultArgs {
     #[command(subcommand)]
     pub action: VaultAction,
 
-    /// Target deployment name (default: "default")
+    /// Target deployment ID or name (default: "default")
     #[arg(long, default_value = "default", global = true)]
     pub deployment: String,
 
@@ -148,8 +148,7 @@ pub async fn vault_task(args: VaultArgs, port: u16) -> Result<()> {
     // Ensure dev server is running (deployments are registered there)
     crate::commands::ensure_server_running(port).await?;
 
-    // Get deployment ID by name
-    let deployment_id = get_deployment_id_by_name(&args.deployment, port).await?;
+    let deployment_id = get_local_deployment_id(&args.deployment, port).await?;
 
     let current_dir = get_current_dir()?;
     let state_dir = current_dir.join(&args.state_dir);
@@ -220,8 +219,8 @@ pub async fn vault_task(args: VaultArgs, port: u16) -> Result<()> {
     Ok(())
 }
 
-/// Get deployment ID by name using the manager API
-async fn get_deployment_id_by_name(deployment_name: &str, port: u16) -> Result<String> {
+/// Resolve an existing local deployment by ID or name using the manager API.
+async fn get_local_deployment_id(deployment_name: &str, port: u16) -> Result<String> {
     let client = alien_manager_api::Client::new(&format!("http://localhost:{}", port));
 
     let response = client
@@ -239,7 +238,13 @@ async fn get_deployment_id_by_name(deployment_name: &str, port: u16) -> Result<S
     let deployment = deployments
         .items
         .iter()
-        .find(|d| d.name.as_str() == deployment_name)
+        .find(|d| {
+            if deployment_name.starts_with("dep_") {
+                d.id.as_str() == deployment_name
+            } else {
+                d.name.as_str() == deployment_name
+            }
+        })
         .ok_or_else(|| {
             AlienError::new(ErrorData::ValidationError {
                 field: "deployment".to_string(),
@@ -435,7 +440,10 @@ pub async fn vault_remote_task(
             validate_vault_name(&secret_name)?;
             let url = format!(
                 "{}/v1/deployments/{}/vault/{}/secrets/{}",
-                manager_url, deployment_id, vault_name, secret_name,
+                manager_url,
+                urlencoding::encode(&deployment_id),
+                vault_name,
+                secret_name,
             );
             let resp = http
                 .put(&url)
@@ -470,7 +478,10 @@ pub async fn vault_remote_task(
             validate_vault_name(&secret_name)?;
             let url = format!(
                 "{}/v1/deployments/{}/vault/{}/secrets/{}",
-                manager_url, deployment_id, vault_name, secret_name,
+                manager_url,
+                urlencoding::encode(&deployment_id),
+                vault_name,
+                secret_name,
             );
             let resp = http.get(&url).send().await.into_alien_error().context(
                 ErrorData::ApiRequestFailed {
@@ -813,15 +824,14 @@ mod tests {
 
 /// Resolve a deployment ID from a name or ID string.
 ///
-/// If the input looks like a UUID, use it directly. Otherwise, list deployments
+/// Deployment IDs (and legacy UUIDs) are used directly. Otherwise, list deployments
 /// from the manager and find a match by name.
 async fn resolve_deployment_id(
     name_or_id: &str,
     http: &reqwest::Client,
     manager_url: &str,
 ) -> Result<String> {
-    // If it looks like a UUID, use it directly.
-    if uuid::Uuid::try_parse(name_or_id).is_ok() {
+    if name_or_id.starts_with("dep_") || uuid::Uuid::try_parse(name_or_id).is_ok() {
         return Ok(name_or_id.to_string());
     }
 
