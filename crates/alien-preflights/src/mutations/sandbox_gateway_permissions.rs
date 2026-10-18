@@ -60,7 +60,9 @@ pub(crate) fn configure_aws_gateway_permissions(stack: &mut Stack) -> Result<()>
     }
     let mut gateway_profile = PermissionProfile::new();
     for link in &gateway.links {
-        if *link.resource_type() == Kv::RESOURCE_TYPE {
+        if *link.resource_type() == Kv::RESOURCE_TYPE
+            && link.id() == super::sandbox_gateway::POLICY_STORE_ID
+        {
             gateway_profile.0.insert(
                 link.id().to_string(),
                 vec![PermissionSetReference::from_name("kv/data-write")],
@@ -134,4 +136,35 @@ fn exact_read(key: &str) -> Result<PermissionSet> {
             "binding": {"resource": {"resources": [format!("arn:aws:ssm:${{awsRegion}}:${{awsAccountId}}:parameter/{parameter}")]}}
         }]}
     })).into_alien_error().context(invalid("Failed to construct exact sandbox vault-entry permissions"))
+}
+
+/// Even an application profile with stack-wide DynamoDB access cannot read or alter policies.
+/// This runs after link grants have authored every workload profile.
+pub(crate) fn protect_aws_gateway_policy_store(stack: &mut Stack) -> Result<()> {
+    if !alien_core::sandbox_egress::has_sandbox_gateway(stack) {
+        return Ok(());
+    }
+    let guard: PermissionSet = serde_json::from_value(serde_json::json!({
+        "id": "kv/protect-sandbox-egress-policies",
+        "description": "Only the sandbox gateway workload may access its policy store",
+        "platforms": {"aws": [{"effect":"Deny", "grant":{"actions":["dynamodb:*"]},
+            "binding":{"resource":{"resources":[
+                "arn:aws:dynamodb:${awsRegion}:${awsAccountId}:table/${resourceName}",
+                "arn:aws:dynamodb:${awsRegion}:${awsAccountId}:table/${resourceName}/*"
+            ]}}}]}
+    }))
+    .into_alien_error()
+    .context(invalid("Failed to construct policy store protection"))?;
+    for (name, profile) in &mut stack.permissions.profiles {
+        if name == SANDBOX_EGRESS_GATEWAY_ID {
+            continue;
+        }
+        let grants = profile
+            .0
+            .entry(super::sandbox_gateway::POLICY_STORE_ID.into())
+            .or_default();
+        grants.retain(|permission| permission.id() != guard.id);
+        grants.push(PermissionSetReference::from_inline(guard.clone()));
+    }
+    Ok(())
 }

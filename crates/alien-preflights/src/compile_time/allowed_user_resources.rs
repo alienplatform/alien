@@ -1,6 +1,10 @@
 use crate::error::Result;
+use crate::mutations::sandbox_gateway::POLICY_STORE_ID;
 use crate::{CheckResult, CompileTimeCheck};
-use alien_core::{Platform, Stack, DEPLOYER_SECRETS_VAULT_ID, SECRETS_VAULT_ID};
+use alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID;
+use alien_core::{
+    Platform, Sandbox, SandboxEgress, Stack, DEPLOYER_SECRETS_VAULT_ID, SECRETS_VAULT_ID,
+};
 use std::collections::HashSet;
 
 /// Ensures the stack contains only allowed user-defined resource types and IDs.
@@ -46,6 +50,22 @@ impl CompileTimeCheck for AllowedUserResourcesCheck {
             "experimental/aws-opensearch",
         ]);
         let mut errors = Vec::new();
+        let internet = stack.resources().any(|(_, entry)| {
+            entry
+                .config
+                .downcast_ref::<Sandbox>()
+                .is_some_and(|sandbox| matches!(sandbox.egress, SandboxEgress::Internet))
+        });
+        if internet
+            && stack
+                .permissions
+                .profiles
+                .contains_key(SANDBOX_EGRESS_GATEWAY_ID)
+        {
+            errors.push(
+                "The sandbox gateway permission profile is reserved for preflight".to_string(),
+            );
+        }
 
         for (resource_id, resource_entry) in stack.resources() {
             let resource_type_value = resource_entry.config.resource_type();
@@ -69,6 +89,15 @@ impl CompileTimeCheck for AllowedUserResourcesCheck {
                 continue;
             }
 
+            if internet
+                && matches!(
+                    resource_id.as_str(),
+                    POLICY_STORE_ID | SANDBOX_EGRESS_GATEWAY_ID
+                )
+            {
+                errors.push(format!("Resource ID '{resource_id}' is reserved for the sandbox gateway; its policy store must be created by preflight, not shared with an application"));
+                continue;
+            }
             let normalized_id = resource_id.replace('_', "-").to_ascii_lowercase();
             if resource_type == "vault"
                 && (normalized_id == DEPLOYER_SECRETS_VAULT_ID

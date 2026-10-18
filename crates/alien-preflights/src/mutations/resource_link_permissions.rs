@@ -51,7 +51,7 @@ impl StackMutation for ResourceLinkPermissionsMutation {
     async fn mutate(
         &self,
         mut stack: Stack,
-        _stack_state: &StackState,
+        stack_state: &StackState,
         _config: &DeploymentConfig,
     ) -> Result<Stack> {
         info!("Adding permission-profile grants for resource links and triggers");
@@ -143,6 +143,9 @@ impl StackMutation for ResourceLinkPermissionsMutation {
             grants_added
         );
 
+        if stack_state.platform == alien_core::Platform::Aws {
+            super::sandbox_gateway_permissions::protect_aws_gateway_policy_store(&mut stack)?;
+        }
         Ok(stack)
     }
 }

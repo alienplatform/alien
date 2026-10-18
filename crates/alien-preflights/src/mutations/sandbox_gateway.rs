@@ -16,7 +16,7 @@ use crate::{
     StackMutation,
 };
 
-const POLICY_STORE_ID: &str = "egress-state";
+pub(crate) const POLICY_STORE_ID: &str = "egress-state";
 const GATEWAY_IMAGE: &str = "ghcr.io/alienplatform/alien-egress-gateway@sha256:7a3a66b0894c05fca445cbf5fd71e351cd8a9a98c40744acad4496b59574bdbd";
 
 /// Managed AWS deployments use the same compute and service-account machinery
@@ -82,8 +82,15 @@ impl StackMutation for SandboxGatewayMutation {
         }
         let kv = Kv::new(POLICY_STORE_ID.into()).build();
         if let Some(existing) = stack.resources.get(POLICY_STORE_ID) {
-            if existing.config.downcast_ref::<Kv>().is_none() || existing.enabled_when.is_some() {
-                return Err(invalid(format!("Reserved gateway policy store '{POLICY_STORE_ID}' must be an unconditional KV resource")));
+            // Only a repeated preparation may reuse our own store. Raw declarations are
+            // rejected by AllowedUserResourcesCheck before deployment mutations run.
+            if !stack.resources.contains_key(SANDBOX_EGRESS_GATEWAY_ID)
+                || existing.config.downcast_ref::<Kv>() != Some(&kv)
+                || existing.enabled_when.is_some()
+                || existing.remote_access
+                || existing.lifecycle != ResourceLifecycle::Frozen
+            {
+                return Err(invalid(format!("Reserved gateway policy store '{POLICY_STORE_ID}' cannot reuse an application KV resource")));
             }
         } else {
             stack.resources.insert(
@@ -163,5 +170,116 @@ impl StackMutation for SandboxGatewayMutation {
             );
         }
         Ok(stack)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{compile_time::AllowedUserResourcesCheck, CompileTimeCheck};
+    use alien_core::{
+        EnvironmentVariablesSnapshot, ExternalBindings, SandboxCode, SandboxLifecyclePolicy,
+        StackSettings,
+    };
+
+    fn fixture() -> (Stack, StackState, DeploymentConfig) {
+        let sandbox = Sandbox::new("subject".into())
+            .code(SandboxCode::Image {
+                image: "example.invalid/base:1".into(),
+            })
+            .egress(SandboxEgress::Internet)
+            .lifecycle(SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build();
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+        (
+            Stack::new("example".into())
+                .add(sandbox, ResourceLifecycle::Live)
+                .build(),
+            StackState::new(Platform::Aws),
+            config,
+        )
+    }
+
+    #[tokio::test]
+    async fn developer_policy_store_is_rejected_before_mutation() {
+        let (mut stack, state, config) = fixture();
+        let kv = Kv::new(POLICY_STORE_ID.into()).build();
+        stack.resources.insert(
+            POLICY_STORE_ID.into(),
+            ResourceEntry {
+                config: Resource::new(kv),
+                lifecycle: ResourceLifecycle::Frozen,
+                dependencies: vec![],
+                enabled_when: None,
+                remote_access: false,
+            },
+        );
+        assert!(
+            !AllowedUserResourcesCheck
+                .check(&stack, Platform::Aws)
+                .await
+                .unwrap()
+                .success
+        );
+        assert!(SandboxGatewayMutation
+            .mutate(stack, &state, &config)
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn application_kv_is_preserved_and_gateway_gets_a_separate_store() {
+        let (mut stack, state, config) = fixture();
+        let application = ResourceEntry {
+            config: Resource::new(Kv::new("application".into()).build()),
+            lifecycle: ResourceLifecycle::Frozen,
+            dependencies: vec![],
+            enabled_when: None,
+            remote_access: true,
+        };
+        stack
+            .resources
+            .insert("application".into(), application.clone());
+        assert!(
+            AllowedUserResourcesCheck
+                .check(&stack, Platform::Aws)
+                .await
+                .unwrap()
+                .success
+        );
+        let prepared = SandboxGatewayMutation
+            .mutate(stack, &state, &config)
+            .await
+            .unwrap();
+        assert_eq!(prepared.resources["application"], application);
+        assert!(!prepared.resources[POLICY_STORE_ID].remote_access);
+        let gateway = prepared.resources[SANDBOX_EGRESS_GATEWAY_ID]
+            .config
+            .downcast_ref::<Container>()
+            .unwrap();
+        assert_eq!(
+            gateway.links,
+            vec![alien_core::ResourceRef::new(
+                Kv::RESOURCE_TYPE,
+                POLICY_STORE_ID
+            )]
+        );
+        let repeated = SandboxGatewayMutation
+            .mutate(prepared.clone(), &state, &config)
+            .await
+            .unwrap();
+        assert_eq!(prepared, repeated);
     }
 }
