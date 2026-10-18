@@ -741,7 +741,7 @@ mod tests {
             .code(SandboxCode::Image {
                 image: BUNDLE_URI.to_string(),
             })
-            .egress(SandboxEgress::Internet)
+            .egress(SandboxEgress::Allow)
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
@@ -1314,7 +1314,7 @@ mod tests {
         let frozen = |bundle: &str| {
             stack_as(
                 ResourceLifecycle::Frozen,
-                with(SandboxEgress::Internet, bundle),
+                with(SandboxEgress::Allow, bundle),
                 None,
             )
         };
@@ -1329,7 +1329,7 @@ mod tests {
         );
         assert_eq!(
             changes(
-                &stack_of(with(SandboxEgress::Internet, BUNDLE_URI), None),
+                &stack_of(with(SandboxEgress::Allow, BUNDLE_URI), None),
                 &frozen(BUNDLE_URI),
                 Platform::Aws
             ),
@@ -1368,7 +1368,7 @@ mod tests {
                 &allow,
                 &stack_of(
                     with(
-                        SandboxEgress::Internet,
+                        SandboxEgress::Allow,
                         "s3://other-artifacts/sandbox-bundle/f00dcafe/bundle.zip"
                     ),
                     Some("net")

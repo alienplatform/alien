@@ -146,9 +146,13 @@ mod tests {
 
     #[tokio::test]
     async fn client_hello_can_arrive_one_byte_at_a_time() {
-        let config = rustls::ClientConfig::builder()
-            .with_root_certificates(rustls::RootCertStore::empty())
-            .with_no_client_auth();
+        let config = rustls::ClientConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_root_certificates(rustls::RootCertStore::empty())
+        .with_no_client_auth();
         let mut client =
             rustls::ClientConnection::new(Arc::new(config), "example.com".try_into().unwrap())
                 .unwrap();
