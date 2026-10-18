@@ -3,16 +3,15 @@
 use super::{
     collect_deployer_input_values, create_manager_client, create_manager_http_client,
     deployment_info_url, load_public_endpoints, load_stack_settings, push_initial_setup_targeted,
-    resolve_base_url, resolve_token, stack_input_matches_context, DeployConfigFile,
-    DeploymentInfoSetupConfig, SetupRunOutcome, UpArgs,
+    resolve_base_url, resolve_token, setup_client_config, stack_input_matches_context,
+    DeployConfigFile, DeploymentInfoSetupConfig, SetupRunOutcome, UpArgs,
 };
 use crate::{
     error::{ErrorData, Result},
     output,
 };
 use alien_core::{
-    embedded_config::DeployCliConfig, ClientConfig, ExternalBinding, ExternalBindings, Platform,
-    StorageBinding,
+    embedded_config::DeployCliConfig, ExternalBinding, ExternalBindings, Platform, StorageBinding,
 };
 use alien_deployment::manager_api_transport::AcquiredDeploymentPayload;
 use alien_error::{AlienError, Context, IntoAlienError};
@@ -41,10 +40,13 @@ impl SetupUpdateTarget {
         if self.deployment_id != deployment_id
             || self.update_operation_id != operation_id
             || self.release_id != release_id
-            || self.platform != Platform::Machines
+            || !matches!(
+                self.platform,
+                Platform::Aws | Platform::Gcp | Platform::Azure | Platform::Machines
+            )
             || self.setup_method.as_deref() != Some("cli")
         {
-            return Err(invalid_target("The authorized setup target does not match the requested deployment, operation, release, or original Machines CLI setup identity."));
+            return Err(invalid_target("The authorized setup target does not match the requested deployment, operation, release, or original cloud or Machines CLI setup identity."));
         }
         Ok(())
     }
@@ -173,6 +175,7 @@ fn has_explicit_inputs(args: &UpArgs, config: Option<&DeployConfigFile>) -> bool
 }
 
 fn explicit_input_values(
+    platform: Platform,
     args: &UpArgs,
     config: Option<&DeployConfigFile>,
     setup_config: Option<&DeploymentInfoSetupConfig>,
@@ -185,7 +188,7 @@ fn explicit_input_values(
         .and_then(|config| config.inputs.clone())
         .unwrap_or_default()
         .into_iter()
-        .filter(|input| stack_input_matches_context(input, Platform::Machines))
+        .filter(|input| stack_input_matches_context(input, platform))
         .collect::<Vec<_>>();
     if inputs.is_empty() {
         return Err(invalid_target(
@@ -236,8 +239,9 @@ async fn fetch_target(
     deployment_id: &str,
     operation_id: &str,
     release_id: &str,
+    platform: Platform,
 ) -> Result<SetupInfo> {
-    let mut url = deployment_info_url(base_url, Platform::Machines, None)?;
+    let mut url = deployment_info_url(base_url, platform, None)?;
     url.query_pairs_mut()
         .append_pair("deploymentId", deployment_id)
         .append_pair("updateOperationId", operation_id);
@@ -253,6 +257,11 @@ async fn fetch_target(
     let info: SetupInfo = read_response(response).await?;
     info.setup_update
         .validate_identity(deployment_id, operation_id, release_id)?;
+    if info.setup_update.platform != platform {
+        return Err(invalid_target(
+            "The authorized setup target changed platform.",
+        ));
+    }
     Ok(info)
 }
 
@@ -260,10 +269,12 @@ fn manager_url(info: &SetupInfo) -> Result<&str> {
     let target = info
         .install_context
         .targets
-        .get("machines")
-        .filter(|target| target.platform == Platform::Machines && !target.manager_url.is_empty())
+        .get(info.setup_update.platform.as_str())
+        .filter(|target| {
+            target.platform == info.setup_update.platform && !target.manager_url.is_empty()
+        })
         .ok_or_else(|| {
-            invalid_target("The authorized target has no Machines manager install context.")
+            invalid_target("The authorized target has no matching manager install context.")
         })?;
     Ok(&target.manager_url)
 }
@@ -291,7 +302,7 @@ fn patch_settings(
 ) -> Result<()> {
     // Only explicit choices are patched. In particular, absent settings must not
     // replace the target's update mode, telemetry, bindings, or gate answers.
-    let settings = load_stack_settings(args, Platform::Machines, Platform::Machines, config)?;
+    let settings = load_stack_settings(args, target.platform, target.platform, config)?;
     let serialized = serde_json::to_value(&settings).into_alien_error().context(
         ErrorData::ConfigurationError {
             message: "Invalid setup settings".into(),
@@ -375,7 +386,7 @@ fn patch_settings(
             )?,
         );
     }
-    if let Some(endpoints) = load_public_endpoints(args, Platform::Machines, config)? {
+    if let Some(endpoints) = load_public_endpoints(args, target.platform, config)? {
         let existing = target
             .stack_settings
             .entry("publicEndpoints")
@@ -401,7 +412,9 @@ fn patch_settings(
     if let Some(bindings) = target.stack_settings.get("externalBindings") {
         let bindings = serde_json::from_value::<ExternalBindings>(bindings.clone())
             .map_err(|_| invalid_target("Invalid saved external bindings."))?;
-        validate_machines_binding_credentials(&bindings)?;
+        if target.platform == Platform::Machines {
+            validate_machines_binding_credentials(&bindings)?;
+        }
     }
     Ok(())
 }
@@ -424,22 +437,27 @@ pub(super) async fn run(
         .release_id
         .as_deref()
         .ok_or_else(|| invalid_target("--release-id is required."))?;
-    if args
+    let platform = match args
         .platform
         .as_deref()
         .or_else(|| config.and_then(|config| config.platform.as_deref()))
-        != Some("machines")
     {
-        return Err(invalid_target(
-            "Explicit setup targeting currently requires --platform machines.",
-        ));
-    }
+        Some("aws") => Platform::Aws,
+        Some("gcp") => Platform::Gcp,
+        Some("azure") => Platform::Azure,
+        Some("machines") => Platform::Machines,
+        _ => {
+            return Err(invalid_target(
+                "Explicit setup targeting requires --platform aws, gcp, azure, or machines.",
+            ))
+        }
+    };
     if args.base_platform.is_some()
         || config.is_some_and(|config| config.base_platform.is_some())
         || args.setup_item.is_some()
     {
         return Err(invalid_target(
-            "An exact Machines setup target cannot select a base platform or setup item.",
+            "An exact native setup target cannot select a base platform or setup item.",
         ));
     }
     let token = resolve_token(args, embedded)?;
@@ -451,6 +469,7 @@ pub(super) async fn run(
         .deployment_id(deployment_id)
         .operation_id(&operation_id)
         .release_id(release_id)
+        .platform(platform)
         .call()
         .await?;
     let original_manager = manager_url(&info)?.to_string();
@@ -478,7 +497,7 @@ pub(super) async fn run(
                 message: "Could not load setup input definitions".into(),
             })?;
         let definitions: DeploymentInfoSetupConfig = read_response(response).await?;
-        let values = explicit_input_values(args, config, Some(&definitions))?;
+        let values = explicit_input_values(platform, args, config, Some(&definitions))?;
         let response = http
             .patch(&inputs_url)
             .json(&InputUpdateRequest {
@@ -500,6 +519,7 @@ pub(super) async fn run(
             .deployment_id(deployment_id)
             .operation_id(&operation_id)
             .release_id(release_id)
+            .platform(platform)
             .call()
             .await?;
         if manager_url(&info)? != original_manager {
@@ -517,7 +537,7 @@ pub(super) async fn run(
         .json(&PrepareRequest {
             deployment_id,
             update_operation_id: &operation_id,
-            platform: Platform::Machines,
+            platform,
             setup_method: "cli",
             save_for_setup: true,
             stack_settings: &info.setup_update.stack_settings,
@@ -529,9 +549,9 @@ pub(super) async fn run(
             message: "Could not save the exact setup choices".into(),
         })?;
     let prepared: PreparedTarget = read_response(response).await?;
-    if prepared.platform != Platform::Machines || prepared.update_operation_id.is_empty() {
+    if prepared.platform != platform || prepared.update_operation_id.is_empty() {
         return Err(invalid_target(
-            "Preparation did not return an exact Machines operation.",
+            "Preparation did not return an exact operation for the original platform.",
         ));
     }
     output::info(&format!(
@@ -544,6 +564,7 @@ pub(super) async fn run(
         .deployment_id(deployment_id)
         .operation_id(&prepared.update_operation_id)
         .release_id(release_id)
+        .platform(platform)
         .call()
         .await?;
     if manager_url(&info)? != original_manager {
@@ -555,8 +576,8 @@ pub(super) async fn run(
     let outcome = push_initial_setup_targeted()
         .client(&client)
         .deployment_id(deployment_id)
-        .platform(Platform::Machines)
-        .client_config(ClientConfig::Machines)
+        .platform(platform)
+        .client_config(setup_client_config(platform).await?)
         .manager_base_url(&original_manager)
         .deployment_token(&token)
         .expected_target(&info.setup_update)
@@ -651,13 +672,15 @@ mod tests {
         let args = UpArgs::parse_from(["democtl", "--input", "archiveEnabled=true"]);
         let definitions: DeploymentInfoSetupConfig =
             serde_json::from_value(input_definitions()).unwrap();
-        let values = explicit_input_values(&args, None, Some(&definitions)).unwrap();
+        let values =
+            explicit_input_values(Platform::Machines, &args, None, Some(&definitions)).unwrap();
         assert_eq!(values.len(), 1);
         assert_eq!(values["archiveEnabled"], true);
         assert!(!values.contains_key("storageSecret"));
         assert!(!values.contains_key("alreadyConfigured"));
         let malformed = UpArgs::parse_from(["democtl", "--secret-input", "sensitive-test-marker"]);
-        let error = explicit_input_values(&malformed, None, Some(&definitions)).unwrap_err();
+        let error = explicit_input_values(Platform::Machines, &malformed, None, Some(&definitions))
+            .unwrap_err();
         assert!(!format!("{error:?}").contains("sensitive-test-marker"));
     }
 
@@ -667,7 +690,8 @@ mod tests {
             serde_json::from_value(input_definitions()).unwrap();
         for flag in ["--input", "--secret-input"] {
             let args = UpArgs::parse_from(["democtl", flag, "storageSecret=canary-secret"]);
-            let error = explicit_input_values(&args, None, Some(&definitions)).unwrap_err();
+            let error = explicit_input_values(Platform::Machines, &args, None, Some(&definitions))
+                .unwrap_err();
             assert!(error.to_string().contains("Storage secret"));
             assert!(!format!("{error:?}").contains("canary-secret"));
         }
@@ -678,6 +702,7 @@ storageSecret = "canary-secret"
         )
         .unwrap();
         let error = explicit_input_values(
+            Platform::Machines,
             &UpArgs::parse_from(["democtl"]),
             Some(&config),
             Some(&definitions),
@@ -990,19 +1015,72 @@ storageSecret = "canary-secret"
     }
 
     #[tokio::test]
+    async fn native_setup_target_preserves_platform_and_authorized_manager() {
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            for wrong_platform in [false, true] {
+                let server = MockServer::start_async().await;
+                let returned = if wrong_platform { Platform::Machines } else { platform };
+                let request = server.mock_async(|when, then| {
+                    when.method(GET).path("/v1/deployment-info")
+                        .query_param("deploymentId", "dep_demo")
+                        .query_param("updateOperationId", "op_saved");
+                    then.status(200).json_body(json!({
+                        "setupUpdate": {
+                            "deploymentId": "dep_demo", "updateOperationId": "op_saved",
+                            "releaseId": "rel_target", "platform": returned,
+                            "setupMethod": "cli", "stackSettings": {"endpointAccess": "private"}
+                        },
+                        "installContext": {"targets": {(returned.as_str()): {
+                            "platform": returned, "managerUrl": server.base_url()
+                        }}}
+                    }));
+                }).await;
+                let result = fetch_target().client(&reqwest::Client::new())
+                    .base_url(&server.base_url()).deployment_id("dep_demo")
+                    .operation_id("op_saved").release_id("rel_target")
+                    .platform(platform).call().await;
+                if wrong_platform {
+                    assert!(result.is_err(), "a different platform cannot replace the authorized target");
+                } else {
+                    let mut info = result.unwrap();
+                    assert_eq!(manager_url(&info).unwrap(), server.base_url());
+                    let args = UpArgs::parse_from(["democtl", "--platform", platform.as_str(), "--endpoint-access", "both"]);
+                    patch_settings(&mut info.setup_update, &args, None).unwrap();
+                    assert_eq!(info.setup_update.stack_settings["endpointAccess"], json!("both"));
+                    assert_eq!(info.setup_update.platform, platform);
+                }
+                request.assert_hits_async(1).await;
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn fresh_runner_uses_acquired_bindings_and_hands_off_at_provisioning() {
         run_fresh_runner(alien_core::EndpointAccess::Internet, None, true).await;
     }
 
     #[tokio::test]
     async fn fresh_runner_rejects_endpoint_access_change_under_claim() {
-        run_fresh_runner(alien_core::EndpointAccess::Internet, Some(alien_core::EndpointAccess::Private), false).await;
+        run_fresh_runner(
+            alien_core::EndpointAccess::Internet,
+            Some(alien_core::EndpointAccess::Private),
+            false,
+        )
+        .await;
     }
 
     #[tokio::test]
     async fn fresh_runner_saves_all_endpoint_transitions_before_claiming_setup() {
-        for stored in [alien_core::EndpointAccess::Internet, alien_core::EndpointAccess::Private, alien_core::EndpointAccess::Both] {
-            for requested in [alien_core::EndpointAccess::Internet, alien_core::EndpointAccess::Private, alien_core::EndpointAccess::Both] {
+        for stored in [
+            alien_core::EndpointAccess::Internet,
+            alien_core::EndpointAccess::Private,
+            alien_core::EndpointAccess::Both,
+        ] {
+            for requested in [
+                alien_core::EndpointAccess::Internet,
+                alien_core::EndpointAccess::Private,
+                alien_core::EndpointAccess::Both,
+            ] {
                 if requested != stored {
                     run_fresh_runner(stored, Some(requested), true).await;
                 }
