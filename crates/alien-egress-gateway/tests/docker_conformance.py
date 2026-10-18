@@ -47,6 +47,26 @@ def encoded(value):
     return base64.urlsafe_b64encode(value).rstrip(b"=").decode()
 
 
+def check_loopback_http(container):
+    script = '''import http.server,os,subprocess,threading,urllib.request
+from pathlib import Path
+env=dict(line.split("=",1) for line in Path("/data/image-env").read_text().splitlines())
+os.environ.clear();os.environ.update(env)
+class Handler(http.server.BaseHTTPRequestHandler):
+ def do_GET(self):
+  self.send_response(200);self.end_headers();self.wfile.write(b"loopback-http-ok")
+ def log_message(self,*args): pass
+server=http.server.ThreadingHTTPServer(("127.0.0.1",0),Handler)
+threading.Thread(target=server.serve_forever,daemon=True).start()
+for host in ["localhost","127.0.0.1"]:
+ url=f"http://{host}:{server.server_port}/"
+ assert urllib.request.urlopen(url,timeout=3).read()==b"loopback-http-ok"
+ assert subprocess.check_output(["curl","--fail","--silent","--max-time","3",url])==b"loopback-http-ok"
+server.shutdown();print("loopback-http-ok")
+'''
+    assert docker("exec", "-u", "60000:60000", container, "python", "-c", script) == "loopback-http-ok"
+
+
 def policy_digest(policy):
     if isinstance(policy, dict):
         policy = {"allow": sorted(policy["allow"])}
@@ -320,6 +340,7 @@ class Suite:
         image_env = docker("exec", "-u", "60000:60000", name, "cat", "/data/image-env")
         assert "HTTP_PROXY=http://127.0.0.1:15002" in image_env
         assert "ALIEN_SANDBOX_EGRESS_TOKEN" not in image_env and "fake-test-secret" not in image_env
+        self.record("gateway command environment preserves localhost HTTP", lambda: check_loopback_http(name))
         script = '''import socket,ssl,http.client
 ip=socket.gethostbyname("allowed.test")
 assert ip.startswith("198.18."),ip
@@ -370,6 +391,8 @@ while True:
   time.sleep(.05)
 '''
             self.record(f"declared none floor {mode}", lambda n=closed, e=expected: equal(docker("exec", n, "python", "-c", health_script), str(e)))
+            if mode == "none":
+                self.record("declared none command environment preserves localhost HTTP", lambda: check_loopback_http(closed))
             if mode == "bridge":
                 control = 'import socket; s=socket.socket();s.setsockopt(socket.SOL_SOCKET,36,0xa11e);s.settimeout(3);s.connect(("1.1.1.1",443));print("reachable")'
                 self.record("open floor direct canary positive control", lambda: equal(docker("exec", closed, "python", "-c", control), "reachable"))

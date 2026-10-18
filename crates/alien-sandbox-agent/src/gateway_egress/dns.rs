@@ -4,6 +4,7 @@ use std::{
     net::{Ipv4Addr, SocketAddr},
     os::fd::AsRawFd,
     sync::Mutex,
+    time::Instant,
 };
 use tokio::{
     net::UdpSocket,
@@ -13,14 +14,44 @@ use tokio::{
 /// Synthetic A records preserve a unique name for transparent CONNECT, without external DNS.
 #[derive(Default)]
 pub(super) struct Names {
-    entries: Mutex<HashMap<Ipv4Addr, String>>,
+    state: Mutex<NameState>,
 }
+
+#[derive(Default)]
+struct NameState {
+    entries: HashMap<Ipv4Addr, NameEntry>,
+    allocated: u32,
+}
+
+struct NameEntry {
+    name: String,
+    expires: Instant,
+}
+
+const DNS_TTL: u32 = 60;
+const MAX_NAMES: usize = 4096;
+const MAX_ADDRESSES: u32 = (1 << 17) - 2;
+
 impl Names {
     pub(super) fn name(&self, ip: Ipv4Addr) -> Option<String> {
-        self.entries.lock().ok()?.get(&ip).cloned()
+        self.name_at(ip, Instant::now())
+    }
+
+    fn name_at(&self, ip: Ipv4Addr, now: Instant) -> Option<String> {
+        self.state
+            .lock()
+            .ok()?
+            .entries
+            .get(&ip)
+            .filter(|entry| entry.expires > now)
+            .map(|entry| entry.name.clone())
     }
 
     pub(super) fn answer(&self, packet: &[u8]) -> Option<Vec<u8>> {
+        self.answer_at(packet, Instant::now())
+    }
+
+    fn answer_at(&self, packet: &[u8], now: Instant) -> Option<Vec<u8>> {
         if packet.len() < 12
             || packet.len() > 4096
             || packet[2] & 0xf8 != 0
@@ -76,20 +107,30 @@ impl Names {
         if qtype != 1 {
             return Some(reply);
         } // AAAA and non-address questions have no answer.
-        let mut entries = self.entries.lock().ok()?;
-        let ip = if let Some((ip, _)) = entries.iter().find(|(_, n)| *n == &name) {
+        let mut state = self.state.lock().ok()?;
+        let expires = now + Duration::from_secs(u64::from(DNS_TTL));
+        let ip = if let Some((ip, entry)) = state.entries.iter_mut().find(|(_, e)| e.name == name) {
+            entry.expires = expires;
             *ip
         } else {
-            if entries.len() >= 4096 {
+            if state.entries.len() >= MAX_NAMES {
+                state.entries.retain(|_, entry| entry.expires > now);
+            }
+            if state.entries.len() >= MAX_NAMES || state.allocated == MAX_ADDRESSES {
                 reply[3] = 0x82;
                 return Some(reply);
             }
-            let ip = Ipv4Addr::from(u32::from(Ipv4Addr::new(198, 18, 0, 1)) + entries.len() as u32);
-            entries.insert(ip, name);
+            // Never recycle an address: clients can retain an expired answer indefinitely.
+            // Exhausting 198.18.0.0/15 fails closed instead of retargeting a stale connection.
+            let ip = Ipv4Addr::from(u32::from(Ipv4Addr::new(198, 18, 0, 1)) + state.allocated);
+            state.allocated += 1;
+            state.entries.insert(ip, NameEntry { name, expires });
             ip
         };
         reply[7] = 1;
-        reply.extend_from_slice(&[0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4]);
+        reply.extend_from_slice(&[0xc0, 0x0c, 0, 1, 0, 1]);
+        reply.extend_from_slice(&DNS_TTL.to_be_bytes());
+        reply.extend_from_slice(&[0, 4]);
         reply.extend_from_slice(&ip.octets());
         Some(reply)
     }
@@ -237,5 +278,57 @@ mod tests {
         assert_eq!(names.answer(&plain), names.answer(&edns));
         edns.pop();
         assert!(names.answer(&edns).is_none());
+    }
+
+    #[test]
+    fn expired_names_free_capacity_without_retargeting_old_addresses() {
+        let names = Names::default();
+        let start = Instant::now();
+        for i in 0..MAX_NAMES {
+            let reply = names
+                .answer_at(&question(&format!("n{i}.example.com")), start)
+                .unwrap();
+            assert_eq!(reply[7], 1);
+        }
+        let extra = question("extra.example.com");
+        assert_eq!(names.answer_at(&extra, start).unwrap()[3] & 15, 2);
+        let first_ip = Ipv4Addr::new(198, 18, 0, 1);
+        let refreshed = start + Duration::from_secs(30);
+        names
+            .answer_at(&question("n0.example.com"), refreshed)
+            .unwrap();
+        let expired = start + Duration::from_secs(60);
+        let reply = names.answer_at(&extra, expired).unwrap();
+        let new_ip = Ipv4Addr::from(<[u8; 4]>::try_from(&reply[reply.len() - 4..]).unwrap());
+        assert_eq!(
+            names.name_at(new_ip, expired).as_deref(),
+            Some("extra.example.com")
+        );
+        assert_eq!(
+            names.name_at(first_ip, expired).as_deref(),
+            Some("n0.example.com")
+        );
+        assert_eq!(names.name_at(Ipv4Addr::new(198, 18, 0, 2), expired), None);
+        assert_eq!(
+            names.name_at(first_ip, start + Duration::from_secs(90)),
+            None
+        );
+        assert!(u32::from(new_ip) >= u32::from(first_ip) + MAX_NAMES as u32);
+    }
+
+    #[test]
+    fn synthetic_address_exhaustion_never_wraps_into_an_old_mapping() {
+        let names = Names::default();
+        names.state.lock().unwrap().allocated = MAX_ADDRESSES - 1;
+        let reply = names.answer(&question("last.example.com")).unwrap();
+        assert_eq!(&reply[reply.len() - 4..], &[198, 19, 255, 254]);
+        assert_eq!(
+            names.answer(&question("overflow.example.com")).unwrap()[3] & 15,
+            2
+        );
+        assert_eq!(
+            names.name(Ipv4Addr::new(198, 19, 255, 254)).as_deref(),
+            Some("last.example.com")
+        );
     }
 }

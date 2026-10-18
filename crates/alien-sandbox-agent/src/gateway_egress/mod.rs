@@ -373,10 +373,20 @@ impl GatewayEgress {
     /// Configure standard proxy-aware tools without disclosing the gateway token.
     pub fn command_environment(&self, env: &mut BTreeMap<String, String>) -> Result<()> {
         for key in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
-            env.insert(key.into(), "http://127.0.0.1:15002".into());
+            env.insert(
+                key.into(),
+                if self.declared_none {
+                    String::new()
+                } else {
+                    "http://127.0.0.1:15002".into()
+                },
+            );
+        }
+        for key in ["ALL_PROXY", "all_proxy"] {
+            env.insert(key.into(), String::new());
         }
         for key in ["NO_PROXY", "no_proxy"] {
-            env.insert(key.into(), String::new());
+            env.insert(key.into(), "localhost,127.0.0.1,127.0.0.0/8,::1".into());
         }
         env.remove("ALIEN_SANDBOX_EGRESS_TOKEN");
         if let Some(path) = self

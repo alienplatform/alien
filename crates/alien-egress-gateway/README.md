@@ -99,6 +99,14 @@ A resource declared `none` uses a loopback-only network and has no gateway or to
 The agent verifies that direct internet fails before serving. Narrowing a resource
 declared `internet` or `allow` to `none` still requires the gateway and a token.
 
+Proxy-aware commands bypass the proxy for localhost and loopback; declared `none`
+does not advertise a proxy. Synthetic DNS answers expire after 60 seconds and
+renew on lookup. The agent retains at most 4096 names, reclaims expired entries
+when full, and never reuses an
+issued synthetic address, so stale answers cannot connect to a different name.
+Clients must resolve again after expiry. After 131070 allocations in one agent
+lifetime, new names fail closed; create a fresh sandbox to reset that limit.
+
 Validation tools live in `tests/` and `fuzz/`. Build the two release binaries, build
 `tests/Dockerfile.agent` with `alien-sandbox-agent` in its Docker build context, then
 run `python3 tests/docker_conformance.py --image IMAGE --agent-image AGENT_IMAGE
