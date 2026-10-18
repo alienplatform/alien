@@ -4749,7 +4749,9 @@ impl AwsWorkerController {
                         },
                         Filter {
                             name: "interface-type".to_string(),
-                            values: vec!["lambda".to_string()],
+                            // Lambda changes detached ENIs to the ordinary interface type
+                            // before its execution role can finish deleting them.
+                            values: vec!["lambda".to_string(), "interface".to_string()],
                         },
                         Filter {
                             name: "vpc-id".to_string(),
@@ -5421,19 +5423,19 @@ mod tests {
         Route, Stage,
     };
     use alien_aws_clients::cloudwatch_logs::MockCloudWatchLogsApi;
-    use alien_aws_clients::ec2::{DescribeNetworkInterfacesResponse, MockEc2Api};
+    use alien_aws_clients::ec2::{DescribeNetworkInterfacesResponse, Ec2Client, MockEc2Api};
     use alien_aws_clients::iam::MockIamApi;
     use alien_aws_clients::lambda::{
         AddPermissionResponse, FunctionConfiguration, GetFunctionResponse, MockLambdaApi,
     };
-    use alien_aws_clients::{AwsClientConfig, AwsClientConfigExt as _};
+    use alien_aws_clients::{AwsClientConfig, AwsClientConfigExt as _, AwsCredentialProvider};
     use alien_client_core::ErrorData as CloudClientErrorData;
     use alien_core::{
-        CertificateStatus, ClientConfig, DeploymentConfig, DnsRecordStatus, DomainMetadata,
-        EnvironmentVariablesSnapshot, ExternalBindings, Network, NetworkSettings, Platform,
-        PublicEndpointUrls, Resource, ResourceDefinition, ResourceDomainInfo, ResourceLifecycle,
-        ResourceStatus, ServiceAccount, Stack, StackResourceState, StackSettings, StackState,
-        Worker, WorkerCode, WorkerOutputs, WorkerPublicEndpoint,
+        AwsServiceOverrides, CertificateStatus, ClientConfig, DeploymentConfig, DnsRecordStatus,
+        DomainMetadata, EnvironmentVariablesSnapshot, ExternalBindings, Network, NetworkSettings,
+        Platform, PublicEndpointUrls, Resource, ResourceDefinition, ResourceDomainInfo,
+        ResourceLifecycle, ResourceStatus, ServiceAccount, Stack, StackResourceState,
+        StackSettings, StackState, Worker, WorkerCode, WorkerOutputs, WorkerPublicEndpoint,
     };
     use alien_error::AlienError;
     use httpmock::prelude::*;
@@ -6331,9 +6333,11 @@ mod tests {
             .withf(|request| {
                 let filters = request.filters.as_ref().unwrap();
                 filters.len() == 3
+                    && filters
+                        .iter()
+                        .any(|f| f.name == "interface-type" && f.values == ["lambda", "interface"])
                     && [
                         ("description", "AWS Lambda VPC ENI-test-basic-func*"),
-                        ("interface-type", "lambda"),
                         ("vpc-id", "vpc-test"),
                     ]
                     .iter()
@@ -6514,19 +6518,32 @@ mod tests {
     async fn existing_vpc_wait_keeps_execution_role_permissions_until_wait_finishes(
         #[case] reaches_deadline: bool,
     ) {
-        let released = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let observed = released.clone();
-        let mut ec2 = MockEc2Api::new();
-        ec2.expect_describe_network_interfaces()
-            .returning(move |_| {
-                Ok(
-                    serde_json::from_value(serde_json::json!({"networkInterfaceSet": {"item":
-                        if observed.load(Ordering::SeqCst) { vec![] }
-                        else { vec![serde_json::json!({"networkInterfaceId": "eni-test", "description": "AWS Lambda VPC ENI-test-basic-func"})] }
-                    }}))
-                    .unwrap(),
-                )
-            });
+        let server = MockServer::start_async().await;
+        let eni_response = |interface_type: &str, status: &str| {
+            format!(
+                "<DescribeNetworkInterfacesResponse><networkInterfaceSet><item>\
+             <networkInterfaceId>eni-test</networkInterfaceId>\
+             <description>AWS Lambda VPC ENI-test-basic-func</description>\
+             <interfaceType>{interface_type}</interfaceType><status>{status}</status>\
+             <vpcId>vpc-test</vpcId></item></networkInterfaceSet>\
+             </DescribeNetworkInterfacesResponse>"
+            )
+        };
+        let attached = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .body_contains("Action=DescribeNetworkInterfaces");
+                then.status(200).body(eni_response("lambda", "in-use"));
+            })
+            .await;
+        let mut aws_config = AwsClientConfig::mock();
+        aws_config.service_overrides = Some(AwsServiceOverrides {
+            endpoints: HashMap::from([("ec2".to_string(), server.base_url())]),
+        });
+        let ec2 = Ec2Client::new(
+            reqwest::Client::new(),
+            AwsCredentialProvider::from_config_sync(aws_config),
+        );
         let iam_calls = Arc::new(AtomicUsize::new(0));
         let mut iam = MockIamApi::new();
         let calls = iam_calls.clone();
@@ -6640,6 +6657,33 @@ mod tests {
             None,
         )
         .unwrap();
+        state = executor.step(state).await.unwrap().next_state;
+        attached.assert_hits_async(1).await;
+        attached.delete_async().await;
+        assert_eq!(iam_calls.load(Ordering::SeqCst), 0);
+
+        // AWS changes a detached Lambda ENI to interface/available before deleting it.
+        // Model EC2's type filtering: a lambda-only query incorrectly sees no interfaces.
+        let detached = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .body_contains("Action=DescribeNetworkInterfaces")
+                    .body_contains("Filter.2.Name=interface-type")
+                    .body_contains("Filter.2.Value.2=interface");
+                then.status(200)
+                    .body(eni_response("interface", "available"));
+            })
+            .await;
+        let absent = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .body_contains("Action=DescribeNetworkInterfaces");
+                then.status(200).body(
+                    "<DescribeNetworkInterfacesResponse><networkInterfaceSet/>\
+                 </DescribeNetworkInterfacesResponse>",
+                );
+            })
+            .await;
         // More than the old 90-poll limit, without advancing wall time. A scheduler
         // that reconciles quickly must neither fail deletion nor remove permissions.
         for _ in 0..125 {
@@ -6651,6 +6695,8 @@ mod tests {
             );
             assert_eq!(iam_calls.load(Ordering::SeqCst), 0);
         }
+        detached.assert_hits_async(125).await;
+        absent.assert_hits_async(0).await;
         if reaches_deadline {
             let resource = state.resources.get_mut("basic-func").unwrap();
             let mut controller: AwsWorkerController =
@@ -6659,7 +6705,7 @@ mod tests {
                 Some(chrono::Utc::now() - chrono::Duration::seconds(20 * 60));
             resource.internal_state = Some(serialize_controller(&controller).unwrap());
         } else {
-            released.store(true, Ordering::SeqCst);
+            detached.delete_async().await;
         }
         for _ in 0..20 {
             state = executor.step(state).await.unwrap().next_state;
