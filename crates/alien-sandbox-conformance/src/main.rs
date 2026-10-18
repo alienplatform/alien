@@ -80,9 +80,11 @@ async fn probe(sandbox: &dyn Sandbox, id: &str, request: &Probe) -> Result<Obser
         args: vec!["-c".into(), GUEST_PROBE.into(), argument],
         cwd: None,
         env: BTreeMap::new(),
-        timeout: Duration::from_secs(10),
+        // Allow interpreter startup on a cold sandbox in addition to the probe's
+        // own five-second network deadline. A command timeout is still an error.
+        timeout: Duration::from_secs(30),
     };
-    tokio::time::timeout(Duration::from_secs(30), async {
+    tokio::time::timeout(Duration::from_secs(45), async {
         let mut stream = sandbox
             .run_command(id, command)
             .await
@@ -118,7 +120,7 @@ async fn probe(sandbox: &dyn Sandbox, id: &str, request: &Probe) -> Result<Obser
     })
     .await
     .into_alien_error()
-    .context(operation("wait for guest probe within 30 seconds"))?
+    .context(operation("wait for guest probe within 45 seconds"))?
 }
 
 async fn create(
@@ -248,13 +250,15 @@ async fn run(bindings: &Bindings, suite: Suite, journal_path: &Path) -> Result<R
                 &sessions[control].sandbox_id,
                 &case.control,
             )
-            .await?;
+            .await
+            .context(operation(format!("positive control for {}", case.name)))?;
             let subject = probe(
                 subject_provider.as_ref(),
                 &sessions[subject].sandbox_id,
                 &case.subject,
             )
-            .await?;
+            .await
+            .context(operation(format!("subject for {}", case.name)))?;
             let verdict = evaluate(&case.expected, &control, &subject);
             results.push(CaseResult {
                 name: case.name,
