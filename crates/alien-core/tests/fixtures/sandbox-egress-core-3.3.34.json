@@ -52,7 +52,11 @@
           "type": "image"
         },
         "egress": {
-          "domains": ["api.example.com"],
+          "domains": [
+            "API.Example.COM.",
+            "*.Example.ORG",
+            "git.example.com:022"
+          ],
           "mode": "allowDomains"
         },
         "lifecycle": {
