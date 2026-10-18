@@ -56,6 +56,9 @@ pub(crate) struct RetiredVersion {
 /// AWS Sandbox controller.
 #[controller]
 pub struct AwsSandboxController {
+    /// Bound installed with the parent and published to runtime bindings.
+    #[serde(default)]
+    pub(crate) egress: Option<alien_core::SandboxEgress>,
     /// Startup security contract of the active version (empty for legacy images).
     #[serde(default)]
     pub(crate) supervisor_environment: BTreeMap<String, String>,
@@ -819,6 +822,7 @@ impl AwsSandboxController {
         // token can be minted for; neither can be inferred from the image, and a session
         // started without the connectors reaches the public internet.
         let binding = SandboxBinding::Aws(AwsSandboxBinding {
+            egress: self.egress.clone(),
             image_arn: BindingValue::value(image_arn.clone()),
             image_version: BindingValue::value(image_version.clone()),
             region: BindingValue::value(region.clone()),

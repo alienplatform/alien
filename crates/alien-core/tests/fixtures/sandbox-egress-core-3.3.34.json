@@ -1,0 +1,71 @@
+{
+  "id": "egress-compatibility",
+  "resources": {
+    "deny": {
+      "config": {
+        "id": "deny",
+        "type": "sandbox",
+        "code": {
+          "image": "alpine:3.20",
+          "type": "image"
+        },
+        "egress": {
+          "mode": "deny"
+        },
+        "lifecycle": {
+          "maxLifetimeSeconds": 3600
+        },
+        "privilegedSupervisor": {
+          "commandUid": 60000
+        }
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "open": {
+      "config": {
+        "id": "open",
+        "type": "sandbox",
+        "code": {
+          "image": "alpine:3.20",
+          "type": "image"
+        },
+        "egress": {
+          "mode": "allow"
+        },
+        "lifecycle": {
+          "maxLifetimeSeconds": 3600
+        },
+        "privilegedSupervisor": {
+          "commandUid": 60000
+        }
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "targets": {
+      "config": {
+        "id": "targets",
+        "type": "sandbox",
+        "code": {
+          "image": "alpine:3.20",
+          "type": "image"
+        },
+        "egress": {
+          "domains": [
+            "api.example.com"
+          ],
+          "mode": "allowDomains"
+        },
+        "lifecycle": {
+          "maxLifetimeSeconds": 3600
+        },
+        "privilegedSupervisor": {
+          "commandUid": 60000
+        }
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    }
+  }
+}

@@ -37,6 +37,9 @@ pub enum SandboxBinding {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AwsSandboxBinding {
+    /// Declared egress bound. Absent only in bindings created by older releases.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub egress: Option<SandboxEgress>,
     /// MicroVM image ARN that scopes the sandboxes this binding creates
     pub image_arn: BindingValue<String>,
     /// Image version. Sandboxes are enumerated by image and version together, so a rolled
@@ -126,6 +129,9 @@ pub struct AzureSandboxBinding {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GcpAgentPlatformSandboxBinding {
+    /// Declared egress bound. Absent only in bindings created by older releases.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub egress: Option<SandboxEgress>,
     /// Agent Engine that parents every sandbox. Sandboxes are created and enumerated under it,
     /// so a binding without it can neither reach nor reap them.
     pub engine: BindingValue<String>,
@@ -149,6 +155,9 @@ pub struct GcpAgentPlatformSandboxBinding {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct KubernetesSandboxBinding {
+    /// Declared egress bound. Absent only in bindings created by older releases.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub egress: Option<SandboxEgress>,
     /// Namespace sandbox pods are created in
     pub namespace: BindingValue<String>,
     /// Runtime class every sandbox pod must carry, such as `gvisor` or `kata`
@@ -170,6 +179,9 @@ pub struct KubernetesSandboxBinding {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalSandboxBinding {
+    /// Declared egress bound. Absent only in bindings created by older releases.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub egress: Option<SandboxEgress>,
     /// Loopback endpoint of the local sandbox manager
     pub manager_url: BindingValue<String>,
     /// Key scoping this binding's sandboxes within the manager
@@ -187,6 +199,7 @@ impl SandboxBinding {
         region: impl Into<BindingValue<String>>,
     ) -> Self {
         Self::Aws(AwsSandboxBinding {
+            egress: None,
             image_arn: image_arn.into(),
             image_version: image_version.into(),
             region: region.into(),
@@ -234,6 +247,11 @@ impl SandboxBinding {
         allow_egress: bool,
     ) -> Self {
         Self::GcpAgentPlatform(GcpAgentPlatformSandboxBinding {
+            egress: Some(if allow_egress {
+                SandboxEgress::Internet
+            } else {
+                SandboxEgress::None
+            }),
             engine: engine.into(),
             template: template.into(),
             region: region.into(),
@@ -250,8 +268,10 @@ impl SandboxBinding {
         broker_url: impl Into<BindingValue<String>>,
         key_name: impl Into<BindingValue<String>>,
         token_path: impl Into<BindingValue<String>>,
+        egress: Option<SandboxEgress>,
     ) -> Self {
         Self::Kubernetes(KubernetesSandboxBinding {
+            egress,
             namespace: namespace.into(),
             runtime_class: runtime_class.into(),
             selector: selector.into(),
@@ -266,8 +286,10 @@ impl SandboxBinding {
         manager_url: impl Into<BindingValue<String>>,
         sandbox_key: impl Into<BindingValue<String>>,
         token_path: impl Into<BindingValue<String>>,
+        egress: Option<SandboxEgress>,
     ) -> Self {
         Self::Local(LocalSandboxBinding {
+            egress,
             manager_url: manager_url.into(),
             sandbox_key: sandbox_key.into(),
             token_path: token_path.into(),
@@ -311,11 +333,13 @@ mod tests {
                 "http://alien-operator.alien.svc:8080",
                 "alien-sandbox-agent-capability",
                 "/var/run/secrets/kubernetes.io/serviceaccount/token",
+                None,
             ),
             SandboxBinding::local(
                 "http://127.0.0.1:8931",
                 "agent",
                 "/state/sandbox-manager.token",
+                None,
             ),
         ];
 
@@ -384,8 +408,8 @@ mod tests {
             SandboxBinding::aws("a", "1", "r"),
             SandboxBinding::azure("g", "e", "r", "rg", "ubuntu", SandboxEgress::None, None),
             SandboxBinding::gcp_agent_platform("e", "t", "us-central1", None, false),
-            SandboxBinding::kubernetes("n", "gvisor", "s", "http://op:8080", "k", "/t"),
-            SandboxBinding::local("u", "k", "t"),
+            SandboxBinding::kubernetes("n", "gvisor", "s", "http://op:8080", "k", "/t", None),
+            SandboxBinding::local("u", "k", "t", None),
         ]
         .iter()
         .map(|binding| {
@@ -415,6 +439,7 @@ mod tests {
             "http://127.0.0.1:8931",
             "agent",
             "/state/sandbox-manager.token",
+            None,
         ))
         .expect("serializes");
 

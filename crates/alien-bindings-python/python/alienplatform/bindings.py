@@ -7,7 +7,7 @@ import json
 import ssl
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Generic, Literal, TypeVar
+from typing import Any, Generic, Literal, TypedDict, TypeVar
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from . import _native  # type: ignore[attr-defined]
@@ -472,6 +472,13 @@ class CommandStream(AsyncIterator[CommandFrame]):
         await self._handle.close()
 
 
+class SandboxAllowEgress(TypedDict):
+    allow: list[str]
+
+
+SandboxEgress = Literal["none", "internet"] | SandboxAllowEgress
+
+
 class Sandbox:
     def __init__(self, name: str) -> None:
         self._handle = _LazyHandle[Any]("sandbox", name)
@@ -488,9 +495,14 @@ class Sandbox:
         tenant_key: str | None = None,
         env: Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
+        egress: SandboxEgress | None = None,
     ) -> SandboxInfo:
         value = await (await self._handle.get()).create(
-            sandbox_id, tenant_key, dict(env) if env else None, timeout_ms
+            sandbox_id,
+            tenant_key,
+            dict(env) if env else None,
+            timeout_ms,
+            json.dumps(egress) if egress is not None else None,
         )
         return _sandbox_info(value)
 
@@ -507,11 +519,20 @@ class Sandbox:
         tenant_key: str | None = None,
         env: Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
+        egress: SandboxEgress | None = None,
     ) -> tuple[SandboxInfo, bool]:
         value = await (await self._handle.get()).get_or_create(
-            sandbox_id, tenant_key, dict(env) if env else None, timeout_ms
+            sandbox_id,
+            tenant_key,
+            dict(env) if env else None,
+            timeout_ms,
+            json.dumps(egress) if egress is not None else None,
         )
         return _sandbox_info(value.sandbox), value.created
+
+    @translate_errors
+    async def update_egress(self, sandbox_id: str, egress: SandboxEgress) -> None:
+        await (await self._handle.get()).update_egress(sandbox_id, json.dumps(egress))
 
     @translate_errors
     async def list(self) -> list[SandboxInfo]:

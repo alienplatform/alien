@@ -282,6 +282,7 @@ async fn kubernetes_narrows_the_platform_flag_and_claims_nothing() {
     let sandbox = KubernetesSandbox::new(
         "sbx",
         &KubernetesSandboxBinding {
+            egress: None,
             namespace: BindingValue::Value("alien".to_string()),
             runtime_class: BindingValue::Value("gvisor".to_string()),
             selector: BindingValue::Value("alien/sandbox=sbx".to_string()),
@@ -331,6 +332,7 @@ async fn local_declares_no_lifetime_and_asks_its_manager_for_nothing() {
     let sandbox = LocalSandbox::new(
         "sbx",
         &LocalSandboxBinding {
+            egress: None,
             manager_url: BindingValue::Value(manager),
             sandbox_key: BindingValue::Value("sbx".to_string()),
             token_path: BindingValue::Value(token.path().display().to_string()),
