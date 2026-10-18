@@ -1547,6 +1547,7 @@ mod tests {
         };
 
         let mut client = MockSandboxDataPlaneApi::new();
+        client.expect_list_sandboxes().returning(|_| Ok(Vec::new()));
         client
             .expect_list_disk_images()
             .returning(|_| Ok(Vec::new()));

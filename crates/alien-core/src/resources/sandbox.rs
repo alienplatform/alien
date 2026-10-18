@@ -177,6 +177,9 @@ impl SandboxEgress {
     }
 }
 
+/// Per-session deadline metadata read by the external lifecycle reaper.
+pub const SANDBOX_EXPIRY_LABEL: &str = "alienExpiresAtMs";
+
 /// How long a sandbox may live and when it is paused.
 ///
 /// Declaration-time ceilings, not per-request values: every sandbox created through this
@@ -185,12 +188,14 @@ impl SandboxEgress {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SandboxLifecyclePolicy {
-    /// Wall-clock ceiling on a single sandbox, after which the platform terminates it.
+    /// Wall-clock ceiling on a single sandbox.
     ///
-    /// Optional because not every backend has the primitive: Kubernetes has
-    /// `activeDeadlineSeconds` and AWS `maximumDurationInSeconds`, while neither Azure nor Local
-    /// expose one, so declaring a ceiling there is refused at plan time rather than accepted and
-    /// never applied. AWS caps it at 8 hours.
+    /// AWS, GCP and Kubernetes enforce this natively; AWS caps it at 8 hours. Local's running
+    /// manager removes expired containers within its 250ms sweep interval plus Docker latency.
+    /// Azure's deployment controller requests deletion on its next five-second reconciliation,
+    /// plus Azure deletion latency. Azure enforcement pauses when the controller is stopped,
+    /// dependencies are unavailable, the resource reaches a terminal failure, or the group is
+    /// removed from the deployment. It resumes on reconciliation; this is no platform hard stop.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_lifetime_seconds: Option<u32>,
     /// Idle period after which the sandbox is paused, where the platform supports it.
@@ -214,7 +219,7 @@ pub struct SandboxCapabilities {
     /// A later call can reach a sandbox created by an earlier one
     pub reconnect: bool,
     /// A command can be started, polled and cancelled across separate calls, so it outlives the
-    /// one that started it. False where nothing inside the sandbox owns the process in between.
+    /// one that started it. The backend retains the process and its output between calls.
     pub jobs: bool,
     /// An authenticated, port-scoped capability to reach a service inside the sandbox
     pub preview: bool,
@@ -231,7 +236,8 @@ pub struct SandboxCapabilities {
     pub enforced_limits: bool,
     /// The platform can cap how many processes a sandbox runs
     pub process_limit: bool,
-    /// The platform terminates a sandbox at a declared wall-clock deadline
+    /// The backend enforces a wall-clock deadline; see `SandboxLifecyclePolicy` for timing
+    /// and the controller availability required on Local and Azure.
     pub sandbox_lifetime: bool,
     /// A command runs in its own PID namespace and cannot see or signal the agent's processes.
     ///
@@ -267,8 +273,9 @@ impl SandboxCapabilities {
                 // resolves names through its resolver, which no security group filters.
                 egress_deny: true,
                 enforced_limits: true,
-                // Nothing in the API bounds process count.
-                process_limit: false,
+                // The root agent sets inherited hard RLIMIT_NPROC; all command uid threads
+                // and detached descendants count, while the supervisor stays exempt.
+                process_limit: true,
                 // `maximumDurationInSeconds` on `RunMicrovm`, which Lambda enforces by
                 // terminating the MicroVM. Capped at 8 hours by the service.
                 sandbox_lifetime: true,
@@ -312,8 +319,8 @@ impl SandboxCapabilities {
             Platform::Local => Ok(Self {
                 files: true,
                 reconnect: true,
-                // Nothing runs inside the sandbox: the manager drives Docker from outside it.
-                jobs: false,
+                // The manager owns Docker exec jobs and their bounded output between requests.
+                jobs: true,
                 preview: true,
                 pause_resume: false,
                 snapshot: false,
@@ -322,7 +329,8 @@ impl SandboxCapabilities {
                 enforced_limits: true,
                 // Docker's `--pids-limit`.
                 process_limit: true,
-                sandbox_lifetime: false,
+                // The host manager reaps deadlines stored on Docker labels.
+                sandbox_lifetime: true,
                 // Local has no in-sandbox agent: the manager drives Docker from outside, so
                 // there is no supervisor inside the sandbox to isolate from.
                 supervisor_pid_namespace: false,
@@ -344,8 +352,8 @@ impl SandboxCapabilities {
         Self {
             files: true,
             reconnect: true,
-            // No Alien process runs inside the sandbox to own a command between two calls.
-            jobs: false,
+            // Native exec starts a detached shell supervisor with bounded retained output.
+            jobs: true,
             // A sandbox port carries a URL and an auth config, and the auth config offers two
             // things: anonymous, or Entra ID with an allowlist of human email addresses.
             // Neither is a credential scoped to a port for a fixed time, which is what a
@@ -363,14 +371,12 @@ impl SandboxCapabilities {
             // sizing rule at plan time instead of matching a tier.
             enforced_limits: true,
             process_limit: false,
-            // Auto-suspend and auto-delete exist; a wall-clock ceiling does not. Accepting
-            // `maxLifetimeSeconds` here would be the silent no-op the capability set exists
-            // to prevent, so this is a decision rather than a gap.
-            sandbox_lifetime: false,
-            // No Alien process inside an Azure sandbox, so there is no supervisor to isolate.
+            // Alien reconciles expiry metadata every five seconds while the deployment runs.
+            // Terminal failures, unavailable dependencies and a stopped controller suspend it.
+            sandbox_lifetime: true,
+            // Native shell supervisors and commands share the guest PID namespace.
             supervisor_pid_namespace: false,
-            // No Alien process runs the command at all — the platform's own data plane does,
-            // so there is no separate supervisor identity to speak of.
+            // Native shell supervisors run as the same guest user as commands.
             supervisor_isolation: false,
         }
     }
@@ -671,6 +677,9 @@ impl Sandbox {
                 // A runtime default is mutable gateway policy, never a startup allowlist.
                 serde_json::to_string(&self.egress).expect("egress serializes"),
             );
+        }
+        if let Some(limit) = self.resolved_limits().max_processes {
+            env.insert("ALIEN_SANDBOX_MAX_PROCESSES".to_string(), limit.to_string());
         }
         env
     }
@@ -2035,9 +2044,8 @@ mod tests {
         assert!(error.to_string().contains("maxProcesses"));
     }
 
-    /// A process ceiling needs a container runtime. Kubernetes sets one per node rather than per
-    /// pod, and neither MicroVMs nor Azure sandboxes expose one, so accepting the declaration
-    /// anywhere else would mean carrying a bound nothing applies.
+    /// Docker caps the container; the AWS agent caps the command uid with an inherited hard
+    /// rlimit. Kubernetes exposes only a node setting, and Azure has no process ceiling.
     #[test]
     fn a_process_ceiling_is_accepted_only_where_a_runtime_can_apply_it() {
         let mut sandbox = sandbox_with(SandboxEgress::None, vec![]);
@@ -2051,7 +2059,10 @@ mod tests {
             .validate_for_platform(Platform::Local)
             .expect("Docker takes a pids limit");
 
-        for platform in [Platform::Aws, Platform::Azure, Platform::Kubernetes] {
+        sandbox
+            .validate_for_platform(Platform::Aws)
+            .expect("the agent applies the hard uid limit");
+        for platform in [Platform::Azure, Platform::Kubernetes] {
             let error = sandbox
                 .validate_for_platform(platform)
                 .expect_err("a process ceiling nothing applies must be refused");
@@ -2202,9 +2213,7 @@ mod tests {
         assert!(label.chars().all(|c| c.is_ascii_hexdigit()), "{label}");
     }
 
-    /// A deadline is accepted only where the platform itself terminates on it — the kubelet's
-    /// `activeDeadlineSeconds` and Lambda's `maximumDurationInSeconds`. Everywhere else it would
-    /// need a reaper that does not exist, so it is refused rather than accepted and dropped.
+    /// Deadlines require a provider primitive or a manager that reaps expired sandboxes.
     #[test]
     fn a_sandbox_deadline_is_accepted_only_where_the_platform_applies_it() {
         let mut sandbox = sandbox_with(SandboxEgress::None, vec![]);
@@ -2217,12 +2226,12 @@ mod tests {
             .validate_for_platform(Platform::Aws)
             .expect("Lambda terminates the MicroVM at maximumDurationInSeconds");
 
-        for platform in [Platform::Azure, Platform::Local] {
-            let error = sandbox
-                .validate_for_platform(platform)
-                .expect_err("a deadline nothing applies must be refused");
-            assert_eq!(error.code, "SANDBOX_CAPABILITY_UNSUPPORTED");
-        }
+        sandbox
+            .validate_for_platform(Platform::Local)
+            .expect("the manager reaps expired containers");
+        sandbox
+            .validate_for_platform(Platform::Azure)
+            .expect("the controller reaps expired sandboxes while reconciling");
     }
 
     /// A MicroVM bursts to four times its baseline with no way to opt out, so a ceiling is kept
@@ -2441,13 +2450,9 @@ mod tests {
             .expect_err("renaming a sandbox is not an update");
     }
 
-    /// Azure declares an idle-pause policy but not a wall-clock ceiling.
-    ///
-    /// The two travel together in `SandboxLifecyclePolicy` and are gated separately on purpose:
-    /// Azure pauses on idle and has no maximum lifetime, so accepting one and refusing the
-    /// other is the honest split rather than an inconsistency.
+    /// Azure's external reaper accepts a wall-clock ceiling independently of native idle pause.
     #[test]
-    fn azure_takes_an_idle_policy_and_still_refuses_a_lifetime_ceiling() {
+    fn azure_accepts_idle_pause_and_reconciled_lifetime() {
         let with_policy = |lifecycle: SandboxLifecyclePolicy| {
             Sandbox::new("sbx".to_string())
                 .code(SandboxCode::Image {
@@ -2465,17 +2470,11 @@ mod tests {
         })
         .expect("Azure pauses a sandbox on idle");
 
-        let error = with_policy(SandboxLifecyclePolicy {
+        with_policy(SandboxLifecyclePolicy {
             max_lifetime_seconds: Some(3600),
             idle_pause_seconds: None,
         })
-        .expect_err("Azure has no wall-clock ceiling to enforce one with");
-        assert_eq!(error.code, "SANDBOX_CAPABILITY_UNSUPPORTED");
-        assert!(
-            error.message.contains("sandboxLifetime"),
-            "names the capability: {}",
-            error.message
-        );
+        .expect("the external controller owns the expiry deadline");
     }
 
     /// Both declaration modes map directly to the backend internet-access switch.

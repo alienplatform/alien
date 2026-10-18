@@ -16,7 +16,11 @@ pub use aws_import::*;
 #[cfg(feature = "azure")]
 mod azure;
 #[cfg(feature = "azure")]
+mod azure_lifetime;
+#[cfg(feature = "azure")]
 pub use azure::*;
+#[cfg(feature = "azure")]
+pub use azure_lifetime::reap_expired_azure_sandboxes;
 
 #[cfg(feature = "azure")]
 mod azure_import;

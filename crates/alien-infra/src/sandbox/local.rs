@@ -313,6 +313,10 @@ fn session_template(sandbox: &Sandbox) -> Result<alien_local::SandboxSessionConf
 
     Ok(alien_local::SandboxSessionConfig {
         image: image.clone(),
+        max_lifetime_ms: sandbox
+            .lifecycle
+            .max_lifetime_seconds
+            .map(|seconds| u64::from(seconds) * 1000),
         cpu_cores: cpu_cores(&limits.cpu, &sandbox.id)?,
         memory_bytes: bytes(&limits.memory, &sandbox.id)? as i64,
         pids_limit: limits.max_processes.map(i64::from),
