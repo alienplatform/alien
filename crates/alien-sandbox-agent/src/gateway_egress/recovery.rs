@@ -42,6 +42,15 @@ fn claims(record: &str) -> Result<Claims> {
 }
 
 impl GatewayEgress {
+    /// Authenticated control callers can verify delivery without reading the token or record.
+    pub fn policy_version(&self) -> Result<Option<(u64, String)>> {
+        self.policy
+            .read()
+            .map_err(|_| invalid("policy lock poisoned"))?
+            .as_ref()
+            .map(|record| claims(record).map(|claims| claims.ver))
+            .transpose()
+    }
     pub(super) fn retain_record(&self, record: String, aud: &str, sub: &str) -> Result<()> {
         let incoming = claims(&record)?;
         if incoming.v != 1 || incoming.aud != aud || incoming.sub != sub || incoming.deleted {
@@ -102,10 +111,14 @@ impl GatewayEgress {
                 if matches!(status, 204 | 409) && self.policy_request(None).await? == 200 {
                     Ok(())
                 } else {
-                    Err(invalid("policy recovery refused"))
+                    Err(alien_error::AlienError::new(
+                        crate::error::ErrorData::EgressPathUnexpected,
+                    ))
                 }
             }
-            _ => Err(invalid("gateway policy unavailable")),
+            _ => Err(alien_error::AlienError::new(
+                crate::error::ErrorData::EgressPathUnexpected,
+            )),
         }
     }
     pub(super) async fn monitor_policy(self: Arc<Self>) {
@@ -219,6 +232,7 @@ mod tests {
         assert!(agent.retain_record(record(1), "p/r", "box").is_err());
         assert!(agent.retain_record(record(3), "p/r", "other").is_err());
         agent.retain_record(record(3), "p/r", "box").unwrap();
+        assert_eq!(agent.policy_version().unwrap().unwrap().0, 3);
         agent.ready.store(true, Ordering::Release);
         assert!(agent.ensure_ready().is_ok());
         agent.awaiting_delivery.store(true, Ordering::Release);

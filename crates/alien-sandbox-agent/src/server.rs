@@ -269,7 +269,10 @@ pub fn router(state: Arc<AgentState>) -> Router {
         .with_state(state.clone());
     #[cfg(target_os = "linux")]
     let router = router
-        .route("/v1/egress", axum::routing::put(update_egress))
+        .route(
+            "/v1/egress",
+            axum::routing::put(update_egress).get(egress_version),
+        )
         .route(&hook_path("run"), get(hook_lifecycle).post(run_egress_hook))
         .with_state(state);
     #[cfg(not(target_os = "linux"))]
@@ -777,6 +780,22 @@ struct EgressUpdate {
     #[serde(default)]
     #[serde(rename = "caCert")]
     ca_certificate: Option<String>,
+}
+
+#[cfg(target_os = "linux")]
+async fn egress_version(
+    State(state): State<Arc<AgentState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> std::result::Result<Json<serde_json::Value>, ApiError> {
+    authorize_control(&state, peer, &headers, SandboxOperationClass::Execute)?;
+    let egress = state
+        .gateway_egress
+        .as_ref()
+        .ok_or_else(|| ApiError::from(AlienError::new(ErrorData::EgressPathUnexpected)))?;
+    Ok(Json(
+        serde_json::json!({"version": egress.policy_version()?}),
+    ))
 }
 
 #[cfg(target_os = "linux")]

@@ -53,7 +53,9 @@ record is current; 409 means an existing entry prevented replacement; 503 means
 replication failed. The agent never registers after a 403.
 
 Agent delivery is `PUT /v1/egress` with `{token,policy:"<compact JWS>",caCert?}`;
-the `updateEgress` envelope carries the same fields. Resume checks the physical
+the `updateEgress` envelope carries the same fields. Authenticated agent
+`GET /v1/egress` returns only `{version:[millis,writerId]}` (or null before delivery),
+so a controller can verify the retained record without retrieving its contents. Resume checks the physical
 network and waits for a fresh delivery before allowing commands or recovery.
 A running agent checks gateway state every five seconds, re-registering only on
 404. The saved record and token remain in supervisor memory. Tombstones expire
