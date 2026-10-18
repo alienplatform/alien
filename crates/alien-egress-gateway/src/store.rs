@@ -1,245 +1,181 @@
-use std::{
-    collections::VecDeque,
-    sync::{Arc, Mutex},
-};
-
-use alien_bindings::{traits::PutOptions, Kv, PutCondition};
-use alien_error::{AlienError, Context, IntoAlienError};
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-
+//! Bounded in-memory policy state. Replicas retain and verify the original signed mutations.
 use crate::{
-    error::{denied, unavailable, Result},
-    policy::{canonical, digest, Policy, MAX_POLICY_BYTES},
+    error::{denied, unavailable, ErrorData, Result},
+    policy::{canonical, Policy},
+    record::{compare_versions, Record, Summary, Version, TOMBSTONE_RETENTION_MS},
+};
+use alien_error::AlienError;
+use std::{
+    collections::BTreeMap,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, RwLock,
+    },
 };
 
-const CHUNK_BYTES: usize = 16 * 1024;
-const CACHE_ENTRIES: usize = 128;
-type CacheKey = (String, String);
+type Identity = (String, String);
 
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct Record {
-    version: u64,
-    policy: Option<String>,
-    chunks: usize,
+struct Stored {
+    record: Record,
+    policy: Option<Arc<Policy>>,
+    bytes: usize,
+    expires: Option<tokio::time::Instant>,
+}
+#[derive(Default)]
+struct State {
+    entries: BTreeMap<Identity, Stored>,
+    bytes: usize,
 }
 
-/// Every authorization reads the current policy reference. Only verified content is cached.
-/// Store failures never fall back to a cached grant.
 pub struct PolicyStore {
-    kv: Arc<dyn Kv>,
-    cache: Mutex<VecDeque<(CacheKey, String, Arc<Policy>)>>,
+    state: RwLock<State>,
+    ready: AtomicBool,
+    max_bytes: usize,
 }
-
 impl PolicyStore {
-    pub fn new(kv: Arc<dyn Kv>) -> Self {
+    pub fn new(ready: bool, max_bytes: usize) -> Self {
         Self {
-            kv,
-            cache: Mutex::new(VecDeque::new()),
+            state: RwLock::new(State::default()),
+            ready: AtomicBool::new(ready),
+            max_bytes,
         }
     }
+    pub fn ready(&self) -> bool {
+        self.ready.load(Ordering::Acquire)
+    }
+    pub fn set_ready(&self) {
+        self.ready.store(true, Ordering::Release);
+    }
 
-    /// Read the current policy; missing entries deny even when configuration has a default.
     pub async fn resolve(&self, aud: &str, sub: &str) -> Result<Arc<Policy>> {
-        let entry = self
-            .kv
-            .get(&key(aud, sub))
-            .await
-            .context(unavailable("read policy record"))?
-            .ok_or_else(|| denied("policy not installed"))?;
-        let record: Record = serde_json::from_slice(&entry.value)
-            .into_alien_error()
-            .context(unavailable("decode policy record"))?;
-        let hash = record.policy.ok_or_else(|| denied("policy deleted"))?;
-        if !crate::token::valid_digest(&hash)
-            || record.chunks == 0
-            || record.chunks > MAX_POLICY_BYTES / CHUNK_BYTES
-        {
-            return Err(AlienError::new(unavailable(
-                "invalid stored policy reference",
-            )));
-        }
-        let cache_key = (aud.to_string(), sub.to_string());
-        {
-            let mut cache = self
-                .cache
-                .lock()
-                .map_err(|_| AlienError::new(unavailable("policy cache poisoned")))?;
-            if let Some(index) = cache
-                .iter()
-                .position(|(key, cached_hash, _)| *key == cache_key && *cached_hash == hash)
-            {
-                let entry = cache
-                    .remove(index)
-                    .ok_or_else(|| AlienError::new(unavailable("policy cache entry missing")))?;
-                let policy = entry.2.clone();
-                cache.push_back(entry);
-                return Ok(policy);
+        self.state
+            .read()
+            .map_err(|_| AlienError::new(unavailable("policy state lock")))?
+            .entries
+            .get(&(aud.to_string(), sub.to_string()))
+            .and_then(|entry| entry.policy.clone())
+            .ok_or_else(|| denied("policy missing or deleted"))
+    }
+    pub async fn version(&self, aud: &str, sub: &str) -> Result<Option<Version>> {
+        Ok(self
+            .state
+            .read()
+            .map_err(|_| AlienError::new(unavailable("policy state lock")))?
+            .entries
+            .get(&(aud.to_string(), sub.to_string()))
+            .map(|entry| entry.record.claims.ver.clone()))
+    }
+    pub fn record(&self, aud: &str, sub: &str) -> Result<Option<Record>> {
+        Ok(self
+            .state
+            .read()
+            .map_err(|_| AlienError::new(unavailable("policy state lock")))?
+            .entries
+            .get(&(aud.to_string(), sub.to_string()))
+            .map(|entry| entry.record.clone()))
+    }
+    pub fn summary(&self) -> Result<Vec<Summary>> {
+        Ok(self
+            .state
+            .read()
+            .map_err(|_| AlienError::new(unavailable("policy state lock")))?
+            .entries
+            .values()
+            .map(|entry| Summary {
+                aud: entry.record.claims.aud.clone(),
+                sub: entry.record.claims.sub.clone(),
+                ver: entry.record.claims.ver.clone(),
+            })
+            .collect())
+    }
+    pub fn newer_than(&self, versions: &[Summary]) -> Result<Vec<Record>> {
+        let known: BTreeMap<_, _> = versions
+            .iter()
+            .map(|version| ((version.aud.as_str(), version.sub.as_str()), &version.ver))
+            .collect();
+        Ok(self
+            .state
+            .read()
+            .map_err(|_| AlienError::new(unavailable("policy state lock")))?
+            .entries
+            .values()
+            .filter(|entry| {
+                known
+                    .get(&(
+                        entry.record.claims.aud.as_str(),
+                        entry.record.claims.sub.as_str(),
+                    ))
+                    .is_none_or(|ver| compare_versions(ver, &entry.record.claims.ver).is_lt())
+            })
+            .map(|entry| entry.record.clone())
+            .collect())
+    }
+    /// Expiration only removes tombstones, at least 25 hours after this replica accepted them.
+    pub fn expire_tombstones(&self) -> Result<()> {
+        let mut state = self
+            .state
+            .write()
+            .map_err(|_| AlienError::new(unavailable("policy state lock")))?;
+        let now = tokio::time::Instant::now();
+        let mut removed = 0;
+        state.entries.retain(|_, entry| {
+            let keep = entry.expires.is_none_or(|expires| expires > now);
+            if !keep {
+                removed += entry.bytes;
             }
-        }
-        let mut bytes = Vec::new();
-        for index in 0..record.chunks {
-            let chunk = self
-                .kv
-                .get(&chunk_key(&key(aud, sub), &hash, index))
-                .await
-                .context(unavailable("read policy content"))?
-                .ok_or_else(|| AlienError::new(unavailable("policy content missing")))?;
-            if chunk.value.len() > CHUNK_BYTES || bytes.len() + chunk.value.len() > MAX_POLICY_BYTES
-            {
-                return Err(AlienError::new(unavailable("invalid stored policy size")));
-            }
-            bytes.extend(chunk.value);
-        }
-        if digest(&bytes) != hash {
-            return Err(AlienError::new(unavailable(
-                "stored policy digest mismatch",
-            )));
-        }
-        let policy: Policy = serde_json::from_slice(&bytes)
-            .into_alien_error()
-            .context(unavailable("decode policy content"))?;
-        if canonical(&policy)? != bytes {
-            return Err(AlienError::new(unavailable(
-                "stored policy is not canonical",
-            )));
-        }
-        let policy = Arc::new(policy);
-        let mut cache = self
-            .cache
-            .lock()
-            .map_err(|_| AlienError::new(unavailable("policy cache poisoned")))?;
-        cache.retain(|(key, _, _)| *key != cache_key);
-        if cache.len() >= CACHE_ENTRIES {
-            cache.pop_front();
-        }
-        cache.push_back((cache_key, hash, policy.clone()));
-        Ok(policy)
-    }
-
-    /// Publish immutable content using a monotonic signed version and atomic reference CAS.
-    pub async fn put(&self, aud: &str, sub: &str, version: u64, policy: &Policy) -> Result<()> {
-        let bytes = canonical(policy)?;
-        let key = key(aud, sub);
-        let chunks = bytes.len().div_ceil(CHUNK_BYTES);
-        let hash = digest(&bytes);
-        let record = Record {
-            version,
-            policy: Some(hash.clone()),
-            chunks,
-        };
-        // Refuse known stale requests before uploading content. CAS checks again after upload.
-        self.check_version(&key, &record).await?;
-        for (index, chunk) in bytes.chunks(CHUNK_BYTES).enumerate() {
-            self.kv
-                .put(&chunk_key(&key, &hash, index), chunk.to_vec(), None)
-                .await
-                .context(unavailable("write policy content"))?;
-        }
-        self.publish(&key, &record).await
-    }
-
-    /// Return the durable sequence, including after deletion; missing identities start at zero.
-    pub async fn version(&self, aud: &str, sub: &str) -> Result<u64> {
-        match self
-            .kv
-            .get(&key(aud, sub))
-            .await
-            .context(unavailable("read policy version"))?
-        {
-            None => Ok(0),
-            Some(entry) => Ok(decode_record(&entry.value)?.version),
-        }
-    }
-
-    async fn check_version(&self, key: &str, next: &Record) -> Result<(PutCondition, bool)> {
-        if next.version == 0 {
-            return Err(conflict());
-        }
-        let Some(entry) = self
-            .kv
-            .get(key)
-            .await
-            .context(unavailable("read policy sequence"))?
-        else {
-            return Ok((PutCondition::Absent, false));
-        };
-        let current = decode_record(&entry.value)?;
-        let same = current.version == next.version && current.policy == next.policy;
-        if same {
-            return Ok((PutCondition::Version(entry.version), true));
-        }
-        if next.version <= current.version {
-            return Err(conflict());
-        }
-        Ok((PutCondition::Version(entry.version), false))
-    }
-
-    async fn publish(&self, key: &str, record: &Record) -> Result<()> {
-        let value = serde_json::to_vec(record)
-            .into_alien_error()
-            .context(unavailable("encode policy record"))?;
-        for _ in 0..8 {
-            let (condition, same) = self.check_version(key, record).await?;
-            if same
-                || self
-                    .kv
-                    .put(
-                        key,
-                        value.clone(),
-                        Some(PutOptions {
-                            ttl: None,
-                            condition,
-                        }),
-                    )
-                    .await
-                    .context(unavailable("publish policy record"))?
-            {
-                return Ok(());
-            }
-        }
-        Err(conflict())
-    }
-
-    /// Retain a version tombstone. Immutable content also remains: deleting chunks would race
-    /// readers and an explicitly recreated identity publishing the same content again.
-    pub async fn delete(&self, aud: &str, sub: &str, version: u64) -> Result<()> {
-        self.publish(
-            &key(aud, sub),
-            &Record {
-                version,
-                policy: None,
-                chunks: 0,
-            },
-        )
-        .await?;
-        self.cache
-            .lock()
-            .map_err(|_| AlienError::new(unavailable("policy cache poisoned")))?
-            .retain(|(key, _, _)| key != &(aud.to_string(), sub.to_string()));
+            keep
+        });
+        state.bytes -= removed;
         Ok(())
     }
-}
 
-fn chunk_key(key: &str, hash: &str, index: usize) -> String {
-    format!("{key}:chunk:{hash}:{index}")
-}
-
-fn key(aud: &str, sub: &str) -> String {
-    let mut hash = Sha256::new();
-    hash.update((aud.len() as u64).to_be_bytes());
-    hash.update(aud.as_bytes());
-    hash.update(sub.as_bytes());
-    format!("egress-policy:{}", URL_SAFE_NO_PAD.encode(hash.finalize()))
-}
-
-fn decode_record(value: &[u8]) -> Result<Record> {
-    serde_json::from_slice(value)
-        .into_alien_error()
-        .context(unavailable("decode policy record"))
-}
-fn conflict() -> AlienError<crate::error::ErrorData> {
-    AlienError::new(crate::error::ErrorData::PolicyVersionConflict)
+    /// Apply a verified record; equal and older versions are no-ops on every path.
+    pub fn apply(&self, record: Record, only_missing: bool) -> Result<bool> {
+        let bytes = record
+            .claims
+            .policy
+            .as_ref()
+            .map(canonical)
+            .transpose()?
+            .map_or(0, |bytes| bytes.len() * 3)
+            + record.signed.len()
+            + record.claims.aud.len()
+            + record.claims.sub.len()
+            + 512;
+        let key = (record.claims.aud.clone(), record.claims.sub.clone());
+        let mut state = self
+            .state
+            .write()
+            .map_err(|_| AlienError::new(unavailable("policy state lock")))?;
+        let previous_bytes = if let Some(current) = state.entries.get(&key) {
+            if only_missing
+                || !crate::record::should_replace(
+                    Some(&current.record.claims.ver),
+                    &record.claims.ver,
+                )
+            {
+                return Ok(false);
+            }
+            current.bytes
+        } else {
+            0
+        };
+        if state.bytes - previous_bytes + bytes > self.max_bytes {
+            return Err(AlienError::new(ErrorData::StoreFull));
+        }
+        state.bytes = state.bytes - previous_bytes + bytes;
+        state.entries.insert(
+            key,
+            Stored {
+                policy: record.claims.policy.clone().map(Arc::new),
+                expires: record.claims.deleted.then(|| {
+                    tokio::time::Instant::now()
+                        + std::time::Duration::from_millis(TOMBSTONE_RETENTION_MS)
+                }),
+                record,
+                bytes,
+            },
+        );
+        Ok(true)
+    }
 }

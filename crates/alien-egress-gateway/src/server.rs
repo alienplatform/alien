@@ -48,6 +48,7 @@ pub struct Gateway {
     pub denied: Arc<std::sync::atomic::AtomicU64>,
     pub connections: Arc<Connections>,
     pub resolver: hickory_resolver::TokioResolver,
+    pub replication: Arc<crate::replication::Replication>,
 }
 
 impl Gateway {
@@ -151,6 +152,7 @@ pub async fn serve(
                     Err(error) => { tracing::warn!(%error, "proxy accept failed; retrying"); tokio::time::sleep(Duration::from_millis(100)).await; continue; }
                 };
                 let Some(gateway) = live.snapshot() else { drop(stream); continue; };
+                if !gateway.policies.ready() { drop(stream); continue; }
                 gateway.accepted.fetch_add(1, Ordering::Relaxed);
                 let admission = registry.source(peer.ip()).and_then(|source| {
                     limit.clone().try_acquire_owned().map(|permit| (source, permit)).map_err(|_| crate::connections::capacity())
@@ -304,24 +306,13 @@ async fn authorized_proxy(
     identity: &IdentityPermit,
 ) -> Result<()> {
     let Some(target) = target else {
-        if !gateway.config.audiences.contains(&claims.aud)
-            || gateway
-                .policies
-                .resolve(&claims.aud, &claims.sub)
-                .await
-                .is_err()
-        {
-            refuse(stream, false).await?;
-            return Err(denied("health identity or policy unavailable"));
-        }
-        audit.allowed = true;
-        log_open(audit);
-        stream
-            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nok\n")
-            .await
-            .into_alien_error()
-            .context(unavailable("reply to authenticated health"))?;
-        return Ok(());
+        return timeout(
+            HEADER_TIMEOUT,
+            crate::recovery::handle(stream, gateway, claims, &input, head_len),
+        )
+        .await
+        .into_alien_error()
+        .context(unavailable("policy recovery timeout"))?;
     };
     if let Err(error) = gateway.authorize(claims, &target).await {
         refuse(stream, error.code == "EGRESS_POLICY_DENIED").await?;
@@ -462,7 +453,8 @@ fn inspect_head(input: &[u8]) -> Result<(Option<Target>, String, bool, usize)> {
         return Err(invalid("incomplete request"));
     };
     let health = request.method == Some("GET") && request.path == Some("/health");
-    let target = if health {
+    let recovery = request.method == Some("PUT") && request.path == Some("/v1/policies/register");
+    let target = if health || recovery {
         if request
             .headers
             .iter()

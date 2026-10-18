@@ -6,6 +6,7 @@
 
 mod dns;
 mod probe;
+mod recovery;
 pub use probe::command_path_is_closed;
 mod redirect;
 mod transport;
@@ -54,6 +55,9 @@ fn invalid(reason: &str) -> AlienError<ErrorData> {
 pub struct GatewayEgress {
     address: RwLock<Option<SocketAddr>>,
     token: RwLock<String>,
+    policy: RwLock<Option<String>>,
+    awaiting_delivery: AtomicBool,
+    path_verified: AtomicBool,
     privileged: bool,
     command_identity: crate::exec::ExecIdentity,
     routing_ready: AtomicBool,
@@ -136,6 +140,9 @@ impl GatewayEgress {
         Ok(Some(Arc::new(Self {
             address: RwLock::new(address),
             token: RwLock::new(token),
+            policy: RwLock::new(None),
+            awaiting_delivery: AtomicBool::new(true),
+            path_verified: AtomicBool::new(false),
             privileged,
             command_identity,
             routing_ready: AtomicBool::new(!defer_routing),
@@ -190,6 +197,12 @@ impl GatewayEgress {
         if !self.declared_none && self.current_token()?.is_empty() {
             return Ok("awaiting-egress-policy");
         }
+        if !self.declared_none && self.awaiting_delivery.load(Ordering::Acquire) {
+            if !self.path_verified.load(Ordering::Acquire) {
+                return Err(AlienError::new(ErrorData::EgressPathUnexpected));
+            }
+            return Ok("awaiting-egress-policy");
+        }
         self.ensure_ready()?;
         Ok("ready")
     }
@@ -221,12 +234,20 @@ impl GatewayEgress {
         if !self.routing_ready.load(Ordering::Acquire) {
             return Err(AlienError::new(ErrorData::EgressPathUnexpected));
         }
-        self.self_check().await
+        self.awaiting_delivery
+            .store(!self.declared_none, Ordering::Release);
+        self.path_verified.store(false, Ordering::Release);
+        self.check_path().await?;
+        if self.declared_none {
+            self.ready.store(true, Ordering::Release);
+        }
+        Ok(())
     }
 
     /// Gate session routes until the network path has been verified.
     pub fn ensure_ready(&self) -> Result<()> {
         if self.routing_ready.load(Ordering::Acquire)
+            && (self.declared_none || !self.awaiting_delivery.load(Ordering::Acquire))
             && self.ready.load(Ordering::Acquire)
             && self.listeners_live.load(Ordering::Acquire)
         {
@@ -254,6 +275,7 @@ impl GatewayEgress {
                 Ok(())
             };
         }
+        tokio::spawn(self.clone().monitor_policy());
         let explicit = TcpListener::bind("127.0.0.1:15002")
             .await
             .into_alien_error()
@@ -382,7 +404,7 @@ impl GatewayEgress {
 
     /// Install a replacement signed token. Signature verification and policy lookup happen in
     /// the gateway; the self-check refuses invalid credentials before reopening session routes.
-    pub async fn update(&self, token: String) -> Result<()> {
+    pub async fn update(&self, token: String, policy: String) -> Result<()> {
         let _update = self.update_lock.lock().await;
         if !self.routing_ready.load(Ordering::Acquire) {
             return Err(AlienError::new(ErrorData::EgressPathUnexpected));
@@ -397,16 +419,20 @@ impl GatewayEgress {
             .read()
             .map_err(|_| invalid("identity lock poisoned"))?
             .as_ref()
-            != Some(&(aud, sub))
+            != Some(&(aud.clone(), sub.clone()))
         {
             return Err(invalid("token audience or sandbox ID mismatch"));
         }
+        self.retain_record(policy, &aud, &sub)?;
+        self.awaiting_delivery.store(true, Ordering::Release);
         self.ready.store(false, Ordering::Release);
         *self
             .token
             .write()
             .map_err(|_| invalid("token lock poisoned"))? = token;
-        self.self_check().await
+        self.self_check().await?;
+        self.awaiting_delivery.store(false, Ordering::Release);
+        Ok(())
     }
 
     /// Install the public per-sandbox CA supplied by management. Never accepts a private key.
@@ -509,7 +535,8 @@ impl GatewayEgress {
             .context(failed("connect gateway"))
     }
 
-    async fn self_check(&self) -> Result<()> {
+    async fn check_path(&self) -> Result<()> {
+        self.path_verified.store(false, Ordering::Release);
         // Marked sockets bypass the in-guest filter, proving the external network boundary.
         let canary: SocketAddr = SocketAddr::from(([1, 1, 1, 1], 443));
         let direct = timeout(Duration::from_secs(3), self.connect(canary)).await;
@@ -518,20 +545,14 @@ impl GatewayEgress {
         }
         probe::supervisor_udp(self.privileged).await?;
         probe::command(self.command_identity).await?;
-        if self.declared_none {
-            self.ready.store(true, Ordering::Release);
-            return Ok(());
-        }
-        let mut gateway = BufReader::new(self.connect(self.gateway_address()?).await?);
-        let token = self.current_token()?;
-        gateway.write_all(format!("GET /health HTTP/1.1\r\nHost: {}\r\nProxy-Authorization: Bearer {token}\r\nConnection: close\r\n\r\n", self.gateway_address()?).as_bytes())
-            .await.into_alien_error().context(failed("request authenticated gateway health"))?;
-        let reply = timeout(TIMEOUT, read_header(&mut gateway))
-            .await
-            .into_alien_error()
-            .context(failed("self-check gateway timeout"))??;
-        if !reply.starts_with(b"HTTP/1.1 200 ") {
-            return Err(AlienError::new(ErrorData::EgressPathUnexpected));
+        self.path_verified.store(true, Ordering::Release);
+        Ok(())
+    }
+
+    async fn self_check(&self) -> Result<()> {
+        self.check_path().await?;
+        if !self.declared_none {
+            self.check_policy().await?;
         }
         self.ready.store(true, Ordering::Release);
         Ok(())

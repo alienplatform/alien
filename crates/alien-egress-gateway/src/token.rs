@@ -66,7 +66,16 @@ fn verify_signed<T: serde::de::DeserializeOwned>(
     keys: &HashMap<String, PublicKey>,
     expected_type: Option<&str>,
 ) -> Result<T> {
-    if token.len() > MAX_TOKEN_BYTES {
+    verify_signed_limit(token, keys, expected_type, MAX_TOKEN_BYTES)
+}
+
+pub(crate) fn verify_signed_limit<T: serde::de::DeserializeOwned>(
+    token: &str,
+    keys: &HashMap<String, PublicKey>,
+    expected_type: Option<&str>,
+    limit: usize,
+) -> Result<T> {
+    if token.len() > limit {
         return Err(denied("token too large"));
     }
     let (signed, signature) = token

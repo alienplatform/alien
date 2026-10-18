@@ -25,7 +25,6 @@ async fn vault_refresh_rotates_keys_and_bounds_last_good_config() {
     let bindings = Arc::new(Bindings::from_env_map(HashMap::from([
         ("ALIEN_DEPLOYMENT_TYPE".into(), "local".into()),
         ("ALIEN_SECRETS_BINDING".into(), json!({"service":"local-vault","dataDir":dir.path().join("vault"),"vaultName":"secrets"}).to_string()),
-        ("ALIEN_EGRESS_STATE_BINDING".into(), json!({"service":"local-kv","dataDir":dir.path().join("kv")}).to_string()),
     ])).unwrap());
     let vault = bindings.vault("secrets").await.unwrap();
     let first = KeyPair::from_seed(Seed::new([1; 32]));
@@ -33,7 +32,7 @@ async fn vault_refresh_rotates_keys_and_bounds_last_good_config() {
     let config = |pair: &KeyPair| {
         json!({"listen":"127.0.0.1:3128","admin":"127.0.0.1:3129",
         "audiences":["p/r"],"keys":[{"kid":"current","publicKey":STANDARD.encode(pair.pk.as_ref())}],
-        "generationStore":{"binding":"egress-state"},"deniedRanges":["10.244.0.0/16"]})
+        "deniedRanges":["10.244.0.0/16"]})
     };
     let sign = |pair: &KeyPair| {
         let input = format!(
