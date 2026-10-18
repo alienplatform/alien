@@ -335,7 +335,8 @@ impl Sandbox for AzureSandbox {
                 environment: request.env,
                 labels,
                 egress: asked.clone(),
-                customer_vnet_connection_name: Some("default".to_string()),
+                customer_vnet_connection_name: (self.egress == SandboxEgress::Internet)
+                    .then(|| "default".to_string()),
                 idle_pause_seconds: self.idle_pause_seconds,
             })
             .await?;
@@ -915,7 +916,9 @@ impl AzureSandbox {
         &self,
         sandbox: &alien_azure_clients::azure::sandbox_data_plane::Sandbox,
     ) -> Result<()> {
-        if sandbox.vnet_connection_name.as_deref() != Some("default") {
+        if self.egress == SandboxEgress::Internet
+            && sandbox.vnet_connection_name.as_deref() != Some("default")
+        {
             return Err(AlienError::new(ErrorData::SandboxNotAsDeclared {
                 sandbox_id: sandbox.id.clone(),
                 restriction: "deployment network".to_string(),
@@ -1647,6 +1650,23 @@ mod tests {
             .await
             .expect_err("network mismatch");
         assert_eq!(error.code, "SANDBOX_NOT_AS_DECLARED");
+    }
+
+    #[tokio::test]
+    async fn a_native_deny_sandbox_needs_no_new_vnet_attachment() {
+        let mut client = MockSandboxDataPlaneApi::new();
+        client.expect_get_sandbox().times(1).returning(|_, id| {
+            let mut sandbox = running(id, egress_policy(&SandboxEgress::None));
+            sandbox.vnet_connection_name = None;
+            Ok(sandbox)
+        });
+        let sandbox = sandbox_denying(client, SandboxEgress::None)
+            .get("existing-denied")
+            .await
+            .expect("released native policy remains usable")
+            .expect("sandbox exists");
+        assert_eq!(sandbox.sandbox_id, "existing-denied");
+        assert_eq!(sandbox.state, SandboxState::Running);
     }
 
     /// The declared image has to reach the create call, not a default chosen here.
@@ -3016,6 +3036,7 @@ mod tests {
             .expect_create_sandbox()
             .times(1)
             .returning(|_, request| {
+                assert!(request.customer_vnet_connection_name.is_none());
                 let policy = request.egress.expect("deny must send a policy");
                 assert_eq!(policy.default_action, "Deny");
                 assert_eq!(

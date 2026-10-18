@@ -29,6 +29,7 @@ pub(super) fn emit(
             entry
                 .config
                 .downcast_ref::<Sandbox>()
+                .filter(|sandbox| sandbox.egress == SandboxEgress::Internet)
                 .map(|sandbox| (id, sandbox))
         })
         .collect();

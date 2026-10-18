@@ -27,7 +27,9 @@ use crate::{
     emitters::azure::helpers::{downcast, required_label, tags},
     expr,
 };
-use alien_core::{import::EmitContext, ErrorData, Network, NetworkSettings, Result, Sandbox};
+use alien_core::{
+    import::EmitContext, ErrorData, Network, NetworkSettings, Result, Sandbox, SandboxEgress,
+};
 use alien_error::AlienError;
 use hcl::expr::Expression;
 
@@ -41,10 +43,12 @@ impl TfEmitter for AzureNetworkEmitter {
 
         if !ctx.targets_kubernetes
             && matches!(network.settings, NetworkSettings::ByoVnetAzure { .. })
-            && ctx
-                .stack
-                .resources()
-                .any(|(_, entry)| entry.config.downcast_ref::<Sandbox>().is_some())
+            && ctx.stack.resources().any(|(_, entry)| {
+                entry
+                    .config
+                    .downcast_ref::<Sandbox>()
+                    .is_some_and(|sandbox| sandbox.egress == SandboxEgress::Internet)
+            })
         {
             return Err(AlienError::new(ErrorData::OperationNotSupported {
                 operation: "Azure sandbox network setup".to_string(),

@@ -12,8 +12,8 @@ use crate::compile_time::stack_requires_network;
 use crate::error::{ErrorData, Result};
 use crate::StackMutation;
 use alien_core::{
-    DeploymentConfig, Network, NetworkSettings, Platform, ResourceEntry, ResourceLifecycle, Stack,
-    StackState,
+    DeploymentConfig, Network, NetworkSettings, Platform, ResourceEntry, ResourceLifecycle,
+    Sandbox, SandboxEgress, Stack, StackState,
 };
 use alien_error::AlienError;
 use async_trait::async_trait;
@@ -79,9 +79,12 @@ impl StackMutation for NetworkMutation {
         } else {
             stack_requires_network(stack)
                 || (target_platform == Platform::Azure
-                    && stack
-                        .resources()
-                        .any(|(_, entry)| entry.config.resource_type().as_ref() == "sandbox"))
+                    && stack.resources().any(|(_, entry)| {
+                        entry
+                            .config
+                            .downcast_ref::<Sandbox>()
+                            .is_some_and(|sandbox| sandbox.egress == SandboxEgress::Internet)
+                    }))
         }
     }
 
