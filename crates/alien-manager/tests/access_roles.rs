@@ -6,6 +6,12 @@
 //! telemetry writers, binding resolvers) and project-scoped capability roles.
 //! This test plugs in such a validator so every role reaches the real routes.
 
+use alien_bindings::{BindingsProvider, BindingsProviderApi};
+use alien_core::{
+    ManagementPermissions, PermissionProfile, Resource, ResourceStatus, Stack, StackResourceState,
+    Vault, VaultBinding,
+};
+use alien_manager::traits::{CreateReleaseParams, UpdateImportedDeploymentParams};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -321,4 +327,161 @@ async fn capability_credentials_cannot_pull_charts_or_the_operator_image() {
             "developer pulling {path}: {body}"
         );
     }
+}
+
+struct LocalVaultCredentials(String);
+
+#[async_trait]
+impl CredentialResolver for LocalVaultCredentials {
+    async fn resolve(&self, _deployment: &DeploymentRecord) -> Result<ClientConfig, AlienError> {
+        Ok(ClientConfig::Local {
+            state_directory: self.0.clone(),
+        })
+    }
+}
+
+#[tokio::test]
+async fn vault_routes_refuse_deployer_values_and_preserve_shared_secrets() {
+    let (mut state, deployment_id) = state().await;
+    let directory = tempfile::tempdir().unwrap();
+    let directory_name = directory.path().to_string_lossy().to_string();
+    state.credential_resolver = Arc::new(LocalVaultCredentials(directory_name.clone()));
+    let mut stack = Stack::new("vault-route-test".to_string())
+        .management(ManagementPermissions::Extend(
+            PermissionProfile::new()
+                .resource("deployer-secrets", ["vault/data-read", "vault/data-write"]),
+        ))
+        .build();
+    stack.inputs = vec![serde_json::from_value(serde_json::json!({
+        "id": "apiKey", "kind": "secret", "providedBy": ["deployer"],
+        "required": true, "label": "API key", "description": ""
+    }))
+    .unwrap()];
+    let release = state
+        .release_store
+        .create_release(
+            &Subject::system(),
+            CreateReleaseParams {
+                project_id: "default".to_string(),
+                stacks: HashMap::from([(Platform::Kubernetes, stack)]),
+                git_commit_sha: None,
+                git_commit_ref: None,
+                git_commit_message: None,
+            },
+        )
+        .await
+        .unwrap();
+    let mut stack_state = StackState::new(Platform::Kubernetes);
+    for name in ["secrets", "deployer-secrets"] {
+        stack_state.resources.insert(
+            name.to_string(),
+            StackResourceState::builder()
+                .resource_type(Vault::RESOURCE_TYPE.to_string())
+                .status(ResourceStatus::Running)
+                .config(Resource::new(Vault::new(name.to_string()).build()))
+                .remote_binding_params(
+                    serde_json::to_value(VaultBinding::local(name, &directory_name)).unwrap(),
+                )
+                .dependencies(Vec::new())
+                .build(),
+        );
+    }
+    let provider = BindingsProvider::from_stack_state(
+        &stack_state,
+        ClientConfig::Local {
+            state_directory: directory_name,
+        },
+    )
+    .unwrap();
+    let deployer = provider.load_vault("deployer-secrets").await.unwrap();
+    let shared = provider.load_vault("secrets").await.unwrap();
+    deployer
+        .set_secret("api-key", "fake-customer-value")
+        .await
+        .unwrap();
+    state
+        .deployment_store
+        .update_imported_stack_state(
+            &Subject::system(),
+            &deployment_id,
+            UpdateImportedDeploymentParams {
+                stack_settings: StackSettings::default(),
+                stack_state,
+                environment_info: None,
+                runtime_metadata: RuntimeMetadata::default(),
+                setup_metadata: None,
+                current_release_id: Some(release.id),
+                setup_target: "test".to_string(),
+                setup_fingerprint: "test".to_string(),
+                setup_fingerprint_version: 1,
+                activation_status: None,
+                schedule_reconciliation: false,
+                input_values: Default::default(),
+            },
+        )
+        .await
+        .unwrap();
+    let router = alien_manager::routes::vault::router().with_state(state);
+    for path in [
+        "deployer-secrets/secrets/api-key",
+        "DEPLOYER_SECRETS/secrets/api-key",
+        "deployer%21-secrets/secrets/api-key",
+    ] {
+        for method in ["GET", "PUT", "DELETE"] {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(format!("/v1/deployments/{deployment_id}/vault/{path}"))
+                        .header(
+                            header::AUTHORIZATION,
+                            format!("Bearer {}", token(Role::ProjectDeveloper)),
+                        )
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(r#"{"value":"overwrite-attempt"}"#))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN, "{method} {path}");
+            assert_eq!(
+                deployer.get_secret("api-key").await.unwrap(),
+                "fake-customer-value"
+            );
+        }
+    }
+    for method in ["PUT", "GET", "DELETE"] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(format!(
+                        "/v1/deployments/{deployment_id}/vault/secrets/secrets/APP_SECRET"
+                    ))
+                    .header(
+                        header::AUTHORIZATION,
+                        format!("Bearer {}", token(Role::ProjectDeveloper)),
+                    )
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"value":"fake-developer-value"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "{method} shared developer secret"
+        );
+        if method == "GET" {
+            let bytes = to_bytes(response.into_body(), 1024).await.unwrap();
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()["value"],
+                "fake-developer-value"
+            );
+        }
+    }
+    assert!(shared.get_secret("APP_SECRET").await.is_err());
 }

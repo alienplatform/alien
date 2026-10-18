@@ -1,6 +1,6 @@
 use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
-use alien_core::{Platform, Stack, SECRETS_VAULT_ID};
+use alien_core::{Platform, Stack, DEPLOYER_SECRETS_VAULT_ID, SECRETS_VAULT_ID};
 use std::collections::HashSet;
 
 /// Ensures the stack contains only allowed user-defined resource types and IDs.
@@ -59,9 +59,24 @@ impl CompileTimeCheck for AllowedUserResourcesCheck {
                 continue;
             }
 
-            if resource_id == SECRETS_VAULT_ID {
+            if matches!(
+                resource_id.as_str(),
+                SECRETS_VAULT_ID | DEPLOYER_SECRETS_VAULT_ID
+            ) {
                 errors.push(format!(
-                    "Resource ID '{SECRETS_VAULT_ID}' is reserved for deployment secret delivery. Choose a different ID for the application resource"
+                    "Resource ID '{resource_id}' is reserved for deployment secret delivery. Choose a different ID for the application resource"
+                ));
+                continue;
+            }
+
+            let normalized_id = resource_id.replace('_', "-").to_ascii_lowercase();
+            if resource_type == "vault"
+                && (normalized_id == DEPLOYER_SECRETS_VAULT_ID
+                    || normalized_id.starts_with(&format!("{DEPLOYER_SECRETS_VAULT_ID}-"))
+                    || DEPLOYER_SECRETS_VAULT_ID.starts_with(&format!("{normalized_id}-")))
+            {
+                errors.push(format!(
+                    "Vault ID '{resource_id}' overlaps the reserved 'deployer-secrets' vault prefix. Choose a different ID so its values do not overlap customer deployer slots"
                 ));
                 continue;
             }
@@ -300,6 +315,50 @@ mod tests {
         assert_eq!(result.errors.len(), 1);
         assert!(result.errors[0].contains("map key 'application-vault'"));
         assert!(result.errors[0].contains("configured ID 'secrets'"));
+    }
+
+    #[tokio::test]
+    async fn user_vaults_cannot_overlap_the_deployer_slot_prefix() {
+        for id in [
+            "deployer",
+            "Deployer",
+            "deployer_secrets",
+            "deployer_secrets_api",
+            "deployer-secrets-api",
+            "deployer-secrets-api-key",
+        ] {
+            let stack = Stack::new("test".into())
+                .add(
+                    alien_core::Vault::new(id.into()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build();
+            let result = AllowedUserResourcesCheck
+                .check(&stack, Platform::Aws)
+                .await
+                .unwrap();
+            assert!(!result.success);
+            assert!(result.errors[0].contains("reserved 'deployer-secrets' vault prefix"));
+        }
+        for id in [
+            "application-secrets",
+            "deployer-backup",
+            "deployer-secrets2",
+        ] {
+            let stack = Stack::new("test".into())
+                .add(
+                    alien_core::Vault::new(id.into()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build();
+            assert!(
+                AllowedUserResourcesCheck
+                    .check(&stack, Platform::Aws)
+                    .await
+                    .unwrap()
+                    .success
+            );
+        }
     }
 
     #[tokio::test]

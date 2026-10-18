@@ -1,0 +1,22 @@
+{
+  "id": "vault/certificate-management",
+  "description": "Manage application TLS certificates in the shared vault only",
+  "platforms": {
+    "azure": [
+      {
+        "grant": {
+          "dataActions": [
+            "Microsoft.KeyVault/vaults/certificates/import/action",
+            "Microsoft.KeyVault/vaults/certificates/read",
+            "Microsoft.KeyVault/vaults/certificates/delete"
+          ]
+        },
+        "binding": {
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.KeyVault/vaults/${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}

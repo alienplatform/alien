@@ -541,7 +541,7 @@ fn gcp_vault_data_write_resource_condition_uses_project_number_and_vault_prefix(
     assert_eq!(condition.title, "ResourceVaultSecrets");
     assert_eq!(
         condition.expression,
-        "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && resource.name.startsWith(\"projects/123456789012/secrets/customer-vault-\")"
+        "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && resource.name.startsWith(\"projects/123456789012/secrets/customer-vault-\") && !resource.name.startsWith(\"projects/123456789012/secrets/my-stack-deployer-secrets-\")"
     );
 }
 

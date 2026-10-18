@@ -1026,24 +1026,6 @@
             "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
           }
         }
-      },
-      // Key Vault certificate for HTTPS containers
-      {
-        "grant": {
-          "dataActions": [
-            "Microsoft.KeyVault/vaults/certificates/import/action",
-            "Microsoft.KeyVault/vaults/certificates/read",
-            "Microsoft.KeyVault/vaults/certificates/delete"
-          ]
-        },
-        "binding": {
-          "stack": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
-          },
-          "resource": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
-          }
-        }
       }
     ]
   }

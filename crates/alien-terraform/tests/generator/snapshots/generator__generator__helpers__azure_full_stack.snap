@@ -398,8 +398,6 @@ resource "azurerm_role_definition" "setup_management_manage_container_apps_0" {
       "Microsoft.ServiceBus/namespaces/read"
     ]
     data_actions = [
-      "Microsoft.KeyVault/vaults/certificates/import/action",
-      "Microsoft.KeyVault/vaults/certificates/read",
       "Microsoft.ServiceBus/namespaces/messages/send/action"
     ]
     not_actions      = []
@@ -795,8 +793,6 @@ resource "azurerm_role_definition" "management_management_resource_group_role" {
       "Microsoft.ServiceBus/namespaces/read"
     ]
     data_actions = [
-      "Microsoft.KeyVault/vaults/certificates/import/action",
-      "Microsoft.KeyVault/vaults/certificates/read",
       "Microsoft.ServiceBus/namespaces/messages/send/action"
     ]
     not_actions      = []

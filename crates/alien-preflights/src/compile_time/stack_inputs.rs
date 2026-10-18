@@ -28,14 +28,14 @@ impl CompileTimeCheck for StackInputsDefinitionCheck {
 
         for input in stack.inputs() {
             validate_input(input, stack, &mut ids, &mut errors);
-            // Each deployer secret owns one slot in the secrets vault; two
+            // Each deployer secret owns one slot in the deployer-secrets vault; two
             // inputs sharing a slot would read each other's value.
             if alien_core::is_deployer_secret_input(input) {
                 let key = alien_core::deployer_secret_vault_key(&input.id);
                 if let Some(other) = deployer_secret_keys.insert(key.clone(), input.id.as_str()) {
                     errors.push(format!(
                         "Stack input '{}': deployer secrets '{other}' and '{}' both use the \
-                         secrets vault key '{key}'; rename one so each has its own slot",
+                         deployer-secrets vault key '{key}'; rename one so each has its own slot",
                         input.id, input.id
                     ));
                 }
@@ -521,7 +521,7 @@ mod tests {
             result
                 .errors
                 .iter()
-                .any(|error| error.contains("both use the secrets vault key 'input-api-key'")),
+                .any(|error| error.contains("both use the deployer-secrets vault key 'api-key'")),
             "{:?}",
             result.errors
         );

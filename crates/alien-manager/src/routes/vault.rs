@@ -105,6 +105,17 @@ async fn ensure_manager_vault_access(
     vault_name: &str,
     permission_set_id: &str,
 ) -> Result<()> {
+    let normalize = |name: &str| match deployment.platform {
+        Platform::Kubernetes => alien_core::vault_naming::kubernetes_secret_name("", name),
+        Platform::Azure => alien_core::vault_naming::key_vault_secret_name(name).to_lowercase(),
+        _ => name.to_string(),
+    };
+    if normalize(vault_name) == normalize(alien_core::DEPLOYER_SECRETS_VAULT_ID) {
+        return Err(ErrorData::forbidden(
+            "Deployer secrets cannot be read or changed through the manager. Use your own cloud credentials and the commands in deployment status.",
+        ));
+    }
+
     if vault_name == "secrets" {
         return Ok(());
     }

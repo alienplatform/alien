@@ -603,11 +603,7 @@
             "Microsoft.Authorization/roleAssignments/write",
             "Microsoft.Authorization/roleAssignments/delete"
           ],
-          "dataActions": [
-            "Microsoft.ServiceBus/namespaces/messages/send/action",
-            "Microsoft.KeyVault/vaults/certificates/import/action",
-            "Microsoft.KeyVault/vaults/certificates/read"
-          ]
+          "dataActions": ["Microsoft.ServiceBus/namespaces/messages/send/action"]
         },
         "binding": {
           "stack": {
