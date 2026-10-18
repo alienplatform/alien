@@ -13,6 +13,8 @@ pub mod http_proxy;
 pub mod io;
 pub mod policy;
 pub mod protocol;
+pub mod record;
+pub mod replication;
 pub mod runtime;
 pub mod server;
 pub mod store;

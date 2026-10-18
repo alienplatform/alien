@@ -9,6 +9,7 @@ use std::{
 };
 
 use alien_bindings::Bindings;
+use base64::Engine;
 use tokio::time::Instant;
 
 /// A vault outage may delay key/range changes by at most ten minutes.
@@ -31,6 +32,7 @@ pub struct LiveGateway {
     denied: Arc<AtomicU64>,
     addresses: (SocketAddr, SocketAddr),
     connections: Arc<crate::connections::Connections>,
+    policies: Arc<PolicyStore>,
 }
 
 impl LiveGateway {
@@ -42,6 +44,7 @@ impl LiveGateway {
         Self {
             stopping: AtomicBool::new(false),
             connections: gateway.connections.clone(),
+            policies: gateway.policies.clone(),
             accepted: gateway.accepted.clone(),
             denied: gateway.denied.clone(),
             addresses: (gateway.config.listen, gateway.config.admin),
@@ -85,17 +88,18 @@ impl LiveGateway {
                     "listener address changes require a container restart",
                 ));
             }
+            gateway.policies = self.policies.clone();
             if let Some(previous) = self.snapshot() {
-                if previous.config.generation_store.binding
-                    == gateway.config.generation_store.binding
+                if previous.config.peers != gateway.config.peers
+                    || previous.config.replica_secret != gateway.config.replica_secret
                 {
-                    gateway.policies = previous.policies.clone();
-                    if previous.config.credentials == gateway.config.credentials
-                        && previous.config.upstream_ca_certificates
-                            == gateway.config.upstream_ca_certificates
-                    {
-                        gateway.credentials = previous.credentials.clone();
-                    }
+                    return Err(invalid("replica discovery/key changes require a restart"));
+                }
+                if previous.config.credentials == gateway.config.credentials
+                    && previous.config.upstream_ca_certificates
+                        == gateway.config.upstream_ca_certificates
+                {
+                    gateway.credentials = previous.credentials.clone();
                 }
             }
             Ok(Arc::new(gateway))
@@ -139,15 +143,26 @@ pub async fn build(
         .context(unavailable("parse gateway config"))?;
     let keys = config.verification_keys()?;
     credentials::validate_rules(&config.credentials)?;
-    let kv = bindings
-        .kv(&config.generation_store.binding)
-        .await
-        .context(unavailable("load policy binding"))?;
+    let seed = config
+        .replica_secret
+        .as_ref()
+        .map(|secret| {
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(secret)
+                .map_err(|_| invalid("invalid replicaSecret encoding"))?;
+            bytes
+                .try_into()
+                .map_err(|_| invalid("replicaSecret must contain 32 bytes"))
+        })
+        .transpose()?;
+    if !config.credentials.is_empty() && seed.is_none() {
+        return Err(invalid("credential rules require replicaSecret"));
+    }
     let credentials = Credentials::new(
-        kv.clone(),
         bindings,
         &config.upstream_ca_certificates,
         &config.credentials,
+        seed,
     )?;
     let mut resolver = hickory_resolver::TokioResolver::builder_tokio()
         .into_alien_error()
@@ -158,12 +173,23 @@ pub async fn build(
         .build()
         .into_alien_error()
         .context(unavailable("build DNS resolver"))?;
+    let replication = Arc::new(crate::replication::Replication::new(
+        config.peers.clone(),
+        seed,
+        config.admin.port(),
+        resolver.clone(),
+    )?);
+    let policies = Arc::new(PolicyStore::new(
+        !replication.enabled(),
+        config.policy_memory_bytes,
+    ));
     Ok(Gateway {
+        replication,
         connections: Arc::new(crate::connections::Connections::default()),
         resolver,
         config,
         keys,
-        policies: Arc::new(PolicyStore::new(kv)),
+        policies,
         credentials: Arc::new(credentials),
         accepted,
         denied,

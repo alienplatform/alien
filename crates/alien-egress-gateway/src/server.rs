@@ -48,6 +48,7 @@ pub struct Gateway {
     pub denied: Arc<std::sync::atomic::AtomicU64>,
     pub connections: Arc<Connections>,
     pub resolver: hickory_resolver::TokioResolver,
+    pub replication: Arc<crate::replication::Replication>,
 }
 
 impl Gateway {
@@ -151,6 +152,7 @@ pub async fn serve(
                     Err(error) => { tracing::warn!(%error, "proxy accept failed; retrying"); tokio::time::sleep(Duration::from_millis(100)).await; continue; }
                 };
                 let Some(gateway) = live.snapshot() else { drop(stream); continue; };
+                if !gateway.policies.ready() { drop(stream); continue; }
                 gateway.accepted.fetch_add(1, Ordering::Relaxed);
                 let admission = registry.source(peer.ip()).and_then(|source| {
                     limit.clone().try_acquire_owned().map(|permit| (source, permit)).map_err(|_| crate::connections::capacity())

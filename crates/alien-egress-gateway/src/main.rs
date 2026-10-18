@@ -105,6 +105,7 @@ async fn main() -> Result<()> {
         result = &mut proxy => return result,
         result = &mut admin => return result.into_alien_error().context(failed("serve admin")),
         result = refresh_config => return result,
+        result = alien_egress_gateway::replication::run(gateway.clone()) => return result,
         result = shutdown_signal() => result?,
     }
     gateway.stop();

@@ -1,8 +1,9 @@
 use std::{sync::Arc, time::Duration};
 
-use alien_bindings::{traits::PutOptions, Bindings, Kv, PutCondition};
-use alien_error::{AlienError, Context, IntoAlienError};
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use alien_bindings::Bindings;
+use alien_error::{Context, IntoAlienError};
+use base64::Engine;
+use hmac::{Hmac, Mac};
 use http::{HeaderName, HeaderValue};
 use rcgen::{
     BasicConstraints, CertificateParams, CidrSubnet, DnType, ExtendedKeyUsagePurpose,
@@ -12,8 +13,7 @@ use rustls::{
     pki_types::{PrivatePkcs8KeyDer, ServerName},
     ClientConfig, RootCertStore, ServerConfig,
 };
-use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+use sha2::Sha256;
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::TcpStream,
@@ -30,9 +30,9 @@ use crate::{
     server::HEADER_TIMEOUT,
 };
 
-/// Gateway-only credential access and durable per-sandbox certificate authorities.
+/// Gateway-only credential access and deterministic per-sandbox certificate authorities.
 pub struct Credentials {
-    kv: Arc<dyn Kv>,
+    seed: Option<[u8; 32]>,
     bindings: Arc<Bindings>,
     upstream: Arc<ClientConfig>,
     rules: Vec<CredentialRule>,
@@ -40,20 +40,18 @@ pub struct Credentials {
     secrets: Cache<(String, String), String>,
 }
 
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct Ca {
     certificate: String,
     private_key: String,
 }
 
 impl Credentials {
-    /// Use the deployment KV for CA material and deployment vault bindings for header values.
+    /// Use a gateway-only seed for CA material and vault bindings for header values.
     pub fn new(
-        kv: Arc<dyn Kv>,
         bindings: Arc<Bindings>,
         additional_roots: &[String],
         rules: &[CredentialRule],
+        seed: Option<[u8; 32]>,
     ) -> Result<Self> {
         let mut roots = RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
         for root in additional_roots {
@@ -71,7 +69,7 @@ impl Credentials {
             .with_no_client_auth();
         config.alpn_protocols = vec![b"http/1.1".to_vec()];
         Ok(Self {
-            kv,
+            seed,
             bindings,
             upstream: Arc::new(config),
             rules: rules.to_vec(),
@@ -80,19 +78,45 @@ impl Credentials {
         })
     }
 
-    /// Return a sandbox-specific public trust certificate; its private key stays in shared KV.
-    /// Creation is atomic across replicas. The admin caller retries a concurrent-create conflict.
+    /// Deterministic sandbox CAs survive replica replacement without a policy database.
+    /// The deployment's gateway-only key never leaves the configured vault entry.
     pub async fn issue_ca(&self, aud: &str, sub: &str) -> Result<String> {
-        if let Some(ca) = self.load_ca(aud, sub).await? {
-            return Ok(ca.certificate);
+        Ok(self.ca(aud, sub)?.certificate)
+    }
+
+    fn ca(&self, aud: &str, sub: &str) -> Result<Ca> {
+        let seed = self
+            .seed
+            .ok_or_else(|| invalid("credential CA requires replicaSecret"))?;
+        let mut mac =
+            Hmac::<Sha256>::new_from_slice(&seed).map_err(|_| invalid("invalid replicaSecret"))?;
+        mac.update(b"alien-egress-ca-v1");
+        for value in std::iter::once(aud.to_string())
+            .chain(std::iter::once(sub.to_string()))
+            .chain(self.hosts(aud))
+        {
+            mac.update(&(value.len() as u64).to_be_bytes());
+            mac.update(value.as_bytes());
         }
-        let key = KeyPair::generate()
-            .into_alien_error()
-            .context(unavailable("generate sandbox CA"))?;
+        // RFC 8410 PKCS#8 Ed25519 seed, with no optional attributes or public-key field.
+        let mut der = vec![
+            0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22,
+            0x04, 0x20,
+        ];
+        der.extend_from_slice(&mac.finalize().into_bytes());
+        let key = KeyPair::from_der_and_sign_algo(
+            &PrivatePkcs8KeyDer::from(der).into(),
+            &rcgen::PKCS_ED25519,
+        )
+        .into_alien_error()
+        .context(unavailable("derive sandbox CA"))?;
         let mut params = CertificateParams::default();
-        let hosts = self.hosts(aud);
         params.name_constraints = Some(NameConstraints {
-            permitted_subtrees: hosts.into_iter().map(GeneralSubtree::DnsName).collect(),
+            permitted_subtrees: self
+                .hosts(aud)
+                .into_iter()
+                .map(GeneralSubtree::DnsName)
+                .collect(),
             excluded_subtrees: vec![
                 GeneralSubtree::IpAddress(CidrSubnet::V4([0; 4], [0; 4])),
                 GeneralSubtree::IpAddress(CidrSubnet::V6([0; 16], [0; 16])),
@@ -107,31 +131,10 @@ impl Credentials {
             .self_signed(&key)
             .into_alien_error()
             .context(unavailable("sign sandbox CA"))?;
-        let ca = Ca {
+        Ok(Ca {
             certificate: cert.pem(),
             private_key: key.serialize_pem(),
-        };
-        let value = serde_json::to_vec(&ca)
-            .into_alien_error()
-            .context(unavailable("encode sandbox CA"))?;
-        if !self
-            .kv
-            .put(
-                &self.ca_key(aud, sub),
-                value,
-                Some(PutOptions {
-                    ttl: None,
-                    condition: PutCondition::Absent,
-                }),
-            )
-            .await
-            .context(unavailable("store sandbox CA"))?
-        {
-            return Err(AlienError::new(unavailable(
-                "sandbox CA created concurrently; repeat request",
-            )));
-        }
-        Ok(ca.certificate)
+        })
     }
 
     fn hosts(&self, aud: &str) -> Vec<String> {
@@ -148,19 +151,6 @@ impl Credentials {
             hosts.push("no-credential-host.invalid".into());
         }
         hosts
-    }
-
-    fn ca_key(&self, aud: &str, sub: &str) -> String {
-        let mut hash = Sha256::new();
-        for host in self.hosts(aud) {
-            hash.update((host.len() as u64).to_be_bytes());
-            hash.update(host.as_bytes());
-        }
-        format!(
-            "{}:scoped:{}",
-            ca_key(aud, sub),
-            URL_SAFE_NO_PAD.encode(hash.finalize())
-        )
     }
 
     async fn secret(&self, binding: &str, name: &str) -> Result<String> {
@@ -181,19 +171,6 @@ impl Credentials {
         Ok(secret)
     }
 
-    async fn load_ca(&self, aud: &str, sub: &str) -> Result<Option<Ca>> {
-        self.kv
-            .get(&self.ca_key(aud, sub))
-            .await
-            .context(unavailable("load sandbox CA"))?
-            .map(|entry| {
-                serde_json::from_slice(&entry.value)
-                    .into_alien_error()
-                    .context(unavailable("decode sandbox CA"))
-            })
-            .transpose()
-    }
-
     async fn server_config(
         &self,
         aud: &str,
@@ -207,10 +184,7 @@ impl Credentials {
         if let Some(config) = self.certificates.get(&cache_key) {
             return Ok(config);
         }
-        let ca = self
-            .load_ca(aud, sub)
-            .await?
-            .ok_or_else(|| invalid("sandbox CA has not been issued"))?;
+        let ca = self.ca(aud, sub)?;
         let key = KeyPair::from_pem(&ca.private_key)
             .into_alien_error()
             .context(unavailable("load CA key"))?;
@@ -327,14 +301,6 @@ pub fn validate_rules(rules: &[CredentialRule]) -> Result<()> {
     Ok(())
 }
 
-fn ca_key(aud: &str, sub: &str) -> String {
-    let mut hash = Sha256::new();
-    hash.update((aud.len() as u64).to_be_bytes());
-    hash.update(aud.as_bytes());
-    hash.update(sub.as_bytes());
-    format!("egress-ca:{}", URL_SAFE_NO_PAD.encode(hash.finalize()))
-}
-
 #[cfg(all(test, feature = "local"))]
 mod tests {
     use super::*;
@@ -350,15 +316,9 @@ mod tests {
             ("ALIEN_EGRESS_STATE_BINDING".into(), serde_json::json!({"service":"local-kv","dataDir":dir.path().join("kv")}).to_string()),
         ])).unwrap());
         let rule: CredentialRule = serde_json::from_value(serde_json::json!({"aud":"p/r","host":"inject.example.com","port":443,"method":"GET","path":"/","header":"Authorization","vaultBinding":"test-vault","secret":"key"})).unwrap();
-        let credentials = Credentials::new(
-            bindings.kv("egress-state").await.unwrap(),
-            bindings.clone(),
-            &[],
-            &[rule],
-        )
-        .unwrap();
+        let credentials = Credentials::new(bindings.clone(), &[], &[rule], Some([7; 32])).unwrap();
         let certificate = credentials.issue_ca("p/r", "box").await.unwrap();
-        let ca = credentials.load_ca("p/r", "box").await.unwrap().unwrap();
+        let ca = credentials.ca("p/r", "box").unwrap();
         let issuer =
             Issuer::from_ca_cert_pem(&ca.certificate, KeyPair::from_pem(&ca.private_key).unwrap())
                 .unwrap();

@@ -66,7 +66,16 @@ fn verify_signed<T: serde::de::DeserializeOwned>(
     keys: &HashMap<String, PublicKey>,
     expected_type: Option<&str>,
 ) -> Result<T> {
-    if token.len() > MAX_TOKEN_BYTES {
+    verify_signed_limit(token, keys, expected_type, MAX_TOKEN_BYTES)
+}
+
+pub(crate) fn verify_signed_limit<T: serde::de::DeserializeOwned>(
+    token: &str,
+    keys: &HashMap<String, PublicKey>,
+    expected_type: Option<&str>,
+    limit: usize,
+) -> Result<T> {
+    if token.len() > limit {
         return Err(denied("token too large"));
     }
     let (signed, signature) = token
@@ -125,6 +134,23 @@ pub struct AdminClaims {
     /// Required and request-bound for PUT and DELETE.
     #[serde(default)]
     pub version: Option<u64>,
+}
+
+/// Verify the authority of a retained mutation, not a fresh admin request. Only authenticated
+/// replica exchange and absent-policy recovery may use this after the original request expired.
+pub fn verify_admin_record(token: &str, keys: &HashMap<String, PublicKey>) -> Result<AdminClaims> {
+    let claims: AdminClaims = verify_signed(token, keys, Some("alien-egress-admin"))?;
+    if claims.iss != "alien-sandbox"
+        || claims.aud.is_empty()
+        || claims.sub.is_empty()
+        || claims.aud.len() > 256
+        || claims.sub.len() > 256
+        || claims.exp <= claims.iat
+        || claims.exp - claims.iat > 60
+    {
+        return Err(denied("invalid retained admin identity or lifetime"));
+    }
+    Ok(claims)
 }
 
 /// Verify a short-lived admin JWS, distinct from proxy tokens by its mandatory type.
