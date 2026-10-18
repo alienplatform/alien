@@ -2092,6 +2092,7 @@ const PUSH_CACHE_FILE: &str = "push-cache-v2.json";
 /// Pushes the built stack's local images, reusing the pushed reference of any artifact already
 /// pushed to the same repository. `push_stack` tags every push afresh, so this cache is what
 /// keeps an unchanged artifact's reference stable across runs.
+#[cfg(test)]
 async fn push_stack_with_cache(
     built_stack: Stack,
     platform: Platform,
@@ -2287,6 +2288,7 @@ fn push_cache_key(kind: &str, path: &str, platform: Platform) -> Option<String> 
 /// Apply cached push URIs to a stack, replacing local image paths with
 /// previously-pushed remote URIs where the content hash matches.
 /// Returns the number of cache hits.
+#[cfg(test)]
 fn apply_push_cache(
     stack: &mut Stack,
     cache: &HashMap<String, String>,
@@ -3473,6 +3475,6 @@ mod tests {
                 .unwrap(),
             None
         );
-        config.assert_calls_async(1).await;
+        config.assert_async().await;
     }
 }

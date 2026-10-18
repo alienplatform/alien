@@ -3916,9 +3916,18 @@ mod tests {
         let cache_image =
             "123456789012.dkr.ecr.{region}.amazonaws.com/sandbox-acme/alien-artifacts-prj_test:new";
         let mut state = aws_state_with_stack(sandbox_stack(Some(old_image)));
-        let mut next = state.current_release.clone().expect("release");
-        next.stack = sandbox_stack(Some(cache_image));
-        state.target_release = Some(next);
+        state.current_release = Some(ReleaseInfo {
+            release_id: Some("old".to_string()),
+            version: None,
+            description: None,
+            stack: sandbox_stack(Some(old_image)),
+        });
+        state.target_release = Some(ReleaseInfo {
+            release_id: Some("new".to_string()),
+            version: None,
+            description: None,
+            stack: sandbox_stack(Some(cache_image)),
+        });
         let (repositories, refused) = repository_access(&registry, &state, PROJECT);
         assert!(refused.is_empty());
         assert_eq!(

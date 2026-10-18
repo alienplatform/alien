@@ -175,7 +175,7 @@ impl RegistryRoutingTable {
         let mut platforms: Vec<Platform> = self
             .routes
             .iter()
-            .filter(|r| r.platform != Platform::Local)
+            .filter(|r| r.platform != Platform::Local && !self.sandbox_prefixes.contains(&r.prefix))
             .map(|r| r.platform)
             .collect();
         platforms.dedup();

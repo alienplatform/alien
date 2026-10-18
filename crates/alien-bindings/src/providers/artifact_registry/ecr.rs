@@ -161,13 +161,15 @@ fn repository_lookup_names(repository_prefix: &str, repo_id: &str) -> Vec<String
 fn valid_sandbox_namespace(prefix: &str, replicated_prefix: &str) -> bool {
     !replicated_prefix.is_empty()
         && !prefix.starts_with(replicated_prefix)
+        && prefix.contains('/')
         && prefix.len() <= 200
         && prefix.split('/').all(|part| {
-            !part.is_empty()
-                && part.as_bytes()[0].is_ascii_lowercase()
-                && part
-                    .bytes()
-                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"-_.".contains(&b))
+            part.split(['.', '_', '-']).all(|segment| {
+                !segment.is_empty()
+                    && segment
+                        .bytes()
+                        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+            })
         })
 }
 
