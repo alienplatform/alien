@@ -87,6 +87,20 @@ fn get_aws_worker_name(prefix: &str, name: &str) -> String {
     aws_prefixed_resource_name(prefix, name)
 }
 
+// AWS emits both the exact function name and a name followed by a UUID.
+// A loose prefix also matches sibling functions such as "worker-v2".
+fn lambda_eni_description_matches(description: &str, prefix: &str) -> bool {
+    let Some(suffix) = description.strip_prefix(prefix) else {
+        return false;
+    };
+    suffix.is_empty()
+        || suffix.strip_prefix('-').is_some_and(|id| {
+            id.len() == 36
+                && Uuid::parse_str(id)
+                    .is_ok_and(|uuid| uuid.hyphenated().to_string().eq_ignore_ascii_case(id))
+        })
+}
+
 fn readiness_probe_dns_override(
     url: &str,
     fqdn: Option<&str>,
@@ -149,11 +163,6 @@ fn replace_lambda_notification_config(
 }
 
 impl AwsWorkerController {
-    fn should_wait_for_lambda_vpc_enis(ctx: &ResourceControllerContext<'_>) -> bool {
-        ctx.deployment_config.stack_settings.network.is_some()
-            || ctx.state.resources.contains_key("default-network")
-    }
-
     fn owns_network(ctx: &ResourceControllerContext<'_>) -> bool {
         matches!(
             ctx.deployment_config.stack_settings.network,
@@ -4675,7 +4684,7 @@ impl AwsWorkerController {
                 self.url = None;
                 self.worker_name = None;
                 self.event_source_mappings.clear();
-                if Self::should_wait_for_lambda_vpc_enis(ctx) {
+                if self.get_vpc_config(ctx)?.is_some() {
                     Ok(HandlerAction::Continue {
                         state: WaitingForVpcEnisReleased,
                         suggested_delay: Some(Duration::from_secs(10)),
@@ -4708,7 +4717,7 @@ impl AwsWorkerController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let worker_config = ctx.desired_resource_config::<Worker>()?;
-        if !Self::should_wait_for_lambda_vpc_enis(ctx) {
+        if self.get_vpc_config(ctx)?.is_none() {
             return Ok(HandlerAction::Continue {
                 state: DeletingCertificate,
                 suggested_delay: None,
@@ -4718,16 +4727,35 @@ impl AwsWorkerController {
         let wait_started_at = *self.vpc_eni_wait_started_at.get_or_insert_with(Utc::now);
 
         let aws_worker_name = get_aws_worker_name(ctx.resource_prefix, &worker_config.id);
+        let network = ctx.require_dependency::<crate::network::AwsNetworkController>(
+            &ResourceRef::new(Network::RESOURCE_TYPE, "default-network"),
+        )?;
+        let vpc_id = network.vpc_id.ok_or_else(|| {
+            AlienError::new(ErrorData::DependencyNotReady {
+                resource_id: worker_config.id.clone(),
+                dependency_id: "default-network".to_string(),
+            })
+        })?;
         let aws_cfg = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
 
         let result = client
             .describe_network_interfaces(
                 DescribeNetworkInterfacesRequest::builder()
-                    .filters(vec![Filter {
-                        name: "description".to_string(),
-                        values: vec![format!("AWS Lambda VPC ENI-{}*", aws_worker_name)],
-                    }])
+                    .filters(vec![
+                        Filter {
+                            name: "description".to_string(),
+                            values: vec![format!("AWS Lambda VPC ENI-{}*", aws_worker_name)],
+                        },
+                        Filter {
+                            name: "interface-type".to_string(),
+                            values: vec!["lambda".to_string()],
+                        },
+                        Filter {
+                            name: "vpc-id".to_string(),
+                            values: vec![vpc_id],
+                        },
+                    ])
                     .build(),
             )
             .await
@@ -4736,10 +4764,22 @@ impl AwsWorkerController {
                 resource_id: Some(worker_config.id.clone()),
             })?;
 
+        // Lambda can share an ENI named for another function; those interfaces are
+        // inherently invisible to this function-name lookup. Do not filter by status:
+        // detached/available interfaces still need the role for their final deletion.
+        // Old leaked interfaces with the same name can therefore consume the full wait.
+        let description_prefix = format!("AWS Lambda VPC ENI-{aws_worker_name}");
         let network_interfaces = result
             .network_interface_set
             .map(|set| set.items)
-            .unwrap_or_default();
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|eni| {
+                eni.description.as_deref().is_some_and(|description| {
+                    lambda_eni_description_matches(description, &description_prefix)
+                })
+            })
+            .collect::<Vec<_>>();
 
         if network_interfaces.is_empty() {
             self.vpc_eni_wait_started_at = None;
@@ -5261,7 +5301,9 @@ impl AwsWorkerController {
     fn get_vpc_config(&self, ctx: &ResourceControllerContext<'_>) -> Result<Option<VpcConfig>> {
         // Check if the stack has a Network resource
         let network_id = "default-network";
-        if !ctx.desired_stack.resources.contains_key(network_id) {
+        // Deletion uses an empty desired stack; the recorded dependency still owns
+        // the VPC configuration until this worker has finished deleting.
+        if !ctx.state.resources.contains_key(network_id) {
             return Ok(None);
         }
 
@@ -5388,7 +5430,7 @@ mod tests {
     use alien_client_core::ErrorData as CloudClientErrorData;
     use alien_core::{
         CertificateStatus, ClientConfig, DeploymentConfig, DnsRecordStatus, DomainMetadata,
-        EnvironmentVariablesSnapshot, ExternalBindings, NetworkSettings, Platform,
+        EnvironmentVariablesSnapshot, ExternalBindings, Network, NetworkSettings, Platform,
         PublicEndpointUrls, Resource, ResourceDefinition, ResourceDomainInfo, ResourceLifecycle,
         ResourceStatus, ServiceAccount, Stack, StackResourceState, StackSettings, StackState,
         Worker, WorkerCode, WorkerOutputs, WorkerPublicEndpoint,
@@ -5401,6 +5443,7 @@ mod tests {
     use crate::core::{
         serialize_controller, MockPlatformServiceProvider, ResourceController, StackExecutor,
     };
+    use crate::network::AwsNetworkController;
     use crate::service_account::AwsServiceAccountController;
     use crate::worker::{
         fixtures::*, readiness_probe::test_utils::create_readiness_probe_mock, AwsWorkerController,
@@ -6238,6 +6281,26 @@ mod tests {
         assert!(executor.outputs().is_none());
     }
 
+    fn add_recorded_test_network(state: &mut StackState) {
+        let mut network = AwsNetworkController::mock_ready("vpc-test", 2);
+        network.transition_to_delete_start().unwrap();
+        state.resources.insert(
+            "default-network".into(),
+            StackResourceState::builder()
+                .resource_type(Network::RESOURCE_TYPE.to_string())
+                .status(ResourceStatus::Deleting)
+                .config(Resource::new(
+                    Network::new("default-network".into())
+                        .settings(NetworkSettings::UseDefault)
+                        .build(),
+                ))
+                .lifecycle(ResourceLifecycle::Frozen)
+                .dependencies(vec![])
+                .internal_state(serialize_controller(&network).unwrap())
+                .build(),
+        );
+    }
+
     fn existing_vpc_settings() -> StackSettings {
         StackSettings {
             network: Some(NetworkSettings::ByoVpcAws {
@@ -6251,7 +6314,122 @@ mod tests {
     }
 
     #[rstest]
-    #[case::existing_wait(false, 1199, true)]
+    #[case::bare("", true)]
+    #[case::uuid("-12345678-1234-1234-1234-123456789abc", true)]
+    #[case::sibling("-v2", false)]
+    #[case::sibling_uuid("-v2-12345678-1234-1234-1234-123456789abc", false)]
+    #[case::invalid_uuid("-12345678-1234-1234-1234-123456789abz", false)]
+    #[case::trailing_text("-12345678-1234-1234-1234-123456789abc-extra", false)]
+    #[tokio::test]
+    async fn eni_wait_matches_only_the_exact_function(
+        #[case] suffix: &'static str,
+        #[case] should_wait: bool,
+    ) {
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_describe_network_interfaces()
+            .times(1)
+            .withf(|request| {
+                let filters = request.filters.as_ref().unwrap();
+                filters.len() == 3
+                    && [
+                        ("description", "AWS Lambda VPC ENI-test-basic-func*"),
+                        ("interface-type", "lambda"),
+                        ("vpc-id", "vpc-test"),
+                    ]
+                    .iter()
+                    .all(|(name, value)| {
+                        filters
+                            .iter()
+                            .any(|f| f.name == *name && f.values == [*value])
+                    })
+            })
+            .returning(move |_| {
+                Ok(serde_json::from_value(serde_json::json!({
+                    "networkInterfaceSet": { "item": [{
+                        "networkInterfaceId": "eni-test",
+                        "description": format!("AWS Lambda VPC ENI-test-basic-func{suffix}"),
+                        "status": "available"
+                    }] }
+                }))
+                .unwrap())
+            });
+        let ec2 = Arc::new(ec2);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_ec2_client()
+            .returning(move |_| Ok(ec2.clone()));
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(basic_function())
+            .controller(AwsWorkerController {
+                state: AwsWorkerState::WaitingForVpcEnisReleased,
+                ..Default::default()
+            })
+            .platform(Platform::Aws)
+            .stack_settings(existing_vpc_settings())
+            .with_dependency(
+                Network::new("default-network".into())
+                    .settings(NetworkSettings::UseDefault)
+                    .build(),
+                AwsNetworkController::mock_ready("vpc-test", 2),
+            )
+            .service_provider(Arc::new(provider))
+            .build()
+            .await
+            .unwrap();
+        executor.step().await.unwrap();
+        assert_eq!(
+            executor
+                .internal_state::<AwsWorkerController>()
+                .unwrap()
+                .state,
+            if should_wait {
+                AwsWorkerState::WaitingForVpcEnisReleased
+            } else {
+                AwsWorkerState::DeletingCertificate
+            }
+        );
+    }
+
+    #[rstest]
+    #[case::no_network(false)]
+    #[case::default_network_without_vpc_attachment(true)]
+    #[tokio::test]
+    async fn eni_wait_skips_workers_without_vpc_configuration(#[case] default_network: bool) {
+        // No provider expectations: neither case should call EC2.
+        let mut builder = SingleControllerExecutor::builder()
+            .resource(basic_function())
+            .controller(AwsWorkerController {
+                state: AwsWorkerState::WaitingForVpcEnisReleased,
+                ..Default::default()
+            })
+            .platform(Platform::Aws)
+            .service_provider(Arc::new(MockPlatformServiceProvider::new()));
+        if default_network {
+            builder = builder
+                .stack_settings(StackSettings {
+                    network: Some(NetworkSettings::UseDefault),
+                    ..Default::default()
+                })
+                .with_dependency(
+                    Network::new("default-network".into())
+                        .settings(NetworkSettings::UseDefault)
+                        .build(),
+                    AwsNetworkController::mock_byo_vpc_ready("vpc-test", vec![], vec![], None),
+                );
+        }
+        let mut executor = builder.build().await.unwrap();
+        executor.step().await.unwrap();
+        assert_eq!(
+            executor
+                .internal_state::<AwsWorkerController>()
+                .unwrap()
+                .state,
+            AwsWorkerState::DeletingCertificate
+        );
+    }
+
+    #[rstest]
+    #[case::existing_wait(false, 1190, true)]
     #[case::existing_timeout(false, 1200, true)]
     #[case::existing_released(false, 0, false)]
     #[case::created_wait(true, 1200, true)]
@@ -6268,7 +6446,7 @@ mod tests {
                 == ["AWS Lambda VPC ENI-test-basic-func*"])
             .returning(move |_| Ok(serde_json::from_value(serde_json::json!({
                 "networkInterfaceSet": { "item": if interfaces_remain {
-                    vec![serde_json::json!({"networkInterfaceId": "eni-shared", "status": "in-use"})]
+                    vec![serde_json::json!({"networkInterfaceId": "eni-shared", "description": "AWS Lambda VPC ENI-test-basic-func", "status": "available"})]
                 } else { vec![] } }
             })).unwrap()));
         let ec2 = Arc::new(ec2);
@@ -6300,6 +6478,12 @@ mod tests {
             .resource(basic_function())
             .controller(controller)
             .platform(Platform::Aws)
+            .with_dependency(
+                Network::new("default-network".into())
+                    .settings(settings.network.clone().unwrap())
+                    .build(),
+                AwsNetworkController::mock_ready("vpc-test", 2),
+            )
             .stack_settings(settings)
             .service_provider(Arc::new(provider))
             .with_test_dependencies()
@@ -6338,7 +6522,7 @@ mod tests {
                 Ok(
                     serde_json::from_value(serde_json::json!({"networkInterfaceSet": {"item":
                         if observed.load(Ordering::SeqCst) { vec![] }
-                        else { vec![serde_json::json!({"networkInterfaceId": "eni-test"})] }
+                        else { vec![serde_json::json!({"networkInterfaceId": "eni-test", "description": "AWS Lambda VPC ENI-test-basic-func"})] }
                     }}))
                     .unwrap(),
                 )
@@ -6386,6 +6570,7 @@ mod tests {
         let worker = basic_function();
         let mut state = StackState::new(Platform::Aws);
         state.resource_prefix = "test".into();
+        add_recorded_test_network(&mut state);
         state.resources.insert(
             worker.id.clone(),
             StackResourceState::builder()
@@ -6393,10 +6578,13 @@ mod tests {
                 .status(ResourceStatus::Deleting)
                 .config(Resource::new(worker))
                 .lifecycle(ResourceLifecycle::Live)
-                .dependencies(vec![alien_core::ResourceRef::new(
-                    ServiceAccount::RESOURCE_TYPE,
-                    "default-profile-sa",
-                )])
+                .dependencies(vec![
+                    alien_core::ResourceRef::new(
+                        ServiceAccount::RESOURCE_TYPE,
+                        "default-profile-sa",
+                    ),
+                    alien_core::ResourceRef::new(Network::RESOURCE_TYPE, "default-network"),
+                ])
                 .internal_state(
                     serialize_controller(&AwsWorkerController {
                         state: AwsWorkerState::WaitingForVpcEnisReleased,
@@ -6428,7 +6616,10 @@ mod tests {
                     ServiceAccount::new("default-profile-sa".into()).build(),
                 ))
                 .lifecycle(ResourceLifecycle::Frozen)
-                .dependencies(vec![])
+                .dependencies(vec![alien_core::ResourceRef::new(
+                    Network::RESOURCE_TYPE,
+                    "default-network",
+                )])
                 .internal_state(serialize_controller(&role_controller).unwrap())
                 .build(),
         );
@@ -6506,7 +6697,7 @@ mod tests {
     /// access-denied answer does to the rest of the delete flow.
     #[bon::builder]
     async fn delete_public_worker_in_created_vpc(
-        mock_lambda: MockLambdaApi,
+        mut mock_lambda: MockLambdaApi,
         mock_ec2: MockEc2Api,
         mock_acm: MockAcmApi,
         #[builder(default = MockCloudWatchLogsApi::new())] mock_logs: MockCloudWatchLogsApi,
@@ -6520,6 +6711,7 @@ mod tests {
 
         let mut state = StackState::new(Platform::Aws);
         state.resource_prefix = "test".to_string();
+        add_recorded_test_network(&mut state);
         state.resources.insert(
             worker_id.clone(),
             StackResourceState::builder()
@@ -6528,10 +6720,16 @@ mod tests {
                 .config(Resource::new(worker))
                 .internal_state(serialize_controller(&controller).unwrap())
                 .lifecycle(ResourceLifecycle::Live)
-                .dependencies(vec![])
+                .dependencies(vec![alien_core::ResourceRef::new(
+                    Network::RESOURCE_TYPE,
+                    "default-network",
+                )])
                 .build(),
         );
 
+        mock_lambda
+            .expect_update_function_configuration()
+            .returning(|_, _| Err(access_denied()));
         let mock_lambda = Arc::new(mock_lambda);
         let mock_ec2 = Arc::new(mock_ec2);
         let mock_acm = Arc::new(mock_acm);
@@ -6664,7 +6862,12 @@ mod tests {
             .call()
             .await;
 
-        let mut expected_calls = vec!["DeleteFunction", "GetFunction", "DescribeNetworkInterfaces"];
+        let mut expected_calls = vec![
+            "GetFunction",
+            "DeleteFunction",
+            "GetFunction",
+            "DescribeNetworkInterfaces",
+        ];
         if !uses_custom_domain {
             expected_calls.push("DeleteCertificate");
         }
@@ -6711,7 +6914,12 @@ mod tests {
 
         assert_eq!(
             *calls.lock().unwrap(),
-            ["DeleteFunction", "GetFunction", "DescribeNetworkInterfaces"]
+            [
+                "GetFunction",
+                "DeleteFunction",
+                "GetFunction",
+                "DescribeNetworkInterfaces"
+            ]
         );
         assert_eq!(status, ResourceStatus::Deleted);
     }
