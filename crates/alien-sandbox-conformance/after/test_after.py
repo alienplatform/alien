@@ -379,9 +379,9 @@ class After(unittest.IsolatedAsyncioTestCase):
 
     @unittest.skipUnless(os.geteuid() == 0, "host packet witness requires CAP_NET_RAW")
     async def test_packet_witness_captures_only_selected_identity(self):
-        def token(subject):
+        def token(subject, audience="test/resource", issuer="alien-sandbox"):
             claims = json.dumps(
-                {"iss": "alien-sandbox", "aud": "test/resource", "sub": subject}
+                {"iss": issuer, "aud": audience, "sub": subject}
             ).encode()
             return (
                 b"header."
@@ -390,51 +390,70 @@ class After(unittest.IsolatedAsyncioTestCase):
             )
 
         expected = token("selected")
-        with socket.socket() as listener:
-            listener.bind(("127.0.0.1", 0))
-            listener.listen()
-            listener.settimeout(2)
-            port = listener.getsockname()[1]
-            observer = await asyncio.create_subprocess_exec(
-                sys.executable,
-                str(Path(__file__).with_name("capture_identity.py")),
-                "--audience",
-                "test/resource",
-                "--sandbox-id",
-                "selected",
-                "--interface",
-                "lo",
-                "--port",
-                str(port),
-                "--timeout",
-                "2",
-                stdout=asyncio.subprocess.PIPE,
-            )
-            try:
-                deadline = time.monotonic() + 2
-                while observer.returncode is None and time.monotonic() < deadline:
-                    for identity in (token("wrong-sandbox"), expected):
-                        with (
-                            socket.create_connection(
-                                listener.getsockname(), timeout=2
-                            ) as client,
-                            listener.accept()[0] as server,
-                        ):
-                            client.sendall(
-                                b"CONNECT allowed.test:443 HTTP/1.1\r\n"
-                                b"Proxy-Authorization: Bearer " + identity + b"\r\n\r\n"
-                            )
-                            server.recv(8192)
-                    await asyncio.sleep(0.05)
-                output, _ = await asyncio.wait_for(observer.communicate(), 3)
-                self.assertEqual(0, observer.returncode)
-                self.assertEqual(
-                    hashlib.sha256(expected).hexdigest() + "\n", output.decode()
+        for mode in ("explicit", "translated", "wrong-port"):
+            with self.subTest(mode=mode), socket.socket() as listener:
+                listener.bind(("127.0.0.1", 0))
+                listener.listen()
+                listener.settimeout(2)
+                port = listener.getsockname()[1]
+                port_args = {
+                    "explicit": ["--port", str(port)],
+                    "translated": ["--any-port"],
+                    "wrong-port": ["--port", "1"],
+                }[mode]
+                observer = await asyncio.create_subprocess_exec(
+                    sys.executable,
+                    str(Path(__file__).with_name("capture_identity.py")),
+                    "--audience",
+                    "test/resource",
+                    "--sandbox-id",
+                    "selected",
+                    "--interface",
+                    "lo",
+                    *port_args,
+                    "--timeout",
+                    "2",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
                 )
-            finally:
-                if observer.returncode is None:
-                    observer.kill()
-                    await observer.wait()
+                try:
+                    deadline = time.monotonic() + 2
+                    while observer.returncode is None and time.monotonic() < deadline:
+                        for identity in (
+                            token("wrong-sandbox"),
+                            token("selected", audience="wrong/resource"),
+                            token("selected", issuer="wrong-issuer"),
+                            expected,
+                        ):
+                            with (
+                                socket.create_connection(
+                                    listener.getsockname(), timeout=2
+                                ) as client,
+                                listener.accept()[0] as server,
+                            ):
+                                client.sendall(
+                                    b"CONNECT allowed.test:443 HTTP/1.1\r\n"
+                                    b"Proxy-Authorization: Bearer "
+                                    + identity
+                                    + b"\r\n\r\n"
+                                )
+                                server.recv(8192)
+                        await asyncio.sleep(0.05)
+                    output, errors = await asyncio.wait_for(observer.communicate(), 3)
+                    self.assertEqual(b"", errors)
+                    if mode == "wrong-port":
+                        self.assertEqual(1, observer.returncode)
+                        self.assertEqual(b"", output)
+                    else:
+                        self.assertEqual(0, observer.returncode)
+                        self.assertEqual(
+                            hashlib.sha256(expected).hexdigest() + "\n",
+                            output.decode(),
+                        )
+                finally:
+                    if observer.returncode is None:
+                        observer.kill()
+                        await observer.wait()
 
     async def test_fingerprint_rejects_secret_or_failed_observer(self):
         self.assertIsNone(await run.fingerprint(None, "sandbox"))

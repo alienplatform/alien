@@ -195,8 +195,13 @@ python3 capture_identity.py --audience deployment-prefix/resource \
   --sandbox-id "$1" --interface eth0
 ```
 
-It watches only IPv4 TCP requests to gateway port 3128 and selects identity claims
-by issuer, audience and sandbox ID before emitting the SHA-256. It neither stores
+By default it watches IPv4 TCP requests to gateway port 3128. Use `--port PORT`
+when the host exposes a different port. If host port translation assigns different
+ports to replicas, use `--any-port` instead; keep `--interface` scoped to the trusted
+capture interface. This mode examines CONNECT requests on any destination port,
+but still selects identity claims by issuer, audience and sandbox ID before emitting
+the SHA-256. A fixed port-3128 filter can miss translated traffic even while the
+gateway handles connections successfully. It neither stores
 pcaps nor prints headers/tokens. The observer does not verify the JWT signature;
 the paired successful gateway request supplies authentication evidence. Run on
 the trusted network boundary and export the matching connection logs.

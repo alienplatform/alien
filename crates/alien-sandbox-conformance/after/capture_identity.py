@@ -19,7 +19,9 @@ def fingerprint_packet(packet, audience, sandbox_id, port):
         return None
     ip_size = (ip[0] & 15) * 4
     tcp = ip[ip_size : struct.unpack("!H", ip[2:4])[0]]
-    if ip_size < 20 or len(tcp) < 20 or struct.unpack("!H", tcp[2:4])[0] != port:
+    if ip_size < 20 or len(tcp) < 20:
+        return None
+    if port is not None and struct.unpack("!H", tcp[2:4])[0] != port:
         return None
     tcp_size = (tcp[12] >> 4) * 4
     if tcp_size < 20:
@@ -82,10 +84,20 @@ def main():
     parser.add_argument(
         "--interface", help="host interface carrying the gateway connection"
     )
-    parser.add_argument("--port", type=int, default=3128)
+    ports = parser.add_mutually_exclusive_group()
+    ports.add_argument("--port", type=int, default=3128)
+    ports.add_argument(
+        "--any-port",
+        dest="port",
+        action="store_const",
+        const=None,
+        help="observe translated host ports; identity scope is still required",
+    )
     parser.add_argument("--timeout", type=float, default=8)
     args = parser.parse_args()
-    if not 0 < args.timeout <= 8 or not 1 <= args.port <= 65535:
+    if not 0 < args.timeout <= 8 or (
+        args.port is not None and not 1 <= args.port <= 65535
+    ):
         parser.error("timeout must be in (0, 8] and port in [1, 65535]")
     try:
         result = capture(args)
