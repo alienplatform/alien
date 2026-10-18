@@ -40,6 +40,14 @@ All JSON uses the following wire forms:
   snapshot endpoints work before readiness.
 - `GET /health`: 200 only after synchronization, otherwise 503.
 
+For the configured peer service, a DNS NXDOMAIN or NODATA answer means no peers
+are currently published. An empty replica can then become ready so service
+discovery and agent re-registration can recover after total loss. The configured
+resolver supplies membership, including negative answers; an SOA record is not
+required. DNS SERVFAIL, REFUSED and transport timeouts remain failures and keep
+an unsynchronized replica unready. A listed but unreachable peer also blocks
+readiness.
+
 Peer POSTs carry `x-alien-replica-time` (Unix seconds) and
 `x-alien-replica-signature` (standard base64 HMAC-SHA256). HMAC input is
 `alien-egress-replica-v1\n`, method, newline, exact path, newline, timestamp as

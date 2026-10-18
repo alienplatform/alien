@@ -57,7 +57,20 @@ def dns():
             continue
         ips = ["93.184.216.2"]
         if name == "replicas.test":
+            mode_file = Path("/fixture/peer-dns")
+            mode = mode_file.read_text().strip() if mode_file.exists() else "normal"
+            if mode in ["nxdomain", "nodata", "bare-nxdomain", "servfail", "refused"]:
+                code = {"nxdomain": 3, "nodata": 0, "bare-nxdomain": 3, "servfail": 2, "refused": 5}[mode]
+                authoritative = mode in ["nxdomain", "nodata"]
+                answer = packet[:2] + struct.pack("!HHHHH", 0x8180 | code | (0x400 if authoritative else 0), 1, 0, int(authoritative), 0) + question
+                if authoritative:
+                    soa = b"\x02ns\x04test\x00\x0ahostmaster\x04test\x00" + struct.pack("!IIIII", 1, 1, 1, 1, 0)
+                    answer += b"\xc0\x0c" + struct.pack("!HHIH", 6, 1, 0, len(soa)) + soa
+                server.sendto(answer, sender)
+                continue
             ips = ["93.184.216.3", "93.184.216.4"]
+            if mode == "three":
+                ips.append("93.184.216.5")
         elif name == "private.test":
             ips = ["10.77.91.2"]
         elif name == "configured-range.test":

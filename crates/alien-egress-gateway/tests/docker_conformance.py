@@ -687,6 +687,7 @@ def main():
     parser.add_argument("--agent-uid", type=int, default=60000, help="command UID/GID configured in the agent fixture image")
     parser.add_argument("--gateway-binary", type=Path)
     parser.add_argument("--vault-config", action="store_true")
+    parser.add_argument("--replica-bootstrap-only", action="store_true")
     args = parser.parse_args()
     if args.agent_uid <= 0:
         parser.error("--agent-uid must be a non-root UID")
@@ -719,7 +720,8 @@ def main():
                "-v", f"{output / 'origin'}:/fixture", "-v", f"{Path(__file__).with_name('origin.py')}:/origin.py:ro", "python:3.13-slim", "python", "/origin.py")
         containers.append(name)
         docker("network", "connect", "--ip", "10.77.91.2", private_network, name)
-        for number, ip in [(1, PROXY), (2, "93.184.216.4")]:
+        def start_gateway(number):
+            ip = f"93.184.216.{number + 2}"
             name = PREFIX + f"-proxy{number}"
             binary = ["-v", f"{args.gateway_binary.resolve()}:/usr/local/bin/alien-egress-gateway:ro"] if args.gateway_binary else []
             config_env = ["-e", "ALIEN_SECRETS_BINDING=" + json.dumps({"service":"local-vault","dataDir":"/vault","vaultName":"secrets"})] if args.vault_config else ["-e", "ALIEN_EGRESS_GATEWAY_CONFIG=" + json.dumps(config)]
@@ -730,6 +732,8 @@ def main():
                    *config_env, args.image)
             containers.append(name)
             docker("network", "connect", "--ip", f"10.77.91.{number + 2}", private_network, name)
+        start_gateway(1)
+        start_gateway(2)
         deadline = time.monotonic() + 30
         while True:
             try:
@@ -741,6 +745,10 @@ def main():
                 if time.monotonic() > deadline:
                     raise
                 time.sleep(0.1)
+        if args.replica_bootstrap_only:
+            from dns_bootstrap import check_dns_bootstrap
+            check_dns_bootstrap(suite, start_gateway, docker, PREFIX, AUD)
+            return
         suite.run()
         check_live_connections(suite, AUD, ORIGIN, PROXY, "93.184.216.4", docker, PREFIX)
         if args.agent_image:

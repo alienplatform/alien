@@ -7,6 +7,10 @@ use crate::{
 use alien_error::{AlienError, Context, IntoAlienError};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use futures_util::TryStreamExt;
+use hickory_resolver::{
+    net::{DnsError, NetError},
+    proto::op::ResponseCode,
+};
 use hmac::{Hmac, Mac};
 use serde::de::{Deserializer as _, SeqAccess, Visitor};
 use sha2::{Digest, Sha256};
@@ -123,9 +127,23 @@ impl Replication {
         )
         .await
         .into_alien_error()
-        .context(unavailable("replica discovery timeout"))?
-        .into_alien_error()
-        .context(unavailable("discover replicas"))?;
+        .context(unavailable("replica discovery timeout"))?;
+        let answers = match answers {
+            // Ready-only service discovery has no records at first boot or after total loss.
+            // Only DNS negative answers from the configured resolver count as empty;
+            // transport errors and DNS failure codes must keep us unready.
+            Err(NetError::Dns(DnsError::NoRecordsFound(ref negative)))
+                if matches!(
+                    negative.response_code,
+                    ResponseCode::NXDomain | ResponseCode::NoError
+                ) =>
+            {
+                return Ok(Vec::new());
+            }
+            result => result
+                .into_alien_error()
+                .context(unavailable("discover replicas"))?,
+        };
         let mut peers = Vec::new();
         for ip in answers
             .answers()
@@ -363,8 +381,100 @@ mod tests {
     use super::*;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use ed25519_compact::{KeyPair, Seed};
+    use hickory_resolver::{
+        config::{ConnectionConfig, NameServerConfig, ResolverConfig},
+        net::runtime::TokioRuntimeProvider,
+        proto::{
+            op::{Message, MessageType, OpCode, ResponseCode},
+            rr::{rdata::SOA, Name, RData, Record as DnsRecord},
+        },
+        TokioResolver,
+    };
     use std::collections::HashMap;
     use tokio::io::AsyncWriteExt;
+
+    #[tokio::test]
+    async fn authoritative_empty_peer_dns_is_empty_but_discovery_failures_are_errors() {
+        for (response_code, soa, expected_empty) in [
+            (Some(ResponseCode::NXDomain), true, true),
+            (Some(ResponseCode::NoError), true, true),
+            (Some(ResponseCode::NXDomain), false, true),
+            (Some(ResponseCode::NoError), false, true),
+            (Some(ResponseCode::Refused), true, false),
+            (Some(ResponseCode::ServFail), true, false),
+            (None, false, false),
+        ] {
+            let socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+            let mut connection = ConnectionConfig::udp();
+            connection.port = socket.local_addr().unwrap().port();
+            let config = ResolverConfig::from_name_servers(vec![NameServerConfig::new(
+                "127.0.0.1".parse().unwrap(),
+                true,
+                vec![connection],
+            )]);
+            let mut builder =
+                TokioResolver::builder_with_config(config, TokioRuntimeProvider::default());
+            builder.options_mut().attempts = 1;
+            builder.options_mut().timeout = Duration::from_millis(100);
+            builder.options_mut().cache_size = 0;
+            let server = tokio::spawn(async move {
+                let mut buffer = [0; 4096];
+                loop {
+                    let (len, peer) = socket.recv_from(&mut buffer).await.unwrap();
+                    let request = Message::from_vec(&buffer[..len]).unwrap();
+                    let Some(code) = response_code else {
+                        continue;
+                    };
+                    let mut response =
+                        Message::new(request.id, MessageType::Response, OpCode::Query);
+                    response.metadata.recursion_desired = true;
+                    response.metadata.recursion_available = true;
+                    response.metadata.authoritative = true;
+                    response.metadata.response_code = code;
+                    response.queries = request.queries;
+                    if soa {
+                        response.authorities.push(DnsRecord::from_rdata(
+                            Name::from_ascii("test.").unwrap(),
+                            0,
+                            RData::SOA(SOA::new(
+                                Name::from_ascii("ns.test.").unwrap(),
+                                Name::from_ascii("hostmaster.test.").unwrap(),
+                                1,
+                                1,
+                                1,
+                                1,
+                                0,
+                            )),
+                        ));
+                    }
+                    socket
+                        .send_to(&response.to_vec().unwrap(), peer)
+                        .await
+                        .unwrap();
+                }
+            });
+            let replication = Replication::new(
+                Some(crate::config::Peers::Dns(crate::config::DnsPeers {
+                    dns: "empty.test".into(),
+                    port: 3129,
+                })),
+                Some([7; 32]),
+                3129,
+                builder.build().unwrap(),
+            )
+            .unwrap();
+            let result = replication.peers().await;
+            server.abort();
+            assert_eq!(
+                result.as_ref().is_ok_and(Vec::is_empty),
+                expected_empty,
+                "response={response_code:?}, soa={soa}, result={result:?}"
+            );
+            if !expected_empty {
+                assert!(result.is_err());
+            }
+        }
+    }
 
     #[tokio::test]
     async fn chunked_snapshot_decodes_one_signed_record_at_a_time() {
