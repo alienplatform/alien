@@ -734,8 +734,19 @@ async fn remote_sandbox_decodes_every_declared_field_and_reaches_the_azure_provi
     assert_eq!(binding.disk_image, value("ubuntu"));
     assert_eq!(
         binding.egress.declaration(),
-        &alien_core::SandboxEgress::Internet
+        &alien_core::SandboxEgress::Allow
     );
+    let provider = crate::BindingsProvider::new(
+        alien_core::ClientConfig::Azure(client_config.clone()),
+        std::collections::HashMap::from([(
+            "agent".to_string(),
+            serde_json::to_value(alien_core::SandboxBinding::Azure((*binding).clone())).unwrap(),
+        )]),
+    )
+    .unwrap();
+    crate::BindingsProviderApi::load_sandbox(&provider, "agent")
+        .await
+        .expect("a released remote Azure lease loads without a gateway");
     assert_eq!(binding.idle_pause_seconds, Some(300));
     assert_eq!(binding.cpu, Some(value("1000m")));
     assert_eq!(binding.memory, Some(value("2048Mi")));

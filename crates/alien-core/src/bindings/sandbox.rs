@@ -383,7 +383,7 @@ impl SandboxBinding {
         })
     }
 
-    /// Creates a GCP Agent Platform sandbox binding.
+    /// Creates a legacy GCP Agent Platform binding from the native egress flag.
     pub fn gcp_agent_platform(
         engine: impl Into<BindingValue<String>>,
         template: impl Into<BindingValue<String>>,
@@ -395,7 +395,7 @@ impl SandboxBinding {
             default_policy: None,
             egress: Some(
                 (if allow_egress {
-                    SandboxEgress::Internet
+                    SandboxEgress::Allow
                 } else {
                     SandboxEgress::None
                 })

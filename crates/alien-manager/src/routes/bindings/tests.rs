@@ -200,7 +200,7 @@ fn sandbox_resource() -> Sandbox {
         .code(SandboxCode::Image {
             image: "ubuntu:24.04".to_string(),
         })
-        .egress(SandboxEgress::Internet)
+        .egress(SandboxEgress::Allow)
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,
@@ -257,7 +257,7 @@ fn open_sandbox_binding_for(platform: Platform) -> SandboxBinding {
             "westus2",
             "rg",
             "ubuntu",
-            alien_core::SandboxEgress::Internet,
+            alien_core::SandboxEgress::Allow,
             None,
         ),
         Platform::Gcp => SandboxBinding::gcp_agent_platform(
@@ -508,6 +508,27 @@ fn remote_sandbox_validation_refuses_a_sandbox_that_restricts_egress() {
         "{}",
         error.message
     );
+}
+
+#[test]
+fn remote_sandbox_validation_refuses_internet_even_without_gateway_metadata() {
+    for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+        let mut binding = open_sandbox_binding_for(platform);
+        match &mut binding {
+            SandboxBinding::Aws(binding) => binding.egress = Some(SandboxEgress::Internet.into()),
+            SandboxBinding::GcpAgentPlatform(binding) => {
+                binding.egress = Some(SandboxEgress::Internet.into());
+            }
+            SandboxBinding::Azure(binding) => binding.egress = SandboxEgress::Internet.into(),
+            _ => unreachable!("the fixture uses cloud bindings"),
+        }
+        let deployment = deployment_on_platform(sandbox_stack_state(binding, platform), platform);
+        let Err(error) = remote_sandbox_binding(&deployment, "agents") else {
+            panic!("Internet must not become direct access through a remote lease");
+        };
+        assert_eq!(error.code, "BAD_REQUEST");
+        assert!(error.message.contains("gateway"), "{error}");
+    }
 }
 
 /// Preflight refuses a remote binding by its permission set's platform coverage, while this route
