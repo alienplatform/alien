@@ -50,6 +50,10 @@ pub(super) fn install() -> io::Result<()> {
     crate::netfilter::install(install_rules())
 }
 
+pub(super) async fn install_at_run() -> io::Result<()> {
+    crate::netfilter::apply(install_rules()).await
+}
+
 async fn install_rules() -> nlink::netlink::Result<()> {
     let conn = Connection::<Nftables>::new()?;
     let tables = conn.list_tables().await?;

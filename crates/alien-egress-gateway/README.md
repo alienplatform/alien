@@ -121,6 +121,9 @@ netlink in one atomic transaction. Images need neither `nft` nor `iptables`. The
 kernel must support nftables and the bootstrap process must have `NET_ADMIN`. A refused
 or timed-out installation stops the agent before it binds its listener or runs image code.
 Bootstrap creates no worker threads before dropping supervisor capabilities.
+Loopback DNAT works on kernels without the optional redirect expression. Every
+image command and exec child receives an irreversible IPv6 socket restriction,
+including on kernels that expose IPv6 sockets without IPv6 nftables support.
 
 Legacy supervisor object policies (`deny`, `allow`, and `allowDomains`) retain
 their released direct path and command-UID filter, including pinned allowlisted

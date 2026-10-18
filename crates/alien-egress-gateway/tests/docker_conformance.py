@@ -390,7 +390,7 @@ class Suite:
         network = PREFIX + "-guest"
         docker("network", "create", "--internal", "--subnet", "172.29.91.0/24", network)
         networks.append(network)
-        docker("network", "connect", "--ip", "172.29.91.2", network, PREFIX + "-proxy1")
+        docker("network", "connect", "--ip", "172.29.91.2", "--alias", "gateway.test", network, PREFIX + "-proxy1")
         name = PREFIX + "-agent"
         docker("run", "-d", "--name", name, "--network", network, "--ip", "172.29.91.3", "--cap-add", "NET_ADMIN",
                "-v", f"{self.output / 'origin/ca.pem'}:/fixture-ca.pem:ro", image)
@@ -417,11 +417,34 @@ class Suite:
         self.record("agent pending health", lambda: equal(json.loads(call("GET", "/v1/health")[1])["status"], "awaiting-egress-policy"))
         hook = {"microvmId": SUB, "runHookPayload": json.dumps({"gateway": "172.29.91.2:3128", "audience": AUD})}
         self.record("AWS run wrapper bootstrap", lambda: equal(call("POST", "/aws/lambda-microvms/runtime/v1/run", hook)[0], 200))
+        # Resolve through the marked control socket after the guest DNS redirect is active.
+        # The subsequent token self-check must reach the real gateway, not a synthetic IP.
+        hook["runHookPayload"] = json.dumps({"gateway": "gateway.test:3128", "audience": AUD})
+        self.record("AWS run hook resolves gateway hostname through control DNS", lambda: equal(call("POST", "/aws/lambda-microvms/runtime/v1/run", hook)[0], 200))
         self.record("agent refuses other sandbox token", lambda: equal(call("PUT", "/v1/egress", {"token": self.token(sub="other")})[0], 500))
         forged = self.token().rsplit(".", 1)[0] + "." + encoded(bytes(64))
         self.record("agent refuses forged identity via authenticated health", lambda: equal(call("PUT", "/v1/egress", {"token": forged})[0], 503))
         self.record("agent token install and path self-check", lambda: equal(call("PUT", "/v1/egress", {"token": self.token()})[0], 204))
         self.record("agent ready health", lambda: equal(json.loads(call("GET", "/v1/health")[1])["status"], "ready"))
+        def child_socket_boundary():
+            # Docker exec bypasses the agent's child setup: establish that IPv6 exists
+            # in this namespace, then exercise the real command launch boundary.
+            docker("exec", name, "python", "-c", "import socket; socket.socket(socket.AF_INET6).close()")
+            program = '''import socket
+for kind in [socket.SOCK_STREAM, socket.SOCK_DGRAM]:
+ try: socket.socket(socket.AF_INET6, kind)
+ except PermissionError: pass
+ else: raise AssertionError("IPv6 escaped the command boundary")
+socket.socket(socket.AF_INET, socket.SOCK_STREAM).close()
+print("IPv6 blocked; IPv4 available")
+'''
+            status, body = call("POST", "/v1/exec", {"command": ["python", "-c", program], "timeoutMs": 5000})
+            assert status == 200, (status, body)
+            frames = [json.loads(line) for line in body.splitlines()]
+            assert frames[-1]["t"] == "exit" and frames[-1]["code"] == 0, frames
+            output = b"".join(base64.b64decode(frame["data"]) for frame in frames if frame["t"] == "stdout")
+            assert output.strip() == b"IPv6 blocked; IPv4 available", frames
+        self.record("actual exec blocks IPv6 despite namespace socket support", child_socket_boundary)
         def reinstall():
             # A second bootstrap replaces the existing tables before failing to bind the
             # occupied control port. Subsequent packet probes exercise the replacement rules.
@@ -625,6 +648,8 @@ def main():
             check_legacy_agents(suite, args.agent_image, containers, AGENT_UID)
             suite.agent(args.agent_image, containers, networks)
             suite.proxy_only(args.agent_image, containers)
+            from run_hook_egress import check_run_hook_agents
+            check_run_hook_agents(suite, args.agent_image, containers)
         if args.vault_config:
             assert suite.admin("/v1/policies", {"aud":AUD,"sub":"reload","policy":"internet"})[0] == 204
             suite.tunnel(token=suite.token(sub="reload")).close()
