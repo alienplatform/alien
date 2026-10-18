@@ -1,4 +1,5 @@
 import {
+  type EgressPolicy,
   type ResourceType,
   type SandboxCode,
   type Sandbox as SandboxConfig,
@@ -10,6 +11,7 @@ import {
 import { type Resource, ResourceBuilder } from "./resource.js"
 
 export type {
+  EgressPolicy,
   Sandbox as SandboxConfig,
   SandboxCapabilities,
   SandboxCode,
@@ -24,7 +26,7 @@ export { SandboxSchema as SandboxConfigSchema } from "./generated/index.js"
  * An isolated environment for running untrusted code.
  *
  * The declaration provisions a durable parent; individual sandboxes are created and destroyed
- * at runtime through the binding. A runtime egress policy may narrow this declaration.
+ * at runtime through the binding. Runtime policies control each sandbox independently.
  * Unsupported policies are refused when planning the stack.
  *
  * Limits are enforced ceilings, not scheduling hints, and are validated when the stack is
@@ -68,10 +70,16 @@ export class Sandbox extends ResourceBuilder {
   }
 
   /**
-   * Sets the outbound network policy.
+   * Sets whether the sandbox may access the public internet.
    */
   public egress(egress: SandboxEgress): this {
     this._config.egress = egress
+    return this
+  }
+
+  /** Sets the runtime policy used when create omits an explicit policy. */
+  public defaultPolicy(policy: EgressPolicy): this {
+    this._config.defaultPolicy = policy
     return this
   }
 

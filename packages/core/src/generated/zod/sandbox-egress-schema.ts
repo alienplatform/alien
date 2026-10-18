@@ -5,8 +5,9 @@
 
 import * as z from "zod";
 
-export const SandboxEgressSchema = z.union([z.object({
-    "allow": z.array(z.string()).min(1).max(4096)
-    }), z.enum(["none", "internet"])])
+/**
+ * @description Whether sandboxes may use the public internet.
+ */
+export const SandboxEgressSchema = z.enum(["none", "internet"]).describe("Whether sandboxes may use the public internet.")
 
 export type SandboxEgress = z.infer<typeof SandboxEgressSchema>

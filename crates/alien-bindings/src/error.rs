@@ -23,25 +23,25 @@ pub enum ErrorData {
     )]
     SandboxEgressPolicyTooLarge { limit: String },
 
-    /// Another caller advanced the sandbox policy during this operation.
+    /// This resource has no outbound network access.
     #[error(
-        code = "SANDBOX_EGRESS_CONFLICT",
-        message = "Sandbox egress changed concurrently; retry with the current policy",
-        retryable = "true",
-        internal = "false",
-        http_status_code = 409
-    )]
-    SandboxEgressConflict,
-
-    /// The runtime policy exceeds the declared bound.
-    #[error(
-        code = "SANDBOX_EGRESS_WIDENS",
-        message = "Sandbox egress target '{target}' exceeds the declared policy",
+        code = "SANDBOX_EGRESS_NONE",
+        message = "A runtime egress policy cannot be set on a sandbox declared none",
         retryable = "false",
         internal = "false",
         http_status_code = 400
     )]
-    SandboxEgressWidens { target: String },
+    SandboxEgressNone,
+    /// No gateway can enforce a requested runtime policy.
+    #[error(
+        code = "SANDBOX_EGRESS_GATEWAY_UNAVAILABLE",
+        message = "Sandbox egress gateway unavailable: {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    SandboxEgressGatewayUnavailable { reason: String },
+
     /// An egress target is invalid.
     #[error(
         code = "SANDBOX_EGRESS_INVALID",

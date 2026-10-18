@@ -43,12 +43,14 @@ describe("Sandbox", () => {
     expect(() => sandbox.build()).toThrow()
   })
 
-  it("carries a hostname allowlist through the schema", () => {
+  it("carries a runtime default independently of the declaration", () => {
     const r = complete()
-      .egress({ allow: ["example.com"] })
+      .egress("internet")
+      .defaultPolicy({ allow: ["example.com"] })
       .build()
 
-    expect(r.config.egress).toEqual({ allow: ["example.com"] })
+    expect(r.config.egress).toBe("internet")
+    expect(r.config.defaultPolicy).toEqual({ allow: ["example.com"] })
   })
 
   it("carries declared preview ports", () => {
