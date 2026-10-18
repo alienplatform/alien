@@ -3,7 +3,7 @@ use super::*;
 use crate::providers::vault::local::LocalVault;
 use alien_core::bindings::SandboxEgressSigningKey;
 use axum::{
-    extract::State,
+    extract::{Query, State},
     http::{HeaderMap, Method, StatusCode},
     routing::put,
     Json, Router,
@@ -17,16 +17,13 @@ use std::sync::{
 
 struct AdminState {
     public: ed25519_compact::PublicKey,
-    policies: StdMutex<std::collections::BTreeMap<String, EgressPolicy>>,
+    policies: StdMutex<std::collections::BTreeMap<String, (u64, Option<EgressPolicy>)>>,
     writes: StdMutex<Vec<String>>,
     refuse: AtomicBool,
+    read_barrier: StdMutex<Option<Arc<tokio::sync::Barrier>>>,
+    version_response: StdMutex<Option<String>>,
 }
-async fn policy_request(
-    State(state): State<Arc<AdminState>>,
-    method: Method,
-    headers: HeaderMap,
-    Json(body): Json<serde_json::Value>,
-) -> StatusCode {
+fn verify_admin(state: &AdminState, headers: &HeaderMap, method: &str) -> serde_json::Value {
     let token = headers["authorization"]
         .to_str()
         .unwrap()
@@ -45,11 +42,58 @@ async fn policy_request(
             &Signature::from_slice(&URL_SAFE_NO_PAD.decode(parts[2]).unwrap()).unwrap(),
         )
         .unwrap();
-    assert_eq!(claims["method"], method.as_str());
+    assert_eq!(claims["method"], method);
+    let now = now_unix().unwrap();
+    assert!((now - 2..=now).contains(&claims["iat"].as_i64().unwrap()));
+    assert!(claims["exp"].as_i64().unwrap() <= now + 60);
+    claims
+}
+async fn policy_version(
+    State(state): State<Arc<AdminState>>,
+    Query(query): Query<std::collections::HashMap<String, String>>,
+    headers: HeaderMap,
+) -> (StatusCode, String) {
+    let claims = verify_admin(&state, &headers, "GET");
+    for field in ["aud", "sub"] {
+        assert_eq!(claims[field], query[field]);
+    }
+    assert!(claims.get("version").is_none());
+    assert!(claims.get("policy").is_none());
+    if state.refuse.load(Ordering::SeqCst) {
+        return (StatusCode::SERVICE_UNAVAILABLE, String::new());
+    }
+    let version = state
+        .policies
+        .lock()
+        .unwrap()
+        .get(&query["sub"])
+        .map_or(0, |row| row.0);
+    let barrier = state.read_barrier.lock().unwrap().clone();
+    if let Some(barrier) = barrier {
+        barrier.wait().await;
+    }
+    let response = state
+        .version_response
+        .lock()
+        .unwrap()
+        .clone()
+        .unwrap_or_else(|| serde_json::json!({"version":version}).to_string());
+    (StatusCode::OK, response)
+}
+async fn policy_request(
+    State(state): State<Arc<AdminState>>,
+    method: Method,
+    headers: HeaderMap,
+    Json(body): Json<serde_json::Value>,
+) -> StatusCode {
+    let claims = verify_admin(&state, &headers, method.as_str());
     for field in ["aud", "sub"] {
         assert_eq!(claims[field], body[field]);
     }
-    assert!(claims["exp"].as_i64().unwrap() <= now_unix().unwrap() + 60);
+    let Some(version) = body["version"].as_u64().filter(|v| *v > 0) else {
+        return StatusCode::BAD_REQUEST;
+    };
+    assert_eq!(claims["version"], version);
     let policy = if method == Method::PUT {
         let policy: EgressPolicy = serde_json::from_value(body["policy"].clone()).unwrap();
         assert_eq!(claims["policy"], policy.policy_digest().unwrap());
@@ -64,11 +108,12 @@ async fn policy_request(
     let key = body["sub"].as_str().unwrap().to_string();
     state.writes.lock().unwrap().push(method.to_string());
     let mut policies = state.policies.lock().unwrap();
-    if let Some(policy) = policy {
-        policies.insert(key, policy);
-    } else {
-        policies.remove(&key);
+    if let Some((previous, stored)) = policies.get(&key) {
+        if version < *previous || (version == *previous && &policy != stored) {
+            return StatusCode::CONFLICT;
+        }
     }
+    policies.insert(key, (version, policy));
     StatusCode::NO_CONTENT
 }
 pub(crate) struct Harness {
@@ -86,7 +131,12 @@ impl Drop for Harness {
 }
 impl Harness {
     pub(crate) fn policy(&self, id: &str) -> Option<EgressPolicy> {
-        self.state.policies.lock().unwrap().get(id).cloned()
+        self.state
+            .policies
+            .lock()
+            .unwrap()
+            .get(id)
+            .and_then(|row| row.1.clone())
     }
     pub(crate) async fn new() -> Self {
         let directory = tempfile::tempdir().unwrap();
@@ -101,11 +151,18 @@ impl Harness {
             policies: StdMutex::new(Default::default()),
             writes: StdMutex::new(Vec::new()),
             refuse: AtomicBool::new(false),
+            read_barrier: StdMutex::new(None),
+            version_response: StdMutex::new(None),
         });
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let admin = format!("http://{}", listener.local_addr().unwrap());
         let router = Router::new()
-            .route("/v1/policies", put(policy_request).delete(policy_request))
+            .route(
+                "/v1/policies",
+                put(policy_request)
+                    .delete(policy_request)
+                    .get(policy_version),
+            )
             .with_state(state.clone());
         let server = tokio::spawn(async move {
             axum::serve(listener, router).await.unwrap();
@@ -208,6 +265,104 @@ async fn full_size_policy_uses_a_small_identity_token_and_failures_propagate() {
         .await
         .is_err());
     assert_eq!(h.policy("expired"), None);
+}
+
+#[tokio::test]
+async fn reopened_clients_continue_versions_after_deletion_without_clock_ordering() {
+    let h = Harness::new().await;
+    let initial = (1_u64 << 53) + 17;
+    h.state
+        .policies
+        .lock()
+        .unwrap()
+        .insert("s1".into(), (initial, None));
+    h.manager
+        .update("s1", &EgressPolicy::Internet)
+        .await
+        .unwrap();
+    assert_eq!(h.state.policies.lock().unwrap()["s1"].0, initial + 1);
+    h.reopen().await.delete("s1").await.unwrap();
+    assert_eq!(h.state.policies.lock().unwrap()["s1"], (initial + 2, None));
+    h.reopen()
+        .await
+        .update("s1", &EgressPolicy::Allow { allow: vec![] })
+        .await
+        .unwrap();
+    assert_eq!(
+        h.state.policies.lock().unwrap()["s1"],
+        (initial + 3, Some(EgressPolicy::Allow { allow: vec![] }))
+    );
+}
+
+#[tokio::test]
+async fn concurrent_independent_clients_return_conflict_without_retrying_stale_intent() {
+    let h = Harness::new().await;
+    let other = h.reopen().await;
+    *h.state.read_barrier.lock().unwrap() = Some(Arc::new(tokio::sync::Barrier::new(2)));
+    let deny = EgressPolicy::Allow { allow: vec![] };
+    let (allow_result, deny_result) =
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            tokio::join!(
+                h.manager.update("s1", &EgressPolicy::Internet),
+                other.update("s1", &deny)
+            )
+        })
+        .await
+        .unwrap();
+    let (conflict, expected) = match (allow_result, deny_result) {
+        (Ok(()), Err(error)) => (error, EgressPolicy::Internet),
+        (Err(error), Ok(())) => (error, deny),
+        results => panic!("exactly one conflicting write must succeed: {results:?}"),
+    };
+    assert_eq!(conflict.code, "SANDBOX_EGRESS_CONFLICT");
+    assert!(!conflict.retryable);
+    assert_eq!(h.policy("s1"), Some(expected));
+    assert_eq!(h.state.policies.lock().unwrap()["s1"].0, 1);
+    assert_eq!(*h.state.writes.lock().unwrap(), ["PUT", "PUT"]);
+}
+
+#[tokio::test]
+async fn one_manager_serializes_policy_versions_without_retaining_idle_locks() {
+    let h = Harness::new().await;
+    let mut updates = tokio::task::JoinSet::new();
+    let manager = Arc::new(h.reopen().await);
+    for _ in 0..16 {
+        let manager = manager.clone();
+        updates.spawn(async move { manager.update("s1", &EgressPolicy::Internet).await });
+    }
+    while let Some(result) = updates.join_next().await {
+        result.unwrap().unwrap();
+    }
+    assert_eq!(h.state.policies.lock().unwrap()["s1"].0, 16);
+    assert!(manager
+        .writes
+        .lock()
+        .await
+        .values()
+        .all(|lock| lock.strong_count() == 0));
+}
+
+#[tokio::test]
+async fn invalid_or_exhausted_versions_never_send_a_policy_write() {
+    let h = Harness::new().await;
+    for response in [
+        "{}".into(),
+        "{\"version\":-1}".into(),
+        "{\"version\":1.5}".into(),
+        "{\"version\":\"7\"}".into(),
+        serde_json::json!({"version":u64::MAX}).to_string(),
+        " ".repeat(1025),
+    ] {
+        *h.state.version_response.lock().unwrap() = Some(response);
+        assert!(h
+            .manager
+            .update("s1", &EgressPolicy::Internet)
+            .await
+            .is_err());
+        assert!(h.manager.delete("s1").await.is_err());
+    }
+    assert!(h.state.writes.lock().unwrap().is_empty());
+    assert_eq!(h.policy("s1"), None);
 }
 
 #[tokio::test]
