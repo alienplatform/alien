@@ -32,6 +32,8 @@ const CAPABILITY_LIFETIME_SECONDS: i64 = 900;
 /// What the application needs to reach its session, and nothing more.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClaimedSession {
+    /// Immutable identity used by the pod agent and egress gateway.
+    pub agent_session_id: String,
     /// Session id, which the pod now carries as a label
     pub session_id: String,
     /// `http://<pod ip>:<agent port>`
@@ -157,7 +159,7 @@ async fn claim_session_with_scope(
         let expires_at = now_unix + CAPABILITY_LIFETIME_SECONDS;
         let capability = sandbox_capability_token::mint(
             &SandboxCapabilityClaims {
-                session_id: agent_session_id,
+                session_id: agent_session_id.clone(),
                 operation: SandboxOperationClass::Execute,
                 generation: 1,
                 expires_at,
@@ -171,6 +173,7 @@ async fn claim_session_with_scope(
         })?;
 
         return Ok(ClaimedSession {
+            agent_session_id,
             session_id: session_id.to_string(),
             endpoint: format!("http://{address}:{AGENT_PORT}"),
             capability,
