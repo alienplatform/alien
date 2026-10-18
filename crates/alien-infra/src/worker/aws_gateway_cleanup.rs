@@ -131,6 +131,13 @@ mod tests {
     use super::*;
     use alien_aws_clients::lambda::{InvocationType, InvokeResponse, MockLambdaApi};
     use serde_json::json;
+    use std::sync::Arc;
+    use crate::{
+        core::controller_test::{SingleControllerExecutor, test_function_1},
+        MockPlatformServiceProvider,
+        remote_stack_management::AwsRemoteStackManagementController,
+        worker::AwsWorkerController,
+    };
 
     const FUNCTION: &str =
         "arn:aws:lambda:us-east-1:123456789012:function:_gateway-cleanup-example:7";
@@ -144,6 +151,47 @@ mod tests {
             log_result: None,
             payload: payload.to_string().into_bytes(),
             executed_version: Some("7".to_string()),
+        }
+    }
+
+    #[tokio::test]
+    async fn installed_capability_requires_one_frozen_matching_published_boundary() {
+        for case in ["valid", "missing", "account", "region", "prefix", "mutable", "live", "duplicate"] {
+            let mut management = AwsRemoteStackManagementController::mock_ready("example-management");
+            management.worker_gateway_cleanup_function_arn = match case {
+                "missing" => None,
+                "account" => Some(FUNCTION.replace("123456789012", "999999999999")),
+                "region" => Some(FUNCTION.replace("us-east-1", "eu-west-1")),
+                "prefix" => Some(FUNCTION.replace("cleanup-example", "cleanup-other")),
+                "mutable" => Some(FUNCTION.replace(":7", ":current")),
+                _ => Some(FUNCTION.into()),
+            };
+            let resource = RemoteStackManagement::new("management".into()).build();
+            let builder = SingleControllerExecutor::builder()
+                .resource(test_function_1())
+                .controller(AwsWorkerController::mock_ready("test-function-1"))
+                .resource_prefix("example")
+                .platform(alien_core::Platform::Aws)
+                .service_provider(Arc::new(MockPlatformServiceProvider::new()));
+            let mut builder = if case == "live" {
+                builder.with_dependency(resource, management)
+            } else {
+                builder.with_frozen_dependency(resource, management)
+            };
+            if case == "duplicate" {
+                let mut second = AwsRemoteStackManagementController::mock_ready("example-management");
+                second.worker_gateway_cleanup_function_arn = Some(FUNCTION.into());
+                builder = builder.with_frozen_dependency(
+                    RemoteStackManagement::new("management-other".into()).build(), second,
+                );
+            }
+            let executor = builder.build().await.unwrap();
+            let result = executor.with_context(|ctx| installed_function(ctx));
+            if case == "valid" {
+                assert_eq!(result.unwrap(), FUNCTION);
+            } else {
+                assert_eq!(result.unwrap_err().code, "DEPLOYMENT_SETUP_REQUIRED", "{case}");
+            }
         }
     }
 
