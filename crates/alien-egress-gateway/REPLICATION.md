@@ -58,6 +58,9 @@ replication failed. The agent never registers after a 403.
 Agent delivery is `PUT /v1/egress` with `{token,policy:"<compact JWS>",caCert?}`;
 the `updateEgress` envelope carries the same fields. Resume checks the physical
 network and waits for a fresh delivery before allowing commands or recovery.
+For a running policy update, `{policy:"<compact JWS>"}` refreshes only the saved
+record, preserving the installed token. It requires an existing identity that
+the gateway still accepts, and cannot release the Resume delivery gate.
 A running agent checks gateway state every five seconds, re-registering only on
 404. The saved record and token remain in supervisor memory. Tombstones expire when `now > ver.millis + 25h + 60s`, independently on each
 replica. Already-expired tombstones are ignored and never forwarded; catch-up

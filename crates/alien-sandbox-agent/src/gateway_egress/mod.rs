@@ -404,7 +404,7 @@ impl GatewayEgress {
 
     /// Install a replacement signed token. Signature verification and policy lookup happen in
     /// the gateway; the self-check refuses invalid credentials before reopening session routes.
-    pub async fn update(&self, token: String, policy: String) -> Result<()> {
+    pub async fn update(&self, token: Option<String>, policy: String) -> Result<()> {
         let _update = self.update_lock.lock().await;
         if !self.routing_ready.load(Ordering::Acquire) {
             return Err(AlienError::new(ErrorData::EgressPathUnexpected));
@@ -412,6 +412,11 @@ impl GatewayEgress {
         if self.declared_none {
             return Err(invalid("declared none cannot acquire an egress token"));
         }
+        let full_delivery = token.is_some();
+        let token = match token {
+            Some(token) => token,
+            None => self.current_token()?,
+        };
         validate_token(&token)?;
         let (aud, sub) = token_identity(&token)?;
         if self
@@ -422,6 +427,14 @@ impl GatewayEgress {
             != Some(&(aud.clone(), sub.clone()))
         {
             return Err(invalid("token audience or sandbox ID mismatch"));
+        }
+        if !full_delivery {
+            // The gateway verifies the installed identity, including expiry. Refreshing
+            // only the recovery copy must neither rotate its token nor release Resume.
+            if !matches!(self.policy_request(None).await?, 200 | 404) {
+                return Err(AlienError::new(ErrorData::EgressPathUnexpected));
+            }
+            return self.retain_record(policy, &aud, &sub);
         }
         self.retain_record(policy, &aud, &sub)?;
         self.awaiting_delivery.store(true, Ordering::Release);
