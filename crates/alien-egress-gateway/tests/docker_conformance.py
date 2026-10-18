@@ -250,7 +250,44 @@ class Suite:
         stream.close()
         return result
 
+    def connect_port80(self):
+        def equal(actual, expected):
+            assert actual == expected, (actual, expected)
+
+        equal(self.admin("/v1/policies", {"aud": AUD, "sub": SUB, "policy": self.policy})[0], 204)
+        self.record("port 80 origin accepts verified TLS directly", lambda: equal(self.tls(port=80, direct=True), (200, BODY)))
+        self.record("CONNECT port 80 accepts matching TLS SNI", lambda: equal(self.tls(port=80), (200, BODY)))
+        self.record("CONNECT port 80 rejects mismatched TLS SNI", lambda: self.denied_tls(port=80, sni="denied.test"))
+        self.record("CONNECT port 80 accepts matching HTTP Host", lambda: equal(self.plain(connect=True), (200, BODY)))
+
+        def mismatched_host():
+            try:
+                result = self.plain(connect=True, host="denied.test")
+            except (ConnectionError, http.client.RemoteDisconnected):
+                return
+            assert result[0] != 200, result
+        self.record("CONNECT port 80 rejects mismatched HTTP Host", mismatched_host)
+
+        def opaque(host, allowed):
+            payload = b"\x00opaque-port-80\xff"
+            with self.tunnel(host, 80) as stream:
+                stream.sendall(payload)
+                stream.shutdown(socket.SHUT_WR)
+                data = b""
+                try:
+                    while part := stream.recv(1024):
+                        data += part
+                except ConnectionResetError:
+                    pass
+                if allowed:
+                    equal(data, payload)
+                else:
+                    assert data != payload, data
+        self.record("CONNECT explicit IP port 80 accepts opaque bytes", lambda: opaque(ORIGIN, True))
+        self.record("CONNECT name port 80 rejects opaque bytes", lambda: opaque("allowed.test", False))
+
     def run(self):
+        self.connect_port80()
         def equal(actual, expected):
             assert actual == expected, (actual, expected)
 
@@ -688,6 +725,7 @@ def main():
     parser.add_argument("--gateway-binary", type=Path)
     parser.add_argument("--vault-config", action="store_true")
     parser.add_argument("--replica-bootstrap-only", action="store_true")
+    parser.add_argument("--connect-port80-only", action="store_true")
     args = parser.parse_args()
     if args.agent_uid <= 0:
         parser.error("--agent-uid must be a non-root UID")
@@ -748,6 +786,9 @@ def main():
         if args.replica_bootstrap_only:
             from dns_bootstrap import check_dns_bootstrap
             check_dns_bootstrap(suite, start_gateway, docker, PREFIX, AUD)
+            return
+        if args.connect_port80_only:
+            suite.connect_port80()
             return
         suite.run()
         check_live_connections(suite, AUD, ORIGIN, PROXY, "93.184.216.4", docker, PREFIX)

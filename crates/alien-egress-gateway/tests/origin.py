@@ -29,8 +29,27 @@ class Origin(http.server.BaseHTTPRequestHandler):
         pass
 
 
+class MixedProtocolServer(http.server.ThreadingHTTPServer):
+    """One port accepts real TLS, clear HTTP, and a binary echo protocol."""
+
+    def finish_request(self, request, client_address):
+        request.settimeout(8)
+        first = request.recv(1, socket.MSG_PEEK)
+        if first == b"\x00":
+            echo_client(request)
+            return
+        if first == b"\x16":
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.load_cert_chain("/fixture/origin.pem", "/fixture/origin.key")
+            with context.wrap_socket(request, server_side=True) as tls:
+                super().finish_request(tls, client_address)
+            return
+        super().finish_request(request, client_address)
+
+
 def serve(port, certificate=None):
-    server = http.server.ThreadingHTTPServer(("0.0.0.0", port), Origin)
+    server_type = MixedProtocolServer if port == 80 else http.server.ThreadingHTTPServer
+    server = server_type(("0.0.0.0", port), Origin)
     if certificate:
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.load_cert_chain(f"/fixture/{certificate}.pem", f"/fixture/{certificate}.key")
