@@ -160,6 +160,27 @@ impl Harness {
             .get(id)
             .and_then(|row| row.1.clone())
     }
+    pub(crate) async fn recover_after_total_loss(&self, record: &str) {
+        self.state.policies.lock().unwrap().clear();
+        let claims = verify_record(&self.state, record);
+        let issuer = self.manager.issuer().await.unwrap();
+        let grant = issuer
+            .mint_admin(
+                "prefix/box",
+                claims["sub"].as_str().unwrap(),
+                EgressAdminOperation::Put,
+                now_unix().unwrap(),
+            )
+            .unwrap();
+        let response = reqwest::Client::new()
+            .put(format!("{}/v1/policies", self.manager.admin_url))
+            .bearer_auth(grant)
+            .json(&serde_json::json!({"record":record}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    }
     pub(crate) async fn new() -> Self {
         let directory = tempfile::tempdir().unwrap();
         let vault = Arc::new(LocalVault::new(
