@@ -91,7 +91,9 @@ the public CA explicitly.
 For a gateway-backed resource the agent starts without a token. Health reports
 `awaiting-egress-policy`, and
 session routes are blocked until token installation and the external path check
-succeed. On AWS the Run hook receives the AWS envelope
+succeed. The agent checks direct internet denial, then calls authenticated
+`GET /health` on proxy port 3128. This verifies the identity and installed policy
+without requiring guest access to admin port 3129 or dialing an upstream. On AWS the Run hook receives the AWS envelope
 `{microvmId,runHookPayload}`; the payload is a JSON string `{gateway,audience}`.
 The injected MicroVM ID is checked against the token subject. Elsewhere the backend
 sets `ALIEN_SANDBOX_SESSION_ID`, `ALIEN_SANDBOX_EGRESS_AUDIENCE`, and

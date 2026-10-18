@@ -185,8 +185,10 @@ async fn proxy(
             return Err(error);
         }
     };
-    audit.host = target.host.clone();
-    audit.port = target.port;
+    if let Some(target) = &target {
+        audit.host = target.host.clone();
+        audit.port = target.port;
+    }
     let claims = match token::verify(
         &bearer,
         &gateway.keys,
@@ -200,6 +202,24 @@ async fn proxy(
     };
     audit.aud = claims.aud.clone();
     audit.sub = claims.sub.clone();
+    let Some(target) = target else {
+        if !gateway.config.audiences.contains(&claims.aud)
+            || gateway
+                .policies
+                .resolve(&claims.aud, &claims.sub)
+                .await
+                .is_err()
+        {
+            refuse(stream, false).await?;
+            return Err(denied("health identity or policy unavailable"));
+        }
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nok\n")
+            .await
+            .into_alien_error()
+            .context(unavailable("reply to authenticated health"))?;
+        return Ok(());
+    };
     if let Err(error) = gateway.authorize(&claims, &target).await {
         refuse(stream, error.code == "EGRESS_POLICY_DENIED").await?;
         return Err(error);
@@ -232,6 +252,9 @@ async fn proxy(
         })
         .cloned()
         .collect();
+    if target.port == 80 {
+        return crate::http_proxy::forward(guest, upstream, target, None).await;
+    }
     if target.host.parse::<std::net::Ipv4Addr>().is_ok() {
         // Explicit IP/CIDR rules are the only grants for opaque, including server-first, protocols.
         tokio::io::copy_bidirectional(&mut guest, &mut upstream)
@@ -317,8 +340,7 @@ async fn read_head(stream: &mut (impl tokio::io::AsyncRead + Unpin)) -> Result<V
     }
 }
 
-fn inspect_head(input: &[u8]) -> Result<(Target, String, bool, usize)> {
-    let target = request_target(input)?.ok_or_else(|| invalid("incomplete request"))?;
+fn inspect_head(input: &[u8]) -> Result<(Option<Target>, String, bool, usize)> {
     let mut headers = [httparse::EMPTY_HEADER; 64];
     let mut request = httparse::Request::new(&mut headers);
     let head_len = request
@@ -326,6 +348,21 @@ fn inspect_head(input: &[u8]) -> Result<(Target, String, bool, usize)> {
         .map_err(|_| invalid("invalid request"))?;
     let httparse::Status::Complete(head_len) = head_len else {
         return Err(invalid("incomplete request"));
+    };
+    let health = request.method == Some("GET") && request.path == Some("/health");
+    let target = if health {
+        if request
+            .headers
+            .iter()
+            .filter(|header| header.name.eq_ignore_ascii_case("host"))
+            .count()
+            != 1
+        {
+            return Err(invalid("exactly one Host required"));
+        }
+        None
+    } else {
+        Some(request_target(input)?.ok_or_else(|| invalid("incomplete request"))?)
     };
     let connect = request.method == Some("CONNECT");
     let mut bearer = None;
@@ -352,7 +389,7 @@ fn inspect_head(input: &[u8]) -> Result<(Target, String, bool, usize)> {
                 return Err(denied("proxy token required"));
             });
         }
-        if connect
+        if (connect || health)
             && (header.name.eq_ignore_ascii_case("transfer-encoding")
                 || header.name.eq_ignore_ascii_case("content-length"))
         {

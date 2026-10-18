@@ -74,6 +74,21 @@ def dns():
         server.sendto(answer, sender)
 
 
+def echo():
+    server = socket.socket()
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server.bind(("0.0.0.0", 2222))
+    server.listen()
+    while True:
+        stream, _ = server.accept()
+        with stream:
+            stream.settimeout(8)
+            try:
+                stream.sendall(stream.recv(1024))
+            except OSError:
+                pass
+
+threading.Thread(target=echo, daemon=True).start()
 for port, certificate in [(80, None), (443, "origin"), (9443, "origin"), (8443, "untrusted")]:
     threading.Thread(target=serve, args=(port, certificate), daemon=True).start()
 dns()

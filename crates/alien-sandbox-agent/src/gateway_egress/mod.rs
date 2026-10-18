@@ -301,7 +301,7 @@ impl GatewayEgress {
             .ok_or_else(|| invalid("gateway endpoint pending"))
     }
 
-    /// Install a replacement signed token. Verification and generation enforcement happen in
+    /// Install a replacement signed token. Signature verification and policy lookup happen in
     /// the gateway; the self-check refuses invalid credentials before reopening session routes.
     pub async fn update(&self, token: String) -> Result<()> {
         let _update = self.update_lock.lock().await;
@@ -439,18 +439,14 @@ impl GatewayEgress {
             return Ok(());
         }
         let mut gateway = self.connect(self.gateway_address()?).await?;
-        self.send_connect(&mut gateway, "one.one.one.one:443")
-            .await?;
+        let token = self.current_token()?;
+        gateway.write_all(format!("GET /health HTTP/1.1\r\nHost: {}\r\nProxy-Authorization: Bearer {token}\r\nConnection: close\r\n\r\n", self.gateway_address()?).as_bytes())
+            .await.into_alien_error().context(failed("request authenticated gateway health"))?;
         let reply = timeout(TIMEOUT, read_header(&mut gateway))
             .await
             .into_alien_error()
             .context(failed("self-check gateway timeout"))??;
-        if !(reply.starts_with(b"HTTP/1.1 200 ")
-            || (reply.starts_with(b"HTTP/1.1 403 ")
-                && reply
-                    .windows(b"X-Alien-Egress-Reason: policy".len())
-                    .any(|v| v == b"X-Alien-Egress-Reason: policy")))
-        {
+        if !reply.starts_with(b"HTTP/1.1 200 ") {
             return Err(AlienError::new(ErrorData::EgressPathUnexpected));
         }
         self.ready.store(true, Ordering::Release);
