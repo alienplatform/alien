@@ -750,6 +750,45 @@
         }
       }
     },
+    "/v1/deployments/{id}/endpoint-access": {
+      "patch": {
+        "tags": [
+          "deployments"
+        ],
+        "operationId": "set_endpoint_access",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deployment ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetEndpointAccessRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Endpoint access saved and reconciliation queued"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/v1/deployments/{id}/info": {
       "get": {
         "tags": [
@@ -7444,6 +7483,14 @@
             },
             "nullable": true
           },
+          "privateCustomDomains": {
+            "type": "object",
+            "description": "Private custom domain configuration per resource ID.\n\nPublic custom domains remain unchanged when private access is added.\nA certificate reference may be reused when it covers both hostnames.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/CustomDomainConfig"
+            },
+            "nullable": true
+          },
           "publicEndpointTarget": {
             "nullable": true,
             "description": "Public endpoint DNS target selection for machines deployments.\n\nWhen omitted, machines deployments publish healthy machine public\naddresses directly. Use `LoadBalancer` when an external load balancer\nfronts the machines and Alien should publish a CNAME to that target.",
@@ -7567,10 +7614,11 @@
       },
       "EndpointAccess": {
         "type": "string",
-        "description": "Reachability of the deployment's public endpoints, fixed at setup.",
+        "description": "Network paths through which the deployment's workload endpoints are reachable.",
         "enum": [
           "internet",
-          "private"
+          "private",
+          "both"
         ]
       },
       "Envelope": {
@@ -16788,6 +16836,19 @@
             "nullable": true
           }
         }
+      },
+      "SetEndpointAccessRequest": {
+        "type": "object",
+        "description": "Set the desired endpoint access and schedule deployment reconciliation.",
+        "required": [
+          "endpointAccess"
+        ],
+        "properties": {
+          "endpointAccess": {
+            "$ref": "#/components/schemas/EndpointAccess"
+          }
+        },
+        "additionalProperties": false
       },
       "SetQuotaWarningOverridesRequest": {
         "type": "object",
