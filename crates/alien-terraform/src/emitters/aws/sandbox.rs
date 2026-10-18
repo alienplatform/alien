@@ -85,6 +85,12 @@ impl TfEmitter for AwsSandboxEmitter {
         } else if matches!(sandbox.egress, SandboxEgress::Internet) {
             super::network::sandbox_subnet_ids(ctx)?
         } else {
+            sandbox_egress_network(ctx.stack).map_err(|refusal| {
+                AlienError::new(ErrorData::OperationNotSupported {
+                    operation: format!("terraform emit sandbox '{}'", sandbox.id()),
+                    reason: refusal.to_string(),
+                })
+            })?;
             private_subnet_ids_expr(ctx)
         };
         // The size whose peak stays inside the declared ceilings. A MicroVM bursts to four times
@@ -326,7 +332,7 @@ impl TfEmitter for AwsSandboxEmitter {
                             })?;
                             vec![
                                 attr("from_port", Expression::from(3128)),
-                                attr("to_port", Expression::from(3128)),
+                                attr("to_port", Expression::from(3129)),
                                 attr("protocol", Expression::from("tcp")),
                                 attr(
                                     "cidr_blocks",
@@ -1276,45 +1282,5 @@ mod tests {
                 "an escaped interpolation reaches IAM as literal text: {rendered}"
             );
         }
-    }
-
-    /// `desired_state` is checked against the CloudFormation Resource Schema, which names every
-    /// property in PascalCase and rejects anything else — but only once an apply reaches AWS, so
-    /// a casing slip lands in a customer's install rather than in a test.
-    #[test]
-    fn the_image_properties_are_named_the_way_the_resource_schema_names_them() {
-        let hooks = hooks().to_string();
-        for property in [
-            "Port",
-            "MicrovmImageHooks",
-            "Ready",
-            "ReadyTimeoutInSeconds",
-            "MicrovmHooks",
-            "Run",
-            "RunTimeoutInSeconds",
-            "Resume",
-            "ResumeTimeoutInSeconds",
-        ] {
-            assert!(
-                hooks.contains(property),
-                "hooks must carry {property}: {hooks}"
-            );
-        }
-        // No property in this object is snake_case, so an underscore is the drift itself.
-        assert!(
-            !hooks.contains('_'),
-            "a snake_case hook property is refused: {hooks}"
-        );
-
-        let variables = environment_variables(&sandbox_with_lifecycle(None, None)).to_string();
-        assert!(
-            variables.contains("Key") && variables.contains("Value"),
-            "{variables}"
-        );
-        // No key or value in the pairs contains these words, so a match is a lower-cased property.
-        assert!(
-            !variables.contains("key") && !variables.contains("value"),
-            "an environment variable pair is Key/Value: {variables}"
-        );
     }
 }

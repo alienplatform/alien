@@ -344,8 +344,9 @@ export class Container extends ResourceBuilder {
   }
 
   /**
-   * Allows outbound connections only to public addresses and DNS, plus the
-   * platform credential proxy for this container's own identity.
+   * Allows public addresses and DNS, this container's own replicas on declared
+   * TCP ports, and the platform credential proxy for its own identity.
+   * Service discovery resolves only this container's own service.
    * Requires security.profile = "restricted"; unsupported backends refuse the
    * plan. Without this setting, existing full network access is unchanged.
    */

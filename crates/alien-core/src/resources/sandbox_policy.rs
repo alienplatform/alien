@@ -12,12 +12,19 @@ use utoipa::openapi::schema::{ArrayBuilder, ObjectBuilder, OneOfBuilder, Type};
 use crate::error::{ErrorData, Result};
 
 /// Per-sandbox outbound policy enforced by the gateway.
+///
+/// Mail ports 25, 465 and 587 require an explicit port in an allowlist target,
+/// such as `smtp.example.com:587`; `internet` and portless targets exclude them.
+/// This protects the deployment's shared outbound IP from mail abuse and blocklisting,
+/// which could disrupt every tenant's access through that IP.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum EgressPolicy {
-    /// Public internet access. Private and link-local destinations remain forbidden.
+    /// Public internet access except mail ports 25, 465 and 587.
+    /// Private and link-local destinations remain forbidden.
     Internet,
-    /// Explicit destinations; unspecified ports match any port and wildcards include the apex.
+    /// Explicit destinations; unspecified ports exclude 25, 465 and 587.
+    /// Wildcards include the apex. An explicit port can allow a mail destination.
     #[serde(untagged)]
     Allow {
         /// Hostnames, wildcard hostnames, IPv4 literals or IPv4 CIDRs, optionally with a port.
@@ -30,6 +37,7 @@ pub enum EgressPolicy {
 impl utoipa::PartialSchema for EgressPolicy {
     fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
         OneOfBuilder::new()
+            .description(Some("Per-sandbox outbound policy. Mail ports 25, 465 and 587 require an explicit allowlist port, such as smtp.example.com:587; internet and portless targets exclude them. This protects the deployment's shared outbound IP from mail abuse and blocklisting that could disrupt every tenant."))
             .item(
                 ObjectBuilder::new()
                     .schema_type(Type::String)
@@ -123,8 +131,14 @@ impl EgressPolicy {
     /// Whether a concrete public destination and port match this policy.
     pub fn allows(&self, host: &str, port: u16) -> Result<bool> {
         let target = Target::parse(&format!("{host}:{port}"))?;
-        Ok(matches!(self, Self::Internet)
-            || self.targets()?.iter().any(|entry| entry.contains(&target)))
+        // Sandboxes share one outbound IP: unsolicited mail can get that IP blocklisted
+        // for every tenant. Explicit destination:port grants retain legitimate mail use.
+        let mail = matches!(port, 25 | 465 | 587);
+        Ok((!mail && matches!(self, Self::Internet))
+            || self
+                .targets()?
+                .iter()
+                .any(|entry| (!mail || entry.port == Some(port)) && entry.contains(&target)))
     }
 
     fn targets(&self) -> Result<Vec<Target>> {
@@ -313,6 +327,13 @@ impl Target {
             _ => false,
         }
     }
+}
+
+/// Whether an IPv4 address is public unicast, excluding metadata and special-use ranges.
+pub fn is_public_ipv4(ip: Ipv4Addr) -> bool {
+    !DENIED_RANGES.iter().any(|&(address, prefix)| {
+        Ipv4Net::new_assert(Ipv4Addr::from(address), prefix).contains(&ip)
+    })
 }
 
 // Includes shared address space, metadata endpoints and non-unicast/reserved ranges.

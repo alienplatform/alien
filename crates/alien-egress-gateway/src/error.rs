@@ -41,6 +41,56 @@ pub enum ErrorData {
         http_status_code = 403
     )]
     Denied { reason: String },
+    /// Bounded connection or resolver admission is exhausted.
+    #[error(
+        code = "EGRESS_CAPACITY",
+        message = "Egress connection capacity reached",
+        retryable = "true",
+        internal = "false",
+        http_status_code = 429
+    )]
+    Capacity,
+    /// The caller must not replay an older intent with a newly allocated version.
+    #[error(
+        code = "EGRESS_POLICY_VERSION_CONFLICT",
+        message = "Egress policy version conflict",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    PolicyVersionConflict,
+    #[error(
+        code = "SANDBOX_EGRESS_VERSION_IN_FUTURE",
+        message = "Egress record version is more than 60 seconds in the future",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    VersionInFuture,
+    #[error(
+        code = "SANDBOX_EGRESS_RECORD_FORMAT_UNSUPPORTED",
+        message = "Unsupported egress record format",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    RecordFormatUnsupported,
+    #[error(
+        code = "SANDBOX_EGRESS_POLICY_STORE_FULL",
+        message = "Egress policy memory budget exhausted",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 503
+    )]
+    StoreFull,
+    #[error(
+        code = "SANDBOX_EGRESS_GATEWAY_UNAVAILABLE",
+        message = "Egress gateway replicas unavailable",
+        retryable = "true",
+        internal = "false",
+        http_status_code = 503
+    )]
+    GatewayUnavailable,
     /// A required network or storage operation failed.
     #[error(
         code = "EGRESS_UNAVAILABLE",

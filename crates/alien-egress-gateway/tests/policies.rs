@@ -1,198 +1,260 @@
-#![cfg(feature = "local")]
-use std::sync::Arc;
-
-use alien_bindings::{
-    providers::kv::local::LocalKv,
-    traits::{Binding, KvEntry, PutOptions, ScanResult},
-    Kv,
-};
 use alien_egress_gateway::{
-    policy::{canonical, Policy},
+    policy::Policy,
+    record::{Claims, Record},
     store::PolicyStore,
 };
-use async_trait::async_trait;
-use tokio::sync::Notify;
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use ed25519_compact::{KeyPair, Seed};
+use std::{collections::HashMap, sync::Arc};
 
-#[tokio::test]
-async fn replicas_and_restarts_observe_replacements_and_deletion_without_token_changes() {
-    let dir = tempfile::tempdir().unwrap();
-    let kv = Arc::new(LocalKv::new(dir.path().into()).await.unwrap());
-    let first = PolicyStore::new(kv.clone());
-    let second = PolicyStore::new(Arc::new(LocalKv::new(dir.path().into()).await.unwrap()));
-    let closed = Policy::Allow {
-        allow: vec!["blocked.example.test".into()],
-    };
-    assert!(first.resolve("p/r", "box").await.is_err());
-    first.put("p/r", "box", &Policy::Internet).await.unwrap();
-    assert_eq!(
-        *second.resolve("p/r", "box").await.unwrap(),
-        Policy::Internet
-    );
-    first.put("p/r", "box", &closed).await.unwrap();
-    assert_eq!(*second.resolve("p/r", "box").await.unwrap(), closed);
-    assert!(second.resolve("p/r", "another").await.is_err());
-    assert!(second.resolve("other/r", "box").await.is_err());
-    first.put("p/r", "box", &Policy::Internet).await.unwrap();
-    let restarted = PolicyStore::new(Arc::new(LocalKv::new(dir.path().into()).await.unwrap()));
-    assert_eq!(
-        *restarted.resolve("p/r", "box").await.unwrap(),
-        Policy::Internet
-    );
-    second.delete("p/r", "box").await.unwrap();
-    assert!(first.resolve("p/r", "box").await.is_err());
-    assert!(restarted.resolve("p/r", "box").await.is_err());
-    second.delete("p/r", "box").await.unwrap();
-    assert!(kv
-        .scan_prefix("egress-policy:", None, None)
-        .await
-        .unwrap()
-        .items
-        .is_empty());
+fn record(
+    version: u64,
+    policy: Option<Policy>,
+) -> (Record, HashMap<String, ed25519_compact::PublicKey>) {
+    record_for(version, policy, "box")
 }
-
+fn record_for(
+    version: u64,
+    policy: Option<Policy>,
+    sub: &str,
+) -> (Record, HashMap<String, ed25519_compact::PublicKey>) {
+    let pair = KeyPair::from_seed(Seed::new([7; 32]));
+    let claims = Claims {
+        v: 1,
+        aud: "p/r".into(),
+        sub: sub.into(),
+        ver: (version, "0".repeat(32)),
+        deleted: policy.is_none(),
+        policy,
+    };
+    let input = format!(
+        "{}.{}",
+        URL_SAFE_NO_PAD.encode(br#"{"alg":"EdDSA","kid":"key","typ":"alien-egress-record"}"#),
+        URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims).unwrap())
+    );
+    let sig = format!(
+        "{input}.{}",
+        URL_SAFE_NO_PAD.encode(pair.sk.sign(input.as_bytes(), None).as_ref())
+    );
+    (
+        Record {
+            signed: sig,
+            claims,
+        },
+        HashMap::from([("key".into(), pair.pk)]),
+    )
+}
 #[tokio::test]
-async fn large_policies_are_bounded_replaceable_and_corruption_fails_closed() {
-    let dir = tempfile::tempdir().unwrap();
-    let kv = Arc::new(LocalKv::new(dir.path().into()).await.unwrap());
-    let store = PolicyStore::new(kv.clone());
-    let policy = Policy::Allow {
-        allow: (0..1500)
-            .map(|i| format!("{i}.{}.{}.example.com", "a".repeat(63), "b".repeat(63)))
-            .collect(),
-    };
-    let bytes = canonical(&policy).unwrap();
-    assert!(bytes.len() > 200_000);
-    store.put("p/r", "box", &policy).await.unwrap();
-    assert_eq!(
-        canonical(&store.resolve("p/r", "box").await.unwrap()).unwrap(),
-        bytes
+async fn signed_records_have_no_expiry_but_require_identity_and_signature() {
+    let (record, keys) = record(1, Some(Policy::Internet));
+    assert!(Record::verify(record.signed.clone(), &keys, &["p/r".into()], 1000000).is_ok());
+    assert!(Record::verify(record.signed.clone(), &keys, &["other".into()], 1000000).is_err());
+    let mut changed = record.signed.clone();
+    changed.push('a');
+    assert!(Record::verify(changed, &keys, &["p/r".into()], 1000000).is_err());
+}
+#[tokio::test]
+async fn concurrent_signed_versions_never_regress_and_recovery_only_fills_absence() {
+    let now = chrono::Utc::now().timestamp_millis() as u64;
+    let store = Arc::new(PolicyStore::new(true, 512 * 1024 * 1024));
+    let (wide, _) = record(now, Some(Policy::Internet));
+    let (narrow, _) = record(
+        now + 1,
+        Some(Policy::Allow {
+            allow: vec!["allowed.example.com".into()],
+        }),
     );
-    // Corrupt actual stored content, then use a fresh replica to force reading it.
-    let entries = kv
-        .scan_prefix("egress-policy:", Some(100), None)
-        .await
-        .unwrap();
-    let chunk = entries
-        .items
-        .iter()
-        .find(|entry| entry.key.contains(":chunk:") && entry.key.ends_with(":0"))
-        .unwrap();
-    kv.put(&chunk.key, b"corrupt".to_vec(), None).await.unwrap();
-    let fresh = PolicyStore::new(kv.clone());
-    assert!(fresh.resolve("p/r", "box").await.is_err());
-    let maximum = Policy::Allow {
-        allow: (0..4096).map(|i| format!("{i}.example.com")).collect(),
-    };
-    store.put("p/r", "box", &maximum).await.unwrap();
+    let mut tasks = tokio::task::JoinSet::new();
+    for value in [narrow.clone(), wide.clone(), narrow.clone(), wide.clone()] {
+        let store = store.clone();
+        tasks.spawn(async move {
+            store.apply(value, false).unwrap();
+        });
+    }
+    while let Some(result) = tasks.join_next().await {
+        result.unwrap();
+    }
     assert_eq!(
-        canonical(&fresh.resolve("p/r", "box").await.unwrap()).unwrap(),
-        canonical(&maximum).unwrap()
+        store.version("p/r", "box").await.unwrap().unwrap().0,
+        now + 1
     );
-    let Policy::Allow { mut allow } = maximum else {
-        unreachable!()
-    };
-    allow.push("overflow.example.com".into());
+    assert_eq!(
+        *store.resolve("p/r", "box").await.unwrap(),
+        narrow.claims.policy.clone().unwrap()
+    );
+    assert!(!store.apply(wide.clone(), false).unwrap());
+    let (deleted, _) = record(now + 2, None);
+    store.apply(deleted.clone(), false).unwrap();
+    assert!(store.resolve("p/r", "box").await.is_err());
+    assert!(!store.apply(wide.clone(), true).unwrap());
+    let restarted = PolicyStore::new(false, 512 * 1024 * 1024);
+    assert!(!restarted.ready());
+    for entry in store.newer_than(&[]).unwrap() {
+        restarted.apply(entry.as_ref().clone(), false).unwrap();
+    }
+    restarted.set_ready();
+    assert!(restarted.ready());
+    assert_eq!(
+        restarted.version("p/r", "box").await.unwrap().unwrap().0,
+        now + 2
+    );
+    assert!(restarted.resolve("p/r", "box").await.is_err());
+    let empty = PolicyStore::new(true, 512 * 1024 * 1024);
+    empty.apply(wide, true).unwrap();
+    assert_eq!(
+        *empty.resolve("p/r", "box").await.unwrap(),
+        Policy::Internet
+    );
+    let (recreated, _) = record(now + 3, Some(Policy::Internet));
+    store.apply(recreated, false).unwrap();
     assert_eq!(
         store
-            .put("p/r", "box", &Policy::Allow { allow })
-            .await
-            .unwrap_err()
-            .code,
-        "SANDBOX_EGRESS_POLICY_TOO_LARGE"
-    );
-    store.put("p/r", "box", &Policy::Internet).await.unwrap();
-    let before = kv
-        .scan_prefix("egress-policy:", Some(100), None)
-        .await
-        .unwrap()
-        .items
-        .len();
-    store.put("p/r", "box", &Policy::Internet).await.unwrap();
-    assert_eq!(
-        kv.scan_prefix("egress-policy:", Some(100), None)
-            .await
+            .newer_than(&restarted.summary().unwrap())
             .unwrap()
-            .items
             .len(),
-        before
+        1
     );
-    store.delete("p/r", "box").await.unwrap();
-    assert!(kv
-        .scan_prefix("egress-policy:", None, None)
-        .await
-        .unwrap()
-        .items
-        .is_empty());
+}
+#[tokio::test]
+async fn maximum_policy_remains_compact_and_reusable_in_memory() {
+    let store = PolicyStore::new(true, 512 * 1024 * 1024);
+    let policy = Policy::Allow {
+        allow: (0..4096).map(|i| format!("{i}.example.com")).collect(),
+    };
+    let (record, keys) = record(1, Some(policy.clone()));
+    Record::verify(record.signed.clone(), &keys, &["p/r".into()], 1000000).unwrap();
+    store.apply(record.clone(), false).unwrap();
+    store.apply(record, false).unwrap();
+    assert_eq!(*store.resolve("p/r", "box").await.unwrap(), policy);
+    let first = store.resolve("p/r", "box").await.unwrap();
+    let second = store.resolve("p/r", "box").await.unwrap();
+    assert!(Arc::ptr_eq(&first, &second));
 }
 
 #[tokio::test]
-async fn concurrent_replacements_publish_one_complete_policy() {
-    let dir = tempfile::tempdir().unwrap();
-    let gate = Arc::new(GatedKv {
-        inner: LocalKv::new(dir.path().into()).await.unwrap(),
-        entered: Notify::new(),
-        resume: Notify::new(),
-    });
-    let first = PolicyStore::new(gate.clone());
-    let second = PolicyStore::new(Arc::new(LocalKv::new(dir.path().into()).await.unwrap()));
-    let left = Policy::Allow {
-        allow: (0..4096).map(|i| format!("left-{i}.example.com")).collect(),
-    };
-    let right = Policy::Allow {
-        allow: (0..4096)
-            .map(|i| format!("right-{i}.example.com"))
-            .collect(),
-    };
-    let write = tokio::spawn(async move { first.put("p/r", "box", &left).await });
-    gate.entered.notified().await;
-    second.put("p/r", "box", &right).await.unwrap();
-    gate.resume.notify_one();
-    write.await.unwrap().unwrap();
-    let read = PolicyStore::new(Arc::new(LocalKv::new(dir.path().into()).await.unwrap()));
-    let value = canonical(&read.resolve("p/r", "box").await.unwrap()).unwrap();
-    let left = Policy::Allow {
-        allow: (0..4096).map(|i| format!("left-{i}.example.com")).collect(),
-    };
-    assert_eq!(value, canonical(&left).unwrap());
+async fn memory_overflow_preserves_the_previous_enforced_policy() {
+    let store = PolicyStore::new(true, 2048);
+    let (live, _) = record(1, Some(Policy::Allow { allow: vec![] }));
+    store.apply(live, false).unwrap();
+    let (larger, _) = record(
+        2,
+        Some(Policy::Allow {
+            allow: (0..256).map(|i| format!("{i}.example.com")).collect(),
+        }),
+    );
+    assert_eq!(
+        store.apply(larger, false).unwrap_err().code,
+        "SANDBOX_EGRESS_POLICY_STORE_FULL"
+    );
+    assert_eq!(
+        *store.resolve("p/r", "box").await.unwrap(),
+        Policy::Allow { allow: vec![] }
+    );
 }
 
-/// Pause one writer immediately before publication, after another writer can replace its chunks.
-#[derive(Debug)]
-struct GatedKv {
-    inner: LocalKv,
-    entered: Notify,
-    resume: Notify,
+#[test]
+fn future_clock_guard_and_writer_ties_use_the_signed_version() {
+    let (future, keys) = record(61_001, Some(Policy::Internet));
+    assert_eq!(
+        Record::verify(future.signed.clone(), &keys, &["p/r".into()], 1_000)
+            .err()
+            .unwrap()
+            .code,
+        "SANDBOX_EGRESS_VERSION_IN_FUTURE"
+    );
+    assert!(Record::verify(future.signed, &keys, &["p/r".into()], 1_001).is_ok());
+    use alien_egress_gateway::record::should_replace;
+    let lower = (100, "0".repeat(32));
+    let higher = (100, "1".repeat(32));
+    assert!(should_replace(Some(&lower), &higher));
+    assert!(!should_replace(Some(&higher), &lower));
+    assert!(!should_replace(Some(&higher), &higher));
 }
-impl Binding for GatedKv {}
-#[async_trait]
-impl Kv for GatedKv {
-    async fn get(&self, key: &str) -> alien_bindings::Result<Option<KvEntry>> {
-        self.inner.get(key).await
-    }
-    async fn put(
-        &self,
-        key: &str,
-        value: Vec<u8>,
-        options: Option<PutOptions>,
-    ) -> alien_bindings::Result<bool> {
-        if !key.contains(":chunk:") {
-            self.entered.notify_one();
-            self.resume.notified().await;
+
+#[tokio::test]
+async fn bounded_snapshot_pages_restore_every_large_signed_policy() {
+    let source = PolicyStore::new(true, 64 * 1024 * 1024);
+    let restored = PolicyStore::new(false, 64 * 1024 * 1024);
+    let policy = Policy::Allow {
+        allow: (0..4000)
+            .map(|i| format!("{i}.{}.example.com", "a".repeat(42)))
+            .collect(),
+    };
+    let mut accepted = 0;
+    loop {
+        let (entry, keys) = record_for(1, Some(policy.clone()), &format!("box-{accepted}"));
+        let mut verified = Record::verify(entry.signed, &keys, &["p/r".into()], 1000).unwrap();
+        // Transport buffers may leave spare capacity without changing signed bytes.
+        verified.signed.reserve(12345);
+        match source.apply(verified, false) {
+            Ok(true) => accepted += 1,
+            Err(error) => {
+                assert_eq!(error.code, "SANDBOX_EGRESS_POLICY_STORE_FULL");
+                break;
+            }
+            Ok(false) => panic!("new identity must be accepted or rejected for capacity"),
         }
-        self.inner.put(key, value, options).await
+        assert!(accepted < 100, "fixture must fill the bounded store");
     }
-    async fn delete(&self, key: &str, version: Option<&str>) -> alien_bindings::Result<bool> {
-        self.inner.delete(key, version).await
+    assert!(accepted >= 30, "fixture must span multiple snapshot pages");
+    let mut pages = 0;
+    loop {
+        let page = source.newer_than(&restored.summary().unwrap()).unwrap();
+        if page.is_empty() {
+            break;
+        }
+        assert!(
+            page.iter()
+                .map(|entry| entry.signed.len() + 4)
+                .sum::<usize>()
+                <= 8 * 1024 * 1024
+        );
+        pages += 1;
+        for entry in page {
+            let keys = record(1, Some(Policy::Internet)).1;
+            let verified =
+                Record::verify(entry.signed.clone(), &keys, &["p/r".into()], 1000).unwrap();
+            restored.apply(verified, false).unwrap();
+        }
     }
-    async fn exists(&self, key: &str) -> alien_bindings::Result<bool> {
-        self.inner.exists(key).await
+    assert!(pages > 1);
+    assert_eq!(restored.summary().unwrap().len(), accepted);
+    let extra = record_for(1, Some(policy.clone()), "one-too-many").0;
+    assert_eq!(
+        restored.apply(extra, false).unwrap_err().code,
+        "SANDBOX_EGRESS_POLICY_STORE_FULL"
+    );
+    for index in 0..accepted {
+        assert_eq!(
+            *restored
+                .resolve("p/r", &format!("box-{index}"))
+                .await
+                .unwrap(),
+            policy
+        );
     }
-    async fn scan_prefix(
-        &self,
-        prefix: &str,
-        limit: Option<usize>,
-        cursor: Option<String>,
-    ) -> alien_bindings::Result<ScanResult> {
-        self.inner.scan_prefix(prefix, limit, cursor).await
-    }
+}
+
+#[test]
+fn cgroup_budget_requires_a_finite_limit_and_rejects_records_past_half_of_it() {
+    use alien_egress_gateway::memory::policy_budget;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("memory.max");
+    assert!(policy_budget(None, &path).is_err());
+    std::fs::write(&path, "max\n").unwrap();
+    assert!(policy_budget(None, &path).is_err());
+    assert_eq!(policy_budget(Some(1024), &path).unwrap(), 1024);
+    assert!(policy_budget(Some(0), &path).is_err());
+    std::fs::write(&path, "1024\n").unwrap();
+    let budget = policy_budget(None, &path).unwrap();
+    assert_eq!(budget, 512);
+    let store = PolicyStore::new(true, budget);
+    assert_eq!(
+        store
+            .apply(record(1, Some(Policy::Internet)).0, false)
+            .unwrap_err()
+            .code,
+        "SANDBOX_EGRESS_POLICY_STORE_FULL"
+    );
+    assert!(store.record("p/r", "box").unwrap().is_none());
 }

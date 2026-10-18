@@ -4,10 +4,11 @@ import http.client
 import json
 import time
 
+from agent_capabilities import AGENT_CAP_ARGS
 from docker_conformance import AUD, PREFIX, docker
 
 
-def check_run_hook_agents(suite, image, containers):
+def check_run_hook_agents(suite, image, containers, uid):
     # Keep NET_ADMIN but reject creation of netlink sockets: startup still serves the
     # hook, whose actual firewall transaction must fail without starting guest code.
     seccomp = suite.output / "refuse-netlink.json"
@@ -21,13 +22,14 @@ def check_run_hook_agents(suite, image, containers):
         declared = "none" if mode in ["none", "open-floor"] else "internet"
         network = "bridge" if mode == "open-floor" else PREFIX + "-guest"
         options = ["--security-opt", "seccomp=" + str(seccomp)] if mode == "netlink-failure" else []
-        docker("run", "-d", "--name", name, "--network", network, "--cap-add", "NET_ADMIN",
+        docker("run", "-d", "--name", name, "--network", network, *AGENT_CAP_ARGS,
                "-e", "ALIEN_SANDBOX_EGRESS_RUN_HOOK=true", "-e", "ALIEN_SANDBOX_EGRESS=" + declared,
                "-v", f"{suite.output / 'origin/ca.pem'}:/fixture-ca.pem:ro", *options, image)
         containers.append(name)
         address = json.loads(docker("inspect", name))[0]["NetworkSettings"]["Networks"][network]["IPAddress"]
 
         def call(method, path, body=None):
+            if method == "PUT" and path == "/v1/egress": body = suite.delivery(body)
             connection = http.client.HTTPConnection(address, 8080, timeout=12)
             try:
                 connection.request(method, path, json.dumps(body) if body is not None else None,
@@ -87,7 +89,7 @@ with ssl.create_default_context(cafile="/fixture-ca.pem").wrap_socket(socket.cre
  s.sendall(b"GET / HTTP/1.1\\r\\nHost: allowed.test\\r\\nConnection: close\\r\\n\\r\\n")
  r=http.client.HTTPResponse(s);r.begin();assert r.status==200 and r.read()==b"controlled-origin-response\\n"
 '''
-            suite.record("Run-hook internet: root TCP uses installed redirect", lambda: docker("exec", name, "python", "-c", probe))
+            suite.record("Run-hook internet: command TCP uses installed redirect", lambda: docker("exec", "-u", f"{uid}:{uid}", name, "python", "-c", probe))
         status, body = call("GET", "/v1/health")
         assert status == 200 and json.loads(body)["status"] == "ready", (status, body)
         suite.record(f"Run-hook {mode}: image starts only after activation", lambda: docker(

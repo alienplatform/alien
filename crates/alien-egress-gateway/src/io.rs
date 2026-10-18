@@ -3,19 +3,41 @@ use std::{
     pin::Pin,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc,
+        Arc, Mutex,
     },
     task::{Context, Poll},
 };
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 /// Stream counters used by the connection audit record.
-#[derive(Default)]
 pub struct Counters {
     /// Bytes received from the guest, including protocol framing.
     pub up: AtomicU64,
     /// Bytes sent to the guest, including protocol framing.
     pub down: AtomicU64,
+    last_activity: Mutex<tokio::time::Instant>,
+}
+
+impl Default for Counters {
+    fn default() -> Self {
+        Self {
+            up: AtomicU64::new(0),
+            down: AtomicU64::new(0),
+            last_activity: Mutex::new(tokio::time::Instant::now()),
+        }
+    }
+}
+impl Counters {
+    fn touch(&self) {
+        if let Ok(mut last) = self.last_activity.lock() {
+            *last = tokio::time::Instant::now();
+        }
+    }
+    pub fn idle_for(&self) -> std::time::Duration {
+        self.last_activity
+            .lock()
+            .map_or(std::time::Duration::MAX, |last| last.elapsed())
+    }
 }
 
 /// Count actual I/O, including failures after a partial transfer.
@@ -31,6 +53,9 @@ impl<S: AsyncRead + Unpin> AsyncRead for Metered<S> {
     ) -> Poll<io::Result<()>> {
         let before = buf.filled().len();
         let result = Pin::new(&mut self.inner).poll_read(cx, buf);
+        if buf.filled().len() > before {
+            self.counters.touch();
+        }
         self.counters
             .up
             .fetch_add((buf.filled().len() - before) as u64, Ordering::Relaxed);
@@ -46,6 +71,9 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for Metered<S> {
         let result = Pin::new(&mut self.inner).poll_write(cx, buf);
         if let Poll::Ready(Ok(n)) = result {
             self.counters.down.fetch_add(n as u64, Ordering::Relaxed);
+            if n > 0 {
+                self.counters.touch();
+            }
         }
         result
     }

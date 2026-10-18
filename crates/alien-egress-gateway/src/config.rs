@@ -11,7 +11,7 @@ use crate::{
     policy::Policy,
 };
 
-/// Deployment-owned gateway configuration. Secret values are never stored here.
+/// Deployment-owned gateway configuration loaded from the gateway vault.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Config {
@@ -29,8 +29,18 @@ pub struct Config {
     pub keys: Vec<VerificationKey>,
     /// Additional deployment CIDRs. Built-in private ranges cannot be disabled.
     pub denied_ranges: Vec<Ipv4Net>,
-    /// Name of the deployment KV binding shared by every replica.
-    pub generation_store: PolicyStoreBinding,
+    /// Replica discovery; absent means a single local gateway.
+    #[serde(default)]
+    pub peers: Option<Peers>,
+    /// Explicit policy storage budget; otherwise half of the cgroup memory limit.
+    #[serde(default)]
+    pub policy_memory_bytes: Option<usize>,
+    /// Global open proxy connections; rejects excess admission before allocating tunnel buffers.
+    #[serde(default = "max_connections")]
+    pub max_connections: usize,
+    /// Base64 32-byte gateway-only key for replica authentication and scoped CAs.
+    #[serde(default)]
+    pub replica_secret: Option<String>,
     /// Additional deployment-owned trust roots, base64 DER, for upstream TLS.
     #[serde(default)]
     pub upstream_ca_certificates: Vec<String>,
@@ -50,7 +60,7 @@ pub struct VerificationKey {
 }
 
 /// Header injection scope. Matching is exact host/method and path-prefix at a slash boundary.
-#[derive(Clone, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CredentialRule {
     /// Audience permitted to use this credential.
@@ -77,13 +87,11 @@ pub struct CredentialRule {
 impl Config {
     /// Decode public keys and reject duplicate key IDs.
     pub fn verification_keys(&self) -> Result<HashMap<String, PublicKey>> {
-        if self.keys.is_empty()
-            || self.audiences.is_empty()
-            || self.generation_store.binding.is_empty()
-        {
-            return Err(invalid(
-                "keys, audiences and generationStore.binding are required",
-            ));
+        if self.max_connections == 0 || self.max_connections > 65536 {
+            return Err(invalid("maxConnections must be between 1 and 65536"));
+        }
+        if self.keys.is_empty() || self.audiences.is_empty() {
+            return Err(invalid("keys and audiences are required"));
         }
         for policy in self.default_policies.values() {
             crate::policy::canonical(policy)?;
@@ -108,9 +116,25 @@ impl Config {
 fn admin_listen() -> SocketAddr {
     SocketAddr::from(([0, 0, 0, 0], 3129))
 }
-/// Existing deployment KV binding shared by all gateway replicas.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct PolicyStoreBinding {
-    pub binding: String,
+
+#[derive(Clone, PartialEq, Eq, Deserialize)]
+#[serde(untagged)]
+pub enum Peers {
+    Dns(DnsPeers),
+    Static(StaticPeers),
+}
+#[derive(Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DnsPeers {
+    pub dns: String,
+    pub port: u16,
+}
+#[derive(Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StaticPeers {
+    pub r#static: Vec<String>,
+}
+
+fn max_connections() -> usize {
+    crate::connections::MAX_CONNECTIONS
 }

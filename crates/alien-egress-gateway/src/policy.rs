@@ -84,7 +84,9 @@ impl PolicyExt for Policy {
     /// Check the policy against a destination. Internet never authorizes literal IPs.
     fn permits(&self, target: &Target) -> bool {
         match self {
-            Self::Internet => target.host.parse::<IpAddr>().is_err(),
+            Self::Internet => {
+                !matches!(target.port, 25 | 465 | 587) && target.host.parse::<IpAddr>().is_err()
+            }
             Self::Allow { .. } => self.allows(&target.host, target.port).unwrap_or(false),
         }
     }
@@ -118,19 +120,7 @@ pub fn check_addresses(addresses: &[IpAddr], extra: &[Ipv4Net]) -> Result<()> {
         let IpAddr::V4(ip) = ip else {
             return Err(denied("IPv6 disabled"));
         };
-        let [a, b, c, d] = ip.octets();
-        if a == 0
-            || a == 10
-            || a == 127
-            || a >= 224
-            || (a == 100 && (64..=127).contains(&b))
-            || (a == 169 && b == 254)
-            || (a == 172 && (16..=31).contains(&b))
-            || (a == 192 && (b == 168 || b == 0))
-            || (a == 198 && (b == 18 || b == 19))
-            || [a, b, c, d] == [168, 63, 129, 16]
-            || extra.iter().any(|net| net.contains(ip))
-        {
+        if !alien_core::is_public_ipv4(*ip) || extra.iter().any(|net| net.contains(ip)) {
             return Err(denied("address is not public"));
         }
     }
@@ -159,6 +149,27 @@ mod tests {
         }
         assert!(policy.permits(&Target::parse("8.8.8.8:53", None).unwrap()));
         assert!(!Policy::Internet.permits(&Target::parse("8.8.8.8:443", None).unwrap()));
+    }
+
+    #[test]
+    fn shared_mail_ports_require_a_matching_explicit_port() {
+        for port in [25, 465, 587] {
+            let target = Target::parse(&format!("mail.example.com:{port}"), None).unwrap();
+            assert!(!Policy::Internet.permits(&target));
+            assert!(!Policy::Allow {
+                allow: vec!["*.example.com".into()]
+            }
+            .permits(&target));
+            assert!(Policy::Allow {
+                allow: vec![format!("*.example.com:{port}")]
+            }
+            .permits(&target));
+            assert!(!Policy::Allow {
+                allow: vec![format!("other.example.com:{port}")]
+            }
+            .permits(&target));
+        }
+        assert!(Policy::Internet.permits(&Target::parse("example.com:22", None).unwrap()));
     }
 
     #[test]
@@ -191,6 +202,9 @@ mod tests {
             "127.0.0.1",
             "100.64.0.1",
             "168.63.129.16",
+            "192.0.2.1",
+            "198.51.100.1",
+            "203.0.113.1",
             "::1",
             "::ffff:8.8.8.8",
         ] {

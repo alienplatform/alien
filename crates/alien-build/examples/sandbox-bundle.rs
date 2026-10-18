@@ -3,6 +3,7 @@
 //! ```text
 //! cargo run -p alien-build --example sandbox-bundle -- --agent-binary <path> <base-image> <bundle.zip>
 //! cargo run -p alien-build --example sandbox-bundle -- --agent-image <ref>  <base-image> <bundle.zip>
+//! cargo run -p alien-build --example sandbox-bundle -- --sandbox <sandbox.json> --agent-binary <path> <base-image> <bundle.zip>
 //! ```
 //!
 //! `--agent-image` is the shipping path: the bundle carries only a Dockerfile that copies the
@@ -12,10 +13,32 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use alien_build::sandbox_bundle::{write_bundle, write_supervised_bundle, AgentSource};
+use alien_build::sandbox_bundle::{write_bundle, write_declared_bundle, AgentSource};
 
 fn main() -> ExitCode {
     let mut arguments: Vec<String> = std::env::args().skip(1).collect();
+    let declaration = if arguments.first().is_some_and(|arg| arg == "--sandbox") {
+        if arguments.len() < 2 {
+            eprintln!("--sandbox requires a sandbox JSON file");
+            return ExitCode::FAILURE;
+        }
+        let path = arguments.remove(1);
+        arguments.remove(0);
+        match std::fs::read(path)
+            .map_err(|error| error.to_string())
+            .and_then(|bytes| {
+                serde_json::from_slice::<alien_core::Sandbox>(&bytes)
+                    .map_err(|error| error.to_string())
+            }) {
+            Ok(sandbox) => Some(sandbox),
+            Err(error) => {
+                eprintln!("read sandbox declaration: {error}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        None
+    };
     let supervised = arguments
         .first()
         .is_some_and(|arg| arg == "--privileged-supervisor");
@@ -39,16 +62,28 @@ fn main() -> ExitCode {
         _ => return usage(),
     };
 
-    let result = if supervised {
-        match inspect_command(base_image) {
-            Ok(command) => {
-                write_supervised_bundle(Path::new(destination), base_image, &agent, &command)
+    let egress = declaration
+        .map(|sandbox| sandbox.egress)
+        .or_else(|| supervised.then_some(alien_core::SandboxEgress::Internet));
+    let result = if let Some(egress) = egress {
+        let config = if matches!(egress, alien_core::SandboxEgress::Internet) {
+            match inspect_config(base_image) {
+                Ok(config) => Some(config),
+                Err(error) => {
+                    eprintln!("{error}");
+                    return ExitCode::FAILURE;
+                }
             }
-            Err(error) => {
-                eprintln!("{error}");
-                return ExitCode::FAILURE;
-            }
-        }
+        } else {
+            None
+        };
+        write_declared_bundle(
+            Path::new(destination),
+            base_image,
+            &agent,
+            &egress,
+            config.as_ref(),
+        )
     } else {
         write_bundle(Path::new(destination), base_image, &agent)
     };
@@ -64,50 +99,14 @@ fn main() -> ExitCode {
     }
 }
 
-fn inspect_command(image: &str) -> Result<alien_core::sandbox_image::SandboxImageCommand, String> {
+fn inspect_config(image: &str) -> Result<oci_client::config::Config, String> {
     let output = std::process::Command::new("docker")
         .args(["image", "inspect", "--format", "{{json .Config}}", image])
         .output()
         .map_err(|error| format!("inspect base image: {error}"))?;
     if !output.status.success() {
-        return Err(format!(
-            "pull the ARM64 base image before packaging: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
+        return Err(format!("pull the base image before packaging: {image}"));
     }
-    let config: serde_json::Value = serde_json::from_slice(&output.stdout)
-        .map_err(|error| format!("read base image configuration: {error}"))?;
-    let mut command = vec![];
-    for field in ["Entrypoint", "Cmd"] {
-        if let Some(args) = config[field].as_array() {
-            for arg in args {
-                command.push(
-                    arg.as_str()
-                        .ok_or_else(|| "image command must contain strings".to_string())?
-                        .to_string(),
-                );
-            }
-        }
-    }
-    let mut env = std::collections::BTreeMap::new();
-    if let Some(entries) = config["Env"].as_array() {
-        for entry in entries {
-            let text = entry
-                .as_str()
-                .ok_or_else(|| "image environment must contain strings".to_string())?;
-            let (key, value) = text
-                .split_once('=')
-                .ok_or_else(|| "image environment entry must contain '='".to_string())?;
-            env.insert(key.to_string(), value.to_string());
-        }
-    }
-    let cwd = config["WorkingDir"]
-        .as_str()
-        .filter(|value| !value.is_empty())
-        .unwrap_or("/");
-    Ok(alien_core::sandbox_image::SandboxImageCommand {
-        command,
-        env,
-        working_directory: cwd.to_string(),
-    })
+    serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("read base image configuration: {error}"))
 }

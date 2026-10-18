@@ -245,7 +245,7 @@ pub fn router(state: Arc<AgentState>) -> Router {
         .route(&hook_path("validate"), get(hook_ready).post(hook_ready))
         .route(
             &hook_path("resume"),
-            get(hook_lifecycle).post(hook_lifecycle),
+            get(resume_egress_hook).post(resume_egress_hook),
         )
         .route(
             &hook_path("suspend"),
@@ -361,6 +361,21 @@ async fn hook_ready() -> StatusCode {
 /// reset. This acknowledges and claims nothing more.
 async fn hook_lifecycle() -> StatusCode {
     StatusCode::OK
+}
+
+async fn resume_egress_hook(
+    State(state): State<Arc<AgentState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> std::result::Result<StatusCode, ApiError> {
+    #[cfg(target_os = "linux")]
+    if let Some(egress) = &state.gateway_egress {
+        authorize_control(&state, peer, &headers, SandboxOperationClass::Execute)?;
+        egress.resume().await?;
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = (state, peer, headers);
+    Ok(StatusCode::OK)
 }
 
 async fn run_command(
@@ -623,7 +638,8 @@ async fn agent_platform(
         "updateEgress" => {
             #[derive(Deserialize)]
             struct Envelope {
-                token: String,
+                token: Option<String>,
+                policy: String,
                 #[serde(rename = "caCert")]
                 ca_certificate: Option<String>,
             }
@@ -634,6 +650,7 @@ async fn agent_platform(
                 headers,
                 Json(EgressUpdate {
                     token: envelope.token,
+                    policy: envelope.policy,
                     ca_certificate: envelope.ca_certificate,
                 }),
             )
@@ -755,7 +772,8 @@ impl axum::response::IntoResponse for ApiError {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct EgressUpdate {
-    token: String,
+    token: Option<String>,
+    policy: String,
     #[serde(default)]
     #[serde(rename = "caCert")]
     ca_certificate: Option<String>,
@@ -776,8 +794,11 @@ async fn update_egress(
     if let Some(certificate) = update.ca_certificate {
         egress.install_ca(&certificate)?;
     }
-    egress.update(update.token).await?;
-    egress.start_image_once(state.exec_identity)?;
+    let full_delivery = update.token.is_some();
+    egress.update(update.token, update.policy).await?;
+    if full_delivery {
+        egress.start_image_once(state.exec_identity)?;
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 

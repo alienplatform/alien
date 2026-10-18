@@ -768,13 +768,11 @@ fn network_validation(ctx: &EmitContext<'_>, label: &str) -> Result<TfFragment> 
                 "alltrue([for route in self.routes : route.gateway_id == \"local\"])",
                 "Sandbox connector subnets must have only local VPC routes.",
             ),
-            "sandbox_gateway" => (
-                "length([for route in self.routes : route if route.cidr_block == \"0.0.0.0/0\" && route.nat_gateway_id != \"\"]) == 1 && alltrue([for route in self.routes : route.gateway_id == \"local\" || (route.cidr_block == \"0.0.0.0/0\" && route.nat_gateway_id != \"\")])",
-                "Gateway subnets must have only local VPC routes and the NAT default route.",
-            ),
+            // Gateway tasks inherit the compute nodes' workload-subnet routes. Checking only
+            // the load balancer subnets would still admit S3/DynamoDB gateway endpoint routes.
             _ => (
-                "length([for route in self.routes : route if route.cidr_block == \"0.0.0.0/0\" && route.nat_gateway_id != \"\"]) == 1",
-                "Workload subnets must have a NAT default route.",
+                "length([for route in self.routes : route if route.cidr_block == \"0.0.0.0/0\" && route.nat_gateway_id != \"\"]) == 1 && alltrue([for route in self.routes : route.gateway_id == \"local\" || (route.cidr_block == \"0.0.0.0/0\" && route.nat_gateway_id != \"\")])",
+                "Gateway and workload subnets must have only local VPC routes and the NAT default route; VPC endpoint routes are not supported.",
             ),
         };
         fragment.data_blocks.push(crate::block::data_block(
@@ -795,6 +793,35 @@ fn network_validation(ctx: &EmitContext<'_>, label: &str) -> Result<TfFragment> 
         (format!("alltrue([for subnet in data.aws_subnet.{label}_sandbox : subnet.ipv6_cidr_block == \"\"] )"),"Sandbox connector subnets must not have IPv6 CIDRs."),
     ];
     if needs_gateway(ctx) {
+        // aws_route_table omits endpoint, propagated, and some service-ENI routes,
+        // and does not expose route state. Ask EC2 to filter the original tables so
+        // those routes cannot disappear from the validation view.
+        for (suffix, filter, value) in [
+            ("endpoint", "route.gateway-id", "vpce-*"),
+            ("propagated", "route.origin", "EnableVgwRoutePropagation"),
+            ("eni", "route.network-interface-id", "*"),
+            ("blackhole", "route.state", "blackhole"),
+        ] {
+            let name = format!("{label}_sandbox_unsafe_{suffix}");
+            fragment.data_blocks.push(crate::block::data_block(
+                "aws_route_tables",
+                &name,
+                [
+                    attr("vpc_id", vpc_id_expr(ctx)),
+                    nested_block(
+                        "filter",
+                        vec![
+                            attr("name", Expression::from(filter)),
+                            attr("values", Expression::from(vec![Expression::from(value)])),
+                        ],
+                    ),
+                ],
+            ));
+            conditions.push((
+                format!("length(setintersection(toset(data.aws_route_tables.{name}.ids), toset(concat(data.aws_route_table.{label}_sandbox[*].id, data.aws_route_table.{label}_sandbox_gateway[*].id, data.aws_route_table.{label}_private[*].id)))) == 0"),
+                "Sandbox, gateway, and workload subnets must not have VPC endpoint, propagated, network-interface, or blackhole routes.",
+            ));
+        }
         conditions.extend([
         (format!("length(distinct(data.aws_subnet.{label}_sandbox_gateway[*].availability_zone_id)) >= 2"),"Gateway subnets must span at least two availability zones."),
         (format!("length(setintersection(toset(data.aws_subnet.{label}_sandbox[*].id),toset(concat(data.aws_subnet.{label}_sandbox_gateway[*].id,data.aws_subnet.{label}_private[*].id)))) == 0 && length(setintersection(toset(data.aws_subnet.{label}_sandbox_gateway[*].id),toset(data.aws_subnet.{label}_private[*].id))) == 0"),"Sandbox and gateway subnets must be dedicated."),

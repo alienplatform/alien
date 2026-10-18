@@ -1,9 +1,9 @@
 //! Exact vault-entry access for the gateway and sandbox-management workloads.
 
 use alien_core::{
+    Build, Container, Daemon, ResourceRef, SECRETS_VAULT_ID, Stack, Vault, Worker,
     permissions::{PermissionProfile, PermissionSet, PermissionSetReference},
     sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID,
-    Build, Container, Daemon, Kv, ResourceRef, Stack, Vault, Worker, SECRETS_VAULT_ID,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 
@@ -60,17 +60,13 @@ pub(crate) fn configure_aws_gateway_permissions(stack: &mut Stack) -> Result<()>
     }
     let mut gateway_profile = PermissionProfile::new();
     for link in &gateway.links {
-        if *link.resource_type() == Kv::RESOURCE_TYPE {
-            gateway_profile.0.insert(
-                link.id().to_string(),
-                vec![PermissionSetReference::from_name("kv/data-write")],
-            );
-        } else if *link.resource_type() != Vault::RESOURCE_TYPE || link.id() != SECRETS_VAULT_ID {
+        if *link.resource_type() != Vault::RESOURCE_TYPE || link.id() != SECRETS_VAULT_ID {
             return Err(AlienError::new(invalid(
-                "The sandbox gateway may link only its policy KV and config vault",
+                "The sandbox gateway may link only its config vault",
             )));
         }
     }
+
     gateway_profile.0.insert(
         SECRETS_VAULT_ID.into(),
         vec![PermissionSetReference::from_inline(exact_read(
@@ -83,7 +79,9 @@ pub(crate) fn configure_aws_gateway_permissions(stack: &mut Stack) -> Result<()>
         .get(&profile_name)
         .is_some_and(|profile| !profile.0.is_empty() && profile != &gateway_profile)
     {
-        return Err(AlienError::new(invalid("The sandbox gateway profile must grant only policy KV access and its exact public config entry")));
+        return Err(AlienError::new(invalid(
+            "The sandbox gateway profile must grant only its exact gateway config entry",
+        )));
     }
     stack
         .permissions
@@ -134,4 +132,33 @@ fn exact_read(key: &str) -> Result<PermissionSet> {
             "binding": {"resource": {"resources": [format!("arn:aws:ssm:${{awsRegion}}:${{awsAccountId}}:parameter/{parameter}")]}}
         }]}
     })).into_alien_error().context(invalid("Failed to construct exact sandbox vault-entry permissions"))
+}
+
+/// The replica secret and derived credential CA belong only to the gateway. Application
+/// profiles may read other vault entries, including the SDK's separate signing key grant.
+/// Run after link grants so a global vault grant cannot expose the gateway configuration.
+pub(crate) fn protect_aws_gateway_config(stack: &mut Stack) -> Result<()> {
+    if !alien_core::sandbox_egress::has_sandbox_gateway(stack) {
+        return Ok(());
+    }
+    let parameter = alien_core::vault_naming::parameter_store_parameter_name(
+        "${resourceName}",
+        "sandbox-egress-gateway-config",
+    );
+    let guard: PermissionSet = serde_json::from_value(serde_json::json!({
+        "id": "vault/protect-sandbox-gateway-config",
+        "description": "Only the gateway workload may access its replica secret and configuration",
+        "platforms": {"aws": [{"effect":"Deny", "grant":{"actions":["ssm:*"]},
+            "binding":{"resource":{"resources":[format!("arn:aws:ssm:${{awsRegion}}:${{awsAccountId}}:parameter/{parameter}")]}}
+        }]}
+    })).into_alien_error().context(invalid("Failed to construct gateway configuration protection"))?;
+    for (name, profile) in &mut stack.permissions.profiles {
+        if name == SANDBOX_EGRESS_GATEWAY_ID {
+            continue;
+        }
+        let grants = profile.0.entry(SECRETS_VAULT_ID.into()).or_default();
+        grants.retain(|permission| permission.id() != guard.id);
+        grants.push(PermissionSetReference::from_inline(guard.clone()));
+    }
+    Ok(())
 }

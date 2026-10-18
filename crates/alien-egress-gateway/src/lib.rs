@@ -5,13 +5,21 @@
 )]
 pub mod admin;
 pub mod config;
+pub mod connections;
+mod credential_cache;
 pub mod credentials;
 pub mod error;
 pub mod http_proxy;
 pub mod io;
 pub mod policy;
 pub mod protocol;
+pub mod record;
+pub mod replication;
 pub mod runtime;
 pub mod server;
 pub mod store;
 pub mod token;
+
+pub mod recovery;
+
+pub mod memory;

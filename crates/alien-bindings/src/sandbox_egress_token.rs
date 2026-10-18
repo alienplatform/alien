@@ -44,6 +44,16 @@ pub struct EgressTokenRequest<'a> {
     pub sandbox_expires_at: i64,
 }
 
+/// The exact policy operation authorized by a short-lived admin token.
+pub enum EgressAdminOperation {
+    /// Read the latest signed record, including a deletion tombstone.
+    Read,
+    /// Replace the policy with a signed record.
+    Put,
+    /// Store a signed deletion tombstone.
+    Delete,
+}
+
 /// An issuer with a deployment key. Debug output never includes the private key.
 pub struct EgressTokenIssuer {
     kid: String,
@@ -120,12 +130,12 @@ impl EgressTokenIssuer {
         Ok(issuer)
     }
 
-    /// Signs the operation and exact policy digest, with a sixty-second lifetime.
+    /// Authorizes the identity and HTTP method with a sixty-second lifetime.
     pub fn mint_admin(
         &self,
         audience: &str,
         sandbox_id: &str,
-        policy: Option<&EgressPolicy>,
+        operation: EgressAdminOperation,
         now_unix: i64,
     ) -> Result<String> {
         validate_identity(audience, sandbox_id)?;
@@ -135,15 +145,37 @@ impl EgressTokenIssuer {
         let exp = now_unix
             .checked_add(60)
             .ok_or_else(|| invalid("issue time is outside the supported range"))?;
-        let mut claims = serde_json::json!({"iss":"alien-sandbox","aud":audience,"sub":sandbox_id,
-            "method":if policy.is_some() {"PUT"} else {"DELETE"},"iat":now_unix,"exp":exp});
-        if let Some(policy) = policy {
-            claims["policy"] = policy
-                .policy_digest()
-                .map_err(crate::providers::sandbox::egress::policy_error)?
-                .into();
-        }
+        let method = match operation {
+            EgressAdminOperation::Read => "GET",
+            EgressAdminOperation::Put => "PUT",
+            EgressAdminOperation::Delete => "DELETE",
+        };
+        let claims = serde_json::json!({"iss":"alien-sandbox","aud":audience,"sub":sandbox_id,
+            "method":method,"iat":now_unix,"exp":exp});
         self.sign("alien-egress-admin", &claims)
+    }
+
+    /// Sign a persistent policy record. Only its outer admin request expires.
+    pub fn mint_record(
+        &self,
+        audience: &str,
+        sandbox_id: &str,
+        version: (u64, &str),
+        policy: Option<&EgressPolicy>,
+    ) -> Result<String> {
+        validate_identity(audience, sandbox_id)?;
+        let mut claims = serde_json::json!({"v":1,"aud":audience,"sub":sandbox_id,"ver":version});
+        if let Some(policy) = policy {
+            claims["policy"] = serde_json::from_slice(
+                &policy
+                    .canonical_json()
+                    .map_err(crate::providers::sandbox::egress::policy_error)?,
+            )
+            .map_err(|_| invalid("could not encode policy record"))?;
+        } else {
+            claims["deleted"] = true.into();
+        }
+        self.sign("alien-egress-record", &claims)
     }
 
     fn sign(&self, kind: &str, claims: &serde_json::Value) -> Result<String> {
@@ -268,7 +300,7 @@ mod admin_tests {
         let issuer = EgressTokenIssuer::from_vault_json(&secret, "rotation-2").unwrap();
         assert!(EgressTokenIssuer::from_vault_json(&secret, "wrong-kid").is_err());
         let token = issuer
-            .mint_admin("prefix/box", "session", Some(&EgressPolicy::Internet), 1000)
+            .mint_admin("prefix/box", "session", EgressAdminOperation::Put, 1000)
             .unwrap();
         let parts: Vec<_> = token.split('.').collect();
         let header: serde_json::Value =
@@ -278,7 +310,7 @@ mod admin_tests {
             serde_json::from_slice(&URL_SAFE_NO_PAD.decode(parts[1]).unwrap()).unwrap();
         assert_eq!(
             claims,
-            serde_json::json!({"iss":"alien-sandbox", "aud":"prefix/box", "sub":"session", "method":"PUT", "policy": EgressPolicy::Internet.policy_digest().unwrap(), "iat":1000, "exp":1060})
+            serde_json::json!({"iss":"alien-sandbox", "aud":"prefix/box", "sub":"session", "method":"PUT", "iat":1000, "exp":1060})
         );
         key.pk
             .verify(

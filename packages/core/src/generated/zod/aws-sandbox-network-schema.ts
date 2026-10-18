@@ -6,7 +6,7 @@
 import * as z from "zod";
 
 /**
- * @description Setup-validated network coordinates for the sandbox connector and gateway.
+ * @description Setup network coordinates; the deployment controller verifies actual EC2 routes and CIDRs.
  */
 export const AwsSandboxNetworkSchema = z.object({
     "gatewayCidrs": z.array(z.string()).describe("Only destinations permitted by the connector security group."),
@@ -15,6 +15,6 @@ export const AwsSandboxNetworkSchema = z.object({
 "sandboxSubnetIds": z.array(z.string()).describe("Route-less connector subnet identifiers."),
 "vpcCidrs": z.array(z.string()).describe("Every associated VPC IPv4 range, denied by the gateway."),
 "workloadCidrs": z.array(z.string()).describe("Source ranges permitted on the gateway admin port.")
-    }).describe("Setup-validated network coordinates for the sandbox connector and gateway.")
+    }).describe("Setup network coordinates; the deployment controller verifies actual EC2 routes and CIDRs.")
 
 export type AwsSandboxNetwork = z.infer<typeof AwsSandboxNetworkSchema>

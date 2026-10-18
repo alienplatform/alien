@@ -356,7 +356,7 @@ fn aws_sandbox_allowing_egress_builds_no_connector() {
     // Without a `Network` in the stack: rendering the deny apparatus would demand one, so a
     // fixture that supplies a VPC anyway could not tell the two outcomes apart.
     let (stack, settings) =
-        sandbox_stack_without_a_network("acme-sandbox-open", SandboxEgress::Internet);
+        sandbox_stack_without_a_network("acme-sandbox-open", SandboxEgress::Allow);
     let module = render(&stack, TerraformTarget::Aws, settings);
     let rendered: String = module
         .files
@@ -585,7 +585,7 @@ fn build_policy_statements(rendered: &str) -> Vec<serde_json::Value> {
 /// test renders.
 #[test]
 fn an_open_live_sandbox_module_keeps_only_the_build_role_and_no_barrier() {
-    let (stack, settings) = live_sandbox_stack("acme-sandbox-open-live", SandboxEgress::Internet);
+    let (stack, settings) = live_sandbox_stack("acme-sandbox-open-live", SandboxEgress::Allow);
     let module = render(&stack, TerraformTarget::Aws, settings);
     assert_terraform_valid(&module, "open live sandbox module");
 
@@ -836,7 +836,7 @@ fn a_restricted_sandbox_makes_terraform_refuse_the_default_network_at_plan_time(
 /// The counterpart: an open sandbox routes through no connector, so the mode stays available.
 #[test]
 fn an_open_sandbox_leaves_the_default_network_selectable() {
-    let (stack, settings) = sandbox_stack("acme-sandbox-open-modes", SandboxEgress::Internet);
+    let (stack, settings) = sandbox_stack("acme-sandbox-open-modes", SandboxEgress::Allow);
     let module = render(&stack, TerraformTarget::Aws, settings);
 
     assert_terraform_valid(&module, "open sandbox module");
@@ -1128,7 +1128,7 @@ fn the_emitted_build_role_matches_the_shared_policy_builder() {
             .add(
                 Sandbox {
                     private_base_image: private_base_image.map(str::to_string),
-                    ..sandbox_fixture_with(SandboxEgress::Internet, bundle_uri)
+                    ..sandbox_fixture_with(SandboxEgress::Allow, bundle_uri)
                 },
                 lifecycle,
             )
@@ -1304,7 +1304,7 @@ fn evaluate_registration(sandbox_file: &hcl::Body, expression: &hcl::Expression)
 fn the_emitted_registration_matches_the_direct_seed() {
     for (egress, bundle_uri) in [
         (
-            SandboxEgress::Internet,
+            SandboxEgress::Allow,
             "s3://acme-artifacts-{region}/sandbox-bundle/f00dcafe/bundle.zip",
         ),
         (SandboxEgress::None, LIVE_BUNDLE),

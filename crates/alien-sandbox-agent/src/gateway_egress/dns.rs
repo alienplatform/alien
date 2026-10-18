@@ -34,16 +34,11 @@ const MAX_ADDRESSES: u32 = (1 << 17) - 2;
 
 impl Names {
     pub(super) fn name(&self, ip: Ipv4Addr) -> Option<String> {
-        self.name_at(ip, Instant::now())
-    }
-
-    fn name_at(&self, ip: Ipv4Addr, now: Instant) -> Option<String> {
         self.state
             .lock()
             .ok()?
             .entries
             .get(&ip)
-            .filter(|entry| entry.expires > now)
             .map(|entry| entry.name.clone())
     }
 
@@ -300,19 +295,10 @@ mod tests {
         let expired = start + Duration::from_secs(60);
         let reply = names.answer_at(&extra, expired).unwrap();
         let new_ip = Ipv4Addr::from(<[u8; 4]>::try_from(&reply[reply.len() - 4..]).unwrap());
-        assert_eq!(
-            names.name_at(new_ip, expired).as_deref(),
-            Some("extra.example.com")
-        );
-        assert_eq!(
-            names.name_at(first_ip, expired).as_deref(),
-            Some("n0.example.com")
-        );
-        assert_eq!(names.name_at(Ipv4Addr::new(198, 18, 0, 2), expired), None);
-        assert_eq!(
-            names.name_at(first_ip, start + Duration::from_secs(90)),
-            None
-        );
+        assert_eq!(names.name(new_ip).as_deref(), Some("extra.example.com"));
+        assert_eq!(names.name(first_ip).as_deref(), Some("n0.example.com"));
+        assert_eq!(names.name(Ipv4Addr::new(198, 18, 0, 2)), None);
+        assert_eq!(names.name(first_ip), Some("n0.example.com".to_string()));
         assert!(u32::from(new_ip) >= u32::from(first_ip) + MAX_NAMES as u32);
     }
 

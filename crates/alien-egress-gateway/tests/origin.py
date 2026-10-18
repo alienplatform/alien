@@ -53,8 +53,12 @@ def dns():
         name = ".".join(labels)
         with open("/fixture/dns.jsonl", "a") as log:
             log.write(json.dumps({"name": name, "type": packet[offset : offset + 2].hex()}) + "\n")
+        if name == "slow.example.test":
+            continue
         ips = ["93.184.216.2"]
-        if name == "private.test":
+        if name == "replicas.test":
+            ips = ["93.184.216.3", "93.184.216.4"]
+        elif name == "private.test":
             ips = ["10.77.91.2"]
         elif name == "configured-range.test":
             ips = ["93.184.217.2"]
@@ -81,14 +85,20 @@ def echo():
     server.listen()
     while True:
         stream, _ = server.accept()
-        with stream:
-            stream.settimeout(8)
-            try:
-                stream.sendall(stream.recv(1024))
-            except OSError:
-                pass
+        threading.Thread(target=echo_client, args=(stream,), daemon=True).start()
+
+
+def echo_client(stream):
+    with stream:
+        stream.settimeout(180)
+        try:
+            while data := stream.recv(1024):
+                stream.sendall(data)
+        except OSError:
+            pass
+
 
 threading.Thread(target=echo, daemon=True).start()
-for port, certificate in [(80, None), (443, "origin"), (9443, "origin"), (8443, "untrusted")]:
+for port, certificate in [(25, "origin"), (465, "origin"), (587, "origin"), (80, None), (443, "origin"), (9443, "origin"), (8443, "untrusted")]:
     threading.Thread(target=serve, args=(port, certificate), daemon=True).start()
 dns()

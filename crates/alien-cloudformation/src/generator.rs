@@ -1511,8 +1511,17 @@ fn add_network_parameters(
         for (name, description) in [
             ("SandboxSubnetIds", "Only used with use-existing. Dedicated sandbox connector subnets with no default route; at least two availability zones."),
             ("SandboxGatewaySubnetIds", "Only used with use-existing. Two or three dedicated gateway subnets, with only local routes and a default route through the deployment NAT."),
+            ("SandboxGatewaySubnetCidrs", "Only used with use-existing. Exact IPv4 CIDRs of SandboxGatewaySubnetIds, in the same order. Used for connector security-group destinations; the deployment controller verifies them against EC2 before enabling internet sandboxes."),
         ] {
-            template.parameters.insert(name.to_string(), comma_list_parameter(description, vec![]));
+            // A create-new install does not use these inputs. The CIDR placeholders
+            // grant no reachable destination; a BYO install must replace them with its
+            // exact subnet CIDRs or controller verification refuses to publish access.
+            let defaults = if name == "SandboxGatewaySubnetCidrs" {
+                vec![alien_core::sandbox_egress::LOOPBACK_ONLY_CIDR.to_string(); 2]
+            } else {
+                vec![]
+            };
+            template.parameters.insert(name.to_string(), comma_list_parameter(description, defaults));
         }
     }
     let defaults = NetworkParameterDefaults::from_settings(network);
@@ -1571,7 +1580,7 @@ fn add_network_parameters(
                     u32::from(defaults.availability_zones),
                     Some(
                         if target.is_kubernetes()
-                            || alien_core::stack_needs_named_subnets_at_setup(stack)
+                            || alien_core::sandbox_egress::has_sandbox_gateway(stack)
                         {
                             vec![CfExpression::from(2u8), CfExpression::from(3u8)]
                         } else {
@@ -1885,6 +1894,12 @@ fn add_standard_conditions(
         }
     }
     let has_created_network = stack_has_created_network(stack, settings.setup_management);
+    if !target.is_kubernetes() && alien_core::sandbox_egress::has_sandbox_gateway(stack) {
+        template.conditions.insert("SandboxGatewayHasThirdSubnet".into(), CfExpression::equals(
+            CfExpression::object([("Fn::Length", CfExpression::ref_("SandboxGatewaySubnetCidrs"))]),
+            CfExpression::Integer(3),
+        ));
+    }
     if has_dynamic_aws_network_settings(settings.network.as_ref()) || has_created_network {
         template.conditions.insert(
             CONDITION_NETWORK_MODE_CREATE.to_string(),

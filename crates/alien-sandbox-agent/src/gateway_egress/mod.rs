@@ -5,7 +5,11 @@
 )]
 
 mod dns;
+mod probe;
+mod recovery;
+pub use probe::command_path_is_closed;
 mod redirect;
+mod transport;
 
 use std::{
     collections::BTreeMap,
@@ -23,7 +27,7 @@ use std::{
 use alien_error::{AlienError, Context, IntoAlienError};
 use base64::Engine;
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{AsyncReadExt, AsyncWriteExt, BufReader},
     net::{TcpListener, TcpStream, UdpSocket},
     sync::Semaphore,
     task::JoinSet,
@@ -32,6 +36,7 @@ use tokio::{
 
 use crate::error::{ErrorData, Result};
 use dns::Names;
+use transport::{accept, read_header};
 
 const TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_HEADER: usize = 32 * 1024;
@@ -50,7 +55,11 @@ fn invalid(reason: &str) -> AlienError<ErrorData> {
 pub struct GatewayEgress {
     address: RwLock<Option<SocketAddr>>,
     token: RwLock<String>,
+    policy: RwLock<Option<String>>,
+    awaiting_delivery: AtomicBool,
+    path_verified: AtomicBool,
     privileged: bool,
+    command_identity: crate::exec::ExecIdentity,
     routing_ready: AtomicBool,
     declared_none: bool,
     ready: AtomicBool,
@@ -76,7 +85,7 @@ impl GatewayEgress {
 
     /// Prepare routing, or defer it until the AWS Run hook. An absent token is pending until
     /// the authenticated policy endpoint delivers it outside the shared image snapshot.
-    pub fn from_env() -> Result<Option<Arc<Self>>> {
+    pub fn from_env(command_identity: crate::exec::ExecIdentity) -> Result<Option<Arc<Self>>> {
         if crate::egress::legacy_from_env()?.is_some() {
             return Ok(None);
         }
@@ -123,7 +132,7 @@ impl GatewayEgress {
             // filter before executing; an installation failure prevents its launch.
             crate::privilege::block_command_ipv6();
             if !defer_routing {
-                redirect::install()
+                redirect::install(command_identity.uid)
                     .into_alien_error()
                     .context(failed("install transparent forwarding"))?;
             }
@@ -131,7 +140,11 @@ impl GatewayEgress {
         Ok(Some(Arc::new(Self {
             address: RwLock::new(address),
             token: RwLock::new(token),
+            policy: RwLock::new(None),
+            awaiting_delivery: AtomicBool::new(true),
+            path_verified: AtomicBool::new(false),
             privileged,
+            command_identity,
             routing_ready: AtomicBool::new(!defer_routing),
             declared_none,
             ready: AtomicBool::new(false),
@@ -184,6 +197,12 @@ impl GatewayEgress {
         if !self.declared_none && self.current_token()?.is_empty() {
             return Ok("awaiting-egress-policy");
         }
+        if !self.declared_none && self.awaiting_delivery.load(Ordering::Acquire) {
+            if !self.path_verified.load(Ordering::Acquire) {
+                return Err(AlienError::new(ErrorData::EgressPathUnexpected));
+            }
+            return Ok("awaiting-egress-policy");
+        }
         self.ensure_ready()?;
         Ok("ready")
     }
@@ -208,9 +227,27 @@ impl GatewayEgress {
         Ok(())
     }
 
+    /// Restored sessions must prove their current network path before accepting more work.
+    pub async fn resume(&self) -> Result<()> {
+        let _update = self.update_lock.lock().await;
+        self.ready.store(false, Ordering::Release);
+        if !self.routing_ready.load(Ordering::Acquire) {
+            return Err(AlienError::new(ErrorData::EgressPathUnexpected));
+        }
+        self.awaiting_delivery
+            .store(!self.declared_none, Ordering::Release);
+        self.path_verified.store(false, Ordering::Release);
+        self.check_path().await?;
+        if self.declared_none {
+            self.ready.store(true, Ordering::Release);
+        }
+        Ok(())
+    }
+
     /// Gate session routes until the network path has been verified.
     pub fn ensure_ready(&self) -> Result<()> {
         if self.routing_ready.load(Ordering::Acquire)
+            && (self.declared_none || !self.awaiting_delivery.load(Ordering::Acquire))
             && self.ready.load(Ordering::Acquire)
             && self.listeners_live.load(Ordering::Acquire)
         {
@@ -238,6 +275,7 @@ impl GatewayEgress {
                 Ok(())
             };
         }
+        tokio::spawn(self.clone().monitor_policy());
         let explicit = TcpListener::bind("127.0.0.1:15002")
             .await
             .into_alien_error()
@@ -344,11 +382,11 @@ impl GatewayEgress {
     }
 
     // The supervisor retains NET_ADMIN before creating worker threads. Installing here lets
-    // the platform finish snapshot restoration before guest-wide rules affect its bootstrap.
+    // the platform finish snapshot restoration before enabling the command UID rules.
     // Callers hold update_lock, so token installation cannot race this transaction.
     async fn install_routing_at_run(&self) -> Result<()> {
         if !self.routing_ready.load(Ordering::Acquire) {
-            redirect::install_at_run()
+            redirect::install_at_run(self.command_identity.uid)
                 .await
                 .into_alien_error()
                 .context(failed("install Run-hook transparent forwarding"))?;
@@ -366,7 +404,7 @@ impl GatewayEgress {
 
     /// Install a replacement signed token. Signature verification and policy lookup happen in
     /// the gateway; the self-check refuses invalid credentials before reopening session routes.
-    pub async fn update(&self, token: String) -> Result<()> {
+    pub async fn update(&self, token: Option<String>, policy: String) -> Result<()> {
         let _update = self.update_lock.lock().await;
         if !self.routing_ready.load(Ordering::Acquire) {
             return Err(AlienError::new(ErrorData::EgressPathUnexpected));
@@ -374,6 +412,11 @@ impl GatewayEgress {
         if self.declared_none {
             return Err(invalid("declared none cannot acquire an egress token"));
         }
+        let full_delivery = token.is_some();
+        let token = match token {
+            Some(token) => token,
+            None => self.current_token()?,
+        };
         validate_token(&token)?;
         let (aud, sub) = token_identity(&token)?;
         if self
@@ -381,16 +424,28 @@ impl GatewayEgress {
             .read()
             .map_err(|_| invalid("identity lock poisoned"))?
             .as_ref()
-            != Some(&(aud, sub))
+            != Some(&(aud.clone(), sub.clone()))
         {
             return Err(invalid("token audience or sandbox ID mismatch"));
         }
+        if !full_delivery {
+            // The gateway verifies the installed identity, including expiry. Refreshing
+            // only the recovery copy must neither rotate its token nor release Resume.
+            if !matches!(self.policy_request(None).await?, 200 | 404) {
+                return Err(AlienError::new(ErrorData::EgressPathUnexpected));
+            }
+            return self.retain_record(policy, &aud, &sub);
+        }
+        self.retain_record(policy, &aud, &sub)?;
+        self.awaiting_delivery.store(true, Ordering::Release);
         self.ready.store(false, Ordering::Release);
         *self
             .token
             .write()
             .map_err(|_| invalid("token lock poisoned"))? = token;
-        self.self_check().await
+        self.self_check().await?;
+        self.awaiting_delivery.store(false, Ordering::Release);
+        Ok(())
     }
 
     /// Install the public per-sandbox CA supplied by management. Never accepts a private key.
@@ -493,27 +548,24 @@ impl GatewayEgress {
             .context(failed("connect gateway"))
     }
 
-    async fn self_check(&self) -> Result<()> {
+    async fn check_path(&self) -> Result<()> {
+        self.path_verified.store(false, Ordering::Release);
         // Marked sockets bypass the in-guest filter, proving the external network boundary.
         let canary: SocketAddr = SocketAddr::from(([1, 1, 1, 1], 443));
         let direct = timeout(Duration::from_secs(3), self.connect(canary)).await;
         if matches!(direct, Ok(Ok(_))) {
             return Err(AlienError::new(ErrorData::EgressPathUnexpected));
         }
-        if self.declared_none {
-            self.ready.store(true, Ordering::Release);
-            return Ok(());
-        }
-        let mut gateway = self.connect(self.gateway_address()?).await?;
-        let token = self.current_token()?;
-        gateway.write_all(format!("GET /health HTTP/1.1\r\nHost: {}\r\nProxy-Authorization: Bearer {token}\r\nConnection: close\r\n\r\n", self.gateway_address()?).as_bytes())
-            .await.into_alien_error().context(failed("request authenticated gateway health"))?;
-        let reply = timeout(TIMEOUT, read_header(&mut gateway))
-            .await
-            .into_alien_error()
-            .context(failed("self-check gateway timeout"))??;
-        if !reply.starts_with(b"HTTP/1.1 200 ") {
-            return Err(AlienError::new(ErrorData::EgressPathUnexpected));
+        probe::supervisor_udp(self.privileged).await?;
+        probe::command(self.command_identity).await?;
+        self.path_verified.store(true, Ordering::Release);
+        Ok(())
+    }
+
+    async fn self_check(&self) -> Result<()> {
+        self.check_path().await?;
+        if !self.declared_none {
+            self.check_policy().await?;
         }
         self.ready.store(true, Ordering::Release);
         Ok(())
@@ -532,30 +584,34 @@ impl GatewayEgress {
         let mut tasks = JoinSet::new();
         loop {
             tokio::select! {
-                connection = listener.accept() => {
-                    let (stream, _) = connection.into_alien_error().context(failed("accept forwarder"))?;
+                connection = accept(&listener) => {
+                    let (stream, _) = connection;
                     let Ok(permit) = limit.clone().try_acquire_owned() else { continue; };
                     let this = self.clone();
                     tasks.spawn(async move { let _permit = permit; let _result = timeout(Duration::from_secs(3600), this.forward(stream, transparent)).await; });
                 }
-                result = tasks.join_next(), if !tasks.is_empty() => { if result.is_some_and(|r| r.is_err()) { return Err(invalid("forwarder task panicked")); } }
+                result = tasks.join_next(), if !tasks.is_empty() => { if let Some(Err(error)) = result { tracing::error!(%error, "forwarder task failed"); } }
             }
         }
     }
 
-    async fn forward(&self, mut guest: TcpStream, transparent: bool) -> Result<()> {
+    async fn forward(&self, guest: TcpStream, transparent: bool) -> Result<()> {
         self.ensure_ready()?;
-        let mut upstream = self.connect(self.gateway_address()?).await?;
+        let mut guest = BufReader::new(guest);
+        let mut upstream = BufReader::new(self.connect(self.gateway_address()?).await?);
         if transparent {
-            let destination = redirect::original_destination(&guest)
+            let destination = redirect::original_destination(guest.get_ref())
                 .into_alien_error()
                 .context(failed("read original destination"))?;
             let name = self
                 .names
                 .name(*destination.ip())
                 .unwrap_or_else(|| destination.ip().to_string());
-            self.send_connect(&mut upstream, &format!("{name}:{}", destination.port()))
-                .await?;
+            self.send_connect(
+                upstream.get_mut(),
+                &format!("{name}:{}", destination.port()),
+            )
+            .await?;
             let response = timeout(TIMEOUT, read_header(&mut upstream))
                 .await
                 .into_alien_error()
@@ -616,45 +672,50 @@ impl GatewayEgress {
     async fn dns_udp(&self, socket: UdpSocket) -> Result<()> {
         let mut packet = [0; 512];
         loop {
-            let (n, peer) = socket
-                .recv_from(&mut packet)
-                .await
-                .into_alien_error()
-                .context(failed("read DNS"))?;
+            let (n, peer) = match socket.recv_from(&mut packet).await {
+                Ok(received) => received,
+                Err(error) => {
+                    tracing::warn!(%error, "DNS receive failed; retrying");
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    continue;
+                }
+            };
             if let Some(reply) = self.names.answer(&packet[..n]) {
-                socket
-                    .send_to(&reply, peer)
-                    .await
-                    .into_alien_error()
-                    .context(failed("reply DNS"))?;
+                if let Err(error) = socket.send_to(&reply, peer).await {
+                    tracing::warn!(%error, "DNS reply failed");
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
             }
         }
     }
 
-    async fn dns_tcp(&self, listener: TcpListener) -> Result<()> {
+    async fn dns_tcp(self: &Arc<Self>, listener: TcpListener) -> Result<()> {
+        let capacity = Arc::new(Semaphore::new(32));
+        let mut tasks = JoinSet::new();
         loop {
-            let (mut stream, _) = listener
-                .accept()
-                .await
-                .into_alien_error()
-                .context(failed("accept DNS"))?;
-            // Sequential and bounded: DNS questions are tiny; no unbounded per-query tasks.
-            let result = timeout(TIMEOUT, async {
-                let n = stream.read_u16().await? as usize;
-                if n > 512 {
-                    return Err(std::io::Error::other("DNS question too large"));
+            tokio::select! {
+                connection = accept(&listener) => {
+                    let (mut stream, _) = connection;
+                    let Ok(permit) = capacity.clone().try_acquire_owned() else { continue; };
+                    let this = self.clone();
+                    tasks.spawn(async move {
+                        let _permit = permit;
+                        let _ = timeout(TIMEOUT, async {
+                            let n = stream.read_u16().await? as usize;
+                            if n > 512 { return Err(std::io::Error::other("DNS question too large")); }
+                            let mut packet = vec![0; n];
+                            stream.read_exact(&mut packet).await?;
+                            if let Some(reply) = this.names.answer(&packet) {
+                                stream.write_u16(reply.len() as u16).await?;
+                                stream.write_all(&reply).await?;
+                            }
+                            Ok::<_, std::io::Error>(())
+                        }).await;
+                    });
                 }
-                let mut packet = vec![0; n];
-                stream.read_exact(&mut packet).await?;
-                if let Some(reply) = self.names.answer(&packet) {
-                    stream.write_u16(reply.len() as u16).await?;
-                    stream.write_all(&reply).await?;
+                result = tasks.join_next(), if !tasks.is_empty() => {
+                    if let Some(Err(error)) = result { tracing::error!(%error, "DNS task failed"); }
                 }
-                Ok::<_, std::io::Error>(())
-            })
-            .await;
-            if result.is_err() {
-                continue;
             }
         }
     }
@@ -671,25 +732,6 @@ fn validate_token(token: &str) -> Result<()> {
         return Err(invalid("invalid egress token encoding"));
     }
     Ok(())
-}
-
-async fn read_header(stream: &mut TcpStream) -> Result<Vec<u8>> {
-    let mut input = Vec::new();
-    // Read to the exact boundary so CONNECT never discards server-first protocol bytes.
-    loop {
-        let byte = stream
-            .read_u8()
-            .await
-            .into_alien_error()
-            .context(failed("read proxy header"))?;
-        input.push(byte);
-        if input.len() > MAX_HEADER {
-            return Err(invalid("proxy header too large"));
-        }
-        if input.ends_with(b"\r\n\r\n") {
-            return Ok(input);
-        }
-    }
 }
 
 fn token_identity(token: &str) -> Result<(String, String)> {

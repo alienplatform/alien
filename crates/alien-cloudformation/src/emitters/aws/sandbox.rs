@@ -167,22 +167,6 @@ impl CfEmitter for AwsSandboxEmitter {
                     ]),
                 )]),
             );
-            if matches!(sandbox.egress, SandboxEgress::Internet) {
-                let network = sandbox_egress_network(ctx.stack).map_err(|error| {
-                    AlienError::new(ErrorData::OperationNotSupported {
-                        operation: "sandbox connector".into(),
-                        reason: error.to_string(),
-                    })
-                })?;
-                let prefix = ctx.name_for(network.id).ok_or_else(|| {
-                    AlienError::new(ErrorData::GenericError {
-                        message: format!("network '{}' has no generated name", network.id),
-                    })
-                })?;
-                connector
-                    .depends_on
-                    .push(format!("{prefix}SandboxNetworkValidation"));
-            }
             connector.properties.insert("Tags".to_string(), tags(ctx));
             egress_resources.extend([operator_role, security_group, connector]);
         }
@@ -245,7 +229,8 @@ impl CfEmitter for AwsSandboxEmitter {
                 CfExpression::Integer(tier.baseline_memory_mib),
             )])]),
         );
-        // AWS exposes only ALL; the agent reduces it before running image code or commands.
+        // AWS rejects named capabilities: only ALL is accepted. The agent drops to eight
+        // before creating worker threads; every image command and exec receives none.
         properties.insert(
             "AdditionalOsCapabilities".to_string(),
             CfExpression::list(

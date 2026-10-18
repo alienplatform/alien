@@ -26,9 +26,9 @@ use alien_core::{
     import::{EmitContext, CURRENT_SETUP_IMPORT_FORMAT_VERSION},
     ComputeCluster, DeploymentModel, ErrorData, HeartbeatsMode, Key, KubernetesCertificateMode,
     KubernetesExposureSettings, KubernetesSettings, Network, NetworkSettings, RemoteBindings,
-    RemoteStackManagement, ResourceLifecycle, Result, Sandbox, SandboxEgress, Stack,
-    StackInputDefaultValue, StackInputDefinition, StackInputKind, StackInputProvider,
-    StackInputValidation, StackSettings, TelemetryMode, UpdatesMode,
+    RemoteStackManagement, ResourceLifecycle, Result, Sandbox, Stack, StackInputDefaultValue,
+    StackInputDefinition, StackInputKind, StackInputProvider, StackInputValidation, StackSettings,
+    TelemetryMode, UpdatesMode,
 };
 use alien_error::{AlienError, IntoAlienError};
 use hcl::{
@@ -4285,7 +4285,7 @@ fn readme_md(
         // approver looking for it.
         let scaffolding = if live_sandboxes
             .iter()
-            .any(|sandbox| !matches!(sandbox.cloud_egress(), SandboxEgress::Internet))
+            .any(|sandbox| alien_core::sandbox_egress::sandbox_needs_connector(stack, sandbox))
         {
             "build scaffolding — the build role, egress connector, operator role, and security \
              group —"

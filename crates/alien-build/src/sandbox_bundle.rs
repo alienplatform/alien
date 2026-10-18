@@ -21,6 +21,8 @@ use zip::ZipWriter;
 use alien_core::sandbox_image::{
     contract_env, entrypoint, identity_setup, AGENT_MODE, AGENT_PATH, AWS_MICROVM,
 };
+use alien_core::{sandbox_image::SandboxImageCommand, SandboxEgress};
+use oci_client::config::Config;
 
 /// Name the agent binary must have inside the bundle.
 pub const AGENT_FILENAME: &str = "alien-sandbox-agent";
@@ -108,7 +110,75 @@ USER 0:0
 /// The archive is flat on purpose — `CreateMicrovmImage` looks for the Dockerfile at the root,
 /// and a nested directory produces a build failure minutes in rather than a rejected request.
 pub fn write_bundle(destination: &Path, base_image: &str, agent: &AgentSource) -> Result<()> {
-    write_bundle_inner(destination, base_image, agent, None)
+    write_bundle_inner(destination, base_image, agent, None, None)
+}
+
+/// Packages the declared sandbox, preserving the released layout for legacy egress modes.
+///
+/// Internet sandboxes need the inspected base image command because the root agent starts that
+/// command only after installing the egress boundary. Both source-built and published images
+/// use their final OCI configuration here; callers must not infer it from a Dockerfile.
+pub fn write_declared_bundle(
+    destination: &Path,
+    base_image: &str,
+    agent: &AgentSource,
+    egress: &SandboxEgress,
+    image_config: Option<&Config>,
+) -> Result<()> {
+    if !matches!(egress, SandboxEgress::Internet) {
+        return write_bundle(destination, base_image, agent);
+    }
+    let config = image_config.ok_or_else(|| {
+        AlienError::new(ErrorData::BuildConfigInvalid {
+            message:
+                "An internet sandbox bundle requires the base image's inspected OCI configuration"
+                    .to_string(),
+        })
+    })?;
+    write_supervised_bundle(
+        destination,
+        base_image,
+        agent,
+        &image_command_from_config(config)?,
+    )
+}
+
+/// Extracts the original execution configuration without exposing it in a public artifact.
+pub fn image_command_from_config(config: &Config) -> Result<SandboxImageCommand> {
+    let invalid = |message: &str| {
+        AlienError::new(ErrorData::BuildConfigInvalid {
+            message: message.to_string(),
+        })
+    };
+    let mut env = std::collections::BTreeMap::new();
+    for entry in config.env.iter().flatten() {
+        let (key, value) = entry.split_once('=').ok_or_else(|| {
+            invalid("The base image OCI environment contains an entry without '='")
+        })?;
+        if key.is_empty() || key.contains('\0') || value.contains('\0') {
+            return Err(invalid(
+                "The base image OCI environment contains an invalid entry",
+            ));
+        }
+        env.insert(key.to_string(), value.to_string());
+    }
+    let command = SandboxImageCommand {
+        command: config
+            .entrypoint
+            .iter()
+            .flatten()
+            .chain(config.cmd.iter().flatten())
+            .cloned()
+            .collect(),
+        env,
+        working_directory: config
+            .working_dir
+            .as_deref()
+            .filter(|directory| !directory.is_empty())
+            .unwrap_or("/")
+            .to_string(),
+    };
+    Ok(command)
 }
 
 /// Writes a bundle preserving the base image's OCI command for unprivileged startup.
@@ -119,7 +189,28 @@ pub fn write_supervised_bundle(
     agent: &AgentSource,
     image_command: &alien_core::sandbox_image::SandboxImageCommand,
 ) -> Result<()> {
-    write_bundle_inner(destination, base_image, agent, Some(image_command))
+    write_bundle_inner(destination, base_image, agent, Some(image_command), None)
+}
+
+/// Copies command metadata from a private image instead of publishing its contents in the ZIP.
+/// The image must hold the inspected command at `IMAGE_COMMAND_PATH` and be pullable by the
+/// image build role. A digest reference keeps the command tied to the packaged base image.
+pub fn write_supervised_bundle_with_command_image(
+    destination: &Path,
+    base_image: &str,
+    agent: &AgentSource,
+    command_image: &str,
+) -> Result<()> {
+    let reference = checked_reference(command_image, "Image command")?;
+    let digest = reference.rsplit_once("@sha256:").map(|(_, digest)| digest);
+    if !digest.is_some_and(|digest| {
+        digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+    }) {
+        return Err(AlienError::new(ErrorData::BuildConfigInvalid {
+            message: "An image command source must be pinned by sha256 digest".to_string(),
+        }));
+    }
+    write_bundle_inner(destination, base_image, agent, None, Some(reference))
 }
 
 fn write_bundle_inner(
@@ -127,6 +218,7 @@ fn write_bundle_inner(
     base_image: &str,
     agent: &AgentSource,
     image_command: Option<&alien_core::sandbox_image::SandboxImageCommand>,
+    command_image: Option<&str>,
 ) -> Result<()> {
     let failed = |operation: &str, path: &Path| ErrorData::FileOperationFailed {
         operation: operation.to_string(),
@@ -146,6 +238,12 @@ fn write_bundle_inner(
         dockerfile.push_str(&format!(
             "\nCOPY --chown=0:0 --chmod=0444 image-command.json {}\n",
             alien_core::sandbox_image::IMAGE_COMMAND_PATH
+        ));
+    }
+    if let Some(image) = command_image {
+        dockerfile.push_str(&format!(
+            "\nCOPY --from={image} --chown=0:0 --chmod=0444 {path} {path}\n",
+            path = alien_core::sandbox_image::IMAGE_COMMAND_PATH,
         ));
     }
     let agent_bytes = match agent {
@@ -203,6 +301,57 @@ fn write_bundle_inner(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn internet_packaging_refuses_missing_or_malformed_image_configuration() {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("bundle.zip");
+        let agent = super::AgentSource::Image("example.com/agent:v1".into());
+        for config in [
+            None,
+            Some(oci_client::config::Config {
+                env: Some(vec!["invalid-entry".into()]),
+                ..Default::default()
+            }),
+        ] {
+            let error = super::write_declared_bundle(
+                &destination,
+                "example.com/base:v1",
+                &agent,
+                &alien_core::SandboxEgress::Internet,
+                config.as_ref(),
+            )
+            .expect_err("cannot publish an Internet bundle without a usable image configuration");
+            assert_eq!(error.code, "PACKAGE_CONFIG_INVALID");
+            assert!(
+                !destination.exists(),
+                "failure must not leave a publishable archive"
+            );
+        }
+    }
+
+    #[test]
+    fn declared_legacy_modes_keep_the_released_bundle_bytes() {
+        let directory = tempfile::tempdir().unwrap();
+        let original = directory.path().join("original.zip");
+        let declared = directory.path().join("declared.zip");
+        let agent = super::AgentSource::Image("example.com/agent:v1".into());
+        super::write_bundle(&original, "example.com/base:v1", &agent).unwrap();
+        for egress in [
+            alien_core::SandboxEgress::None,
+            alien_core::SandboxEgress::Allow,
+            alien_core::SandboxEgress::AllowDomains {
+                domains: vec!["example.com".into()],
+            },
+        ] {
+            super::write_declared_bundle(&declared, "example.com/base:v1", &agent, &egress, None)
+                .unwrap();
+            assert_eq!(
+                std::fs::read(&original).unwrap(),
+                std::fs::read(&declared).unwrap()
+            );
+        }
+    }
+
     /// The reference reaches a generated Dockerfile, so a newline in it writes directives of the
     /// caller's choosing. Both entry points render through `dockerfile`, so the refusal is here.
     #[test]

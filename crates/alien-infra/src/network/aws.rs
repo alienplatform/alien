@@ -1096,7 +1096,7 @@ pub struct AwsNetworkController {
     /// NAT addresses learned during creation or handed off by setup.
     #[serde(default)]
     pub egress_public_ips: Vec<String>,
-    /// Setup-validated connector and gateway subnet coordinates.
+    /// Setup coordinates; actual CIDRs and routes are verified during refresh.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sandbox_network: Option<alien_core::import::data::AwsSandboxNetwork>,
 
@@ -2726,6 +2726,7 @@ mod failure_domain_compatibility_tests {
             available_ip_address_count: None,
             default_for_az: None,
             map_public_ip_on_launch: None,
+            ipv6_cidr_block_association_set: None,
             tag_set: None,
         }
     }
@@ -4432,6 +4433,29 @@ impl AwsNetworkController {
     )]
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Network>()?;
+
+        if let Some(declared) = &self.sandbox_network {
+            let vpc_id = self.vpc_id.as_deref().ok_or_else(|| {
+                AlienError::new(ErrorData::ResourceConfigInvalid {
+                    message: "Sandbox network setup is missing the VPC ID".into(),
+                    resource_id: Some(config.id.clone()),
+                })
+            })?;
+            let client = ctx
+                .service_provider
+                .get_aws_ec2_client(ctx.get_aws_config()?)
+                .await?;
+            self.sandbox_network = Some(
+                super::validate_aws_sandbox_network(
+                    client.as_ref(),
+                    &config.id,
+                    vpc_id,
+                    declared,
+                    &self.private_subnet_ids,
+                )
+                .await?,
+            );
+        }
 
         // For BYO-VPC, we don't need to verify - preflights already validated
         if self.is_byo_vpc {
