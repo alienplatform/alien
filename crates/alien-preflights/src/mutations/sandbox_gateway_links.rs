@@ -49,7 +49,10 @@ impl StackMutation for SandboxGatewayLinksMutation {
                 .resources
                 .get_mut(id)
                 .expect("sandbox collected above");
-            let sandbox = entry.config.downcast_mut::<Sandbox>().expect("sandbox type");
+            let sandbox = entry
+                .config
+                .downcast_mut::<Sandbox>()
+                .expect("sandbox type");
             if !sandbox.links.contains(&gateway) {
                 sandbox.links.push(gateway.clone());
             }
@@ -78,35 +81,6 @@ impl StackMutation for SandboxGatewayLinksMutation {
             if id == SANDBOX_EGRESS_GATEWAY_ID {
                 continue;
             }
-            let profile = entry
-                .config
-                .downcast_ref::<Container>()
-                .map(|resource| &resource.permissions)
-                .or_else(|| {
-                    entry
-                        .config
-                        .downcast_ref::<Worker>()
-                        .map(|resource| &resource.permissions)
-                })
-                .or_else(|| {
-                    entry
-                        .config
-                        .downcast_ref::<Build>()
-                        .map(|resource| &resource.permissions)
-                })
-                .or_else(|| {
-                    entry
-                        .config
-                        .downcast_ref::<Daemon>()
-                        .and_then(|resource| resource.permissions.as_ref())
-                });
-            let can_sign = profile
-                .and_then(|name| stack.permissions.profiles.get(name))
-                .and_then(|profile| profile.0.get(SECRETS_VAULT_ID))
-                .is_some_and(|sets| {
-                    sets.iter()
-                        .any(|set| set.id() == "vault/sandbox-egress-signing-key-read")
-                });
             // Test the type before taking the mutable reference so borrows do not overlap.
             let links = match entry.config.resource_type().as_ref() {
                 "worker" => {
@@ -143,7 +117,9 @@ impl StackMutation for SandboxGatewayLinksMutation {
                 if !links.contains(&gateway) {
                     links.push(gateway.clone());
                 }
-                if can_sign && !links.contains(&vault) {
+                // Loading the SDK needs the vault descriptor. Secret access remains
+                // governed by the separately derived permission profile.
+                if !links.contains(&vault) {
                     links.push(vault.clone());
                 }
             }

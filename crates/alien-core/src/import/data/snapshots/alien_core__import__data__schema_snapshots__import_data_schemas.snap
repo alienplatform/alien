@@ -419,7 +419,7 @@ expression: schemas
         "type": "object"
       },
       "AwsSandboxNetwork": {
-        "description": "Setup-validated network coordinates for the sandbox connector and gateway.",
+        "description": "Setup network coordinates; the deployment controller verifies actual EC2 routes and CIDRs.",
         "properties": {
           "gatewayCidrs": {
             "description": "Only destinations permitted by the connector security group.",
@@ -561,7 +561,7 @@ expression: schemas
             "type": "null"
           }
         ],
-        "description": "Isolated sandbox networking verified during setup; absent on older imports."
+        "description": "Dedicated sandbox networking to verify after setup; absent on older imports."
       },
       "securityGroupId": {
         "description": "Security group ID for private workloads.",
