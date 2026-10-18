@@ -6,6 +6,8 @@
 //! Its security group must accept traffic only from that load balancer, and its
 //! endpoint policy must allow only the associated API.
 
+use sha2::{Digest, Sha256};
+
 /// Envoy v1.39.4, pinned to its published multi-platform manifest.
 pub const IMAGE: &str =
     "envoyproxy/envoy@sha256:74bd4eb5629708d3fadca1a5e6b85d208f338d7bb54e06b69565905c5294cc01";
@@ -18,8 +20,31 @@ pub const BOOTSTRAP: &str = include_str!("aws_worker_gateway/envoy.json");
 /// Its function name and role path must remain outside runtime worker grants.
 pub const CLEANUP_HANDLER_SOURCE: &str = include_str!("aws_worker_gateway/cleanup.py");
 
+/// Interpreter used by all setup surfaces for the retirement capability.
+pub const CLEANUP_RUNTIME: &str = "python3.13";
+
+/// Stable source/configuration revision for publishing immutable setup versions.
+pub fn cleanup_revision() -> String {
+    let mut hash = Sha256::new();
+    hash.update(CLEANUP_HANDLER_SOURCE.as_bytes());
+    hash.update(CLEANUP_RUNTIME.as_bytes());
+    hash.update(b"index.handler:60");
+    format!("{:x}", hash.finalize())
+}
+
 /// This namespace cannot match ordinary `<resource-prefix>-*` worker grants.
 pub const CLEANUP_FUNCTION_PREFIX: &str = "_gateway-cleanup-";
+
+/// Keep setup retirement available while any native worker may own a gateway.
+/// Internet-only settings can later change without discarding retirement access.
+pub fn requires_cleanup_capability(ctx: &crate::import::EmitContext<'_>) -> bool {
+    !ctx.targets_kubernetes
+        && ctx.platform == crate::Platform::Aws
+        && ctx.stack.resources().any(|(_, entry)| {
+            entry.lifecycle == crate::ResourceLifecycle::Live
+                && entry.config.downcast_ref::<crate::Worker>().is_some()
+        })
+}
 
 /// Validate setup registration before exposing the capability to runtime.
 pub fn validate_cleanup_function_arn(

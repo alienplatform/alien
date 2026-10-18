@@ -482,6 +482,14 @@ fn generate_terraform_module_internal(
         .unwrap_or_else(|| stack.id())
         .to_string();
 
+    let include_archive_provider = per_resource.values().any(|fragment| {
+        fragment.data_blocks.iter().any(|block| {
+            block
+                .labels
+                .first()
+                .is_some_and(|label| label.as_str() == "archive_file")
+        })
+    });
     let mut files: IndexMap<String, String> = IndexMap::new();
     files.insert(
         "versions.tf".to_string(),
@@ -494,6 +502,7 @@ fn generate_terraform_module_internal(
             include_azapi_provider,
             include_awscc_provider,
             include_google_beta_provider,
+            include_archive_provider,
         ))?,
     );
     files.insert(
@@ -1537,6 +1546,7 @@ fn versions_body(
     include_azapi_provider: bool,
     include_awscc_provider: bool,
     include_google_beta_provider: bool,
+    include_archive_provider: bool,
 ) -> Body {
     let required_version = if matches!(target, TerraformTarget::Eks) {
         ">= 1.9.0"
@@ -1585,6 +1595,9 @@ fn versions_body(
     if include_helm_provider {
         provider_attrs.push(attr("helm", provider_requirement("helm")));
     }
+    if include_archive_provider {
+        provider_attrs.push(attr("archive", provider_requirement("archive")));
+    }
     provider_attrs.push(attr("random", provider_requirement("random")));
     if let Some(registration) = registration {
         provider_attrs.push(attr(
@@ -1625,6 +1638,7 @@ pub(crate) const PROVIDER_REQUIREMENTS: &[(&str, &str, &str)] = &[
     ("kubernetes", "hashicorp/kubernetes", ">= 2.30"),
     ("helm", "hashicorp/helm", ">= 3.0"),
     ("random", "hashicorp/random", ">= 3.6"),
+    ("archive", "hashicorp/archive", ">= 2.7, < 3.0"),
 ];
 
 /// The `required_providers` entry for a provider in [`PROVIDER_REQUIREMENTS`].
@@ -4584,6 +4598,7 @@ mod tests {
                     false,
                     false,
                     false,
+                    false,
                 ))
                 .expect("versions should render"),
             ),
@@ -4674,6 +4689,7 @@ data "aws_eks_cluster" "target" { name = "validation-only" }
         let versions = render_body(versions_body(
             TerraformTarget::Aws,
             Some(&registration),
+            false,
             false,
             false,
             false,

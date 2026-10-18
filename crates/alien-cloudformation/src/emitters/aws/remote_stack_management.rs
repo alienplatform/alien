@@ -8,20 +8,20 @@ use crate::{
     emitter::CfEmitter,
     emitters::aws::{
         helpers::{
-            cf_from_json, chunk_managed_policy_statements, required_logical_id, resource_config,
-            tags, uniquify_iam_statement_sids, PARAM_MANAGING_ROLE_ARN,
+            PARAM_MANAGING_ROLE_ARN, cf_from_json, chunk_managed_policy_statements,
+            required_logical_id, resource_config, tags, uniquify_iam_statement_sids,
         },
         service_account::permission_context,
     },
     template::{CfExpression, CfResource},
 };
 use alien_core::{
-    import::EmitContext, ErrorData, KubernetesCluster, PermissionProfile, PermissionSetReference,
-    RemoteStackManagement, ResourceLifecycle, Result, Worker,
+    ErrorData, KubernetesCluster, PermissionProfile, PermissionSetReference, RemoteStackManagement,
+    ResourceLifecycle, Result, Worker, import::EmitContext,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{
-    generators::AwsCloudFormationPermissionsGenerator, BindingTarget, PermissionContext,
+    BindingTarget, PermissionContext, generators::AwsCloudFormationPermissionsGenerator,
 };
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -48,6 +48,9 @@ impl CfEmitter for AwsRemoteStackManagementEmitter {
         let mut resources = vec![role];
         resources.extend(management_policy_resources(&role_id, policy_documents));
 
+        if alien_core::aws_worker_gateway::requires_cleanup_capability(ctx) {
+            resources.extend(super::gateway_cleanup::emit(ctx, &role_id));
+        }
         Ok(resources)
     }
 
@@ -82,6 +85,12 @@ impl CfEmitter for AwsRemoteStackManagementEmitter {
                     );
                     (scope, value)
                 })),
+            ));
+        }
+        if alien_core::aws_worker_gateway::requires_cleanup_capability(ctx) {
+            fields.push((
+                "workerGatewayCleanupFunctionArn",
+                CfExpression::ref_(super::gateway_cleanup::version_id(&role_id)),
             ));
         }
         Ok(CfExpression::object(fields))

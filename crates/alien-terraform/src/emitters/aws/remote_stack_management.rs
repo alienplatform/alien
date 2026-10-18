@@ -22,13 +22,13 @@ use crate::{
     expr,
 };
 use alien_core::{
-    import::EmitContext, ErrorData, KubernetesCluster, PermissionProfile, PermissionSetReference,
-    RemoteStackManagement, ResourceLifecycle, Result, Worker,
+    ErrorData, KubernetesCluster, PermissionProfile, PermissionSetReference, RemoteStackManagement,
+    ResourceLifecycle, Result, Worker, import::EmitContext,
 };
 use alien_error::Context;
 use alien_permissions::{
-    generators::{AwsIamStatement, AwsRuntimePermissionsGenerator},
     BindingTarget, PermissionContext,
+    generators::{AwsIamStatement, AwsRuntimePermissionsGenerator},
 };
 use hcl::expr::Expression;
 
@@ -167,6 +167,9 @@ impl TfEmitter for AwsRemoteStackManagementEmitter {
             ],
         ));
 
+        if alien_core::aws_worker_gateway::requires_cleanup_capability(ctx) {
+            super::gateway_cleanup::emit(ctx, label, &mut fragment);
+        }
         Ok(fragment)
     }
 
@@ -199,6 +202,12 @@ impl TfEmitter for AwsRemoteStackManagementEmitter {
                     );
                     (scope, value)
                 })),
+            ));
+        }
+        if alien_core::aws_worker_gateway::requires_cleanup_capability(ctx) {
+            fields.push((
+                "workerGatewayCleanupFunctionArn",
+                super::gateway_cleanup::version_arn(label),
             ));
         }
         Ok(expr::object(fields))

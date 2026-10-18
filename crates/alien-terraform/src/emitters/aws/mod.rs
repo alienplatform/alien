@@ -7,6 +7,7 @@
 pub mod ai;
 pub mod artifact_registry;
 pub mod build;
+mod gateway_cleanup;
 pub mod helpers;
 pub mod key;
 pub mod kv;
