@@ -1,4 +1,8 @@
 //! Gateway forwarding. DNS returns synthetic addresses so arbitrary TCP retains its original name.
+#![expect(
+    clippy::result_large_err,
+    reason = "Alien errors retain structured metadata and causal context"
+)]
 
 mod dns;
 mod redirect;
@@ -149,6 +153,19 @@ impl GatewayEgress {
     /// An immutable deny declaration needs no gateway bootstrap or token.
     pub fn requires_token(&self) -> bool {
         !self.declared_none
+    }
+
+    /// Recheck the actual network after restoring a snapshot. Build-time network readiness must
+    /// never authorize the restored sandbox, and a failed build-time check must be recoverable.
+    pub async fn activate_declared_none(&self) -> Result<()> {
+        if !self.declared_none {
+            return Err(invalid("gateway policy requires a token"));
+        }
+        self.ready.store(false, Ordering::Release);
+        self.listeners_live.store(false, Ordering::Release);
+        self.self_check().await?;
+        self.listeners_live.store(true, Ordering::Release);
+        Ok(())
     }
 
     /// Gate session routes until the network path has been verified.

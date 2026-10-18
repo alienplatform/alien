@@ -48,11 +48,10 @@ flush table ip alien_gateway
 add chain ip alien_gateway guest_tcp {{ type nat hook output priority -100; policy accept; }}
 add rule ip alien_gateway guest_tcp meta mark {MARK} return
 add rule ip alien_gateway guest_tcp ct direction reply tcp sport {{ {control_port},15001,15002,15053 }} return
-add rule ip alien_gateway guest_tcp ip daddr 127.0.0.1 tcp dport {{ {control_port},15001,15002,15053 }} return
-add rule ip alien_gateway guest_tcp ip daddr 127.0.0.1 udp dport 15053 return
 add rule ip alien_gateway guest_tcp ct direction reply udp sport 15053 return
 add rule ip alien_gateway guest_tcp udp dport 53 redirect to :15053
 add rule ip alien_gateway guest_tcp tcp dport 53 redirect to :15053
+add rule ip alien_gateway guest_tcp ip daddr 127.0.0.0/8 return
 add rule ip alien_gateway guest_tcp meta l4proto tcp redirect to :15001
 add chain ip alien_gateway filter {{ type filter hook output priority 0; policy drop; }}
 add rule ip alien_gateway filter meta mark {MARK} accept

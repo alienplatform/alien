@@ -788,14 +788,15 @@ async fn run_egress_hook(
     headers: HeaderMap,
     body: bytes::Bytes,
 ) -> std::result::Result<StatusCode, ApiError> {
-    if state
-        .gateway_egress
-        .as_ref()
-        .is_none_or(|egress| !egress.requires_token())
-    {
+    let Some(egress) = &state.gateway_egress else {
+        return Ok(StatusCode::OK);
+    };
+    authorize_control(&state, peer, &headers, SandboxOperationClass::Execute)?;
+    if !egress.requires_token() {
+        egress.activate_declared_none().await?;
+        egress.start_image_once(state.exec_identity)?;
         return Ok(StatusCode::OK);
     }
-    authorize_control(&state, peer, &headers, SandboxOperationClass::Execute)?;
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase", deny_unknown_fields)]
     struct RunHook {

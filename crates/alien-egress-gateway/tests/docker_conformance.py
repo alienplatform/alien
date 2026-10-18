@@ -65,7 +65,7 @@ def certificates(directory):
           .add_extension(x509.SubjectKeyIdentifier.from_public_key(ca_key.public_key()), False)
           .add_extension(x509.KeyUsage(True, False, False, False, False, True, True, False, False), True)
           .sign(ca_key, hashes.SHA256()))
-    names = ["allowed.test", "inject.test", "rebind.test", "private.test", "mixed.test", "denied.test"]
+    names = ["allowed.test", "inject.test", "rebind.test", "private.test", "mixed.test", "denied.test", "*.example.test"]
     for label in ["origin", "untrusted"]:
         key = ec.generate_private_key(ec.SECP256R1())
         issuer_key = ca_key if label == "origin" else key
@@ -182,6 +182,27 @@ class Suite:
         self.record("SNI mismatch", lambda: self.denied_tls(sni="denied.test"))
         self.record("TLS on explicit port", lambda: equal(self.tls(port=9443), (200, BODY)))
         self.record("SNI mismatch on explicit port", lambda: self.denied_tls(port=9443, sni="denied.test"))
+        def reject_hello(payload, delay=0):
+            with self.tunnel() as stream:
+                try:
+                    stream.sendall(payload)
+                    time.sleep(delay)
+                    assert stream.recv(1024) == b"", "gateway forwarded a denied ClientHello"
+                except ConnectionResetError:
+                    pass
+        # Generate only a ClientHello, with no server name. No TLS verification is skipped:
+        # any server response is a test failure and the TLS session must never be established.
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.check_hostname = False
+        incoming, outgoing = ssl.MemoryBIO(), ssl.MemoryBIO()
+        hello = context.wrap_bio(incoming, outgoing)
+        try:
+            hello.do_handshake()
+        except ssl.SSLWantReadError:
+            pass
+        self.record("missing SNI", lambda: reject_hello(outgoing.read()))
+        self.record("oversized TLS record", lambda: reject_hello(b"\x16\x03\x01\xff\xff" + b"x" * 70000))
+        self.record("slow ClientHello deadline", lambda: reject_hello(b"\x16", 5.2))
         self.record("explicit IP HTTP", lambda: equal(self.plain(target=ORIGIN, host=ORIGIN), (200, BODY)))
         self.record("forged HTTP Host", lambda: equal(self.plain(host="denied.test")[0], 403))
         self.record("CONNECT cannot bypass HTTP Host", lambda: equal(self.plain(host="denied.test", connect=True)[0], 403))
@@ -236,6 +257,11 @@ class Suite:
         self.record("current generation", lambda: equal(self.tls(token=self.token(gen=2)), (200, BODY)))
         self.record("second replica denies old generation", lambda: self.tunnel(proxy="93.184.216.4", expected=403))
         self.record("future generation denied", lambda: self.tunnel(token=self.token(gen=3), expected=403))
+        large = {"allow": [f"host{i}.example.test" for i in range(4096)]}
+        self.record("4096-target policy delivered over admin HTTP", lambda: equal(self.admin("/v1/generations", {"aud": AUD, "sub": "large", "gen": 0, "policy": large})[0], 204))
+        self.record("small token resolves 4096-target policy", lambda: equal(self.tls(host="host4095.example.test", token=self.token(sub="large", egress=large)), (200, BODY)))
+        status, error = self.admin("/v1/generations", {"aud": AUD, "sub": "too-large", "gen": 0, "policy": {"allow": large["allow"] + ["extra.example.test"]}})
+        self.record("4097 targets refused with typed error", lambda: equal((status, json.loads(error)["code"]), (400, "SANDBOX_EGRESS_POLICY_TOO_LARGE")))
         self.benchmark()
 
     def benchmark(self):
@@ -366,7 +392,7 @@ def main():
     (output / "vault/secrets.json").write_text(json.dumps({"test": "fake-test-secret"}))
     suite = Suite(output)
     public = base64.b64encode(suite.key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)).decode()
-    allowed = ["allowed.test", "allowed.test:80", "allowed.test:9443", f"{ORIGIN}:80", "inject.test", "inject.test:8443", "rebind.test", "private.test", "mixed.test", "metadata.test"]
+    allowed = ["allowed.test", "allowed.test:80", "allowed.test:9443", f"{ORIGIN}:80", "inject.test", "inject.test:8443", "rebind.test", "private.test", "mixed.test", "metadata.test", "*.example.test"]
     suite.policy = {"allow": allowed}
     rules = [dict(aud=AUD, host="inject.test", port=port, method="GET", path="/v1/", header="X-Test-Credential", vaultBinding="test-vault", secret="test") for port in [443, 8443]]
     config = dict(listen="0.0.0.0:3128", bounds={AUD: {"allow": allowed}}, keys=[dict(kid="test", publicKey=public)], deniedRanges=[], credentials=rules, upstreamCaCertificates=[ca])
