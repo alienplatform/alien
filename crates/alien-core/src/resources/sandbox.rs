@@ -270,8 +270,9 @@ impl SandboxCapabilities {
                 // resolves names through its resolver, which no security group filters.
                 egress_deny: true,
                 enforced_limits: true,
-                // Nothing in the API bounds process count.
-                process_limit: false,
+                // The root agent sets inherited hard RLIMIT_NPROC; all command uid threads
+                // and detached descendants count, while the supervisor stays exempt.
+                process_limit: true,
                 // `maximumDurationInSeconds` on `RunMicrovm`, which Lambda enforces by
                 // terminating the MicroVM. Capped at 8 hours by the service.
                 sandbox_lifetime: true,
@@ -609,6 +610,9 @@ impl Sandbox {
                 "ALIEN_SANDBOX_EGRESS".to_string(),
                 serde_json::to_string(&self.egress).expect("egress serializes"),
             );
+        }
+        if let Some(limit) = self.resolved_limits().max_processes {
+            env.insert("ALIEN_SANDBOX_MAX_PROCESSES".to_string(), limit.to_string());
         }
         env
     }
@@ -2042,9 +2046,8 @@ mod tests {
         assert!(error.to_string().contains("maxProcesses"));
     }
 
-    /// A process ceiling needs a container runtime. Kubernetes sets one per node rather than per
-    /// pod, and neither MicroVMs nor Azure sandboxes expose one, so accepting the declaration
-    /// anywhere else would mean carrying a bound nothing applies.
+    /// Docker caps the container; the AWS agent caps the command uid with an inherited hard
+    /// rlimit. Kubernetes exposes only a node setting, and Azure has no process ceiling.
     #[test]
     fn a_process_ceiling_is_accepted_only_where_a_runtime_can_apply_it() {
         let mut sandbox = sandbox_with(SandboxEgress::Deny, vec![]);
@@ -2058,7 +2061,8 @@ mod tests {
             .validate_for_platform(Platform::Local)
             .expect("Docker takes a pids limit");
 
-        for platform in [Platform::Aws, Platform::Azure, Platform::Kubernetes] {
+        sandbox.validate_for_platform(Platform::Aws).expect("the agent applies the hard uid limit");
+        for platform in [Platform::Azure, Platform::Kubernetes] {
             let error = sandbox
                 .validate_for_platform(platform)
                 .expect_err("a process ceiling nothing applies must be refused");
