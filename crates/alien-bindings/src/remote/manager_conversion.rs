@@ -469,6 +469,7 @@ impl ResolvedRemoteBinding {
                 }
                 Self::SandboxAzure {
                     binding: Box::new(alien_core::AzureSandboxBinding {
+                        max_lifetime_seconds: None,
                         default_policy: None,
                         sandbox_group: alien_core::BindingValue::Value(binding.sandbox_group),
                         data_plane_endpoint: alien_core::BindingValue::Value(

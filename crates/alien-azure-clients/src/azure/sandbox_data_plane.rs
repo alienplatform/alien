@@ -227,6 +227,9 @@ fn create_body(request: &CreateSandbox) -> serde_json::Value {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Sandbox {
+    /// Provider metadata used to recover the gateway identity on reconnect.
+    #[serde(default)]
+    pub labels: BTreeMap<String, String>,
     /// Sandbox id within its group
     pub id: String,
     /// VNet connection Azure actually attached, absent for the provider-managed network.

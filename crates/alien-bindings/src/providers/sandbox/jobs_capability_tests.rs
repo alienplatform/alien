@@ -193,7 +193,8 @@ async fn azure_declares_jobs_and_reaches_the_backend() {
     let mut client = alien_azure_clients::azure::sandbox_data_plane::MockSandboxDataPlaneApi::new();
     client.expect_get_sandbox().times(1).returning(|_, id| {
         Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
-                vnet_connection_name: Some("default".into()),
+            labels: Default::default(),
+            vnet_connection_name: Some("default".into()),
             id: id.to_string(),
             state: Some("Running".to_string()),
             egress_policy: None,

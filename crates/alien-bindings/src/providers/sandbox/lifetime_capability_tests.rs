@@ -257,6 +257,7 @@ async fn azure_declares_lifetime_and_sends_deadline_metadata() {
         })
         .returning(|_, _| {
             Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
+                labels: Default::default(),
                 vnet_connection_name: Some("default".into()),
                 id: "s1".to_string(),
                 state: Some("Running".to_string()),
@@ -265,7 +266,8 @@ async fn azure_declares_lifetime_and_sends_deadline_metadata() {
         });
     client.expect_get_sandbox().returning(|_, id| {
         Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
-                vnet_connection_name: Some("default".into()),
+            labels: Default::default(),
+            vnet_connection_name: Some("default".into()),
             id: id.to_string(),
             state: Some("Running".to_string()),
             egress_policy: None,

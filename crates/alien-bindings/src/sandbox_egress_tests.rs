@@ -85,6 +85,9 @@ impl Drop for Harness {
     }
 }
 impl Harness {
+    pub(crate) fn refuse_writes(&self, refuse: bool) {
+        self.state.refuse.store(refuse, Ordering::SeqCst);
+    }
     pub(crate) fn policy(&self, id: &str) -> Option<EgressPolicy> {
         self.state.policies.lock().unwrap().get(id).cloned()
     }

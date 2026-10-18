@@ -53,7 +53,7 @@ impl CompileTimeCheck for SandboxPlatformSupportCheck {
                 }
                 if gateway_present {
                     errors.push(format!(
-                        "Sandbox '{}': Azure gateway transport and create-time identity are not \
+                        "Sandbox '{}': Azure gateway network setup and internal load balancing are not \
                          available; gateway-backed egress cannot be deployed",
                         sandbox.id()
                     ));
@@ -247,7 +247,7 @@ mod tests {
         assert!(result
             .errors
             .iter()
-            .any(|error| error.contains("gateway transport and create-time identity")));
+            .any(|error| error.contains("gateway network setup and internal load balancing")));
         assert!(result.warnings.is_empty());
     }
 

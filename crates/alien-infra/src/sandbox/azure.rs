@@ -101,6 +101,8 @@ pub struct AzureSandboxController {
     /// Idle seconds after which a sandbox pauses, if the declaration asked for one.
     #[serde(default)]
     pub(crate) idle_pause_seconds: Option<u32>,
+    #[serde(default)]
+    pub(crate) max_lifetime_seconds: Option<u32>,
     /// Ceilings every sandbox is created with, from the declaration.
     #[serde(default)]
     pub(crate) limits: Option<SandboxLimits>,
@@ -377,6 +379,7 @@ impl AzureSandboxController {
         // All three or none, as the declaration has them: the data plane reads a missing ceiling
         // as its own default, so filling one in alone would assert a size nobody declared.
         azure.default_policy = egress.default_policy().cloned();
+        azure.max_lifetime_seconds = self.max_lifetime_seconds;
         if let Some(limits) = self.limits.as_ref() {
             azure.cpu = Some(BindingValue::value(limits.cpu.clone()));
             azure.memory = Some(BindingValue::value(limits.memory.clone()));
@@ -462,6 +465,7 @@ impl AzureSandboxController {
         }
         self.egress = Some(config.into());
         self.idle_pause_seconds = config.lifecycle.idle_pause_seconds;
+        self.max_lifetime_seconds = config.lifecycle.max_lifetime_seconds;
         self.limits = config.limits.clone();
         Ok(())
     }
@@ -935,6 +939,7 @@ mod tests {
     #[test]
     fn the_binding_carries_the_regional_data_plane_endpoint() {
         let controller = AzureSandboxController {
+            max_lifetime_seconds: None,
             state: AzureSandboxState::Ready,
             sandbox_group: Some("sbg".to_string()),
             region: Some("swedencentral".to_string()),
@@ -983,6 +988,7 @@ mod tests {
             })
             .build();
         let controller = AzureSandboxController {
+            max_lifetime_seconds: None,
             state: AzureSandboxState::Ready,
             sandbox_group: Some("sbg".to_string()),
             region: Some("swedencentral".to_string()),
@@ -1017,6 +1023,7 @@ mod tests {
     #[test]
     fn controller_round_trips_by_tag() {
         let controller = AzureSandboxController {
+            max_lifetime_seconds: None,
             sandbox_group: Some("sbg1".to_string()),
             region: Some("swedencentral".to_string()),
             resource_group: Some("rg".to_string()),
@@ -1121,6 +1128,7 @@ mod tests {
     #[test]
     fn an_incomplete_import_is_refused_with_a_message_naming_what_is_missing() {
         let controller = AzureSandboxController {
+            max_lifetime_seconds: None,
             sandbox_group: Some("sbg1".to_string()),
             region: None,
             resource_group: Some("rg".to_string()),
@@ -1146,6 +1154,7 @@ mod tests {
     #[test]
     fn a_failed_capture_leaves_the_declaration_whole() {
         let mut controller = AzureSandboxController {
+            max_lifetime_seconds: None,
             state: AzureSandboxState::Ready,
             sandbox_group: Some("sbg".to_string()),
             region: Some("swedencentral".to_string()),
@@ -1191,6 +1200,7 @@ mod tests {
     #[test]
     fn a_failed_capture_does_not_apply_a_tightened_egress_either() {
         let mut controller = AzureSandboxController {
+            max_lifetime_seconds: None,
             state: AzureSandboxState::Ready,
             sandbox_group: Some("sbg".to_string()),
             region: Some("swedencentral".to_string()),
@@ -1239,6 +1249,7 @@ mod tests {
     #[test]
     fn the_binding_carries_the_declared_ceilings() {
         let controller = AzureSandboxController {
+            max_lifetime_seconds: None,
             state: AzureSandboxState::Ready,
             sandbox_group: Some("sbg".to_string()),
             region: Some("swedencentral".to_string()),
@@ -1274,6 +1285,7 @@ mod tests {
     #[test]
     fn a_sandbox_without_declared_ceilings_publishes_none() {
         let controller = AzureSandboxController {
+            max_lifetime_seconds: None,
             state: AzureSandboxState::Ready,
             sandbox_group: Some("sbg".to_string()),
             region: Some("swedencentral".to_string()),
@@ -1303,6 +1315,7 @@ mod tests {
     #[test]
     fn the_binding_carries_the_allowlist() {
         let controller = AzureSandboxController {
+            max_lifetime_seconds: None,
             state: AzureSandboxState::Ready,
             sandbox_group: Some("sbg".to_string()),
             region: Some("swedencentral".to_string()),
@@ -1402,6 +1415,7 @@ mod tests {
             disk_image_id: Option<&str>,
         ) -> AzureSandboxController {
             AzureSandboxController {
+                max_lifetime_seconds: None,
                 state: AzureSandboxState::Ready,
                 sandbox_group: Some("sbg".to_string()),
                 region: Some("westus2".to_string()),

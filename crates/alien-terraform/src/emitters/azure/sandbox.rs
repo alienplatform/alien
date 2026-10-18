@@ -200,6 +200,13 @@ impl TfEmitter for AzureSandboxEmitter {
             ),
         ];
 
+        if let Some(seconds) = sandbox.lifecycle.max_lifetime_seconds {
+            fields.push((
+                "maxLifetimeSeconds",
+                Expression::Number(i64::from(seconds).into()),
+            ));
+        }
+
         if let Some(seconds) = sandbox.lifecycle.idle_pause_seconds {
             fields.push((
                 "idlePauseSeconds",
@@ -820,6 +827,7 @@ mod tests {
         let rendered = binding_with(SandboxEgress::Internet, Some(900));
 
         let binding = AzureSandboxBinding {
+            max_lifetime_seconds: None,
             default_policy: None,
             sandbox_group: BindingValue::Value("sbg".to_string()),
             data_plane_endpoint: BindingValue::Value("https://example.invalid".to_string()),

@@ -95,6 +95,10 @@ impl SandboxEgressManager {
             writes: Mutex::new(HashMap::new()),
         })
     }
+    /// Proxy authority, without credentials, for native proxy environments and network rules.
+    pub(crate) fn gateway_authority(&self) -> &str {
+        &self.gateway
+    }
     /// Nonsecret launch metadata. AWS injects its own sandbox id alongside this payload.
     pub fn bootstrap_payload(&self) -> String {
         serde_json::json!({"gateway":self.gateway,"audience":self.config.audience}).to_string()

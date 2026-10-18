@@ -4,6 +4,9 @@
 //! files and lifecycle natively, so this provider is a translation layer rather than a transport
 //! for a protocol. Verified against a stock `ubuntu` catalog disk containing no Alien code.
 
+#[path = "azure_egress.rs"]
+mod gateway;
+
 use std::collections::BTreeMap;
 
 use async_trait::async_trait;
@@ -39,6 +42,9 @@ pub struct AzureSandbox {
     disk_image_id: std::sync::Mutex<Option<String>>,
     /// Outbound policy every sandbox is created with, from the declaration.
     egress: SandboxEgress,
+    egress_manager: Option<std::sync::Arc<crate::sandbox_egress::SandboxEgressManager>>,
+    default_policy: Option<alien_core::EgressPolicy>,
+    max_lifetime_seconds: Option<u32>,
     /// Idle seconds after which a sandbox suspends itself, if the declaration asked for one.
     idle_pause_seconds: Option<u32>,
     /// Sandbox ceilings, in the data plane's own units. Disk is optional because the data plane
@@ -66,6 +72,9 @@ impl AzureSandbox {
             disk_image,
             disk_image_id: std::sync::Mutex::new(None),
             egress,
+            egress_manager: None,
+            default_policy: None,
+            max_lifetime_seconds: None,
             idle_pause_seconds,
             cpu,
             memory,
@@ -304,19 +313,18 @@ impl Sandbox for AzureSandbox {
         SandboxCapabilities::azure()
     }
 
-    async fn create(&self, request: CreateSandboxRequest) -> Result<SandboxInstance> {
-        super::egress::require_default(request.egress.as_ref(), self.egress_declaration())?;
+    async fn create(&self, mut request: CreateSandboxRequest) -> Result<SandboxInstance> {
+        let policy = self.requested_policy(request.egress.as_ref())?;
         checked_sandbox_env(CREATE, &request.env)?;
         refuse_unsupported_create_fields(&request, CREATE)?;
 
         let mut labels = BTreeMap::new();
-        if let Some(timeout_ms) = request.timeout_ms {
-            let seconds = super::requested_lifetime_seconds(timeout_ms, None, CREATE)?;
-            let expires = chrono::Utc::now().timestamp_millis() + i64::from(seconds) * 1000;
+        if let Some(expires) = self.creation_deadline(request.timeout_ms)? {
             labels.insert(SANDBOX_EXPIRY_LABEL.to_string(), expires.to_string());
         }
-        let asked = egress_policy(&self.egress);
+        let asked = self.native_policy();
         let disk_image_id = self.disk_image_id().await?;
+        let identity = self.prepare_identity(&mut request.env, &mut labels).await?;
         let sandbox = self
             .create_from_image(CreateSandbox {
                 disk_image: self.disk_image.clone(),
@@ -371,9 +379,21 @@ impl Sandbox for AzureSandbox {
 
         // Everything past this point owns a sandbox the caller has no id for, so every failure
         // deletes it. Azure allocates the id, so the one in this response was minted by this call.
-        match self.settle(&sandbox).await {
+        let ready = async {
+            let instance = self.settle(&sandbox, identity.as_deref()).await?;
+            if let (Some(manager), Some(identity), Some(policy)) =
+                (&self.egress_manager, &identity, &policy)
+            {
+                manager.update(identity, policy).await?;
+            }
+            Ok(instance)
+        }
+        .await;
+        match ready {
             Ok(sandbox) => Ok(sandbox),
-            Err(error) => Err(self.discard(&sandbox.id, error).await),
+            Err(error) => Err(self
+                .discard_with_policy(&sandbox.id, identity.as_deref(), error)
+                .await),
         }
     }
 
@@ -401,7 +421,7 @@ impl Sandbox for AzureSandbox {
     }
 
     async fn get_or_create(&self, request: CreateSandboxRequest) -> Result<ResolvedSandbox> {
-        super::egress::require_default(request.egress.as_ref(), self.egress_declaration())?;
+        let policy = self.requested_policy(request.egress.as_ref())?;
         if let Some(timeout_ms) = request.timeout_ms {
             super::requested_lifetime_seconds(timeout_ms, None, "sandbox.getOrCreate")?;
         }
@@ -410,7 +430,12 @@ impl Sandbox for AzureSandbox {
             // started has to mean the same thing — so the same gate every other verb uses: bring
             // it up, judge it there, and refuse it if it does not match.
             match self.reconnect(id).await {
-                Ok(sandbox) => return Ok(ResolvedSandbox::found(sandbox)),
+                Ok(sandbox) => {
+                    if let Some(policy) = policy {
+                        self.update_egress(id, policy).await?;
+                    }
+                    return Ok(ResolvedSandbox::found(sandbox));
+                }
                 // The two ways an id can fail to serve — gone, or running a policy the
                 // declaration no longer matches — mean the same thing to a caller asking for a
                 // sandbox, and are answered the same way: a fresh one. A sandbox refused for its
@@ -692,8 +717,34 @@ impl Sandbox for AzureSandbox {
         self.cancel_native_job(sandbox_id, job_id).await
     }
 
+    async fn update_egress(
+        &self,
+        sandbox_id: &str,
+        policy: alien_core::EgressPolicy,
+    ) -> Result<()> {
+        super::egress::validate(&policy, self.egress_declaration())?;
+        Self::checked_sandbox_id("sandbox.updateEgress", sandbox_id)?;
+        let manager = self
+            .egress_manager
+            .as_ref()
+            .ok_or_else(|| super::egress::unsupported("update_egress"))?;
+        let sandbox = self
+            .read_sandbox("sandbox.updateEgress", sandbox_id)
+            .await?
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::SandboxCommandFailed {
+                    failure: "sandboxGone".into(),
+                    reason: "sandbox no longer exists".into(),
+                })
+            })?;
+        self.policy_must_hold(&sandbox)?;
+        manager.update(gateway::identity(&sandbox)?, &policy).await
+    }
+
     async fn terminate(&self, sandbox_id: &str) -> Result<()> {
         Self::checked_sandbox_id("sandbox.terminate", sandbox_id)?;
+        // Still terminate if revocation fails; report the failure after proving deletion.
+        let revocation = self.revoke_identity(sandbox_id).await;
         self.accept_delete(sandbox_id).await?;
 
         // The delete is accepted, not completed: the client's own contract is "returns before it
@@ -713,7 +764,7 @@ impl Sandbox for AzureSandbox {
                 .await
             {
                 if is_not_found(&error) {
-                    return Ok(());
+                    return revocation;
                 }
                 warn!(sandbox = %sandbox_id, %error, "could not confirm a sandbox is gone");
             }
@@ -871,6 +922,9 @@ impl AzureSandbox {
                 reason: "the sandbox is not attached to the setup-owned default VNet connection; rerun setup and create a new sandbox".to_string(),
             }));
         }
+        if self.egress_manager.is_some() {
+            return self.check_gateway_floor(sandbox);
+        }
         let Some(asked) = egress_policy(&self.egress) else {
             return Ok(());
         };
@@ -896,6 +950,7 @@ impl AzureSandbox {
     async fn settle(
         &self,
         sandbox: &alien_azure_clients::azure::sandbox_data_plane::Sandbox,
+        expected_identity: Option<&str>,
     ) -> Result<SandboxInstance> {
         // The running sandbox is what gets judged, not the accept: a create response sent while
         // the sandbox is still coming up need not carry the policy yet, and reading its absence
@@ -908,6 +963,14 @@ impl AzureSandbox {
         // A restriction that did not take effect is worse than one that was never asked for: the
         // caller believes the sandbox is contained.
         self.policy_must_hold(&running)?;
+        if let Some(expected) = expected_identity {
+            if gateway::identity(&running)? != expected {
+                return Err(gateway::not_as_declared(
+                    &running.id,
+                    "identity label was not preserved",
+                ));
+            }
+        }
 
         Ok(SandboxInstance {
             sandbox_id: running.id,
@@ -1603,6 +1666,7 @@ mod tests {
             .times(1)
             .returning(|_, _| {
                 Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
+                    labels: Default::default(),
                     vnet_connection_name: Some("default".to_string()),
                     id: "s1".to_string(),
                     egress_policy: None,
@@ -1680,6 +1744,7 @@ mod tests {
             .times(2)
             .returning(|_, _| {
                 Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
+                    labels: Default::default(),
                     vnet_connection_name: Some("default".to_string()),
                     id: "s1".to_string(),
                     egress_policy: None,
@@ -1733,6 +1798,7 @@ mod tests {
             .times(1)
             .returning(|_, _| {
                 Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
+                    labels: Default::default(),
                     vnet_connection_name: Some("default".to_string()),
                     id: "s1".to_string(),
                     egress_policy: None,
@@ -1902,6 +1968,7 @@ mod tests {
             .times(1)
             .returning(|_, _| {
                 Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
+                    labels: Default::default(),
                     vnet_connection_name: Some("default".to_string()),
                     id: "s1".to_string(),
                     egress_policy: None,
@@ -1933,6 +2000,7 @@ mod tests {
         client.expect_delete_sandbox().returning(|_, _| Ok(()));
         client.expect_get_sandbox().returning(|_, id| {
             Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
+                labels: Default::default(),
                 vnet_connection_name: Some("default".to_string()),
                 id: id.to_string(),
                 egress_policy: None,
@@ -2109,6 +2177,7 @@ mod tests {
                 return Err(http_error(404, "SandboxNotFound"));
             }
             Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
+                labels: Default::default(),
                 vnet_connection_name: Some("default".to_string()),
                 id: sandbox_id.to_string(),
                 egress_policy: None,
@@ -2824,6 +2893,7 @@ mod tests {
             let state = reported.to_string();
             client.expect_get_sandbox().times(1).returning(move |_, _| {
                 Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
+                    labels: Default::default(),
                     vnet_connection_name: Some("default".to_string()),
                     id: "s1".to_string(),
                     egress_policy: None,
@@ -2850,6 +2920,7 @@ mod tests {
             let state = reported.map(str::to_string);
             client.expect_get_sandbox().times(1).returning(move |_, _| {
                 Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
+                    labels: Default::default(),
                     vnet_connection_name: Some("default".to_string()),
                     id: "s1".to_string(),
                     egress_policy: None,
@@ -2877,6 +2948,7 @@ mod tests {
             .times(1)
             .returning(|_, _| {
                 Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
+                    labels: Default::default(),
                     vnet_connection_name: Some("default".to_string()),
                     id: "s1".to_string(),
                     egress_policy: None,
@@ -2910,6 +2982,7 @@ mod tests {
         egress: Option<EgressPolicy>,
     ) -> alien_azure_clients::azure::sandbox_data_plane::Sandbox {
         alien_azure_clients::azure::sandbox_data_plane::Sandbox {
+            labels: Default::default(),
             vnet_connection_name: Some("default".to_string()),
             id: id.to_string(),
             egress_policy: egress,
@@ -3229,6 +3302,7 @@ mod tests {
         let mut client = MockSandboxDataPlaneApi::new();
         let unreadable = || {
             Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
+                labels: Default::default(),
                 vnet_connection_name: Some("default".to_string()),
                 id: "orphan".to_string(),
                 egress_policy: None,
@@ -4506,6 +4580,7 @@ mod tests {
         let mut client = MockSandboxDataPlaneApi::new();
         client.expect_get_sandbox().times(1).returning(|_, _| {
             Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
+                labels: Default::default(),
                 vnet_connection_name: Some("default".to_string()),
                 id: "s1".to_string(),
                 egress_policy: None,

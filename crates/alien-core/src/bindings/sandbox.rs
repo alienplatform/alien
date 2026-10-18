@@ -204,6 +204,9 @@ pub struct AwsSandboxBinding {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AzureSandboxBinding {
+    /// Wall-clock ceiling shared with the external lifetime reconciler.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_lifetime_seconds: Option<u32>,
     /// Default runtime policy when create omits one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_policy: Option<EgressPolicy>,
@@ -376,6 +379,7 @@ impl SandboxBinding {
         idle_pause_seconds: Option<u32>,
     ) -> Self {
         Self::Azure(AzureSandboxBinding {
+            max_lifetime_seconds: None,
             default_policy: None,
             sandbox_group: sandbox_group.into(),
             data_plane_endpoint: data_plane_endpoint.into(),
