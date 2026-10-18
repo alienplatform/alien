@@ -20,7 +20,9 @@ use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 
 use crate::error::{ErrorData, Result};
+use crate::sandbox_jobs::SandboxJobs;
 use crate::sandbox_manager::{LocalSandboxManager, SandboxOutput, SandboxSessionConfig};
+use alien_bindings::traits::{JobPoll, JobStart, RunCommandRequest};
 use alien_error::{AlienError, IntoAlienError};
 
 /// Bearer token file for one sandbox, inside the deployment state directory.
@@ -126,6 +128,7 @@ pub struct ReadFileResponse {
 #[derive(Clone)]
 struct RouteState {
     manager: Arc<LocalSandboxManager>,
+    jobs: Arc<SandboxJobs>,
     sandbox: String,
     token: String,
     /// Replaced in place on update. Held behind a lock rather than moved into the router so an
@@ -268,6 +271,7 @@ impl SandboxRoute {
         let template = Arc::new(Mutex::new(template));
         let state = RouteState {
             manager,
+            jobs: Arc::new(SandboxJobs::default()),
             sandbox: sandbox.to_string(),
             token,
             template: Arc::clone(&template),
@@ -280,6 +284,11 @@ impl SandboxRoute {
                 axum::routing::delete(terminate),
             )
             .route("/v1/sessions/{session_id}/exec", post(exec))
+            .route("/v1/sessions/{session_id}/jobs", post(start_job))
+            .route(
+                "/v1/sessions/{session_id}/jobs/{job_id}",
+                get(poll_job).delete(cancel_job),
+            )
             .route(
                 "/v1/sessions/{session_id}/files",
                 get(read_file).put(write_file),
@@ -562,11 +571,23 @@ async fn terminate(
 ) -> std::result::Result<StatusCode, (StatusCode, String)> {
     authorize(&state, &headers).map_err(|code| (code, "unauthorized".to_string()))?;
 
+    let container = state
+        .manager
+        .list_sessions(&state.sandbox)
+        .await
+        .map_err(failed)?
+        .into_iter()
+        .find(|session| session.session_id == session_id)
+        .map(|session| session.container_id);
     state
         .manager
         .terminate(&state.sandbox, &session_id)
         .await
         .map_err(failed)?;
+
+    if let Some(container) = container {
+        state.jobs.forget(&container);
+    }
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -628,4 +649,51 @@ mod tests {
             "a guessable token is not a token"
         );
     }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JobQuery {
+    since_seq: Option<u64>,
+}
+
+async fn start_job(
+    State(state): State<RouteState>,
+    Path(session): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<RunCommandRequest>,
+) -> std::result::Result<Json<JobStart>, (StatusCode, String)> {
+    authorize(&state, &headers).map_err(|code| (code, "unauthorized".to_string()))?;
+    let container = container_for(&state, &session).await?;
+    let job_id = state
+        .jobs
+        .start(state.manager.docker.clone(), container, request)
+        .map_err(failed)?;
+    Ok(Json(JobStart { job_id }))
+}
+
+async fn poll_job(
+    State(state): State<RouteState>,
+    Path((session, job)): Path<(String, String)>,
+    Query(query): Query<JobQuery>,
+    headers: HeaderMap,
+) -> std::result::Result<Json<JobPoll>, (StatusCode, String)> {
+    authorize(&state, &headers).map_err(|code| (code, "unauthorized".to_string()))?;
+    let container = container_for(&state, &session).await?;
+    state
+        .jobs
+        .poll(&container, &job, query.since_seq)
+        .map(Json)
+        .map_err(failed)
+}
+
+async fn cancel_job(
+    State(state): State<RouteState>,
+    Path((session, job)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> std::result::Result<StatusCode, (StatusCode, String)> {
+    authorize(&state, &headers).map_err(|code| (code, "unauthorized".to_string()))?;
+    let container = container_for(&state, &session).await?;
+    state.jobs.cancel(&container, &job).map_err(failed)?;
+    Ok(StatusCode::NO_CONTENT)
 }

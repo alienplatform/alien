@@ -517,21 +517,48 @@ impl Sandbox for LocalSandbox {
         Err(self.unsupported("snapshot"))
     }
 
-    async fn start_job(&self, _sandbox_id: &str, _request: RunCommandRequest) -> Result<JobStart> {
-        Err(self.unsupported("jobs"))
+    async fn start_job(&self, sandbox_id: &str, request: RunCommandRequest) -> Result<JobStart> {
+        self.send(
+            self.client
+                .post(self.url(&format!("/v1/sessions/{sandbox_id}/jobs")))
+                .json(&request),
+            "sandbox.jobStart",
+        )
+        .await
+        .context(ErrorData::SandboxOutcomeUnknown {
+            operation: "sandbox.jobStart".to_string(),
+            reason: "the local job start was not acknowledged".to_string(),
+        })
     }
 
     async fn poll_job(
         &self,
-        _sandbox_id: &str,
-        _job_id: &str,
-        _since_seq: Option<u64>,
+        sandbox_id: &str,
+        job_id: &str,
+        since_seq: Option<u64>,
     ) -> Result<JobPoll> {
-        Err(self.unsupported("jobs"))
+        self.send(
+            self.client
+                .get(self.url(&format!("/v1/sessions/{sandbox_id}/jobs/{job_id}")))
+                .query(
+                    &since_seq
+                        .map(|seq| ("sinceSeq", seq))
+                        .into_iter()
+                        .collect::<Vec<_>>(),
+                ),
+            "sandbox.jobPoll",
+        )
+        .await
     }
 
-    async fn cancel_job(&self, _sandbox_id: &str, _job_id: &str) -> Result<()> {
-        Err(self.unsupported("jobs"))
+    async fn cancel_job(&self, sandbox_id: &str, job_id: &str) -> Result<()> {
+        self.request(
+            self.client
+                .delete(self.url(&format!("/v1/sessions/{sandbox_id}/jobs/{job_id}"))),
+            "sandbox.jobCancel",
+        )
+        .await?;
+        Ok(())
     }
 
     async fn terminate(&self, sandbox_id: &str) -> Result<()> {

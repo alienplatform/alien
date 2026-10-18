@@ -62,6 +62,7 @@ mod kv_manager;
 mod local_bindings_provider;
 mod postgres_manager;
 mod queue_manager;
+mod sandbox_jobs;
 mod sandbox_manager;
 mod sandbox_route;
 mod storage_manager;

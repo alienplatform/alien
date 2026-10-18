@@ -101,7 +101,7 @@ pub struct SandboxExecResult {
 /// Creates and destroys hardened Docker sessions for one deployment.
 #[derive(Debug)]
 pub struct LocalSandboxManager {
-    docker: Docker,
+    pub(crate) docker: Docker,
     state_dir: PathBuf,
 }
 
@@ -218,6 +218,8 @@ impl LocalSandboxManager {
             )])),
             cap_drop: Some(vec!["ALL".to_string()]),
             security_opt: Some(vec!["no-new-privileges:true".to_string()]),
+            // Reap orphaned job descendants after cancellation.
+            init: Some(true),
             pids_limit: config.pids_limit,
             memory: Some(config.memory_bytes),
             nano_cpus: Some((config.cpu_cores * 1_000_000_000.0) as i64),
