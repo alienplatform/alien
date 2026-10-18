@@ -1,9 +1,9 @@
 //! Exact vault-entry access for the gateway and sandbox-management workloads.
 
 use alien_core::{
-    Build, Container, Daemon, ResourceRef, SECRETS_VAULT_ID, Stack, Vault, Worker,
     permissions::{PermissionProfile, PermissionSet, PermissionSetReference},
     sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID,
+    Build, Container, Daemon, ResourceRef, Stack, Vault, Worker, SECRETS_VAULT_ID,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 
@@ -110,7 +110,10 @@ pub(crate) fn configure_aws_gateway_permissions(stack: &mut Stack) -> Result<()>
         })
         .collect();
     for profile in stack.permissions.profiles.values_mut() {
-        if profile.0.iter().any(|(target, sets)| (target == "*" || sandboxes.contains(target)) && sets.iter().any(|set| matches!(set, PermissionSetReference::Name(name) if name == "sandbox/management"))) {
+        if profile.0.iter().any(|(target, sets)| {
+            (target == "*" || sandboxes.contains(target))
+                && sets.iter().any(|set| set.id() == "sandbox/management")
+        }) {
             let grants = profile.0.entry(SECRETS_VAULT_ID.into()).or_default();
             let set = exact_read("sandbox-egress-signing-key")?;
             if !grants.iter().any(|existing| existing.id() == set.id) {

@@ -13,7 +13,11 @@ use alien_core::{
 };
 use std::sync::Arc;
 
-async fn executor(directory: &std::path::Path, wrong_source: bool) -> SingleControllerExecutor {
+async fn executor(
+    directory: &std::path::Path,
+    wrong_source: bool,
+    earlier_live: bool,
+) -> SingleControllerExecutor {
     let (network, vnet, nsg, nat, public) = fixture();
     let subnet = vnet["properties"]["subnets"][0].clone();
     let mut network_client = client(vnet, nsg, nat, public);
@@ -62,7 +66,7 @@ async fn executor(directory: &std::path::Path, wrong_source: bool) -> SingleCont
         egress: Some(config.egress.clone().into()),
         ..Default::default()
     };
-    SingleControllerExecutor::builder()
+    let mut builder = SingleControllerExecutor::builder()
         .resource(config)
         .controller(controller)
         .platform(Platform::Azure)
@@ -100,17 +104,30 @@ async fn executor(directory: &std::path::Path, wrong_source: bool) -> SingleCont
                 })
                 .build(),
             ResourceLifecycle::Live,
-        )
-        .build()
-        .await
-        .unwrap()
+        );
+    if earlier_live {
+        builder = builder.with_stack_resource(
+            Sandbox::new("aaa-live".into())
+                .code(SandboxCode::Image {
+                    image: "ubuntu".into(),
+                })
+                .egress(SandboxEgress::Internet)
+                .lifecycle(alien_core::SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build(),
+            ResourceLifecycle::Live,
+        );
+    }
+    builder.build().await.unwrap()
 }
 
 #[tokio::test]
 async fn actual_controller_initializes_shared_key_and_publishes_only_after_network_checks() {
     let dir = tempfile::tempdir().unwrap();
     let vault = LocalVault::new("secrets".into(), dir.path().into());
-    let mut run = executor(dir.path(), false).await;
+    let mut run = executor(dir.path(), false, false).await;
     run.step().await.unwrap();
     let controller = run.internal_state::<AzureSandboxController>().unwrap();
     assert_eq!(controller.state, AzureSandboxState::PublishingEgressConfig);
@@ -172,7 +189,7 @@ async fn actual_controller_initializes_shared_key_and_publishes_only_after_netwo
 async fn actual_connection_mismatch_prevents_config_and_binding_publication() {
     let dir = tempfile::tempdir().unwrap();
     let vault = LocalVault::new("secrets".into(), dir.path().into());
-    let mut run = executor(dir.path(), true).await;
+    let mut run = executor(dir.path(), true, false).await;
     run.step().await.unwrap();
     let error = run
         .step()
@@ -190,5 +207,26 @@ async fn actual_connection_mismatch_prevents_config_and_binding_publication() {
             .get_secret(crate::sandbox::egress::GATEWAY_CONFIG)
             .await
             .is_err()
+    );
+}
+
+#[tokio::test]
+async fn frozen_controller_initializes_key_before_earlier_live_sandbox() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = LocalVault::new("secrets".into(), dir.path().into());
+    let mut run = executor(dir.path(), false, true).await;
+    run.step().await.unwrap();
+    assert_eq!(
+        run.internal_state::<AzureSandboxController>()
+            .unwrap()
+            .state,
+        AzureSandboxState::PublishingEgressConfig
+    );
+    assert!(
+        !vault
+            .get_secret(crate::sandbox::egress::SIGNING_KEY)
+            .await
+            .unwrap()
+            .is_empty()
     );
 }

@@ -37,7 +37,7 @@ fn invalid_key() -> ErrorData {
     }
 }
 
-/// Called only by the first internet Sandbox in resource-id order. Other Sandbox
+/// Called only by the setup-aware shared-key owner. Other Sandbox
 /// controllers depend on that owner, so initialization has exactly one writer.
 /// A retry reads the accepted write instead of rotating the deployment's key.
 pub(crate) async fn ensure_signing_key(vault: &dyn Vault) -> Result<GatewayPublicKey> {
@@ -309,7 +309,9 @@ pub(crate) async fn publish_config(
     vpc_cidrs: &[String],
 ) -> Result<()> {
     let ids = internet_sandbox_ids(ctx.desired_stack);
-    if ids.first().map(String::as_str) != Some(ctx.desired_config.id()) {
+    if alien_core::sandbox_egress::sandbox_egress_key_owner(ctx.desired_stack)
+        != Some(ctx.desired_config.id())
+    {
         return Ok(());
     }
     let mut denied: Vec<String> = [
@@ -349,7 +351,7 @@ pub(crate) async fn publish_config(
     publish_gateway_config(vault.as_ref(), value).await
 }
 
-/// Only the first internet Sandbox publishes this entry. The replica secret stays in the
+/// Only the shared-key owner publishes this entry. The replica secret stays in the
 /// vault and never enters controller state, bindings, logs or generated packages.
 #[cfg(any(feature = "aws", feature = "azure", test))]
 async fn publish_gateway_config(vault: &dyn Vault, mut value: serde_json::Value) -> Result<()> {

@@ -24,8 +24,9 @@ pub(super) async fn initialize_key(
         ));
     }
     let vault = egress::deployment_vault(ctx).await?;
-    let ids = egress::internet_sandbox_ids(ctx.desired_stack);
-    let key = if ids.first().map(String::as_str) == Some(config.id.as_str()) {
+    let key = if sandbox_egress::sandbox_egress_key_owner(ctx.desired_stack)
+        == Some(config.id.as_str())
+    {
         egress::ensure_signing_key(vault.as_ref()).await?
     } else {
         egress::read_signing_public_key(vault.as_ref()).await?
