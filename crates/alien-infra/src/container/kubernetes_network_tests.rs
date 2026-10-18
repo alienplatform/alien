@@ -1,7 +1,8 @@
 use super::*;
 use crate::core::kubernetes_manifest_test_support::KubernetesManifestTestHarness;
 use alien_core::{
-    ContainerCode, Resource, ResourceLifecycle, ResourceRef, ResourceSpec, Worker, WorkerCode,
+    ComputeCluster, ContainerCode, Resource, ResourceLifecycle, ResourceRef, ResourceSpec, Worker,
+    WorkerCode,
 };
 
 fn container(id: &str, cluster: &str) -> Container {

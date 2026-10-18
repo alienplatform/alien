@@ -13,6 +13,9 @@ use crate::{
     setup_resource_tags, Network, NetworkSettings, ResourceEntry, Sandbox, SandboxEgress, Stack,
 };
 
+/// Reserved Container hosting the deployment's sandbox egress gateway.
+pub const SANDBOX_EGRESS_GATEWAY_ID: &str = "sandbox-egress-gateway";
+
 /// The name of the operator role's inline policy.
 pub const SANDBOX_EGRESS_POLICY_NAME: &str = "sandbox-egress-connector";
 

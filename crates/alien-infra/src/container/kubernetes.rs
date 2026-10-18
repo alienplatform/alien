@@ -707,6 +707,22 @@ impl KubernetesContainerController {
         {
             let workload_name = &workload_name;
             let namespace = &namespace;
+            // Gateway configuration is read from the vault, so its changes are detected
+            // here rather than by the synchronous deployment-snapshot check.
+            if config.id == alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID {
+                let secrets = self.additional_environment_secrets(config, ctx).await?;
+                if self.env_secret.drifted_with_additional_secrets(
+                    &config.id,
+                    workload_name,
+                    &ctx.deployment_config.environment_variables.variables,
+                    &secrets,
+                ) {
+                    return Ok(HandlerAction::Continue {
+                        state: UpdateStart,
+                        suggested_delay: None,
+                    });
+                }
+            }
             let deployment_client = ctx
                 .service_provider
                 .get_kubernetes_deployment_client(kubernetes_config)
@@ -1875,6 +1891,10 @@ impl KubernetesContainerController {
             return Ok(false);
         };
         let config = ctx.desired_resource_config::<Container>()?;
+        if config.id == alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID {
+            // Ready checks the vault value alongside the deployment snapshot.
+            return Ok(false);
+        }
         let monitoring_headers = direct_monitoring_auth_headers(ctx);
         Ok(self.env_secret.drifted_with_additional_secrets(
             &config.id,
@@ -2067,6 +2087,26 @@ impl KubernetesContainerController {
         }
     }
 
+    async fn additional_environment_secrets(
+        &self,
+        config: &Container,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<BTreeMap<String, String>> {
+        let mut secrets = direct_monitoring_auth_headers(ctx);
+        if config.id == alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID {
+            let vault = crate::sandbox::egress::deployment_vault(ctx).await?;
+            let value = vault
+                .get_secret(crate::sandbox::egress::GATEWAY_CONFIG)
+                .await
+                .context(ErrorData::ResourceConfigInvalid {
+                    message: "The sandbox gateway configuration is not ready".into(),
+                    resource_id: Some(config.id.clone()),
+                })?;
+            secrets.insert("ALIEN_EGRESS_GATEWAY_CONFIG".into(), value);
+        }
+        Ok(secrets)
+    }
+
     async fn reconcile_environment_secret(
         &self,
         config: &Container,
@@ -2075,7 +2115,7 @@ impl KubernetesContainerController {
         legacy_owner_proven: bool,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<Option<KubernetesEnvSecretPlan>> {
-        let monitoring_headers = direct_monitoring_auth_headers(ctx);
+        let monitoring_headers = self.additional_environment_secrets(config, ctx).await?;
         reconcile_environment_secret_with_additional_secrets(
             "container",
             &config.id,

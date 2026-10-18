@@ -16,7 +16,7 @@ use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
 use sha2::{Digest, Sha256};
 use tracing::debug;
 
-fn peer_service_name(workload: &str) -> String {
+pub(crate) fn peer_service_name(workload: &str) -> String {
     if workload.len() <= 57 {
         return format!("{workload}-peers");
     }

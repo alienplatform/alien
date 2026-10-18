@@ -34,6 +34,9 @@ pub struct KubernetesSandboxController {
     /// Bound installed with the parent and published to runtime bindings.
     #[serde(default)]
     pub(crate) egress: Option<alien_core::bindings::SandboxEgressBinding>,
+    /// Default policy supplied to newly created sessions.
+    #[serde(default)]
+    pub(crate) default_policy: Option<alien_core::EgressPolicy>,
     /// Sandbox this controller owns, and the enumeration scope for its pods.
     pub(crate) sandbox_id: Option<String>,
     /// Namespace the Helm chart created for this sandbox's pods.
@@ -96,7 +99,7 @@ impl KubernetesSandboxController {
 
         self.runtime_class = Some(runtime_class);
         self.sandbox_id = Some(config.id.clone());
-        self.egress = Some(config.into());
+        self.default_policy = config.default_policy.clone();
         self.broker_url = broker_url();
 
         // Recorded as soon as it is known, because the binding and the outputs both read it
@@ -112,6 +115,8 @@ impl KubernetesSandboxController {
             self.capability_public_key =
                 Some(ensure_capability_keypair(ctx, &config.id, &namespace).await?);
         }
+
+        self.egress = Some(super::kubernetes_egress::configure(ctx, config, &namespace).await?);
 
         info!(sandbox_id = %config.id, "Cluster can run sandboxes");
 
@@ -135,6 +140,7 @@ impl KubernetesSandboxController {
         self.deployment_label_value = Some(deployment_label_value);
         self.capability_public_key =
             Some(ensure_capability_keypair(ctx, &config.id, &namespace).await?);
+        self.egress = Some(super::kubernetes_egress::configure(ctx, config, &namespace).await?);
         let sessions = list_session_pods(ctx, &namespace, &config.id).await?;
 
         let pool = replenish_warm_pool(
@@ -194,7 +200,9 @@ impl KubernetesSandboxController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
-        self.egress = Some(config.into());
+        self.default_policy = config.default_policy.clone();
+        let namespace = deployment_namespace(ctx.get_kubernetes_config()?)?;
+        self.egress = Some(super::kubernetes_egress::configure(ctx, config, &namespace).await?);
 
         // Config applies to pods created after it. Running sessions are not rolled: a session
         // is a unit of work someone is waiting on, not a replica.
@@ -361,10 +369,8 @@ impl KubernetesSandboxController {
         );
 
         if let SandboxBinding::Kubernetes(value) = &mut binding {
-            value.default_policy = self
-                .egress
-                .as_ref()
-                .and_then(|value| value.default_policy().cloned());
+            value.egress = self.egress.clone();
+            value.default_policy = self.default_policy.clone();
         }
 
         Ok(Some(
@@ -455,9 +461,23 @@ async fn replenish_warm_pool(
     let waiting = idle.items.len();
     let deficit = pool_deficit(target, waiting);
     let mut created = 0;
+    if deficit == 0 {
+        return Ok(WarmPool {
+            idle: waiting,
+            created,
+        });
+    }
+    let Some(egress_environment) =
+        super::kubernetes_egress::bootstrap_environment(ctx, sandbox, namespace).await?
+    else {
+        return Ok(WarmPool {
+            idle: waiting,
+            created,
+        });
+    };
 
     for _ in 0..deficit {
-        let pod = idle_pool_pod_with_labels(
+        let mut pod = idle_pool_pod_with_labels(
             sandbox,
             namespace,
             runtime_class,
@@ -465,6 +485,14 @@ async fn replenish_warm_pool(
             capability_public_key,
             kubernetes_cleanup_resource_labels(ctx, &sandbox.id),
         );
+
+        pod.spec
+            .as_mut()
+            .expect("generated pod has a spec")
+            .containers[0]
+            .env
+            .get_or_insert_default()
+            .extend(egress_environment.clone());
 
         // Best effort per pod: a pool that is one short is slower, not broken, and failing the
         // health tick over it would take a working sandbox out of Running. The reason is logged
@@ -497,10 +525,9 @@ fn deployment_namespace(config: &alien_core::KubernetesClientConfig) -> Result<S
     use alien_core::KubernetesClientConfig as Config;
 
     let namespace = match config {
-        Config::InCluster { namespace, .. } | Config::Kubeconfig { namespace, .. } => {
-            namespace.clone()
-        }
-        _ => None,
+        Config::InCluster { namespace, .. }
+        | Config::Kubeconfig { namespace, .. }
+        | Config::Manual { namespace, .. } => namespace.clone(),
     };
 
     namespace.ok_or_else(|| {
@@ -553,6 +580,7 @@ mod tests {
 
         let mut controller = KubernetesSandboxController {
             egress: None,
+            default_policy: None,
             state: KubernetesSandboxState::Ready,
             sandbox_id: Some("sbx".to_string()),
             namespace: Some("alien-sandbox-sbx".to_string()),
@@ -592,6 +620,47 @@ mod tests {
 
     use super::*;
     use crate::core::{deserialize_controller, serialize_controller, ResourceController};
+
+    #[test]
+    fn gateway_binding_keeps_its_descriptor_and_creation_default() {
+        use alien_core::bindings::{
+            SandboxEgressBinding, SandboxEgressGateway, SandboxEgressSigningKey,
+        };
+        let gateway = SandboxEgressBinding::Gateway(SandboxEgressGateway {
+            container: alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.into(),
+            audience: "deployment/subject".into(),
+            signing_key: SandboxEgressSigningKey {
+                vault: "secrets".into(),
+                key: "sandbox-egress-signing-key".into(),
+            },
+            kid: "one".into(),
+            admin_ca_pem: None,
+        });
+        let policy = serde_json::from_value(serde_json::json!({"allow":["example.com"]})).unwrap();
+        let controller = KubernetesSandboxController {
+            egress: Some(gateway.clone()),
+            default_policy: Some(policy),
+            sandbox_id: Some("subject".into()),
+            namespace: Some("deployment".into()),
+            runtime_class: Some("gvisor".into()),
+            broker_url: Some("http://broker:8080".into()),
+            deployment_label_key: Some("alien.dev/deployment".into()),
+            deployment_label_value: Some("deployment".into()),
+            ..Default::default()
+        };
+        let binding: alien_core::bindings::SandboxBinding =
+            serde_json::from_value(controller.get_binding_params().unwrap().unwrap()).unwrap();
+        let alien_core::bindings::SandboxBinding::Kubernetes(binding) = binding else {
+            panic!("Kubernetes binding")
+        };
+        assert_eq!(binding.egress, Some(gateway));
+        assert_eq!(binding.default_policy, controller.default_policy);
+        let restored = deserialize_controller(serialize_controller(&controller).unwrap()).unwrap();
+        assert_eq!(
+            restored.get_binding_params().unwrap(),
+            controller.get_binding_params().unwrap()
+        );
+    }
 
     #[test]
     fn controller_round_trips_by_tag() {
