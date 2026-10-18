@@ -170,6 +170,8 @@ pub struct CreateSandbox {
     /// Idle seconds after which the sandbox pauses itself, sent as the data plane's
     /// `autoSuspendPolicy`. Absent leaves its own policy rather than asserting one.
     pub idle_pause_seconds: Option<u32>,
+    /// Metadata for lifecycle management outside the guest.
+    pub labels: BTreeMap<String, String>,
 }
 
 /// The create body.
@@ -209,6 +211,9 @@ fn create_body(request: &CreateSandbox) -> serde_json::Value {
         });
     }
 
+    if !request.labels.is_empty() {
+        body["labels"] = serde_json::json!(request.labels);
+    }
     body
 }
 
@@ -299,12 +304,26 @@ impl std::fmt::Debug for CreateDiskImage {
 fn disk_image_body(request: &CreateDiskImage) -> serde_json::Value {
     let mut body = serde_json::json!({
         "image": { "base": request.base },
-        "labels": request.labels,
     });
     if let Some((username, token)) = &request.registry_credentials {
         body["registryCredentials"] = serde_json::json!({ "username": username, "token": token });
     }
     body
+}
+
+/// Sandbox metadata returned by the group list operation.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListedSandbox {
+    /// Immutable platform-assigned session id.
+    pub id: String,
+    /// Platform creation timestamp, unaffected by suspend/resume.
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    /// Control-plane metadata, including the requested expiry deadline.
+    #[serde(default)]
+    pub labels: BTreeMap<String, String>,
+    /// Platform lifecycle state, including in-flight deletion.
+    pub state: String,
 }
 
 /// Result of a shell command.
@@ -327,6 +346,9 @@ pub struct ExecResult {
 pub trait SandboxDataPlaneApi: Send + Sync + std::fmt::Debug {
     /// Creates a sandbox from a disk image.
     async fn create_sandbox(&self, group: &str, request: CreateSandbox) -> Result<Sandbox>;
+
+    /// Lists sandbox lifecycle metadata in a group; does not execute or read guest files.
+    async fn list_sandboxes(&self, group: &str) -> Result<Vec<ListedSandbox>>;
 
     /// Reads a sandbox. A 404 is how deletion is confirmed.
     async fn get_sandbox(&self, group: &str, sandbox_id: &str) -> Result<Sandbox>;
@@ -603,6 +625,70 @@ impl SandboxDataPlaneApi for AzureSandboxDataPlaneClient {
                 .await,
         )?;
         Self::parse(response, "CreateSandbox").await
+    }
+
+    async fn list_sandboxes(&self, group: &str) -> Result<Vec<ListedSandbox>> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Page {
+            Array(Vec<ListedSandbox>),
+            Envelope {
+                value: Vec<ListedSandbox>,
+                #[serde(rename = "nextLink")]
+                next_link: Option<String>,
+            },
+        }
+        let token = self
+            .token_cache
+            .get_bearer_token_with_scope(ADC_SCOPE)
+            .await?;
+        let initial = self.base.build_url(
+            &format!("{}/sandboxes", self.group_path(group)),
+            Some(vec![("api-version", API_VERSION.into())]),
+        );
+        let refused = || {
+            alien_error::AlienError::new(ErrorData::GenericError {
+                message: "Azure sandbox pagination left the group scope or repeated a page"
+                    .to_string(),
+            })
+        };
+        let original = reqwest::Url::parse(&initial).map_err(|_| refused())?;
+        let mut url = original.clone();
+        let mut visited = std::collections::HashSet::new();
+        let mut sessions = Vec::new();
+        loop {
+            // Never forward the bearer credential to a continuation outside this group.
+            if url.origin() != original.origin()
+                || url.path() != original.path()
+                || !url.username().is_empty()
+                || url.password().is_some()
+                || !visited.insert(url.to_string())
+            {
+                return Err(refused());
+            }
+            let request = AzureRequestBuilder::new(Method::GET, url.to_string()).build()?;
+            let signed = self.base.sign_request(request, &token).await?;
+            let response = self
+                .base
+                .execute_request(signed, "ListSandboxes", group)
+                .await?;
+            match Self::parse::<Page>(response, "ListSandboxes").await? {
+                Page::Array(items) => {
+                    sessions.extend(items);
+                    break;
+                }
+                Page::Envelope { value, next_link } => {
+                    sessions.extend(value);
+                    match next_link {
+                        Some(next) if !next.is_empty() => {
+                            url = original.join(&next).map_err(|_| refused())?
+                        }
+                        _ => break,
+                    }
+                }
+            }
+        }
+        Ok(sessions)
     }
 
     async fn get_sandbox(&self, group: &str, sandbox_id: &str) -> Result<Sandbox> {
@@ -947,6 +1033,48 @@ mod tests {
             "rg",
             AzureTokenCache::new(config),
         )
+    }
+
+    #[tokio::test]
+    async fn sandbox_listing_follows_pages_and_refuses_foreign_continuations() {
+        let server = MockServer::start_async().await;
+        let path = format!(
+            "/subscriptions/{}/resourceGroups/rg/sandboxGroups/grp/sandboxes",
+            AzureClientConfig::mock().subscription_id
+        );
+        let second = server.mock_async(|when, then| {
+            when.method(GET).path(&path).query_param("page", "2");
+            then.status(200).json_body(serde_json::json!([{"id":"two","createdAt":"2026-01-01T00:00:00Z","state":"Stopped"}]));
+        }).await;
+        let mut first = server.mock_async(|when, then| {
+            when.method(GET).path(&path).query_param("api-version", API_VERSION);
+            then.status(200).json_body(serde_json::json!({"value":[{"id":"one","createdAt":"2026-01-01T00:00:00Z","state":"Running"}],"nextLink":format!("{}{path}?page=2",server.base_url())}));
+        }).await;
+        let listed = client_against(&server)
+            .list_sandboxes("grp")
+            .await
+            .expect("all pages");
+        assert_eq!(
+            listed.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+            ["one", "two"]
+        );
+        first.assert_async().await;
+        second.assert_async().await;
+        first.delete_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path(&path)
+                    .query_param("api-version", API_VERSION);
+                then.status(200).json_body(
+                    serde_json::json!({"value":[],"nextLink":"https://example.invalid/steal"}),
+                );
+            })
+            .await;
+        client_against(&server)
+            .list_sandboxes("grp")
+            .await
+            .expect_err("foreign origin refused before request");
     }
 
     /// A create is delivered once, however the data plane answers.

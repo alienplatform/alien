@@ -61,7 +61,7 @@ mod lifetime_capability_tests;
 /// waiting for it to serve, and that wait fails as unreachable — a retryable answer to a request
 /// that can never succeed. Past what whole seconds can hold there is no lifetime to send, and a
 /// ceiling does not stand in for one: the ordinary deployment declares none.
-#[cfg(any(feature = "aws", feature = "gcp"))]
+#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
 pub(crate) fn requested_lifetime_seconds(
     timeout_ms: u64,
     declared_ceiling: Option<u32>,

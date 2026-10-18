@@ -21,7 +21,7 @@ use alien_azure_clients::azure::sandbox_data_plane::{
 use alien_client_core::ErrorData as ClientErrorData;
 use alien_core::{
     azure_disk_image_label, classify_azure_sandbox_image, AzureSandboxImage, SandboxCapabilities,
-    SandboxCapability, SandboxEgress, AZURE_DISK_IMAGE_LABEL,
+    SandboxEgress, AZURE_DISK_IMAGE_LABEL, SANDBOX_EXPIRY_LABEL,
 };
 use alien_error::{AlienError, ContextError};
 use tracing::warn;
@@ -290,14 +290,6 @@ fn refuse_unsupported_create_fields(request: &CreateSandboxRequest, operation: &
                 .to_string(),
         }));
     }
-    if request.timeout_ms.is_some() {
-        return Err(AlienError::new(ErrorData::OperationNotSupported {
-            operation: SandboxCapability::SandboxLifetime.as_str().to_string(),
-            reason: "Azure sandboxes have auto-suspend and auto-delete but no wall-clock \
-                     ceiling; terminate the sandbox when the caller is done with it"
-                .to_string(),
-        }));
-    }
     Ok(())
 }
 
@@ -314,6 +306,12 @@ impl Sandbox for AzureSandbox {
         checked_sandbox_env(CREATE, &request.env)?;
         refuse_unsupported_create_fields(&request, CREATE)?;
 
+        let mut labels = BTreeMap::new();
+        if let Some(timeout_ms) = request.timeout_ms {
+            let seconds = super::requested_lifetime_seconds(timeout_ms, None, CREATE)?;
+            let expires = chrono::Utc::now().timestamp_millis() + i64::from(seconds) * 1000;
+            labels.insert(SANDBOX_EXPIRY_LABEL.to_string(), expires.to_string());
+        }
         let asked = egress_policy(&self.egress);
         let disk_image_id = self.disk_image_id().await?;
         let sandbox = self
@@ -324,6 +322,7 @@ impl Sandbox for AzureSandbox {
                 memory: self.memory.clone(),
                 disk: self.disk.clone(),
                 environment: request.env,
+                labels,
                 egress: asked.clone(),
                 idle_pause_seconds: self.idle_pause_seconds,
             })
@@ -398,6 +397,9 @@ impl Sandbox for AzureSandbox {
     }
 
     async fn get_or_create(&self, request: CreateSandboxRequest) -> Result<ResolvedSandbox> {
+        if let Some(timeout_ms) = request.timeout_ms {
+            super::requested_lifetime_seconds(timeout_ms, None, "sandbox.getOrCreate")?;
+        }
         if let Some(id) = request.sandbox_id.as_deref() {
             // `create` returns a sandbox that can take work, and reaching one someone else
             // started has to mean the same thing — so the same gate every other verb uses: bring
@@ -1473,8 +1475,6 @@ const RUN_COMMAND: &str = "sandbox.runCommand";
 const CREATE: &str = "sandbox.create";
 const GET_OR_CREATE: &str = "sandbox.getOrCreate";
 
-
-
 /// How long a sandbox has to become able to take work, and how often that is checked.
 const SANDBOX_READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 const SANDBOX_READY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
@@ -2056,6 +2056,15 @@ mod tests {
         ) -> alien_client_core::Result<alien_azure_clients::azure::sandbox_data_plane::Sandbox>
         {
             unreachable!("the command paths never create")
+        }
+
+        async fn list_sandboxes(
+            &self,
+            _group: &str,
+        ) -> alien_client_core::Result<
+            Vec<alien_azure_clients::azure::sandbox_data_plane::ListedSandbox>,
+        > {
+            unreachable!("command tests do not enumerate sessions")
         }
 
         async fn get_sandbox(

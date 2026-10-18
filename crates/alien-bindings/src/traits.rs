@@ -1064,7 +1064,10 @@ pub struct CreateSandboxRequest {
     /// Environment variables to place in the sandbox.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
-    /// Wall-clock lifetime, after which the platform terminates the sandbox.
+    /// Wall-clock lifetime. Local needs its running manager; Azure needs its deployment's
+    /// reconciliation loop, which requests deletion within five seconds plus API latency.
+    /// Azure terminal failures, unavailable dependencies, a stopped controller or a group
+    /// removed from the deployment pause enforcement. AWS, GCP and Kubernetes enforce natively.
     ///
     /// Requires `sandboxLifetime`; a backend without it refuses rather than accepting a ceiling
     /// it would never apply. It only ever shortens: a declared ceiling still bounds the sandbox,
@@ -1198,7 +1201,8 @@ pub enum CommandOutput {
     /// Bytes written to stdout
     #[serde(rename_all = "camelCase")]
     Stdout {
-        /// Monotonic across both streams, so a caller can interleave them in production order
+        /// Monotonic across both streams. Azure reconstructs each poll's stdout before stderr;
+        /// its native exec API cannot establish production order between streams.
         seq: u64,
         /// Raw bytes; command output is not necessarily UTF-8
         data: Vec<u8>,

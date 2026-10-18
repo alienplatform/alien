@@ -234,12 +234,39 @@ async fn a_sandbox_lifetime_and_a_command_timeout_never_reach_each_other() {
     );
 }
 
-/// Azure declares none, and the client double proves it: a call on it would panic, so a refusal
-/// that leaked through to the data plane fails this test rather than passing quietly.
+/// Azure writes a deadline outside the guest for its deployment controller to reap.
 #[tokio::test]
-async fn azure_declares_no_lifetime_and_sends_nothing() {
+async fn azure_declares_lifetime_and_sends_deadline_metadata() {
+    let mut client = alien_azure_clients::azure::sandbox_data_plane::MockSandboxDataPlaneApi::new();
+    client
+        .expect_create_sandbox()
+        .times(1)
+        .withf(|_, request| {
+            request
+                .labels
+                .get(alien_core::SANDBOX_EXPIRY_LABEL)
+                .and_then(|v| v.parse::<i64>().ok())
+                .is_some_and(|deadline| {
+                    let remaining = deadline - chrono::Utc::now().timestamp_millis();
+                    (590_000..=600_000).contains(&remaining)
+                })
+        })
+        .returning(|_, _| {
+            Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
+                id: "s1".to_string(),
+                state: Some("Running".to_string()),
+                egress_policy: None,
+            })
+        });
+    client.expect_get_sandbox().returning(|_, id| {
+        Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
+            id: id.to_string(),
+            state: Some("Running".to_string()),
+            egress_policy: None,
+        })
+    });
     let sandbox = AzureSandbox::new(
-        Arc::new(alien_azure_clients::azure::sandbox_data_plane::MockSandboxDataPlaneApi::new()),
+        Arc::new(client),
         "group".to_string(),
         "ubuntu".to_string(),
         SandboxEgress::Allow,
@@ -248,8 +275,11 @@ async fn azure_declares_no_lifetime_and_sends_nothing() {
         "2Gi".to_string(),
         None,
     );
-
-    refuses_a_created_lifetime(&sandbox).await;
+    assert!(sandbox.capabilities().sandbox_lifetime);
+    sandbox
+        .create(with_lifetime())
+        .await
+        .expect("deadline accepted");
 }
 
 /// Kubernetes has `activeDeadlineSeconds`, but the pool's pods are already running under the
