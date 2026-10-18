@@ -21,6 +21,7 @@ pub mod runtime;
 pub mod server;
 pub mod store;
 pub mod token;
+mod tunnel;
 
 pub mod recovery;
 

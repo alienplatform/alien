@@ -100,6 +100,15 @@ between 1 and 65536). Excess connections are refused before tunnel buffers are
 allocated, with a rate-limited `global connection capacity` log and denial counter.
 Changing the limit requires a restart. Per-source and per-identity limits still apply.
 
+On Linux, opaque IP and validated TLS tunnels relay through `splice` after flushing
+the inspected prefix. Each direction owns one nonblocking pipe capped at 8 KiB
+(rounded up to the kernel page size), so each tunnel adds four pipe descriptors.
+Half-close, byte accounting, idle expiry and live policy cancellation still apply.
+HTTP and credential-injection traffic keep their HTTP/TLS parsers; other operating
+systems use the buffered relay. The `--splice-only` Docker test requires host
+`strace` and permission to trace its owned gateway container. It checks actual
+transfer bytes, half-close, descriptor cleanup and userspace syscall byte counts.
+
 ## Release memory measurements
 
 Measured on 2026-10-18 with the x86_64 musl release binary at `fe53b9fab`,

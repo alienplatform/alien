@@ -362,6 +362,7 @@ async fn authorized_proxy(
         .into_alien_error()
         .context(unavailable("acknowledge CONNECT"))?;
     let mut guest = Prefixed::new(input[head_len..].to_vec(), stream);
+    drop(input);
     let rules: Vec<_> = gateway
         .config
         .credentials
@@ -373,7 +374,12 @@ async fn authorized_proxy(
         .collect();
     if target.host.parse::<std::net::Ipv4Addr>().is_ok() {
         // Explicit IP/CIDR rules are the only grants for opaque, including server-first, protocols.
-        tokio::io::copy_bidirectional(&mut guest, &mut upstream)
+        let guest = guest
+            .flush_prefix(&mut upstream)
+            .await
+            .into_alien_error()
+            .context(unavailable("forward buffered IP payload"))?;
+        crate::tunnel::relay(guest, &mut upstream)
             .await
             .into_alien_error()
             .context(unavailable("relay IP connection"))?;
@@ -414,7 +420,17 @@ async fn authorized_proxy(
         .await
         .into_alien_error()
         .context(unavailable("forward ClientHello"))?;
-    tokio::io::copy_bidirectional(&mut guest, &mut upstream)
+    drop(hello);
+    let guest = guest
+        .flush_prefix(&mut upstream)
+        .await
+        .into_alien_error()
+        .context(unavailable("forward protocol prefix"))?
+        .flush_prefix(&mut upstream)
+        .await
+        .into_alien_error()
+        .context(unavailable("forward buffered TLS payload"))?;
+    crate::tunnel::relay(guest, &mut upstream)
         .await
         .into_alien_error()
         .context(unavailable("relay connection"))?;

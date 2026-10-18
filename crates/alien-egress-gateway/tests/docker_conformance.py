@@ -734,6 +734,7 @@ def main():
     parser.add_argument("--range-refresh-only", action="store_true")
     parser.add_argument("--resume-only", action="store_true")
     parser.add_argument("--edges-only", action="store_true")
+    parser.add_argument("--splice-only", action="store_true")
     args = parser.parse_args()
     if args.range_refresh_only and not args.vault_config:
         parser.error("--range-refresh-only requires --vault-config")
@@ -802,6 +803,10 @@ def main():
         if args.edges_only:
             from edge_cases import check_edges
             check_edges(suite, AUD, SUB, PROXY)
+            return
+        if args.splice_only:
+            from splice_relay import check_splice
+            check_splice(suite, AUD, SUB, PROXY, ORIGIN, docker, PREFIX)
             return
         if args.connect_port80_only:
             suite.connect_port80()
