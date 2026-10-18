@@ -57,6 +57,16 @@ def validate(suite):
         raise ValueError("explicit after mode and deployed revision required")
     if suite.get("withoutConnectorBinding") == suite["binding"]:
         raise ValueError("connector refusal needs a distinct fixture binding")
+    if "withoutVnetSandboxId" in suite:
+        sandbox_id = suite["withoutVnetSandboxId"]
+        if (
+            not isinstance(sandbox_id, str)
+            or not sandbox_id.strip()
+            or sandbox_id.strip() != sandbox_id
+        ):
+            raise ValueError(
+                "withoutVnetSandboxId must identify an existing isolated fixture"
+            )
     for key in ("allowed", "removed"):
         endpoint = suite[key]
         url = urlsplit(endpoint["url"])
@@ -396,6 +406,49 @@ class Run:
             }
         )
         await self.no_connector(control)
+        if "withoutVnetSandboxId" in suite:
+            await self.no_vnet(control)
+
+    async def no_vnet(self, control):
+        # Azure has no agent. This readback guard is distinct from the agent self-check.
+        sandbox_id = self.suite["withoutVnetSandboxId"]
+        if sandbox_id == control[1]:
+            raise ValueError(
+                "missing-VNet fixture must differ from the attached control"
+            )
+        positive = await observe(*control, http(self.suite["allowed"]["url"]))
+        result = {
+            "name": "reconnect-without-vnet",
+            "control": positive,
+            "fixtureSandboxId": sandbox_id,
+            "verdict": "unproven",
+        }
+        self.results.append(result)
+        healthy = response(positive["observation"], self.suite["allowed"]["bodySha256"])
+        try:
+            attached = await asyncio.wait_for(control[0].get(control[1]), 45)
+        except Exception as error:  # noqa: BLE001 - retain typed diagnostic, never provider text
+            result["controlErrorCode"] = getattr(error, "code", None)
+            return
+        if not healthy or attached is None or attached.state != "running":
+            return
+        try:
+            found = await asyncio.wait_for(control[0].get(sandbox_id), 45)
+        except Exception as error:  # noqa: BLE001 - other refusals cannot prove this guard
+            code = getattr(error, "code", None)
+            context = getattr(error, "context", None)
+            result["errorCode"] = code
+            if (
+                code == "SANDBOX_NOT_AS_DECLARED"
+                and isinstance(context, dict)
+                and context.get("sandbox_id") == sandbox_id
+                and context.get("restriction") == "deployment network"
+            ):
+                result["verdict"] = "pass"
+        else:
+            # A missing/terminated fixture has no running attachment to judge.
+            if found is not None and found.state == "running":
+                result["verdict"] = "fail"
 
     async def no_connector(self, control):
         positive = await observe(*control, http(self.suite["allowed"]["url"]))

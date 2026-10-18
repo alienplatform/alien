@@ -154,6 +154,17 @@ class EmptyRefusedBox(Box):
         return await super().create(egress=egress, timeout_ms=timeout_ms)
 
 
+class VnetBox(Box):
+    fixture_result = None
+
+    async def get(self, sandbox_id):
+        if sandbox_id == "without-vnet":
+            if isinstance(self.fixture_result, Exception):
+                raise self.fixture_result
+            return self.fixture_result
+        return await super().get(sandbox_id)
+
+
 class After(unittest.IsolatedAsyncioTestCase):
     async def test_live_transport_and_policy_transitions(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -308,6 +319,63 @@ class After(unittest.IsolatedAsyncioTestCase):
                     all(item["terminationCallCompleted"] for item in cleanup)
                 )
                 self.assertTrue(all(not box.sessions for box, _ in runner.sessions))
+
+            azure = dict(suite, withoutVnetSandboxId="without-vnet")
+            azure.pop("withoutConnectorBinding")
+            with (root / "vnet.jsonl").open("x") as journal:
+                runner = run.Run(azure, journal, lambda name: VnetBox(name, tls, cert))
+                try:
+                    await runner.execute()
+                    rows = {row["name"]: row for row in runner.results}
+                    self.assertEqual(
+                        "unproven", rows["start-without-connector"]["verdict"]
+                    )
+                    self.assertEqual(
+                        "unproven", rows["reconnect-without-vnet"]["verdict"]
+                    )
+                    box, record = runner.sessions[0]
+                    control = box, record["sandboxId"]
+                    error = RuntimeError("sensitive provider response")
+                    error.code = "SANDBOX_NOT_AS_DECLARED"
+                    error.context = {
+                        "sandbox_id": "without-vnet",
+                        "restriction": "deployment network",
+                        "reason": "sensitive provider response",
+                    }
+                    box.fixture_result = error
+                    await runner.no_vnet(control)
+                    self.assertEqual("pass", runner.results[-1]["verdict"])
+                    for key, value in (
+                        ("restriction", "egress policy"),
+                        ("sandbox_id", "another-session"),
+                    ):
+                        original = error.context[key]
+                        error.context[key] = value
+                        await runner.no_vnet(control)
+                        self.assertEqual("unproven", runner.results[-1]["verdict"])
+                        error.context[key] = original
+                    error.code = "EGRESS_PATH_UNEXPECTED"
+                    await runner.no_vnet(control)
+                    self.assertEqual("unproven", runner.results[-1]["verdict"])
+                    error.code = "SANDBOX_NOT_AS_DECLARED"
+                    azure["allowed"] = dict(suite["allowed"], bodySha256="b" * 64)
+                    await runner.no_vnet(control)
+                    self.assertEqual("unproven", runner.results[-1]["verdict"])
+                    azure["allowed"] = suite["allowed"]
+                    box.fixture_result = SimpleNamespace(state="running")
+                    await runner.no_vnet(control)
+                    self.assertEqual("fail", runner.results[-1]["verdict"])
+                    self.assertNotIn(
+                        "sensitive provider response", json.dumps(runner.results)
+                    )
+                    self.assertNotIn(
+                        "without-vnet", [r["sandboxId"] for _, r in runner.sessions]
+                    )
+                finally:
+                    cleanup = await runner.cleanup()
+                self.assertTrue(
+                    all(item["terminationCallCompleted"] for item in cleanup)
+                )
 
     @unittest.skipUnless(os.geteuid() == 0, "host packet witness requires CAP_NET_RAW")
     async def test_packet_witness_captures_only_selected_identity(self):

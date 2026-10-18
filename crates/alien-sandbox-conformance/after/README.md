@@ -147,6 +147,27 @@ behavior by itself: normal connection checks and independent provider evidence
 are still required. Azure has no agent; its connectorless agent self-check remains
 unproven and must not be counted as a pass based on this mapping.
 
+For Azure's separate attachment readback guard, add
+`"withoutVnetSandboxId": "PROVIDER_SANDBOX_ID"` to the suite. The fixture owner must
+create an isolated, running sandbox in the same group through the provider API,
+without the default VNet connection, and retain its provider readback. Keep all
+other declared settings the same. The normal SDK create path forces that connection,
+so changing `withoutConnectorBinding` does not construct this fixture.
+
+This adds `reconnect-without-vnet`: the runner first proves `get()` and the known
+HTTPS fixture work on its normally attached control, then calls `get()` on the
+missing-VNet fixture through the same binding. Only `SANDBOX_NOT_AS_DECLARED` with
+the exact fixture ID and `restriction: "deployment network"` qualifies. A returned
+running sandbox fails; missing or non-running fixtures, other restrictions, generic
+errors and failed controls remain unproven. This row proves the SDK readback guard,
+not an agent self-check or an outside-the-guest network boundary. The existing
+`start-without-connector` row remains separate and unproven on Azure.
+
+The runner neither executes commands on nor changes or deletes this externally
+created fixture. Its owner must delete it and retain provider list/readback cleanup
+evidence separately from the runner's session journal. Run against a wheel containing
+the Azure implementation under test; an API-only wheel does not establish that proof.
+
 The update row measures from **before** the update API call through the observed
 CONNECT denial and includes command dispatch latency. It permits at most ten
 seconds, uses fresh connections, and requires the removed destination to work
