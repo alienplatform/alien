@@ -27,8 +27,8 @@ use alien_gcp_clients::pubsub::{OidcToken, PushConfig, Subscription, Topic};
 // Note: Role controller removed - workers now use ServiceAccount and permission profiles
 use alien_core::{
     CertificateStatus, DnsRecordStatus, GcpCloudRunWorkerHeartbeatData, HeartbeatBackend, Network,
-    ObservedHealth, Platform, ProviderLifecycleState, ResourceDefinition, ResourceHeartbeat,
-    ResourceHeartbeatData, ResourceOutputs, ResourceRef, ResourceStatus, Worker,
+    NetworkSettings, ObservedHealth, Platform, ProviderLifecycleState, ResourceDefinition,
+    ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs, ResourceRef, ResourceStatus, Worker,
     WorkerHeartbeatData, WorkerOutputs, WorkloadHeartbeatStatus,
 };
 use alien_error::{AlienError, Context, ContextError, GenericError, IntoAlienError};
@@ -4779,9 +4779,18 @@ impl GcpWorkerController {
     fn get_vpc_access(&self, ctx: &ResourceControllerContext<'_>) -> Result<Option<VpcAccess>> {
         // Check if the stack has a Network resource
         let network_id = "default-network";
-        if !ctx.desired_stack.resources.contains_key(network_id) {
+        let Some(network_entry) = ctx.desired_stack.resources.get(network_id) else {
             return Ok(None);
-        }
+        };
+        let network_config = network_entry
+            .config
+            .downcast_ref::<Network>()
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::ResourceControllerConfigError {
+                    resource_id: network_id.to_string(),
+                    message: "Expected a Network resource for Direct VPC egress".to_string(),
+                })
+            })?;
 
         // Get the Network controller state via require_dependency
         let network_ref = ResourceRef::new(Network::RESOURCE_TYPE, network_id.to_string());
@@ -4805,9 +4814,16 @@ impl GcpWorkerController {
             .subnetwork(subnetwork_name)
             .build();
 
+        // The default network has no Alien-provisioned NAT. Keep public traffic on
+        // Cloud Run's normal egress; preserve NAT IPs and routing policy for Create/BYO.
+        let egress = match network_config.settings {
+            NetworkSettings::UseDefault => VpcEgress::PrivateRangesOnly,
+            _ => VpcEgress::AllTraffic,
+        };
+
         Ok(Some(
             VpcAccess::builder()
-                .egress(VpcEgress::AllTraffic)
+                .egress(egress)
                 .network_interfaces(vec![network_interface])
                 .build(),
         ))
