@@ -49,6 +49,10 @@ impl StackMutation for SandboxGatewayLinksMutation {
                 .resources
                 .get_mut(id)
                 .expect("sandbox collected above");
+            let sandbox = entry.config.downcast_mut::<Sandbox>().expect("sandbox type");
+            if !sandbox.links.contains(&gateway) {
+                sandbox.links.push(gateway.clone());
+            }
             if !entry.dependencies.contains(&vault) {
                 entry.dependencies.push(vault.clone());
             }

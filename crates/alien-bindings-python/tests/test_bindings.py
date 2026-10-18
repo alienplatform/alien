@@ -106,7 +106,9 @@ async def test_queue_batches_preserve_outcomes_and_payloads(tmp_path: Path) -> N
     assert [result["status"] for result in results] == ["sent", "rejected", "sent"]
     messages = await jobs.receive(10)
     assert [(message.payload_type, message.payload) for message in messages] == [
-        ("json", '{"order":1}'), ("text", "plain"), ("text", "last")
+        ("json", '{"order":1}'),
+        ("text", "plain"),
+        ("text", "last"),
     ]
     for message in messages:
         await jobs.ack(message.receipt_handle)
@@ -134,6 +136,7 @@ async def test_postgres_helpers_and_container_discovery() -> None:
             "containerName": "api",
             "internalUrl": "http://api.svc:8000",
             "publicUrl": "http://localhost:18000",
+            "internalUrls": {"8000": "http://api.svc:8000", "3129": "http://api.svc:3129"},
         },
     )
 
@@ -148,6 +151,10 @@ async def test_postgres_helpers_and_container_discovery() -> None:
     )
     assert connection.ssl_context() is None
     assert "p@ss/word" not in repr(connection)
+    assert await container("api").internal_urls() == {
+        8000: "http://api.svc:8000",
+        3129: "http://api.svc:3129",
+    }
     assert await container("api").internal_url() == "http://api.svc:8000"
     assert await container("api").public_url() == "http://localhost:18000"
 
