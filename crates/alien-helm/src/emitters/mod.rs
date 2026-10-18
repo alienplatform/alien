@@ -53,3 +53,5 @@ pub fn register_built_ins(registry: &mut HelmRegistry) {
         service_account::ServiceAccountEmitter,
     );
 }
+
+pub(crate) mod sandbox_gateway_access;
