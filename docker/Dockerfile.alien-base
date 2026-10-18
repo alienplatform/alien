@@ -13,6 +13,16 @@ RUN case "$TARGETARCH" in \
        arm64)  cp /tmp/alien-worker-runtime-aarch64 /tmp/alien-worker-runtime ;; \
     esac
 
+# Bind the capabilities reported by the selected executable to its exact bytes.
+# Consumers must also verify the final image entrypoint and immutable manifest:
+# a derived image can replace either the runtime or its startup command.
+RUN set -eu; \
+    capabilities="$(/tmp/alien-worker-runtime --print-capabilities-json)"; \
+    executable_sha256="$(sha256sum /tmp/alien-worker-runtime)"; \
+    executable_sha256="${executable_sha256%% *}"; \
+    printf '{"executableSha256":"%s","capabilities":%s}\n' \
+      "$executable_sha256" "$capabilities" > /tmp/alien-worker-runtime.capabilities.json
+
 # Stage 2: Final runtime image
 FROM docker.io/chainguard/wolfi-base:latest
 
@@ -21,6 +31,7 @@ WORKDIR /app
 # Apply mode and ownership in the copy layer. Separate chmod/chown layers would
 # duplicate the runtime binary in the OCI image.
 COPY --from=binary-selector --chmod=755 --chown=nonroot:nonroot /tmp/alien-worker-runtime /app/alien-worker-runtime
+COPY --from=binary-selector --chmod=644 --chown=nonroot:nonroot /tmp/alien-worker-runtime.capabilities.json /app/alien-worker-runtime.capabilities.json
 
 # Switch to nonroot user
 USER nonroot
