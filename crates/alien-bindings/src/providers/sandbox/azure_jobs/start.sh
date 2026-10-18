@@ -35,11 +35,13 @@ setsid sh -c '\''job=$1; shift; echo "$$" > "$job/pid"; exec "$@"'\'' sh "$job" 
 # A separate session keeps the timer out of the command process group.
 setsid sh -c '\''sleep "$1"; if mkdir "$2/stopping" 2>/dev/null; then echo timeoutExceeded > "$2/reason"; kill -9 -"$3" 2>/dev/null; fi'\'' sh "$timeout" "$job" "$child" & timer=$!
 wait "$child"; code=$?
-kill -9 -"$timer" 2>/dev/null
-wait "$timer" 2>/dev/null
+# Descendants can keep output open after their parent exits. Keep cancellation and
+# the deadline active until those writers also finish.
+wait "$out" "$err"
 # Claim completion before a late cancel can signal a recycled PID.
 mkdir "$job/stopping" 2>/dev/null || :
-wait "$out" "$err"
+kill -9 -"$timer" 2>/dev/null
+wait "$timer" 2>/dev/null
 printf "%s\n" "$code" > "$job/exit.tmp"
 mv "$job/exit.tmp" "$job/exit"
 ' sh "$job" "$timeout" "$cwd" "$@" 9>&- </dev/null >/dev/null 2>&1 &

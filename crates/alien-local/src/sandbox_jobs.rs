@@ -44,15 +44,17 @@ struct Job {
     truncated: bool,
 }
 
+type ContainerJobs = HashMap<String, Arc<Mutex<Job>>>;
+
 /// Results belong to a container, not a client connection. Reconnecting clients can poll them.
 #[derive(Debug, Default)]
 pub(crate) struct SandboxJobs {
-    sessions: Mutex<HashMap<String, HashMap<String, Arc<Mutex<Job>>>>>,
+    sessions: Mutex<HashMap<String, ContainerJobs>>,
 }
 
 impl SandboxJobs {
     pub(crate) fn start(
-        &self,
+        self: &Arc<Self>,
         docker: Docker,
         container: String,
         request: RunCommandRequest,
@@ -110,12 +112,13 @@ impl SandboxJobs {
             }
             jobs.insert(id.clone(), Arc::clone(&job));
         }
+        let jobs = Arc::clone(self);
         tokio::spawn(async move {
             // Also bound a Docker create/start/inspect call that never acknowledges its result.
             let deadline = request.timeout + STOP_GRACE;
-            let result = match tokio::time::timeout(deadline, run(&docker, &container, request, cwd, cancelled, &job)).await {
+            let result = match tokio::time::timeout(deadline, run(&docker, &container, request, cwd, cancelled, &job, &jobs)).await {
                 Ok(result) => result,
-                Err(_) => match remove_unresponsive(&docker, &container).await {
+                Err(_) => match remove_unresponsive(&docker, &container, &jobs).await {
                     Ok(()) => Err(failed(&container, "Docker did not confirm the job outcome before its deadline; sandbox removed")),
                     Err(error) => Err(error),
                 },
@@ -210,6 +213,7 @@ async fn run(
     cwd: String,
     cancelled: oneshot::Receiver<()>,
     job: &Arc<Mutex<Job>>,
+    jobs: &SandboxJobs,
 ) -> Result<Option<i32>> {
     let mut command = vec![
         "/bin/sh".to_string(),
@@ -301,7 +305,7 @@ async fn run(
         result = &mut collect => {
             if let Err(error) = result {
                 // Losing the output transport must not also lose the only external deadline.
-                remove_unresponsive(docker, container).await?;
+                remove_unresponsive(docker, container, jobs).await?;
                 return Err(error);
             }
             None
@@ -324,7 +328,7 @@ async fn run(
             collect.await
         };
         if !matches!(tokio::time::timeout(STOP_GRACE, stopped).await, Ok(Ok(()))) {
-            remove_unresponsive(docker, container).await?;
+            remove_unresponsive(docker, container, jobs).await?;
         }
         job.lock().expect("job lock").snapshot.error = Some(JobError {
             code: reason.to_string(),
@@ -347,7 +351,7 @@ async fn run(
 }
 
 /// The host owns this backstop even if a guest has killed its shell supervisor.
-async fn remove_unresponsive(docker: &Docker, container: &str) -> Result<()> {
+async fn remove_unresponsive(docker: &Docker, container: &str, jobs: &SandboxJobs) -> Result<()> {
     match docker
         .remove_container(
             container,
@@ -362,7 +366,10 @@ async fn remove_unresponsive(docker: &Docker, container: &str) -> Result<()> {
         Ok(())
         | Err(bollard::errors::Error::DockerResponseServerError {
             status_code: 404, ..
-        }) => Ok(()),
+        }) => {
+            jobs.forget(container);
+            Ok(())
+        }
         Err(error) => Err(error)
             .into_alien_error()
             .context(ErrorData::SandboxSessionFailed {
@@ -415,7 +422,7 @@ mod tests {
             bollard::API_DEFAULT_VERSION,
         )
         .expect("Docker client");
-        let jobs = SandboxJobs::default();
+        let jobs = Arc::new(SandboxJobs::default());
         let id = jobs
             .start(
                 docker,
@@ -429,11 +436,10 @@ mod tests {
                 },
             )
             .expect("job accepted");
-        let result = tokio::time::timeout(Duration::from_secs(8), async {
+        tokio::time::timeout(Duration::from_secs(8), async {
             loop {
-                let poll = jobs.poll("container", &id, None).expect("poll");
-                if !poll.running {
-                    break poll;
+                if jobs.poll("container", &id, None).is_err() {
+                    break;
                 }
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
@@ -446,9 +452,9 @@ mod tests {
             removed.load(Ordering::SeqCst),
             "unacknowledged work is contained by deleting its sandbox"
         );
-        assert_eq!(
-            result.error.expect("unknown command result").code,
-            "outcomeUnknown"
+        assert!(
+            jobs.sessions.lock().expect("jobs lock").is_empty(),
+            "removed sandboxes must release all retained job output"
         );
     }
 }

@@ -141,7 +141,7 @@ async fn native_jobs_survive_reconnection_and_bound_work_and_output() {
         assert!(!replay.running);
         assert!(!replay.frames.is_empty());
         let job = second
-            .start_job(&id, command("sleep 120 & wait", 30))
+            .start_job(&id, command("sleep 120 &", 30))
             .await
             .expect("cancel start");
         second
@@ -155,7 +155,7 @@ async fn native_jobs_survive_reconnection_and_bound_work_and_output() {
         let (_, _, result) = drain(second.as_ref(), &id, &job.job_id).await;
         assert_eq!(result.error.expect("cancel error").code, "cancelled");
         let job = second
-            .start_job(&id, command("sleep 120 & wait", 1))
+            .start_job(&id, command("sleep 120 &", 1))
             .await
             .expect("timeout start");
         let (_, _, result) = drain(second.as_ref(), &id, &job.job_id).await;

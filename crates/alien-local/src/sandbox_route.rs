@@ -324,12 +324,17 @@ impl SandboxRoute {
                     let _ = stop.await;
                 })
                 .into_future();
-            tokio::pin!(serve);
+            // Docker cleanup may be slow; the listener must keep accepting requests.
+            let mut serve = tokio::spawn(serve);
             let mut tick = tokio::time::interval(std::time::Duration::from_millis(250));
             loop {
                 tokio::select! {
                     result = &mut serve => {
-                        if let Err(error) = result { tracing::error!("local sandbox route stopped: {error}"); }
+                        match result {
+                            Ok(Ok(())) => {}
+                            Ok(Err(error)) => tracing::error!("local sandbox route stopped: {error}"),
+                            Err(error) => tracing::error!("local sandbox route task failed: {error}"),
+                        }
                         break;
                     },
                     _ = tick.tick() => {
@@ -625,9 +630,128 @@ async fn terminate(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JobQuery {
+    since_seq: Option<u64>,
+}
+
+async fn start_job(
+    State(state): State<RouteState>,
+    Path(session): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<RunCommandRequest>,
+) -> std::result::Result<Json<JobStart>, (StatusCode, String)> {
+    authorize(&state, &headers).map_err(|code| (code, "unauthorized".to_string()))?;
+    let container = container_for(&state, &session).await?;
+    let job_id = state
+        .jobs
+        .start(state.manager.docker.clone(), container, request)
+        .map_err(failed)?;
+    Ok(Json(JobStart { job_id }))
+}
+
+async fn poll_job(
+    State(state): State<RouteState>,
+    Path((session, job)): Path<(String, String)>,
+    Query(query): Query<JobQuery>,
+    headers: HeaderMap,
+) -> std::result::Result<Json<JobPoll>, (StatusCode, String)> {
+    authorize(&state, &headers).map_err(|code| (code, "unauthorized".to_string()))?;
+    let container = container_for(&state, &session).await?;
+    state
+        .jobs
+        .poll(&container, &job, query.since_seq)
+        .map(Json)
+        .map_err(failed)
+}
+
+async fn cancel_job(
+    State(state): State<RouteState>,
+    Path((session, job)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> std::result::Result<StatusCode, (StatusCode, String)> {
+    authorize(&state, &headers).map_err(|code| (code, "unauthorized".to_string()))?;
+    let container = container_for(&state, &session).await?;
+    state.jobs.cancel(&container, &job).map_err(failed)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn slow_cleanup_does_not_block_accepting_requests() {
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let observed = Arc::clone(&entered);
+        let gate = Arc::clone(&release);
+        let first = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let docker_api = Router::new().fallback(move || {
+            let entered = Arc::clone(&observed);
+            let release = Arc::clone(&gate);
+            let first = Arc::clone(&first);
+            async move {
+                if first.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                    entered.notify_one();
+                    release.notified().await;
+                }
+                Json(Vec::<serde_json::Value>::new())
+            }
+        });
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listen");
+        let address = listener.local_addr().expect("address");
+        let docker_server = tokio::spawn(async move {
+            axum::serve(listener, docker_api)
+                .await
+                .expect("serve Docker");
+        });
+        let dir = tempfile::tempdir().expect("temp directory");
+        let mut manager = LocalSandboxManager::new(dir.path().to_path_buf()).expect("manager");
+        manager.docker = bollard::Docker::connect_with_http(
+            &format!("http://{address}"),
+            120,
+            bollard::API_DEFAULT_VERSION,
+        )
+        .expect("Docker client");
+        let template = SandboxSessionConfig {
+            image: "unused".to_string(),
+            max_lifetime_ms: Some(1000),
+            cpu_cores: 0.5,
+            memory_bytes: 268_435_456,
+            pids_limit: Some(64),
+            scratch_bytes: 16_777_216,
+            egress: crate::sandbox_manager::SandboxEgressMode::Deny,
+            preview_ports: vec![],
+            env: Default::default(),
+        };
+        let (route, _, shutdown, serving) =
+            SandboxRoute::serve(Arc::new(manager), "slow-cleanup", template)
+                .await
+                .expect("route");
+        tokio::time::timeout(std::time::Duration::from_secs(2), entered.notified())
+            .await
+            .expect("cleanup entered Docker");
+        let response = reqwest::Client::new()
+            .get(format!("{}/v1/sessions", route.base_url))
+            .timeout(std::time::Duration::from_secs(1))
+            .send()
+            .await;
+        // Shutdown also waits for this in-flight cleanup rather than abandoning it.
+        drop(shutdown);
+        assert!(!serving.is_finished());
+        release.notify_one();
+        tokio::time::timeout(std::time::Duration::from_secs(2), serving)
+            .await
+            .expect("route shuts down")
+            .expect("serving task");
+        docker_server.abort();
+        assert_eq!(
+            response.expect("listener stays responsive").status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
 
     /// Two sandboxes in one deployment share a state directory. With a fixed file name whichever
     /// one started last owned the credential for both, and the other's binding then authenticated
@@ -682,51 +806,4 @@ mod tests {
             "a guessable token is not a token"
         );
     }
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct JobQuery {
-    since_seq: Option<u64>,
-}
-
-async fn start_job(
-    State(state): State<RouteState>,
-    Path(session): Path<String>,
-    headers: HeaderMap,
-    Json(request): Json<RunCommandRequest>,
-) -> std::result::Result<Json<JobStart>, (StatusCode, String)> {
-    authorize(&state, &headers).map_err(|code| (code, "unauthorized".to_string()))?;
-    let container = container_for(&state, &session).await?;
-    let job_id = state
-        .jobs
-        .start(state.manager.docker.clone(), container, request)
-        .map_err(failed)?;
-    Ok(Json(JobStart { job_id }))
-}
-
-async fn poll_job(
-    State(state): State<RouteState>,
-    Path((session, job)): Path<(String, String)>,
-    Query(query): Query<JobQuery>,
-    headers: HeaderMap,
-) -> std::result::Result<Json<JobPoll>, (StatusCode, String)> {
-    authorize(&state, &headers).map_err(|code| (code, "unauthorized".to_string()))?;
-    let container = container_for(&state, &session).await?;
-    state
-        .jobs
-        .poll(&container, &job, query.since_seq)
-        .map(Json)
-        .map_err(failed)
-}
-
-async fn cancel_job(
-    State(state): State<RouteState>,
-    Path((session, job)): Path<(String, String)>,
-    headers: HeaderMap,
-) -> std::result::Result<StatusCode, (StatusCode, String)> {
-    authorize(&state, &headers).map_err(|code| (code, "unauthorized".to_string()))?;
-    let container = container_for(&state, &session).await?;
-    state.jobs.cancel(&container, &job).map_err(failed)?;
-    Ok(StatusCode::NO_CONTENT)
 }
