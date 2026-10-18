@@ -15,3 +15,6 @@ pub mod egress;
 
 #[cfg(unix)]
 pub mod image_command;
+
+#[cfg(target_os = "linux")]
+pub mod gateway_egress;

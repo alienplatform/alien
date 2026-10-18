@@ -1289,6 +1289,7 @@ dependencies = [
  "chrono",
  "ed25519-compact",
  "futures",
+ "httparse",
  "libc",
  "reqwest 0.12.28",
  "serde",
