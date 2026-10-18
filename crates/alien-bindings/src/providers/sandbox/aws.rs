@@ -479,8 +479,9 @@ impl AwsSandbox {
         Ok(Some(self.instance(microvm_id, microvm.state)))
     }
 
-    /// Blocks until the agent answers, so `create` returns a sandbox that can take work.
-    async fn wait_until_servable(&self, sandbox_id: &str) -> Result<()> {
+    /// Blocks until the agent answers, so `create` and `resume` return a sandbox that can take
+    /// work. `operation` is the verb the caller invoked, which a failure here is reported under.
+    async fn wait_until_servable(&self, operation: &str, sandbox_id: &str) -> Result<()> {
         let deadline = std::time::Instant::now() + SANDBOX_READY_TIMEOUT;
 
         // Only the endpoint's absence is worth waiting on. A refused token mint, a sandbox that is
@@ -488,7 +489,7 @@ impl AwsSandbox {
         // timeout would report a permission problem as a slow boot a minute later.
         let probe = loop {
             let published = self
-                .owned_microvm("sandbox.create", sandbox_id)
+                .owned_microvm(operation, sandbox_id)
                 .await?
                 .is_some_and(|microvm| microvm.endpoint.is_some());
 
@@ -499,7 +500,7 @@ impl AwsSandbox {
             }
             if std::time::Instant::now() >= deadline {
                 return Err(AlienError::new(ErrorData::SandboxUnreachable {
-                    operation: "sandbox.create".to_string(),
+                    operation: operation.to_string(),
                     reason: format!(
                         "MicroVM '{sandbox_id}' published no endpoint within {}s",
                         SANDBOX_READY_TIMEOUT.as_secs()
@@ -509,7 +510,7 @@ impl AwsSandbox {
             tokio::time::sleep(SANDBOX_READY_POLL).await;
         };
 
-        Self::poll_until_healthy(probe, deadline, sandbox_id).await
+        Self::poll_until_healthy(probe, deadline, operation, sandbox_id).await
     }
 
     /// The agent uses a plain-text error-code prefix. Recognize only its explicit self-check
@@ -554,6 +555,7 @@ impl AwsSandbox {
     async fn poll_until_healthy(
         probe: reqwest::RequestBuilder,
         deadline: std::time::Instant,
+        operation: &str,
         sandbox_id: &str,
     ) -> Result<()> {
         let mut last_seen;
@@ -562,7 +564,7 @@ impl AwsSandbox {
             // no further describes or mints.
             let request = probe.try_clone().ok_or_else(|| {
                 AlienError::new(ErrorData::SandboxUnreachable {
-                    operation: "sandbox.create".to_string(),
+                    operation: operation.to_string(),
                     reason: "the readiness probe could not be repeated".to_string(),
                 })
             })?;
@@ -578,7 +580,7 @@ impl AwsSandbox {
 
             if std::time::Instant::now() >= deadline {
                 return Err(AlienError::new(ErrorData::SandboxUnreachable {
-                    operation: "sandbox.create".to_string(),
+                    operation: operation.to_string(),
                     reason: format!(
                         "MicroVM '{sandbox_id}' did not become servable in time: {last_seen}"
                     ),
@@ -707,7 +709,7 @@ impl Sandbox for AwsSandbox {
                 let delivery = manager.create(&microvm_id, policy, expires_at).await?;
                 self.install_egress(&microvm_id, delivery).await?;
             }
-            self.wait_until_servable(&microvm_id).await
+            self.wait_until_servable("sandbox.create", &microvm_id).await
         }
         .await;
         if let Err(mut error) = ready {
@@ -794,7 +796,7 @@ impl Sandbox for AwsSandbox {
                 // or the guarantee holds only for whoever won the race. Waited for here rather
                 // than in `get`, which reports a sandbox's state and does not promise one.
                 if matches!(existing.state, SandboxState::Starting) {
-                    self.wait_until_servable(id).await?;
+                    self.wait_until_servable("sandbox.create", id).await?;
                     return Ok(ResolvedSandbox::found(
                         self.instance(id.to_string(), Some("RUNNING".to_string())),
                     ));
@@ -934,7 +936,12 @@ impl Sandbox for AwsSandbox {
             "sandbox.resume",
             &format!("could not resume MicroVM '{sandbox_id}'"),
         )?;
-        self.renew_egress(sandbox_id).await
+        self.renew_egress(sandbox_id).await?;
+
+        // ResumeMicrovm is accepted while the MicroVM is still SUSPENDED; it takes traffic only
+        // once its /resume hook returns, so a command sent before then hits the proxy's 502. Not
+        // terminated on a failed wait, unlike `create`: the caller holds this sandbox's id.
+        self.wait_until_servable("sandbox.resume", sandbox_id).await
     }
 
     async fn snapshot(&self, _sandbox_id: &str) -> Result<String> {
@@ -1390,7 +1397,7 @@ mod tests {
         let probe = reqwest::Client::new().get(format!("http://{address}{HEALTH_PATH}"));
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
 
-        AwsSandbox::poll_until_healthy(probe, deadline, "mvm-restoring")
+        AwsSandbox::poll_until_healthy(probe, deadline, "sandbox.create", "mvm-restoring")
             .await
             .expect("the wait must outlast generic restore 502 and 503 responses");
         assert_eq!(
@@ -1418,7 +1425,7 @@ mod tests {
         let probe = reqwest::Client::new().get(format!("http://{address}{HEALTH_PATH}"));
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(30);
 
-        let error = AwsSandbox::poll_until_healthy(probe, deadline, "mvm-dead")
+        let error = AwsSandbox::poll_until_healthy(probe, deadline, "sandbox.create", "mvm-dead")
             .await
             .expect_err("a sandbox that never answers must not be reported as ready");
         assert_eq!(error.code, "SANDBOX_UNREACHABLE");

@@ -429,6 +429,7 @@ async fn aws_egress_health_self_check_refusal_is_not_a_restore_response() {
     let response = AwsSandbox::poll_until_healthy(
         reqwest::Client::new().get(format!("http://{address}{HEALTH_PATH}")),
         std::time::Instant::now() + std::time::Duration::from_secs(5),
+        "sandbox.create",
         "mvm-self-check",
     )
     .await
