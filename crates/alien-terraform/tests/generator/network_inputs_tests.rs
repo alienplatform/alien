@@ -134,3 +134,99 @@ run "network_{index}" {{
         ));
     }
 }
+
+/// Generation refuses subnet layouts that cannot hold the dedicated sandbox allocation.
+#[test]
+fn azure_sandbox_network_rejects_small_or_non_ipv4_networks() {
+    use alien_core::{Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy};
+    for (cidr, supported) in [
+        ("10.46.0.0/16", true),
+        ("10.46.0.0/20", false),
+        ("fd00::/16", false),
+    ] {
+        let stack = Stack::new("sandbox-network".into())
+            .add(
+                Network::new("net".into())
+                    .settings(NetworkSettings::Create {
+                        cidr: Some(cidr.into()),
+                        availability_zones: 1,
+                    })
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Sandbox::new("box".into())
+                    .code(SandboxCode::Image {
+                        image: "ubuntu".into(),
+                    })
+                    .egress(SandboxEgress::Internet)
+                    .lifecycle(SandboxLifecyclePolicy {
+                        max_lifetime_seconds: None,
+                        idle_pause_seconds: None,
+                    })
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let result =
+            super::helpers::try_render(&stack, TerraformTarget::Azure, StackSettings::default());
+        if supported {
+            result.expect("the default network can allocate the dedicated subnet");
+        } else {
+            let error = result.expect_err("unsafe subnet allocation must fail before apply");
+            assert!(
+                error.to_string().contains("IPv4 VNet /16 or larger"),
+                "{error}"
+            );
+        }
+    }
+}
+
+#[test]
+fn aks_sandboxes_do_not_require_a_native_azure_subnet() {
+    use alien_core::{Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy};
+    let settings = NetworkSettings::ByoVnetAzure {
+        vnet_resource_id: "/subscriptions/test/resourceGroups/test/providers/Microsoft.Network/virtualNetworks/test".into(),
+        public_subnet_name: "public".into(),
+        private_subnet_name: "private".into(),
+        application_gateway_subnet_name: None,
+        private_endpoint_subnet_name: None,
+    };
+    let stack = Stack::new("aks-sandbox".into())
+        .add(
+            Network::new("net".into())
+                .settings(settings.clone())
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Sandbox::new("box".into())
+                .code(SandboxCode::Image {
+                    image: "ubuntu".into(),
+                })
+                .egress(SandboxEgress::Internet)
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    super::helpers::try_render(
+        &stack,
+        TerraformTarget::Aks,
+        StackSettings {
+            network: Some(settings),
+            ..Default::default()
+        },
+    )
+    .expect("pods do not consume native Azure sandbox subnets");
+    let error =
+        super::helpers::try_render(&stack, TerraformTarget::Azure, StackSettings::default())
+            .expect_err("native sandboxes still require a dedicated setup-owned subnet");
+    assert!(
+        error.to_string().contains("dedicated BYO sandbox subnets"),
+        "{error}"
+    );
+}

@@ -114,7 +114,7 @@ impl TfEmitter for AzureSandboxEmitter {
                     reason: "every Azure sandbox requires a deployment network".to_string(),
                 })
             })?;
-        let subnet = format!("{network}_sandbox");
+        let subnet = super::sandbox_network::subnet_label(network, label);
         fragment.resource_blocks.push(resource_block(
             "azapi_resource",
             &format!("{label}_vnet"),
@@ -784,22 +784,20 @@ mod tests {
     /// domains denies everything, and the domains without the mode are ignored.
     #[test]
     fn the_binding_carries_the_declared_egress() {
-        // The key names are asserted, not just the values: `AzureSandboxBinding.egress` has no
-        // serde default, so a misspelled key here is a deserialization failure on the customer's
-        // cluster rather than a failure at emit.
-        let denied = binding_for(SandboxEgress::None);
-        assert!(denied.contains("egress = {"), "{denied}");
-        assert!(denied.contains(r#"mode = "deny""#), "{denied}");
-
-        let listed = binding_for(SandboxEgress::Allow {
-            allow: vec!["api.example.com".to_string()],
-        });
-        assert!(listed.contains(r#"mode = "allowDomains""#), "{listed}");
-        assert!(listed.contains("domains = ["), "{listed}");
-        assert!(listed.contains(r#""api.example.com""#), "{listed}");
-
-        let open = binding_for(SandboxEgress::Internet);
-        assert!(open.contains(r#"mode = "allow""#), "{open}");
+        for expected in [
+            SandboxEgress::None,
+            SandboxEgress::Internet,
+            SandboxEgress::Allow {
+                allow: vec!["api.example.com".to_string()],
+            },
+        ] {
+            let rendered = binding_for(expected.clone());
+            let value: serde_json::Value =
+                hcl::from_str(&format!("binding = {rendered}")).expect("binding is valid HCL");
+            let actual: SandboxEgress = serde_json::from_value(value["binding"]["egress"].clone())
+                .expect("the emitted policy matches the binding's public schema");
+            assert_eq!(actual, expected);
+        }
     }
 
     /// Every key the binding deserializes is a key the emitter writes.

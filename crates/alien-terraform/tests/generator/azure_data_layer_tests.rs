@@ -16,10 +16,10 @@ use super::helpers::{
 };
 use alien_core::{
     Ai, AzureContainerAppsEnvironment, AzureResourceGroup, AzureServiceBusNamespace,
-    AzureStorageAccount, Key, Kv, LifecycleRule, PermissionProfile, PermissionSetReference, Queue,
-    RemoteBindings, RemoteStackManagement, ResourceLifecycle, ResourceRef, Sandbox, SandboxCode,
-    SandboxEgress, SandboxLifecyclePolicy, ServiceAccount, Stack, StackSettings, Storage, Vault,
-    Worker, WorkerCode,
+    AzureStorageAccount, Key, Kv, LifecycleRule, Network, PermissionProfile,
+    PermissionSetReference, Queue, RemoteBindings, RemoteStackManagement, ResourceLifecycle,
+    ResourceRef, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy, ServiceAccount,
+    Stack, StackSettings, Storage, Vault, Worker, WorkerCode,
 };
 use alien_permissions::{BindingTarget, PermissionContext};
 use alien_terraform::{
@@ -568,6 +568,12 @@ fn azure_remote_sandbox_grants_the_access_identity_its_own_group_and_nothing_wid
         })
         .build();
     let stack = Stack::new("byo-sandbox".to_string())
+        .add(
+            Network::new("sandbox-network".to_string())
+                .settings(alien_core::NetworkSettings::UseDefault)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
         .add(resource_group(), ResourceLifecycle::Frozen)
         .add_with_remote_access(sandbox, ResourceLifecycle::Frozen)
         .add(
@@ -712,6 +718,12 @@ fn azure_sandbox_image_grant_reaches_the_manager_on_its_own_group_only() {
         })
         .build();
     let stack = Stack::new("byo-sandbox".to_string())
+        .add(
+            Network::new("sandbox-network".to_string())
+                .settings(alien_core::NetworkSettings::UseDefault)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
         .management(alien_core::ManagementPermissions::extend(
             PermissionProfile::new().resource("agents", ["sandbox/images"]),
         ))
@@ -817,6 +829,12 @@ fn workload_sandbox_stack(profile: PermissionProfile, sandbox_ids: &[&str]) -> S
         .expect("built-in permission sets resolve");
 
     let mut stack = Stack::new("byo-sandbox".to_string())
+        .add(
+            Network::new("sandbox-network".to_string())
+                .settings(alien_core::NetworkSettings::UseDefault)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
         .permission("execution", profile)
         .add(resource_group(), ResourceLifecycle::Frozen)
         .add(
@@ -1432,6 +1450,12 @@ fn an_aks_package_is_not_told_about_a_sandbox_group_it_does_not_get() {
         })
         .build();
     let stack = Stack::new("byo-sandbox".to_string())
+        .add(
+            Network::new("sandbox-network".to_string())
+                .settings(alien_core::NetworkSettings::UseDefault)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
         .add_with_remote_access(sandbox, ResourceLifecycle::Frozen)
         .add(
             RemoteBindings::new("access".to_string()).build(),
@@ -1468,12 +1492,12 @@ fn an_aks_package_is_not_told_about_a_sandbox_group_it_does_not_get() {
     }
 }
 
-/// A remote sandbox renders on its own, with no other resource declared — which is what makes
+/// A remote sandbox and its network use the supplied resource group, which makes
 /// `parent_id` worth pinning: it must resolve to the deployer-supplied
 /// `var.azure_resource_group_name`, not a resource group the module would have had to declare.
 /// Reaches `terraform validate` only, not apply.
 #[test]
-fn an_azure_remote_sandbox_renders_without_any_other_resource_declared() {
+fn an_azure_remote_sandbox_uses_the_supplied_resource_group() {
     let sandbox = Sandbox::new("agents".to_string())
         .code(SandboxCode::Image {
             image: "ubuntu".to_string(),
@@ -1485,6 +1509,12 @@ fn an_azure_remote_sandbox_renders_without_any_other_resource_declared() {
         })
         .build();
     let stack = Stack::new("byo-sandbox".to_string())
+        .add(
+            Network::new("sandbox-network".to_string())
+                .settings(alien_core::NetworkSettings::UseDefault)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
         .add_with_remote_access(sandbox, ResourceLifecycle::Frozen)
         .add(
             RemoteBindings::new("access".to_string()).build(),
@@ -1580,6 +1610,12 @@ fn published_sandbox_stack(profile: PermissionProfile) -> Stack {
         .link(&frozen_sandbox("other"))
         .build();
     Stack::new("byo-sandbox".to_string())
+        .add(
+            Network::new("sandbox-network".to_string())
+                .settings(alien_core::NetworkSettings::UseDefault)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
         .permission("execution", profile)
         .add(resource_group(), ResourceLifecycle::Frozen)
         .add(
@@ -1669,6 +1705,12 @@ fn grants_whose_names_join_alike_get_their_own_addresses() {
         .expect("built-in permission sets resolve")
     };
     let stack = Stack::new("byo-sandbox".to_string())
+        .add(
+            Network::new("sandbox-network".to_string())
+                .settings(alien_core::NetworkSettings::UseDefault)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
         .permission("b", b.clone())
         .permission("a-b", a_b.clone())
         .add(resource_group(), ResourceLifecycle::Frozen)

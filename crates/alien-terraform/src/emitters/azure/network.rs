@@ -39,7 +39,8 @@ impl TfEmitter for AzureNetworkEmitter {
         let network = downcast::<Network>(ctx, Network::RESOURCE_TYPE)?;
         let label = required_label(ctx)?;
 
-        if matches!(network.settings, NetworkSettings::ByoVnetAzure { .. })
+        if !ctx.targets_kubernetes
+            && matches!(network.settings, NetworkSettings::ByoVnetAzure { .. })
             && ctx
                 .stack
                 .resources()
@@ -547,7 +548,7 @@ fn create_topology(ctx: &EmitContext<'_>, label: &str, cidr: Option<String>) -> 
         ],
     ));
 
-    super::sandbox_network::emit(ctx, label, &mut fragment)?;
+    super::sandbox_network::emit(ctx, label, &cidr, &mut fragment)?;
     Ok(fragment)
 }
 

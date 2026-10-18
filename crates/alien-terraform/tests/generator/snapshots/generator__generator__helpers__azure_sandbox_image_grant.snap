@@ -186,6 +186,29 @@ locals {
   deployment_settings          = merge(local.advanced_settings, { deploymentModel = var.deployment_model, updates = var.updates_mode, telemetry = var.telemetry_mode, heartbeats = var.heartbeats_mode, endpointAccess = var.endpoint_access })
   deployment_resources = [
     {
+      id   = "sandbox-network"
+      type = "network"
+      importData = {
+        subscriptionId = var.azure_subscription_id
+        resourceGroup  = var.azure_resource_group_name
+        vnetId         = azurerm_virtual_network.sandbox_network.id
+        vnetName       = azurerm_virtual_network.sandbox_network.name
+        subnetIds = [
+          azurerm_subnet.sandbox_network_public.id,
+          azurerm_subnet.sandbox_network_private.id
+        ]
+        applicationGatewaySubnetId   = azurerm_subnet.sandbox_network_appgw.id
+        applicationGatewaySubnetName = azurerm_subnet.sandbox_network_appgw.name
+        privateEndpointSubnetName    = azurerm_subnet.sandbox_network_pe.name
+        natGatewayId                 = azurerm_nat_gateway.sandbox_network_nat.id
+        networkSecurityGroupId       = azurerm_network_security_group.sandbox_network_workload.id
+        egressPublicIps = [
+          azurerm_public_ip.sandbox_network_nat_pip.ip_address
+        ]
+        isByoVnet = false
+      }
+    },
+    {
       id   = "default-resource-group"
       type = "azure_resource_group"
       importData = {
@@ -219,16 +242,468 @@ locals {
   ]
 }
 
-=== default_resource_group.tf ===
-resource "azurerm_resource_group" "default_resource_group" {
-  name     = var.azure_resource_group_name
-  location = var.azure_location
+=== sandbox_network.tf ===
+resource "azurerm_virtual_network" "sandbox_network" {
+  name                = "${local.resource_prefix}-sandbox_network"
+  resource_group_name = var.azure_resource_group_name
+  location            = var.azure_location
+  address_space = [
+    "10.46.0.0/16"
+  ]
   tags = {
     "managed-by"    = "setup"
     deployment      = local.resource_prefix
-    resource        = "default-resource-group"
-    "resource-type" = "resource-group"
+    resource        = "sandbox-network"
+    "resource-type" = "network"
   }
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_subnet" "sandbox_network_public" {
+  name                 = "${local.resource_prefix}-sandbox_network-public"
+  resource_group_name  = var.azure_resource_group_name
+  virtual_network_name = azurerm_virtual_network.sandbox_network.name
+  address_prefixes = [
+    cidrsubnet(tolist(azurerm_virtual_network.sandbox_network.address_space)[0], 8, 0)
+  ]
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_subnet" "sandbox_network_private" {
+  name                 = "${local.resource_prefix}-sandbox_network-private"
+  resource_group_name  = var.azure_resource_group_name
+  virtual_network_name = azurerm_virtual_network.sandbox_network.name
+  address_prefixes = [
+    cidrsubnet(tolist(azurerm_virtual_network.sandbox_network.address_space)[0], 8, 1)
+  ]
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_subnet" "sandbox_network_container_apps" {
+  name                 = "${local.resource_prefix}-sandbox_network-container-apps"
+  resource_group_name  = var.azure_resource_group_name
+  virtual_network_name = azurerm_virtual_network.sandbox_network.name
+  address_prefixes = [
+    cidrsubnet(tolist(azurerm_virtual_network.sandbox_network.address_space)[0], 8, 5)
+  ]
+
+  delegation {
+    name = "container-apps-environment"
+
+    service_delegation {
+      name = "Microsoft.App/environments"
+      actions = [
+        "Microsoft.Network/virtualNetworks/subnets/join/action"
+      ]
+    }
+  }
+
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_subnet" "sandbox_network_appgw" {
+  name                 = "${local.resource_prefix}-sandbox_network-appgw"
+  resource_group_name  = var.azure_resource_group_name
+  virtual_network_name = azurerm_virtual_network.sandbox_network.name
+  address_prefixes = [
+    cidrsubnet(tolist(azurerm_virtual_network.sandbox_network.address_space)[0], 8, 2)
+  ]
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_subnet" "sandbox_network_alb" {
+  name                 = "${local.resource_prefix}-sandbox_network-alb"
+  resource_group_name  = var.azure_resource_group_name
+  virtual_network_name = azurerm_virtual_network.sandbox_network.name
+  address_prefixes = [
+    cidrsubnet(tolist(azurerm_virtual_network.sandbox_network.address_space)[0], 8, 3)
+  ]
+
+  delegation {
+    name = "service-networking"
+
+    service_delegation {
+      name = "Microsoft.ServiceNetworking/trafficControllers"
+      actions = [
+        "Microsoft.Network/virtualNetworks/subnets/join/action"
+      ]
+    }
+  }
+
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_subnet" "sandbox_network_pe" {
+  name                 = "${local.resource_prefix}-sandbox_network-pe"
+  resource_group_name  = var.azure_resource_group_name
+  virtual_network_name = azurerm_virtual_network.sandbox_network.name
+  address_prefixes = [
+    cidrsubnet(tolist(azurerm_virtual_network.sandbox_network.address_space)[0], 8, 4)
+  ]
+  private_endpoint_network_policies = "Disabled"
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_public_ip" "sandbox_network_nat_pip" {
+  name                = "${local.resource_prefix}-sandbox_network-nat-pip"
+  resource_group_name = var.azure_resource_group_name
+  location            = var.azure_location
+  allocation_method   = "Static"
+  sku                 = "Standard"
+  tags = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "sandbox-network"
+    "resource-type" = "network"
+  }
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_nat_gateway" "sandbox_network_nat" {
+  name                    = "${local.resource_prefix}-sandbox_network-nat"
+  resource_group_name     = var.azure_resource_group_name
+  location                = var.azure_location
+  sku_name                = "Standard"
+  idle_timeout_in_minutes = 10
+  tags = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "sandbox-network"
+    "resource-type" = "network"
+  }
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_nat_gateway_public_ip_association" "sandbox_network_nat" {
+  nat_gateway_id       = azurerm_nat_gateway.sandbox_network_nat.id
+  public_ip_address_id = azurerm_public_ip.sandbox_network_nat_pip.id
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_subnet_nat_gateway_association" "sandbox_network_private" {
+  subnet_id      = azurerm_subnet.sandbox_network_private.id
+  nat_gateway_id = azurerm_nat_gateway.sandbox_network_nat.id
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_network_security_group" "sandbox_network_workload" {
+  name                = "${local.resource_prefix}-sandbox_network-workload"
+  resource_group_name = var.azure_resource_group_name
+  location            = var.azure_location
+
+  security_rule {
+    name                       = "AllowVnetInbound"
+    priority                   = 100
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "*"
+    source_port_range          = "*"
+    destination_port_range     = "*"
+    source_address_prefix      = "VirtualNetwork"
+    destination_address_prefix = "VirtualNetwork"
+  }
+
+  tags = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "sandbox-network"
+    "resource-type" = "network"
+  }
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_subnet_network_security_group_association" "sandbox_network_private" {
+  subnet_id                 = azurerm_subnet.sandbox_network_private.id
+  network_security_group_id = azurerm_network_security_group.sandbox_network_workload.id
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_subnet" "sandbox_network_sandbox_agents" {
+  name                 = "${local.resource_prefix}-sandbox_network-sandbox-agents"
+  resource_group_name  = var.azure_resource_group_name
+  virtual_network_name = azurerm_virtual_network.sandbox_network.name
+  address_prefixes = [
+    cidrsubnet(tolist(azurerm_virtual_network.sandbox_network.address_space)[0], 7, 8)
+  ]
+
+  delegation {
+    name = "sandbox-environment"
+
+    service_delegation {
+      name = "Microsoft.App/environments"
+      actions = [
+        "Microsoft.Network/virtualNetworks/subnets/join/action"
+      ]
+    }
+  }
+
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_network_security_group" "sandbox_network_sandbox_agents" {
+  name                = "${local.resource_prefix}-sandbox_network-sandbox-agents"
+  resource_group_name = var.azure_resource_group_name
+  location            = var.azure_location
+  tags = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "sandbox-network"
+    "resource-type" = "sandbox-network"
+  }
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_network_security_rule" "sandbox_network_sandbox_agents_metadata" {
+  name                        = "metadata"
+  resource_group_name         = var.azure_resource_group_name
+  network_security_group_name = azurerm_network_security_group.sandbox_network_sandbox_agents.name
+  priority                    = 100
+  direction                   = "Outbound"
+  access                      = "Deny"
+  protocol                    = "*"
+  source_port_range           = "*"
+  source_address_prefix       = "*"
+  destination_address_prefix  = "AzurePlatformIMDS"
+  destination_port_range      = "*"
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_network_security_rule" "sandbox_network_sandbox_agents_vnet" {
+  name                        = "vnet"
+  resource_group_name         = var.azure_resource_group_name
+  network_security_group_name = azurerm_network_security_group.sandbox_network_sandbox_agents.name
+  priority                    = 110
+  direction                   = "Outbound"
+  access                      = "Deny"
+  protocol                    = "*"
+  source_port_range           = "*"
+  source_address_prefix       = "*"
+  destination_address_prefix  = "VirtualNetwork"
+  destination_port_range      = "*"
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_network_security_rule" "sandbox_network_sandbox_agents_unspecified" {
+  name                        = "unspecified"
+  resource_group_name         = var.azure_resource_group_name
+  network_security_group_name = azurerm_network_security_group.sandbox_network_sandbox_agents.name
+  priority                    = 120
+  direction                   = "Outbound"
+  access                      = "Deny"
+  protocol                    = "*"
+  source_port_range           = "*"
+  source_address_prefix       = "*"
+  destination_address_prefix  = "0.0.0.0/8"
+  destination_port_range      = "*"
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_network_security_rule" "sandbox_network_sandbox_agents_private_10" {
+  name                        = "private_10"
+  resource_group_name         = var.azure_resource_group_name
+  network_security_group_name = azurerm_network_security_group.sandbox_network_sandbox_agents.name
+  priority                    = 121
+  direction                   = "Outbound"
+  access                      = "Deny"
+  protocol                    = "*"
+  source_port_range           = "*"
+  source_address_prefix       = "*"
+  destination_address_prefix  = "10.0.0.0/8"
+  destination_port_range      = "*"
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_network_security_rule" "sandbox_network_sandbox_agents_shared" {
+  name                        = "shared"
+  resource_group_name         = var.azure_resource_group_name
+  network_security_group_name = azurerm_network_security_group.sandbox_network_sandbox_agents.name
+  priority                    = 122
+  direction                   = "Outbound"
+  access                      = "Deny"
+  protocol                    = "*"
+  source_port_range           = "*"
+  source_address_prefix       = "*"
+  destination_address_prefix  = "100.64.0.0/10"
+  destination_port_range      = "*"
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_network_security_rule" "sandbox_network_sandbox_agents_loopback" {
+  name                        = "loopback"
+  resource_group_name         = var.azure_resource_group_name
+  network_security_group_name = azurerm_network_security_group.sandbox_network_sandbox_agents.name
+  priority                    = 123
+  direction                   = "Outbound"
+  access                      = "Deny"
+  protocol                    = "*"
+  source_port_range           = "*"
+  source_address_prefix       = "*"
+  destination_address_prefix  = "127.0.0.0/8"
+  destination_port_range      = "*"
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_network_security_rule" "sandbox_network_sandbox_agents_link_local" {
+  name                        = "link_local"
+  resource_group_name         = var.azure_resource_group_name
+  network_security_group_name = azurerm_network_security_group.sandbox_network_sandbox_agents.name
+  priority                    = 124
+  direction                   = "Outbound"
+  access                      = "Deny"
+  protocol                    = "*"
+  source_port_range           = "*"
+  source_address_prefix       = "*"
+  destination_address_prefix  = "169.254.0.0/16"
+  destination_port_range      = "*"
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_network_security_rule" "sandbox_network_sandbox_agents_private_172" {
+  name                        = "private_172"
+  resource_group_name         = var.azure_resource_group_name
+  network_security_group_name = azurerm_network_security_group.sandbox_network_sandbox_agents.name
+  priority                    = 125
+  direction                   = "Outbound"
+  access                      = "Deny"
+  protocol                    = "*"
+  source_port_range           = "*"
+  source_address_prefix       = "*"
+  destination_address_prefix  = "172.16.0.0/12"
+  destination_port_range      = "*"
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_network_security_rule" "sandbox_network_sandbox_agents_private_192" {
+  name                        = "private_192"
+  resource_group_name         = var.azure_resource_group_name
+  network_security_group_name = azurerm_network_security_group.sandbox_network_sandbox_agents.name
+  priority                    = 126
+  direction                   = "Outbound"
+  access                      = "Deny"
+  protocol                    = "*"
+  source_port_range           = "*"
+  source_address_prefix       = "*"
+  destination_address_prefix  = "192.168.0.0/16"
+  destination_port_range      = "*"
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_network_security_rule" "sandbox_network_sandbox_agents_multicast" {
+  name                        = "multicast"
+  resource_group_name         = var.azure_resource_group_name
+  network_security_group_name = azurerm_network_security_group.sandbox_network_sandbox_agents.name
+  priority                    = 127
+  direction                   = "Outbound"
+  access                      = "Deny"
+  protocol                    = "*"
+  source_port_range           = "*"
+  source_address_prefix       = "*"
+  destination_address_prefix  = "224.0.0.0/4"
+  destination_port_range      = "*"
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_network_security_rule" "sandbox_network_sandbox_agents_other" {
+  name                        = "other"
+  resource_group_name         = var.azure_resource_group_name
+  network_security_group_name = azurerm_network_security_group.sandbox_network_sandbox_agents.name
+  priority                    = 300
+  direction                   = "Outbound"
+  access                      = "Deny"
+  protocol                    = "*"
+  source_port_range           = "*"
+  source_address_prefix       = "*"
+  destination_address_prefix  = "*"
+  destination_port_range      = "*"
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_network_security_rule" "sandbox_network_sandbox_agents_internet" {
+  name                        = "internet"
+  resource_group_name         = var.azure_resource_group_name
+  network_security_group_name = azurerm_network_security_group.sandbox_network_sandbox_agents.name
+  priority                    = 200
+  direction                   = "Outbound"
+  access                      = "Allow"
+  protocol                    = "Tcp"
+  source_port_range           = "*"
+  source_address_prefix       = "*"
+  destination_address_prefix  = "Internet"
+  destination_port_ranges = [
+    "443",
+    "80"
+  ]
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_subnet_nat_gateway_association" "sandbox_network_sandbox_agents" {
+  subnet_id      = azurerm_subnet.sandbox_network_sandbox_agents.id
+  nat_gateway_id = azurerm_nat_gateway.sandbox_network_nat.id
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_subnet_network_security_group_association" "sandbox_network_sandbox_agents" {
+  subnet_id                 = azurerm_subnet.sandbox_network_sandbox_agents.id
+  network_security_group_id = azurerm_network_security_group.sandbox_network_sandbox_agents.id
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
 }
 
 resource "azurerm_role_definition" "setup_management_manage_sandbox_disk_images_0" {
@@ -251,6 +726,21 @@ resource "azurerm_role_definition" "setup_management_manage_sandbox_disk_images_
   assignable_scopes = [
     "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
   ]
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+=== default_resource_group.tf ===
+resource "azurerm_resource_group" "default_resource_group" {
+  name     = var.azure_resource_group_name
+  location = var.azure_location
+  tags = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "default-resource-group"
+    "resource-type" = "resource-group"
+  }
 }
 
 === agents.tf ===
@@ -268,6 +758,24 @@ resource "azapi_resource" "agents" {
   }
   schema_validation_enabled = false
   depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azapi_resource" "agents_vnet" {
+  type      = "Microsoft.App/sandboxGroups/vnetConnections@2026-02-01-preview"
+  name      = "default"
+  parent_id = azapi_resource.agents.id
+  location  = var.azure_location
+  body = {
+    properties = {
+      subnetId = azurerm_subnet.sandbox_network_sandbox_agents.id
+    }
+  }
+  schema_validation_enabled = false
+  depends_on = [
+    azurerm_subnet_nat_gateway_association.sandbox_network_sandbox_agents,
+    azurerm_subnet_network_security_group_association.sandbox_network_sandbox_agents,
     azurerm_resource_group.default_resource_group
   ]
 }
@@ -342,9 +850,39 @@ resource "terraform_data" "deployment_registration" {
     inputValues                 = {}
   }
   depends_on = [
-    azurerm_resource_group.default_resource_group,
+    azurerm_virtual_network.sandbox_network,
+    azurerm_subnet.sandbox_network_public,
+    azurerm_subnet.sandbox_network_private,
+    azurerm_subnet.sandbox_network_container_apps,
+    azurerm_subnet.sandbox_network_appgw,
+    azurerm_subnet.sandbox_network_alb,
+    azurerm_subnet.sandbox_network_pe,
+    azurerm_public_ip.sandbox_network_nat_pip,
+    azurerm_nat_gateway.sandbox_network_nat,
+    azurerm_nat_gateway_public_ip_association.sandbox_network_nat,
+    azurerm_subnet_nat_gateway_association.sandbox_network_private,
+    azurerm_network_security_group.sandbox_network_workload,
+    azurerm_subnet_network_security_group_association.sandbox_network_private,
+    azurerm_subnet.sandbox_network_sandbox_agents,
+    azurerm_network_security_group.sandbox_network_sandbox_agents,
+    azurerm_network_security_rule.sandbox_network_sandbox_agents_metadata,
+    azurerm_network_security_rule.sandbox_network_sandbox_agents_vnet,
+    azurerm_network_security_rule.sandbox_network_sandbox_agents_unspecified,
+    azurerm_network_security_rule.sandbox_network_sandbox_agents_private_10,
+    azurerm_network_security_rule.sandbox_network_sandbox_agents_shared,
+    azurerm_network_security_rule.sandbox_network_sandbox_agents_loopback,
+    azurerm_network_security_rule.sandbox_network_sandbox_agents_link_local,
+    azurerm_network_security_rule.sandbox_network_sandbox_agents_private_172,
+    azurerm_network_security_rule.sandbox_network_sandbox_agents_private_192,
+    azurerm_network_security_rule.sandbox_network_sandbox_agents_multicast,
+    azurerm_network_security_rule.sandbox_network_sandbox_agents_other,
+    azurerm_network_security_rule.sandbox_network_sandbox_agents_internet,
+    azurerm_subnet_nat_gateway_association.sandbox_network_sandbox_agents,
+    azurerm_subnet_network_security_group_association.sandbox_network_sandbox_agents,
     azurerm_role_definition.setup_management_manage_sandbox_disk_images_0,
+    azurerm_resource_group.default_resource_group,
     azapi_resource.agents,
+    azapi_resource.agents_vnet,
     azurerm_role_assignment.agents_images_0,
     azurerm_user_assigned_identity.management,
     azurerm_role_assignment.management_self_read,

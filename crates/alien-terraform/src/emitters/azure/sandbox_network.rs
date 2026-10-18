@@ -1,8 +1,9 @@
-//! Setup-owned subnet and outbound rules shared by Azure sandbox groups.
+//! Setup-owned subnet and outbound rules for each Azure sandbox group.
 
 use std::collections::BTreeSet;
 
-use alien_core::{import::EmitContext, Result, Sandbox, SandboxEgress};
+use alien_core::{import::EmitContext, ErrorData, Result, Sandbox, SandboxEgress};
+use alien_error::AlienError;
 use hcl::expr::Expression;
 
 use crate::{
@@ -12,34 +13,81 @@ use crate::{
     expr,
 };
 
-pub(super) fn emit(ctx: &EmitContext<'_>, network: &str, fragment: &mut TfFragment) -> Result<()> {
+pub(super) fn emit(
+    ctx: &EmitContext<'_>,
+    network: &str,
+    cidr: &str,
+    fragment: &mut TfFragment,
+) -> Result<()> {
+    if ctx.targets_kubernetes {
+        return Ok(());
+    }
     let sandboxes: Vec<_> = ctx
         .stack
         .resources()
-        .filter_map(|(_, entry)| entry.config.downcast_ref::<Sandbox>())
+        .filter_map(|(id, entry)| {
+            entry
+                .config
+                .downcast_ref::<Sandbox>()
+                .map(|sandbox| (id, sandbox))
+        })
         .collect();
     if sandboxes.is_empty() {
         return Ok(());
     }
-    let label = format!("{network}_sandbox");
+    // Keep the existing infrastructure allocation and reserve /23 or larger subnets for
+    // sandboxes. Each group requires its own delegated subnet, which cannot move later.
+    let supported_cidr = cidr.split_once('/').is_some_and(|(address, prefix)| {
+        address.parse::<std::net::Ipv4Addr>().is_ok()
+            && prefix.parse::<u8>().is_ok_and(|prefix| prefix <= 16)
+    });
+    if !supported_cidr || sandboxes.len() > 120 {
+        return Err(AlienError::new(ErrorData::OperationNotSupported {
+            operation: "Azure sandbox network setup".to_string(),
+            reason: "the dedicated subnet layout requires an IPv4 VNet /16 or larger and at most 120 sandbox resources".to_string(),
+        }));
+    }
+    for (index, (id, sandbox)) in sandboxes.into_iter().enumerate() {
+        let name = ctx.name_for(id).ok_or_else(|| {
+            AlienError::new(ErrorData::OperationNotSupported {
+                operation: "Azure sandbox network setup".to_string(),
+                reason: format!("sandbox {id} has no Terraform resource name"),
+            })
+        })?;
+        emit_group(ctx, network, name, index + 8, sandbox, fragment)?;
+    }
+    Ok(())
+}
+
+pub(super) fn subnet_label(network: &str, sandbox: &str) -> String {
+    format!("{network}_sandbox_{sandbox}")
+}
+
+fn emit_group(
+    ctx: &EmitContext<'_>,
+    network: &str,
+    sandbox_name: &str,
+    subnet_index: usize,
+    sandbox: &Sandbox,
+    fragment: &mut TfFragment,
+) -> Result<()> {
+    let label = subnet_label(network, sandbox_name);
     let nat = format!("{network}_nat");
     let mut ports = BTreeSet::new();
-    for sandbox in &sandboxes {
-        match sandbox.egress.normalized()? {
-            SandboxEgress::None => {}
-            SandboxEgress::Internet => {
-                ports.insert("80".to_string());
-                ports.insert("443".to_string());
-            }
-            SandboxEgress::Allow { allow } => {
-                for target in allow {
-                    ports.insert(
-                        target
-                            .rsplit_once(':')
-                            .map_or("443", |(_, port)| port)
-                            .to_string(),
-                    );
-                }
+    match sandbox.egress.normalized()? {
+        SandboxEgress::None => {}
+        SandboxEgress::Internet => {
+            ports.insert("80".to_string());
+            ports.insert("443".to_string());
+        }
+        SandboxEgress::Allow { allow } => {
+            for target in allow {
+                ports.insert(
+                    target
+                        .rsplit_once(':')
+                        .map_or("443", |(_, port)| port)
+                        .to_string(),
+                );
             }
         }
     }
@@ -49,7 +97,7 @@ pub(super) fn emit(ctx: &EmitContext<'_>, network: &str, fragment: &mut TfFragme
         [
             attr(
                 "name",
-                expr::template(format!("${{local.resource_prefix}}-{network}-sandbox")),
+                expr::template(format!("${{local.resource_prefix}}-{network}-sandbox-{sandbox_name}")),
             ),
             attr(
                 "resource_group_name",
@@ -63,7 +111,7 @@ pub(super) fn emit(ctx: &EmitContext<'_>, network: &str, fragment: &mut TfFragme
             attr(
                 "address_prefixes",
                 Expression::Array(vec![expr::raw(format!(
-                    "cidrsubnet(tolist(azurerm_virtual_network.{network}.address_space)[0], 7, 8)"
+                    "cidrsubnet(tolist(azurerm_virtual_network.{network}.address_space)[0], 7, {subnet_index})"
                 ))]),
             ),
             nested(block(
@@ -99,7 +147,9 @@ pub(super) fn emit(ctx: &EmitContext<'_>, network: &str, fragment: &mut TfFragme
         [
             attr(
                 "name",
-                expr::template(format!("${{local.resource_prefix}}-{network}-sandbox")),
+                expr::template(format!(
+                    "${{local.resource_prefix}}-{network}-sandbox-{sandbox_name}"
+                )),
             ),
             attr(
                 "resource_group_name",
