@@ -16,7 +16,7 @@ use crate::{
     StackMutation,
 };
 
-const GATEWAY_IMAGE: &str = "ghcr.io/alienplatform/alien-egress-gateway@sha256:f0e47d06eea327bc27fdc1238dae6a8938572db0c1d139495d00dd5623b657dd";
+const GATEWAY_IMAGE: &str = "ghcr.io/alienplatform/alien-egress-gateway@sha256:1dc14128e34426b84c7a02228a6de790ea092b156776c3f2688b9843b26fc924";
 
 /// Managed AWS deployments use the same compute and service-account machinery
 /// as application containers. Unsupported deployments are refused before execution.
