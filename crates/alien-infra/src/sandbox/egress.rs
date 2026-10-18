@@ -6,7 +6,7 @@ use crate::core::state_utils::StackResourceStateExt;
 use alien_bindings::BindingsProviderApi;
 use alien_bindings::Vault;
 use alien_error::{AlienError, Context};
-use base64::{engine::general_purpose::STANDARD, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD};
 use ed25519_compact::{KeyPair, SecretKey};
 use serde::{Deserialize, Serialize};
 
@@ -140,6 +140,56 @@ mod tests {
         let error = ensure_signing_key(&vault).await.unwrap_err();
         assert!(!format!("{error:?}").contains("test-secret-not-a-key"));
         assert_eq!(vault.get_secret(SIGNING_KEY).await.unwrap(), secret);
+    }
+
+    #[tokio::test]
+    async fn gateway_replica_secret_survives_retry_and_audience_changes() {
+        let directory = tempfile::tempdir().unwrap();
+        let vault = LocalVault::new("secrets".into(), directory.path().into());
+        let config =
+            serde_json::json!({"audiences":["first"],"peers":{"dns":"gateway.svc","port":3129}});
+        publish_gateway_config(&vault, config.clone())
+            .await
+            .unwrap();
+        let initial = vault.get_secret(GATEWAY_CONFIG).await.unwrap();
+        let initial_json: serde_json::Value = serde_json::from_str(&initial).unwrap();
+        assert_eq!(
+            STANDARD
+                .decode(initial_json["replicaSecret"].as_str().unwrap())
+                .unwrap()
+                .len(),
+            32
+        );
+        let version = vault.secret_presence(GATEWAY_CONFIG).await.unwrap();
+        publish_gateway_config(&vault, config).await.unwrap();
+        assert_eq!(vault.get_secret(GATEWAY_CONFIG).await.unwrap(), initial);
+        assert_eq!(
+            vault.secret_presence(GATEWAY_CONFIG).await.unwrap(),
+            version
+        );
+        publish_gateway_config(
+            &vault,
+            serde_json::json!({"audiences":["first","second"],"peers":{"dns":"gateway.svc","port":3129}}),
+        )
+        .await
+        .unwrap();
+        let changed: serde_json::Value =
+            serde_json::from_str(&vault.get_secret(GATEWAY_CONFIG).await.unwrap()).unwrap();
+        assert_eq!(changed["replicaSecret"], initial_json["replicaSecret"]);
+        assert_eq!(changed["audiences"], serde_json::json!(["first", "second"]));
+    }
+
+    #[tokio::test]
+    async fn corrupt_replica_secret_fails_without_rotation_or_disclosure() {
+        let directory = tempfile::tempdir().unwrap();
+        let vault = LocalVault::new("secrets".into(), directory.path().into());
+        let invalid = r#"{"replicaSecret":"private-invalid-fixture"}"#;
+        vault.set_secret(GATEWAY_CONFIG, invalid).await.unwrap();
+        let error = publish_gateway_config(&vault, serde_json::json!({"audiences":[]}))
+            .await
+            .unwrap_err();
+        assert!(!format!("{error:?}").contains("private-invalid-fixture"));
+        assert_eq!(vault.get_secret(GATEWAY_CONFIG).await.unwrap(), invalid);
     }
 }
 
@@ -283,24 +333,66 @@ pub(crate) async fn publish_aws_config(
         "listen": "0.0.0.0:3128", "admin": "0.0.0.0:3129",
         "audiences": audiences, "defaultPolicies": {}, "keys": [key],
         "deniedRanges": denied,
+        "peers": {"dns": format!("{}.svc", alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID), "port": 3129},
         "credentials": []
-    })
-    .to_string();
+    });
     let vault = deployment_vault(ctx).await?;
-    match vault.get_secret(GATEWAY_CONFIG).await {
-        Ok(current) if current == value => return Ok(()),
-        Ok(_) => {}
+    publish_gateway_config(vault.as_ref(), value).await
+}
+
+/// Only the first internet Sandbox publishes this entry. The replica secret stays in the
+/// vault and never enters controller state, bindings, logs or generated packages.
+#[cfg(any(feature = "aws", test))]
+async fn publish_gateway_config(vault: &dyn Vault, mut value: serde_json::Value) -> Result<()> {
+    let invalid = || {
+        AlienError::new(ErrorData::ResourceConfigInvalid {
+            message: "The sandbox gateway configuration must be an object with a valid 32-byte base64 replicaSecret".into(),
+            resource_id: Some(alien_core::SECRETS_VAULT_ID.into()),
+        })
+    };
+    let current = match vault.get_secret(GATEWAY_CONFIG).await {
+        Ok(current) => Some(current),
         Err(error)
             if matches!(
                 error.error,
                 Some(alien_bindings::ErrorData::VaultSecretNotFound { .. })
-            ) => {}
+            ) =>
+        {
+            None
+        }
         Err(error) => {
             return Err(error).context(ErrorData::ResourceConfigInvalid {
                 message: "Failed to read the sandbox gateway configuration".into(),
                 resource_id: Some(alien_core::SECRETS_VAULT_ID.into()),
-            })
+            });
         }
+    };
+    let stored = current
+        .as_deref()
+        .map(serde_json::from_str::<serde_json::Value>)
+        .transpose()
+        .map_err(|_| invalid())?;
+    if stored.as_ref().is_some_and(|value| !value.is_object()) {
+        return Err(invalid());
+    }
+    let replica_secret = match stored.as_ref().and_then(|value| value.get("replicaSecret")) {
+        Some(value) => {
+            let encoded = value.as_str().ok_or_else(invalid)?;
+            let decoded = STANDARD.decode(encoded).map_err(|_| invalid())?;
+            if decoded.len() != 32 {
+                return Err(invalid());
+            }
+            encoded.to_string()
+        }
+        None => STANDARD.encode(ed25519_compact::Seed::generate().as_ref()),
+    };
+    value
+        .as_object_mut()
+        .ok_or_else(invalid)?
+        .insert("replicaSecret".into(), replica_secret.into());
+    let value = value.to_string();
+    if current.as_deref() == Some(&value) {
+        return Ok(());
     }
     vault
         .set_secret(GATEWAY_CONFIG, &value)
