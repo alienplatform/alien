@@ -9,7 +9,10 @@ use alien_azure_clients::azure::{
 };
 use alien_bindings::traits::{CommandOutput, CreateSandboxRequest, RunCommandRequest, Sandbox};
 use alien_bindings::{BindingsProvider, BindingsProviderApi};
-use alien_core::{AzureClientConfig, AzureCredentials, ClientConfig, EgressPolicy, SandboxEgress};
+use alien_core::{
+    bindings::VaultBinding, AzureClientConfig, AzureCredentials, ClientConfig, EgressPolicy,
+    SandboxEgress,
+};
 use futures::StreamExt;
 use std::{
     collections::{BTreeMap, HashMap},
@@ -78,11 +81,32 @@ async fn legacy_allow_keeps_native_networking_and_refuses_runtime_policies() {
             "diskImage":"ubuntu", "egress":egress,
         })
     };
+    // A reconnect must reject the missing attachment before reading a signing key
+    // or contacting the gateway. These endpoints deliberately have no service.
+    let mut attached_binding = binding(SandboxEgress::Internet);
+    attached_binding["egress"] = serde_json::json!({
+        "container": "gateway", "audience": "live-test/sandbox", "kid": "unused",
+        "signingKey": {"vault": "unused-vault", "key": "unused"},
+    });
     let provider = BindingsProvider::new(
         ClientConfig::Azure(Box::new(azure.clone())),
         HashMap::from([
             ("legacy".to_string(), binding(SandboxEgress::Allow)),
             ("new-internet".to_string(), binding(SandboxEgress::Internet)),
+            ("attached".to_string(), attached_binding),
+            (
+                "gateway".to_string(),
+                serde_json::json!({
+                    "service": "horizon", "containerName": "unused",
+                    "internalUrl": "http://127.0.0.1:9",
+                    "internalUrls": {"3128": "http://127.0.0.1:9", "3129": "http://127.0.0.1:9"},
+                }),
+            ),
+            (
+                "unused-vault".to_string(),
+                serde_json::to_value(VaultBinding::key_vault("unused-live-test-vault"))
+                    .expect("vault binding"),
+            ),
         ]),
     )
     .expect("binding config");
@@ -144,7 +168,26 @@ async fn legacy_allow_keeps_native_networking_and_refuses_runtime_policies() {
             !reopened.created && reopened.sandbox.sandbox_id == *id,
             "reconnect replaced sandbox"
         );
-        eprintln!("legacy native network/reconnect/policy-refusal and new internet refusal PASS");
+        let attached = provider.load_sandbox("attached").await?;
+        let error = attached.get(id).await.err().ok_or_else(|| {
+            std::io::Error::other("new Internet accepted a sandbox without a VNet attachment")
+        })?;
+        ensure!(
+            error.code == "SANDBOX_NOT_AS_DECLARED"
+                && matches!(
+                    error.error.as_ref(),
+                    Some(alien_bindings::ErrorData::SandboxNotAsDeclared {
+                        sandbox_id, restriction, ..
+                    }) if sandbox_id == id && restriction == "deployment network"
+                ),
+            "missing VNet produced the wrong refusal: {}",
+            error.code
+        );
+        ensure!(
+            boxes.get(id).await?.is_some(),
+            "refused reconnect changed the legacy sandbox"
+        );
+        eprintln!("legacy native lifecycle and new Internet missing-VNet refusal PASS");
         Ok(())
     }
     .await;
