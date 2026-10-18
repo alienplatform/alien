@@ -21,6 +21,10 @@ pub const BOOTSTRAP: &str = include_str!("aws_worker_gateway/envoy.json");
 /// Its function name and role path must remain outside runtime worker grants.
 pub const CLEANUP_HANDLER_SOURCE: &str = include_str!("aws_worker_gateway/cleanup.py");
 
+/// Deterministic ZIP generated at build time for direct setup uploads.
+pub const CLEANUP_HANDLER_ARCHIVE: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/gateway-cleanup.zip"));
+
 /// Interpreter used by all setup surfaces for the retirement capability.
 pub const CLEANUP_RUNTIME: &str = "python3.13";
 
