@@ -38,4 +38,5 @@ hyper-util = { workspace = true, features = ["tokio"] }
 http-body-util = { workspace = true }
 
 [dev-dependencies]
+async-trait = { workspace = true }
 tempfile = { workspace = true }

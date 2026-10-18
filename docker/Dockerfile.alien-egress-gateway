@@ -16,4 +16,3 @@ ENV RUST_LOG=info
 USER 65532:65532
 EXPOSE 3128/tcp 3129/tcp
 ENTRYPOINT ["/usr/local/bin/alien-egress-gateway"]
-CMD ["/etc/alien-egress/config.json"]

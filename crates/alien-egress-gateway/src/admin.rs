@@ -9,7 +9,7 @@ use axum::{
 };
 use serde::Deserialize;
 
-use crate::server::Gateway;
+use crate::{runtime::LiveGateway, server::Gateway};
 
 /// Admin listener state; only deployment public keys are needed.
 pub struct Admin {
@@ -49,9 +49,9 @@ struct Identity {
 }
 
 /// Authenticated management API, health and aggregate metrics.
-pub fn router(admin: Arc<Admin>) -> Router {
+pub fn router(admin: Arc<LiveGateway>) -> Router {
     Router::new()
-        .route("/health", get(|| async { "ok\n" }))
+        .route("/health", get(health))
         .route("/metrics", get(metrics))
         .route("/v1/policies", put(update).delete(remove))
         .route("/v1/ca", post(issue_ca))
@@ -73,10 +73,14 @@ fn identity_valid(admin: &Admin, aud: &str, sub: &str) -> bool {
 }
 
 async fn update(
-    State(admin): State<Arc<Admin>>,
+    State(live): State<Arc<LiveGateway>>,
     headers: HeaderMap,
     Json(update): Json<Update>,
 ) -> Response {
+    let Some(gateway) = live.snapshot() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    let admin = Admin { gateway };
     let Some(grant) = admin.authorized(&headers) else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
@@ -112,10 +116,14 @@ async fn update(
 }
 
 async fn remove(
-    State(admin): State<Arc<Admin>>,
+    State(live): State<Arc<LiveGateway>>,
     headers: HeaderMap,
     Json(identity): Json<Identity>,
 ) -> Response {
+    let Some(gateway) = live.snapshot() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    let admin = Admin { gateway };
     let Some(grant) = admin.authorized(&headers) else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
@@ -142,10 +150,14 @@ async fn remove(
 }
 
 async fn issue_ca(
-    State(admin): State<Arc<Admin>>,
+    State(live): State<Arc<LiveGateway>>,
     headers: HeaderMap,
     Json(identity): Json<Identity>,
 ) -> Response {
+    let Some(gateway) = live.snapshot() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    let admin = Admin { gateway };
     let Some(grant) = admin.authorized(&headers) else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
@@ -166,7 +178,11 @@ async fn issue_ca(
     }
 }
 
-async fn metrics(State(admin): State<Arc<Admin>>, headers: HeaderMap) -> Response {
+async fn metrics(State(live): State<Arc<LiveGateway>>, headers: HeaderMap) -> Response {
+    let Some(gateway) = live.snapshot() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    let admin = Admin { gateway };
     if !admin
         .authorized(&headers)
         .is_some_and(|grant| grant.method == "GET")
@@ -175,4 +191,12 @@ async fn metrics(State(admin): State<Arc<Admin>>, headers: HeaderMap) -> Respons
     }
     format!("# TYPE alien_egress_connections_total counter\nalien_egress_connections_total {}\n# TYPE alien_egress_denied_total counter\nalien_egress_denied_total {}\n",
         admin.gateway.accepted.load(Ordering::Relaxed), admin.gateway.denied.load(Ordering::Relaxed)).into_response()
+}
+
+async fn health(State(live): State<Arc<LiveGateway>>) -> Response {
+    if live.snapshot().is_some() {
+        "ok\n".into_response()
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE.into_response()
+    }
 }

@@ -42,9 +42,9 @@ pub struct Gateway {
     /// Gateway-only CA and vault access.
     pub credentials: crate::credentials::Credentials,
     /// Total accepted proxy connections.
-    pub accepted: std::sync::atomic::AtomicU64,
+    pub accepted: Arc<std::sync::atomic::AtomicU64>,
     /// Total denied or failed proxy connections.
-    pub denied: std::sync::atomic::AtomicU64,
+    pub denied: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl Gateway {
@@ -96,13 +96,19 @@ impl Gateway {
 }
 
 /// Serve proxy connections with bounded concurrency and supervised connection tasks.
-pub async fn serve(listener: TcpListener, gateway: Arc<Gateway>) -> Result<()> {
+pub async fn serve(listener: TcpListener, live: Arc<crate::runtime::LiveGateway>) -> Result<()> {
     let limit = Arc::new(Semaphore::new(1024));
     let mut tasks = JoinSet::new();
     loop {
         tokio::select! {
             accepted = listener.accept() => {
                 let (stream, _) = accepted.into_alien_error().context(unavailable("accept proxy connection"))?;
+                let Some(gateway) = live.snapshot() else {
+                    tracing::info!(ts = %chrono::Utc::now().to_rfc3339(), aud = "", sub = "", host = "", port = 0,
+                        decision = "deny", reason = "config unavailable", bytesUp = 0, bytesDown = 0, durationMs = 0, "egress connection");
+                    drop(stream);
+                    continue;
+                };
                 let permit = match limit.clone().try_acquire_owned() {
                     Ok(permit) => permit,
                     Err(_) => {

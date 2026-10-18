@@ -5,7 +5,16 @@ policy from the deployment KV. It resolves destinations itself and connects only
 to checked IPv4 addresses. Private, link-local, metadata, multicast and configured
 deployment/overlay ranges are always denied. IPv6 is not an outbound candidate.
 
-Run `alien-egress-gateway` with `ALIEN_EGRESS_GATEWAY_CONFIG` containing:
+At boot, `alien-egress-gateway` reads `sandbox-egress-gateway-config` from its
+`secrets` vault binding. It refreshes every 60 seconds and atomically publishes
+a validated config/key snapshot. A failed or timed-out refresh denies new
+connections and returns 503 from admin health until a later refresh succeeds.
+The gateway reads only this entry; it never reads `sandbox-egress-signing-key`.
+Its service account needs read access to the config entry, which includes public
+verification keys. Listener changes require a container restart.
+
+For local/tests, `ALIEN_EGRESS_GATEWAY_CONFIG` overrides vault loading and
+periodic refresh. The config is:
 
 ```json
 {
@@ -23,7 +32,7 @@ Run `alien-egress-gateway` with `ALIEN_EGRESS_GATEWAY_CONFIG` containing:
 The image runs as UID/GID 65532, needs no capabilities, and supports a read-only
 root filesystem. Provide the existing KV binding environment. Local KV requires
 a writable data volume shared by replicas; cloud KV requires no writable files.
-A config-file path is also accepted as the first argument. `admin` defaults to
+A config-file path is also accepted as a static override in the first argument. `admin` defaults to
 3129. Features select providers: `aws`, `cloud` (AWS, GCP, Azure and Kubernetes
 base-cloud stores), and `local`. All replicas must use the same KV. SQLite Local
 replicas must share local disk, not a multi-host network filesystem. Redis is not
@@ -37,11 +46,14 @@ contains a create default. The binding applies create defaults explicitly.
 Every new connection reads the policy reference from KV; only verified content
 is cached, in at most 128 entries. Updates and deletion therefore need no token
 replacement and do not wait for a cache TTL. Store failures deny access. Up to
-16 fixed 16 KiB chunk slots per sandbox support the 256 KiB / 4096-target limit
-on every KV provider. A digest detects torn reads while the binding serializes
-writes per sandbox. Interrupted writes may deny connections until retried.
-Replacement reuses slots; deletion removes the record first, then every slot.
-This keeps storage bounded without a second state service or retained versions.
+16 immutable 16 KiB chunks per policy version support the 256 KiB / 4096-target
+limit on every KV provider. Content is published before an atomic reference
+replacement, so concurrent callers cannot mix chunks. The last reference write
+wins; repeated identical policies reuse content. Distinct policy versions remain
+until sandbox deletion, which removes authorization and all versions. This
+avoids a cleanup race with overlapping writers without introducing a lock service,
+at the cost of retained versions during the sandbox lifetime. The binding must
+serialize termination with its writes.
 
 The proxy accepts `Proxy-Authorization: Bearer <JWS>` and Basic credentials from
 `http://alien:<JWS>@gateway:3128`. DNS-name grants require TLS with matching SNI

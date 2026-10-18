@@ -488,6 +488,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--agent-image")
     parser.add_argument("--gateway-binary", type=Path)
+    parser.add_argument("--vault-config", action="store_true")
     args = parser.parse_args()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
@@ -503,6 +504,8 @@ def main():
     suite.policy = {"allow": allowed}
     rules = [dict(aud=AUD, host="inject.test", port=port, method="GET", path="/v1/", header="X-Test-Credential", vaultBinding="test-vault", secret="test") for port in [443, 8443]]
     config = dict(listen="0.0.0.0:3128", audiences=[AUD], defaultPolicies={AUD: "internet"}, generationStore={"binding":"egress-state"}, keys=[dict(kid="test", publicKey=public)], deniedRanges=["93.184.217.0/24", "10.244.0.0/16"], credentials=rules, upstreamCaCertificates=[ca])
+    if args.vault_config:
+        (output / "vault/secrets.json").write_text(json.dumps({"test":"fake-test-secret", "sandbox-egress-gateway-config":json.dumps(config)}))
     containers, networks = [], []
     try:
         docker("network", "create", "--internal", "--subnet", "93.184.216.0/24", PREFIX)
@@ -518,11 +521,12 @@ def main():
         for number, ip in [(1, PROXY), (2, "93.184.216.4")]:
             name = PREFIX + f"-proxy{number}"
             binary = ["-v", f"{args.gateway_binary.resolve()}:/usr/local/bin/alien-egress-gateway:ro"] if args.gateway_binary else []
-            docker("run", "-d", "--read-only", *binary, "--name", name, "--network", PREFIX, "--ip", ip, "--dns", ORIGIN,
+            config_env = ["-e", "ALIEN_SECRETS_BINDING=" + json.dumps({"service":"local-vault","dataDir":"/vault","vaultName":"secrets"})] if args.vault_config else ["-e", "ALIEN_EGRESS_GATEWAY_CONFIG=" + json.dumps(config)]
+            docker("run", "-d", "--read-only", "--cap-drop", "ALL", *binary, "--name", name, "--network", PREFIX, "--ip", ip, "--dns", ORIGIN,
                    "-v", f"{output / 'kv'}:/kv", "-v", f"{output / 'vault'}:/vault:ro",
                    "-e", "ALIEN_DEPLOYMENT_TYPE=local", "-e", "ALIEN_EGRESS_STATE_BINDING=" + json.dumps({"service": "local-kv", "dataDir": "/kv"}),
                    "-e", "ALIEN_TEST_VAULT_BINDING=" + json.dumps({"service": "local-vault", "dataDir": "/vault", "vaultName": "test"}),
-                   "-e", "ALIEN_EGRESS_GATEWAY_CONFIG=" + json.dumps(config), args.image)
+                   *config_env, args.image)
             containers.append(name)
             docker("network", "connect", "--ip", f"10.77.91.{number + 2}", private_network, name)
         deadline = time.monotonic() + 30
@@ -540,6 +544,29 @@ def main():
         if args.agent_image:
             suite.agent(args.agent_image, containers, networks)
             suite.proxy_only(args.agent_image, containers)
+        if args.vault_config:
+            assert suite.admin("/v1/policies", {"aud":AUD,"sub":"reload","policy":"internet"})[0] == 204
+            suite.tunnel(token=suite.token(sub="reload")).close()
+            config["deniedRanges"].append(ORIGIN + "/32")
+            secret_file = output / "vault/secrets.json"
+            replacement = secret_file.with_suffix(".next")
+            replacement.write_text(json.dumps({"test":"fake-test-secret", "sandbox-egress-gateway-config":json.dumps(config)}))
+            replacement.replace(secret_file)
+            def reload_proof():
+                deadline = time.monotonic() + 75
+                pending = {PROXY, "93.184.216.4"}
+                while pending:
+                    for proxy in list(pending):
+                        conn = http.client.HTTPConnection(proxy, 3128, timeout=3)
+                        conn.request("CONNECT", "allowed.test:443", headers={"Host":"allowed.test:443", "Proxy-Authorization":"Bearer " + suite.token(sub="reload")})
+                        response = conn.getresponse()
+                        if response.status == 403: pending.remove(proxy)
+                        else: assert response.status == 200, response.status
+                        conn.close()
+                    if pending:
+                        assert time.monotonic() < deadline, pending
+                        time.sleep(1)
+            suite.record("vault config polls replace CIDRs on both running replicas", reload_proof)
     finally:
         secret_in_logs = False
         for name in reversed(containers):

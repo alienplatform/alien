@@ -75,7 +75,7 @@ impl PolicyStore {
         for index in 0..record.chunks {
             let chunk = self
                 .kv
-                .get(&chunk_key(&key(aud, sub), index))
+                .get(&chunk_key(&key(aud, sub), &record.policy, index))
                 .await
                 .context(unavailable("read policy content"))?
                 .ok_or_else(|| AlienError::new(unavailable("policy content missing")))?;
@@ -110,21 +110,22 @@ impl PolicyStore {
         Ok(policy)
     }
 
-    /// Replace fixed per-sandbox chunk slots, then publish their digest. The binding serializes
-    /// writes per sandbox. Readers racing a partial write fail closed on the digest check; a
-    /// failed write can be retried without leaving unbounded historical policy chunks.
+    /// Publish immutable content before replacing the policy reference. Concurrent writers
+    /// cannot mix chunks; the last reference write wins. Repeated policies reuse their content.
+    /// Distinct versions remain until sandbox deletion, avoiding a cleanup race with readers.
     pub async fn put(&self, aud: &str, sub: &str, policy: &Policy) -> Result<()> {
         let bytes = canonical(policy)?;
         let key = key(aud, sub);
         let chunks = bytes.len().div_ceil(CHUNK_BYTES);
+        let hash = digest(&bytes);
         for (index, chunk) in bytes.chunks(CHUNK_BYTES).enumerate() {
             self.kv
-                .put(&chunk_key(&key, index), chunk.to_vec(), None)
+                .put(&chunk_key(&key, &hash, index), chunk.to_vec(), None)
                 .await
                 .context(unavailable("write policy content"))?;
         }
         let record = Record {
-            policy: digest(&bytes),
+            policy: hash,
             chunks,
         };
         let value = serde_json::to_vec(&record)
@@ -134,26 +135,35 @@ impl PolicyStore {
             .put(&key, value, None)
             .await
             .context(unavailable("publish policy record"))?;
-        // Fixed slots bound storage even if a prior cleanup was interrupted.
-        for index in chunks..MAX_POLICY_BYTES / CHUNK_BYTES {
-            self.kv
-                .delete(&chunk_key(&key, index), None)
-                .await
-                .context(unavailable("remove unused policy content"))?;
-        }
         Ok(())
     }
 
-    /// Remove authorization first, then all bounded chunk slots. Retrying is safe.
+    /// Remove authorization first, then every stored version. Retrying is safe.
     pub async fn delete(&self, aud: &str, sub: &str) -> Result<()> {
         let key = key(aud, sub);
         self.kv
             .delete(&key, None)
             .await
             .context(unavailable("delete policy record"))?;
-        for index in 0..MAX_POLICY_BYTES / CHUNK_BYTES {
+        // The binding serializes termination with its writes. Collect before deleting so
+        // provider continuation cursors are never used against a mutating scan.
+        let mut cursor = None;
+        let mut keys = Vec::new();
+        loop {
+            let page = self
+                .kv
+                .scan_prefix(&format!("{key}:chunk:"), Some(100), cursor)
+                .await
+                .context(unavailable("list policy content"))?;
+            keys.extend(page.items.into_iter().map(|entry| entry.key));
+            cursor = page.next_cursor;
+            if cursor.is_none() {
+                break;
+            }
+        }
+        for key in keys {
             self.kv
-                .delete(&chunk_key(&key, index), None)
+                .delete(&key, None)
                 .await
                 .context(unavailable("delete policy content"))?;
         }
@@ -165,8 +175,8 @@ impl PolicyStore {
     }
 }
 
-fn chunk_key(key: &str, index: usize) -> String {
-    format!("{key}:chunk:{index}")
+fn chunk_key(key: &str, hash: &str, index: usize) -> String {
+    format!("{key}:chunk:{hash}:{index}")
 }
 
 fn key(aud: &str, sub: &str) -> String {

@@ -1,11 +1,17 @@
 #![cfg(feature = "local")]
 use std::sync::Arc;
 
-use alien_bindings::{providers::kv::local::LocalKv, Kv};
+use alien_bindings::{
+    providers::kv::local::LocalKv,
+    traits::{Binding, KvEntry, PutOptions, ScanResult},
+    Kv,
+};
 use alien_egress_gateway::{
     policy::{canonical, Policy},
     store::PolicyStore,
 };
+use async_trait::async_trait;
+use tokio::sync::Notify;
 
 #[tokio::test]
 async fn replicas_and_restarts_observe_replacements_and_deletion_without_token_changes() {
@@ -69,7 +75,7 @@ async fn large_policies_are_bounded_replaceable_and_corruption_fails_closed() {
     let chunk = entries
         .items
         .iter()
-        .find(|entry| entry.key.ends_with(":chunk:0"))
+        .find(|entry| entry.key.contains(":chunk:") && entry.key.ends_with(":0"))
         .unwrap();
     kv.put(&chunk.key, b"corrupt".to_vec(), None).await.unwrap();
     let fresh = PolicyStore::new(kv.clone());
@@ -95,13 +101,20 @@ async fn large_policies_are_bounded_replaceable_and_corruption_fails_closed() {
         "SANDBOX_EGRESS_POLICY_TOO_LARGE"
     );
     store.put("p/r", "box", &Policy::Internet).await.unwrap();
+    let before = kv
+        .scan_prefix("egress-policy:", Some(100), None)
+        .await
+        .unwrap()
+        .items
+        .len();
+    store.put("p/r", "box", &Policy::Internet).await.unwrap();
     assert_eq!(
         kv.scan_prefix("egress-policy:", Some(100), None)
             .await
             .unwrap()
             .items
             .len(),
-        2
+        before
     );
     store.delete("p/r", "box").await.unwrap();
     assert!(kv
@@ -110,4 +123,76 @@ async fn large_policies_are_bounded_replaceable_and_corruption_fails_closed() {
         .unwrap()
         .items
         .is_empty());
+}
+
+#[tokio::test]
+async fn concurrent_replacements_publish_one_complete_policy() {
+    let dir = tempfile::tempdir().unwrap();
+    let gate = Arc::new(GatedKv {
+        inner: LocalKv::new(dir.path().into()).await.unwrap(),
+        entered: Notify::new(),
+        resume: Notify::new(),
+    });
+    let first = PolicyStore::new(gate.clone());
+    let second = PolicyStore::new(Arc::new(LocalKv::new(dir.path().into()).await.unwrap()));
+    let left = Policy::Allow {
+        allow: (0..4096).map(|i| format!("left-{i}.example.com")).collect(),
+    };
+    let right = Policy::Allow {
+        allow: (0..4096)
+            .map(|i| format!("right-{i}.example.com"))
+            .collect(),
+    };
+    let write = tokio::spawn(async move { first.put("p/r", "box", &left).await });
+    gate.entered.notified().await;
+    second.put("p/r", "box", &right).await.unwrap();
+    gate.resume.notify_one();
+    write.await.unwrap().unwrap();
+    let read = PolicyStore::new(Arc::new(LocalKv::new(dir.path().into()).await.unwrap()));
+    let value = canonical(&read.resolve("p/r", "box").await.unwrap()).unwrap();
+    let left = Policy::Allow {
+        allow: (0..4096).map(|i| format!("left-{i}.example.com")).collect(),
+    };
+    assert_eq!(value, canonical(&left).unwrap());
+}
+
+/// Pause one writer immediately before publication, after another writer can replace its chunks.
+#[derive(Debug)]
+struct GatedKv {
+    inner: LocalKv,
+    entered: Notify,
+    resume: Notify,
+}
+impl Binding for GatedKv {}
+#[async_trait]
+impl Kv for GatedKv {
+    async fn get(&self, key: &str) -> alien_bindings::Result<Option<KvEntry>> {
+        self.inner.get(key).await
+    }
+    async fn put(
+        &self,
+        key: &str,
+        value: Vec<u8>,
+        options: Option<PutOptions>,
+    ) -> alien_bindings::Result<bool> {
+        if !key.contains(":chunk:") {
+            self.entered.notify_one();
+            self.resume.notified().await;
+        }
+        self.inner.put(key, value, options).await
+    }
+    async fn delete(&self, key: &str, version: Option<&str>) -> alien_bindings::Result<bool> {
+        self.inner.delete(key, version).await
+    }
+    async fn exists(&self, key: &str) -> alien_bindings::Result<bool> {
+        self.inner.exists(key).await
+    }
+    async fn scan_prefix(
+        &self,
+        prefix: &str,
+        limit: Option<usize>,
+        cursor: Option<String>,
+    ) -> alien_bindings::Result<ScanResult> {
+        self.inner.scan_prefix(prefix, limit, cursor).await
+    }
 }

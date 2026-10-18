@@ -32,7 +32,7 @@ use crate::{
 /// Gateway-only credential access and durable per-sandbox certificate authorities.
 pub struct Credentials {
     kv: Arc<dyn Kv>,
-    bindings: Bindings,
+    bindings: Arc<Bindings>,
     upstream: Arc<ClientConfig>,
 }
 
@@ -45,7 +45,11 @@ struct Ca {
 
 impl Credentials {
     /// Use the deployment KV for CA material and deployment vault bindings for header values.
-    pub fn new(kv: Arc<dyn Kv>, bindings: Bindings, additional_roots: &[String]) -> Result<Self> {
+    pub fn new(
+        kv: Arc<dyn Kv>,
+        bindings: Arc<Bindings>,
+        additional_roots: &[String],
+    ) -> Result<Self> {
         let mut roots = RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
         for root in additional_roots {
             let der = base64::engine::general_purpose::STANDARD
