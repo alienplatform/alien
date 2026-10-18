@@ -63,6 +63,7 @@ impl ResourceImporter for AwsNetworkImporter {
             internet_gateway_id: data.internet_gateway_id,
             nat_gateway_id: data.nat_gateway_id,
             eip_allocation_id: data.eip_allocation_id,
+            sandbox_network: data.sandbox_network,
             public_subnet_ids: data.public_subnet_ids,
             private_subnet_ids: data.private_subnet_ids,
             public_route_table_id: data.public_route_table_id,
@@ -256,6 +257,7 @@ mod tests {
             internet_gateway_id: None,
             nat_gateway_id: None,
             eip_allocation_id: None,
+            sandbox_network: None,
             public_subnet_ids: Vec::new(),
             private_subnet_ids: Vec::new(),
             public_route_table_id: None,
@@ -446,6 +448,15 @@ mod tests {
         let mut changed = named_network_data(false);
         changed.security_group_id = Some("sg-replaced".to_string());
         changed.nat_gateway_id = Some("nat-replaced".to_string());
+        let sandbox_network = alien_core::import::data::AwsSandboxNetwork {
+            sandbox_subnet_ids: vec!["subnet-isolated".into()],
+            gateway_subnet_ids: vec!["subnet-gateway".into()],
+            sandbox_cidrs: vec!["10.0.6.0/24".into()],
+            gateway_cidrs: vec!["10.0.9.0/24".into()],
+            workload_cidrs: vec!["10.0.3.0/24".into()],
+            vpc_cidrs: vec!["10.0.0.0/16".into(), "198.18.0.0/16".into()],
+        };
+        changed.sandbox_network = Some(sandbox_network.clone());
 
         let (merged, internal) = rerun(&settings, existing, changed);
 
@@ -453,6 +464,8 @@ mod tests {
         assert_eq!(internal["state"], "ready");
         assert_eq!(internal["securityGroupId"], "sg-replaced");
         assert_eq!(internal["natGatewayId"], "nat-replaced");
+        let controller: AwsNetworkController = serde_json::from_value(internal.clone()).unwrap();
+        assert_eq!(controller.sandbox_network, Some(sandbox_network));
         assert_eq!(
             internal["subnetsByFailureDomain"],
             serde_json::to_value(discovered_map()).unwrap()

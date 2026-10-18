@@ -1094,6 +1094,10 @@ pub struct AwsNetworkController {
     pub nat_gateway_id: Option<String>,
     pub(crate) eip_allocation_id: Option<String>,
 
+    /// Setup-validated connector and gateway subnet coordinates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox_network: Option<alien_core::import::data::AwsSandboxNetwork>,
+
     // Subnets
     #[serde(deserialize_with = "alien_core::network_ids::deserialize_ids")]
     pub public_subnet_ids: Vec<String>,
@@ -5461,6 +5465,7 @@ impl AwsNetworkController {
             internet_gateway_id: Some(format!("igw-{}", vpc_id)),
             nat_gateway_id: Some(format!("nat-{}", vpc_id)),
             eip_allocation_id: Some(format!("eipalloc-{}", vpc_id)),
+            sandbox_network: None,
             public_subnet_ids: (0..az_count)
                 .map(|i| format!("subnet-pub-{}-{}", vpc_id, i))
                 .collect(),
@@ -5516,6 +5521,7 @@ impl AwsNetworkController {
             internet_gateway_id: None,
             nat_gateway_id: None,
             eip_allocation_id: None,
+            sandbox_network: None,
             public_subnet_ids,
             private_subnet_ids: private_subnet_ids.clone(),
             public_route_table_id: None,

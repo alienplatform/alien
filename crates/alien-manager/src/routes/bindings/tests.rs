@@ -510,6 +510,27 @@ fn remote_sandbox_validation_refuses_a_sandbox_that_restricts_egress() {
     );
 }
 
+#[test]
+fn remote_sandbox_validation_refuses_internet_even_without_gateway_metadata() {
+    for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+        let mut binding = open_sandbox_binding_for(platform);
+        match &mut binding {
+            SandboxBinding::Aws(binding) => binding.egress = Some(SandboxEgress::Internet.into()),
+            SandboxBinding::GcpAgentPlatform(binding) => {
+                binding.egress = Some(SandboxEgress::Internet.into());
+            }
+            SandboxBinding::Azure(binding) => binding.egress = SandboxEgress::Internet.into(),
+            _ => unreachable!("the fixture uses cloud bindings"),
+        }
+        let deployment = deployment_on_platform(sandbox_stack_state(binding, platform), platform);
+        let Err(error) = remote_sandbox_binding(&deployment, "agents") else {
+            panic!("Internet must not become direct access through a remote lease");
+        };
+        assert_eq!(error.code, "BAD_REQUEST");
+        assert!(error.message.contains("gateway"), "{error}");
+    }
+}
+
 /// Preflight refuses a remote binding by its permission set's platform coverage, while this route
 /// hardcodes AWS. Widening either alone brings back a deployment that installs a grant the other
 /// end will not honour.

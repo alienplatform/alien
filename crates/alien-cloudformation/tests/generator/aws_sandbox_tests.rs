@@ -1854,7 +1854,7 @@ fn the_emitted_registration_matches_the_direct_seed() {
         ),
         // The agent enforces these in the guest, so the cloud side sees open egress. A registration
         // that read the declared egress instead refused this sandbox on direct deployments only.
-        (SandboxEgress::Internet, supervised.clone(), LIVE_BUNDLE),
+        (SandboxEgress::Allow, supervised.clone(), LIVE_BUNDLE),
         (SandboxEgress::None, supervised.clone(), LIVE_BUNDLE),
     ] {
         let sandbox = Sandbox {
