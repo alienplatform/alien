@@ -102,10 +102,14 @@ impl GatewayEgress {
                 if matches!(status, 204 | 409) && self.policy_request(None).await? == 200 {
                     Ok(())
                 } else {
-                    Err(invalid("policy recovery refused"))
+                    Err(alien_error::AlienError::new(
+                        crate::error::ErrorData::EgressPathUnexpected,
+                    ))
                 }
             }
-            _ => Err(invalid("gateway policy unavailable")),
+            _ => Err(alien_error::AlienError::new(
+                crate::error::ErrorData::EgressPathUnexpected,
+            )),
         }
     }
     pub(super) async fn monitor_policy(self: Arc<Self>) {
@@ -219,6 +223,13 @@ mod tests {
         assert!(agent.retain_record(record(1), "p/r", "box").is_err());
         assert!(agent.retain_record(record(3), "p/r", "other").is_err());
         agent.retain_record(record(3), "p/r", "box").unwrap();
+        assert_eq!(
+            claims(agent.policy.read().unwrap().as_ref().unwrap())
+                .unwrap()
+                .ver
+                .0,
+            3
+        );
         agent.ready.store(true, Ordering::Release);
         assert!(agent.ensure_ready().is_ok());
         agent.awaiting_delivery.store(true, Ordering::Release);

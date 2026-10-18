@@ -1,7 +1,7 @@
 # Sandbox egress gateway
 
 The gateway verifies an Ed25519 sandbox identity and reads that sandbox's current
-policy from the deployment KV. It resolves destinations itself and connects only
+policy from bounded memory replicated across gateway instances. It resolves destinations itself and connects only
 to checked IPv4 addresses. Private, link-local, metadata, multicast and configured
 deployment/overlay ranges are always denied. IPv6 is not an outbound candidate.
 
@@ -13,7 +13,10 @@ are denied and admin health returns 503 until refresh succeeds. This bounded
 window can delay key or range revocation; policy reads never use stale fallback.
 The gateway reads only this entry; it never reads `sandbox-egress-signing-key`.
 Its service account needs read access to the config entry, which includes public
-verification keys. Listener changes require a container restart.
+verification keys and the gateway-only replica secret. Other workloads must not
+read this entry. Listener, replica-secret, discovery and memory-budget changes require a restart.
+Keep old public verification keys until all records signed by them have been
+replaced or retired; retained records have no expiry.
 
 For local/tests, `ALIEN_EGRESS_GATEWAY_CONFIG` overrides vault loading and
 periodic refresh. The config is:
@@ -22,7 +25,8 @@ periodic refresh. The config is:
 {
   "listen": "0.0.0.0:3128",
   "admin": "0.0.0.0:3129",
-  "generationStore": {"binding": "egress-state"},
+  "peers": {"dns": "sandbox-egress-gateway.svc", "port": 3129},
+  "replicaSecret": "BASE64_GATEWAY_ONLY_32_BYTE_SECRET",
   "audiences": ["deployment/box"],
   "defaultPolicies": {},
   "keys": [{"kid": "current", "publicKey": "BASE64_RAW_ED25519_PUBLIC_KEY"}],
@@ -32,28 +36,40 @@ periodic refresh. The config is:
 ```
 
 The image runs as UID/GID 65532, needs no capabilities, and supports a read-only
-root filesystem. Provide the existing KV binding environment. Local KV requires
-a writable data volume shared by replicas; cloud KV requires no writable files.
-A config-file path is also accepted as a static override in the first argument. `admin` defaults to
-3129. Features select providers: `aws`, `cloud` (AWS, GCP, Azure and Kubernetes
-base-cloud stores), and `local`. All replicas must use the same KV. SQLite Local
-replicas must share local disk, not a multi-host network filesystem. Redis is not
-implemented by Alien bindings.
+root filesystem. No policy KV, writable volume or policy-store permission is
+required. Policy storage uses half the finite cgroup v2 `memory.max` limit; a
+1 GiB container therefore has a 512 MiB record budget. Set `policyMemoryBytes`
+explicitly when no finite cgroup limit is available; otherwise startup fails.
+Snapshots stream signed records in bounded pages without duplicating the store.
+A config-file path is also accepted as a static override in the first
+argument. `admin` defaults to 3129. Features select vault providers: `aws`, `cloud`
+(AWS, GCP, Azure and Kubernetes), and `local`. Omit `peers` for a single local
+replica. See [the replication protocol](REPLICATION.md) for static peers and wire
+formats.
 
 Tokens contain only `{iss,aud,sub,iat,exp}`, with `iss: "alien-sandbox"`, a maximum
 24-hour lifetime and a 4 KiB encoded size limit. Neither a policy nor a generation
 appears in a proxy token. Missing policy records deny access, even if the config
 contains a create default. The binding applies create defaults explicitly.
 
-Every new connection reads the policy reference from KV; verified content uses a
-128-entry LRU cache. Store failures deny access. Up to sixteen immutable 16 KiB
-chunks support the 256 KiB / 4096-target policy limit on every KV provider.
-An atomic compare-and-swap publishes a signed monotonic version after the content.
-Older versions and equal versions with different content return 409; identical
-retries succeed. DELETE leaves a durable version tombstone. A deliberately
-recreated identity may publish a higher version. Content chunks remain until the
-deployment store is removed, because deletion could race readers or a recreated
-identity using the same content. Repeated identical policies reuse chunks.
+Every new connection reads the current in-memory policy. Policies support at most
+256 KiB and 4096 targets. Each signed record has a format version and a version pair
+of Unix milliseconds and a process-specific writer ID. Higher pairs replace older
+records; equal and older pairs are no-ops. Records over sixty seconds in the future
+are refused. DELETE retains a denial tombstone for at least 25 hours; an explicit
+higher-version policy can recreate an identity. Memory exhaustion refuses writes
+without evicting live policies.
+
+Writes fan out over HTTP to the service's other replicas and return success only
+after acknowledgements. A failed fan-out returns a retryable error; retry the same
+record. Startup snapshots precede readiness, and a listed unreachable peer keeps a
+new replica unready. Version summaries repair missed writes every thirty seconds.
+Missing policy always denies. Total replica loss also loses deletion/version
+history: agents can restore their saved signed record only while the entry is
+absent. An old signed record can be replayed during that absence; replication does
+not provide durable recovery of a newer restriction after total state loss. If an
+older record fills the entry first, a newer management write is required to
+replace it; the agent poll does not bound this replay window.
 
 Each replica rechecks active identities every 30 seconds and closes tunnels whose
 destination is no longer allowed, including after deletion or a store failure.
@@ -84,17 +100,17 @@ expiry is never extended. Proxy tokens use the same issuance allowance. `method`
 `policy` is `sha256:<hex>` of the normalized, sorted, compact policy JSON.
 It is an admin-body authenticator, never a proxy-token claim.
 
-- `GET /v1/policies?aud=...&sub=...` returns `{version}` with an identity-bound
-  GET grant. An absent identity starts at zero; tombstones retain their version.
-- `PUT /v1/policies {aud,sub,version,policy}` replaces the policy and returns 204.
-- `DELETE /v1/policies {aud,sub,version}` removes authorization and returns 204.
-  Its grant must contain the same version and must not contain `policy`.
-- `GET /health` is unauthenticated. `GET /metrics` requires an admin grant.
+- `GET /v1/policies?aud=...&sub=...` returns `{version:[millis,writerId]}`,
+  or `{version:null}` when absent, with an identity-bound GET grant.
+- `PUT /v1/policies {record}` carries the independently signed policy record.
+- `DELETE /v1/policies {record}` carries a signed deletion tombstone.
+- `GET /v1/policies/record?aud=...&sub=...` returns `{record}` or 404.
+- `GET /health` is unauthenticated readiness; `GET /metrics` requires an admin grant.
 
-Identity, method, version and policy must match the signed request. The binding
-serializes updates per sandbox, reads the current version and submits the next
-one. Conflicts fail explicitly; clients must not automatically retry older intent
-with a new version. The admin network must remain inaccessible to guests.
+The record has `typ: "alien-egress-record"`, claims `{v:1,aud,sub,ver,policy}` or
+`{v:1,aud,sub,ver,deleted:true}`, and no expiry. The short-lived outer admin grant
+binds identity and method. The admin network must remain inaccessible to guests;
+peer exchange additionally authenticates with the gateway-only replica secret.
 Logs separate authorization from the close reason, with open and close events.
 Refusal logs are limited to twenty per second per replica; fixed-category counters
 still count every refusal. Metrics include active connections, without host or
@@ -110,10 +126,11 @@ reflect a credential; only configure trusted origins. `upstreamCaCertificates` m
 add deployment-owned trust roots encoded as base64 DER.
 
 `POST /v1/ca {aud,sub}` with a matching admin JWS creates or returns a sandbox's
-public CA certificate as `{certificate: "PEM"}`. The private CA remains in the
-shared KV. The gateway therefore needs explicit data-read/write permission on that
-store, and data-read permission on each configured credential vault. Deliver the
-public CA through the agent's `PUT /v1/egress {token,caCert?}`. Trust bundle paths
+public CA certificate as `{certificate: "PEM"}`. The private CA is deterministically
+derived from the gateway-only replica secret, sandbox identity and allowed host
+set. All replicas derive the same CA without a separate store. The gateway needs
+read permission on each configured credential vault. Deliver the public CA through
+the agent's `PUT /v1/egress {token,policy,caCert?}`. Trust bundle paths
 are passed to standard tools; applications with their own trust stores must import
 the public CA explicitly. The CA is constrained to the audience's configured
 credential host names and excludes IP certificates. Changing this host set issues
@@ -127,15 +144,18 @@ For a gateway-backed resource the agent starts without a token. Health reports
 session routes are blocked until token installation and the external path check
 succeed. The agent checks supervisor TCP and UDP internet denial and runs metadata
 HTTP and unmarked network probes in a child with the command's dropped identity.
-It repeats these checks on authenticated Resume, then calls authenticated
-`GET /health` on proxy port 3128. This verifies the identity and installed policy
+It repeats these checks on authenticated Resume and waits for the SDK to deliver
+the token and latest signed policy before reopening commands or forwarding.
+Delivery calls authenticated `GET /health` on proxy port 3128. This verifies the identity and installed policy
 without requiring guest access to admin port 3129 or dialing an upstream. On AWS the Run hook receives the AWS envelope
 `{microvmId,runHookPayload}`; the payload is a JSON string `{gateway,audience}`.
 The injected MicroVM ID is checked against the token subject. Elsewhere the backend
 sets `ALIEN_SANDBOX_SESSION_ID`, `ALIEN_SANDBOX_EGRESS_AUDIENCE`, and
 `ALIEN_SANDBOX_EGRESS_GATEWAY`. Tokens are never supplied through environment or
-image state. Policy updates go only to the gateway; token installation happens at create
-and renewal. Updates affect new connections immediately and existing tunnels at the next policy sweep.
+image state. Policy updates go directly to the gateway and succeed while an agent
+is paused or unreachable. Token and record delivery happen at create, resume and
+renewal. A running agent checks gateway policy state every five seconds and only
+re-registers its saved record after a 404, never after a tombstone refusal. Updates affect new connections immediately and existing tunnels at the next policy sweep.
 
 A resource declared `none` uses a loopback-only network and has no gateway or token.
 The agent verifies that direct internet fails before serving. A closed runtime policy still requires the gateway and an identity token.

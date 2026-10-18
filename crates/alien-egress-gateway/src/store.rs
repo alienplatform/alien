@@ -14,9 +14,10 @@ use std::{
 };
 
 type Identity = (String, String);
+const SNAPSHOT_PAGE_BYTES: usize = 8 * 1024 * 1024;
 
 struct Stored {
-    record: Record,
+    record: Arc<Record>,
     policy: Option<Arc<Policy>>,
     bytes: usize,
     expires: Option<tokio::time::Instant>,
@@ -65,7 +66,7 @@ impl PolicyStore {
             .get(&(aud.to_string(), sub.to_string()))
             .map(|entry| entry.record.claims.ver.clone()))
     }
-    pub fn record(&self, aud: &str, sub: &str) -> Result<Option<Record>> {
+    pub fn record(&self, aud: &str, sub: &str) -> Result<Option<Arc<Record>>> {
         Ok(self
             .state
             .read()
@@ -88,7 +89,8 @@ impl PolicyStore {
             })
             .collect())
     }
-    pub fn newer_than(&self, versions: &[Summary]) -> Result<Vec<Record>> {
+    pub fn newer_than(&self, versions: &[Summary]) -> Result<Vec<Arc<Record>>> {
+        let mut page_bytes = 0;
         let known: BTreeMap<_, _> = versions
             .iter()
             .map(|version| ((version.aud.as_str(), version.sub.as_str()), &version.ver))
@@ -106,6 +108,14 @@ impl PolicyStore {
                         entry.record.claims.sub.as_str(),
                     ))
                     .is_none_or(|ver| compare_versions(ver, &entry.record.claims.ver).is_lt())
+            })
+            .take_while(|entry| {
+                let size = entry.record.signed.len() + 4;
+                if page_bytes + size > SNAPSHOT_PAGE_BYTES {
+                    return false;
+                }
+                page_bytes += size;
+                true
             })
             .map(|entry| entry.record.clone())
             .collect())
@@ -131,16 +141,28 @@ impl PolicyStore {
 
     /// Apply a verified record; equal and older versions are no-ops on every path.
     pub fn apply(&self, record: Record, only_missing: bool) -> Result<bool> {
-        let bytes = record
-            .claims
-            .policy
-            .as_ref()
-            .map(canonical)
-            .transpose()?
-            .map_or(0, |bytes| bytes.len() * 3)
-            + record.signed.len()
+        if let Some(policy) = &record.claims.policy {
+            canonical(policy)?;
+        }
+        // Charge both decoded policy copies, their string/vector allocations, signed bytes,
+        // identity keys, and fixed map/record overhead. Live entries are never evicted.
+        let policy_bytes = match &record.claims.policy {
+            Some(Policy::Allow { allow }) => {
+                (allow.capacity() + allow.len()) * std::mem::size_of::<String>()
+                    + allow
+                        .iter()
+                        .map(|target| target.capacity() + target.len())
+                        .sum::<usize>()
+            }
+            _ => 0,
+        };
+        let bytes = policy_bytes
+            + record.signed.capacity()
+            + record.claims.aud.capacity()
+            + record.claims.sub.capacity()
             + record.claims.aud.len()
             + record.claims.sub.len()
+            + record.claims.ver.1.capacity()
             + 512;
         let key = (record.claims.aud.clone(), record.claims.sub.clone());
         let mut state = self
@@ -172,7 +194,7 @@ impl PolicyStore {
                     tokio::time::Instant::now()
                         + std::time::Duration::from_millis(TOMBSTONE_RETENTION_MS)
                 }),
-                record,
+                record: Arc::new(record),
                 bytes,
             },
         );

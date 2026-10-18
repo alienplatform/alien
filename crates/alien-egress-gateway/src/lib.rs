@@ -21,3 +21,5 @@ pub mod store;
 pub mod token;
 
 pub mod recovery;
+
+pub mod memory;

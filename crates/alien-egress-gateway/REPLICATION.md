@@ -6,7 +6,9 @@ listener remains `listen`. Local tests may configure
 admin addresses (exclude the current replica). Service discovery uses
 `peers: {"dns": "gateway.svc", "port": 3129}`. Omit `peers` for a single replica.
 `replicaSecret` is a base64-encoded 32-byte secret shared only by gateway replicas.
-The configured `policyMemoryBytes` defaults to 512 MiB.
+The optional `policyMemoryBytes` overrides half the finite cgroup v2 `memory.max`
+limit (512 MiB for a 1 GiB container). Without a finite limit or explicit override,
+startup fails. Local processes in an unbounded host must set an override.
 
 A record is a compact Ed25519 JWS with `typ: "alien-egress-record"` and the same
 `kid` used by admin/proxy signing. Its claims are `{v:1,aud,sub,ver:[unixMillis,
@@ -33,7 +35,9 @@ All JSON uses the following wire forms:
   `{aud,sub,ver:[millis,writerId]}`.
 - `POST /v1/replicas/pull` (alias `/snapshot`): body is an array of known summaries;
   returns an array of compact JWS strings newer than those summaries. An empty
-  array requests a full snapshot. Snapshot endpoints work before readiness.
+  array starts a full snapshot. Responses are bounded to 8 MiB; repeat with the
+  updated summary until the array is empty. Both sides stream records individually;
+  snapshot endpoints work before readiness.
 - `GET /health`: 200 only after synchronization, otherwise 503.
 
 Peer POSTs carry `x-alien-replica-time` (Unix seconds) and
@@ -61,5 +65,8 @@ at least 25 hours after local acceptance; live records are never evicted.
 Total loss of every replica also loses version and deletion history. A live
 identity token can therefore re-register an older signed policy while the entry
 is absent. This protocol cannot distinguish that record from the latest one;
-the independent restart tests measure the recovery window. Agentless clients
+the independent restart tests measure this window. If an older record fills the
+entry first, absent-only recovery cannot replace it: stale authorization remains
+until an explicit newer management write. The five-second agent poll is not a
+revocation bound after total state loss. Agentless clients
 remain denied until their application publishes a policy again.

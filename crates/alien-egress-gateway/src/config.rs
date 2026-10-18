@@ -32,9 +32,9 @@ pub struct Config {
     /// Replica discovery; absent means a single local gateway.
     #[serde(default)]
     pub peers: Option<Peers>,
-    /// Total signed policy storage budget. Live records are never evicted to make room.
-    #[serde(default = "memory_budget")]
-    pub policy_memory_bytes: usize,
+    /// Explicit policy storage budget; otherwise half of the cgroup memory limit.
+    #[serde(default)]
+    pub policy_memory_bytes: Option<usize>,
     /// Base64 32-byte gateway-only key for replica authentication and scoped CAs.
     #[serde(default)]
     pub replica_secret: Option<String>,
@@ -127,7 +127,4 @@ pub struct DnsPeers {
 #[serde(deny_unknown_fields)]
 pub struct StaticPeers {
     pub r#static: Vec<String>,
-}
-fn memory_budget() -> usize {
-    512 * 1024 * 1024
 }

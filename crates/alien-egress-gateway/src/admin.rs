@@ -180,7 +180,7 @@ async fn read_record(
     }
     match admin.gateway.policies.record(&identity.aud, &identity.sub) {
         Ok(Some(record)) => Json(Mutation {
-            record: record.signed,
+            record: record.signed.clone(),
         })
         .into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
@@ -215,13 +215,7 @@ async fn exchange(
                 return StatusCode::BAD_REQUEST.into_response();
             };
             match gateway.policies.newer_than(&known) {
-                Ok(records) => Json(
-                    records
-                        .into_iter()
-                        .map(|record| record.signed)
-                        .collect::<Vec<_>>(),
-                )
-                .into_response(),
+                Ok(records) => stream_snapshot(records),
                 Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
             }
         }
@@ -245,6 +239,25 @@ async fn exchange(
         }
         _ => StatusCode::NOT_FOUND.into_response(),
     }
+}
+
+fn stream_snapshot(records: Vec<Arc<Record>>) -> Response {
+    let chunks = std::iter::once(bytes::Bytes::from_static(b"["))
+        .chain(records.into_iter().enumerate().map(|(index, record)| {
+            // Verified compact JWS uses only base64url characters and dots, with no JSON escapes.
+            bytes::Bytes::from(format!(
+                "{}\"{}\"",
+                if index == 0 { "" } else { "," },
+                record.signed
+            ))
+        }))
+        .chain(std::iter::once(bytes::Bytes::from_static(b"]")))
+        .map(Ok::<_, std::convert::Infallible>);
+    (
+        [("content-type", "application/json")],
+        axum::body::Body::from_stream(futures_util::stream::iter(chunks)),
+    )
+        .into_response()
 }
 
 async fn version(

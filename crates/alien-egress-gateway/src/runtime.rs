@@ -89,11 +89,21 @@ impl LiveGateway {
                 ));
             }
             gateway.policies = self.policies.clone();
-            if let Some(previous) = self.snapshot() {
+            {
+                // Compare immutable settings even after the last-good serving window expired.
+                let previous = self
+                    .current
+                    .read()
+                    .map_err(|_| AlienError::new(unavailable("config lock poisoned")))?
+                    .0
+                    .clone();
                 if previous.config.peers != gateway.config.peers
                     || previous.config.replica_secret != gateway.config.replica_secret
+                    || previous.config.policy_memory_bytes != gateway.config.policy_memory_bytes
                 {
-                    return Err(invalid("replica discovery/key changes require a restart"));
+                    return Err(invalid(
+                        "replica discovery/key/memory-budget changes require a restart",
+                    ));
                 }
                 if previous.config.credentials == gateway.config.credentials
                     && previous.config.upstream_ca_certificates
@@ -181,7 +191,10 @@ pub async fn build(
     )?);
     let policies = Arc::new(PolicyStore::new(
         !replication.enabled(),
-        config.policy_memory_bytes,
+        crate::memory::policy_budget(
+            config.policy_memory_bytes,
+            std::path::Path::new("/sys/fs/cgroup/memory.max"),
+        )?,
     ));
     Ok(Gateway {
         replication,

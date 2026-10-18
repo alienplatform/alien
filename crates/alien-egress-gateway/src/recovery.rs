@@ -14,7 +14,7 @@ pub async fn handle(
     claims: &Claims,
     input: &[u8],
     head_len: usize,
-) -> Result<()> {
+) -> Result<bool> {
     if !gateway.config.audiences.contains(&claims.aud) {
         return reply(stream, 403).await;
     }
@@ -86,7 +86,7 @@ pub async fn handle(
     reply(stream, status).await
 }
 
-async fn reply(stream: &mut (impl AsyncWrite + Unpin), status: u16) -> Result<()> {
+async fn reply(stream: &mut (impl AsyncWrite + Unpin), status: u16) -> Result<bool> {
     let reason = match status {
         200 => "OK",
         204 => "No Content",
@@ -102,5 +102,6 @@ async fn reply(stream: &mut (impl AsyncWrite + Unpin), status: u16) -> Result<()
         )
         .await
         .into_alien_error()
-        .context(unavailable("reply to recovery request"))
+        .context(unavailable("reply to recovery request"))?;
+    Ok(matches!(status, 200 | 204))
 }
