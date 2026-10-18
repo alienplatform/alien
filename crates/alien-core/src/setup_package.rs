@@ -1,6 +1,6 @@
 use crate::{
     ownership_policy_for_resource_type, ErrorData, Key, ManagementPermissions, Platform,
-    ResourceEntry, Result, Sandbox, SetupManagement, Stack, Storage,
+    ResourceEntry, Result, Sandbox, SetupManagement, Stack, Storage, Vault,
 };
 use alien_error::AlienError;
 
@@ -29,10 +29,15 @@ pub fn validate_automatic_setup_resources(
                     "permissions.management",
                 ));
             }
-            // The AWS management role may not change its own policies after setup, so a
-            // grant scoped to one resource could never be attached by the runtime.
+            // Automatic packages own vaults and install their concrete grants during setup.
+            // Other scoped grants still require scaffolding that runtime cannot attach.
             ManagementPermissions::Extend(profile) if platform == Platform::Aws => {
-                if let Some(scope) = profile.0.keys().find(|scope| scope.as_str() != "*") {
+                if let Some(scope) = profile.0.keys().find(|scope| {
+                    scope.as_str() != "*"
+                        && !stack.resources.get(scope.as_str()).is_some_and(|entry| {
+                            entry.config.downcast_ref::<Vault>().is_some()
+                        })
+                }) {
                     return Err(unsupported("resource-scoped management permission", scope));
                 }
             }

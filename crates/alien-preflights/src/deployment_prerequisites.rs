@@ -10,7 +10,7 @@ use crate::{CheckResult, DeploymentPrerequisiteCheck};
 use alien_core::{
     validate_binding_type, ComputeBackend, ComputeCluster, Container, Daemon, DeploymentConfig,
     EndpointAccess, EnvironmentVariable, ExposeProtocol, KubernetesCluster, PermissionProfile,
-    PermissionSet, Platform, ResourceEntry, ResourceLifecycle, Stack, StackState, Worker,
+    PermissionSet, Platform, ResourceEntry, ResourceLifecycle, Stack, StackState, Vault, Worker,
 };
 use alien_permissions::{
     generators::AwsRuntimePermissionsGenerator, BindingTarget, PermissionContext,
@@ -380,7 +380,9 @@ fn aws_live_management_setup_context(
         .with_managing_account_id("210987654321")
         .with_resource_id(resource_id.to_string());
 
-    if resource_entry.config.downcast_ref::<Worker>().is_some() {
+    if resource_entry.config.downcast_ref::<Worker>().is_some()
+        || resource_entry.config.downcast_ref::<Vault>().is_some()
+    {
         return context.with_resource_name(format!("stack-{resource_id}"));
     }
 
