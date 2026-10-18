@@ -177,22 +177,13 @@ impl StackMutation for SecretsVaultMutation {
             stack_state.platform,
         );
 
-        // Step 4: Add vault data permissions to management profile for the secrets vault.
-        // This allows the control plane to sync secret environment variables without
-        // granting access to user-declared vaults. Automatic AWS installs are the exception:
-        // their stack-wide vault data grant also covers user-declared vaults in the stack.
-        // Automatic AWS setup installs stack-wide vault data access with the management role;
-        // see ManagementPermissionProfileMutation. A vault-scoped grant would make the
-        // runtime write a policy onto its own management role, which is denied.
-        if !(stack_state.platform == Platform::Aws
-            && config.stack_settings.setup_management == alien_core::SetupManagement::Automatic)
-        {
-            add_vault_permissions_to_management(
-                &mut stack,
-                secrets_vault_id,
-                !infrastructure_only,
-            )?;
-        }
+        // Setup installs concrete vault grants before runtime can sync secret values.
+        // Adding a vault later requires setup to authorize its new data permissions.
+        add_vault_permissions_to_management(
+            &mut stack,
+            secrets_vault_id,
+            !infrastructure_only,
+        )?;
 
         Ok(stack)
     }
@@ -2020,11 +2011,9 @@ mod tests {
         }
     }
 
-    /// The secrets vault usually arrives with a later release's first worker. In an automatic
-    /// install the runtime applies that release as the management identity, which cannot attach
-    /// a vault-scoped policy to its own role, so approved setup must already cover the vault.
+    /// A later first workload adds a concrete setup grant without opening user vaults.
     #[tokio::test]
-    async fn automatic_setup_covers_a_later_secrets_vault_with_the_installed_grant() {
+    async fn automatic_setup_scopes_a_later_secrets_vault_grant() {
         let worker = Worker::new("later-worker".to_string())
             .code(WorkerCode::Image {
                 image: "test:latest".to_string(),
@@ -2074,8 +2063,7 @@ mod tests {
             .external_bindings(ExternalBindings::default())
             .build();
 
-        let mut installed_grant = None;
-        for stack in [initial, later] {
+        for (has_worker, stack) in [(false, initial), (true, later)] {
             let stack = if SecretsVaultMutation.should_run(&stack, &stack_state, &config) {
                 SecretsVaultMutation
                     .mutate(stack, &stack_state, &config)
@@ -2095,21 +2083,17 @@ mod tests {
                 .clone();
             for id in ["vault/data-read", "vault/data-write"] {
                 assert!(
-                    profile.0["*"].iter().any(|grant| grant.id() == id),
-                    "approved setup installs stack-wide {id}"
+                    !profile.0["*"].iter().any(|grant| grant.id() == id),
+                    "automatic setup must not install stack-wide {id}"
                 );
-            }
-            assert!(
-                profile.0.get(SECRETS_VAULT_ID).is_none(),
-                "no vault-scoped management grant for the runtime to apply: {profile:?}"
-            );
-            if let Some(installed) = &installed_grant {
                 assert_eq!(
-                    installed, &profile.0["*"],
-                    "a later worker needs no new grant"
+                    profile.0.get(SECRETS_VAULT_ID)
+                        .is_some_and(|grants| grants.iter().any(|grant| grant.id() == id)),
+                    has_worker,
+                    "the workload requires a concrete secrets vault grant: {profile:?}"
                 );
             }
-            installed_grant = Some(profile.0["*"].clone());
+            assert!(profile.0.keys().all(|scope| scope == "*" || scope == SECRETS_VAULT_ID));
         }
     }
 

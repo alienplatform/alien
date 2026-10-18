@@ -17,7 +17,7 @@ use crate::{
 };
 use alien_core::{
     import::EmitContext, ErrorData, KubernetesCluster, PermissionProfile, PermissionSetReference,
-    RemoteStackManagement, ResourceLifecycle, Result, Worker,
+    RemoteStackManagement, ResourceLifecycle, Result, Vault, Worker,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{
@@ -182,7 +182,9 @@ fn remote_management_policy_documents(ctx: &EmitContext<'_>) -> Result<Vec<CfExp
             let Some(resource_entry) = ctx.stack.resources.get(resource_id) else {
                 continue;
             };
-            if resource_entry.lifecycle != ResourceLifecycle::Live {
+            if resource_entry.lifecycle != ResourceLifecycle::Live
+                && resource_entry.config.downcast_ref::<Vault>().is_none()
+            {
                 continue;
             }
             let Some(permission_set) = permission_set_ref
@@ -309,7 +311,9 @@ fn resource_scoped_aws_permission_context(
         .with_resource_id(resource_id.to_string());
     context.resource_name = None;
 
-    if resource_entry.config.downcast_ref::<Worker>().is_some() {
+    if resource_entry.config.downcast_ref::<Worker>().is_some()
+            || resource_entry.config.downcast_ref::<Vault>().is_some()
+        {
         return context.with_resource_name(format!("${{AWS::StackName}}-{resource_id}"));
     }
 

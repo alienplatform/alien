@@ -9,7 +9,7 @@ use alien_core::{
     KubernetesCluster, ObservedHealth, Platform, ProviderLifecycleState, RemoteStackManagement,
     RemoteStackManagementHeartbeatData, RemoteStackManagementHeartbeatStatus,
     RemoteStackManagementOutputs, ResourceHeartbeat, ResourceHeartbeatData, ResourceLifecycle,
-    ResourceOutputs, ResourceStatus, Worker,
+    ResourceOutputs, ResourceStatus, Vault, Worker,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
@@ -697,7 +697,9 @@ impl AwsRemoteStackManagementController {
             let Some(resource_entry) = ctx.desired_stack.resources.get(resource_id) else {
                 continue;
             };
-            if resource_entry.lifecycle != ResourceLifecycle::Live {
+            if resource_entry.lifecycle != ResourceLifecycle::Live
+                && resource_entry.config.downcast_ref::<Vault>().is_none()
+            {
                 continue;
             }
             let permission_context = Self::resource_scoped_management_permission_context(
@@ -758,7 +760,9 @@ impl AwsRemoteStackManagementController {
             .with_resource_id(resource_id.to_string());
         context.resource_name = None;
 
-        if resource_entry.config.downcast_ref::<Worker>().is_some() {
+        if resource_entry.config.downcast_ref::<Worker>().is_some()
+            || resource_entry.config.downcast_ref::<Vault>().is_some()
+        {
             return Ok(
                 context.with_resource_name(format!("{}-{}", ctx.resource_prefix, resource_id))
             );

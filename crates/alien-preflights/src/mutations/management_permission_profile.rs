@@ -270,8 +270,7 @@ fn generate_auto_management_profile(
         // A direct setup explicitly grants ongoing infrastructure control for all supported
         // resource types, including ones a later release adds. Reuse the permission registry
         // rather than keeping a second cloud-specific administrator-policy implementation.
-        // Data payload permissions stay explicit; on AWS they are stack-scoped (see below)
-        // because the management role cannot receive a resource-scoped grant after setup.
+        // Sensitive data permissions name concrete resources and are installed during setup.
         for id in list_permission_set_ids() {
             let Some((resource_type, operation)) = id.split_once('/') else {
                 continue;
@@ -286,22 +285,9 @@ fn generate_auto_management_profile(
             }
         }
         if platform == Platform::Aws {
-            // The AWS management role may not change its own policies
-            // (remote-stack-management/protect-management-role), so after setup no
-            // controller can attach a resource-scoped grant to it. Approved setup installs
-            // the stack-prefixed grants those controllers would otherwise attach:
-            // - command dispatch for this stack's workers, including workers added later;
-            //   Lambda invocation stays bounded to the stack prefix;
-            // - data access to the secrets vault, which usually arrives with a later
-            //   release's first workload; vault provisioning already allows the same
-            //   parameter writes.
-            for id in [
-                "worker/dispatch-command",
-                "vault/data-read",
-                "vault/data-write",
-            ] {
-                permission_set_ids.insert(id.to_string());
-            }
+            // Command dispatch remains bounded to this stack's worker functions.
+            // Vault data grants are added separately for the concrete required vaults.
+            permission_set_ids.insert("worker/dispatch-command".to_string());
         }
     }
 
@@ -733,7 +719,7 @@ mod tests {
                     || (platform == Platform::Aws
                         && matches!(
                             id,
-                            "worker/dispatch-command" | "vault/data-read" | "vault/data-write"
+                            "worker/dispatch-command"
                         ));
                 if !requested
                     || resource_type == "remote-stack-management"
@@ -875,8 +861,6 @@ mod tests {
         for id in [
             "storage/provision",
             "worker/dispatch-command",
-            "vault/data-read",
-            "vault/data-write",
         ] {
             assert!(
                 profile.0["*"].iter().any(|grant| grant.id() == id),
