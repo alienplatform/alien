@@ -36,6 +36,7 @@ members = [
   "crates/alien-operations-sdk",
   "crates/alien-sandbox-agent",
   "crates/alien-egress-gateway",
+  "crates/alien-sandbox-conformance",
   "crates/alien-preflights",
   "crates/alien-deployment",
   "crates/alien-local",
