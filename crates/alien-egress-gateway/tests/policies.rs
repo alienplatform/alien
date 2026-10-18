@@ -180,14 +180,23 @@ async fn bounded_snapshot_pages_restore_every_large_signed_policy() {
             .map(|i| format!("{i}.{}.example.com", "a".repeat(42)))
             .collect(),
     };
-    for index in 0..30 {
-        source
-            .apply(
-                record_for(1, Some(policy.clone()), &format!("box-{index}")).0,
-                false,
-            )
-            .unwrap();
+    let mut accepted = 0;
+    loop {
+        let (entry, keys) = record_for(1, Some(policy.clone()), &format!("box-{accepted}"));
+        let mut verified = Record::verify(entry.signed, &keys, &["p/r".into()], 1000).unwrap();
+        // Transport buffers may leave spare capacity without changing signed bytes.
+        verified.signed.reserve(12345);
+        match source.apply(verified, false) {
+            Ok(true) => accepted += 1,
+            Err(error) => {
+                assert_eq!(error.code, "SANDBOX_EGRESS_POLICY_STORE_FULL");
+                break;
+            }
+            Ok(false) => panic!("new identity must be accepted or rejected for capacity"),
+        }
+        assert!(accepted < 100, "fixture must fill the bounded store");
     }
+    assert!(accepted >= 30, "fixture must span multiple snapshot pages");
     let mut pages = 0;
     loop {
         let page = source.newer_than(&restored.summary().unwrap()).unwrap();
@@ -209,8 +218,13 @@ async fn bounded_snapshot_pages_restore_every_large_signed_policy() {
         }
     }
     assert!(pages > 1);
-    assert_eq!(restored.summary().unwrap().len(), 30);
-    for index in 0..30 {
+    assert_eq!(restored.summary().unwrap().len(), accepted);
+    let extra = record_for(1, Some(policy.clone()), "one-too-many").0;
+    assert_eq!(
+        restored.apply(extra, false).unwrap_err().code,
+        "SANDBOX_EGRESS_POLICY_STORE_FULL"
+    );
+    for index in 0..accepted {
         assert_eq!(
             *restored
                 .resolve("p/r", &format!("box-{index}"))

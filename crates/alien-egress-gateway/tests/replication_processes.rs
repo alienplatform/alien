@@ -301,14 +301,25 @@ async fn three_process_replication_survives_faults_and_exposes_total_loss_replay
             assert_eq!(connect_status(proxy, &token).await, 200);
             traffic_started.wait().await;
             let (mut allowed, mut denied) = (1, 0);
-            while !*traffic_done.borrow() {
-                match connect_status(proxy, &token).await {
+            loop {
+                let stopping = *traffic_done.borrow();
+                let status = connect_status(proxy, &token).await;
+                if stopping {
+                    assert_eq!(
+                        status, 403,
+                        "final steady request must observe the synchronized denial"
+                    );
+                }
+                match status {
                     200 => {
                         assert_eq!(denied, 0, "allowed after observing the newer denial");
                         allowed += 1;
                     }
                     403 => denied += 1,
                     status => panic!("steady traffic returned unexpected status {status}"),
+                }
+                if stopping {
+                    break;
                 }
                 tokio::time::sleep(Duration::from_millis(25)).await;
             }
@@ -331,6 +342,14 @@ async fn three_process_replication_survives_faults_and_exposes_total_loss_replay
     assert_eq!(cluster.connect(2, &token).await, 403);
     cluster.isolate(2, Fault::Heal);
     cluster.ready_all().await;
+    assert_eq!(
+        cluster.connect(2, &token).await,
+        403,
+        "replacement must snapshot the pending write before ready"
+    );
+    // The earlier 503 did not acknowledge every surviving peer. Follow the SDK
+    // contract: retry this exact record after recovery, then require all peers.
+    assert_eq!(cluster.write(0, &deny, false).await, 204);
     cluster.assert_all(&token, 403).await;
 
     stop_traffic.send(true).unwrap();
@@ -449,4 +468,66 @@ async fn three_process_replication_survives_faults_and_exposes_total_loss_replay
         "CI replication budget exceeded: {:?}",
         start.elapsed()
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tombstones_expire_at_the_signed_timestamp_despite_staggered_snapshots() {
+    let mut cluster = Cluster::new().await;
+    let retention = (25 * 60 * 60 + 60) * 1000;
+    let expires = millis() + 5000;
+    let written = expires - retention;
+    let deleted = record(written, 2, None);
+    let older = record(written - 1, 1, Some(json!("internet")));
+    let expired_token = signed(
+        "JWT",
+        json!({
+            "iss":"alien-sandbox","aud":AUD,"sub":SUB,
+            "iat":written/1000,"exp":written/1000+24*60*60
+        }),
+    );
+    // A fresh management-issued identity represents explicit named-id reuse.
+    // It is only a witness for absence: the original deleted identity is expired
+    // throughout this test and must remain denied even if its old policy returns.
+    let reused_identity = identity();
+    cluster.isolate(2, Fault::Drop);
+    assert_eq!(cluster.write(0, &deleted, true).await, 503);
+    assert_eq!(cluster.write(1, &deleted, true).await, 503);
+    cluster.assert_all(&expired_token, 403).await;
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    cluster.isolate(2, Fault::Heal);
+    cluster.stop(2).await;
+    cluster.start(2);
+    cluster.ready_all().await;
+    assert!(
+        millis() < expires,
+        "fixture must snapshot before the expiry boundary"
+    );
+    for index in 0..3 {
+        assert_eq!(
+            cluster.register(index, &reused_identity, &older).await,
+            409,
+            "each replica must retain the not-yet-expired tombstone"
+        );
+    }
+    cluster.assert_all(&reused_identity, 403).await;
+
+    // Advance real wall time to the signed boundary, not the local receipt time.
+    tokio::time::sleep(Duration::from_millis(expires.saturating_sub(millis()) + 20)).await;
+    assert_eq!(
+        cluster.register(0, &reused_identity, &older).await,
+        204,
+        "all peers must discard the tombstone by its signed deadline, including the late snapshot"
+    );
+    cluster.assert_all(&reused_identity, 200).await;
+    cluster.assert_all(&expired_token, 403).await;
+    // Staggered late deliveries cannot refresh deletion or replace the older
+    // record that has legitimately filled the absent entry after expiration.
+    for index in 0..3 {
+        assert_eq!(cluster.write(index, &deleted, true).await, 204);
+        cluster.assert_all(&reused_identity, 200).await;
+        cluster.assert_all(&expired_token, 403).await;
+    }
+    for index in 0..3 {
+        cluster.stop(index).await;
+    }
 }

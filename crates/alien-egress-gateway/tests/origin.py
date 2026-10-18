@@ -53,8 +53,12 @@ def dns():
         name = ".".join(labels)
         with open("/fixture/dns.jsonl", "a") as log:
             log.write(json.dumps({"name": name, "type": packet[offset : offset + 2].hex()}) + "\n")
+        if name == "slow.example.test":
+            continue
         ips = ["93.184.216.2"]
-        if name == "private.test":
+        if name == "replicas.test":
+            ips = ["93.184.216.3", "93.184.216.4"]
+        elif name == "private.test":
             ips = ["10.77.91.2"]
         elif name == "configured-range.test":
             ips = ["93.184.217.2"]

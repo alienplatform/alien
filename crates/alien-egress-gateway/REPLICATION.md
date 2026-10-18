@@ -82,3 +82,33 @@ remain denied until their application publishes a policy again.
 between 1 and 65536). Excess connections are refused before tunnel buffers are
 allocated, with a rate-limited `global connection capacity` log and denial counter.
 Changing the limit requires a restart. Per-source and per-identity limits still apply.
+
+## Release memory measurements
+
+Measured on 2026-10-18 with the x86_64 musl release binary at `fe53b9fab`,
+inside a read-only, capability-free container limited to 512 MiB. The record
+budget was derived from cgroup `memory.max`, with no configuration override.
+Peak RSS is the process's Linux `VmHWM`; it includes allocator overhead but not
+kernel socket memory. These controlled local loads are sizing evidence, not a
+production throughput guarantee.
+
+| Load | Result | Peak RSS |
+| --- | --- | ---: |
+| 10,000 sandboxes, each with a 1 KiB policy | 10,000 accepted | 189,104,128 bytes (180.3 MiB) |
+| Startup snapshot of those 10,000 records | Ready after 3.03 s; all versions matched | 102,621,184 bytes (97.9 MiB) |
+| Source serving that snapshot | All records retained | 192,090,112 bytes (183.2 MiB) |
+| 1,000 attempts with 256 KiB policies | 127 accepted; 873 returned `SANDBOX_EGRESS_POLICY_STORE_FULL` | 226,955,264 bytes (216.4 MiB) |
+| Startup snapshot of the full large-policy store | All 127 accepted records restored in 1.90 s with the same memory limit | 251,224,064 bytes (239.6 MiB) |
+| 2,000 open CONNECT tunnels with traffic | All tunnels exchanged data | 93,646,848 bytes (89.3 MiB) |
+| Full policy store plus 2,000 tunnels with traffic | All tunnels exchanged data | 307,109,888 bytes (292.9 MiB) |
+| Full policy store plus 2,048 tunnels | Connection 2,049 refused and logged | 309,084,160 bytes (294.8 MiB) |
+
+No process was OOM-killed. The combined peak leaves about 217 MiB below the
+container limit; the measurements do not support reducing it to 256 MiB. Record
+accounting charges twice the retained allocations to cover measured allocator
+size classes and fragmentation. It counts both decoded policy copies and the
+signed record. Retained strings and vectors have their spare capacity removed
+before charging, so identical records cost the same on every ingestion path.
+A full store refuses writes without evicting a live policy. The 2,048 default
+connection cap bounds tunnel memory separately; increasing it or overriding
+the record budget requires sizing for the deployment's workload.

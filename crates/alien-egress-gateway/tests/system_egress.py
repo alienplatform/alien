@@ -31,6 +31,8 @@ except (OSError,http.client.HTTPException): pass
     for hook in ["suspend", "resume"]:
         suite.record(f"agent {hook} hook remains reachable with routing installed", lambda hook=hook:
                      _hook(call, hook))
+    assert call("POST","/v1/exec",{"command":["true"],"timeoutMs":1000})[0]==503
+    assert call("PUT","/v1/egress",{"token":suite.token()})[0]==204
 
 
 def _hook(call, hook):

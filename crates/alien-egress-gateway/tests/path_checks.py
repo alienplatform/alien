@@ -2,7 +2,7 @@
 import json
 
 
-def check_resume_path(suite, name, call, docker, networks, prefix, metadata):
+def check_resume_path(suite, name, call, docker, networks, prefix, metadata, sub="sandbox-one"):
     suffix = "metadata-canary" if metadata else "udp-canary"
     subnet, origin, guest = ("169.254.169.0/24", "169.254.169.254", "169.254.169.10") if metadata else ("8.8.8.0/24", "8.8.8.8", "8.8.8.10")
     network = prefix+"-"+suffix
@@ -30,5 +30,8 @@ def check_resume_path(suite, name, call, docker, networks, prefix, metadata):
         status,body=call("POST","/aws/lambda-microvms/runtime/v1/resume",{})
         assert status==200,(status,body)
         status,body=call("GET","/v1/health")
-        assert status==200 and json.loads(body)["status"]=="ready",(status,body)
+        assert status==200 and json.loads(body)["status"]=="awaiting-egress-policy",(status,body)
+        assert call("POST","/v1/exec",{"command":["true"],"timeoutMs":1000})[0]==503
+        assert call("PUT","/v1/egress",{"token":suite.token(sub=sub)})[0]==204
+        assert json.loads(call("GET","/v1/health")[1])["status"]=="ready"
     suite.record(f"Resume recovers after closing {suffix}",recover)

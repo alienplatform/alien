@@ -85,6 +85,34 @@ print("other source admitted")'''
                 stream.close()
     suite.record("pre-auth source cap preserves admission from another IP", source_capacity)
 
+    def dns_capacity():
+        install("slow-dns", {"allow":["slow.example.test","allowed.test"]})
+        streams=[]
+        try:
+            for _ in range(8):
+                stream=socket.create_connection((proxy,3128),timeout=2)
+                stream.sendall(f"CONNECT slow.example.test:443 HTTP/1.1\r\nHost: slow.example.test:443\r\nProxy-Authorization: Bearer {suite.token(sub='slow-dns')}\r\n\r\n".encode())
+                streams.append(stream)
+            time.sleep(.3)
+            suite.tunnel(token=suite.token(sub="slow-dns"),expected=403)
+            with connect("neighbor") as neighbor: echo(neighbor)
+        finally:
+            for stream in streams:stream.close()
+    suite.record("stalled DNS is capped per identity and another sandbox proceeds",dns_capacity)
+
+    def refusal_logs():
+        def denied_count():
+            status, metrics=suite.admin("/metrics",{},method="GET")
+            assert status==200
+            return int(next(line.split()[-1] for line in metrics.decode().splitlines() if line.startswith('alien_egress_denials_total{reason="authentication"}')))
+        before=denied_count()
+        logs_before=len(docker("logs",prefix+"-proxy1").splitlines())
+        for _ in range(100): suite.tunnel(token="invalid",expected=403)
+        assert denied_count()==before+100
+        logs_after=len(docker("logs",prefix+"-proxy1").splitlines())
+        assert logs_after-logs_before<100,(logs_before,logs_after)
+    suite.record("refusal logs are rate limited while counters retain every denial",refusal_logs)
+
     def descriptor_exhaustion():
         install("descriptors")
         with connect("descriptors", second) as existing:

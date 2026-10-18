@@ -184,8 +184,8 @@ class Suite:
             stream.close()
         return stream
 
-    def tls(self, host="allowed.test", port=443, sni=None, ca=None, token=None, path="/", method="GET", host_header=None, direct=False):
-        stream = socket.create_connection((ORIGIN, port), timeout=8) if direct else self.tunnel(host, port, token)
+    def tls(self, host="allowed.test", port=443, sni=None, ca=None, token=None, path="/", method="GET", host_header=None, direct=False, proxy=PROXY):
+        stream = socket.create_connection((ORIGIN, port), timeout=8) if direct else self.tunnel(host, port, token, proxy=proxy)
         context = ssl.create_default_context(cafile=str(ca or self.output / "origin/ca.pem"))
         with context.wrap_socket(stream, server_hostname=sni or host) as tls:
             tls.sendall(f"{method} {path} HTTP/1.1\r\nHost: {host_header or host}\r\nConnection: close\r\n\r\n".encode())
@@ -193,26 +193,45 @@ class Suite:
             response.begin()
             return response.status, response.read()
 
+    def signed_policy(self, body, method="PUT"):
+        claims = {"v":1,"aud":body["aud"],"sub":body["sub"],"ver":[body["version"],"0"*32]}
+        if method == "DELETE": claims["deleted"] = True
+        else: claims["policy"] = body["policy"]
+        message = encoded(json.dumps({"alg":"EdDSA","kid":"test","typ":"alien-egress-record"}).encode())+"."+encoded(json.dumps(claims).encode())
+        return message+"."+encoded(self.key.sign(message.encode()))
+
+    def delivery(self, body):
+        body = dict(body)
+        if "policy" in body:
+            return body
+        claims = json.loads(base64.urlsafe_b64decode(body["token"].split(".")[1]+"=="))
+        identity = {k:claims[k] for k in ["aud","sub"]}
+        status, response = self.admin("/v1/policies/record?"+urlencode(identity), identity, method="GET")
+        assert status in [200,404], (status,response)
+        body["policy"] = json.loads(response)["record"] if status == 200 else self.signed_policy({**identity,"version":int(time.time()*1000),"policy":self.policy})
+        return body
+
     def admin(self, path, body, token=None, proxy=PROXY, method=None):
         method = method or ("PUT" if path == "/v1/policies" else "POST")
         body = dict(body)
-        if path == "/v1/policies" and method in ["PUT", "DELETE"] and "version" not in body:
-            body["version"] = self.version(body["aud"], body["sub"], proxy)+1
-        claims = {k: v for k, v in body.items() if k in ["aud", "sub", "version"]}
+        claims = {k:v for k,v in body.items() if k in ["aud","sub"]}
         claims["method"] = method
-        if "policy" in body:
-            claims["policy"] = policy_digest(body["policy"])
-        conn = http.client.HTTPConnection(proxy, 3129, timeout=5)
-        conn.request(method, path, json.dumps(body), {"Content-Type": "application/json", "Authorization": "Bearer " + (token or self.token(admin=True, **claims))})
-        response = conn.getresponse()
-        result = response.status, response.read()
+        if "policy" in body: claims["policy"] = policy_digest(body["policy"])
+        if path == "/v1/policies" and method in ["PUT","DELETE"]:
+            if "version" not in body:
+                body["version"] = max(int(time.time()*1000), self.version(body["aud"],body["sub"],proxy)+1)
+            body = {"record":self.signed_policy(body,method)}
+        conn = http.client.HTTPConnection(proxy,3129,timeout=10)
+        conn.request(method,path,json.dumps(body),{"Content-Type":"application/json","Authorization":"Bearer "+(token or self.token(admin=True,**claims))})
+        response=conn.getresponse()
+        result=response.status,response.read()
         conn.close()
         return result
 
     def version(self, aud, sub, proxy=PROXY):
         status, response = self.admin("/v1/policies?"+urlencode({"aud":aud,"sub":sub}), {"aud":aud,"sub":sub}, proxy=proxy, method="GET")
         assert status == 200, (status,response)
-        return json.loads(response)["version"]
+        return (json.loads(response)["version"] or [0,""])[0]
 
     def denied_tls(self, **kwargs):
         try:
@@ -243,8 +262,8 @@ class Suite:
             result = response.status, response.read()
             conn.close()
             return result
-        self.record("authenticated proxy-port health", lambda: equal(health(self.token()), (200, b"ok\n")))
-        self.record("health refuses identity without policy despite configured default", lambda: equal(health(self.token(sub="missing"))[0], 403))
+        self.record("authenticated proxy-port health", lambda: equal(health(self.token()), (200, b"")))
+        self.record("health refuses identity without policy despite configured default", lambda: equal(health(self.token(sub="missing"))[0], 404))
         self.record("obsolete generation token refused", lambda: self.tunnel(token=self.token(gen=0), expected=403))
         self.record("direct verified TLS control", lambda: equal(self.tls(direct=True), (200, BODY)))
         self.record("allowed name verified TLS", lambda: equal(self.tls(), (200, BODY)))
@@ -333,22 +352,23 @@ class Suite:
         self.record("signed admin identity cannot change", lambda: equal(self.admin("/v1/policies", {**policy_body, "sub":"other"}, self.token(admin=True, method="PUT", policy=policy_digest(self.policy)))[0], 403))
         self.record("PUT grant cannot DELETE", lambda: equal(self.admin("/v1/policies", identity, self.token(admin=True, method="PUT", policy=policy_digest(self.policy)), method="DELETE")[0], 403))
         def policy_versions():
+            base = int(time.time()*1000)
             identity = {"aud":AUD,"sub":"versioned"}
             equal(self.version(**identity),0)
-            body = {**identity,"version":1,"policy":{"allow":["allowed.test"]}}
+            body = {**identity,"version":base,"policy":{"allow":["allowed.test"]}}
             equal(self.admin("/v1/policies", body)[0],204)
             equal(self.admin("/v1/policies", body, proxy="93.184.216.4")[0],204)
-            equal(self.version(**identity,proxy="93.184.216.4"),1)
-            equal(self.admin("/v1/policies", {**body,"policy":"internet"})[0],409)
-            equal(self.admin("/v1/policies", {**body,"version":0})[0],409)
-            wrong_version = self.token(admin=True, sub="versioned", method="PUT", version=3, policy=policy_digest(body["policy"]))
-            equal(self.admin("/v1/policies", {**body,"version":2}, wrong_version)[0],403)
-            equal(self.admin("/v1/policies", {**identity,"version":2}, method="DELETE")[0],204)
-            equal(self.admin("/v1/policies", {**identity,"version":2}, method="DELETE")[0],204)
-            equal(self.version(**identity),2)
-            equal(self.admin("/v1/policies", body)[0],409)
-            equal(self.admin("/v1/policies", {**body,"version":3})[0],204)
-        self.record("signed versions reject reordering, conflicting replay and resurrection", policy_versions)
+            equal(self.version(**identity,proxy="93.184.216.4"),base)
+            equal(self.admin("/v1/policies", {**body,"policy":"internet"})[0],204)
+            self.tunnel("blocked.example.test",token=self.token(sub="versioned"),expected=403)
+            equal(self.admin("/v1/policies", {**body,"version":base-1})[0],204)
+            equal(self.admin("/v1/policies", {**identity,"version":base+1}, method="DELETE")[0],204)
+            equal(self.admin("/v1/policies", {**identity,"version":base+1}, method="DELETE")[0],204)
+            equal(self.version(**identity),base+1)
+            equal(self.admin("/v1/policies", body)[0],204)
+            self.tunnel(token=self.token(sub="versioned"),expected=403)
+            equal(self.admin("/v1/policies", {**body,"version":base+2})[0],204)
+        self.record("signed record versions ignore reordering, equal retries and old resurrection", policy_versions)
         status, response = self.admin("/v1/ca", identity)
         assert status == 200, response
         ca = self.output / "guest-ca.pem"
@@ -448,6 +468,7 @@ class Suite:
         containers.append(name)
 
         def call(method, path, body=None):
+            if method == "PUT" and path == "/v1/egress": body = self.delivery(body)
             conn = http.client.HTTPConnection("172.29.91.3", 8080, timeout=12)
             conn.request(method, path, json.dumps(body) if body is not None else None, {"Content-Type": "application/json"})
             response = conn.getresponse()
@@ -477,6 +498,7 @@ class Suite:
         self.record("agent refuses forged identity via authenticated health", lambda: equal(call("PUT", "/v1/egress", {"token": forged})[0], 503))
         self.record("agent token install and path self-check", lambda: equal(call("PUT", "/v1/egress", {"token": self.token()})[0], 204))
         self.record("agent ready health", lambda: equal(json.loads(call("GET", "/v1/health")[1])["status"], "ready"))
+
         check_capabilities(self, name, call, docker, AGENT_UID)
         def child_socket_boundary():
             # Docker exec bypasses the agent's child setup: establish that IPv6 exists
@@ -578,6 +600,10 @@ else: raise AssertionError("unexpected egress")
 '''
         self.record("command UID honors stored policy replacement", lambda: equal(docker("exec", "-u", f"{AGENT_UID}:{AGENT_UID}", name, "python", "-c", denied), "denied"))
 
+        from paused_policy import check_paused_policy, check_running_recovery
+        self.record("paused agent accepts gateway-only narrowing and Resume delivery gates commands",lambda:check_paused_policy(self,name,call,docker,AUD,SUB,AGENT_UID))
+        self.record("running narrowing survives total gateway loss with the retained record",lambda:check_running_recovery(self,call,docker,AUD,SUB,PREFIX))
+
         for mode, expected in [("none", 200), ("bridge", 503)]:
             closed = PREFIX + f"-floor-{mode}"
             docker("run", "-d", "--name", closed, "--network", mode, *AGENT_CAP_ARGS, "-e", 'ALIEN_SANDBOX_EGRESS="none"', image)
@@ -611,6 +637,7 @@ while True:
                "-v", f"{self.output / 'origin/ca.pem'}:/fixture-ca.pem:ro", image)
         containers.append(name)
         def call(method, path, body=None):
+            if method == "PUT" and path == "/v1/egress": body = self.delivery(body)
             conn = http.client.HTTPConnection("172.29.91.4", 8080, timeout=10)
             conn.request(method, path, json.dumps(body) if body is not None else None, {"Content-Type":"application/json"})
             response = conn.getresponse()
@@ -647,7 +674,7 @@ print("proxy-only passed")
         def probe():
             assert docker("exec", name, "python", "-c", script) == "proxy-only passed"
         self.record("unprivileged HTTPS_PROXY works and direct socket fails", probe)
-        check_resume_path(self, name, call, docker, networks, PREFIX, metadata=True)
+        check_resume_path(self, name, call, docker, networks, PREFIX, metadata=True, sub=sub)
         self.record("unprivileged localhost HTTP remains local", lambda: check_loopback_http(name))
 
 
@@ -666,7 +693,7 @@ def main():
     AGENT_UID = args.agent_uid
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
-    for name in ["origin", "vault", "kv"]:
+    for name in ["origin", "vault"]:
         (output / name).mkdir(mode=0o777)
         (output / name).chmod(0o777)
     ca = certificates(output / "origin")
@@ -677,7 +704,7 @@ def main():
     allowed = ["allowed.test", f"{ORIGIN}:80", f"{ORIGIN}:2222", "inject.test", "inject.test:8443", "rebind.test", "private.test", "mixed.test", "metadata.test", "configured-range.test", "overlay.test", "*.example.test"]
     suite.policy = {"allow": allowed}
     rules = [dict(aud=AUD, host="inject.test", port=port, method="GET", path="/v1/", header="X-Test-Credential", vaultBinding="test-vault", secret="test") for port in [443, 8443]]
-    config = dict(listen="0.0.0.0:3128", audiences=[AUD], defaultPolicies={AUD: "internet"}, generationStore={"binding":"egress-state"}, keys=[dict(kid="test", publicKey=public)], deniedRanges=["93.184.217.0/24", "10.244.0.0/16"], credentials=rules, upstreamCaCertificates=[ca])
+    config = dict(listen="0.0.0.0:3128", audiences=[AUD], defaultPolicies={AUD: "internet"}, peers={"dns":"replicas.test","port":3129}, replicaSecret=base64.b64encode(bytes([7])*32).decode(), keys=[dict(kid="test", publicKey=public)], deniedRanges=["93.184.217.0/24", "10.244.0.0/16"], credentials=rules, upstreamCaCertificates=[ca])
     if args.vault_config:
         (output / "vault/secrets.json").write_text(json.dumps({"test":"fake-test-secret", "sandbox-egress-gateway-config":json.dumps(config)}))
     containers, networks = [], []
@@ -696,9 +723,9 @@ def main():
             name = PREFIX + f"-proxy{number}"
             binary = ["-v", f"{args.gateway_binary.resolve()}:/usr/local/bin/alien-egress-gateway:ro"] if args.gateway_binary else []
             config_env = ["-e", "ALIEN_SECRETS_BINDING=" + json.dumps({"service":"local-vault","dataDir":"/vault","vaultName":"secrets"})] if args.vault_config else ["-e", "ALIEN_EGRESS_GATEWAY_CONFIG=" + json.dumps(config)]
-            docker("run", "-d", "--read-only", "--cap-drop", "ALL", *binary, "--name", name, "--network", PREFIX, "--ip", ip, "--dns", ORIGIN,
-                   "-v", f"{output / 'kv'}:/kv", "-v", f"{output / 'vault'}:/vault:ro",
-                   "-e", "ALIEN_DEPLOYMENT_TYPE=local", "-e", "ALIEN_EGRESS_STATE_BINDING=" + json.dumps({"service": "local-kv", "dataDir": "/kv"}),
+            docker("run", "-d", "--read-only", "--memory", "512m", "--cap-drop", "ALL", *binary, "--name", name, "--network", PREFIX, "--ip", ip, "--dns", ORIGIN,
+                   "-v", f"{output / 'vault'}:/vault:ro",
+                   "-e", "ALIEN_DEPLOYMENT_TYPE=local",
                    "-e", "ALIEN_TEST_VAULT_BINDING=" + json.dumps({"service": "local-vault", "dataDir": "/vault", "vaultName": "test"}),
                    *config_env, args.image)
             containers.append(name)
@@ -710,7 +737,7 @@ def main():
                 conn.request("GET", "/health")
                 assert conn.getresponse().read() == b"ok\n"
                 break
-            except (OSError, http.client.HTTPException):
+            except (OSError, http.client.HTTPException, AssertionError):
                 if time.monotonic() > deadline:
                     raise
                 time.sleep(0.1)

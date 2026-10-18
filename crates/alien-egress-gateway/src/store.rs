@@ -179,12 +179,27 @@ impl PolicyStore {
             chrono::Utc::now().timestamp_millis().max(0) as u64,
         )
     }
-    fn apply_at(&self, record: Record, only_missing: bool, now_ms: u64) -> Result<bool> {
+    fn apply_at(&self, mut record: Record, only_missing: bool, now_ms: u64) -> Result<bool> {
         if record.expired(now_ms) {
             return Ok(false);
         }
         if let Some(policy) = &record.claims.policy {
             canonical(policy)?;
+        }
+        // HTTP bodies and snapshot strings can have different spare capacity. Retain
+        // exactly the same allocations for the same record on every ingestion path.
+        fn compact(value: &mut String) {
+            *value = std::mem::take(value).into_boxed_str().into_string();
+        }
+        compact(&mut record.signed);
+        compact(&mut record.claims.aud);
+        compact(&mut record.claims.sub);
+        compact(&mut record.claims.ver.1);
+        if let Some(Policy::Allow { allow }) = &mut record.claims.policy {
+            for target in allow.iter_mut() {
+                compact(target);
+            }
+            *allow = std::mem::take(allow).into_boxed_slice().into_vec();
         }
         // Charge both decoded policy copies, their string/vector allocations, signed bytes,
         // identity keys, and fixed map/record overhead. Live entries are never evicted.
