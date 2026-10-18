@@ -61,6 +61,8 @@ const GCP_CREDENTIAL_HANDOFF_GRACE_PERIOD: Duration = Duration::from_secs(10 * 6
 /// Retry transient credential failures for at most ten minutes since the last
 /// persisted deployment progress. Waiting never checkpoints or moves this deadline.
 const CREDENTIAL_ERROR_GRACE_PERIOD: Duration = Duration::from_secs(10 * 60);
+const CREDENTIAL_RETRY_INTERVAL: chrono::Duration = chrono::Duration::seconds(5);
+const CREDENTIAL_FAILURE_RECHECK_INTERVAL: chrono::Duration = chrono::Duration::minutes(5);
 
 /// Build a `HorizonMachineImage` from `ALIEN_BYO_HORIZON_AMI_AMD64`/`_ARM64`
 /// + `AWS_REGION` env vars. Returns `None` when no AMI env vars are set so
@@ -224,18 +226,19 @@ pub struct DeploymentLoop {
     /// so hold the last one instead of refetching and re-deserializing it.
     /// One entry per deployment, replaced when it moves to another release.
     settled_stack_cache: Mutex<HashMap<String, (String, Option<Stack>)>>,
-    /// Deployments this loop skipped because its credentials cannot provision
-    /// their phase, keyed by ID. The loop does not acquire them again until
-    /// their status changes or the recheck time passes.
-    unprovisionable: Mutex<HashMap<String, UnprovisionableDeployment>>,
+    /// Acquisition backoff shared by deployment and heartbeat ticks. The retry
+    /// deadline itself comes from persisted progress, never from this cache.
+    deferred: Mutex<HashMap<String, DeferredDeployment>>,
 }
 
-/// A deployment the loop skipped for lack of provisioning credentials.
+/// A deployment waiting for credentials or another driver.
 #[derive(Debug, Clone)]
-struct UnprovisionableDeployment {
+struct DeferredDeployment {
     /// The status it was skipped in.
     status: String,
-    /// When the loop may acquire it again in that status.
+    updated_at: Option<chrono::DateTime<chrono::Utc>>,
+    retry_requested: bool,
+    /// When the loop may acquire it again if the record has not changed.
     recheck_after: chrono::DateTime<chrono::Utc>,
 }
 
@@ -293,53 +296,44 @@ impl DeploymentLoop {
             dev_status_tx,
             local_bindings_cache: Mutex::new(HashMap::new()),
             settled_stack_cache: Mutex::new(HashMap::new()),
-            unprovisionable: Mutex::new(HashMap::new()),
+            deferred: Mutex::new(HashMap::new()),
         }
     }
 
-    /// Restrict `filter` to current candidates, minus deployments this loop
-    /// skipped for lack of provisioning credentials and that are still in the
-    /// status they were skipped in. Forgets entries that are due for a recheck,
-    /// changed status, or are no longer candidates. Returns `false` when no
-    /// candidate is left.
-    async fn exclude_unprovisionable(
+    /// Exclude unchanged deployments until their acquisition backoff expires.
+    /// Query only when needed, and retain entries outside this loop's filter:
+    /// heartbeat and deployment ticks share this cache but acquire different statuses.
+    pub(crate) async fn exclude_deferred(
         &self,
         caller: &Subject,
         filter: &mut DeploymentFilter,
     ) -> Result<bool, AlienError> {
         let now = chrono::Utc::now();
-        let mut parked = self
-            .unprovisionable
-            .lock()
-            .expect("unprovisionable poisoned")
-            .clone();
-        parked.retain(|_, entry| entry.recheck_after > now);
-        if parked.is_empty() {
-            self.unprovisionable
-                .lock()
-                .expect("unprovisionable poisoned")
-                .clear();
-            return Ok(true);
+        {
+            let mut deferred = self.deferred.lock().expect("deferred poisoned");
+            deferred.retain(|_, entry| entry.recheck_after > now);
+            if deferred.is_empty() {
+                return Ok(true);
+            }
         }
-
         let candidates = self
             .deployment_store
             .list_deployments(caller, filter)
             .await?;
-        let mut still_parked = HashMap::new();
+        let mut deferred = self.deferred.lock().expect("deferred poisoned");
         let mut ids = Vec::with_capacity(candidates.len());
         for candidate in candidates {
-            match parked.remove(&candidate.id) {
-                Some(entry) if entry.status == candidate.status => {
-                    still_parked.insert(candidate.id, entry);
-                }
-                _ => ids.push(candidate.id),
+            let unchanged = deferred.get(&candidate.id).is_some_and(|entry| {
+                entry.status == candidate.status
+                    && entry.updated_at == candidate.updated_at
+                    && entry.retry_requested == candidate.retry_requested
+                    && entry.recheck_after > now
+            });
+            if !unchanged {
+                deferred.remove(&candidate.id);
+                ids.push(candidate.id);
             }
         }
-        *self
-            .unprovisionable
-            .lock()
-            .expect("unprovisionable poisoned") = still_parked;
         let has_candidates = !ids.is_empty();
         filter.deployment_ids = Some(ids);
         Ok(has_candidates)
@@ -494,7 +488,7 @@ impl DeploymentLoop {
         // no caller passthrough is available.
         let caller = Subject::system();
 
-        match self.exclude_unprovisionable(&caller, &mut filter).await {
+        match self.exclude_deferred(&caller, &mut filter).await {
             Ok(true) => {}
             Ok(false) => return,
             Err(error) => {
@@ -531,7 +525,6 @@ impl DeploymentLoop {
                     stream::iter(acquired)
                         .for_each_concurrent(MAX_CONCURRENT_DEPLOYMENTS, |item| async {
                             let deployment_id = item.deployment.id.clone();
-                            let status = item.deployment.status.clone();
                             let skipped = self
                                 .process_deployment(
                                     item.deployment,
@@ -541,17 +534,6 @@ impl DeploymentLoop {
                                 )
                                 .await;
                             if skipped {
-                                self.unprovisionable
-                                    .lock()
-                                    .expect("unprovisionable poisoned")
-                                    .insert(
-                                        deployment_id.clone(),
-                                        UnprovisionableDeployment {
-                                            status,
-                                            recheck_after: chrono::Utc::now()
-                                                + UNPROVISIONABLE_RECHECK_INTERVAL,
-                                        },
-                                    );
                                 skipped_ids
                                     .lock()
                                     .expect("skipped IDs poisoned")
@@ -620,8 +602,7 @@ impl DeploymentLoop {
 
     /// Process a single deployment: step until stable, reconcile, release.
     ///
-    /// Returns `true` when it was skipped because the resolved credentials
-    /// cannot provision its phase.
+    /// Returns `true` when acquisition should wait before trying this deployment again.
     async fn process_deployment(
         &self,
         deployment: DeploymentRecord,
@@ -644,8 +625,37 @@ impl DeploymentLoop {
             );
         }
 
-        // Release lock unconditionally. Loop context, no inbound caller.
+        // Capture the revision while we still own the lease.
         let caller = Subject::system();
+        let deferred = if let Ok(Some(delay)) = result {
+            // A checkpoint may have changed the status and timestamp. Remember
+            // the persisted record so later user actions can end the backoff.
+            match self
+                .deployment_store
+                .get_deployment(&caller, &deployment_id)
+                .await
+            {
+                Ok(Some(record)) => {
+                    self.deferred.lock().expect("deferred poisoned").insert(
+                        deployment_id.clone(),
+                        DeferredDeployment {
+                            status: record.status,
+                            updated_at: record.updated_at,
+                            retry_requested: record.retry_requested,
+                            recheck_after: chrono::Utc::now() + delay,
+                        },
+                    );
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    error!(%deployment_id, %error, "Failed to remember deployment backoff")
+                }
+            }
+            true
+        } else {
+            false
+        };
+        // Release lock unconditionally, including when reading the revision failed.
         if let Err(e) = self
             .deployment_store
             .release(&caller, &deployment_id, session, execution_claim.clone())
@@ -657,7 +667,7 @@ impl DeploymentLoop {
                 "Failed to release deployment lock"
             );
         }
-        matches!(result, Ok(true))
+        deferred
     }
 
     async fn process_deployment_inner(
@@ -666,7 +676,7 @@ impl DeploymentLoop {
         execution_claim: Option<crate::traits::deployment_store::ExecutionClaim>,
         session: &str,
         options: ProcessOptions,
-    ) -> Result<bool, AlienError> {
+    ) -> Result<Option<chrono::Duration>, AlienError> {
         let deployment_id = deployment.id.clone();
         let stack_settings = deployment
             .stack_settings
@@ -680,7 +690,7 @@ impl DeploymentLoop {
                 deployment_id = %deployment_id,
                 "Skipping pull-mode deployment — handled by alien-operator"
             );
-            return Ok(false);
+            return Ok(None);
         }
 
         let status = parse_status(&deployment.status);
@@ -690,7 +700,7 @@ impl DeploymentLoop {
                 deployment_id = %deployment_id,
                 "Skipping heartbeat because heartbeats are disabled for this deployment"
             );
-            return Ok(false);
+            return Ok(None);
         }
 
         // 1. Get the release for this deployment.
@@ -776,7 +786,7 @@ impl DeploymentLoop {
                     .delete_deployment(&system, &deployment_id)
                     .await?;
             }
-            return Ok(false);
+            return Ok(None);
         }
 
         // 2. Resolve credentials for the target platform and lifecycle phase.
@@ -804,8 +814,22 @@ impl DeploymentLoop {
                         error = %e,
                         "Credentials unavailable for deployment phase; waiting to retry or for credential handoff"
                     );
+                    return Ok(Some(CREDENTIAL_RETRY_INTERVAL));
                 } else {
                     let failed_status = failed_status_for_deployment_error(status);
+                    let unchanged = status == failed_status
+                        && !deployment.retry_requested
+                        && deployment_record_error(&deployment.error).as_ref() == Some(&e);
+                    if unchanged {
+                        warn!(
+                            deployment_id = %deployment_id,
+                            status = ?status,
+                            error_code = %e.code,
+                            error = %e,
+                            "Credential resolution still failing; leaving unchanged failure checkpoint and backing off"
+                        );
+                        return Ok(Some(CREDENTIAL_FAILURE_RECHECK_INTERVAL));
+                    }
                     warn!(
                         deployment_id = %deployment_id,
                         status = ?status,
@@ -832,7 +856,7 @@ impl DeploymentLoop {
                     )
                     .await?;
                 }
-                return Ok(false);
+                return Ok(Some(CREDENTIAL_FAILURE_RECHECK_INTERVAL));
             }
         };
 
@@ -858,7 +882,7 @@ impl DeploymentLoop {
                 )
                 .await?;
             }
-            return Ok(true);
+            return Ok(Some(UNPROVISIONABLE_RECHECK_INTERVAL));
         }
         let client_config = resolved_credentials.client_config;
 
@@ -1092,7 +1116,7 @@ impl DeploymentLoop {
         }
 
         // Propagate step loop errors to the caller (which logs and releases the lock).
-        runner_result.map(|_| false).map_err(|e| e.into_generic())
+        runner_result.map(|_| None).map_err(|e| e.into_generic())
     }
 
     async fn checkpoint_without_step(
@@ -1426,9 +1450,7 @@ fn credential_error_retry_remaining(
     error: &AlienError,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Option<Duration> {
-    if !error.retryable
-        || (parse_status(&deployment.status).is_failed() && !deployment.retry_requested)
-    {
+    if !error.retryable || parse_status(&deployment.status).is_failed() {
         return None;
     }
     // Like the setup handoff window, the stored timestamp survives replica
@@ -1932,7 +1954,7 @@ mod tests {
     /// preflight and a pending deployment whose CLI never acquired it.
     #[cfg(feature = "sqlite")]
     #[tokio::test]
-    async fn unprovisionable_deployment_is_not_reacquired_every_tick() {
+    async fn deferred_deployment_is_not_reacquired_every_tick() {
         for (status, retry) in [("preflights-failed", true), ("pending", false)] {
             let temp = tempfile::tempdir().unwrap();
             let db = Arc::new(
@@ -2160,9 +2182,9 @@ mod tests {
 
             // ...or when the recheck time passes.
             for entry in runner
-                .unprovisionable
+                .deferred
                 .lock()
-                .expect("unprovisionable poisoned")
+                .expect("deferred poisoned")
                 .values_mut()
             {
                 entry.recheck_after = chrono::Utc::now() - chrono::Duration::seconds(1);
@@ -2616,6 +2638,8 @@ mod tests {
         async fn expired_transient_error_fails_with_real_error_after_restart() {
             let error = transient_error();
             let fixture = Fixture::new(DeploymentStatus::UpdatePending, error.clone()).await;
+            fixture.process(&fixture.runner()).await;
+            assert_eq!(fixture.record().await.status, "update-pending");
             let old = (Utc::now() - chrono::Duration::minutes(11)).to_rfc3339();
             fixture
                 .db
@@ -2626,6 +2650,81 @@ mod tests {
             let record = fixture.record().await;
             assert_eq!(record.status, "update-failed");
             assert_eq!(record.error.unwrap(), serde_json::to_value(error).unwrap());
+        }
+
+        #[tokio::test]
+        async fn credential_failure_backs_off_heartbeat_acquisition_without_writes() {
+            let error = AlienError::new(alien_gcp_clients::ErrorData::InvalidClientConfig {
+                message: "management credentials are missing".to_string(),
+                errors: None,
+            })
+            .into_generic();
+            let fixture = Fixture::new(DeploymentStatus::Running, error).await;
+            let runner = Arc::new(fixture.runner());
+            let heartbeat = crate::loops::heartbeat::HeartbeatLoop::new(
+                fixture.manager.config.clone(),
+                fixture.manager.deployment_store.clone(),
+                runner.clone(),
+            );
+            heartbeat.tick().await;
+            assert_eq!(fixture.record().await.status, "refresh-failed");
+            assert_eq!(fixture.credentials.visits.load(Ordering::SeqCst), 1);
+            let writes = fixture.writes().await;
+            for _ in 0..20 {
+                runner.tick().await;
+                heartbeat.tick().await;
+            }
+            assert_eq!(
+                fixture.writes().await,
+                writes,
+                "backoff must avoid even lease writes"
+            );
+            assert_eq!(fixture.credentials.visits.load(Ordering::SeqCst), 1);
+
+            // A periodic recheck acquires/releases, but does not repeat the failure checkpoint.
+            for entry in runner.deferred.lock().unwrap().values_mut() {
+                entry.recheck_after = Utc::now() - chrono::Duration::seconds(1);
+            }
+            let before = fixture.record().await;
+            heartbeat.tick().await;
+            assert_eq!(fixture.credentials.visits.load(Ordering::SeqCst), 2);
+            assert_eq!(fixture.record().await.updated_at, before.updated_at);
+            let after_recheck = fixture.writes().await;
+            assert_eq!(
+                after_recheck - writes,
+                2,
+                "only acquire and release may write"
+            );
+            heartbeat.tick().await;
+            assert_eq!(fixture.writes().await, after_recheck);
+
+            // An explicit retry ends the backoff, including when the status stays failed.
+            fixture
+                .manager
+                .deployment_store
+                .set_retry_requested(&Subject::system(), &fixture.id)
+                .await
+                .unwrap();
+            heartbeat.tick().await;
+            assert_eq!(fixture.credentials.visits.load(Ordering::SeqCst), 3);
+        }
+
+        #[tokio::test]
+        async fn transient_credentials_are_attempted_once_per_tick_and_keep_deadline() {
+            let fixture = Fixture::new(DeploymentStatus::UpdatePending, transient_error()).await;
+            let runner = fixture.runner();
+            let before = fixture.record().await;
+            runner.tick().await;
+            assert_eq!(fixture.credentials.visits.load(Ordering::SeqCst), 1);
+            let writes = fixture.writes().await;
+            runner.tick().await;
+            assert_eq!(fixture.credentials.visits.load(Ordering::SeqCst), 1);
+            assert_eq!(fixture.writes().await, writes);
+            assert_eq!(fixture.record().await.updated_at, before.updated_at);
+            // Another replica may retry, but must use the original persisted deadline.
+            fixture.runner().tick().await;
+            assert_eq!(fixture.credentials.visits.load(Ordering::SeqCst), 2);
+            assert_eq!(fixture.record().await.updated_at, before.updated_at);
         }
 
         #[tokio::test]

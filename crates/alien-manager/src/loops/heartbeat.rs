@@ -27,10 +27,24 @@ pub struct HeartbeatLoop {
 #[async_trait]
 pub(crate) trait HeartbeatDeploymentProcessor: Send + Sync {
     async fn process_heartbeat_deployment(&self, item: AcquiredDeployment, session: &str);
+
+    async fn exclude_deferred(
+        &self,
+        _filter: &mut DeploymentFilter,
+    ) -> Result<bool, alien_error::AlienError> {
+        Ok(true)
+    }
 }
 
 #[async_trait]
 impl HeartbeatDeploymentProcessor for DeploymentLoop {
+    async fn exclude_deferred(
+        &self,
+        filter: &mut DeploymentFilter,
+    ) -> Result<bool, alien_error::AlienError> {
+        self.exclude_deferred(&Subject::system(), filter).await
+    }
+
     async fn process_heartbeat_deployment(&self, item: AcquiredDeployment, session: &str) {
         self.process_heartbeat_deployment(item.deployment, item.execution_claim, session)
             .await;
@@ -75,8 +89,8 @@ impl HeartbeatLoop {
     }
 
     /// One heartbeat tick: acquire running deployments and run one health-check step.
-    async fn tick(&self) {
-        let filter = DeploymentFilter {
+    pub(super) async fn tick(&self) {
+        let mut filter = DeploymentFilter {
             statuses: Some(vec!["running".to_string(), "refresh-failed".to_string()]),
             platforms: if self.config.targets.is_empty() {
                 None
@@ -97,6 +111,18 @@ impl HeartbeatLoop {
         // batch would leave the surplus holding leases that nothing extends.
         let batches = HEARTBEAT_DEPLOYMENTS_PER_TICK.div_ceil(MAX_CONCURRENT_DEPLOYMENTS);
         for _ in 0..batches {
+            match self
+                .deployment_processor
+                .exclude_deferred(&mut filter)
+                .await
+            {
+                Ok(true) => {}
+                Ok(false) => break,
+                Err(error) => {
+                    error!(%error, "Heartbeat: failed to filter deferred deployments");
+                    break;
+                }
+            }
             let session = uuid::Uuid::new_v4().to_string();
             match self
                 .deployment_store
