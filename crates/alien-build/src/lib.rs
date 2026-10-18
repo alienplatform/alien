@@ -1879,6 +1879,18 @@ async fn push_resource_images(
                 lambda_image::validate_sandbox(archive, resource_name)?;
             }
             vec![(target, archive.clone())]
+        } else if *platform == Platform::Azure && resource_type == "worker" {
+            let target = BinaryTarget::LinuxX64;
+            let archive = oci_files
+                .iter()
+                .find(|path| oci_tarball_target(path) == Some(target))
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::InvalidResourceConfig {
+                        resource_id: resource_name.to_owned(),
+                        reason: "Azure workers require a Linux amd64 OCI archive".to_owned(),
+                    })
+                })?;
+            vec![(target, archive.clone())]
         } else if *platform == Platform::Local && matches!(resource_type, "worker" | "daemon") {
             let host = BinaryTarget::current_os();
             let archive = oci_files
@@ -1917,6 +1929,11 @@ async fn push_resource_images(
     if let [(_, only)] = selected_tarballs.as_slice() {
         info!("Pushing {} to {}", only.display(), image_uri);
         let image = DockDashImage::from_tarball(only).map_dockdash_err()?;
+        if *platform == Platform::Azure && resource_type == "worker" {
+            // Inspect the final image before uploading. A legacy image is allowed,
+            // but an inherited receipt must not survive a changed runtime/startup.
+            worker_image::inspect(&image, resource_name).await?;
+        }
         push_image_with_retry(&image, &image_uri, &push_opts_with_progress).await?;
         info!(
             "Pushed resource '{}' in {:.2}s",
@@ -1924,7 +1941,9 @@ async fn push_resource_images(
             push_resource_started.elapsed().as_secs_f64()
         );
 
-        if *platform == Platform::Aws && resource_type == "sandbox" {
+        if (*platform == Platform::Aws && resource_type == "sandbox")
+            || (*platform == Platform::Azure && resource_type == "worker")
+        {
             // Tags are unique per push, not per image. The bundle's FROM and
             // content key must use the registry's immutable ARM64 manifest so an
             // unchanged sandbox does not rebuild on every application release.
@@ -1938,7 +1957,7 @@ async fn push_resource_images(
                 protocol: push_options.protocol.clone(),
                 ..Default::default()
             });
-            let (_, digest) = client
+            let (manifest, digest) = client
                 .pull_manifest_raw(
                     &reference,
                     &push_options.auth,
@@ -1948,8 +1967,14 @@ async fn push_resource_images(
                 .into_alien_error()
                 .context(ErrorData::ImagePushFailed {
                     image: image_uri.clone(),
-                    reason: "Failed to resolve the pushed ARM64 manifest".to_string(),
+                    reason: "Failed to resolve the pushed image manifest".to_string(),
                 })?;
+            worker_image::verify_pushed_manifest(
+                &manifest,
+                &digest,
+                image.config_digest(),
+                resource_name,
+            )?;
             return Ok(format!("{repository}@{digest}"));
         }
         return Ok(image_uri);

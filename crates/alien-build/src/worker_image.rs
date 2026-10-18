@@ -90,6 +90,35 @@ pub async fn inspect(
     }))
 }
 
+/// Check the registry's actual manifest before using its immutable reference.
+/// The registry can convert the manifest encoding, but must retain the inspected
+/// configuration, which binds the startup command and uncompressed layer hashes.
+pub(crate) fn verify_pushed_manifest(
+    bytes: &[u8],
+    digest: &str,
+    config_digest: &str,
+    resource_name: &str,
+) -> Result<()> {
+    let invalid = |reason: &str| ErrorData::ImagePushFailed {
+        image: resource_name.to_owned(),
+        reason: reason.to_owned(),
+    };
+    if format!("sha256:{:x}", Sha256::digest(bytes)) != digest {
+        return Err(AlienError::new(invalid(
+            "Registry manifest digest does not match its bytes",
+        )));
+    }
+    let manifest: oci_client::manifest::OciImageManifest = serde_json::from_slice(bytes)
+        .into_alien_error()
+        .context(invalid("Registry did not return an image manifest"))?;
+    if manifest.schema_version != 2 || manifest.config.digest != config_digest {
+        return Err(AlienError::new(invalid(
+            "Pushed image configuration differs from the inspected image",
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -194,5 +223,32 @@ mod tests {
     async fn legacy_image_without_receipt_has_no_capability() {
         let image = Image::builder().build().await.unwrap().0;
         assert_eq!(inspect(&image, "worker").await.unwrap(), None);
+    }
+    #[tokio::test]
+    async fn registry_manifest_must_bind_exact_bytes_and_inspected_configuration() {
+        let image = fixture(None, RUNTIME_PATH, vec![]).await;
+        let bytes = serde_json::to_vec(&serde_json::json!({
+            "schemaVersion": 2,
+            "mediaType": "application/vnd.oci.image.manifest.v1+json",
+            "config": {"mediaType": "application/vnd.oci.image.config.v1+json",
+                "digest": image.config_digest(), "size": 1},
+            "layers": []
+        }))
+        .unwrap();
+        let digest = format!("sha256:{:x}", Sha256::digest(&bytes));
+        verify_pushed_manifest(&bytes, &digest, image.config_digest(), "worker").unwrap();
+        assert!(
+            verify_pushed_manifest(&bytes, "sha256:other", image.config_digest(), "worker")
+                .is_err()
+        );
+        assert!(verify_pushed_manifest(&bytes, &digest, "sha256:other", "worker").is_err());
+        let index = br#"{"schemaVersion":2,"manifests":[]}"#;
+        assert!(verify_pushed_manifest(
+            index,
+            &format!("sha256:{:x}", Sha256::digest(index)),
+            image.config_digest(),
+            "worker"
+        )
+        .is_err());
     }
 }
