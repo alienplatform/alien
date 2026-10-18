@@ -1019,34 +1019,58 @@ storageSecret = "canary-secret"
         for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
             for wrong_platform in [false, true] {
                 let server = MockServer::start_async().await;
-                let returned = if wrong_platform { Platform::Machines } else { platform };
-                let request = server.mock_async(|when, then| {
-                    when.method(GET).path("/v1/deployment-info")
-                        .query_param("deploymentId", "dep_demo")
-                        .query_param("updateOperationId", "op_saved");
-                    then.status(200).json_body(json!({
-                        "setupUpdate": {
-                            "deploymentId": "dep_demo", "updateOperationId": "op_saved",
-                            "releaseId": "rel_target", "platform": returned,
-                            "setupMethod": "cli", "stackSettings": {"endpointAccess": "private"}
-                        },
-                        "installContext": {"targets": {(returned.as_str()): {
-                            "platform": returned, "managerUrl": server.base_url()
-                        }}}
-                    }));
-                }).await;
-                let result = fetch_target().client(&reqwest::Client::new())
-                    .base_url(&server.base_url()).deployment_id("dep_demo")
-                    .operation_id("op_saved").release_id("rel_target")
-                    .platform(platform).call().await;
+                let returned = if wrong_platform {
+                    Platform::Machines
+                } else {
+                    platform
+                };
+                let request = server
+                    .mock_async(|when, then| {
+                        when.method(GET)
+                            .path("/v1/deployment-info")
+                            .query_param("deploymentId", "dep_demo")
+                            .query_param("updateOperationId", "op_saved");
+                        then.status(200).json_body(json!({
+                            "setupUpdate": {
+                                "deploymentId": "dep_demo", "updateOperationId": "op_saved",
+                                "releaseId": "rel_target", "platform": returned,
+                                "setupMethod": "cli", "stackSettings": {"endpointAccess": "private"}
+                            },
+                            "installContext": {"targets": {(returned.as_str()): {
+                                "platform": returned, "managerUrl": server.base_url()
+                            }}}
+                        }));
+                    })
+                    .await;
+                let result = fetch_target()
+                    .client(&reqwest::Client::new())
+                    .base_url(&server.base_url())
+                    .deployment_id("dep_demo")
+                    .operation_id("op_saved")
+                    .release_id("rel_target")
+                    .platform(platform)
+                    .call()
+                    .await;
                 if wrong_platform {
-                    assert!(result.is_err(), "a different platform cannot replace the authorized target");
+                    assert!(
+                        result.is_err(),
+                        "a different platform cannot replace the authorized target"
+                    );
                 } else {
                     let mut info = result.unwrap();
                     assert_eq!(manager_url(&info).unwrap(), server.base_url());
-                    let args = UpArgs::parse_from(["democtl", "--platform", platform.as_str(), "--endpoint-access", "both"]);
+                    let args = UpArgs::parse_from([
+                        "democtl",
+                        "--platform",
+                        platform.as_str(),
+                        "--endpoint-access",
+                        "both",
+                    ]);
                     patch_settings(&mut info.setup_update, &args, None).unwrap();
-                    assert_eq!(info.setup_update.stack_settings["endpointAccess"], json!("both"));
+                    assert_eq!(
+                        info.setup_update.stack_settings["endpointAccess"],
+                        json!("both")
+                    );
                     assert_eq!(info.setup_update.platform, platform);
                 }
                 request.assert_hits_async(1).await;
@@ -1070,7 +1094,7 @@ storageSecret = "canary-secret"
     }
 
     #[tokio::test]
-    async fn fresh_runner_saves_all_endpoint_transitions_before_claiming_setup() {
+    async fn fresh_runner_saves_endpoint_choices_and_preserves_machines_preflight() {
         for stored in [
             alien_core::EndpointAccess::Internet,
             alien_core::EndpointAccess::Private,
@@ -1231,6 +1255,9 @@ storageSecret = "canary-secret"
                     .contains("Endpoint access cannot change after setup"),
                 "{error}"
             );
+        } else if settings.endpoint_access != alien_core::EndpointAccess::Internet {
+            let error = result.expect_err("Machines cannot serve private cloud endpoints");
+            assert!(format!("{error:?}").contains("PRIVATE_ENDPOINT_ACCESS_UNSUPPORTED"));
         } else {
             result.expect("exact setup should hand off to manager");
         }
@@ -1244,7 +1271,15 @@ storageSecret = "canary-secret"
                 .await;
         }
         reconcile
-            .assert_hits_async(if !claim_matches { 0 } else { 1 })
+            .assert_hits_async(
+                if !claim_matches
+                    || settings.endpoint_access != alien_core::EndpointAccess::Internet
+                {
+                    0
+                } else {
+                    1
+                },
+            )
             .await;
         init.assert_hits_async(0).await;
     }
