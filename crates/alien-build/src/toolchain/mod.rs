@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 pub mod cache_utils;
 pub mod docker;
+mod docker_cache;
 pub(crate) mod native_addon;
 pub mod python;
 pub mod rust;

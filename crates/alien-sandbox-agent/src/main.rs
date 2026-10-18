@@ -83,8 +83,8 @@ fn main() -> Result<()> {
                     "reduce supervisor capabilities",
                     "cannot restrict the supervisor grant".to_string(),
                 ))?;
-            // The directory was created for the image's default uid. The declaration owns the
-            // identity, so fix it before commands or uploaded files can exist.
+            // Ensure the writable root agrees with the built image's command identity before
+            // commands or uploaded files can exist.
             let path = std::ffi::CString::new(state.session_root.as_os_str().as_encoded_bytes())
                 .into_alien_error()
                 .context(failed("prepare session root", "invalid path".to_string()))?;
@@ -301,6 +301,15 @@ fn load_state() -> Result<AgentState> {
         uid: parse(ENV_EXEC_UID)?,
         gid: parse(ENV_EXEC_GID)?,
     };
+
+    // A prebuilt bundle cannot be inspected by a setup emitter. Treat an explicit declaration
+    // as an assertion, never an override of the identity selected from the image at build time.
+    if std::env::var_os("ALIEN_SANDBOX_EXPECTED_EXEC_UID").is_some() {
+        let declared: u32 = parse("ALIEN_SANDBOX_EXPECTED_EXEC_UID")?;
+        if declared != exec_identity.uid {
+            return Err(invalid("ALIEN_SANDBOX_EXPECTED_EXEC_UID", "privilegedSupervisor.commandUid disagrees with the built image; rebuild the bundle with the matching command uid"));
+        }
+    }
 
     let isolation = load_isolation()?;
 

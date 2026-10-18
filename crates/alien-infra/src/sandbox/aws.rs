@@ -1311,8 +1311,7 @@ fn agent_hooks() -> MicrovmImageHooks {
 
 /// The agent's configuration contract, identical to the setup emitters' rendering.
 ///
-/// `ALIEN_SANDBOX_ISOLATION` is absent here and from both setup emitters. The image's own `ENV`
-/// is the only place it is set.
+/// Identity and isolation come from the image: runtime defaults would overwrite its USER.
 fn agent_environment() -> BTreeMap<String, String> {
     BTreeMap::from([
         (
@@ -1326,14 +1325,6 @@ fn agent_environment() -> BTreeMap<String, String> {
         (
             "ALIEN_SANDBOX_AUTHORIZATION".to_string(),
             AWS_MICROVM.authorization.env_value().to_string(),
-        ),
-        (
-            "ALIEN_SANDBOX_EXEC_UID".to_string(),
-            AWS_MICROVM.exec_uid.to_string(),
-        ),
-        (
-            "ALIEN_SANDBOX_EXEC_GID".to_string(),
-            AWS_MICROVM.exec_uid.to_string(),
         ),
     ])
 }
@@ -2778,7 +2769,7 @@ mod tests {
                     && request.additional_os_capabilities == vec!["ALL"]
                     && request
                         .environment_variables
-                        .get("ALIEN_SANDBOX_EXEC_UID")
+                        .get("ALIEN_SANDBOX_EXPECTED_EXEC_UID")
                         .map(String::as_str)
                         == Some("60001")
                     && request

@@ -508,3 +508,53 @@ async fn an_abandoned_session_is_reaped_with_its_sandbox() {
         "nothing survives the sandbox's own teardown: {after:?}"
     );
 }
+
+#[tokio::test]
+#[ignore = "requires a real Docker daemon"]
+async fn image_user_and_primary_group_survive_create_exec_and_file_upload() {
+    let fixture = TempDir::new().expect("build context");
+    std::fs::write(fixture.path().join("Dockerfile"), format!(
+        "FROM {IMAGE}\nRUN addgroup -g 2001 app && adduser -D -u 1001 -G app app && mkdir /data && chown app:app /data\nUSER app\n"
+    )).expect("fixture Dockerfile");
+    let image = format!("alien1610-identity-{}", uuid::Uuid::new_v4());
+    let built = std::process::Command::new("docker")
+        .args(["build", "-t", &image])
+        .arg(fixture.path())
+        .output()
+        .expect("docker build");
+    assert!(
+        built.status.success(),
+        "{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    let (manager, _dir) = manager();
+    let mut config = config(SandboxEgressMode::Deny);
+    config.image = image.clone();
+    let session = manager.create_session(&image, "user", &config).await;
+    let result = if let Ok(session) = &session {
+        Some(async {
+        manager
+            .write_file(&session.container_id, "uploaded", b"image-user")
+            .await?;
+        manager.exec(&session.container_id, &sh(
+            "set -ex; test $(id -u) = 1001; test $(id -g) = 2001; test $(stat -c %u:%g /sandbox/uploaded) = 1001:2001; test $ALIEN_SANDBOX_EXEC_UID = 1001; test $ALIEN_SANDBOX_EXEC_GID = 2001; test $ALIEN_SANDBOX_ROOT = /sandbox; if echo forbidden > /data/x; then exit 1; fi; cat /sandbox/uploaded"
+        )).await
+        }.await)
+    } else {
+        None
+    };
+    manager.reap(&image).await.expect("remove session");
+    let removed = std::process::Command::new("docker")
+        .args(["image", "rm", &image])
+        .output()
+        .expect("remove fixture");
+    assert!(
+        removed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&removed.stderr)
+    );
+    session.expect("session creates using the image USER");
+    let result = result.expect("executed").expect("exec succeeds");
+    assert_eq!(result.exit_code, 0, "{result:?}");
+    assert_eq!(stdout(&result), "image-user");
+}

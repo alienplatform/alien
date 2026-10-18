@@ -10,6 +10,7 @@ pub mod merge;
 pub mod plan;
 pub mod registry;
 pub mod sandbox_bundle;
+pub mod sandbox_identity;
 #[cfg(test)]
 mod sandbox_publish_tests;
 pub mod settings;
@@ -35,7 +36,6 @@ use oci_client::manifest::{
 use oci_client::Reference;
 use rand::distr::Alphanumeric;
 use rand::Rng;
-use reqwest::Url;
 use settings::{BinaryTargetExt, BuildSettings, PlatformBuildSettings, PushSettings};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
@@ -754,6 +754,16 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                                     resource_name: sandbox_id.clone()
                                 }))
                             }
+                        };
+
+                        let result = match result {
+                            Ok(image_uri) => sandbox_identity::validate_declared_uid(
+                                &sandbox,
+                                Path::new(&image_uri),
+                            )
+                            .await
+                            .map(|()| image_uri),
+                            Err(error) => Err(error),
                         };
 
                         match &result {
@@ -3199,25 +3209,7 @@ async fn build_target_to_file(
         target.runtime_platform_id()
     );
 
-    // Parse cache store from cache URL if provided
-    let cache_store = if let Some(cache_url) = &settings.cache_url {
-        let url =
-            Url::parse(cache_url)
-                .into_alien_error()
-                .context(ErrorData::BuildConfigInvalid {
-                    message: format!("Invalid cache URL: {}", cache_url),
-                })?;
-
-        let (store, _path) = object_store::parse_url(&url).into_alien_error().context(
-            ErrorData::BuildConfigInvalid {
-                message: format!("Failed to parse cache URL: {}", cache_url),
-            },
-        )?;
-
-        Some(std::sync::Arc::from(store))
-    } else {
-        None
-    };
+    let cache_store = toolchain::cache_utils::store_from_url(settings.cache_url.as_deref())?;
 
     // The build directory is the parent of output_path (e.g., .alien/build/local/function-name/)
     // This is where intermediate artifacts (bootstrap files, compiled binaries) should go.
@@ -4012,10 +4004,20 @@ async fn pull_and_export_image(
         drop(image_guard);
 
         // Flatten the saved archive to a single image manifest before the OCI reader sees it.
-        crate::toolchain::docker::DockerToolchain::normalize_oci_archive(
-            &output_tarball,
-            arch_str,
-        )?;
+        let archive_path = output_tarball.clone();
+        tokio::task::spawn_blocking(move || {
+            crate::toolchain::docker::DockerToolchain::normalize_oci_archive(
+                &archive_path,
+                arch_str,
+            )
+        })
+        .await
+        .into_alien_error()
+        .context(ErrorData::ImageBuildFailed {
+            resource_name: container_name.to_string(),
+            reason: "Image archive normalization task failed".to_string(),
+            build_output: None,
+        })??;
 
         info!(
             "Successfully exported {} to {}",
