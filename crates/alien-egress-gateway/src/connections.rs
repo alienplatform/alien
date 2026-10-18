@@ -20,7 +20,7 @@ use crate::{
     token::Claims,
 };
 
-pub const MAX_CONNECTIONS: usize = 1024;
+pub const MAX_CONNECTIONS: usize = 2048;
 pub const MAX_SOURCE_PENDING: usize = 32;
 pub const MAX_IDENTITY_CONNECTIONS: usize = 128;
 pub const IDLE_TIMEOUT: Duration = Duration::from_secs(120);

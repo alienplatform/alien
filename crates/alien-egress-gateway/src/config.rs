@@ -35,6 +35,9 @@ pub struct Config {
     /// Explicit policy storage budget; otherwise half of the cgroup memory limit.
     #[serde(default)]
     pub policy_memory_bytes: Option<usize>,
+    /// Global open proxy connections; rejects excess admission before allocating tunnel buffers.
+    #[serde(default = "max_connections")]
+    pub max_connections: usize,
     /// Base64 32-byte gateway-only key for replica authentication and scoped CAs.
     #[serde(default)]
     pub replica_secret: Option<String>,
@@ -84,6 +87,9 @@ pub struct CredentialRule {
 impl Config {
     /// Decode public keys and reject duplicate key IDs.
     pub fn verification_keys(&self) -> Result<HashMap<String, PublicKey>> {
+        if self.max_connections == 0 || self.max_connections > 65536 {
+            return Err(invalid("maxConnections must be between 1 and 65536"));
+        }
         if self.keys.is_empty() || self.audiences.is_empty() {
             return Err(invalid("keys and audiences are required"));
         }
@@ -127,4 +133,8 @@ pub struct DnsPeers {
 #[serde(deny_unknown_fields)]
 pub struct StaticPeers {
     pub r#static: Vec<String>,
+}
+
+fn max_connections() -> usize {
+    crate::connections::MAX_CONNECTIONS
 }

@@ -100,9 +100,10 @@ impl LiveGateway {
                 if previous.config.peers != gateway.config.peers
                     || previous.config.replica_secret != gateway.config.replica_secret
                     || previous.config.policy_memory_bytes != gateway.config.policy_memory_bytes
+                    || previous.config.max_connections != gateway.config.max_connections
                 {
                     return Err(invalid(
-                        "replica discovery/key/memory-budget changes require a restart",
+                        "replica discovery/key/memory-budget/connection-limit changes require a restart",
                     ));
                 }
                 if previous.config.credentials == gateway.config.credentials

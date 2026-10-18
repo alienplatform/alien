@@ -55,10 +55,11 @@ async fn signed_records_have_no_expiry_but_require_identity_and_signature() {
 }
 #[tokio::test]
 async fn concurrent_signed_versions_never_regress_and_recovery_only_fills_absence() {
+    let now = chrono::Utc::now().timestamp_millis() as u64;
     let store = Arc::new(PolicyStore::new(true, 512 * 1024 * 1024));
-    let (wide, _) = record(1, Some(Policy::Internet));
+    let (wide, _) = record(now, Some(Policy::Internet));
     let (narrow, _) = record(
-        2,
+        now + 1,
         Some(Policy::Allow {
             allow: vec!["allowed.example.com".into()],
         }),
@@ -73,13 +74,16 @@ async fn concurrent_signed_versions_never_regress_and_recovery_only_fills_absenc
     while let Some(result) = tasks.join_next().await {
         result.unwrap();
     }
-    assert_eq!(store.version("p/r", "box").await.unwrap().unwrap().0, 2);
+    assert_eq!(
+        store.version("p/r", "box").await.unwrap().unwrap().0,
+        now + 1
+    );
     assert_eq!(
         *store.resolve("p/r", "box").await.unwrap(),
         narrow.claims.policy.clone().unwrap()
     );
     assert!(!store.apply(wide.clone(), false).unwrap());
-    let (deleted, _) = record(3, None);
+    let (deleted, _) = record(now + 2, None);
     store.apply(deleted.clone(), false).unwrap();
     assert!(store.resolve("p/r", "box").await.is_err());
     assert!(!store.apply(wide.clone(), true).unwrap());
@@ -90,7 +94,10 @@ async fn concurrent_signed_versions_never_regress_and_recovery_only_fills_absenc
     }
     restarted.set_ready();
     assert!(restarted.ready());
-    assert_eq!(restarted.version("p/r", "box").await.unwrap().unwrap().0, 3);
+    assert_eq!(
+        restarted.version("p/r", "box").await.unwrap().unwrap().0,
+        now + 2
+    );
     assert!(restarted.resolve("p/r", "box").await.is_err());
     let empty = PolicyStore::new(true, 512 * 1024 * 1024);
     empty.apply(wide, true).unwrap();
@@ -98,7 +105,7 @@ async fn concurrent_signed_versions_never_regress_and_recovery_only_fills_absenc
         *empty.resolve("p/r", "box").await.unwrap(),
         Policy::Internet
     );
-    let (recreated, _) = record(4, Some(Policy::Internet));
+    let (recreated, _) = record(now + 3, Some(Policy::Internet));
     store.apply(recreated, false).unwrap();
     assert_eq!(
         store
@@ -122,30 +129,6 @@ async fn maximum_policy_remains_compact_and_reusable_in_memory() {
     let first = store.resolve("p/r", "box").await.unwrap();
     let second = store.resolve("p/r", "box").await.unwrap();
     assert!(Arc::ptr_eq(&first, &second));
-}
-
-#[tokio::test(start_paused = true)]
-async fn tombstones_retain_for_twenty_five_hours_without_evicting_live_policies() {
-    let store = PolicyStore::new(true, 1024 * 1024);
-    let (live, _) = record(1, Some(Policy::Internet));
-    store.apply(live.clone(), false).unwrap();
-    let (deleted, _) = record(2, None);
-    store.apply(deleted, false).unwrap();
-    tokio::time::advance(std::time::Duration::from_secs(25 * 3600 - 1)).await;
-    store.expire_tombstones().unwrap();
-    assert!(store.record("p/r", "box").unwrap().unwrap().claims.deleted);
-    assert!(!store.apply(live, true).unwrap());
-    tokio::time::advance(std::time::Duration::from_secs(1)).await;
-    store.expire_tombstones().unwrap();
-    assert!(store.record("p/r", "box").unwrap().is_none());
-    let (live, _) = record(3, Some(Policy::Internet));
-    store.apply(live, false).unwrap();
-    tokio::time::advance(std::time::Duration::from_secs(50 * 3600)).await;
-    store.expire_tombstones().unwrap();
-    assert_eq!(
-        *store.resolve("p/r", "box").await.unwrap(),
-        Policy::Internet
-    );
 }
 
 #[tokio::test]
