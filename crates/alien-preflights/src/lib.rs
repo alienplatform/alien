@@ -349,6 +349,7 @@ impl PreflightRegistry {
         registry.add_compile_time_check(Box::new(compile_time::ResourceEnabledValidCheck));
         registry.add_compile_time_check(Box::new(compile_time::FrozenResourceLifecycleCheck));
         registry.add_compile_time_check(Box::new(compile_time::ContainerLifecycleCheck));
+        registry.add_compile_time_check(Box::new(compile_time::ContainerNetworkSettingsCheck));
         registry.add_compile_time_check(Box::new(compile_time::KubernetesWorkloadSettingsCheck));
         registry.add_compile_time_check(Box::new(compile_time::PublicWorkerLifecycleCheck));
         registry.add_compile_time_check(Box::new(compile_time::MachinesResourcesCheck));
@@ -498,6 +499,7 @@ impl PreflightRegistry {
         registry.add_mutation(Box::new(mutations::ManagementPermissionProfileMutation));
 
         // Phase 4: Dependency wiring (must be last, after all resources exist)
+        registry.add_mutation(Box::new(mutations::ContainerEndpointLinksMutation));
         registry.add_mutation(Box::new(mutations::ServiceAccountDependenciesMutation));
         registry.add_mutation(Box::new(mutations::InfrastructureDependenciesMutation));
 

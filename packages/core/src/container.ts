@@ -2,6 +2,7 @@ import {
   type ContainerAutoscaling,
   type ContainerCode,
   type Container as ContainerConfig,
+  type ContainerEgress,
   type ContainerGpuSpec,
   ContainerSchema,
   type ContainerSecurity,
@@ -19,6 +20,11 @@ import { type Resource, ResourceBuilder } from "./resource.js"
 /** Deployment-time choices for one resource dimension. */
 export type ContainerResourceRange<T> = { min: T; max: T; default: T }
 
+/** Resources allowed to connect to a named internal endpoint. */
+export interface InternalEndpointOptions {
+  from: readonly Resource[]
+}
+
 export type PublicEndpointOptions =
   | "http"
   | "tcp"
@@ -32,7 +38,10 @@ export type {
   Container as ContainerConfig,
   ContainerAutoscaling,
   ContainerCode,
+  ContainerEgress,
   ContainerGpuSpec,
+  ContainerInternalEndpoint,
+  ContainerInternalEndpointOutput,
   ContainerOutputs,
   ContainerPort,
   ContainerSecurity,
@@ -337,6 +346,35 @@ export class Container extends ResourceBuilder {
       hostLabel: endpoint.hostLabel,
       wildcardSubdomains: endpoint.wildcardSubdomains ?? false,
     } satisfies PublicEndpoint)
+    return this
+  }
+
+  /**
+   * Exposes a port only to the listed Sandbox, Worker, Container or Daemon resources.
+   * `from` is required and must not be empty. The endpoint is independent of
+   * public endpoints and the deployment's endpointAccess setting; a port can
+   * have both public and internal exposure. Allowed resources receive
+   * `internalEndpoints.<name>.url` in this container's binding.
+   * Backends that cannot enforce the source restriction refuse the plan.
+   */
+  public internalEndpoint(name: string, port: number, options: InternalEndpointOptions): this {
+    this._config.internalEndpoints ??= []
+    this._config.internalEndpoints.push({
+      name,
+      port,
+      from: options.from.map(resource => resource.ref()),
+    })
+    return this
+  }
+
+  /**
+   * Allows outbound connections only to public addresses and DNS, plus the
+   * platform credential proxy for this container's own identity.
+   * Requires security.profile = "restricted"; unsupported backends refuse the
+   * plan. Without this setting, existing full network access is unchanged.
+   */
+  public egress(policy: ContainerEgress): this {
+    this._config.egress = policy
     return this
   }
 
