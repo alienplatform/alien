@@ -96,6 +96,7 @@ class Box:
     def __init__(self, name, tls, cert):
         self.name, self.tls, self.cert = name, tls, cert
         self.sessions = {}
+        self.terminated = set()
 
     async def create(self, *, egress, timeout_ms):
         if self.name == "without-connector":
@@ -128,10 +129,13 @@ class Box:
         return Stream(proc)
 
     async def get(self, sandbox_id):
-        return self.sessions.get(sandbox_id)
+        if sandbox_id in self.terminated:
+            return SimpleNamespace(state="terminated")
+        return SimpleNamespace(state="running") if sandbox_id in self.sessions else None
 
     async def terminate(self, sandbox_id):
         server, thread = self.sessions.pop(sandbox_id)
+        self.terminated.add(sandbox_id)
         await asyncio.to_thread(server.shutdown)
         server.server_close()
         thread.join()
@@ -241,6 +245,10 @@ class After(unittest.IsolatedAsyncioTestCase):
                 )
                 self.assertEqual(
                     9, len((root / "sessions.jsonl").read_text().splitlines())
+                )
+                repeated = await runner.cleanup()
+                self.assertTrue(
+                    all(item["terminationCallCompleted"] for item in repeated)
                 )
             partial = dict(suite, floor=[], identityCommand=None)
             run.validate(partial)

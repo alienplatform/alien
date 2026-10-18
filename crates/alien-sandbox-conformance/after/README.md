@@ -5,7 +5,11 @@ This runner uses an installed Python SDK with `Sandbox.create(egress=...)` and
 merging runtime implementation changes into the conformance branch. Python 3.11
 or newer runs the host scripts; the guest needs Python 3 and its standard library.
 Use the deployment's normal binding environment and a wheel built from the
-implementation under test. Record that wheel's revision alongside the deployed
+implementation under test. The runner must reach the private gateway admin
+endpoint on port 3129. On AWS, run inside the deployment VPC using its scoped
+workload identity; an outside runner cannot manage policies through a private
+load balancer. A host-network Python container can use the host's instance profile
+without copying cloud credentials. Record that wheel's revision alongside the deployed
 revision. Never run this as a before measurement.
 
 Create an uncommitted suite file with this structure, replacing every example
