@@ -112,7 +112,7 @@ pub(crate) fn configure_aws_gateway_permissions(stack: &mut Stack) -> Result<()>
     for profile in stack.permissions.profiles.values_mut() {
         if profile.0.iter().any(|(target, sets)| {
             (target == "*" || sandboxes.contains(target))
-                && sets.iter().any(|set| set.id() == "sandbox/management")
+                && sets.iter().any(grants_sandbox_management)
         }) {
             let grants = profile.0.entry(SECRETS_VAULT_ID.into()).or_default();
             let set = exact_read("sandbox-egress-signing-key")?;
@@ -122,6 +122,18 @@ pub(crate) fn configure_aws_gateway_permissions(stack: &mut Stack) -> Result<()>
         }
     }
     Ok(())
+}
+
+/// Only the built-in management grant carries the signing key. An inline set counts only
+/// when its contents equal the built-in set: an ID alone can be reused for a narrower,
+/// deliberately restricted grant that must not be able to sign policy writes.
+fn grants_sandbox_management(set: &PermissionSetReference) -> bool {
+    match set {
+        PermissionSetReference::Name(name) => name == "sandbox/management",
+        PermissionSetReference::Inline(inline) => {
+            alien_permissions::get_permission_set("sandbox/management") == Some(inline)
+        }
+    }
 }
 
 fn exact_read(key: &str) -> Result<PermissionSet> {
