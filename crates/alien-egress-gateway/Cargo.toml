@@ -6,6 +6,7 @@ license-file.workspace = true
 
 [features]
 default = []
+aws = ["alien-bindings/aws"]
 cloud = ["alien-bindings/aws", "alien-bindings/gcp", "alien-bindings/azure", "alien-bindings/kubernetes"]
 local = ["alien-bindings/local"]
 

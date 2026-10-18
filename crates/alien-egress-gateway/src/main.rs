@@ -28,22 +28,23 @@ async fn main() -> Result<()> {
         .flatten_event(true)
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
-    let path = env::args()
-        .nth(1)
-        .ok_or_else(|| AlienError::new(failed("provide gateway config path")))?;
-    let config: Config = serde_json::from_slice(
-        &tokio::fs::read(path)
-            .await
-            .into_alien_error()
-            .context(failed("read config"))?,
-    )
-    .into_alien_error()
-    .context(failed("parse config"))?;
+    let encoded = match env::var("ALIEN_EGRESS_GATEWAY_CONFIG") {
+        Ok(encoded) => encoded,
+        Err(_) => {
+            let path = env::args().nth(1).ok_or_else(|| {
+                AlienError::new(failed("provide ALIEN_EGRESS_GATEWAY_CONFIG or config path"))
+            })?;
+            tokio::fs::read_to_string(path)
+                .await
+                .into_alien_error()
+                .context(failed("read config"))?
+        }
+    };
+    let config: Config = serde_json::from_str(&encoded)
+        .into_alien_error()
+        .context(failed("parse config"))?;
     let keys = config.verification_keys()?;
     credentials::validate_rules(&config.credentials)?;
-    let token = env::var("ALIEN_EGRESS_ADMIN_TOKEN")
-        .into_alien_error()
-        .context(failed("read ALIEN_EGRESS_ADMIN_TOKEN"))?;
     let bindings = Bindings::from_env().context(failed("load deployment bindings"))?;
     let kv = bindings
         .kv(&config.generation_binding)
@@ -66,7 +67,9 @@ async fn main() -> Result<()> {
         accepted: AtomicU64::new(0),
         denied: AtomicU64::new(0),
     });
-    let admin = Arc::new(Admin::new(gateway.clone(), &token)?);
+    let admin = Arc::new(Admin {
+        gateway: gateway.clone(),
+    });
     tokio::select! {
         result = server::serve(proxy, gateway) => result,
         result = axum::serve(admin_listener, admin::router(admin)) => result.into_alien_error().context(failed("serve admin")),

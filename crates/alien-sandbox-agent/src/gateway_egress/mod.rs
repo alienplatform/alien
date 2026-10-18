@@ -16,6 +16,7 @@ use std::{
 };
 
 use alien_error::{AlienError, Context, IntoAlienError};
+use base64::Engine;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream, UdpSocket},
@@ -42,13 +43,15 @@ fn invalid(reason: &str) -> AlienError<ErrorData> {
 
 /// Session egress state. Tokens never enter command environments, even in proxy-only mode.
 pub struct GatewayEgress {
-    address: SocketAddr,
+    address: RwLock<Option<SocketAddr>>,
     token: RwLock<String>,
     privileged: bool,
     ready: AtomicBool,
     names: Names,
     image_started: AtomicBool,
     ca_path: RwLock<Option<String>>,
+    identity: RwLock<Option<(String, String)>>,
+    update_lock: tokio::sync::Mutex<()>,
 }
 
 impl GatewayEgress {
@@ -56,19 +59,21 @@ impl GatewayEgress {
     /// the authenticated Run hook delivers it outside the shared image snapshot.
     pub fn from_env(control_port: u16) -> Result<Option<Arc<Self>>> {
         let address = match std::env::var("ALIEN_SANDBOX_EGRESS_GATEWAY") {
-            Ok(v) => v,
+            Ok(value) => Some(
+                value
+                    .to_socket_addrs()
+                    .into_alien_error()
+                    .context(failed("resolve gateway"))?
+                    .find(SocketAddr::is_ipv4)
+                    .ok_or_else(|| invalid("gateway needs IPv4"))?,
+            ),
+            Err(_) if std::env::var_os("ALIEN_SANDBOX_EGRESS").is_some() => None,
             Err(_) => return Ok(None),
         };
-        let address = address
-            .to_socket_addrs()
-            .into_alien_error()
-            .context(failed("resolve gateway"))?
-            .find(SocketAddr::is_ipv4)
-            .ok_or_else(|| invalid("gateway needs IPv4"))?;
-        let token = std::env::var("ALIEN_SANDBOX_EGRESS_TOKEN").unwrap_or_default();
-        if !token.is_empty() {
-            validate_token(&token)?;
-        }
+        let token = String::new();
+        let identity = std::env::var("ALIEN_SANDBOX_EGRESS_AUDIENCE")
+            .ok()
+            .zip(std::env::var("ALIEN_SANDBOX_SESSION_ID").ok());
         let privileged = unsafe { libc::geteuid() } == 0;
         if privileged {
             redirect::install(control_port)
@@ -76,13 +81,15 @@ impl GatewayEgress {
                 .context(failed("install transparent forwarding"))?;
         }
         Ok(Some(Arc::new(Self {
-            address,
+            address: RwLock::new(address),
             token: RwLock::new(token),
             privileged,
             ready: AtomicBool::new(false),
             names: Names::default(),
             image_started: AtomicBool::new(false),
             ca_path: RwLock::new(None),
+            identity: RwLock::new(identity),
+            update_lock: tokio::sync::Mutex::new(()),
         })))
     }
 
@@ -105,6 +112,15 @@ impl GatewayEgress {
             });
         }
         Ok(())
+    }
+
+    /// Health remains available while create is waiting to deliver the policy.
+    pub fn status(&self) -> Result<&'static str> {
+        if self.current_token()?.is_empty() {
+            return Ok("awaiting-egress-policy");
+        }
+        self.ensure_ready()?;
+        Ok("ready")
     }
 
     /// Gate session routes until the network path has been verified.
@@ -173,10 +189,69 @@ impl GatewayEgress {
         Ok(())
     }
 
+    /// Set the deployment endpoint from an authenticated Run hook before token delivery.
+    pub async fn set_gateway(
+        &self,
+        authority: &str,
+        audience: &str,
+        sandbox_id: &str,
+    ) -> Result<()> {
+        if self.ready.load(Ordering::Acquire) {
+            return Err(invalid("gateway already active"));
+        }
+        if audience.is_empty()
+            || sandbox_id.is_empty()
+            || audience.len() > 256
+            || sandbox_id.len() > 256
+        {
+            return Err(invalid("invalid sandbox identity"));
+        }
+        {
+            let mut identity = self
+                .identity
+                .write()
+                .map_err(|_| invalid("identity lock poisoned"))?;
+            if identity
+                .as_ref()
+                .is_some_and(|(aud, sub)| aud != audience || sub != sandbox_id)
+            {
+                return Err(invalid("sandbox identity cannot change"));
+            }
+            *identity = Some((audience.into(), sandbox_id.into()));
+        }
+        let address = dns::resolve_gateway(authority, self.privileged)
+            .await
+            .into_alien_error()
+            .context(failed("resolve run-hook gateway"))?;
+        *self
+            .address
+            .write()
+            .map_err(|_| invalid("gateway lock poisoned"))? = Some(address);
+        Ok(())
+    }
+
+    fn gateway_address(&self) -> Result<SocketAddr> {
+        self.address
+            .read()
+            .map_err(|_| invalid("gateway lock poisoned"))?
+            .ok_or_else(|| invalid("gateway endpoint pending"))
+    }
+
     /// Install a replacement signed token. Verification and generation enforcement happen in
     /// the gateway; the self-check refuses invalid credentials before reopening session routes.
     pub async fn update(&self, token: String) -> Result<()> {
+        let _update = self.update_lock.lock().await;
         validate_token(&token)?;
+        let (aud, sub) = token_identity(&token)?;
+        if self
+            .identity
+            .read()
+            .map_err(|_| invalid("identity lock poisoned"))?
+            .as_ref()
+            != Some(&(aud, sub))
+        {
+            return Err(invalid("token audience or sandbox ID mismatch"));
+        }
         self.ready.store(false, Ordering::Release);
         *self
             .token
@@ -282,7 +357,7 @@ impl GatewayEgress {
         if matches!(direct, Ok(Ok(_))) {
             return Err(AlienError::new(ErrorData::EgressPathUnexpected));
         }
-        let mut gateway = self.connect(self.address).await?;
+        let mut gateway = self.connect(self.gateway_address()?).await?;
         self.send_connect(&mut gateway, "one.one.one.one:443")
             .await?;
         let reply = timeout(TIMEOUT, read_header(&mut gateway))
@@ -327,7 +402,7 @@ impl GatewayEgress {
 
     async fn forward(&self, mut guest: TcpStream, transparent: bool) -> Result<()> {
         self.ensure_ready()?;
-        let mut upstream = self.connect(self.address).await?;
+        let mut upstream = self.connect(self.gateway_address()?).await?;
         if transparent {
             let destination = redirect::original_destination(&guest)
                 .into_alien_error()
@@ -472,4 +547,24 @@ async fn read_header(stream: &mut TcpStream) -> Result<Vec<u8>> {
             return Ok(input);
         }
     }
+}
+
+fn token_identity(token: &str) -> Result<(String, String)> {
+    #[derive(serde::Deserialize)]
+    struct Identity {
+        aud: String,
+        sub: String,
+    }
+    let payload = token
+        .split('.')
+        .nth(1)
+        .ok_or_else(|| invalid("missing token payload"))?;
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload)
+        .into_alien_error()
+        .context(failed("decode token identity"))?;
+    let identity: Identity = serde_json::from_slice(&bytes)
+        .into_alien_error()
+        .context(failed("parse token identity"))?;
+    Ok((identity.aud, identity.sub))
 }

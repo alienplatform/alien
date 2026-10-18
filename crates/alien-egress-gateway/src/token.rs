@@ -43,6 +43,27 @@ struct Header {
 
 /// Verify Ed25519 JWS and all time/identity constraints. No network key discovery.
 pub fn verify(token: &str, keys: &HashMap<String, PublicKey>, now: u64) -> Result<Claims> {
+    let claims: Claims = verify_signed(token, keys, None)?;
+    if claims.iss != "alien-sandbox"
+        || claims.aud.is_empty()
+        || claims.sub.is_empty()
+        || claims.aud.len() > 256
+        || claims.sub.len() > 256
+        || claims.iat > now
+        || claims.exp <= now
+        || claims.exp <= claims.iat
+        || claims.exp - claims.iat > 86400
+    {
+        return Err(denied("invalid identity or token lifetime"));
+    }
+    Ok(claims)
+}
+
+fn verify_signed<T: serde::de::DeserializeOwned>(
+    token: &str,
+    keys: &HashMap<String, PublicKey>,
+    expected_type: Option<&str>,
+) -> Result<T> {
     if token.len() > MAX_TOKEN_BYTES {
         return Err(denied("token too large"));
     }
@@ -58,7 +79,12 @@ pub fn verify(token: &str, keys: &HashMap<String, PublicKey>, now: u64) -> Resul
             .map_err(|_| denied("malformed token"))?,
     )
     .map_err(|_| denied("malformed token header"))?;
-    if header.alg != "EdDSA" || header.typ.as_deref().is_some_and(|typ| typ != "JWT") {
+    if header.alg != "EdDSA"
+        || !match expected_type {
+            Some(expected) => header.typ.as_deref() == Some(expected),
+            None => header.typ.as_deref().is_none_or(|typ| typ == "JWT"),
+        }
+    {
         return Err(denied("unsupported token algorithm or type"));
     }
     let key = keys
@@ -72,12 +98,34 @@ pub fn verify(token: &str, keys: &HashMap<String, PublicKey>, now: u64) -> Resul
     .map_err(|_| denied("malformed signature"))?;
     key.verify(signed.as_bytes(), &signature)
         .map_err(|_| denied("invalid signature"))?;
-    let claims: Claims = serde_json::from_slice(
+    let claims: T = serde_json::from_slice(
         &URL_SAFE_NO_PAD
             .decode(payload)
             .map_err(|_| denied("malformed claims"))?,
     )
     .map_err(|_| denied("malformed claims"))?;
+    Ok(claims)
+}
+
+/// An admin grant binds the signed mutation to exactly one sandbox and generation.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AdminClaims {
+    pub iss: String,
+    pub aud: String,
+    pub sub: String,
+    pub gen: u64,
+    pub iat: u64,
+    pub exp: u64,
+}
+
+/// Verify a short-lived admin JWS, distinct from proxy tokens by its mandatory type.
+pub fn verify_admin(
+    token: &str,
+    keys: &HashMap<String, PublicKey>,
+    now: u64,
+) -> Result<AdminClaims> {
+    let claims: AdminClaims = verify_signed(token, keys, Some("alien-egress-admin"))?;
     if claims.iss != "alien-sandbox"
         || claims.aud.is_empty()
         || claims.sub.is_empty()
@@ -86,9 +134,9 @@ pub fn verify(token: &str, keys: &HashMap<String, PublicKey>, now: u64) -> Resul
         || claims.iat > now
         || claims.exp <= now
         || claims.exp <= claims.iat
-        || claims.exp - claims.iat > 86400
+        || claims.exp - claims.iat > 60
     {
-        return Err(denied("invalid identity or token lifetime"));
+        return Err(denied("invalid admin identity or lifetime"));
     }
     Ok(claims)
 }
@@ -127,5 +175,40 @@ mod tests {
         let mut wrong = payload;
         wrong["iss"] = "other".into();
         assert!(verify(&signed(&pair, wrong), &keys, 100).is_err());
+    }
+}
+
+#[cfg(test)]
+mod admin_tests {
+    use super::*;
+    use ed25519_compact::{KeyPair, Seed};
+
+    #[test]
+    fn admin_type_and_sixty_second_lifetime_are_mandatory() {
+        let pair = KeyPair::from_seed(Seed::new([11; 32]));
+        let keys = HashMap::from([("admin".into(), pair.pk)]);
+        let sign = |typ: &str, exp: u64| {
+            let header = serde_json::json!({"alg":"EdDSA","kid":"admin","typ":typ});
+            let payload = serde_json::json!({"iss":"alien-sandbox","aud":"p/r","sub":"box","gen":7,"iat":100,"exp":exp});
+            let input = format!(
+                "{}.{}",
+                URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header).unwrap()),
+                URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).unwrap())
+            );
+            format!(
+                "{input}.{}",
+                URL_SAFE_NO_PAD.encode(pair.sk.sign(input.as_bytes(), None).as_ref())
+            )
+        };
+        assert_eq!(
+            verify_admin(&sign("alien-egress-admin", 160), &keys, 100)
+                .unwrap()
+                .gen,
+            7
+        );
+        assert!(verify_admin(&sign("JWT", 160), &keys, 100).is_err());
+        assert!(verify_admin(&sign("alien-egress-admin", 161), &keys, 100).is_err());
+        assert!(verify_admin(&sign("alien-egress-admin", 160), &keys, 160).is_err());
+        assert!(verify(&sign("alien-egress-admin", 160), &keys, 100).is_err());
     }
 }

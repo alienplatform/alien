@@ -160,6 +160,12 @@ fn prepare(
     request
         .headers_mut()
         .insert(CONNECTION, HeaderValue::from_static("close"));
+    if !injection.is_empty() {
+        let path = request.uri().path();
+        if path.contains(['%', '\\']) || path.split('/').any(|part| part == "." || part == "..") {
+            return Err(denied("ambiguous credential path"));
+        }
+    }
     for rule in injection {
         let path = request.uri().path();
         if request.method().as_str() == rule.method

@@ -59,14 +59,14 @@ impl Gateway {
             .bounds
             .get(&claims.aud)
             .ok_or_else(|| denied("unknown audience"))?;
+        self.generations
+            .check(&claims.aud, &claims.sub, claims.gen)
+            .await?;
         if !bound.permits(target) || !claims.egress.permits(target) {
             return Err(alien_error::AlienError::new(
                 crate::error::ErrorData::PolicyDenied,
             ));
         }
-        self.generations
-            .check(&claims.aud, &claims.sub, claims.gen)
-            .await?;
         Ok(claims)
     }
 

@@ -4,50 +4,33 @@ use axum::{
     extract::{DefaultBodyLimit, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    routing::{get, post, put},
+    routing::{get, post},
     Json, Router,
 };
 use serde::Deserialize;
-use sha2::{Digest, Sha256};
 
 use crate::server::Gateway;
 
-/// Admin listener state. The token is a deployment secret, distinct from all sandbox tokens.
+/// Admin listener state; only deployment public keys are needed.
 pub struct Admin {
     pub gateway: Arc<Gateway>,
-    token_hash: [u8; 32],
 }
 impl Admin {
-    /// Require a high-entropy deployment token, supplied outside the public configuration.
-    pub fn new(gateway: Arc<Gateway>, token: &str) -> crate::error::Result<Self> {
-        if token.len() < 32 {
-            return Err(crate::error::invalid(
-                "admin token must contain at least 32 bytes",
-            ));
-        }
-        Ok(Self {
-            gateway,
-            token_hash: Sha256::digest(token.as_bytes()).into(),
-        })
-    }
-    fn authorized(&self, headers: &HeaderMap) -> bool {
+    fn authorized(&self, headers: &HeaderMap) -> Option<crate::token::AdminClaims> {
         if headers.get_all("authorization").iter().count() != 1 {
-            return false;
+            return None;
         }
-        let Some(token) = headers
-            .get("authorization")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.strip_prefix("Bearer "))
-        else {
-            return false;
-        };
-        let actual: [u8; 32] = Sha256::digest(token.as_bytes()).into();
-        // Fixed-length comparison. Compare digests so input length cannot affect the comparison.
-        actual
-            .iter()
-            .zip(self.token_hash)
-            .fold(0u8, |diff, (a, b)| diff | (a ^ b))
-            == 0
+        let token = headers
+            .get("authorization")?
+            .to_str()
+            .ok()?
+            .strip_prefix("Bearer ")?;
+        crate::token::verify_admin(
+            token,
+            &self.gateway.keys,
+            chrono::Utc::now().timestamp().max(0) as u64,
+        )
+        .ok()
     }
 }
 
@@ -70,7 +53,7 @@ pub fn router(admin: Arc<Admin>) -> Router {
     Router::new()
         .route("/health", get(|| async { "ok\n" }))
         .route("/metrics", get(metrics))
-        .route("/v1/generations", put(advance))
+        .route("/v1/generations", post(advance))
         .route("/v1/ca", post(issue_ca))
         .layer(DefaultBodyLimit::max(4096))
         .with_state(admin)
@@ -85,8 +68,11 @@ async fn advance(
     headers: HeaderMap,
     Json(update): Json<Update>,
 ) -> StatusCode {
-    if !admin.authorized(&headers) {
+    let Some(grant) = admin.authorized(&headers) else {
         return StatusCode::UNAUTHORIZED;
+    };
+    if grant.aud != update.aud || grant.sub != update.sub || grant.gen != update.gen {
+        return StatusCode::FORBIDDEN;
     }
     if !identity_valid(&admin, &update.aud, &update.sub) {
         return StatusCode::BAD_REQUEST;
@@ -107,8 +93,11 @@ async fn issue_ca(
     headers: HeaderMap,
     Json(identity): Json<Identity>,
 ) -> Response {
-    if !admin.authorized(&headers) {
+    let Some(grant) = admin.authorized(&headers) else {
         return StatusCode::UNAUTHORIZED.into_response();
+    };
+    if grant.aud != identity.aud || grant.sub != identity.sub {
+        return StatusCode::FORBIDDEN.into_response();
     }
     if !identity_valid(&admin, &identity.aud, &identity.sub) {
         return StatusCode::BAD_REQUEST.into_response();
@@ -125,7 +114,7 @@ async fn issue_ca(
 }
 
 async fn metrics(State(admin): State<Arc<Admin>>, headers: HeaderMap) -> Response {
-    if !admin.authorized(&headers) {
+    if admin.authorized(&headers).is_none() {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     format!("# TYPE alien_egress_connections_total counter\nalien_egress_connections_total {}\n# TYPE alien_egress_denied_total counter\nalien_egress_denied_total {}\n",

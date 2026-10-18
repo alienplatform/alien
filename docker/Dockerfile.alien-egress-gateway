@@ -1,0 +1,18 @@
+# Release binaries are built natively for both architectures by release.yml.
+FROM --platform=$BUILDPLATFORM docker.io/chainguard/wolfi-base:latest AS binary-selector
+COPY target/aarch64-unknown-linux-musl/release/alien-egress-gateway /tmp/gateway-arm64
+COPY target/x86_64-unknown-linux-musl/release/alien-egress-gateway /tmp/gateway-amd64
+ARG TARGETARCH
+RUN case "$TARGETARCH" in \
+      amd64) cp /tmp/gateway-amd64 /tmp/alien-egress-gateway ;; \
+      arm64) cp /tmp/gateway-arm64 /tmp/alien-egress-gateway ;; \
+      *) exit 1 ;; \
+    esac
+
+FROM docker.io/chainguard/wolfi-base:latest
+COPY --from=binary-selector --chmod=0755 /tmp/alien-egress-gateway /usr/local/bin/alien-egress-gateway
+ENV RUST_LOG=info
+USER 65532:65532
+EXPOSE 3128/tcp 3129/tcp
+ENTRYPOINT ["/usr/local/bin/alien-egress-gateway"]
+CMD ["/etc/alien-egress/config.json"]

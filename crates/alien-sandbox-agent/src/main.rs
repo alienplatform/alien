@@ -51,15 +51,7 @@ fn main() -> Result<()> {
     let state = Arc::new(load_state()?);
     let port: u16 = parse(ENV_PORT)?;
     let mut run_image_command = false;
-    if let Ok(encoded) = std::env::var("ALIEN_SANDBOX_EGRESS") {
-        #[cfg(target_os = "linux")]
-        let use_legacy_filter = state.gateway_egress.is_none();
-        let policy = serde_json::from_str(&encoded)
-            .into_alien_error()
-            .context(failed(
-                "parse egress policy",
-                "invalid startup policy".to_string(),
-            ))?;
+    if std::env::var_os("ALIEN_SANDBOX_EGRESS").is_some() {
         #[cfg(target_os = "linux")]
         {
             alien_sandbox_agent::privilege::prepare_identity(
@@ -71,9 +63,6 @@ fn main() -> Result<()> {
                 "prepare declared command identity",
                 "cannot write the image's passwd/group entries".to_string(),
             ))?;
-            if use_legacy_filter {
-                alien_sandbox_agent::egress::install(&policy, state.exec_identity.uid)?;
-            }
             alien_sandbox_agent::privilege::restrict_supervisor()
                 .into_alien_error()
                 .context(failed(
