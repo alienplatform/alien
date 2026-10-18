@@ -33,19 +33,16 @@ pub fn stack_requires_network(stack: &Stack) -> bool {
 
 pub(crate) fn resource_requires_network(entry: &ResourceEntry) -> bool {
     RESOURCE_TYPES_REQUIRING_NETWORK.contains(&entry.config.resource_type().as_ref())
-        || sandbox_denies_egress(entry)
+        || sandbox_requires_network(entry)
 }
 
-/// A sandbox needs a VPC only to deny with.
-///
-/// Denying runs sessions through a VPC egress connector, and that connector needs subnets. An
-/// open sandbox attaches no connector and so needs no network at all — listing the resource type
-/// outright would demand a VPC from a stack that never touches one.
-fn sandbox_denies_egress(entry: &ResourceEntry) -> bool {
+/// Connector-backed sandbox modes need subnets, including gateway-routed Internet.
+/// Released Allow and privileged-supervisor modes retain their connectorless network behavior.
+fn sandbox_requires_network(entry: &ResourceEntry) -> bool {
     entry
         .config
         .downcast_ref::<Sandbox>()
-        .is_some_and(|sandbox| !matches!(sandbox.cloud_egress(), SandboxEgress::Internet))
+        .is_some_and(|sandbox| !matches!(sandbox.cloud_egress(), SandboxEgress::Allow))
 }
 
 /// Ensures public subnets are configured when resources need public ingress.
@@ -439,25 +436,41 @@ mod tests {
         }
     }
 
-    /// A sandbox's egress mode, not its presence, decides whether the stack needs a VPC: only a
-    /// restricted mode is enforced by a connector, and a connector needs one. Getting this
-    /// backwards is silent either way — a needless VPC, or a restriction with nothing to enforce it.
+    /// Network planning preserves released connectorless modes while requiring the gateway's VPC.
     #[test]
-    fn a_sandbox_requires_a_network_only_when_its_egress_is_restricted() {
+    fn a_sandbox_requires_a_network_only_when_its_cloud_mode_uses_a_connector() {
         for (egress, expected) in [
             (SandboxEgress::None, true),
-            (SandboxEgress::Internet, false),
+            (SandboxEgress::Internet, true),
+            (SandboxEgress::Allow, false),
+            (
+                SandboxEgress::AllowDomains {
+                    domains: vec!["example.com".into()],
+                },
+                true,
+            ),
         ] {
-            let mut resources = IndexMap::new();
-            resources.insert("runner".to_string(), create_sandbox_entry(egress.clone()));
-            let stack = create_stack(resources);
-
-            assert_eq!(
-                stack_requires_network(&stack),
-                expected,
-                "egress {egress:?} should {} a network",
-                if expected { "require" } else { "not require" }
-            );
+            for supervisor in [false, true] {
+                let mut entry = create_sandbox_entry(egress.clone());
+                if supervisor {
+                    entry
+                        .config
+                        .downcast_mut::<Sandbox>()
+                        .unwrap()
+                        .privileged_supervisor = Some(alien_core::SandboxPrivilegedSupervisor {
+                        command_uid: 60001,
+                    });
+                }
+                let mut resources = IndexMap::new();
+                resources.insert("runner".to_string(), entry);
+                let stack = create_stack(resources);
+                let expected = expected && (!supervisor || egress == SandboxEgress::Internet);
+                assert_eq!(
+                    stack_requires_network(&stack),
+                    expected,
+                    "egress {egress:?}, privileged supervisor {supervisor}"
+                );
+            }
         }
     }
 

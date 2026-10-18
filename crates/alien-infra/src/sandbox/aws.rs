@@ -2781,7 +2781,7 @@ mod tests {
                         .environment_variables
                         .get("ALIEN_SANDBOX_EGRESS")
                         .map(String::as_str)
-                        == Some("\"none\"")
+                        == Some(r#"{"mode":"deny"}"#)
             })
             .times(1)
             .returning(|_, _| {

@@ -1043,7 +1043,7 @@ mod tests {
         #[tokio::test]
         async fn a_sandbox_switched_to_deny_waits_for_setup_to_build_its_connector() {
             assert_setup_required(
-                sandbox(SandboxEgress::Internet, BUNDLE, None),
+                sandbox(SandboxEgress::Allow, BUNDLE, None),
                 sandbox(SandboxEgress::None, BUNDLE, None),
                 None,
             )
@@ -1054,7 +1054,7 @@ mod tests {
         async fn a_sandbox_switched_to_allow_waits_for_setup_to_reseed_it() {
             assert_setup_required(
                 sandbox(SandboxEgress::None, BUNDLE, None),
-                sandbox(SandboxEgress::Internet, BUNDLE, None),
+                sandbox(SandboxEgress::Allow, BUNDLE, None),
                 None,
             )
             .await;
@@ -1063,9 +1063,9 @@ mod tests {
         #[tokio::test]
         async fn a_bundle_in_another_bucket_waits_for_setup_to_regrant_the_build_role() {
             assert_setup_required(
-                sandbox(SandboxEgress::Internet, BUNDLE, None),
+                sandbox(SandboxEgress::Allow, BUNDLE, None),
                 sandbox(
-                    SandboxEgress::Internet,
+                    SandboxEgress::Allow,
                     "s3://other-artifacts/sandbox-bundle/f00dcafe/bundle.zip",
                     None,
                 ),
@@ -1078,7 +1078,7 @@ mod tests {
         async fn a_sandbox_added_by_an_update_waits_for_setup_to_create_its_build_role() {
             assert_setup_required(
                 empty(),
-                sandbox(SandboxEgress::Internet, BUNDLE, None),
+                sandbox(SandboxEgress::Allow, BUNDLE, None),
                 None,
             )
             .await;
@@ -1103,7 +1103,7 @@ mod tests {
         /// With nothing installed to compare against, the sandbox is treated as new, not skipped.
         #[tokio::test]
         async fn an_update_with_no_installed_stack_waits_for_setup() {
-            let target = sandbox(SandboxEgress::Internet, BUNDLE, None);
+            let target = sandbox(SandboxEgress::Allow, BUNDLE, None);
             let state = DeploymentState {
                 status: DeploymentStatus::UpdatePending,
                 platform: Platform::Aws,
@@ -1142,9 +1142,9 @@ mod tests {
         async fn a_template_setup_rolls_a_new_bundle_but_waits_for_setup_on_a_new_bucket() {
             assert_updates(
                 InitialSetupAuthority::ImportedHandoff,
-                sandbox(SandboxEgress::Internet, BUNDLE, None),
+                sandbox(SandboxEgress::Allow, BUNDLE, None),
                 sandbox(
-                    SandboxEgress::Internet,
+                    SandboxEgress::Allow,
                     "s3://acme-artifacts/sandbox-bundle/0ddba11/bundle.zip",
                     None,
                 ),
@@ -1152,9 +1152,9 @@ mod tests {
             .await;
             let error = update(
                 InitialSetupAuthority::ImportedHandoff,
-                sandbox(SandboxEgress::Internet, BUNDLE, None),
+                sandbox(SandboxEgress::Allow, BUNDLE, None),
                 sandbox(
-                    SandboxEgress::Internet,
+                    SandboxEgress::Allow,
                     "s3://other-artifacts/sandbox-bundle/f00dcafe/bundle.zip",
                     None,
                 ),

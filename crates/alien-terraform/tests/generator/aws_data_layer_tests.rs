@@ -400,7 +400,7 @@ fn aws_remote_sandbox_grants_the_access_identity_its_own_image_and_nothing_wider
         .code(SandboxCode::Image {
             image: "s3://acme-artifacts/agents/bundle.zip".to_string(),
         })
-        .egress(SandboxEgress::Internet)
+        .egress(SandboxEgress::Allow)
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,
@@ -545,7 +545,7 @@ fn aws_remote_sandbox_management_role_heartbeats_without_reaching_a_session() {
                 .code(SandboxCode::Image {
                     image: "s3://acme-artifacts/agents/bundle.zip".to_string(),
                 })
-                .egress(SandboxEgress::Internet)
+                .egress(SandboxEgress::Allow)
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,

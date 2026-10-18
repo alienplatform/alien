@@ -9,20 +9,28 @@ use std::{
     process::{Command, Stdio},
 };
 
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-/// Startup policy retained for images using the legacy supervisor contract.
-pub enum StartupEgressPolicy {
-    None,
-    Internet,
-    #[serde(untagged)]
-    Allow {
-        allow: Vec<String>,
-    },
-}
 use alien_error::{AlienError, Context, IntoAlienError};
 
 use crate::error::{ErrorData, Result};
+
+/// Startup policy retained for images using the legacy supervisor contract.
+#[derive(serde::Deserialize)]
+#[serde(from = "alien_core::SandboxEgress")]
+pub enum StartupEgressPolicy {
+    None,
+    Internet,
+    Allow { allow: Vec<String> },
+}
+
+impl From<alien_core::SandboxEgress> for StartupEgressPolicy {
+    fn from(policy: alien_core::SandboxEgress) -> Self {
+        match policy {
+            alien_core::SandboxEgress::None => Self::None,
+            alien_core::SandboxEgress::Internet | alien_core::SandboxEgress::Allow => Self::Internet,
+            alien_core::SandboxEgress::AllowDomains { domains } => Self::Allow { allow: domains },
+        }
+    }
+}
 
 fn failed(reason: impl ToString) -> ErrorData {
     ErrorData::OperationFailed {

@@ -299,7 +299,7 @@ fn a_gcp_remote_sandbox_grants_the_access_identity_its_own_engine_and_nothing_wi
                 .code(SandboxCode::Image {
                     image: "python:3.12".to_string(),
                 })
-                .egress(SandboxEgress::Internet)
+                .egress(SandboxEgress::Allow)
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
@@ -535,7 +535,7 @@ fn a_gcp_remote_sandbox_management_role_heartbeats_without_reaching_a_session() 
                 .code(SandboxCode::Image {
                     image: "python:3.12".to_string(),
                 })
-                .egress(SandboxEgress::Internet)
+                .egress(SandboxEgress::Allow)
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
