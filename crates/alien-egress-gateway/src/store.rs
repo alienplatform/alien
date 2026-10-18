@@ -109,7 +109,12 @@ impl PolicyStore {
             })
             .collect())
     }
-    pub fn newer_than(&self, versions: &[Summary]) -> Result<Vec<Arc<Record>>> {
+    /// Replicate only configured audiences, including when older in-flight writes remain stored.
+    pub fn newer_than(
+        &self,
+        versions: &[Summary],
+        audiences: &[String],
+    ) -> Result<Vec<Arc<Record>>> {
         let mut page_bytes = 0;
         let mut known = BTreeMap::new();
         for version in versions {
@@ -126,6 +131,8 @@ impl PolicyStore {
             .map_err(|_| AlienError::new(unavailable("policy state lock")))?
             .entries
             .values()
+            // Filter before paging: a full page of retired records must not hide active records.
+            .filter(|entry| audiences.contains(&entry.record.claims.aud))
             .filter(|entry| {
                 !entry
                     .record

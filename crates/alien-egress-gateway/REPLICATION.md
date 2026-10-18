@@ -40,6 +40,11 @@ All JSON uses the following wire forms:
   snapshot endpoints work before readiness.
 - `GET /health`: 200 only after synchronization, otherwise 503.
 
+Snapshots and catch-up writes include only the sender's currently configured
+audiences. Retiring an audience stops replication of its records, so those
+records cannot block a replacement replica's startup. Retained records still
+count toward the source's memory budget until that process restarts.
+
 For the configured peer service, a DNS NXDOMAIN or NODATA answer means no peers
 are currently published. An empty replica can then become ready so service
 discovery and agent re-registration can recover after total loss. The configured
