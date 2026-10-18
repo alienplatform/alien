@@ -29,8 +29,27 @@ class Origin(http.server.BaseHTTPRequestHandler):
         pass
 
 
+class MixedProtocolServer(http.server.ThreadingHTTPServer):
+    """One port accepts real TLS, clear HTTP, and a binary echo protocol."""
+
+    def finish_request(self, request, client_address):
+        request.settimeout(8)
+        first = request.recv(1, socket.MSG_PEEK)
+        if first == b"\x00":
+            echo_client(request)
+            return
+        if first == b"\x16":
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.load_cert_chain("/fixture/origin.pem", "/fixture/origin.key")
+            with context.wrap_socket(request, server_side=True) as tls:
+                super().finish_request(tls, client_address)
+            return
+        super().finish_request(request, client_address)
+
+
 def serve(port, certificate=None):
-    server = http.server.ThreadingHTTPServer(("0.0.0.0", port), Origin)
+    server_type = MixedProtocolServer if port == 80 else http.server.ThreadingHTTPServer
+    server = server_type(("0.0.0.0", port), Origin)
     if certificate:
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.load_cert_chain(f"/fixture/{certificate}.pem", f"/fixture/{certificate}.key")
@@ -57,7 +76,20 @@ def dns():
             continue
         ips = ["93.184.216.2"]
         if name == "replicas.test":
+            mode_file = Path("/fixture/peer-dns")
+            mode = mode_file.read_text().strip() if mode_file.exists() else "normal"
+            if mode in ["nxdomain", "nodata", "bare-nxdomain", "servfail", "refused"]:
+                code = {"nxdomain": 3, "nodata": 0, "bare-nxdomain": 3, "servfail": 2, "refused": 5}[mode]
+                authoritative = mode in ["nxdomain", "nodata"]
+                answer = packet[:2] + struct.pack("!HHHHH", 0x8180 | code | (0x400 if authoritative else 0), 1, 0, int(authoritative), 0) + question
+                if authoritative:
+                    soa = b"\x02ns\x04test\x00\x0ahostmaster\x04test\x00" + struct.pack("!IIIII", 1, 1, 1, 1, 0)
+                    answer += b"\xc0\x0c" + struct.pack("!HHIH", 6, 1, 0, len(soa)) + soa
+                server.sendto(answer, sender)
+                continue
             ips = ["93.184.216.3", "93.184.216.4"]
+            if mode == "three":
+                ips.append("93.184.216.5")
         elif name == "private.test":
             ips = ["10.77.91.2"]
         elif name == "configured-range.test":

@@ -364,9 +364,6 @@ async fn authorized_proxy(
         })
         .cloned()
         .collect();
-    if target.port == 80 {
-        return crate::http_proxy::forward(guest, upstream, target, None).await;
-    }
     if target.host.parse::<std::net::Ipv4Addr>().is_ok() {
         // Explicit IP/CIDR rules are the only grants for opaque, including server-first, protocols.
         tokio::io::copy_bidirectional(&mut guest, &mut upstream)
