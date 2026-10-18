@@ -1243,10 +1243,6 @@ async fn test_delete_repository(#[case] ctx: impl ArtifactRegistryTestContext) {
 }
 
 #[rstest]
-#[cfg_attr(
-    feature = "aws",
-    case::aws_direct(AwsProviderArtifactRegistryTestContext::setup_with_configured_roles(false).await)
-)]
 #[cfg_attr(feature = "local", case::local(LocalProviderArtifactRegistryTestContext::setup().await))]
 #[cfg_attr(feature = "aws", case::aws(AwsProviderArtifactRegistryTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderArtifactRegistryTestContext::setup().await))]
@@ -1421,10 +1417,6 @@ async fn test_full_repository_lifecycle(#[case] ctx: impl ArtifactRegistryTestCo
 }
 
 #[rstest]
-#[cfg_attr(
-    feature = "aws",
-    case::aws_direct(AwsProviderArtifactRegistryTestContext::setup_with_configured_roles(false).await)
-)]
 #[cfg_attr(feature = "local", case::local(LocalProviderArtifactRegistryTestContext::setup().await))]
 #[cfg_attr(feature = "aws", case::aws(AwsProviderArtifactRegistryTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderArtifactRegistryTestContext::setup().await))]
@@ -1522,4 +1514,29 @@ async fn test_get_nonexistent_repository_returns_404(
     );
 
     println!("[{}] ✓ HTTP status code is correctly 404", provider_name);
+}
+
+#[cfg(feature = "aws")]
+#[tokio::test]
+async fn direct_credentials_can_create_read_and_delete_an_ecr_repository() {
+    let context = AwsProviderArtifactRegistryTestContext::setup_with_configured_roles(false).await;
+    let registry = context.get_artifact_registry().await;
+    let created = registry
+        .create_repository(&generate_unique_repo_name("aws-direct"))
+        .await
+        .expect("create the owned repository");
+    let read = registry.get_repository(&created.name).await;
+    // Clean up even when the read regresses, then fail on the original read result.
+    registry
+        .delete_repository(&created.name)
+        .await
+        .expect("delete the owned repository");
+    let read = read.expect("read the created repository without an assumed role");
+    assert_eq!(read.name, created.name);
+    assert_eq!(read.uri, created.uri);
+    let missing = registry
+        .get_repository(&created.name)
+        .await
+        .expect_err("deleted repository must be absent");
+    assert_eq!(missing.http_status_code, Some(404));
 }
