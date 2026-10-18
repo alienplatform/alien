@@ -7,6 +7,15 @@ use crate::{Platform, ResourceType};
 #[derive(Debug, Clone, AlienErrorData, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ErrorData {
+    /// The image's command identity cannot be resolved safely.
+    #[error(
+        code = "SANDBOX_IMAGE_USER_INVALID",
+        message = "Invalid sandbox image USER '{user}': {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    SandboxImageUserInvalid { user: String, reason: String },
     /// A deployment selected resources outside the release's declared choices.
     #[error(
         code = "CONTAINER_RESOURCE_SELECTION_INVALID",

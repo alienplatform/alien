@@ -84,9 +84,11 @@ impl Authorization {
 /// The values an image must carry for the agent to run in it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SandboxImage {
-    /// Uid and gid the supervised command runs as.
+    /// Uid the supervised command runs as, resolved from a non-root base USER or the default.
     pub exec_uid: u32,
-    /// Directory a session's files live under, and the only place `exec_uid` may write.
+    /// Primary gid from the base USER, which may differ from its uid.
+    pub exec_gid: u32,
+    /// Writable session directory. Image-owned directories may also be writable on VM backends.
     pub session_root: &'static str,
     /// Port the agent serves, both its own protocol and any lifecycle hooks.
     pub port: u16,
@@ -95,9 +97,9 @@ pub struct SandboxImage {
 }
 
 impl SandboxImage {
-    /// Gid the supervised command runs as, always equal to the exec uid.
+    /// Gid the supervised command runs as.
     pub fn exec_gid(&self) -> u32 {
-        self.exec_uid
+        self.exec_gid
     }
 
     /// The agent's configuration contract as `(name, value)` pairs, in the order the `ENV` block
@@ -156,6 +158,7 @@ impl SandboxImage {
 /// shared-kernel backend must give the agent `CAP_SETUID` instead of root.
 pub const AWS_MICROVM: SandboxImage = SandboxImage {
     exec_uid: 60000,
+    exec_gid: 60000,
     session_root: "/sandbox",
     port: AGENT_PORT,
     authorization: Authorization::Transport,
@@ -174,6 +177,7 @@ pub const AWS_MICROVM: SandboxImage = SandboxImage {
 /// 8080 is right under either answer; any other number is right under only one.
 pub const GCP_AGENT_PLATFORM: SandboxImage = SandboxImage {
     exec_uid: 1000,
+    exec_gid: 1000,
     session_root: "/sandbox",
     port: 8080,
     authorization: Authorization::Transport,
