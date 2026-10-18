@@ -2,7 +2,6 @@ use std::{
     io,
     net::{Ipv4Addr, SocketAddrV4},
     os::fd::AsRawFd,
-    time::Duration,
 };
 
 use nlink::netlink::{
@@ -48,17 +47,7 @@ pub(super) fn original_destination(stream: &TcpStream) -> io::Result<SocketAddrV
 /// All guest TCP, including root-owned processes, is redirected. Only explicitly marked agent
 /// sockets and TCP replies to incoming connections escape the redirect; no UID-wide exemption.
 pub(super) fn install() -> io::Result<()> {
-    // Bootstrap is deliberately single-threaded: worker threads must only be created after
-    // the supervisor drops its capabilities. This temporary runtime has no worker threads.
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?
-        .block_on(async {
-            tokio::time::timeout(Duration::from_secs(5), install_rules())
-                .await
-                .map_err(io::Error::other)?
-                .map_err(io::Error::other)
-        })
+    crate::netfilter::install(install_rules())
 }
 
 async fn install_rules() -> nlink::netlink::Result<()> {

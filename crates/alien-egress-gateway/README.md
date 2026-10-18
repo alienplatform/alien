@@ -122,6 +122,11 @@ kernel must support nftables and the bootstrap process must have `NET_ADMIN`. A 
 or timed-out installation stops the agent before it binds its listener or runs image code.
 Bootstrap creates no worker threads before dropping supervisor capabilities.
 
+Legacy supervisor object policies (`deny`, `allow`, and `allowDomains`) retain
+their released direct path and command-UID filter, including pinned allowlisted
+DNS and command IPv6 restrictions. They require no gateway token. These startup
+rules also use native netlink.
+
 Replies to incoming TCP connections, including preview servers, keep their established
 return path. New outbound TCP is still redirected regardless of the source port or UID.
 Proxy-aware commands bypass the proxy for localhost and loopback; declared `none`
