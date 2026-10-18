@@ -8,7 +8,10 @@ use indexmap::IndexMap;
 
 const IAM_POLICY_RESOURCE_TYPE: &str = "AWS::IAM::Policy";
 const IAM_MANAGED_POLICY_RESOURCE_TYPE: &str = "AWS::IAM::ManagedPolicy";
-const IAM_MANAGED_POLICIES_PER_ROLE: usize = 10;
+// AWS raised the default from 10 to 20 in August 2026. Do not assume an
+// account has requested the optional increase beyond the default.
+// https://aws.amazon.com/about-aws/whats-new/2026/08/aws-iam-quota-increase/
+const IAM_MANAGED_POLICIES_PER_ROLE: usize = 20;
 
 #[derive(PartialEq)]
 struct PolicyGroupKey {
@@ -90,7 +93,7 @@ pub(crate) fn consolidate_role_inline_policies(template: &mut CfTemplate) -> Res
                 return Err(AlienError::new(ErrorData::OperationNotSupported {
                     operation: "generate_cloudformation_template".to_string(),
                     reason: format!(
-                        "IAM role '{role_id}' requires {} managed policies, exceeding AWS's attachment limit of {IAM_MANAGED_POLICIES_PER_ROLE}",
+                        "IAM role '{role_id}' requires {} managed policies, exceeding AWS's default attachment quota of {IAM_MANAGED_POLICIES_PER_ROLE}",
                         *attachment_count + policy_documents.len()
                     ),
                 }));
@@ -222,8 +225,8 @@ pub(crate) fn validate_role_policy_limits(template: &CfTemplate) -> Result<()> {
         }
     }
     for (role_id, count) in attachments {
-        if count > 20 {
-            shortfalls.push(format!("IAM role '{role_id}' requires at least {count} managed-policy attachments; AWS allows at most 20 per role. Reduce the number of attached policies."));
+        if count > IAM_MANAGED_POLICIES_PER_ROLE {
+            shortfalls.push(format!("IAM role '{role_id}' requires at least {count} managed-policy attachments; AWS's default quota is {IAM_MANAGED_POLICIES_PER_ROLE} per role. Reduce the number of attached policies."));
         }
     }
     if shortfalls.is_empty() {
@@ -584,21 +587,29 @@ mod tests {
 
     #[test]
     fn consolidation_counts_managed_policies_already_attached_to_the_role() {
-        let mut template = template_with_inline_grants();
-        let role = template
-            .resources
-            .get_mut("ExecutionRole")
-            .expect("role should exist");
-        role.properties.insert(
-            "ManagedPolicyArns".to_string(),
-            CfExpression::list((0..10).map(|index| {
-                CfExpression::from(format!("arn:aws:iam::aws:policy/Existing{index}"))
-            })),
-        );
+        for existing in [19, 20] {
+            let mut template = template_with_inline_grants();
+            let role = template
+                .resources
+                .get_mut("ExecutionRole")
+                .expect("role should exist");
+            role.properties.insert(
+                "ManagedPolicyArns".to_string(),
+                CfExpression::list((0..existing).map(|index| {
+                    CfExpression::from(format!("arn:aws:iam::aws:policy/Existing{index}"))
+                })),
+            );
 
-        let error = consolidate_role_inline_policies(&mut template)
-            .expect_err("the eleventh managed-policy attachment must be rejected");
-        assert!(error.to_string().contains("requires 11 managed policies"));
+            let result = consolidate_role_inline_policies(&mut template);
+            if existing == 19 {
+                result.expect("the twentieth attachment fits the default quota");
+                assert_eq!(super::managed_policy_attachment_counts(&template)["ExecutionRole"], 20);
+                validate_role_policy_limits(&template).unwrap();
+            } else {
+                let error = result.expect_err("the twenty-first attachment requires a quota increase");
+                assert!(error.to_string().contains("requires 21 managed policies"));
+            }
+        }
     }
 
     #[test]
@@ -719,7 +730,7 @@ mod tests {
     }
 
     #[test]
-    fn final_guard_checks_attachment_maximum_without_relaxing_consolidation_default() {
+    fn final_guard_checks_default_attachment_quota() {
         let mut template = template_with_inline_grants();
         template.resources.shift_remove("GrantOne");
         template.resources.shift_remove("GrantTwo");
@@ -734,7 +745,7 @@ mod tests {
                     (0..20).map(|index| CfExpression::from(format!("policy-{index}"))),
                 ),
             );
-        validate_role_policy_limits(&template).expect("20 is the adjustable maximum");
+        validate_role_policy_limits(&template).expect("20 is the default quota");
         let mut extra = CfResource::new("Extra".into(), "AWS::IAM::ManagedPolicy".into());
         extra.properties.insert(
             "Roles".into(),

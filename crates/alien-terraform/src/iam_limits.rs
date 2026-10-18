@@ -95,7 +95,7 @@ pub(crate) fn validate_role_policy_limits(fragments: &IndexMap<String, TfFragmen
             .count();
         let count = literal_count.max(arns.len() - literal_count);
         if count > 20 {
-            shortfalls.push(format!("IAM role '{role}' requires at least {count} managed-policy attachments; AWS allows at most 20 per role. Reduce the number of attached policies."));
+            shortfalls.push(format!("IAM role '{role}' requires at least {count} managed-policy attachments; AWS's default quota is 20 per role. Reduce the number of attached policies."));
         }
     }
     if shortfalls.is_empty() {
