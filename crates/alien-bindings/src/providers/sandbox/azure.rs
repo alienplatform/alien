@@ -422,7 +422,9 @@ impl Sandbox for AzureSandbox {
     }
 
     async fn get_or_create(&self, request: CreateSandboxRequest) -> Result<ResolvedSandbox> {
-        let policy = self.requested_policy(request.egress.as_ref())?;
+        if let Some(policy) = request.egress.as_ref() {
+            self.requested_policy(Some(policy))?;
+        }
         if let Some(timeout_ms) = request.timeout_ms {
             super::requested_lifetime_seconds(timeout_ms, None, "sandbox.getOrCreate")?;
         }
@@ -432,7 +434,7 @@ impl Sandbox for AzureSandbox {
             // it up, judge it there, and refuse it if it does not match.
             match self.reconnect(id).await {
                 Ok(sandbox) => {
-                    if let Some(policy) = policy {
+                    if let Some(policy) = request.egress.clone() {
                         self.update_egress(id, policy).await?;
                     }
                     return Ok(ResolvedSandbox::found(sandbox));

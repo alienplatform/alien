@@ -126,12 +126,8 @@ impl AzureSandbox {
             })?;
         // Azure chooses its vendor id after create; the label persists the pre-created identity.
         let identity = uuid::Uuid::new_v4().to_string();
-        let delivery = manager.renew(&identity, expires / 1000).await?;
-        let proxy = format!(
-            "http://alien:{}@{}",
-            delivery.token,
-            manager.gateway_authority()
-        );
+        let token = manager.mint_identity(&identity, expires / 1000).await?;
+        let proxy = format!("http://alien:{}@{}", token, manager.gateway_authority());
         for name in ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"] {
             environment.insert(name.into(), proxy.clone());
         }

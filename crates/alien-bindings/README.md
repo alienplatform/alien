@@ -54,17 +54,15 @@ rediscover manager assignment without exposing a non-refreshing provider.
 ## Azure sandbox gateway recovery
 
 Gateway-backed Azure `internet` plans remain unavailable until automatic hosting
-and signed-record integration are complete. The recovery contract for that path
-is explicit: Azure runs no Alien agent and cannot restore a policy after all
+is complete. The recovery contract for that path is explicit: Azure runs no Alien agent and cannot restore a policy after all
 gateway replicas lose their in-memory state. Proxy requests then receive HTTP
 403 with reason `no policy` until the application reapplies its current policy
 with `updateEgress`, or `getOrCreate` with an explicit `egress` argument.
 
 For an existing sandbox, `getOrCreate` without `egress` must preserve the stored
 policy, including its absence after total state loss. Defaults apply only when
-creating a sandbox. The shared SDK integration must enforce this before the
-gateway-backed path is enabled; it must never restore an older create-time
-policy after the application has narrowed access.
+creating a sandbox. Reconnecting never restores an older create-time policy
+after the application has narrowed access.
 
 Azure's create-time proxy token proves identity only. Issuing it before provider
 creation does not register a policy or grant access. The binding publishes the

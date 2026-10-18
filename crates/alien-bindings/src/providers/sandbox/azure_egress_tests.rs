@@ -160,6 +160,16 @@ async fn durable_identity_drives_create_reconnect_update_and_termination() {
         .update_egress("vendor-id", empty.clone())
         .await
         .unwrap();
+    assert_eq!(h.policy(&id), Some(empty.clone()));
+    // An omitted policy on reconnect must preserve narrowing, even with a resource default.
+    let preserved = reopened
+        .get_or_create(CreateSandboxRequest {
+            sandbox_id: Some("vendor-id".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(preserved.sandbox.sandbox_id, "vendor-id");
     assert_eq!(h.policy(&id), Some(empty));
     let resolved = reopened
         .get_or_create(CreateSandboxRequest {
@@ -180,6 +190,54 @@ async fn durable_identity_drives_create_reconnect_update_and_termination() {
     reopened.terminate("vendor-id").await.unwrap();
     assert!(record.lock().unwrap().is_none());
     assert_eq!(h.policy(&id), None);
+}
+
+#[tokio::test]
+async fn total_gateway_state_loss_requires_an_explicit_policy() {
+    let h = Harness::new().await;
+    let (sandbox, _, request) = provider(h.reopen().await, false);
+    sandbox
+        .create(CreateSandboxRequest::default())
+        .await
+        .unwrap();
+    let id = request.lock().unwrap().as_ref().unwrap().labels[IDENTITY_LABEL].clone();
+    let empty = RuntimePolicy::Allow { allow: vec![] };
+    sandbox
+        .update_egress("vendor-id", empty.clone())
+        .await
+        .unwrap();
+    h.lose_policy_state();
+
+    // Reconnect must not replay the resource default or the earlier create-time policy.
+    h.refuse_writes(true);
+    assert!(sandbox.get("vendor-id").await.unwrap().is_some());
+    let found = sandbox
+        .get_or_create(CreateSandboxRequest {
+            sandbox_id: Some("vendor-id".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(found.sandbox.sandbox_id, "vendor-id");
+    assert_eq!(h.policy(&id), None);
+    h.refuse_writes(false);
+
+    sandbox
+        .update_egress("vendor-id", empty.clone())
+        .await
+        .unwrap();
+    assert_eq!(h.policy(&id), Some(empty.clone()));
+    h.lose_policy_state();
+    sandbox
+        .get_or_create(CreateSandboxRequest {
+            sandbox_id: Some("vendor-id".into()),
+            egress: Some(empty.clone()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(h.policy(&id), Some(empty));
+    sandbox.terminate("vendor-id").await.unwrap();
 }
 
 #[tokio::test]
