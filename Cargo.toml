@@ -35,6 +35,7 @@ members = [
   "crates/alien-permission-types",
   "crates/alien-operations-sdk",
   "crates/alien-sandbox-agent",
+  "crates/alien-egress-gateway",
   "crates/alien-preflights",
   "crates/alien-deployment",
   "crates/alien-local",
@@ -295,3 +296,4 @@ opt-level = 0
 [profile.dev.build-override]
 opt-level = 0
 codegen-units = 32
+
