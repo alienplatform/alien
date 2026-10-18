@@ -8,16 +8,28 @@ use alien_core::{bindings::SandboxEgressGateway, EgressPolicy};
 use alien_error::AlienError;
 use serde::Deserialize;
 use std::{
-    collections::HashMap,
     fmt,
-    sync::{Arc, Weak},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, LazyLock,
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
-use tokio::sync::Mutex;
+// One writer identity and logical clock per process, shared by reopened bindings.
+// A process-wide clock is also strictly increasing for every individual sandbox,
+// without retaining a map of all sandbox identities ever used.
+static WRITER_ID: LazyLock<String> = LazyLock::new(|| {
+    ed25519_compact::Seed::generate()[..16]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+});
+static LAST_MILLIS: AtomicU64 = AtomicU64::new(0);
 
 /// A token for the backend's authenticated agent transport. Debug never exposes it.
 pub struct EgressDelivery {
     pub(crate) token: String,
+    pub(crate) policy: String,
 }
 impl fmt::Debug for EgressDelivery {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -32,7 +44,6 @@ pub struct SandboxEgressManager {
     gateway: String,
     admin_url: String,
     admin: reqwest::Client,
-    writes: Mutex<HashMap<String, Weak<Mutex<()>>>>,
 }
 impl fmt::Debug for SandboxEgressManager {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -95,7 +106,6 @@ impl SandboxEgressManager {
             gateway,
             admin_url,
             admin,
-            writes: Mutex::new(HashMap::new()),
         })
     }
     /// Nonsecret launch metadata. AWS injects its own sandbox id alongside this payload.
@@ -113,23 +123,29 @@ impl SandboxEgressManager {
         policy: &EgressPolicy,
         expires_at: i64,
     ) -> Result<EgressDelivery> {
-        let delivery = self.renew(id, expires_at).await?;
-        self.update(id, policy).await?;
-        Ok(delivery)
+        let token = self.mint_identity(id, expires_at).await?;
+        let policy = self.write(id, Some(policy)).await?;
+        Ok(EgressDelivery { token, policy })
     }
     /// Update new connections without changing the token or the sandbox's lifecycle state.
     pub async fn update(&self, id: &str, policy: &EgressPolicy) -> Result<()> {
         policy
             .validate()
             .map_err(crate::providers::sandbox::egress::policy_error)?;
-        self.write(id, Some(policy)).await
+        self.write(id, Some(policy)).await.map(|_| ())
     }
     /// Removing a policy makes existing identity tokens unable to open new connections.
     pub async fn delete(&self, id: &str) -> Result<()> {
-        self.write(id, None).await
+        self.write(id, None).await.map(|_| ())
     }
-    /// Renewal never reads or rewrites policy. The backend supplies its authoritative deadline.
+    /// Resume delivers the latest gateway record without rewriting it.
     pub async fn renew(&self, id: &str, expires_at: i64) -> Result<EgressDelivery> {
+        let token = self.mint_identity(id, expires_at).await?;
+        let policy = self.policy_record(id).await?;
+        Ok(EgressDelivery { token, policy })
+    }
+    /// Azure needs identity before create; this never reads or publishes policy.
+    pub async fn mint_identity(&self, id: &str, expires_at: i64) -> Result<String> {
         let token = self.issuer().await?.mint(
             EgressTokenRequest::builder()
                 .audience(&self.config.audience)
@@ -138,111 +154,109 @@ impl SandboxEgressManager {
                 .sandbox_expires_at(expires_at)
                 .build(),
         )?;
-        Ok(EgressDelivery { token })
+        Ok(token)
     }
-    async fn write(&self, id: &str, policy: Option<&EgressPolicy>) -> Result<()> {
-        let lock = {
-            let mut writes = self.writes.lock().await;
-            writes.retain(|_, lock| lock.strong_count() > 0);
-            let entry = writes.entry(id.to_string()).or_default();
-            if let Some(lock) = entry.upgrade() {
-                lock
-            } else {
-                let lock = Arc::new(Mutex::new(()));
-                *entry = Arc::downgrade(&lock);
-                lock
-            }
-        };
-        let _guard = lock.lock().await;
+    async fn write(&self, id: &str, policy: Option<&EgressPolicy>) -> Result<String> {
         let issuer = self.issuer().await?;
-        // Read the gateway's durable sequence so a restarted client cannot replay an old
-        // version. A concurrent writer can win this race; never retry with a newer version,
-        // since that could undo its restriction with our stale intent.
-        let version = self
-            .policy_version(id, &issuer)
-            .await?
-            .checked_add(1)
-            .ok_or_else(|| unavailable("gateway policy version is exhausted"))?;
-        let operation = match policy {
-            Some(policy) => EgressAdminOperation::Put { policy, version },
-            None => EgressAdminOperation::Delete { version },
-        };
-        let authorization = issuer.mint_admin(&self.config.audience, id, operation, now_unix()?)?;
-        let mut body = serde_json::json!({"aud":self.config.audience,"sub":id,"version":version});
-        if let Some(policy) = policy {
-            body["policy"] = serde_json::from_slice(
-                &policy
-                    .canonical_json()
-                    .map_err(crate::providers::sandbox::egress::policy_error)?,
-            )
-            .map_err(|_| unavailable("could not encode runtime policy"))?;
+        let millis = u64::try_from(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|_| unavailable("system clock predates Unix epoch"))?
+                .as_millis(),
+        )
+        .map_err(|_| unavailable("system clock is outside the supported range"))?;
+        let previous = LAST_MILLIS
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |last| {
+                last.checked_add(1).map(|next| next.max(millis))
+            })
+            .map_err(|_| unavailable("policy clock is exhausted"))?;
+        let version = millis.max(previous + 1);
+        let record =
+            issuer.mint_record(&self.config.audience, id, (version, &WRITER_ID), policy)?;
+        let body = serde_json::json!({"record":record});
+        // Partial fan-out may already have applied this write. Retry the exact record;
+        // allocating a newer version here could overwrite another writer's decision.
+        for attempt in 0..3 {
+            let operation = if policy.is_some() {
+                EgressAdminOperation::Put
+            } else {
+                EgressAdminOperation::Delete
+            };
+            let authorization =
+                issuer.mint_admin(&self.config.audience, id, operation, now_unix()?)?;
+            let method = if policy.is_some() {
+                reqwest::Method::PUT
+            } else {
+                reqwest::Method::DELETE
+            };
+            let response = self
+                .admin
+                .request(
+                    method,
+                    format!("{}/v1/policies", self.admin_url.trim_end_matches('/')),
+                )
+                .bearer_auth(authorization)
+                .json(&body)
+                .send()
+                .await;
+            match response {
+                Ok(response) if response.status() == reqwest::StatusCode::NO_CONTENT => {
+                    return Ok(record)
+                }
+                Ok(response) => {
+                    let transient = response.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE;
+                    let error = gateway_error(response).await;
+                    if !transient
+                        || error.code != "SANDBOX_EGRESS_GATEWAY_UNAVAILABLE"
+                        || attempt == 2
+                    {
+                        return Err(error);
+                    }
+                }
+                Err(_) if attempt == 2 => {
+                    return Err(unavailable(
+                        "gateway policy request failed after three attempts",
+                    ))
+                }
+                Err(_) => {}
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100 * (attempt + 1))).await;
         }
-        let method = if policy.is_some() {
-            reqwest::Method::PUT
-        } else {
-            reqwest::Method::DELETE
-        };
-        let response = self
-            .admin
-            .request(
-                method,
-                format!("{}/v1/policies", self.admin_url.trim_end_matches('/')),
-            )
-            .bearer_auth(authorization)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|_| unavailable("gateway policy request failed"))?;
-        if response.status() == reqwest::StatusCode::CONFLICT {
-            return Err(AlienError::new(ErrorData::SandboxEgressConflict {
-                sandbox_id: id.into(),
-            }));
-        }
-        if response.status() != reqwest::StatusCode::NO_CONTENT {
-            return Err(unavailable("gateway refused the policy request"));
-        }
-        Ok(())
+        unreachable!("every final attempt returns")
     }
 
-    async fn policy_version(&self, id: &str, issuer: &EgressTokenIssuer) -> Result<u64> {
+    async fn policy_record(&self, id: &str) -> Result<String> {
         #[derive(Deserialize)]
-        struct PolicyVersion {
-            version: u64,
+        struct PolicyRecord {
+            record: String,
         }
+        let issuer = self.issuer().await?;
         let authorization = issuer.mint_admin(
             &self.config.audience,
             id,
-            EgressAdminOperation::ReadVersion,
+            EgressAdminOperation::Read,
             now_unix()?,
         )?;
-        let mut response = self
+        let response = self
             .admin
             .get(format!(
-                "{}/v1/policies",
+                "{}/v1/policies/record",
                 self.admin_url.trim_end_matches('/')
             ))
             .query(&[("aud", self.config.audience.as_str()), ("sub", id)])
             .bearer_auth(authorization)
             .send()
             .await
-            .map_err(|_| unavailable("gateway policy version request failed"))?;
+            .map_err(|_| unavailable("gateway policy record request failed"))?;
         if response.status() != reqwest::StatusCode::OK {
-            return Err(unavailable("gateway refused the policy version request"));
+            return Err(unavailable(
+                "gateway has no readable policy record for this sandbox",
+            ));
         }
-        let mut body = Vec::new();
-        while let Some(chunk) = response
-            .chunk()
-            .await
-            .map_err(|_| unavailable("gateway policy version response failed"))?
-        {
-            if body.len() + chunk.len() > 1024 {
-                return Err(unavailable("gateway policy version response is too large"));
-            }
-            body.extend_from_slice(&chunk);
-        }
-        serde_json::from_slice::<PolicyVersion>(&body)
-            .map(|value| value.version)
-            .map_err(|_| unavailable("gateway returned an invalid policy version"))
+        let body = bounded_body(response, 360 * 1024).await?;
+        serde_json::from_slice::<PolicyRecord>(&body)
+            .map(|value| value.record)
+            .map_err(|_| unavailable("gateway returned an invalid policy record"))
     }
 }
 pub(crate) fn now_unix() -> Result<i64> {
@@ -253,10 +267,41 @@ pub(crate) fn now_unix() -> Result<i64> {
     i64::try_from(seconds).map_err(|_| unavailable("system clock is outside the supported range"))
 }
 fn unavailable(reason: &str) -> AlienError<ErrorData> {
-    AlienError::new(ErrorData::SandboxUnreachable {
-        operation: "sandbox.egress".into(),
+    AlienError::new(ErrorData::SandboxEgressGatewayUnavailable {
         reason: reason.into(),
     })
+}
+async fn bounded_body(mut response: reqwest::Response, limit: usize) -> Result<Vec<u8>> {
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| unavailable("gateway response failed"))?
+    {
+        if body.len() + chunk.len() > limit {
+            return Err(unavailable("gateway response is too large"));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+async fn gateway_error(response: reqwest::Response) -> AlienError<ErrorData> {
+    let body = match bounded_body(response, 4096).await {
+        Ok(body) => body,
+        Err(error) => return error,
+    };
+    let code = serde_json::from_slice::<serde_json::Value>(&body)
+        .ok()
+        .and_then(|value| value["code"].as_str().map(str::to_owned));
+    match code.as_deref() {
+        Some("SANDBOX_EGRESS_VERSION_IN_FUTURE") => {
+            AlienError::new(ErrorData::SandboxEgressVersionInFuture)
+        }
+        Some("SANDBOX_EGRESS_POLICY_STORE_FULL") => {
+            AlienError::new(ErrorData::SandboxEgressPolicyStoreFull)
+        }
+        _ => unavailable("gateway refused the policy record"),
+    }
 }
 #[cfg(all(test, feature = "local"))]
 #[path = "sandbox_egress_tests.rs"]
