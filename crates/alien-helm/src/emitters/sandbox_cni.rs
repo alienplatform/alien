@@ -9,7 +9,7 @@ pub(super) fn template() -> String {
         .map(|line| format!("              {line}\n"))
         .collect::<String>();
     format!(
-        r#"{{{{- $name := printf "%s-sandbox-cni" (include "deployment.fullname" .) | trunc 63 | trimSuffix "-" -}}}}
+        r#"{{{{- $name := printf "%s-sandbox-cni" (include "deployment.fullname" . | trunc 51 | trimSuffix "-") -}}}}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
