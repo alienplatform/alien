@@ -1,0 +1,271 @@
+{
+  "baselineSha": "5629803a7a704879a308dd1d724a88b81d9585ae",
+  "fixedImplementationSha": "9ed5b4035",
+  "environment": {
+    "docker": "20.10.24",
+    "buildx": "0.37.1",
+    "buildkit": "0.33.1",
+    "probeRust": "1.100.0-nightly (5ceaf6608 2026-09-25)",
+    "pinnedTestRust": "1.101.0-nightly (0abfedbc7 2026-10-02)",
+    "moto": "5.1.17",
+    "host": "Linux x86_64"
+  },
+  "fixtureSha256": {
+    "Dockerfile": "0228158ce0d63b7bfd522137ec8031859ad56ebc14f3f7e9673f025d7e7f9d9b",
+    "app.txt": "ba1ac2e0cd1d04bf39797d9b34adf6896fd9849ad7db493a1bfc6a2fcd13a132",
+    "dependency.txt": "6b069acc842db77c35204fe51103d201bceb9b06103ee40dc42bd9a68ee29387"
+  },
+  "cases": {
+    "actual-baseline1": {
+      "seconds": 4.929806857,
+      "imagePushPayloadBytes": 5730011,
+      "novelLayerBytes": 5727042,
+      "dependencyLayer": {
+        "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+        "digest": "sha256:2d14f0fe3d8c4b0c49bf8ca2197f84ea269afe593379ae18c0fda52010d0d3e5",
+        "size": 2100785
+      },
+      "dependencyNonce": "58 2e 88 84 0f 6d eb 67 4e 51 01 a0 a6 af 17 bf",
+      "exitStatus": 0
+    },
+    "actual-baseline2": {
+      "seconds": 5.97681092,
+      "imagePushPayloadBytes": 2103753,
+      "novelLayerBytes": 2100784,
+      "dependencyLayer": {
+        "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+        "digest": "sha256:e19f0a0042cc8900f400ad574866799df2bd9a5b54fc5d41ec6938092285f139",
+        "size": 2100784
+      },
+      "dependencyNonce": "89 f9 b2 f3 bc e8 00 34 08 11 56 a5 44 10 c9 0a",
+      "exitStatus": 0
+    },
+    "local-cold": {
+      "seconds": 5.3915863037109375,
+      "exitStatus": 0,
+      "cacheHttpPayloadBytes": {
+        "requestBytes": 0,
+        "responseBytes": 0
+      },
+      "imagePushPayloadBytes": 5730013,
+      "dependencyLayer": {
+        "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+        "digest": "sha256:85615e374db03bf7aae64caa967893ed59addda8efe5ad6d9d2172979044e02f",
+        "size": 2100788
+      },
+      "dependencyNonce": "85 35 61 dc ad 36 e9 00 ac af ab a8 01 a2 68 3f",
+      "expectedInputs": {
+        "app.txt": "application-v1",
+        "dependency.txt": "dependency-v1",
+        "dependencies/version": "1"
+      },
+      "runtimeMatchesInputs": true
+    },
+    "local-warm": {
+      "seconds": 1.1777665615081787,
+      "exitStatus": 0,
+      "cacheHttpPayloadBytes": {
+        "requestBytes": 0,
+        "responseBytes": 0
+      },
+      "imagePushPayloadBytes": 2968,
+      "dependencyLayer": {
+        "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+        "digest": "sha256:85615e374db03bf7aae64caa967893ed59addda8efe5ad6d9d2172979044e02f",
+        "size": 2100788
+      },
+      "dependencyNonce": "85 35 61 dc ad 36 e9 00 ac af ab a8 01 a2 68 3f",
+      "expectedInputs": {
+        "app.txt": "application-v1",
+        "dependency.txt": "dependency-v1",
+        "dependencies/version": "1"
+      },
+      "runtimeMatchesInputs": true
+    },
+    "remote-cold": {
+      "seconds": 7.1116249561309814,
+      "exitStatus": 0,
+      "cacheHttpPayloadBytes": {
+        "requestBytes": 5740681,
+        "responseBytes": 1214
+      },
+      "imagePushPayloadBytes": 2103752,
+      "dependencyLayer": {
+        "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+        "digest": "sha256:a28bc2a857271eddd6901f79c7c8e220eb83f29f191d6054b8df453993403495",
+        "size": 2100785
+      },
+      "dependencyNonce": "43 8f c2 9e cb c1 68 77 00 5b a7 83 fa 67 a3 4a",
+      "expectedInputs": {
+        "app.txt": "application-v1",
+        "dependency.txt": "dependency-v1",
+        "dependencies/version": "1"
+      },
+      "runtimeMatchesInputs": true
+    },
+    "remote-warm": {
+      "seconds": 3.384368896484375,
+      "exitStatus": 0,
+      "cacheHttpPayloadBytes": {
+        "requestBytes": 5740681,
+        "responseBytes": 5741433
+      },
+      "imagePushPayloadBytes": 2967,
+      "dependencyLayer": {
+        "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+        "digest": "sha256:a28bc2a857271eddd6901f79c7c8e220eb83f29f191d6054b8df453993403495",
+        "size": 2100785
+      },
+      "dependencyNonce": "43 8f c2 9e cb c1 68 77 00 5b a7 83 fa 67 a3 4a",
+      "expectedInputs": {
+        "app.txt": "application-v1",
+        "dependency.txt": "dependency-v1",
+        "dependencies/version": "1"
+      },
+      "runtimeMatchesInputs": true
+    },
+    "app-change": {
+      "seconds": 4.766313552856445,
+      "exitStatus": 0,
+      "cacheHttpPayloadBytes": {
+        "requestBytes": 5740681,
+        "responseBytes": 5741430
+      },
+      "imagePushPayloadBytes": 3086,
+      "dependencyLayer": {
+        "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+        "digest": "sha256:a28bc2a857271eddd6901f79c7c8e220eb83f29f191d6054b8df453993403495",
+        "size": 2100785
+      },
+      "dependencyNonce": "43 8f c2 9e cb c1 68 77 00 5b a7 83 fa 67 a3 4a",
+      "expectedInputs": {
+        "app.txt": "application-v2",
+        "dependency.txt": "dependency-v1",
+        "dependencies/version": "1"
+      },
+      "runtimeMatchesInputs": true
+    },
+    "dependency-change": {
+      "seconds": 4.704149961471558,
+      "exitStatus": 0,
+      "cacheHttpPayloadBytes": {
+        "requestBytes": 5740681,
+        "responseBytes": 5741432
+      },
+      "imagePushPayloadBytes": 2103867,
+      "dependencyLayer": {
+        "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+        "digest": "sha256:c90a9bd5a5da2f121206e79ef61bdf96e89d6ccb344fad37f03573412a8c29fd",
+        "size": 2100784
+      },
+      "dependencyNonce": "da 28 60 b4 1c 13 67 f3 eb 3a 7e 13 56 e3 6e dd",
+      "expectedInputs": {
+        "app.txt": "application-v2",
+        "dependency.txt": "dependency-v2",
+        "dependencies/version": "1"
+      },
+      "runtimeMatchesInputs": true
+    },
+    "arg-change": {
+      "seconds": 4.797245264053345,
+      "exitStatus": 0,
+      "cacheHttpPayloadBytes": {
+        "requestBytes": 5740681,
+        "responseBytes": 5741429
+      },
+      "imagePushPayloadBytes": 2103753,
+      "dependencyLayer": {
+        "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+        "digest": "sha256:77ed93eddcf04bba454861a652008ef0e0bd110ff4c28ac0057e4975454fa853",
+        "size": 2100788
+      },
+      "dependencyNonce": "a4 39 fc 55 4c 87 1d 39 f6 fa e0 12 de 6e ad fb",
+      "expectedInputs": {
+        "app.txt": "application-v2",
+        "dependency.txt": "dependency-v2",
+        "dependencies/version": "2"
+      },
+      "runtimeMatchesInputs": true
+    },
+    "dockerfile-change": {
+      "seconds": 5.825962543487549,
+      "exitStatus": 0,
+      "cacheHttpPayloadBytes": {
+        "requestBytes": 5740681,
+        "responseBytes": 5741432
+      },
+      "imagePushPayloadBytes": 2103755,
+      "dependencyLayer": {
+        "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+        "digest": "sha256:4f5e564ca77c2424e133231f92c0b63dc242fc45d57732925481818ec971416e",
+        "size": 2100790
+      },
+      "dependencyNonce": "ba 53 f9 a4 bc ec 92 0a 1a 99 30 c8 84 8f 86 23",
+      "expectedInputs": {
+        "app.txt": "application-v2",
+        "dependency.txt": "dependency-v2",
+        "dependencies/version": "2"
+      },
+      "runtimeMatchesInputs": true
+    },
+    "failure": {
+      "seconds": 6.207068204879761,
+      "exitStatus": 1,
+      "cacheHttpPayloadBytes": {
+        "requestBytes": 0,
+        "responseBytes": 5740544
+      }
+    },
+    "recovery": {
+      "seconds": 1.1877639293670654,
+      "exitStatus": 0,
+      "cacheHttpPayloadBytes": {
+        "requestBytes": 5740681,
+        "responseBytes": 5741434
+      },
+      "imagePushPayloadBytes": 2965,
+      "dependencyLayer": {
+        "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+        "digest": "sha256:4f5e564ca77c2424e133231f92c0b63dc242fc45d57732925481818ec971416e",
+        "size": 2100790
+      },
+      "dependencyNonce": "ba 53 f9 a4 bc ec 92 0a 1a 99 30 c8 84 8f 86 23",
+      "expectedInputs": {
+        "app.txt": "application-v2",
+        "dependency.txt": "dependency-v2",
+        "dependencies/version": "2"
+      },
+      "runtimeMatchesInputs": true
+    },
+    "after-concurrency": {
+      "seconds": 3.1637115478515625,
+      "exitStatus": 0,
+      "cacheHttpPayloadBytes": {
+        "requestBytes": 5740681,
+        "responseBytes": 5741433
+      },
+      "imagePushPayloadBytes": 2965,
+      "dependencyLayer": {
+        "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+        "digest": "sha256:4f5e564ca77c2424e133231f92c0b63dc242fc45d57732925481818ec971416e",
+        "size": 2100790
+      },
+      "dependencyNonce": "ba 53 f9 a4 bc ec 92 0a 1a 99 30 c8 84 8f 86 23",
+      "expectedInputs": {
+        "app.txt": "application-v2",
+        "dependency.txt": "dependency-v2",
+        "dependencies/version": "2"
+      },
+      "runtimeMatchesInputs": true
+    }
+  },
+  "checks": {
+    "normalizationPayloadsUnchanged": true,
+    "registryPayloadsIndependentlyVerified": true,
+    "concurrentDistinctAppsCorrect": true,
+    "simultaneousFirstCreationCorrect": true,
+    "selectedContextWithInvalidAmbientHostCorrect": true,
+    "cacheTransportTests": 5,
+    "dockerFocusedNextestTests": 27
+  }
+}
