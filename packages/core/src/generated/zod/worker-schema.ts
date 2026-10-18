@@ -8,6 +8,7 @@ import { ReadinessProbeSchema } from "./readiness-probe-schema.js";
 import { ResourceRefSchema } from "./resource-ref-schema.js";
 import { WorkerCodeSchema } from "./worker-code-schema.js";
 import { WorkerPublicEndpointSchema } from "./worker-public-endpoint-schema.js";
+import { WorkerRuntimeImageSchema } from "./worker-runtime-image-schema.js";
 import { WorkerTriggerSchema } from "./worker-trigger-schema.js";
 
 /**
@@ -33,6 +34,9 @@ get "publicEndpoints"(){
               },
 get "readinessProbe"(){
                 return z.union([ReadinessProbeSchema, z.null()]).optional()
+              },
+get "runtimeImage"(){
+                return z.union([WorkerRuntimeImageSchema, z.null()]).optional()
               },
 "timeoutSeconds": z.optional(z.int().min(1).max(3600).default(180).describe("Maximum execution time for the worker in seconds.\nConstraints: 1‑3600 seconds (platform-specific limits may apply)\nDefault: 180")),
 get "triggers"(){
