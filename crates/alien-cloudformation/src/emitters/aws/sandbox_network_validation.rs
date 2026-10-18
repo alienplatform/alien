@@ -1,5 +1,7 @@
 //! Setup reads effective routes, including implicit main-table associations.
 
+use std::hash::{DefaultHasher, Hash, Hasher};
+
 use crate::{
     emitters::aws::{
         helpers::{
@@ -10,6 +12,8 @@ use crate::{
     template::{CfExpression, CfResource},
 };
 use alien_core::{import::EmitContext, Network, NetworkSettings, Result};
+
+const VALIDATOR_CODE: &str = include_str!("sandbox_network_validation.py");
 
 pub(crate) fn resources(ctx: &EmitContext<'_>) -> Result<Vec<CfResource>> {
     let prefix = required_logical_id(ctx)?;
@@ -68,7 +72,7 @@ pub(crate) fn resources(ctx: &EmitContext<'_>) -> Result<Vec<CfResource>> {
         "Code".into(),
         CfExpression::object([(
             "ZipFile",
-            CfExpression::from(include_str!("sandbox_network_validation.py")),
+            CfExpression::from(VALIDATOR_CODE),
         )]),
     );
     function.properties.insert("Tags".into(), tags(ctx));
@@ -79,6 +83,14 @@ pub(crate) fn resources(ctx: &EmitContext<'_>) -> Result<Vec<CfResource>> {
     validation.properties.insert(
         "ServiceToken".into(),
         CfExpression::get_att(function_id, "Arn"),
+    );
+    // Updating a Lambda's code does not itself invoke an existing custom resource.
+    // A changed checksum forces validation to run with the new rules as well.
+    let mut revision = DefaultHasher::new();
+    VALIDATOR_CODE.hash(&mut revision);
+    validation.properties.insert(
+        "ValidationRevision".into(),
+        CfExpression::from(format!("{:016x}", revision.finish())),
     );
     validation
         .properties
