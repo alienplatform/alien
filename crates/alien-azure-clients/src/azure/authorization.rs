@@ -613,16 +613,23 @@ impl AuthorizationApi for AzureAuthorizationClient {
                 .base
                 .execute_request(signed, "ListRoleAssignments", &scope_string)
                 .await?;
-            let page: RoleAssignmentListResponse = response
-                .json()
-                .await
+            let response_body =
+                response
+                    .text()
+                    .await
+                    .into_alien_error()
+                    .context(ErrorData::HttpRequestFailed {
+                        message: "Azure ListRoleAssignments: failed to read response body"
+                            .to_string(),
+                    })?;
+            let page: RoleAssignmentListResponse = serde_json::from_str(&response_body)
                 .into_alien_error()
                 .context(ErrorData::HttpResponseError {
                     message: "Azure ListRoleAssignments: invalid response page".to_string(),
                     url,
                     http_status: 200,
                     http_request_text: None,
-                    http_response_text: None,
+                    http_response_text: Some(response_body),
                 })?;
             assignments.extend(page.value.into_iter().filter(|assignment| {
                 role_definition_id.as_ref().is_none_or(|id| {
@@ -704,7 +711,12 @@ mod tests {
     use crate::azure::{AzureCredentials, ServiceOverrides};
     use httpmock::{Method::GET, MockServer};
     use serde_json::json;
-    use std::collections::HashMap;
+    use std::{
+        collections::HashMap,
+        io::{Read, Write},
+        net::TcpListener,
+        time::Duration,
+    };
 
     const ASSIGNMENTS_PATH: &str = "/subscriptions/sub-123/resourceGroups/rg-1/providers/Microsoft.Authorization/roleAssignments";
 
@@ -785,15 +797,26 @@ mod tests {
                 then.status(200).body("{}");
             })
             .await;
-        assert!(test_client(&server)
+        let error = test_client(&server)
             .list_role_assignments(
                 &Scope::ResourceGroup {
-                    resource_group_name: "rg-1".into()
+                    resource_group_name: "rg-1".into(),
                 },
-                None
+                None,
             )
             .await
-            .is_err());
+            .unwrap_err();
+        assert_eq!(error.code, "HTTP_RESPONSE_ERROR");
+        assert!(error.internal);
+        assert!(error.retryable);
+        match error.error {
+            Some(ErrorData::HttpResponseError {
+                http_response_text, ..
+            }) => {
+                assert_eq!(http_response_text.as_deref(), Some("{}"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
         first.assert_hits_async(1).await;
         invalid.assert_hits_async(1).await;
     }
@@ -936,6 +959,52 @@ mod tests {
                 .assert_hits_async(if status == 403 { 4 } else { 1 })
                 .await;
         }
+    }
+
+    #[tokio::test]
+    async fn role_assignment_truncated_body_preserves_read_error_classification() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0; 1024];
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                let count = stream.read(&mut buffer).unwrap();
+                assert_ne!(count, 0);
+                request.extend_from_slice(&buffer[..count]);
+            }
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\nConnection: close\r\n\r\n{}")
+                .unwrap();
+        });
+        let mut config = test_config();
+        config.service_overrides = Some(ServiceOverrides {
+            endpoints: HashMap::from([("management".to_string(), endpoint)]),
+        });
+        let client = AzureAuthorizationClient::new(
+            Client::builder()
+                .timeout(Duration::from_secs(5))
+                .build()
+                .unwrap(),
+            AzureTokenCache::new(config),
+        );
+        let result = client
+            .list_role_assignments(
+                &Scope::ResourceGroup {
+                    resource_group_name: "rg-1".to_string(),
+                },
+                None,
+            )
+            .await;
+        server.join().unwrap();
+        let error = result.unwrap_err();
+        assert_eq!(error.code, "HTTP_REQUEST_FAILED");
+        assert!(!error.internal);
+        assert!(error.retryable);
     }
 
     fn test_config() -> AzureClientConfig {
