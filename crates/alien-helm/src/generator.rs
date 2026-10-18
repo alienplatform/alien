@@ -3759,6 +3759,9 @@ impl ChartAnalysis {
             }
             if let Some(container) = entry.config.downcast_ref::<Container>() {
                 fail_if_container_source_remains(resource_id, container)?;
+                if container.egress.is_some() {
+                    analysis.extra_templates.insert("sandbox-cni-probe.yaml".into(), crate::emitters::sandbox_cni::template());
+                }
                 if let Some(endpoint) = container.public_endpoints.first() {
                     analysis.services.push(ServiceValue {
                         id: resource_id.clone(),

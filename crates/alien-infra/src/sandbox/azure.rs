@@ -12,9 +12,11 @@
 //! with its own credential (which lacks Data Owner by design); the execute grant that opens the
 //! data plane is authored on that resource's permission set by a preflight, not verified here.
 //!
-//! It owns one data-plane object: the disk image built from a registry image, deleted once a
-//! changed reference replaces it; `sandbox/images` grants exactly those verbs. One build per
-//! reference string, so a tag pushed again is not rebuilt: a changed image needs a new tag or digest.
+//! It owns the disk image built from a registry image; `sandbox/images` grants those verbs.
+//! One build per reference string means a changed image needs a new tag or digest. Its existing
+//! `sandbox/management` grant also lists session metadata and deletes expired sessions on
+//! reconciliation, without granting exec or file access. This cleanup pauses in terminal failure
+//! states, when dependencies are unavailable, or when deployment reconciliation stops.
 
 use std::time::Duration;
 
@@ -163,6 +165,7 @@ impl AzureSandboxController {
     )]
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
+        let lifetime_issue = self.reap_session_lifetimes(ctx, config).await;
         // Refresh the binding inputs against the declaration, but do not gate the heartbeat on
         // them: a bad `code.image` is a declaration error the create and update paths already
         // fail on, and must not flip a serving sandbox to a terminal RefreshFailed here. A
@@ -196,12 +199,14 @@ impl AzureSandboxController {
         self.sweep_disk_images(ctx, &config.id).await;
         self.reap_retired_disk_images(ctx, &config.id).await;
 
-        // The data plane has no sandbox list operation, so the heartbeat carries the group's ARM
-        // provisioning state rather than a sandbox count. A read failure here leaves the sandbox
+        // The heartbeat carries the group's ARM provisioning state. A read failure here leaves the sandbox
         // serving: the heartbeat is an observation, not a health gate.
         if let Ok((group, _region, resource_group)) = self.identity(&config.id) {
             let mut provisioning_state = None;
             let mut status = alien_core::SandboxHeartbeatStatus::default();
+            if let Some(issue) = lifetime_issue {
+                record_collection_issue(&mut status, issue);
+            }
 
             // sandboxGroups/read is granted, so a failure here is transient rather than a
             // permission gap. Report it as a partial collection instead of a default-Healthy
@@ -257,7 +262,7 @@ impl AzureSandboxController {
 
         Ok(HandlerAction::Continue {
             state: Ready,
-            suggested_delay: Some(Duration::from_secs(60)),
+            suggested_delay: Some(Duration::from_secs(5)),
         })
     }
 
@@ -335,6 +340,10 @@ impl AzureSandboxController {
         status = ResourceStatus::RefreshFailed
     );
 
+    fn requires_convergence_reconciliation(&self) -> bool {
+        true
+    }
+
     fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
         use alien_core::bindings::{BindingValue, SandboxBinding};
 
@@ -398,6 +407,31 @@ impl AzureSandboxController {
 }
 
 impl AzureSandboxController {
+    /// Runs on Ready and image-build ticks. This is a reconciliation ceiling: terminal failures,
+    /// unavailable dependencies and a stopped deployment controller suspend enforcement.
+    async fn reap_session_lifetimes(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        config: &Sandbox,
+    ) -> Option<String> {
+        let result = async {
+            let (group, client) = self.data_plane(ctx, &config.id)?;
+            super::reap_expired_azure_sandboxes(
+                client.as_ref(),
+                &group,
+                config.lifecycle.max_lifetime_seconds,
+            )
+            .await
+        }
+        .await;
+        if let Err(error) = result {
+            // A transient list/delete error must not make the reaper itself terminal.
+            warn!(sandbox_id = %config.id, %error, "Azure sandbox lifetime cleanup failed; the next reconciliation will retry");
+            return Some(format!("sandbox lifetime cleanup failed: {error}"));
+        }
+        None
+    }
+
     /// Captures the image, egress, idle-pause and ceilings the binding carries from the
     /// declaration.
     ///
@@ -449,6 +483,7 @@ impl AzureSandboxController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<AzureSandboxHandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
+        let _ = self.reap_session_lifetimes(ctx, config).await;
         // Nothing to build: `Ready` abandons any build left in flight.
         let Some(reference) = self.pending_image(config) else {
             return Ok(AzureSandboxHandlerAction::Continue {
@@ -1400,7 +1435,8 @@ mod tests {
 
         /// A provider handing out `client` for the data plane, and an ARM client whose read fails,
         /// which the heartbeat reports as a partial collection rather than an error.
-        fn provider_with(client: MockSandboxDataPlaneApi) -> Arc<MockPlatformServiceProvider> {
+        fn provider_with(mut client: MockSandboxDataPlaneApi) -> Arc<MockPlatformServiceProvider> {
+            client.expect_list_sandboxes().returning(|_| Ok(vec![]));
             let client: Arc<dyn SandboxDataPlaneApi> = Arc::new(client);
             let mut provider = MockPlatformServiceProvider::new();
             provider

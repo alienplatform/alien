@@ -311,6 +311,25 @@ fn load_state() -> Result<AgentState> {
     let (agent_uid, agent_gid) = (u32::MAX, u32::MAX);
     enforce_exec_identity(isolation, exec_identity, agent_uid, agent_gid)?;
 
+    if std::env::var_os("ALIEN_SANDBOX_MAX_PROCESSES").is_some() {
+        let limit: u32 = parse("ALIEN_SANDBOX_MAX_PROCESSES")?;
+        if limit == 0 || agent_uid != 0 || exec_identity.uid == 0 {
+            return Err(invalid(
+                "ALIEN_SANDBOX_MAX_PROCESSES",
+                "requires a positive limit and a root supervisor with a non-root command identity",
+            ));
+        }
+        #[cfg(target_os = "linux")]
+        alien_sandbox_agent::privilege::limit_processes(limit)
+            .into_alien_error()
+            .context(failed(
+                "set process ceiling",
+                "cannot enforce ALIEN_SANDBOX_MAX_PROCESSES".to_string(),
+            ))?;
+        #[cfg(not(target_os = "linux"))]
+        return Err(invalid("ALIEN_SANDBOX_MAX_PROCESSES", "requires Linux"));
+    }
+
     Ok(AgentState {
         session_root,
         authorization: load_authorization()?,

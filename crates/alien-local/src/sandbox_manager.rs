@@ -30,6 +30,7 @@ use alien_error::{AlienError, Context, IntoAlienError};
 const LABEL_SANDBOX: &str = "dev.alien.sandbox";
 /// Label carrying the session id within that sandbox.
 const LABEL_SESSION: &str = "dev.alien.sandbox.session";
+const LABEL_EXPIRES: &str = "dev.alien.sandbox.expires-at-ms";
 
 /// Unprivileged uid/gid the workload runs as. `nobody` exists in every common base image.
 const SANDBOX_USER: &str = "65534:65534";
@@ -53,6 +54,8 @@ pub enum SandboxEgressMode {
 pub struct SandboxSessionConfig {
     /// Image used as the session's root filesystem
     pub image: String,
+    /// Wall-clock ceiling enforced by the host manager; clients may only shorten it.
+    pub max_lifetime_ms: Option<u64>,
     /// CPU ceiling in cores
     pub cpu_cores: f64,
     /// Memory ceiling in bytes
@@ -101,7 +104,7 @@ pub struct SandboxExecResult {
 /// Creates and destroys hardened Docker sessions for one deployment.
 #[derive(Debug)]
 pub struct LocalSandboxManager {
-    docker: Docker,
+    pub(crate) docker: Docker,
     state_dir: PathBuf,
 }
 
@@ -171,10 +174,24 @@ impl LocalSandboxManager {
             .map(|(key, value)| format!("{key}={value}"))
             .collect();
 
-        let labels = HashMap::from([
+        let mut labels = HashMap::from([
             (LABEL_SANDBOX.to_string(), sandbox.to_string()),
             (LABEL_SESSION.to_string(), session_id.to_string()),
         ]);
+
+        if let Some(lifetime) = config.max_lifetime_ms {
+            let expires = i64::try_from(lifetime)
+                .ok()
+                .filter(|value| *value > 0)
+                .and_then(|value| chrono::Utc::now().timestamp_millis().checked_add(value))
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::SandboxSessionFailed {
+                        session_id: session_id.to_string(),
+                        operation: "invalid sandbox lifetime".to_string(),
+                    })
+                })?;
+            labels.insert(LABEL_EXPIRES.to_string(), expires.to_string());
+        }
 
         // Bound to 127.0.0.1, never 0.0.0.0: a preview is for the developer's own machine, and
         // publishing on all interfaces would expose untrusted code to the local network.
@@ -218,6 +235,8 @@ impl LocalSandboxManager {
             )])),
             cap_drop: Some(vec!["ALL".to_string()]),
             security_opt: Some(vec!["no-new-privileges:true".to_string()]),
+            // Reap orphaned job descendants after cancellation.
+            init: Some(true),
             pids_limit: config.pids_limit,
             memory: Some(config.memory_bytes),
             nano_cpus: Some((config.cpu_cores * 1_000_000_000.0) as i64),
@@ -229,7 +248,9 @@ impl LocalSandboxManager {
         let container_config = Config {
             image: Some(config.image.clone()),
             user: Some(SANDBOX_USER.to_string()),
-            working_dir: Some(SESSION_ROOT.to_string()),
+            // Docker may chmod an auto-created WORKDIR after mounting tmpfs, overriding
+            // its writable mode. Exec sets its cwd after the container has started.
+            working_dir: Some("/".to_string()),
             env: Some(env),
             labels: Some(labels),
             exposed_ports: if exposed_ports.is_empty() {
@@ -340,6 +361,7 @@ impl LocalSandboxManager {
             .create_exec(
                 container_id,
                 CreateExecOptions {
+                    working_dir: Some(SESSION_ROOT.to_string()),
                     cmd: Some(command.to_vec()),
                     attach_stdout: Some(true),
                     attach_stderr: Some(true),
@@ -566,6 +588,24 @@ impl LocalSandboxManager {
 
     /// Lists the sessions this manager is tracking for a sandbox.
     pub async fn list_sessions(&self, sandbox: &str) -> Result<Vec<SandboxSessionHandle>> {
+        let containers = self.session_containers(sandbox).await?;
+
+        Ok(containers
+            .into_iter()
+            .filter_map(|container| {
+                let session_id = container.labels.as_ref()?.get(LABEL_SESSION)?.clone();
+                Some(SandboxSessionHandle {
+                    session_id,
+                    container_id: container.id?,
+                })
+            })
+            .collect())
+    }
+
+    async fn session_containers(
+        &self,
+        sandbox: &str,
+    ) -> Result<Vec<bollard::models::ContainerSummary>> {
         let filters = HashMap::from([(
             "label".to_string(),
             vec![format!("{LABEL_SANDBOX}={sandbox}")],
@@ -585,16 +625,65 @@ impl LocalSandboxManager {
                 operation: "list sessions".to_string(),
             })?;
 
-        Ok(containers
-            .into_iter()
-            .filter_map(|container| {
-                let session_id = container.labels.as_ref()?.get(LABEL_SESSION)?.clone();
-                Some(SandboxSessionHandle {
-                    session_id,
-                    container_id: container.id?,
-                })
-            })
-            .collect())
+        Ok(containers)
+    }
+
+    /// Deletes expired sessions from outside the guest, including paused containers.
+    /// Deadlines live on Docker labels, so reconnecting the route does not reset them.
+    pub(crate) async fn reap_expired(&self, sandbox: &str) -> Result<Vec<String>> {
+        let now = chrono::Utc::now().timestamp_millis();
+        let mut removed = Vec::new();
+        for container in self.session_containers(sandbox).await? {
+            let Some(labels) = container.labels else {
+                continue;
+            };
+            let Some(expires) = labels.get(LABEL_EXPIRES) else {
+                continue;
+            };
+            let expires: i64 =
+                expires
+                    .parse()
+                    .into_alien_error()
+                    .context(ErrorData::SandboxSessionFailed {
+                        session_id: sandbox.to_string(),
+                        operation: "read sandbox deadline".to_string(),
+                    })?;
+            if expires <= now {
+                let id = container.id.ok_or_else(|| {
+                    AlienError::new(ErrorData::SandboxSessionFailed {
+                        session_id: sandbox.to_string(),
+                        operation: "expired container has no id".to_string(),
+                    })
+                })?;
+                match self
+                    .docker
+                    .remove_container(
+                        &id,
+                        Some(RemoveContainerOptions {
+                            force: true,
+                            v: true,
+                            ..Default::default()
+                        }),
+                    )
+                    .await
+                {
+                    Ok(())
+                    | Err(bollard::errors::Error::DockerResponseServerError {
+                        status_code: 404,
+                        ..
+                    }) => removed.push(id),
+                    Err(error) => {
+                        return Err(error).into_alien_error().context(
+                            ErrorData::SandboxSessionFailed {
+                                session_id: id,
+                                operation: "reap expired sandbox".to_string(),
+                            },
+                        )
+                    }
+                }
+            }
+        }
+        Ok(removed)
     }
 
     /// Removes a session and its private network. Idempotent: an absent session is success.

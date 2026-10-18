@@ -1072,7 +1072,10 @@ pub struct CreateSandboxRequest {
     /// Environment variables to place in the sandbox.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
-    /// Wall-clock lifetime, after which the platform terminates the sandbox.
+    /// Wall-clock lifetime. Local needs its running manager; Azure needs its deployment's
+    /// reconciliation loop, which requests deletion within five seconds plus API latency.
+    /// Azure terminal failures, unavailable dependencies, a stopped controller or a group
+    /// removed from the deployment pause enforcement. AWS, GCP and Kubernetes enforce natively.
     ///
     /// Requires `sandboxLifetime`; a backend without it refuses rather than accepting a ceiling
     /// it would never apply. It only ever shortens: a declared ceiling still bounds the sandbox,
@@ -1206,7 +1209,8 @@ pub enum CommandOutput {
     /// Bytes written to stdout
     #[serde(rename_all = "camelCase")]
     Stdout {
-        /// Monotonic across both streams, so a caller can interleave them in production order
+        /// Monotonic across both streams. Azure reconstructs each poll's stdout before stderr;
+        /// its native exec API cannot establish production order between streams.
         seq: u64,
         /// Raw bytes; command output is not necessarily UTF-8
         data: Vec<u8>,
@@ -1352,8 +1356,9 @@ pub trait Sandbox: Binding {
     /// Lists the sandboxes belonging to this binding's parent.
     ///
     /// Offered only where the backend has a verb for it and the grant covers it — GCP lists
-    /// under its engine. AWS and Azure raise `OperationNotSupported`: enumerating there costs an
-    /// account-wide grant the sandbox role deliberately withholds. Reaching a known id is `get`.
+    /// under its engine. AWS requires an account-wide grant this binding withholds. Azure's
+    /// binding does not expose group enumeration; its controller uses it for lifetime cleanup.
+    /// Reaching a known id is `get`.
     async fn list(&self) -> Result<Vec<SandboxInstance>>;
 
     /// Runs a command, streaming output frames until exactly one terminal frame.

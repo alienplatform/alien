@@ -125,6 +125,11 @@ async fn claim_session_with_scope(
             continue;
         };
 
+        // The agent starts while the pod is still idle. Its authorization identity is the
+        // immutable pod UID, supplied by the downward API, rather than this later claim label.
+        let Some(agent_session_id) = pod.metadata.uid.clone().filter(|uid| !uid.is_empty()) else {
+            continue;
+        };
         let mut candidate = pod;
         if !claim_idle_pod(&mut candidate, session_id) {
             continue;
@@ -152,7 +157,7 @@ async fn claim_session_with_scope(
         let expires_at = now_unix + CAPABILITY_LIFETIME_SECONDS;
         let capability = sandbox_capability_token::mint(
             &SandboxCapabilityClaims {
-                session_id: session_id.to_string(),
+                session_id: agent_session_id,
                 operation: SandboxOperationClass::Execute,
                 generation: 1,
                 expires_at,
@@ -391,6 +396,7 @@ mod tests {
         Pod {
             metadata: ObjectMeta {
                 name: Some(name.to_string()),
+                uid: Some(format!("uid-{name}")),
                 labels: Some(sandbox_labels()),
                 ..Default::default()
             },
@@ -407,6 +413,7 @@ mod tests {
         Pod {
             metadata: ObjectMeta {
                 name: Some(name.to_string()),
+                uid: Some(format!("uid-{name}")),
                 labels: Some(sandbox_labels()),
                 ..Default::default()
             },
@@ -555,7 +562,61 @@ mod tests {
         let pair = ed25519_compact::KeyPair::generate();
         let stored = pair.as_ref().to_vec();
 
-        let mut pods = pods_returning(vec![idle_pod("pool-0", "10.1.2.3")]);
+        let sandbox = alien_core::Sandbox::new("sbx".into())
+            .code(alien_core::SandboxCode::Image {
+                image: "python:3.13-slim".into(),
+            })
+            .egress(alien_core::SandboxEgress::None)
+            .lifecycle(alien_core::SandboxLifecyclePolicy {
+                max_lifetime_seconds: Some(300),
+                idle_pause_seconds: None,
+            })
+            .build();
+        let mut pod = idle_pod("pool-0", "10.1.2.3");
+        pod.spec = crate::sandbox::kubernetes_spec::idle_pool_pod(
+            &sandbox,
+            "ns",
+            "gvisor",
+            None,
+            Some(&BASE64.encode(*pair.pk)),
+        )
+        .spec;
+        // Resolve the actual emitted environment as the kubelet does. A missing required
+        // identity, a logical claim label, or the wrong public key must fail this exchange.
+        let environment: BTreeMap<_, _> = pod.spec.as_ref().unwrap().containers[0]
+            .env
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|env| {
+                let value = env.value.clone().unwrap_or_else(|| {
+                    let field = &env
+                        .value_from
+                        .as_ref()
+                        .unwrap()
+                        .field_ref
+                        .as_ref()
+                        .unwrap()
+                        .field_path;
+                    match field.as_str() {
+                        "metadata.uid" => pod.metadata.uid.clone().unwrap(),
+                        _ => panic!("unexpected identity field {field}"),
+                    }
+                });
+                (env.name.clone(), value)
+            })
+            .collect();
+        let agent_identity = alien_core::sandbox_capability::SandboxSessionIdentity {
+            session_id: environment["ALIEN_SANDBOX_SESSION_ID"].clone(),
+            generation: environment["ALIEN_SANDBOX_GENERATION"].parse().unwrap(),
+        };
+        let agent_key = ed25519_compact::PublicKey::from_slice(
+            &BASE64
+                .decode(&environment["ALIEN_SANDBOX_PUBLIC_KEY"])
+                .unwrap(),
+        )
+        .unwrap();
+        let mut pods = pods_returning(vec![pod]);
         pods.expect_update_pod()
             .returning(|_, _, pod| Ok(pod.clone()));
 
@@ -594,11 +655,8 @@ mod tests {
 
         sandbox_capability_token::verify(
             &claimed.capability,
-            &pair.pk,
-            &alien_core::sandbox_capability::SandboxSessionIdentity {
-                session_id: "s1".to_string(),
-                generation: 1,
-            },
+            &agent_key,
+            &agent_identity,
             SandboxOperationClass::Execute,
             1_100,
         )
@@ -608,7 +666,7 @@ mod tests {
             &claimed.capability,
             &pair.pk,
             &alien_core::sandbox_capability::SandboxSessionIdentity {
-                session_id: "another-session".to_string(),
+                session_id: "uid-replacement-pod".to_string(),
                 generation: 1,
             },
             SandboxOperationClass::Execute,

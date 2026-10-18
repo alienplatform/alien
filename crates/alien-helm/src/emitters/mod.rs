@@ -13,6 +13,7 @@ pub mod compute_cluster;
 pub mod kv;
 pub mod queue;
 pub mod sandbox;
+pub(crate) mod sandbox_cni;
 pub mod service_account;
 pub mod storage;
 pub mod vault;

@@ -7,8 +7,8 @@
 use std::collections::BTreeMap;
 
 use k8s_openapi::api::core::v1::{
-    Capabilities, Container, EnvVar, Pod, PodSecurityContext, PodSpec, ResourceRequirements,
-    SecurityContext,
+    Capabilities, Container, EnvVar, EnvVarSource, ObjectFieldSelector, Pod, PodSecurityContext,
+    PodSpec, ResourceRequirements, SecurityContext,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
@@ -207,6 +207,24 @@ pub fn capability_environment(public_key_base64: &str) -> Vec<EnvVar> {
         EnvVar {
             name: "ALIEN_SANDBOX_PUBLIC_KEY".to_string(),
             value: Some(public_key_base64.to_string()),
+            value_from: None,
+        },
+        // A warm pod starts before the broker assigns its logical session label. Its immutable
+        // UID is available at startup and cannot be reused by a replacement at the same IP.
+        EnvVar {
+            name: "ALIEN_SANDBOX_SESSION_ID".to_string(),
+            value: None,
+            value_from: Some(EnvVarSource {
+                field_ref: Some(ObjectFieldSelector {
+                    api_version: Some("v1".to_string()),
+                    field_path: "metadata.uid".to_string(),
+                }),
+                ..Default::default()
+            }),
+        },
+        EnvVar {
+            name: "ALIEN_SANDBOX_GENERATION".to_string(),
+            value: Some("1".to_string()),
             value_from: None,
         },
     ]

@@ -20,6 +20,37 @@ pub fn block_command_ipv6() {
     BLOCK_IPV6.store(true, Ordering::Relaxed);
 }
 
+/// Sets the inherited hard process/thread ceiling for the command uid.
+///
+/// Linux accounts RLIMIT_NPROC across all processes with a real uid, including detached
+/// descendants and concurrent jobs. The root supervisor is exempt; commands drop uid and
+/// every capability before exec, so they cannot raise the hard limit or bypass it.
+#[cfg(target_os = "linux")]
+pub fn limit_processes(limit: u32) -> io::Result<()> {
+    if limit == 0 {
+        return Err(io::Error::from_raw_os_error(libc::EINVAL));
+    }
+    let mut current = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: both pointers refer to initialized rlimit structs for this process.
+    unsafe {
+        if libc::getrlimit(libc::RLIMIT_NPROC, &mut current) != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let requested = libc::rlim_t::from(limit);
+        let bounded = libc::rlimit {
+            rlim_cur: current.rlim_cur.min(requested),
+            rlim_max: current.rlim_max.min(requested),
+        };
+        if libc::setrlimit(libc::RLIMIT_NPROC, &bounded) != 0 {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
 /// Drops to `identity` and makes the drop irreversible.
 ///
 /// Runs in the forked child before `exec`, so everything here is async-signal-safe.

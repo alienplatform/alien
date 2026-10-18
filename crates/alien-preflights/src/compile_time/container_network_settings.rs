@@ -71,7 +71,10 @@ impl CompileTimeCheck for ContainerNetworkSettingsCheck {
                 errors.push(format!("Container '{id}': {error}"));
             }
             if container.egress.is_some()
-                && !matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure)
+                && !matches!(
+                    platform,
+                    Platform::Aws | Platform::Gcp | Platform::Azure | Platform::Kubernetes
+                )
             {
                 errors.push(format!("CONTAINER_NETWORK_SETTINGS_UNSUPPORTED: {platform} does not yet enforce Container '{id}' egress internet"));
             }
@@ -386,6 +389,27 @@ mod tests {
                 );
             }
         }
+        stack
+            .resources
+            .get_mut("api")
+            .unwrap()
+            .config
+            .downcast_mut::<Container>()
+            .unwrap()
+            .security = Some(alien_core::ContainerSecurity {
+            profile: alien_core::ContainerSecurityProfile::Restricted,
+            run_as_user: 65532,
+            run_as_group: 65532,
+            read_only_root_filesystem: true,
+        });
+        assert!(
+            check
+                .check(&stack, Platform::Kubernetes)
+                .await
+                .unwrap()
+                .success
+        );
+        assert!(!check.check(&stack, Platform::Local).await.unwrap().success);
         stack
             .resources
             .get_mut("api")

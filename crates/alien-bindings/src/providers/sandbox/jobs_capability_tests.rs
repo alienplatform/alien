@@ -35,44 +35,6 @@ fn command() -> RunCommandRequest {
     }
 }
 
-/// Every job method refuses with the code a caller branches on, and nothing was sent anywhere.
-async fn refuses_every_job_method(sandbox: &dyn Sandbox) {
-    assert!(
-        !sandbox.capabilities().jobs,
-        "this helper is for the backends that declare no jobs"
-    );
-
-    for (what, error) in [
-        (
-            "start_job",
-            sandbox
-                .start_job("s1", command())
-                .await
-                .expect_err("a backend with no jobs cannot start one"),
-        ),
-        (
-            "poll_job",
-            sandbox
-                .poll_job("s1", "j1", None)
-                .await
-                .expect_err("nor poll one"),
-        ),
-        (
-            "cancel_job",
-            sandbox
-                .cancel_job("s1", "j1")
-                .await
-                .expect_err("nor cancel one"),
-        ),
-    ] {
-        assert_eq!(
-            error.code, "OPERATION_NOT_SUPPORTED",
-            "{what} must refuse as unsupported so a caller reading `jobs: false` and a caller \
-             that called anyway are told the same thing: {error}"
-        );
-    }
-}
-
 async fn serve(router: Router) -> String {
     let listener = tokio::net::TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().unwrap())
         .await
@@ -225,12 +187,29 @@ async fn gcp_declares_jobs_and_starts_one_through_its_proxy() {
     assert_eq!(started.job_id, "j1");
 }
 
-/// Azure declares no jobs, and the client double proves it: a call on it would panic, so a
-/// refusal that leaked through to the data plane fails this test rather than passing quietly.
+/// Azure reads the sandbox policy before starting a native shell job.
 #[tokio::test]
-async fn azure_declares_no_jobs_and_sends_nothing() {
+async fn azure_declares_jobs_and_reaches_the_backend() {
+    let mut client = alien_azure_clients::azure::sandbox_data_plane::MockSandboxDataPlaneApi::new();
+    client.expect_get_sandbox().times(1).returning(|_, id| {
+        Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
+            id: id.to_string(),
+            state: Some("Running".to_string()),
+            egress_policy: None,
+        })
+    });
+    client
+        .expect_execute_shell_command()
+        .times(1)
+        .returning(|_, _, _, _| {
+            Ok(alien_azure_clients::azure::sandbox_data_plane::ExecResult {
+                exit_code: Some(0),
+                stdout: String::new(),
+                stderr: String::new(),
+            })
+        });
     let sandbox = AzureSandbox::new(
-        Arc::new(alien_azure_clients::azure::sandbox_data_plane::MockSandboxDataPlaneApi::new()),
+        Arc::new(client),
         "group".to_string(),
         "ubuntu".to_string(),
         SandboxEgress::Internet,
@@ -239,22 +218,24 @@ async fn azure_declares_no_jobs_and_sends_nothing() {
         "2Gi".to_string(),
         None,
     );
-
-    refuses_every_job_method(&sandbox).await;
+    assert!(sandbox.capabilities().jobs);
+    let error = sandbox
+        .start_job("s1", command())
+        .await
+        .expect_err("fixture supplies no start receipt");
+    assert_eq!(error.code, "SANDBOX_OUTCOME_UNKNOWN");
 }
 
-/// Local declares no jobs, and its manager is a live route here rather than a dead address: a
-/// refusal that turned into a request would show up as a hit, and a dead address would not tell
-/// the two apart because an unreachable local route reports the same code as a refusal.
+/// Local starts jobs through the authenticated manager route.
 #[tokio::test]
-async fn local_declares_no_jobs_and_asks_its_manager_for_nothing() {
+async fn local_declares_jobs_and_reaches_its_manager() {
     let hits = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&hits);
     let manager = serve(Router::new().fallback(move || {
         let counted = Arc::clone(&counted);
         async move {
             counted.fetch_add(1, Ordering::SeqCst);
-            Json(json!({}))
+            Json(json!({ "jobId": "j1" }))
         }
     }))
     .await;
@@ -275,11 +256,14 @@ async fn local_declares_no_jobs_and_asks_its_manager_for_nothing() {
     .await
     .expect("the binding is complete");
 
-    refuses_every_job_method(&sandbox).await;
+    assert!(sandbox.capabilities().jobs);
     assert_eq!(
-        hits.load(Ordering::SeqCst),
-        0,
-        "a refusal must cost no request: the manager serves exec, files, preview and delete, and \
-         a job route would 404 into the same code the refusal already uses"
+        sandbox
+            .start_job("s1", command())
+            .await
+            .expect("start")
+            .job_id,
+        "j1"
     );
+    assert_eq!(hits.load(Ordering::SeqCst), 1);
 }
