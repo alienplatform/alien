@@ -572,6 +572,21 @@ pub trait DeploymentStore: Send + Sync {
         .into_generic())
     }
 
+    /// Atomically patch endpoint access and queue reconciliation for an idle,
+    /// unlocked deployment, preserving all other settings and release choices.
+    /// Callers must authorize updates. False means no write occurred.
+    async fn set_endpoint_access(
+        &self,
+        _caller: &crate::auth::Subject,
+        _id: &str,
+        _access: alien_core::EndpointAccess,
+    ) -> Result<bool, AlienError> {
+        Err(
+            crate::error::ErrorData::bad_request("This manager cannot update endpoint access")
+                .into_generic(),
+        )
+    }
+
     async fn get_deployment_by_name(
         &self,
         caller: &crate::auth::Subject,

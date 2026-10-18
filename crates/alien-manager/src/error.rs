@@ -56,6 +56,16 @@ pub enum ErrorData {
     )]
     QuotaOverridesNotSaved { deployment_id: String },
 
+    /// Endpoint access cannot change while execution is active or locked.
+    #[error(
+        code = "ENDPOINT_ACCESS_NOT_SAVED",
+        message = "Endpoint access for deployment '{deployment_id}' was not saved; wait until it is idle and unlocked, then try again",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    EndpointAccessNotSaved { deployment_id: String },
+
     /// Deployment group not found
     #[error(
         code = "DEPLOYMENT_GROUP_NOT_FOUND",

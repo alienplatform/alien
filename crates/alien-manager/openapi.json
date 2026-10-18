@@ -999,6 +999,60 @@
         }
       }
     },
+    "/v1/deployments/{id}/endpoint-access": {
+      "patch": {
+        "tags": [
+          "deployments"
+        ],
+        "operationId": "set_endpoint_access",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deployment ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetEndpointAccessRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Endpoint access saved and reconciliation queued"
+          },
+          "400": {
+            "description": "Invalid endpoint access or unsupported store"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not found"
+          },
+          "409": {
+            "description": "Deployment is active or locked"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/v1/deployments/{id}/info": {
       "get": {
         "tags": [
@@ -8626,6 +8680,19 @@
               "type": "string"
             }
           },
+          "privateCustomDomains": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Private custom domain configuration per resource ID.\n\nPublic custom domains remain unchanged when private access is added.\nA certificate reference may be reused when it covers both hostnames.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/CustomDomainConfig"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
           "publicEndpointTarget": {
             "oneOf": [
               {
@@ -8759,10 +8826,11 @@
       },
       "EndpointAccess": {
         "type": "string",
-        "description": "Reachability of the deployment's public endpoints, fixed at setup.",
+        "description": "Network paths through which the deployment's workload endpoints are reachable.",
         "enum": [
           "internet",
-          "private"
+          "private",
+          "both"
         ]
       },
       "Envelope": {
@@ -18851,6 +18919,19 @@
             "description": "Release to pin to; absent unpins and returns to the channel's release."
           }
         }
+      },
+      "SetEndpointAccessRequest": {
+        "type": "object",
+        "description": "Set the desired endpoint access and schedule deployment reconciliation.",
+        "required": [
+          "endpointAccess"
+        ],
+        "properties": {
+          "endpointAccess": {
+            "$ref": "#/components/schemas/EndpointAccess"
+          }
+        },
+        "additionalProperties": false
       },
       "SetQuotaWarningOverridesRequest": {
         "type": "object",
