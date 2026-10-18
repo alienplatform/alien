@@ -4,11 +4,6 @@ use alien_bindings::traits::Container;
 use napi_derive::napi;
 use std::sync::Arc;
 
-#[napi(object)]
-pub struct InternalEndpoint {
-    pub url: String,
-}
-
 /// Read-only service discovery for a linked container.
 #[napi]
 pub struct ContainerHandle {
@@ -23,15 +18,13 @@ impl ContainerHandle {
 
 #[napi]
 impl ContainerHandle {
-    /// Return the named endpoints authorized for this workload.
+    /// Return internal URLs keyed by port for the linked container.
     #[napi]
-    pub async fn get_internal_endpoints(
-        &self,
-    ) -> std::collections::HashMap<String, InternalEndpoint> {
+    pub async fn get_internal_urls(&self) -> std::collections::HashMap<String, String> {
         self.inner
-            .get_internal_endpoints()
+            .get_internal_urls()
             .into_iter()
-            .map(|(name, endpoint)| (name, InternalEndpoint { url: endpoint.url }))
+            .map(|(port, url)| (port.to_string(), url))
             .collect()
     }
 

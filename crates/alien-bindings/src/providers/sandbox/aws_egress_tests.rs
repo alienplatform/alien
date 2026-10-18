@@ -170,6 +170,7 @@ async fn exercise(delivery_status: StatusCode, delivery_body: &'static str) {
         None,
         Some(3600),
     )
+    .with_egress(Some(SandboxEgress::Internet))
     .with_egress_manager(Arc::new(harness.reopen().await));
     provider.agent = reqwest::Client::builder()
         .add_root_certificate(

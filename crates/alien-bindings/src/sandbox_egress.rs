@@ -41,32 +41,34 @@ impl fmt::Debug for SandboxEgressManager {
     }
 }
 impl SandboxEgressManager {
-    /// Resolve the signing vault with the workload's management identity.
+    /// Resolve the gateway's proxy and admin ports from the linked Container.
     pub fn new(
         config: SandboxEgressGateway,
         vault: Arc<dyn Vault>,
-        container_url: &str,
+        proxy_url: &str,
+        admin_url: &str,
     ) -> Result<Self> {
-        let mut url = reqwest::Url::parse(container_url)
-            .map_err(|_| unavailable("invalid gateway Container internal URL"))?;
-        if !matches!(url.scheme(), "http" | "https")
-            || url.host_str().is_none()
-            || !url.username().is_empty()
-            || url.password().is_some()
-            || url.query().is_some()
-            || url.fragment().is_some()
-            || !matches!(url.path(), "" | "/")
-        {
-            return Err(unavailable(
-                "gateway Container internal URL must be an HTTP(S) origin without credentials",
-            ));
+        fn origin(value: &str) -> Result<reqwest::Url> {
+            let url = reqwest::Url::parse(value)
+                .map_err(|_| unavailable("invalid gateway Container internal URL"))?;
+            if !matches!(url.scheme(), "http" | "https")
+                || url.host_str().is_none()
+                || !url.username().is_empty()
+                || url.password().is_some()
+                || url.query().is_some()
+                || url.fragment().is_some()
+                || !matches!(url.path(), "" | "/")
+            {
+                return Err(unavailable(
+                    "gateway Container internal URL must be an HTTP(S) origin without credentials",
+                ));
+            }
+            Ok(url)
         }
-        url.set_port(Some(3128))
-            .map_err(|_| unavailable("invalid gateway Container port"))?;
-        let gateway = url[url::Position::BeforeHost..url::Position::AfterPort].to_string();
-        url.set_port(Some(3129))
-            .map_err(|_| unavailable("invalid gateway admin port"))?;
-        Self::with_endpoints(config, vault, gateway, url.to_string())
+        let proxy = origin(proxy_url)?;
+        let admin = origin(admin_url)?;
+        let gateway = proxy[url::Position::BeforeHost..url::Position::AfterPort].to_string();
+        Self::with_endpoints(config, vault, gateway, admin.to_string())
     }
 
     fn with_endpoints(
