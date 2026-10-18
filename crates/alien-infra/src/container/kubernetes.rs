@@ -32,8 +32,8 @@ use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec, StatefulSet, Statef
 use k8s_openapi::api::core::v1::{
     Capabilities, Container as K8sContainer, ContainerPort, HTTPGetAction, LocalObjectReference,
     PersistentVolumeClaim, PersistentVolumeClaimSpec, PodSecurityContext, PodSpec, PodTemplateSpec,
-    Probe, ResourceRequirements, SeccompProfile, SecretVolumeSource, SecurityContext, Service,
-    ServicePort, ServiceSpec, Volume, VolumeMount,
+    Probe, ResourceRequirements, SeccompProfile, SecretVolumeSource, SecurityContext, Volume,
+    VolumeMount,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta};
@@ -159,12 +159,8 @@ fn statefulset_rollout_complete(
         && status.current_revision == status.update_revision
 }
 
-fn kubernetes_port_name(port: &alien_core::ContainerPort) -> String {
-    if false {
-        "http".to_string()
-    } else {
-        format!("tcp-{}", port.port)
-    }
+pub(super) fn kubernetes_port_name(port: &alien_core::ContainerPort) -> String {
+    format!("tcp-{}", port.port)
 }
 
 #[controller]
@@ -177,6 +173,9 @@ pub struct KubernetesContainerController {
     pub(crate) namespace: Option<String>,
     /// The service name for the container (for binding construction)
     pub(crate) service_name: Option<String>,
+    /// Headless discovery for the ready replicas of an internet-only Container.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) peer_service_name: Option<String>,
     /// The first declared service port for binding construction.
     pub(crate) service_port: Option<u16>,
     #[serde(default)]
@@ -1487,6 +1486,11 @@ impl KubernetesContainerController {
             &mut self.public_endpoint,
         )
         .await?;
+        if let Some(peer) = self.peer_service_name.clone() {
+            self.delete_internal_service(namespace, &peer, &config.id, ctx, false)
+                .await?;
+            self.peer_service_name = None;
+        }
         if let Some(service_name) = &self.service_name {
             self.delete_internal_service(
                 namespace,
@@ -1942,6 +1946,7 @@ mod output_tests {
             service_ports: vec![3000, 3129],
             service_port: Some(3000),
             network_policy_name: None,
+            peer_service_name: None,
             container_id: Some("container".to_string()),
             public_endpoint,
             env_secret: EnvSecretRotationTracker::default(),
@@ -1989,6 +1994,7 @@ mod output_tests {
             service_ports: Vec::new(),
             service_port: Some(3000),
             network_policy_name: None,
+            peer_service_name: None,
             container_id: Some("container".to_string()),
             public_endpoint,
             env_secret: EnvSecretRotationTracker::default(),
@@ -2052,6 +2058,7 @@ impl KubernetesContainerController {
             service_ports: Vec::new(),
             service_port: Some(80),
             network_policy_name: None,
+            peer_service_name: None,
             container_id: Some("test-container".to_string()),
             public_endpoint: KubernetesPublicEndpointState::default(),
             env_secret: EnvSecretRotationTracker::default(),
@@ -2079,194 +2086,6 @@ impl KubernetesContainerController {
             ctx,
         )
         .await
-    }
-
-    async fn reconcile_internal_service(
-        &self,
-        config: &Container,
-        service_name: &str,
-        namespace: &str,
-        ctx: &ResourceControllerContext<'_>,
-    ) -> Result<()> {
-        let kubernetes_config = ctx.get_kubernetes_config()?;
-        let service_client = ctx
-            .service_provider
-            .get_kubernetes_service_client(kubernetes_config)
-            .await?;
-
-        let Some(mut service) = self.build_internal_service(config, service_name, namespace, ctx)
-        else {
-            self.delete_internal_service(namespace, service_name, &config.id, ctx, true)
-                .await?;
-            return Ok(());
-        };
-
-        match service_client.create_service(namespace, &service).await {
-            Ok(_) => Ok(()),
-            Err(e) if is_remote_resource_conflict(&e) => {
-                let existing = service_client
-                    .get_service(namespace, service_name)
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to get internal Service '{}' before update",
-                            service_name
-                        ),
-                        resource_id: Some(config.id.clone()),
-                    })?;
-                let desired_labels = service
-                    .metadata
-                    .labels
-                    .as_ref()
-                    .cloned()
-                    .unwrap_or_default();
-                if !crate::core::kubernetes_labels_match_identity(
-                    existing.metadata.labels.as_ref(),
-                    &desired_labels,
-                    &["managed-by", "component", "app"],
-                ) || !crate::core::kubernetes_labels_have_compatible_scope(
-                    existing.metadata.labels.as_ref(),
-                    &desired_labels,
-                ) {
-                    return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
-                        message: format!(
-                            "Refusing to mutate Kubernetes Service '{service_name}' because it is not owned by Container '{}' in this deployment",
-                            config.id
-                        ),
-                        resource_id: Some(config.id.clone()),
-                    }));
-                }
-                service.metadata.resource_version = existing.metadata.resource_version;
-                service_client
-                    .update_service(namespace, service_name, &service)
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!("Failed to update internal Service '{}'", service_name),
-                        resource_id: Some(config.id.clone()),
-                    })?;
-                Ok(())
-            }
-            Err(e) => Err(e.context(ErrorData::CloudPlatformError {
-                message: format!("Failed to create internal Service '{}'", service_name),
-                resource_id: Some(config.id.clone()),
-            })),
-        }
-    }
-
-    async fn delete_internal_service(
-        &self,
-        namespace: &str,
-        service_name: &str,
-        resource_id: &str,
-        ctx: &ResourceControllerContext<'_>,
-        legacy_owner_proven: bool,
-    ) -> Result<()> {
-        let kubernetes_config = ctx.get_kubernetes_config()?;
-        let service_client = ctx
-            .service_provider
-            .get_kubernetes_service_client(kubernetes_config)
-            .await?;
-
-        let existing = match service_client.get_service(namespace, service_name).await {
-            Ok(existing) => existing,
-            Err(e)
-                if matches!(
-                    e.error,
-                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                ) =>
-            {
-                return Ok(());
-            }
-            Err(e) => {
-                return Err(e.context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to get internal Service '{service_name}' before deletion"
-                    ),
-                    resource_id: Some(resource_id.to_string()),
-                }));
-            }
-        };
-        let mut desired_labels = self.build_labels(service_name);
-        desired_labels.extend(kubernetes_cleanup_resource_labels(ctx, resource_id));
-        if !crate::core::kubernetes_labels_match_identity(
-            existing.metadata.labels.as_ref(),
-            &desired_labels,
-            &["managed-by", "component", "app"],
-        ) || !(crate::core::kubernetes_labels_match_current_scope(
-            existing.metadata.labels.as_ref(),
-            &desired_labels,
-        ) || (legacy_owner_proven
-            && crate::core::kubernetes_labels_have_compatible_scope(
-                existing.metadata.labels.as_ref(),
-                &desired_labels,
-            )))
-        {
-            debug!(
-                service_name,
-                resource_id,
-                "Leaving same-name Kubernetes Service untouched because it is not owned by this Container deployment"
-            );
-            return Ok(());
-        }
-
-        match service_client.delete_service(namespace, service_name).await {
-            Ok(()) => Ok(()),
-            Err(e)
-                if matches!(
-                    e.error,
-                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                ) =>
-            {
-                Ok(())
-            }
-            Err(e) => Err(e.context(ErrorData::CloudPlatformError {
-                message: format!("Failed to delete internal Service '{}'", service_name),
-                resource_id: Some(service_name.to_string()),
-            })),
-        }
-    }
-
-    fn build_internal_service(
-        &self,
-        config: &Container,
-        service_name: &str,
-        namespace: &str,
-        ctx: &ResourceControllerContext<'_>,
-    ) -> Option<Service> {
-        if config.ports.is_empty() {
-            return None;
-        }
-
-        let selector_labels = self.build_labels(service_name);
-        let mut labels = selector_labels.clone();
-        labels.extend(kubernetes_cleanup_resource_labels(ctx, &config.id));
-        Some(Service {
-            metadata: ObjectMeta {
-                name: Some(service_name.to_string()),
-                namespace: Some(namespace.to_string()),
-                labels: Some(labels.clone()),
-                ..Default::default()
-            },
-            spec: Some(ServiceSpec {
-                type_: Some("ClusterIP".to_string()),
-                selector: Some(selector_labels),
-                ports: Some(
-                    config
-                        .ports
-                        .iter()
-                        .map(|port| ServicePort {
-                            name: Some(kubernetes_port_name(port)),
-                            port: port.port as i32,
-                            protocol: Some("TCP".to_string()),
-                            target_port: Some(IntOrString::Int(port.port as i32)),
-                            ..Default::default()
-                        })
-                        .collect(),
-                ),
-                ..Default::default()
-            }),
-            ..Default::default()
-        })
     }
 
     /// Builds a Kubernetes Deployment for stateless containers.
@@ -2674,7 +2493,7 @@ impl KubernetesContainerController {
     }
 
     /// Builds standard labels for Kubernetes resources.
-    fn build_labels(&self, container_name: &str) -> BTreeMap<String, String> {
+    pub(super) fn build_labels(&self, container_name: &str) -> BTreeMap<String, String> {
         let mut labels = BTreeMap::new();
         labels.insert("app".to_string(), container_name.to_string());
         labels.insert("managed-by".to_string(), "runtime".to_string());
@@ -2999,6 +2818,7 @@ mod tests {
             service_ports: Vec::new(),
             service_port: Some(3000),
             network_policy_name: None,
+            peer_service_name: None,
             container_id: Some("api".to_string()),
             public_endpoint: KubernetesPublicEndpointState::default(),
             env_secret: EnvSecretRotationTracker::default(),

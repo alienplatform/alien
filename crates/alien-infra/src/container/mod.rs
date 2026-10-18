@@ -15,3 +15,6 @@ mod local_utils;
 
 #[cfg(feature = "kubernetes")]
 mod kubernetes_network;
+
+#[cfg(feature = "kubernetes")]
+mod kubernetes_service;

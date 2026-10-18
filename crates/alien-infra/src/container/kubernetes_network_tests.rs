@@ -231,4 +231,157 @@ async fn live_policy_client_round_trip() {
         .reconcile_network_policy(&replicated, "replicated", "alien-network-test", &ctx)
         .await
         .unwrap();
+
+    // Exercise real Service API immutability, updates, retirement and ownership
+    // before leaving the headless endpoint available for the live DNS probe.
+    let services = ctx
+        .service_provider
+        .get_kubernetes_service_client(ctx.get_kubernetes_config().unwrap())
+        .await
+        .unwrap();
+    replica_controller
+        .reconcile_internal_service(&replicated, "replicated", "alien-network-test", &ctx)
+        .await
+        .unwrap();
+    let original_client = services
+        .get_service("alien-network-test", "replicated")
+        .await
+        .unwrap();
+    let original_peer = services
+        .get_service("alien-network-test", "replicated-peers")
+        .await
+        .unwrap();
+    assert_ne!(
+        original_client.spec.as_ref().unwrap().cluster_ip.as_deref(),
+        Some("None")
+    );
+    assert_eq!(
+        original_peer.spec.as_ref().unwrap().cluster_ip.as_deref(),
+        Some("None")
+    );
+    let mut changed = replicated.clone();
+    changed.ports[0].port = 3130;
+    replica_controller
+        .reconcile_internal_service(&changed, "replicated", "alien-network-test", &ctx)
+        .await
+        .unwrap();
+    let updated_client = services
+        .get_service("alien-network-test", "replicated")
+        .await
+        .unwrap();
+    let updated_peer = services
+        .get_service("alien-network-test", "replicated-peers")
+        .await
+        .unwrap();
+    assert_eq!(original_client.metadata.uid, updated_client.metadata.uid);
+    assert_eq!(
+        original_client.spec.as_ref().unwrap().cluster_ip,
+        updated_client.spec.as_ref().unwrap().cluster_ip
+    );
+    assert_eq!(original_peer.metadata.uid, updated_peer.metadata.uid);
+    assert_eq!(
+        updated_peer.spec.as_ref().unwrap().ports.as_ref().unwrap()[0].port,
+        3130
+    );
+
+    changed.egress = None;
+    replica_controller
+        .reconcile_internal_service(&changed, "replicated", "alien-network-test", &ctx)
+        .await
+        .unwrap();
+    let removed = services
+        .get_service("alien-network-test", "replicated-peers")
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        removed.error,
+        Some(ClientError::RemoteResourceNotFound { .. })
+    ));
+    assert!(replica_controller.peer_service_name.is_none());
+    assert_eq!(
+        services
+            .get_service("alien-network-test", "replicated")
+            .await
+            .unwrap()
+            .metadata
+            .uid,
+        original_client.metadata.uid
+    );
+
+    replica_controller
+        .reconcile_internal_service(&replicated, "replicated", "alien-network-test", &ctx)
+        .await
+        .unwrap();
+    let mut foreign = services
+        .get_service("alien-network-test", "replicated-peers")
+        .await
+        .unwrap();
+    foreign
+        .metadata
+        .labels
+        .as_mut()
+        .unwrap()
+        .insert("alien.dev/deployment".into(), "foreign".into());
+    services
+        .update_service("alien-network-test", "replicated-peers", &foreign)
+        .await
+        .unwrap();
+    let foreign = services
+        .get_service("alien-network-test", "replicated-peers")
+        .await
+        .unwrap();
+    let error = replica_controller
+        .reconcile_internal_service(&replicated, "replicated", "alien-network-test", &ctx)
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "RESOURCE_CONFIG_INVALID");
+    replica_controller
+        .delete_internal_service(
+            "alien-network-test",
+            "replicated-peers",
+            &replicated.id,
+            &ctx,
+            false,
+        )
+        .await
+        .unwrap();
+    let mut preserved = services
+        .get_service("alien-network-test", "replicated-peers")
+        .await
+        .unwrap();
+    assert_eq!(
+        preserved.metadata.resource_version,
+        foreign.metadata.resource_version
+    );
+    preserved
+        .metadata
+        .labels
+        .as_mut()
+        .unwrap()
+        .insert("alien.dev/deployment".into(), "test".into());
+    services
+        .update_service("alien-network-test", "replicated-peers", &preserved)
+        .await
+        .unwrap();
+
+    let mut no_ports = replicated.clone();
+    no_ports.ports.clear();
+    replica_controller
+        .reconcile_internal_service(&no_ports, "replicated", "alien-network-test", &ctx)
+        .await
+        .unwrap();
+    for name in ["replicated", "replicated-peers"] {
+        let error = services
+            .get_service("alien-network-test", name)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error.error,
+            Some(ClientError::RemoteResourceNotFound { .. })
+        ));
+    }
+    replica_controller
+        .reconcile_internal_service(&replicated, "replicated", "alien-network-test", &ctx)
+        .await
+        .unwrap();
 }
