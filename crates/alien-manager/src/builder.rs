@@ -621,6 +621,7 @@ impl AlienManagerBuilder {
 
             // Build registry routing table from configured providers.
             let mut routes = Vec::new();
+            let mut sandbox_prefixes = Vec::new();
 
             // Add target platform registries (ECR/GAR/ACR).
             for (platform, provider) in &target_bindings {
@@ -633,6 +634,15 @@ impl AlienManagerBuilder {
                             prefix = %prefix,
                             "Registered artifact registry route"
                         );
+                        if let Some(sandbox_prefix) = ar.sandbox_repository_prefix() {
+                            sandbox_prefixes.push(sandbox_prefix.clone());
+                            routes.push(crate::routes::registry_proxy::RegistryRoute {
+                                prefix: sandbox_prefix,
+                                platform: *platform,
+                                provider: provider.clone(),
+                                binding_name: binding_name.to_string(),
+                            });
+                        }
                         routes.push(crate::routes::registry_proxy::RegistryRoute {
                             prefix,
                             platform: *platform,
@@ -681,7 +691,11 @@ impl AlienManagerBuilder {
             }
 
             let routing_table = Arc::new(
-                crate::routes::registry_proxy::RegistryRoutingTable::new(routes).map_err(|e| {
+                crate::routes::registry_proxy::RegistryRoutingTable::with_sandbox_routes(
+                    routes,
+                    sandbox_prefixes,
+                )
+                .map_err(|e| {
                     AlienError::new(ErrorData::ServerInitFailed {
                         reason: format!("Artifact registry configuration error: {}", e),
                     })

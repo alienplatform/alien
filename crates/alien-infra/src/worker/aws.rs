@@ -1,3 +1,5 @@
+mod linked_containers;
+
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, time::Duration};
 use tracing::{debug, info, warn};
@@ -750,7 +752,7 @@ impl AwsWorkerController {
         };
 
         // Get VPC configuration if a Network resource exists
-        let vpc_config = self.get_vpc_config(ctx)?;
+        let vpc_config = linked_containers::vpc_config(ctx, self.get_vpc_config(ctx)?).await?;
         if vpc_config.is_some() {
             info!(name=%aws_worker_name, "Configuring Lambda worker to run inside VPC");
         }
@@ -2255,7 +2257,7 @@ impl AwsWorkerController {
             .to_string();
 
         // Get VPC configuration if a Network resource exists
-        let vpc_config = self.get_vpc_config(ctx)?;
+        let vpc_config = linked_containers::vpc_config(ctx, self.get_vpc_config(ctx)?).await?;
 
         let request = UpdateFunctionConfigurationRequest::builder()
             .role(role_arn)
@@ -2900,7 +2902,7 @@ impl AwsWorkerController {
         };
 
         // Get VPC configuration if a Network resource exists
-        let vpc_config = self.get_vpc_config(ctx)?;
+        let vpc_config = linked_containers::vpc_config(ctx, self.get_vpc_config(ctx)?).await?;
 
         let request = UpdateFunctionConfigurationRequest::builder()
             .role(role_arn)

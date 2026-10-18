@@ -82,14 +82,26 @@ pub struct RegistryRoute {
 pub struct RegistryRoutingTable {
     /// Routes sorted by prefix length descending (longest prefix match wins).
     routes: Vec<RegistryRoute>,
+    sandbox_prefixes: Vec<String>,
 }
 
 impl RegistryRoutingTable {
-    pub fn new(mut routes: Vec<RegistryRoute>) -> Result<Self, String> {
+    pub fn new(routes: Vec<RegistryRoute>) -> Result<Self, String> {
+        Self::with_sandbox_routes(routes, Vec::new())
+    }
+
+    /// Register additional sandbox namespaces without changing the default push destination.
+    pub fn with_sandbox_routes(
+        mut routes: Vec<RegistryRoute>,
+        sandbox_prefixes: Vec<String>,
+    ) -> Result<Self, String> {
         Self::validate_unique_prefixes(&routes)?;
         // Sort by prefix length descending for longest-prefix match.
         routes.sort_by(|a, b| b.prefix.len().cmp(&a.prefix.len()));
-        Ok(Self { routes })
+        Ok(Self {
+            routes,
+            sandbox_prefixes,
+        })
     }
 
     /// Find the registry route that matches the given repo name.
@@ -118,6 +130,15 @@ impl RegistryRoutingTable {
         project_id_after_prefix(repo_name, route.prefix.as_str())
     }
 
+    pub fn sandbox_prefix_for_platform(&self, platform: Platform) -> Option<&str> {
+        self.routes
+            .iter()
+            .find(|route| {
+                route.platform == platform && self.sandbox_prefixes.contains(&route.prefix)
+            })
+            .map(|route| route.prefix.as_str())
+    }
+
     /// Get the repo prefix for a given platform.
     pub fn prefix_for_platform(&self, platform: Platform) -> Option<&str> {
         self.route_for_platform(platform).map(|r| r.prefix.as_str())
@@ -131,7 +152,11 @@ impl RegistryRoutingTable {
     /// route registered as `Platform::Local`) and nodes pull them through this
     /// manager with the deployment's token.
     pub fn route_for_platform(&self, platform: Platform) -> Option<&RegistryRoute> {
-        if let Some(route) = self.routes.iter().find(|r| r.platform == platform) {
+        if let Some(route) = self
+            .routes
+            .iter()
+            .find(|r| r.platform == platform && !self.sandbox_prefixes.contains(&r.prefix))
+        {
             return Some(route);
         }
         match platform {
@@ -150,7 +175,7 @@ impl RegistryRoutingTable {
         let mut platforms: Vec<Platform> = self
             .routes
             .iter()
-            .filter(|r| r.platform != Platform::Local)
+            .filter(|r| r.platform != Platform::Local && !self.sandbox_prefixes.contains(&r.prefix))
             .map(|r| r.platform)
             .collect();
         platforms.dedup();
@@ -2967,5 +2992,36 @@ mod tests {
             project_id_after_prefix("cloud-project/artifacts/prj_123", "cloud-project/artifacts",),
             Some("prj_123")
         );
+    }
+
+    #[test]
+    fn sandbox_route_keeps_the_normal_destination_and_project_boundary() {
+        let normal = registry_route("acme-artifacts", Platform::Aws, "artifacts");
+        let cache = registry_route("sandbox-acme/acme-artifacts", Platform::Aws, "artifacts");
+        let table = RegistryRoutingTable::with_sandbox_routes(
+            vec![normal, cache],
+            vec!["sandbox-acme/acme-artifacts".to_string()],
+        )
+        .unwrap();
+        assert_eq!(
+            table.prefix_for_platform(Platform::Aws),
+            Some("acme-artifacts")
+        );
+        assert_eq!(
+            table.sandbox_prefix_for_platform(Platform::Aws),
+            Some("sandbox-acme/acme-artifacts")
+        );
+        for project in ["prj_a", "prj_b"] {
+            let path = format!("sandbox-acme/acme-artifacts-{project}");
+            assert_eq!(table.project_id_for_repo(&path), Some(project));
+            assert_eq!(table.resolve(&path).unwrap().binding_name, "artifacts");
+        }
+        for path in [
+            "sandbox-acme/acme-artifactsx-prj_a",
+            "sandbox-acme/acme-artifacts-",
+            "sandbox-other/acme-artifacts-prj_a",
+        ] {
+            assert_eq!(table.project_id_for_repo(path), None, "{path}");
+        }
     }
 }

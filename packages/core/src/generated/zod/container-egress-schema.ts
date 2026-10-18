@@ -6,8 +6,8 @@
 import * as z from "zod";
 
 /**
- * @description Outbound network restriction enforced outside the container.\nAbsence preserves the runtime\'s existing full-network behavior.
+ * @description Outbound network restriction enforced outside the container.\nInternet access also permits this container\'s own replicas on declared TCP ports,\nown-service discovery, and the credential proxy for its own identity.\nAbsence preserves the runtime\'s existing full-network behavior.
  */
-export const ContainerEgressSchema = z.enum(["internet"]).describe("Outbound network restriction enforced outside the container.\nAbsence preserves the runtime's existing full-network behavior.")
+export const ContainerEgressSchema = z.enum(["internet"]).describe("Outbound network restriction enforced outside the container.\nInternet access also permits this container's own replicas on declared TCP ports,\nown-service discovery, and the credential proxy for its own identity.\nAbsence preserves the runtime's existing full-network behavior.")
 
 export type ContainerEgress = z.infer<typeof ContainerEgressSchema>

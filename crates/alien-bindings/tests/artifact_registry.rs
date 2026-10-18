@@ -156,6 +156,13 @@ struct AwsProviderArtifactRegistryTestContext {
 #[cfg(feature = "aws")]
 impl AsyncTestContext for AwsProviderArtifactRegistryTestContext {
     async fn setup() -> Self {
+        Self::setup_with_configured_roles(true).await
+    }
+}
+
+#[cfg(feature = "aws")]
+impl AwsProviderArtifactRegistryTestContext {
+    async fn setup_with_configured_roles(use_configured_roles: bool) -> Self {
         load_test_env();
         let binding_name = "test-aws-artifact-registry";
 
@@ -168,8 +175,12 @@ impl AsyncTestContext for AwsProviderArtifactRegistryTestContext {
         let account_id = std::env::var("AWS_MANAGEMENT_ACCOUNT_ID")
             .expect("AWS_MANAGEMENT_ACCOUNT_ID must be set in .env.test");
 
-        let pull_role_arn = std::env::var("ALIEN_TEST_AWS_ECR_PULL_ROLE_ARN").ok();
-        let push_role_arn = std::env::var("ALIEN_TEST_AWS_ECR_PUSH_ROLE_ARN").ok();
+        let pull_role_arn = use_configured_roles
+            .then(|| env::var("ALIEN_TEST_AWS_ECR_PULL_ROLE_ARN").ok())
+            .flatten();
+        let push_role_arn = use_configured_roles
+            .then(|| env::var("ALIEN_TEST_AWS_ECR_PUSH_ROLE_ARN").ok())
+            .flatten();
 
         let binding = alien_core::bindings::ArtifactRegistryBinding::ecr(
             "test".to_string(),
@@ -182,6 +193,9 @@ impl AsyncTestContext for AwsProviderArtifactRegistryTestContext {
         env_map.insert("AWS_REGION".to_string(), region);
         env_map.insert("AWS_ACCESS_KEY_ID".to_string(), access_key);
         env_map.insert("AWS_SECRET_ACCESS_KEY".to_string(), secret_key);
+        if let Ok(token) = env::var("AWS_MANAGEMENT_SESSION_TOKEN") {
+            env_map.insert("AWS_SESSION_TOKEN".to_string(), token);
+        }
         env_map.insert("AWS_ACCOUNT_ID".to_string(), account_id);
         env_map.insert("ALIEN_DEPLOYMENT_TYPE".to_string(), "aws".to_string());
         let binding_json = serde_json::to_string(&binding).expect("Failed to serialize binding");
@@ -1500,4 +1514,29 @@ async fn test_get_nonexistent_repository_returns_404(
     );
 
     println!("[{}] ✓ HTTP status code is correctly 404", provider_name);
+}
+
+#[cfg(feature = "aws")]
+#[tokio::test]
+async fn direct_credentials_can_create_read_and_delete_an_ecr_repository() {
+    let context = AwsProviderArtifactRegistryTestContext::setup_with_configured_roles(false).await;
+    let registry = context.get_artifact_registry().await;
+    let created = registry
+        .create_repository(&generate_unique_repo_name("aws-direct"))
+        .await
+        .expect("create the owned repository");
+    let read = registry.get_repository(&created.name).await;
+    // Clean up even when the read regresses, then fail on the original read result.
+    registry
+        .delete_repository(&created.name)
+        .await
+        .expect("delete the owned repository");
+    let read = read.expect("read the created repository without an assumed role");
+    assert_eq!(read.name, created.name);
+    assert_eq!(read.uri, created.uri);
+    let missing = registry
+        .get_repository(&created.name)
+        .await
+        .expect_err("deleted repository must be absent");
+    assert_eq!(missing.http_status_code, Some(404));
 }

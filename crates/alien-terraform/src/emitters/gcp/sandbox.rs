@@ -458,7 +458,7 @@ mod tests {
                     .code(SandboxCode::Image {
                         image: "ubuntu".to_string(),
                     })
-                    .egress(SandboxEgress::Allow)
+                    .egress(SandboxEgress::Internet)
                     .lifecycle(SandboxLifecyclePolicy {
                         max_lifetime_seconds: None,
                         idle_pause_seconds: None,
@@ -534,7 +534,7 @@ mod tests {
         /// set on both sides so the key sets are comparable whole.
         #[test]
         fn emitted_binding_keys_match_the_binding_type() {
-            let emitted = emit_binding(SandboxEgress::Allow, Some(3600))
+            let emitted = emit_binding(SandboxEgress::Internet, Some(3600))
                 .expect("the binding renders")
                 .expect("an Agent Platform sandbox has a binding");
 

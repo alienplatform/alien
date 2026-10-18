@@ -586,6 +586,7 @@ export type ExternalBindingEcr = {
    * or a reference to a Kubernetes Secret
    */
   repositoryPrefix: BindingValueStringUnion;
+  sandboxRepositoryPrefix?: BindingValueStringUnion | null | undefined;
   service: "ecr";
   type: TypeArtifactRegistry1;
 };
@@ -1994,6 +1995,8 @@ export const ExternalBindingEcr$inboundSchema: z.ZodType<
   pullRoleArn: z.nullable(BindingValueStringUnion$inboundSchema).optional(),
   pushRoleArn: z.nullable(BindingValueStringUnion$inboundSchema).optional(),
   repositoryPrefix: BindingValueStringUnion$inboundSchema,
+  sandboxRepositoryPrefix: z.nullable(BindingValueStringUnion$inboundSchema)
+    .optional(),
   service: z.literal("ecr"),
   type: TypeArtifactRegistry1$inboundSchema,
 });
@@ -2002,6 +2005,7 @@ export type ExternalBindingEcr$Outbound = {
   pullRoleArn?: BindingValueStringUnion$Outbound | null | undefined;
   pushRoleArn?: BindingValueStringUnion$Outbound | null | undefined;
   repositoryPrefix: BindingValueStringUnion$Outbound;
+  sandboxRepositoryPrefix?: BindingValueStringUnion$Outbound | null | undefined;
   service: "ecr";
   type: string;
 };
@@ -2014,6 +2018,8 @@ export const ExternalBindingEcr$outboundSchema: z.ZodType<
   pullRoleArn: z.nullable(BindingValueStringUnion$outboundSchema).optional(),
   pushRoleArn: z.nullable(BindingValueStringUnion$outboundSchema).optional(),
   repositoryPrefix: BindingValueStringUnion$outboundSchema,
+  sandboxRepositoryPrefix: z.nullable(BindingValueStringUnion$outboundSchema)
+    .optional(),
   service: z.literal("ecr"),
   type: TypeArtifactRegistry1$outboundSchema,
 });

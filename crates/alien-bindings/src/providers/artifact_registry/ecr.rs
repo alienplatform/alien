@@ -30,6 +30,7 @@ pub struct EcrArtifactRegistry {
     ecr_client: EcrClient,
     binding_name: String,
     repository_prefix: String,
+    sandbox_repository_prefix: Option<String>,
     pull_role_arn: Option<String>,
     push_role_arn: Option<String>,
 }
@@ -38,6 +39,10 @@ pub struct EcrArtifactRegistry {
 ///
 /// Separate from the API call so the document a deployment produces can be asserted directly.
 pub fn cross_account_repository_policy(aws_access: &AwsCrossAccountAccess) -> Value {
+    repository_policy(aws_access, false)
+}
+
+fn repository_policy(aws_access: &AwsCrossAccountAccess, cached: bool) -> Value {
     let mut statements = Vec::new();
 
     // Add cross-account access for target accounts + specific role ARNs.
@@ -56,23 +61,23 @@ pub fn cross_account_repository_policy(aws_access: &AwsCrossAccountAccess) -> Va
             }
         }
         if !principals.is_empty() {
+            let mut actions = vec![
+                "ecr:BatchCheckLayerAvailability",
+                "ecr:GetDownloadUrlForLayer",
+                "ecr:BatchGetImage",
+                "ecr:GetRepositoryPolicy",
+                "ecr:SetRepositoryPolicy",
+            ];
+            if cached {
+                actions.extend(["ecr:BatchImportUpstreamImage", "ecr:GetImageCopyStatus"]);
+            }
             statements.push(json!({
                 "Sid": "CrossAccountRolePermission",
                 "Effect": "Allow",
                 "Principal": {
                     "AWS": principals
                 },
-                "Action": [
-                    "ecr:BatchCheckLayerAvailability",
-                    "ecr:GetDownloadUrlForLayer",
-                    "ecr:BatchGetImage",
-                    // Lambda verifies and sets the ECR repo policy itself when
-                    // it creates a resource from a cross-account image — a
-                    // function, and equally a MicroVM image — so the calling
-                    // principal needs these on the repo.
-                    "ecr:GetRepositoryPolicy",
-                    "ecr:SetRepositoryPolicy"
-                ]
+                "Action": actions
             }));
         }
     }
@@ -153,6 +158,21 @@ fn repository_lookup_names(repository_prefix: &str, repo_id: &str) -> Vec<String
     }
 }
 
+fn valid_sandbox_namespace(prefix: &str, replicated_prefix: &str) -> bool {
+    !replicated_prefix.is_empty()
+        && !prefix.starts_with(replicated_prefix)
+        && prefix.contains('/')
+        && prefix.len() <= 200
+        && prefix.split('/').all(|part| {
+            part.split(['.', '_', '-']).all(|segment| {
+                !segment.is_empty()
+                    && segment
+                        .bytes()
+                        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+            })
+        })
+}
+
 impl EcrArtifactRegistry {
     /// Creates a new AWS ECR artifact registry binding from binding parameters.
     pub async fn new(
@@ -189,6 +209,27 @@ impl EcrArtifactRegistry {
                 reason: "Failed to extract repository_prefix from binding".to_string(),
             })?;
 
+        let sandbox_repository_prefix = config
+            .sandbox_repository_prefix
+            .map(|v| v.into_value(&binding_name, "sandbox_repository_prefix"))
+            .transpose()
+            .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var(&binding_name),
+                binding_name: binding_name.clone(),
+                reason: "Failed to extract sandbox_repository_prefix".to_string(),
+            })?;
+        if sandbox_repository_prefix
+            .as_ref()
+            .is_some_and(|prefix| !valid_sandbox_namespace(prefix, &repository_prefix))
+        {
+            return Err(AlienError::new(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var(&binding_name),
+                binding_name: binding_name.clone(),
+                reason: "Sandbox namespace must be outside the replicated repository prefix"
+                    .to_string(),
+            }));
+        }
+
         let pull_role_arn = config
             .pull_role_arn
             .map(|v| {
@@ -220,6 +261,7 @@ impl EcrArtifactRegistry {
             ecr_client,
             binding_name,
             repository_prefix,
+            sandbox_repository_prefix,
             pull_role_arn,
             push_role_arn,
         })
@@ -227,6 +269,99 @@ impl EcrArtifactRegistry {
 
     /// Constructs the full repository name for ECR using the repository prefix.
     /// If `repo_name` is empty, returns just the prefix (shared-repo pattern).
+    async fn create_named_repository(&self, full_repo_name: String) -> Result<RepositoryResponse> {
+        let repo_name = full_repo_name.as_str();
+
+        info!(
+            repo_name = %repo_name,
+            full_repo_name = %full_repo_name,
+            "Creating ECR repository"
+        );
+
+        // Use push role for cross-account, or direct credentials for single-account.
+        let ecr_config = if let Some(push_role_arn) = &self.push_role_arn {
+            self.credentials
+                .config()
+                .impersonate(alien_aws_clients::AwsImpersonationConfig {
+                    role_arn: push_role_arn.clone(),
+                    session_name: Some("alien-ecr-create".to_string()),
+                    duration_seconds: None,
+                    external_id: None,
+                    target_region: None,
+                })
+                .await
+                .map_err(|e| {
+                    map_cloud_client_error(
+                        e,
+                        "Failed to assume ECR push role".to_string(),
+                        Some(repo_name.to_string()),
+                    )
+                })?
+        } else {
+            self.credentials.config().clone()
+        };
+        let ecr_client = alien_aws_clients::ecr::EcrClient::new(
+            crate::http_client::create_http_client(),
+            AwsCredentialProvider::from_config(ecr_config)
+                .await
+                .context(ErrorData::BindingSetupFailed {
+                    binding_type: "artifact_registry.ecr".to_string(),
+                    reason: "Failed to create credential provider for ECR access".to_string(),
+                })?,
+        );
+
+        let request = CreateRepositoryRequest::builder()
+            .repository_name(full_repo_name.clone())
+            .build();
+
+        let response = match ecr_client.create_repository(request).await {
+            Ok(response) => response,
+            Err(e) => {
+                let error = map_cloud_client_error(
+                    e,
+                    format!("Failed to create ECR repository '{}'", full_repo_name),
+                    Some(repo_name.to_string()),
+                );
+
+                if matches!(error.http_status_code, Some(409)) {
+                    info!(
+                        repo_name = %repo_name,
+                        full_repo_name = %full_repo_name,
+                        "ECR repository already exists"
+                    );
+
+                    return Ok(RepositoryResponse {
+                        name: full_repo_name.clone(),
+                        uri: Some(self.repository_uri(&full_repo_name)),
+                        created_at: None,
+                    });
+                }
+
+                return Err(error);
+            }
+        };
+
+        info!(
+            repo_name = %repo_name,
+            full_repo_name = %full_repo_name,
+            "ECR repository created successfully"
+        );
+
+        // ECR repositories are ready immediately after creation
+        let repository = &response.repository;
+        let created_at = if repository.created_at > 0.0 {
+            DateTime::from_timestamp(repository.created_at as i64, 0).map(|dt| dt.to_rfc3339())
+        } else {
+            None
+        };
+
+        Ok(RepositoryResponse {
+            name: full_repo_name,
+            uri: Some(repository.repository_uri.clone()),
+            created_at,
+        })
+    }
+
     /// Uses `-` separator to match IAM policy wildcards (e.g., `alien-artifacts-prj_xxx`).
     fn make_full_repo_name(&self, repo_name: &str) -> String {
         if repo_name.is_empty() {
@@ -236,6 +371,12 @@ impl EcrArtifactRegistry {
         } else {
             repo_name.to_string()
         }
+    }
+
+    fn is_cached_repository(&self, name: &str) -> bool {
+        self.sandbox_repository_prefix
+            .as_ref()
+            .is_some_and(|prefix| name.starts_with(&format!("{prefix}-")))
     }
 
     fn repository_uri(&self, full_repo_name: &str) -> String {
@@ -312,7 +453,7 @@ impl EcrArtifactRegistry {
         repo_name: &str,
         aws_access: &AwsCrossAccountAccess,
     ) -> Result<()> {
-        let policy = cross_account_repository_policy(aws_access);
+        let policy = repository_policy(aws_access, self.is_cached_repository(repo_name));
         // ECR rejects an empty Statement array. Removing the final grant deletes the policy.
         if policy["Statement"].as_array().is_some_and(Vec::is_empty) {
             return match ecr_client
@@ -432,22 +573,53 @@ impl ArtifactRegistry for EcrArtifactRegistry {
         self.repository_prefix.clone()
     }
 
-    async fn create_repository(&self, repo_name: &str) -> Result<RepositoryResponse> {
-        let full_repo_name = self.make_full_repo_name(repo_name);
+    fn sandbox_repository_prefix(&self) -> Option<String> {
+        self.sandbox_repository_prefix.clone()
+    }
 
-        info!(
-            repo_name = %repo_name,
-            full_repo_name = %full_repo_name,
-            "Creating ECR repository"
+    async fn create_repository(&self, repo_name: &str) -> Result<RepositoryResponse> {
+        self.create_named_repository(self.make_full_repo_name(repo_name))
+            .await
+    }
+
+    async fn create_sandbox_project_repository(
+        &self,
+        project_id: &str,
+    ) -> Result<RepositoryResponse> {
+        match &self.sandbox_repository_prefix {
+            Some(prefix) => {
+                self.create_named_repository(format!("{prefix}-{project_id}"))
+                    .await
+            }
+            None => self.create_project_repository(project_id).await,
+        }
+    }
+
+    async fn get_repository(&self, repo_id: &str) -> Result<RepositoryResponse> {
+        let lookup_names = repository_lookup_names(
+            if self.is_cached_repository(repo_id) {
+                ""
+            } else {
+                &self.repository_prefix
+            },
+            repo_id,
         );
 
-        // Use push role for cross-account, or direct credentials for single-account.
-        let ecr_config = if let Some(push_role_arn) = &self.push_role_arn {
-            self.credentials
+        info!(
+            repo_id = %repo_id,
+            lookup_names = ?lookup_names,
+            "Getting ECR repository details"
+        );
+
+        // A configured pull role owns reads across accounts. Single-account bindings use
+        // their own credentials, just as repository creation and policy management do.
+        let read_config = match &self.pull_role_arn {
+            Some(pull_role_arn) => self
+                .credentials
                 .config()
                 .impersonate(alien_aws_clients::AwsImpersonationConfig {
-                    role_arn: push_role_arn.clone(),
-                    session_name: Some("alien-ecr-create".to_string()),
+                    role_arn: pull_role_arn.clone(),
+                    session_name: Some("alien-ecr-describe".to_string()),
                     duration_seconds: None,
                     external_id: None,
                     target_region: None,
@@ -456,118 +628,19 @@ impl ArtifactRegistry for EcrArtifactRegistry {
                 .map_err(|e| {
                     map_cloud_client_error(
                         e,
-                        "Failed to assume ECR push role".to_string(),
-                        Some(repo_name.to_string()),
+                        "Failed to assume ECR pull role".to_string(),
+                        Some(repo_id.to_string()),
                     )
-                })?
-        } else {
-            self.credentials.config().clone()
-        };
-        let ecr_client = alien_aws_clients::ecr::EcrClient::new(
-            crate::http_client::create_http_client(),
-            AwsCredentialProvider::from_config(ecr_config)
-                .await
-                .context(ErrorData::BindingSetupFailed {
-                    binding_type: "artifact_registry.ecr".to_string(),
-                    reason: "Failed to create credential provider for ECR access".to_string(),
                 })?,
-        );
-
-        let request = CreateRepositoryRequest::builder()
-            .repository_name(full_repo_name.clone())
-            .build();
-
-        let response = match ecr_client.create_repository(request).await {
-            Ok(response) => response,
-            Err(e) => {
-                let error = map_cloud_client_error(
-                    e,
-                    format!("Failed to create ECR repository '{}'", full_repo_name),
-                    Some(repo_name.to_string()),
-                );
-
-                if matches!(error.http_status_code, Some(409)) {
-                    info!(
-                        repo_name = %repo_name,
-                        full_repo_name = %full_repo_name,
-                        "ECR repository already exists"
-                    );
-
-                    return Ok(RepositoryResponse {
-                        name: full_repo_name.clone(),
-                        uri: Some(self.repository_uri(&full_repo_name)),
-                        created_at: None,
-                    });
-                }
-
-                return Err(error);
-            }
+            None => self.credentials.config().clone(),
         };
-
-        info!(
-            repo_name = %repo_name,
-            full_repo_name = %full_repo_name,
-            "ECR repository created successfully"
-        );
-
-        // ECR repositories are ready immediately after creation
-        let repository = &response.repository;
-        let created_at = if repository.created_at > 0.0 {
-            DateTime::from_timestamp(repository.created_at as i64, 0).map(|dt| dt.to_rfc3339())
-        } else {
-            None
-        };
-
-        Ok(RepositoryResponse {
-            name: full_repo_name,
-            uri: Some(repository.repository_uri.clone()),
-            created_at,
-        })
-    }
-
-    async fn get_repository(&self, repo_id: &str) -> Result<RepositoryResponse> {
-        let lookup_names = repository_lookup_names(&self.repository_prefix, repo_id);
-
-        info!(
-            repo_id = %repo_id,
-            lookup_names = ?lookup_names,
-            "Getting ECR repository details"
-        );
-
-        // Assume the pull role for repository reads
-        let pull_role_arn = self.pull_role_arn.as_ref().ok_or_else(|| {
-            AlienError::new(ErrorData::BindingConfigInvalid {
-                env_var: binding_env_var(&self.binding_name),
-                binding_name: self.binding_name.clone(),
-                reason: "Pull role ARN not available".to_string(),
-            })
-        })?;
-        let impersonated = self
-            .credentials
-            .config()
-            .impersonate(alien_aws_clients::AwsImpersonationConfig {
-                role_arn: pull_role_arn.clone(),
-                session_name: Some("alien-ecr-describe".to_string()),
-                duration_seconds: None,
-                external_id: None,
-                target_region: None,
-            })
-            .await
-            .map_err(|e| {
-                map_cloud_client_error(
-                    e,
-                    "Failed to assume ECR pull role".to_string(),
-                    Some(repo_id.to_string()),
-                )
-            })?;
-        let ecr_client = alien_aws_clients::ecr::EcrClient::new(
+        let ecr_client = EcrClient::new(
             crate::http_client::create_http_client(),
-            AwsCredentialProvider::from_config(impersonated)
+            AwsCredentialProvider::from_config(read_config)
                 .await
                 .context(ErrorData::BindingSetupFailed {
                     binding_type: "artifact_registry.ecr".to_string(),
-                    reason: "Failed to create credential provider for impersonated role"
-                        .to_string(),
+                    reason: "Failed to create credential provider for repository reads".to_string(),
                 })?,
         );
 
@@ -739,8 +812,33 @@ impl ArtifactRegistry for EcrArtifactRegistry {
                 .policy_management_client(region, &full_repo_name)
                 .await?;
 
-            self.wait_for_repository_with_client(&target_ecr, &full_repo_name, region)
-                .await?;
+            if self.is_cached_repository(&full_repo_name) {
+                match target_ecr
+                    .create_repository(
+                        CreateRepositoryRequest::builder()
+                            .repository_name(full_repo_name.clone())
+                            .build(),
+                    )
+                    .await
+                {
+                    Ok(_) => {}
+                    Err(error) => {
+                        let error = map_cloud_client_error(
+                            error,
+                            format!(
+                                "Failed to prepare regional sandbox repository {full_repo_name}"
+                            ),
+                            Some(full_repo_name.clone()),
+                        );
+                        if error.http_status_code != Some(409) {
+                            return Err(error);
+                        }
+                    }
+                }
+            } else {
+                self.wait_for_repository_with_client(&target_ecr, &full_repo_name, region)
+                    .await?;
+            }
             self.set_full_policy_with_client(&target_ecr, &full_repo_name, &merged_access)
                 .await?;
 
@@ -1334,6 +1432,57 @@ mod tests {
             repository_lookup_names("alien-artifacts-prj_1", ""),
             vec!["alien-artifacts-prj_1".to_string()],
             "an empty id names the shared repository, as create does"
+        );
+    }
+
+    #[test]
+    fn sandbox_namespaces_cannot_match_the_eager_replication_filter() {
+        for prefix in [
+            "sandbox-acme/acme-artifacts",
+            "sandbox-acme-staging/acme-artifacts",
+        ] {
+            assert!(
+                valid_sandbox_namespace(prefix, "acme-artifacts"),
+                "{prefix}"
+            );
+        }
+        for prefix in [
+            "",
+            "acme-artifacts/sandbox",
+            "acme-artifacts-other",
+            "/sandbox/acme",
+            "sandbox//acme",
+            "sandbox/acme/",
+            "sandbox/*",
+            "sandbox/{region}",
+            "Sandbox/acme",
+        ] {
+            assert!(
+                !valid_sandbox_namespace(prefix, "acme-artifacts"),
+                "{prefix}"
+            );
+        }
+    }
+
+    #[test]
+    fn cold_cache_import_permissions_belong_only_to_the_cache_repository_policy() {
+        let access = AwsCrossAccountAccess {
+            account_ids: vec!["123456789012".to_string()],
+            regions: vec!["us-east-2".to_string()],
+            allowed_service_types: vec![ComputeServiceType::Worker],
+            role_arns: vec![],
+        };
+        let normal = repository_policy(&access, false);
+        let cache = repository_policy(&access, true);
+        let normal_actions = normal["Statement"][0]["Action"].as_array().unwrap();
+        let cache_actions = cache["Statement"][0]["Action"].as_array().unwrap();
+        for action in ["ecr:BatchImportUpstreamImage", "ecr:GetImageCopyStatus"] {
+            assert!(!normal_actions.contains(&json!(action)));
+            assert!(cache_actions.contains(&json!(action)));
+        }
+        assert_eq!(
+            normal["Statement"][1], cache["Statement"][1],
+            "classic Lambda service access must not acquire cache import permissions"
         );
     }
 }

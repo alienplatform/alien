@@ -306,7 +306,7 @@ fn a_declared_private_base_is_the_only_repository_a_live_build_pulls() {
             &serde_json::json!({
                 "Sid": "PullSandboxBaseImage",
                 "Effect": "Allow",
-                "Action": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"],
+                "Action": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer", "ecr:BatchImportUpstreamImage", "ecr:GetImageCopyStatus"],
                 "Resource": {
                     "Fn::Sub":
                         "arn:${AWS::Partition}:ecr:${AWS::Region}:123456789012:repository/acme/agents-base"
@@ -1854,7 +1854,7 @@ fn the_emitted_registration_matches_the_direct_seed() {
         ),
         // The agent enforces these in the guest, so the cloud side sees open egress. A registration
         // that read the declared egress instead refused this sandbox on direct deployments only.
-        (SandboxEgress::Internet, supervised.clone(), LIVE_BUNDLE),
+        (SandboxEgress::Allow, supervised.clone(), LIVE_BUNDLE),
         (SandboxEgress::None, supervised.clone(), LIVE_BUNDLE),
     ] {
         let sandbox = Sandbox {
