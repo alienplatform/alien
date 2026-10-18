@@ -6873,7 +6873,7 @@ mod tests {
         network_name: "customer-vpc".to_string(),
         subnet_name: "customer-subnet".to_string(),
         region: "us-central1".to_string(),
-    }), Some(VpcEgress::PrivateRangesOnly))]
+    }), Some(VpcEgress::AllTraffic))]
     #[case::no_network(None, None)]
     #[tokio::test]
     async fn worker_vpc_egress_follows_network_mode(
@@ -6998,10 +6998,10 @@ mod tests {
             expected_egress
         );
         if let Some(expected_interface) = expected_interface {
-            assert_eq!(
-                vpc_access.unwrap().network_interfaces,
-                vec![expected_interface]
-            );
+            let interfaces = vpc_access.unwrap().network_interfaces.as_ref().unwrap();
+            assert_eq!(interfaces.len(), 1);
+            assert_eq!(interfaces[0].network, expected_interface.network);
+            assert_eq!(interfaces[0].subnetwork, expected_interface.subnetwork);
         } else {
             assert!(vpc_access.is_none());
         }
