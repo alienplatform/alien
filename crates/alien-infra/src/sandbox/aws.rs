@@ -1139,6 +1139,10 @@ impl ImageBuildInputs {
     fn with_supervisor(mut self, sandbox: &Sandbox) -> Self {
         self.environment.extend(sandbox.supervisor_environment());
         if sandbox.privileged_supervisor.is_some() {
+            // AWS rejects named capabilities (including NET_ADMIN): the API enum is only ALL.
+            // The agent drops to eight capabilities before starting worker threads and gives
+            // commands none. Omitting ALL prevents netlink firewall installation.
+            // https://docs.aws.amazon.com/lambda/latest/dg/microvms-images.html#microvms-images-os-capabilities
             self.additional_os_capabilities = vec!["ALL".to_string()];
             // Fold the complete policy into the token without truncating away its digest.
             let digest =
