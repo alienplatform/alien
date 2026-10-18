@@ -112,18 +112,23 @@ impl HeartbeatLoop {
         // Acquire in batches no larger than the processing concurrency. A lease
         // is only renewed once its deployment is being processed, so a larger
         // batch would leave the surplus holding leases that nothing extends.
+        // Older stores keep direct heartbeat acquisition. An inclusion-list
+        // fallback could starve running deployments beyond the store's list cap.
+        let supports_exclusions = self.deployment_store.supports_acquire_exclusions();
         let batches = HEARTBEAT_DEPLOYMENTS_PER_TICK.div_ceil(MAX_CONCURRENT_DEPLOYMENTS);
         for batch in 0..batches {
-            match self
-                .deployment_processor
-                .exclude_deferred(&mut filter, batch == 0)
-                .await
-            {
-                Ok(true) => {}
-                Ok(false) => break,
-                Err(error) => {
-                    error!(%error, "Heartbeat: failed to filter deferred deployments");
-                    break;
+            if supports_exclusions {
+                match self
+                    .deployment_processor
+                    .exclude_deferred(&mut filter, batch == 0)
+                    .await
+                {
+                    Ok(true) => {}
+                    Ok(false) => break,
+                    Err(error) => {
+                        error!(%error, "Heartbeat: failed to filter deferred deployments");
+                        break;
+                    }
                 }
             }
             let session = uuid::Uuid::new_v4().to_string();
@@ -240,6 +245,9 @@ mod tests {
         };
         let acquire_calls = Arc::new(AtomicUsize::new(0));
         let mut store = MockDeploymentStore::new();
+        store
+            .expect_supports_acquire_exclusions()
+            .return_const(false);
         store.expect_acquire().times(2).returning({
             let acquire_calls = acquire_calls.clone();
             let acquired = acquired.clone();

@@ -357,8 +357,15 @@ impl DeploymentLoop {
             .deferred
             .lock()
             .expect("deferred poisoned")
-            .keys()
-            .cloned()
+            .iter()
+            .filter(|(_, entry)| {
+                filter.statuses.as_ref().is_none_or(|statuses| {
+                    statuses
+                        .iter()
+                        .any(|status| parse_status(status) == entry.status)
+                })
+            })
+            .map(|(id, _)| id.clone())
             .collect();
         if self.deployment_store.supports_acquire_exclusions() {
             filter.excluded_deployment_ids.extend(deferred_ids);
@@ -2789,7 +2796,10 @@ mod tests {
 
         #[tokio::test]
         async fn unsupported_exclusions_preserve_batches_without_reacquiring_deferred_work() {
-            for status in [DeploymentStatus::UpdatePending, DeploymentStatus::Running] {
+            for status in [
+                DeploymentStatus::UpdatePending,
+                DeploymentStatus::Provisioning,
+            ] {
                 let fixture = Fixture::new(status, transient_error()).await;
                 let record = fixture.record().await;
                 let records = Arc::new(Mutex::new(
@@ -2856,19 +2866,147 @@ mod tests {
                 let store = Arc::new(store);
                 let mut runner = fixture.runner();
                 runner.deployment_store = store.clone();
-                if status == DeploymentStatus::Running {
-                    crate::loops::heartbeat::HeartbeatLoop::new(
-                        fixture.manager.config.clone(),
-                        store,
-                        Arc::new(runner),
-                    )
-                    .tick()
-                    .await;
-                } else {
-                    runner.tick().await;
-                }
+                runner.tick().await;
                 assert_eq!(fixture.credentials.visits.load(Ordering::SeqCst), 8);
             }
+        }
+
+        fn defer_pending(runner: &DeploymentLoop) {
+            runner.deferred.lock().unwrap().insert(
+                "deferred-pending".to_string(),
+                super::super::DeferredDeployment {
+                    status: DeploymentStatus::Pending,
+                    updated_at: None,
+                    retry_requested: false,
+                    recheck_after: Utc::now() + chrono::Duration::minutes(5),
+                },
+            );
+        }
+
+        #[tokio::test]
+        async fn unrelated_backoff_does_not_snapshot_unsupported_deployment_candidates() {
+            let fixture = Fixture::new(DeploymentStatus::UpdatePending, transient_error()).await;
+            let mut runner = fixture.runner();
+            defer_pending(&runner);
+            let mut store = crate::traits::deployment_store::MockDeploymentStore::new();
+            store
+                .expect_supports_acquire_exclusions()
+                .return_const(false);
+            store.expect_list_deployments().times(0);
+            runner.deployment_store = Arc::new(store);
+            let mut filter = DeploymentFilter {
+                statuses: Some(vec!["update-pending".to_string()]),
+                ..Default::default()
+            };
+            assert!(runner
+                .exclude_deferred(&Subject::system(), &mut filter, true)
+                .await
+                .unwrap());
+            assert!(filter.deployment_ids.is_none());
+        }
+
+        #[tokio::test]
+        async fn unsupported_heartbeats_reach_all_candidates_beyond_the_listing_cap() {
+            let fixture = Fixture::new(DeploymentStatus::Running, transient_error()).await;
+            let record = fixture.record().await;
+            let records = Arc::new(Mutex::new(
+                (0..150)
+                    .map(|index| {
+                        let mut record = record.clone();
+                        record.id = format!("candidate-{index:03}");
+                        (record.id.clone(), record)
+                    })
+                    .collect::<std::collections::BTreeMap<_, _>>(),
+            ));
+            let queue = Arc::new(Mutex::new(
+                records.lock().unwrap().keys().cloned().collect::<Vec<_>>(),
+            ));
+            let listed_count = Arc::new(AtomicUsize::new(0));
+            let released = Arc::new(Mutex::new(std::collections::HashSet::new()));
+            let mut store = crate::traits::deployment_store::MockDeploymentStore::new();
+            store
+                .expect_supports_acquire_exclusions()
+                .return_const(false);
+            let available = records.clone();
+            store
+                .expect_acquire()
+                .returning(move |_, _, filter, limit| {
+                    let mut queue = queue.lock().unwrap();
+                    let ids: Vec<_> = queue
+                        .iter()
+                        .filter(|id| {
+                            filter
+                                .deployment_ids
+                                .as_ref()
+                                .is_none_or(|ids| ids.contains(id))
+                        })
+                        .take(limit as usize)
+                        .cloned()
+                        .collect();
+                    queue.retain(|id| !ids.contains(id));
+                    let available = available.lock().unwrap();
+                    Ok(ids
+                        .into_iter()
+                        .map(|id| crate::traits::deployment_store::AcquiredDeployment {
+                            deployment: available[&id].clone(),
+                            execution_claim: None,
+                        })
+                        .collect())
+                });
+            let listed = records.clone();
+            let calls = listed_count.clone();
+            store.expect_list_deployments().returning(move |_, _| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(listed.lock().unwrap().values().take(100).cloned().collect())
+            });
+            let saved = records.clone();
+            store.expect_reconcile().returning(move |_, data| {
+                let mut records = saved.lock().unwrap();
+                let record = records.get_mut(&data.deployment_id).unwrap();
+                record.runtime_metadata = data.state.runtime_metadata;
+                Ok(crate::traits::deployment_store::ReconcileOutcome {
+                    record: record.clone(),
+                    target_operations_bundle_set: None,
+                    target_dynamic_containers: None,
+                })
+            });
+            store
+                .expect_get_deployment()
+                .returning(move |_, id| Ok(records.lock().unwrap().get(id).cloned()));
+            let completed = released.clone();
+            store.expect_release().returning(move |_, id, _, _| {
+                completed.lock().unwrap().insert(id.to_string());
+                Ok(())
+            });
+            let store = Arc::new(store);
+            let mut runner = fixture.runner();
+            runner.deployment_store = store.clone();
+            // A CLI-owned pending deployment parked by the deployment loop must
+            // not make heartbeats enumerate a capped list of running deployments.
+            defer_pending(&runner);
+            let heartbeat = crate::loops::heartbeat::HeartbeatLoop::new(
+                fixture.manager.config.clone(),
+                store,
+                Arc::new(runner),
+            );
+            heartbeat.tick().await;
+            assert_eq!(
+                released.lock().unwrap().len(),
+                100,
+                "preserve the existing per-tick budget"
+            );
+            heartbeat.tick().await;
+            assert_eq!(
+                released.lock().unwrap().len(),
+                150,
+                "newer candidates must also receive heartbeats"
+            );
+            assert_eq!(fixture.credentials.visits.load(Ordering::SeqCst), 150);
+            assert_eq!(
+                listed_count.load(Ordering::SeqCst),
+                0,
+                "unsupported heartbeat stores retain direct acquisition"
+            );
         }
 
         #[tokio::test]
