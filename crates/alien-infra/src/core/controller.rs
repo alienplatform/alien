@@ -815,7 +815,9 @@ pub const MIN_SUPPORTED_CONTROLLER_STATE_VERSION: u32 = 1;
 /// Version 6 preserves GCP worker trigger update checkpoints and pending create
 /// ownership. Upgrade readers
 /// before writing these phases; older actors must reject them before planning.
-pub const CURRENT_CONTROLLER_STATE_VERSION: u32 = 6;
+/// Version 7 preserves the setup-owned AWS gateway retirement capability. Older
+/// readers must reject it instead of silently dropping the only cleanup grant.
+pub const CURRENT_CONTROLLER_STATE_VERSION: u32 = 7;
 
 /// Serializes a controller to a JSON Value, injecting its type tag.
 pub fn serialize_controller(
