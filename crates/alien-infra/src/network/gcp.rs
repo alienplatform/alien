@@ -12,8 +12,9 @@ use crate::error::{ErrorData, Result};
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     GcpVpcNetworkHeartbeatData, HeartbeatBackend, Network, NetworkHeartbeatData,
-    NetworkHeartbeatStatus, NetworkSettings, ObservedHealth, Platform, ProviderLifecycleState,
-    ResourceHeartbeat, ResourceHeartbeatData, ResourceStatus,
+    NetworkHeartbeatStatus, NetworkOutputs, NetworkSettings, ObservedHealth, Platform,
+    ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
+    ResourceStatus,
 };
 use alien_error::{AlienError, Context, ContextError};
 use alien_gcp_clients::compute::{
@@ -41,6 +42,9 @@ pub struct GcpNetworkController {
     pub subnetwork_self_link: Option<String>,
     pub(crate) router_name: Option<String>,
     pub(crate) cloud_nat_name: Option<String>,
+    /// Reserved setup-owned NAT addresses; empty for legacy or externally managed NAT.
+    #[serde(default)]
+    pub egress_public_ips: Vec<String>,
     pub(crate) firewall_name: Option<String>,
     pub(crate) region: Option<String>,
     pub cidr_block: Option<String>,
@@ -176,6 +180,7 @@ impl GcpNetworkController {
             )),
             router_name: Some(format!("test-{}-router", network_id)),
             cloud_nat_name: Some(format!("test-{}-nat", network_id)),
+            egress_public_ips: Vec::new(),
             firewall_name: Some(format!("test-{}-fw", network_id)),
             region: Some(region),
             cidr_block: Some("10.0.0.0/16".to_string()),
@@ -1501,4 +1506,17 @@ impl GcpNetworkController {
     }
 
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
+
+    fn build_outputs(&self) -> Option<ResourceOutputs> {
+        self.network_self_link.as_ref().map(|network_id| {
+            ResourceOutputs::new(NetworkOutputs {
+                network_id: network_id.clone(),
+                availability_zones: 0,
+                has_public_subnets: false,
+                has_nat_gateway: self.cloud_nat_name.is_some(),
+                egress_public_ips: self.egress_public_ips.clone(),
+                cidr: self.cidr_block.clone(),
+            })
+        })
+    }
 }

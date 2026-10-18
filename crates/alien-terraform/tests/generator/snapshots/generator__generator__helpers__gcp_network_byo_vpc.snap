@@ -178,10 +178,11 @@ locals {
         subnetSelfLinks = [
           data.google_compute_subnetwork.default_network_subnet.self_link
         ]
-        cidrBlock      = data.google_compute_subnetwork.default_network_subnet.ip_cidr_range
-        routerSelfLink = null
-        natName        = null
-        isByoVpc       = true
+        cidrBlock       = data.google_compute_subnetwork.default_network_subnet.ip_cidr_range
+        routerSelfLink  = null
+        natName         = null
+        egressPublicIps = []
+        isByoVpc        = true
       }
     }
   ]

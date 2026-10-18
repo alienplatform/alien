@@ -10,6 +10,7 @@ import * as z from "zod";
  */
 export const GcpNetworkImportDataSchema = z.object({
     "cidrBlock": z.string().describe("Primary subnetwork CIDR block used for internal firewall rules.").nullish(),
+"egressPublicIps": z.optional(z.array(z.string()).describe("Reserved public addresses used by the deployment Cloud NAT. Empty when unknown.")),
 "isByoVpc": z.boolean().describe("True when the VPC is owned outside this stack."),
 "natName": z.string().describe("Cloud NAT name (when created).").nullish(),
 "projectId": z.string().describe("Project ID owning the network."),

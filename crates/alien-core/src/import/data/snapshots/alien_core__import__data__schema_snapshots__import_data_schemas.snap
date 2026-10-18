@@ -1802,6 +1802,14 @@ expression: schemas
           "null"
         ]
       },
+      "egressPublicIps": {
+        "default": [],
+        "description": "Reserved public addresses used by the deployment Cloud NAT. Empty when unknown.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
       "isByoVpc": {
         "description": "True when the VPC is owned outside this stack.",
         "type": "boolean"

@@ -122,6 +122,7 @@ impl TfEmitter for GcpNetworkEmitter {
                     ),
                     ("routerSelfLink", Expression::Null),
                     ("natName", Expression::Null),
+                    ("egressPublicIps", Expression::Array(Vec::new())),
                     ("isByoVpc", Expression::Bool(true)),
                 ])
             }
@@ -166,6 +167,12 @@ impl TfEmitter for GcpNetworkEmitter {
                         "natName",
                         expr::raw(format!(
                             "var.network_mode == \"create-new\" ? google_compute_router_nat.{nat_label}[0].name : null"
+                        )),
+                    ),
+                    (
+                        "egressPublicIps",
+                        expr::raw(format!(
+                            "var.network_mode == \"create-new\" ? [google_compute_address.{label}_nat_ip[0].address] : []"
                         )),
                     ),
                     ("isByoVpc", expr::raw("var.network_mode != \"create-new\"")),
@@ -284,6 +291,25 @@ fn create_topology(label: &str, cidr: Option<String>, counted: bool) -> TfFragme
         ],
     ));
 
+    let nat_ip_label = format!("{label}_nat_ip");
+    fragment.resource_blocks.push(resource_block(
+        "google_compute_address",
+        &nat_ip_label,
+        [
+            attr("name", gcp_network_name(label, "-nat-ip")),
+            attr("project", expr::raw("var.gcp_project")),
+            attr("region", expr::raw("var.gcp_region")),
+            attr("address_type", Expression::String("EXTERNAL".to_string())),
+        ],
+    ));
+    let nat_ip = if counted {
+        expr::raw(format!(
+            "google_compute_address.{nat_ip_label}[0].self_link"
+        ))
+    } else {
+        expr::traversal(["google_compute_address", &nat_ip_label, "self_link"])
+    };
+
     fragment.resource_blocks.push(resource_block(
         "google_compute_router_nat",
         &nat_label,
@@ -294,8 +320,9 @@ fn create_topology(label: &str, cidr: Option<String>, counted: bool) -> TfFragme
             attr("router", router_name),
             attr(
                 "nat_ip_allocate_option",
-                Expression::String("AUTO_ONLY".to_string()),
+                Expression::String("MANUAL_ONLY".to_string()),
             ),
+            attr("nat_ips", Expression::Array(vec![nat_ip])),
             attr(
                 "source_subnetwork_ip_ranges_to_nat",
                 Expression::String("ALL_SUBNETWORKS_ALL_IP_RANGES".to_string()),
