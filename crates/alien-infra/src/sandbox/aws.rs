@@ -197,7 +197,10 @@ impl AwsSandboxController {
             &bundle_uri,
             tier.baseline_memory_mib,
         )
-        .with_supervisor(config)
+        .with_agent_environment(alien_core::sandbox_egress::aws_sandbox_agent_environment(
+            ctx.desired_stack,
+            config,
+        ))
         .with_receipt()?;
 
         // A create whose response never reached state leaves an image under this
@@ -313,7 +316,8 @@ impl AwsSandboxController {
         self.image_arn = Some(image_arn);
         self.pending_version = Some(image_version);
         self.pending_bundle_uri = Some(bundle_uri);
-        self.pending_supervisor_environment = config.supervisor_environment();
+        self.pending_supervisor_environment =
+            alien_core::sandbox_egress::aws_sandbox_agent_environment(ctx.desired_stack, config);
         self.region = Some(aws_config.region.clone());
 
         info!(sandbox_id = %config.id, image = %image_name, "MicroVM image build started");
@@ -645,7 +649,11 @@ impl AwsSandboxController {
         let desired_bundle = desired_bundle_uri(&config, &aws_config.region)?;
 
         if self.bundle_uri.as_deref() == Some(desired_bundle.as_str())
-            && self.supervisor_environment == config.supervisor_environment()
+            && self.supervisor_environment
+                == alien_core::sandbox_egress::aws_sandbox_agent_environment(
+                    ctx.desired_stack,
+                    config,
+                )
         {
             info!(sandbox_id = %config.id, "Updated AWS sandbox configuration");
             return Ok(HandlerAction::Continue {
@@ -718,7 +726,10 @@ impl AwsSandboxController {
             &desired_bundle,
             tier.baseline_memory_mib,
         )
-        .with_supervisor(config)
+        .with_agent_environment(alien_core::sandbox_egress::aws_sandbox_agent_environment(
+            ctx.desired_stack,
+            config,
+        ))
         .for_roll(self.active_version.as_deref())
         .for_retry(self.build_retry_generation)
         .with_receipt()?
@@ -769,7 +780,8 @@ impl AwsSandboxController {
         // ACTIVE, so the binding keeps naming the bundle sessions can actually start from.
         self.pending_version = Some(image_version);
         self.pending_bundle_uri = Some(desired_bundle);
-        self.pending_supervisor_environment = config.supervisor_environment();
+        self.pending_supervisor_environment =
+            alien_core::sandbox_egress::aws_sandbox_agent_environment(ctx.desired_stack, config);
         if let Some(arn) = rolled.image_arn {
             self.image_arn = Some(arn);
         }
@@ -1222,9 +1234,9 @@ struct ImageBuildInputs {
 }
 
 impl ImageBuildInputs {
-    fn with_supervisor(mut self, sandbox: &Sandbox) -> Self {
-        self.environment.extend(sandbox.supervisor_environment());
-        if sandbox.privileged_supervisor.is_some() {
+    fn with_agent_environment(mut self, environment: BTreeMap<String, String>) -> Self {
+        self.environment.extend(environment);
+        if self.environment.contains_key("ALIEN_SANDBOX_EGRESS") {
             self.additional_os_capabilities = vec!["ALL".to_string()];
             // Fold the complete policy into the token without truncating away its digest.
             let digest =

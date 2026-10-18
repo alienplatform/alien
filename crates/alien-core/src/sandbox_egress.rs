@@ -30,6 +30,23 @@ pub fn sandbox_needs_connector(stack: &Stack, sandbox: &Sandbox) -> bool {
     matches!(sandbox.egress, SandboxEgress::None) || has_sandbox_gateway(stack)
 }
 
+/// Activate the agent's network guard for every isolated AWS sandbox. Native
+/// internet deployments keep their original startup path. Command identity is
+/// resolved independently from the image and any legacy supervisor declaration.
+pub fn aws_sandbox_agent_environment(
+    stack: &Stack,
+    sandbox: &Sandbox,
+) -> std::collections::BTreeMap<String, String> {
+    let mut environment = sandbox.supervisor_environment();
+    if sandbox_needs_connector(stack, sandbox) {
+        environment.insert(
+            "ALIEN_SANDBOX_EGRESS".into(),
+            serde_json::to_string(&sandbox.egress).expect("egress serializes"),
+        );
+    }
+    environment
+}
+
 /// The name of the operator role's inline policy.
 pub const SANDBOX_EGRESS_POLICY_NAME: &str = "sandbox-egress-connector";
 

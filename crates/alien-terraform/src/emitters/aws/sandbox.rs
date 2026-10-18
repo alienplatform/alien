@@ -455,14 +455,21 @@ impl TfEmitter for AwsSandboxEmitter {
             // no subset to ask for, so the answer is none — and the key has to be present.
             (
                 "AdditionalOsCapabilities",
-                Expression::from(if sandbox.privileged_supervisor.is_some() {
-                    vec![Expression::String("ALL".to_string())]
-                } else {
-                    vec![]
-                }),
+                Expression::from(
+                    if alien_core::sandbox_egress::aws_sandbox_agent_environment(ctx.stack, sandbox)
+                        .contains_key("ALIEN_SANDBOX_EGRESS")
+                    {
+                        vec![Expression::String("ALL".to_string())]
+                    } else {
+                        vec![]
+                    },
+                ),
             ),
             ("Hooks", hooks()),
-            ("EnvironmentVariables", environment_variables(sandbox)),
+            (
+                "EnvironmentVariables",
+                environment_variables(ctx.stack, sandbox),
+            ),
             ("Tags", tag_objects(ctx, false)),
         ]);
 
@@ -1066,7 +1073,7 @@ fn hooks() -> Expression {
 ///
 /// `ALIEN_SANDBOX_AUTHORIZATION` is `transport` on AWS: the proxy validates a token scoped to one
 /// MicroVM before a request arrives, and one MicroVM is one session.
-fn environment_variables(sandbox: &Sandbox) -> Expression {
+fn environment_variables(stack: &alien_core::Stack, sandbox: &Sandbox) -> Expression {
     let pairs = [
         ("ALIEN_SANDBOX_ROOT", AWS_MICROVM.session_root.to_string()),
         ("ALIEN_SANDBOX_PORT", AWS_MICROVM.port.to_string()),
@@ -1082,7 +1089,7 @@ fn environment_variables(sandbox: &Sandbox) -> Expression {
         .into_iter()
         .map(|(key, value)| (key.to_string(), value))
         .collect();
-    let mut overrides = sandbox.supervisor_environment();
+    let mut overrides = alien_core::sandbox_egress::aws_sandbox_agent_environment(stack, sandbox);
     for (key, value) in &mut pairs {
         if let Some(replacement) = overrides.remove(key) {
             *value = replacement;

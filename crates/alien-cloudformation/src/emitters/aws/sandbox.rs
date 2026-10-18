@@ -241,16 +241,20 @@ impl CfEmitter for AwsSandboxEmitter {
         // AWS exposes only ALL; the agent reduces it before running image code or commands.
         properties.insert(
             "AdditionalOsCapabilities".to_string(),
-            CfExpression::list(if sandbox.privileged_supervisor.is_some() {
-                vec![CfExpression::from("ALL")]
-            } else {
-                vec![]
-            }),
+            CfExpression::list(
+                if alien_core::sandbox_egress::aws_sandbox_agent_environment(ctx.stack, sandbox)
+                    .contains_key("ALIEN_SANDBOX_EGRESS")
+                {
+                    vec![CfExpression::from("ALL")]
+                } else {
+                    vec![]
+                },
+            ),
         );
         properties.insert("Hooks".to_string(), hooks());
         properties.insert(
             "EnvironmentVariables".to_string(),
-            environment_variables(sandbox),
+            environment_variables(ctx.stack, sandbox),
         );
         properties.insert("Tags".to_string(), tags(ctx));
 
@@ -769,7 +773,7 @@ fn hooks() -> CfExpression {
 ///
 /// `transport` authorization on AWS: the proxy validates a token scoped to one MicroVM before a
 /// request arrives, and one MicroVM is one session.
-fn environment_variables(sandbox: &Sandbox) -> CfExpression {
+fn environment_variables(stack: &alien_core::Stack, sandbox: &Sandbox) -> CfExpression {
     let pairs = [
         ("ALIEN_SANDBOX_ROOT", AWS_MICROVM.session_root.to_string()),
         ("ALIEN_SANDBOX_PORT", AWS_MICROVM.port.to_string()),
@@ -785,7 +789,7 @@ fn environment_variables(sandbox: &Sandbox) -> CfExpression {
         .into_iter()
         .map(|(key, value)| (key.to_string(), value))
         .collect();
-    let mut overrides = sandbox.supervisor_environment();
+    let mut overrides = alien_core::sandbox_egress::aws_sandbox_agent_environment(stack, sandbox);
     for (key, value) in &mut pairs {
         if let Some(replacement) = overrides.remove(key) {
             *value = replacement;
