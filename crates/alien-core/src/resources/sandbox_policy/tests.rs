@@ -183,3 +183,40 @@ fn policy_limits_preserve_4096_targets_and_refuse_oversized_canonical_json() {
         "SANDBOX_EGRESS_POLICY_TOO_LARGE"
     );
 }
+
+#[test]
+fn azure_limits_count_apex_guards_and_reject_unrepresentable_targets() {
+    for target in ["example.com:22", "8.8.8.0/24"] {
+        let policy = SandboxEgress::Allow {
+            allow: vec![target.to_string()],
+        };
+        assert!(policy.validate().is_ok());
+        assert_eq!(
+            policy.validate_for_azure().unwrap_err().code,
+            "SANDBOX_EGRESS_INVALID"
+        );
+    }
+    for count in [250, 251] {
+        let policy = SandboxEgress::Allow {
+            allow: (0..count).map(|n| format!("*.h{n}.example.com")).collect(),
+        };
+        if count == 250 {
+            policy.validate_for_azure().unwrap();
+        } else {
+            assert_eq!(
+                policy.validate_for_azure().unwrap_err().code,
+                "SANDBOX_EGRESS_POLICY_TOO_LARGE"
+            );
+        }
+    }
+    let exact = SandboxEgress::Allow {
+        allow: (0..500).map(|n| format!("h{n}.example.com")).collect(),
+    };
+    exact.validate_for_azure().unwrap();
+    let overlap = SandboxEgress::Allow {
+        allow: (0..250)
+            .flat_map(|n| [format!("*.h{n}.example.com"), format!("h{n}.example.com")])
+            .collect(),
+    };
+    overlap.validate_for_azure().unwrap();
+}

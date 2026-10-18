@@ -33,6 +33,19 @@ fn rule(host: &str, scheme: &str, action: &str) -> EgressRule {
 
 /// Only HTTP(S) ports are expressible in the native policy. Refuse other targets before create.
 pub(super) fn policy(egress: &SandboxEgress) -> Result<EgressPolicy> {
+    egress.validate_for_azure().map_err(|error| {
+        let context = match &error.error {
+            Some(alien_core::ErrorData::SandboxEgressPolicyTooLarge { limit }) => {
+                ErrorData::SandboxEgressPolicyTooLarge {
+                    limit: limit.clone(),
+                }
+            }
+            _ => ErrorData::SandboxEgressInvalid {
+                reason: error.message.clone(),
+            },
+        };
+        error.context(context)
+    })?;
     let egress = egress.normalized().map_err(|e| {
         e.context(ErrorData::SandboxEgressInvalid {
             reason: "invalid Azure egress target".to_string(),
@@ -60,12 +73,8 @@ pub(super) fn policy(egress: &SandboxEgress) -> Result<EgressPolicy> {
             let mut targets = Vec::new();
             for target in &allow {
                 let (host, port) = target.rsplit_once(':').unwrap_or((target, "443"));
-                let scheme = match port { "80" => "http", "443" => "https", _ => return Err(invalid(format!("Azure native egress cannot enforce target '{target}'; only HTTP port 80 and HTTPS port 443 are supported"))) };
-                if host.contains('/') {
-                    return Err(invalid(format!(
-                        "Azure native egress cannot enforce CIDR target '{target}'"
-                    )));
-                }
+                // validate_for_azure has already excluded every other port and CIDRs.
+                let scheme = if port == "80" { "http" } else { "https" };
                 targets.push((host, scheme));
             }
             // Azure wildcards include the apex. Deny it before the wildcard unless another

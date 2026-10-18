@@ -580,6 +580,9 @@ impl Sandbox {
     /// anything is provisioned, rather than at the first exec.
     pub fn validate_for_platform(&self, platform: Platform) -> Result<()> {
         self.egress.validate()?;
+        if platform == Platform::Azure {
+            self.egress.validate_for_azure()?;
+        }
         let mut capabilities = SandboxCapabilities::for_platform(platform)?;
         if let Some(supervisor) = &self.privileged_supervisor {
             if platform != Platform::Aws {

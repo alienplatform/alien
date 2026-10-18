@@ -123,6 +123,55 @@ impl SandboxEgress {
         }
     }
 
+    /// Azure's native proxy supports HTTP(S) matches and at most 500 rules, including
+    /// the deny rules needed to keep wildcard apices outside the allowed set.
+    pub fn validate_for_azure(&self) -> Result<()> {
+        let targets = self.targets()?;
+        let too_large = || {
+            AlienError::new(ErrorData::SandboxEgressPolicyTooLarge {
+                limit: "Azure's 500 native rules, including wildcard apex guards".to_string(),
+            })
+        };
+        if targets.len() > 500 {
+            return Err(too_large());
+        }
+        let mut rules = targets.len();
+        for target in &targets {
+            if !matches!(target.port, 80 | 443) {
+                return Err(invalid(
+                    &target.canonical(),
+                    "Azure native egress supports HTTP port 80 and HTTPS port 443 only",
+                ));
+            }
+            if matches!(&target.host, Host::Network(network) if network.prefix_len() != 32) {
+                return Err(invalid(
+                    &target.canonical(),
+                    "Azure native egress cannot enforce IPv4 CIDR targets",
+                ));
+            }
+            if let Host::Name {
+                name,
+                wildcard: true,
+            } = &target.host
+            {
+                let apex = Target {
+                    host: Host::Name {
+                        name: name.clone(),
+                        wildcard: false,
+                    },
+                    port: target.port,
+                };
+                if !targets.iter().any(|parent| parent.contains(&apex)) {
+                    rules += 1;
+                }
+            }
+        }
+        if rules > 500 {
+            return Err(too_large());
+        }
+        Ok(())
+    }
+
     /// Canonical JSON used by the gateway policy reference: normalized, sorted, no whitespace.
     /// Duplicate entries remain present; sorting makes input order irrelevant to the digest.
     pub fn canonical_json(&self) -> Result<Vec<u8>> {
