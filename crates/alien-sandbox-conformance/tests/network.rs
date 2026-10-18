@@ -156,6 +156,27 @@ fn connect_rejection_is_distinct_from_an_origin_response() {
 }
 
 #[test]
+fn missing_proxy_configuration_cannot_silently_probe_a_direct_connection() {
+    let probe = Probe::Http {
+        url: "https://127.0.0.1:1/".into(),
+        use_proxy: true,
+        server_name: None,
+        host_header: None,
+    };
+    let output = Command::new("python3")
+        .args(["-c", GUEST_PROBE, &serde_json::to_string(&probe).unwrap()])
+        .env_remove("HTTPS_PROXY")
+        .env_remove("https_proxy")
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(
+        output.stdout.is_empty(),
+        "configuration errors are not observations"
+    );
+}
+
+#[test]
 fn a_dead_control_cannot_turn_a_denied_subject_into_a_pass() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();

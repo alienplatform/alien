@@ -33,6 +33,8 @@ def http_probe(probe):
     if probe["useProxy"]:
         key = "HTTPS_PROXY" if origin.scheme == "https" else "HTTP_PROXY"
         proxy_value = os.environ.get(key, os.environ.get(key.lower(), ""))
+        if not proxy_value:
+            raise ValueError("explicit proxy probe requires a configured proxy")
     proxy = urllib.parse.urlsplit(proxy_value) if proxy_value else None
     if proxy and (proxy.scheme != "http" or not proxy.hostname):
         raise ValueError("expected an HTTP proxy URL")
