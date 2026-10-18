@@ -15,7 +15,7 @@ use alien_core::{
     },
     setup_resource_tags, InitialSetupAuthority, RemoteStackManagement, ResourceLifecycle,
 };
-use alien_error::{AlienError, Context, ErrorContext};
+use alien_error::{AlienError, Context, ContextError};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
