@@ -12,9 +12,15 @@ try {
     () => box.getOrCreate(created.sandboxId, { egress: "none" }),
     () => box.updateEgress(created.sandboxId, "none"),
   ]) {
-    await assert.rejects(call, error => error.code === "OPERATION_NOT_SUPPORTED" && error.retryable === false)
+    await assert.rejects(
+      call,
+      error => error.code === "OPERATION_NOT_SUPPORTED" && error.retryable === false,
+    )
   }
-  await assert.rejects(() => box.create({ egress: { allow: [] } }), error => error.code === "SANDBOX_EGRESS_INVALID")
+  await assert.rejects(
+    () => box.create({ egress: { allow: [] } }),
+    error => error.code === "SANDBOX_EGRESS_INVALID",
+  )
 } finally {
   await box.terminate(created.sandboxId)
 }

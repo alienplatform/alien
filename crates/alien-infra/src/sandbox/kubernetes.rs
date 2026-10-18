@@ -542,6 +542,7 @@ mod tests {
         use crate::core::ResourceController;
 
         let mut controller = KubernetesSandboxController {
+            egress: None,
             state: KubernetesSandboxState::Ready,
             sandbox_id: Some("sbx".to_string()),
             namespace: Some("alien-sandbox-sbx".to_string()),
