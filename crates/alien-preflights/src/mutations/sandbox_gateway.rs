@@ -88,8 +88,8 @@ impl StackMutation for SandboxGatewayMutation {
                 desired: "0.25".into(),
             })
             .memory(ResourceSpec {
-                min: "1Gi".into(),
-                desired: "1Gi".into(),
+                min: "512Mi".into(),
+                desired: "512Mi".into(),
             })
             // The managed scheduler prefers different machines for these replicas.
             // Insufficient available capacity may still place them together.
@@ -228,8 +228,8 @@ mod tests {
             .unwrap();
         assert!(gateway.links.is_empty());
         assert_eq!(gateway.replicas, Some(2));
-        assert_eq!(gateway.memory.min, "1Gi");
-        assert_eq!(gateway.memory.desired, "1Gi");
+        assert_eq!(gateway.memory.min, "512Mi");
+        assert_eq!(gateway.memory.desired, "512Mi");
         let repeated = SandboxGatewayMutation
             .mutate(prepared.clone(), &state, &config)
             .await
