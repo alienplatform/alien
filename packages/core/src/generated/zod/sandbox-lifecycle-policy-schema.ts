@@ -10,7 +10,7 @@ import * as z from "zod";
  */
 export const SandboxLifecyclePolicySchema = z.object({
     "idlePauseSeconds": z.int().min(0).describe("Idle period after which the sandbox is paused, where the platform supports it.\n\nStored state written before the rename calls this `idleSuspendSeconds`.").nullish(),
-"maxLifetimeSeconds": z.int().min(0).describe("Wall-clock ceiling on a single sandbox, after which the platform terminates it.\n\nOptional because not every backend has the primitive: Kubernetes has\n`activeDeadlineSeconds` and AWS `maximumDurationInSeconds`, while neither Azure nor Local\nexpose one, so declaring a ceiling there is refused at plan time rather than accepted and\nnever applied. AWS caps it at 8 hours.").nullish()
+"maxLifetimeSeconds": z.int().min(0).describe("Wall-clock ceiling on a single sandbox.\n\nAWS, GCP and Kubernetes enforce this natively; AWS caps it at 8 hours. Local's running\nmanager removes expired containers within its 250ms sweep interval plus Docker latency.\nAzure's deployment controller requests deletion on its next five-second reconciliation,\nplus Azure deletion latency. Azure enforcement pauses when the controller is stopped,\ndependencies are unavailable, the resource reaches a terminal failure, or the group is\nremoved from the deployment. It resumes on reconciliation; this is no platform hard stop.").nullish()
     }).describe("How long a sandbox may live and when it is paused.\n\nDeclaration-time ceilings, not per-request values: every sandbox created through this\ndeclaration's binding is held to them, whatever a caller asks for at runtime.")
 
 export type SandboxLifecyclePolicy = z.infer<typeof SandboxLifecyclePolicySchema>

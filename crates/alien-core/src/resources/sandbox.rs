@@ -223,7 +223,7 @@ pub struct SandboxCapabilities {
     /// A later call can reach a sandbox created by an earlier one
     pub reconnect: bool,
     /// A command can be started, polled and cancelled across separate calls, so it outlives the
-    /// one that started it. False where nothing inside the sandbox owns the process in between.
+    /// one that started it. The backend retains the process and its output between calls.
     pub jobs: bool,
     /// An authenticated, port-scoped capability to reach a service inside the sandbox
     pub preview: bool,
@@ -378,10 +378,9 @@ impl SandboxCapabilities {
             // Alien reconciles expiry metadata every five seconds while the deployment runs.
             // Terminal failures, unavailable dependencies and a stopped controller suspend it.
             sandbox_lifetime: true,
-            // No Alien process inside an Azure sandbox, so there is no supervisor to isolate.
+            // Native shell supervisors and commands share the guest PID namespace.
             supervisor_pid_namespace: false,
-            // No Alien process runs the command at all — the platform's own data plane does,
-            // so there is no separate supervisor identity to speak of.
+            // Native shell supervisors run as the same guest user as commands.
             supervisor_isolation: false,
         }
     }
