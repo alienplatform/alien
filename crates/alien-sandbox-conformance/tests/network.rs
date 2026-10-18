@@ -6,6 +6,21 @@ use std::time::Duration;
 
 use alien_sandbox_conformance::{evaluate, Expectation, Observation, Probe, Verdict, GUEST_PROBE};
 
+#[test]
+fn tls_sni_is_independent_of_connect_authority_and_certificate_validation_still_succeeds() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let output = Command::new("python3")
+        .arg(root.join("tests/tls_probe.py"))
+        .arg(root.join("src/probe.py"))
+        .output()
+        .expect("TLS fixture runs");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 fn observe(probe: &Probe, proxy: Option<&str>) -> Observation {
     let mut command = Command::new("python3");
     command

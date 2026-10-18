@@ -28,3 +28,36 @@ policy. Live qualification additionally needs deployed subject/control
 sandboxes, controlled public and private listeners, authoritative DNS query
 logs, gateway connection logs, and the deployment's independently read NAT IP.
 DNS resolution failure alone cannot prove that a query did not escape.
+
+Build the live runner with the deployment's backend feature (`aws`, `gcp`,
+`azure`, `kubernetes`, or `local`). It reads the standard deployment bindings
+from the environment:
+
+```sh
+cargo run -p alien-sandbox-conformance --features aws -- run suite.json sessions.jsonl
+cargo run -p alien-sandbox-conformance --features aws -- cleanup sessions.jsonl
+```
+
+The suite names distinct `controlBinding` and `subjectBinding`, identifies its
+`backend`, `revision`, and `mode`, and supplies `cases`. Each case has a `name`,
+`control` and `subject` probe, and an `expected` result. For example, a direct
+TCP denial uses these fields:
+
+```json
+{
+  "name": "direct public TCP",
+  "control": { "kind": "tcp", "host": "controlled.example", "port": 443 },
+  "subject": { "kind": "tcp", "host": "controlled.example", "port": 443 },
+  "expected": { "kind": "networkDenied" }
+}
+```
+
+The runner creates both sessions, retains their provider handles, and attempts
+termination on success and failure. It persists each session ID immediately in
+a new journal and refuses to overwrite a previous run. A non-passing verdict
+returns a failing exit code. The journal remains available for recovery.
+`terminationCallsCompleted` only confirms successful termination calls; verify
+resource deletion with backend list calls before claiming cleanup. Kubernetes
+recovery after process exit requires its broker because its bindings currently
+keep session claims in memory; the recovery command refuses to silently skip
+those sessions.
