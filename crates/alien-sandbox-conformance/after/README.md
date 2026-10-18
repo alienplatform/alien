@@ -111,6 +111,9 @@ returning 403 cannot prove the address boundary.
 The verifier permits one second of clock skew. Synchronize clocks and export
 complete logs; missing observations remain unproven. Log verification does not
 replace controlled DNS records and setup evidence for each destination class.
+Log exports may be concatenated in any node order. The verifier assigns a distinct
+matching event to each observation, reassigning overlapping timestamp matches when
+needed; sorting the input is not required and no event is reused.
 
 The update row measures from **before** the update API call through the observed
 CONNECT denial and includes command dispatch latency. It permits at most ten

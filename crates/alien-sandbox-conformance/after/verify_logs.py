@@ -18,9 +18,10 @@ def observations(report):
 
 
 def verify(report, events, audience):
-    used = set()
     checks = []
+    candidates = []
     for name, item in observations(report):
+        candidates.append([])
         value = item["observation"]
         if value["outcome"] not in ("response", "proxyDenied"):
             checks.append(
@@ -33,10 +34,9 @@ def verify(report, events, audience):
             continue
         destination = urlsplit(item["probe"]["url"])
         decision = "deny" if value["outcome"] == "proxyDenied" else "allow"
-        found = None
         for index, event in enumerate(events):
             fields = event.get("fields", event)
-            if index in used or fields.get("message") != "egress connection":
+            if fields.get("message") != "egress connection":
                 continue
             if (
                 fields.get("aud"),
@@ -68,18 +68,34 @@ def verify(report, events, audience):
                 and fields.get("reason") != "Egress denied: address is not public"
             ):
                 continue
-            found = index
-            used.add(index)
-            break
+            candidates[-1].append(index)
         checks.append(
             {
                 "case": name,
                 "sandboxId": item["sandboxId"],
                 "host": destination.hostname,
                 "decision": decision,
-                "verdict": "pass" if found is not None else "unproven",
+                "verdict": "unproven",
             }
         )
+    # Clock-skew windows overlap, and per-node exports need not be chronological.
+    # Reassign earlier matches when needed so each connection gets a distinct event.
+    assigned = {}
+
+    def assign(connection, seen):
+        for event in candidates[connection]:
+            if event in seen:
+                continue
+            seen.add(event)
+            if event not in assigned or assign(assigned[event], seen):
+                assigned[event] = connection
+                return True
+        return False
+
+    for connection in range(len(checks)):
+        assign(connection, set())
+    for connection in assigned.values():
+        checks[connection]["verdict"] = "pass"
     complete = bool(checks) and all(row["verdict"] == "pass" for row in checks)
     return {
         "revision": report["revision"],

@@ -16,6 +16,7 @@ import time
 import unittest
 import uuid
 from datetime import UTC, datetime
+from itertools import permutations
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -375,6 +376,76 @@ class After(unittest.IsolatedAsyncioTestCase):
         ):
             with self.assertRaises(RuntimeError):
                 await run.fingerprint(command, "sandbox")
+
+    def test_connection_log_matching_is_independent_of_input_order(self):
+        cases = [
+            {
+                "name": "connection-" + str(index),
+                "subject": {
+                    "sandboxId": "sandbox",
+                    "startedAt": 100 + index,
+                    "finishedAt": 101 + index,
+                    "probe": run.http("https://allowed.test/"),
+                    "observation": {"outcome": "response"},
+                },
+            }
+            for index in range(3)
+        ]
+        events = [
+            {
+                "message": "egress connection",
+                "aud": "deployment/resource",
+                "sub": "sandbox",
+                "host": "allowed.test",
+                "port": 443,
+                "decision": "allow",
+                "bytesUp": 1,
+                "bytesDown": 1,
+                "durationMs": 1,
+                "ts": datetime.fromtimestamp(stamp, UTC).isoformat(),
+            }
+            for stamp in (100, 101.5, 102.5)
+        ]
+        # Overlapping clock-skew windows require reassigning an earlier match.
+        # Both per-node log exports and report traversal may be out of time order.
+        for case_order in permutations(cases):
+            report = {"revision": "test", "cases": case_order}
+            for event_order in permutations(events):
+                self.assertEqual(
+                    "pass",
+                    verify_logs.verify(report, event_order, "deployment/resource")[
+                        "verdict"
+                    ],
+                )
+            self.assertEqual(
+                "unproven",
+                verify_logs.verify(report, events[:2], "deployment/resource")[
+                    "verdict"
+                ],
+            )
+
+        # A general denial must not consume the only address-floor witness.
+        cases = cases[:2]
+        cases[1]["name"] = "floor-vpc-name"
+        for case in cases:
+            case["subject"]["observation"] = {"outcome": "proxyDenied"}
+        events = events[1:]
+        for event, reason in zip(
+            events, ("address is not public", "target is not allowed")
+        ):
+            event["decision"] = "deny"
+            event["reason"] = "Egress denied: " + reason
+        # Both observations can see either event, but only one proves the floor.
+        cases[0]["subject"]["finishedAt"] = 102
+        for event_order in permutations(events):
+            self.assertEqual(
+                "pass",
+                verify_logs.verify(
+                    {"revision": "test", "cases": cases},
+                    event_order,
+                    "deployment/resource",
+                )["verdict"],
+            )
 
     def test_connection_log_requires_distinct_scoped_current_events(self):
         observation = {
