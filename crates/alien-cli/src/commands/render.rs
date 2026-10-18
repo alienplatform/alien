@@ -675,7 +675,7 @@ mod tests {
                 image: image.to_string(),
             })
             .egress(if remote {
-                SandboxEgress::Internet
+                SandboxEgress::Allow
             } else {
                 SandboxEgress::None
             })

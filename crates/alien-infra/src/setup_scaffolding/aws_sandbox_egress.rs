@@ -2163,7 +2163,7 @@ mod tests {
             service_provider: &provider,
             resource_prefix: PREFIX,
         };
-        let stack = stack(SandboxEgress::Internet, None);
+        let stack = stack(SandboxEgress::Allow, None);
         let state = stack_state(None);
         let mut records = BTreeMap::new();
 
@@ -3556,7 +3556,7 @@ mod tests {
             code: SandboxCode::Image {
                 image: REGIONAL_BUNDLE.to_string(),
             },
-            ..sandbox(SandboxEgress::Internet)
+            ..sandbox(SandboxEgress::Allow)
         };
         let served = serve_from_seed(sandbox, None).await;
 
@@ -3806,7 +3806,7 @@ mod tests {
     #[tokio::test]
     async fn setup_run_again_switches_a_serving_sandbox_between_allow_and_deny() {
         let cloud = Shared::default();
-        let allow = stack(SandboxEgress::Internet, created_network());
+        let allow = stack(SandboxEgress::Allow, created_network());
         let deny = stack(SandboxEgress::None, created_network());
         let mut state = stack_state(Some(ResourceStatus::Running));
         let mut records = BTreeMap::new();
