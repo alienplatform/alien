@@ -350,6 +350,43 @@ pub struct ContainerPort {
     pub port: u16,
 }
 
+/// A port reachable only by the listed resources of this deployment.
+/// Independent of public endpoints and the deployment's endpointAccess setting.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ContainerInternalEndpoint {
+    /// Unique endpoint name within this container.
+    pub name: String,
+    /// Container port served by this endpoint.
+    #[cfg_attr(feature = "openapi", schema(minimum = 1, maximum = 65535))]
+    pub port: u16,
+    /// Resources allowed to connect: Sandbox, Worker, Container or Daemon.
+    /// Required and non-empty. These access references are not lifecycle dependencies.
+    #[cfg_attr(feature = "openapi", schema(min_items = 1))]
+    pub from: Vec<ResourceRef>,
+}
+
+/// Outbound network restriction enforced outside the container.
+/// Absence preserves the runtime's existing full-network behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum ContainerEgress {
+    /// Public addresses and DNS only, plus the platform credential proxy for this identity.
+    /// Requires the restricted security profile and backend enforcement.
+    Internet,
+}
+
+/// Runtime address of a named internal endpoint, shared only with its allowed resources.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ContainerInternalEndpointOutput {
+    /// URL reachable through this endpoint's private network path.
+    pub url: String,
+}
+
 /// Container resource for running long-running container workloads.
 ///
 /// A Container defines a deployable unit that runs on a ComputeCluster.
@@ -415,6 +452,15 @@ pub struct Container {
     #[builder(field)]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub public_endpoints: Vec<PublicEndpoint>,
+
+    /// Named ports reachable only by their explicitly allowed deployment resources.
+    #[builder(field)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub internal_endpoints: Vec<ContainerInternalEndpoint>,
+
+    /// Optional public-internet-only egress. Requires restricted security and backend support.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub egress: Option<ContainerEgress>,
 
     /// Makes one HTTP port reachable from the control plane through the
     /// manager's tunnel, over the operator's outbound connection. Nothing is
@@ -540,6 +586,59 @@ impl Container {
         !self.stateful
     }
 
+    /// Validate resource-local network options; preflight also checks source existence and backend support.
+    pub fn validate_network_settings(&self) -> Result<()> {
+        let invalid = |reason: String| {
+            AlienError::new(ErrorData::InvalidResourceUpdate {
+                resource_id: self.id.clone(),
+                reason,
+            })
+        };
+        if self.egress.is_some()
+            && !self
+                .security
+                .as_ref()
+                .is_some_and(|security| security.profile == ContainerSecurityProfile::Restricted)
+        {
+            return Err(invalid(
+                "container egress internet requires security.profile restricted".into(),
+            ));
+        }
+        let mut names = std::collections::HashSet::new();
+        for endpoint in &self.internal_endpoints {
+            crate::resources::validate_endpoint_name(&self.id, &endpoint.name)?;
+            if !names.insert(&endpoint.name) {
+                return Err(invalid(format!(
+                    "duplicate internal endpoint name '{}'",
+                    endpoint.name
+                )));
+            }
+            if endpoint.port == 0 || !self.ports.iter().any(|port| port.port == endpoint.port) {
+                return Err(invalid(format!(
+                    "internal endpoint '{}' requires a declared nonzero port",
+                    endpoint.name
+                )));
+            }
+            if endpoint.from.is_empty() {
+                return Err(invalid(format!(
+                    "internal endpoint '{}' requires non-empty from resources",
+                    endpoint.name
+                )));
+            }
+            for source in &endpoint.from {
+                if source.id.is_empty()
+                    || !matches!(
+                        source.resource_type.as_ref(),
+                        "sandbox" | "worker" | "container" | "daemon"
+                    )
+                {
+                    return Err(invalid(format!("internal endpoint '{}' from must reference Sandbox, Worker, Container or Daemon resources", endpoint.name)));
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Validates the public endpoint configuration.
     fn validate_public_endpoints(&self) -> Result<()> {
         let mut endpoint_names = std::collections::HashSet::new();
@@ -622,6 +721,18 @@ impl<S: container_builder::State> ContainerBuilder<S> {
         self
     }
 
+    /// Exposes a named endpoint only to its listed deployment resources.
+    /// The access list does not add a dependency from this container to its callers.
+    pub fn internal_endpoint(mut self, endpoint: ContainerInternalEndpoint) -> Self {
+        if !self.ports.iter().any(|port| port.port == endpoint.port) {
+            self.ports.push(ContainerPort {
+                port: endpoint.port,
+            });
+        }
+        self.internal_endpoints.push(endpoint);
+        self
+    }
+
     /// Exposes a named public endpoint.
     pub fn public_endpoint(mut self, endpoint: PublicEndpoint) -> Self {
         if !self.ports.iter().any(|p| p.port == endpoint.port) {
@@ -699,6 +810,9 @@ pub struct ContainerOutputs {
     /// Public endpoints resolved for this container.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub public_endpoints: HashMap<String, PublicEndpointOutput>,
+    /// Internal endpoints resolved for the resources permitted by each endpoint's from list.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub internal_endpoints: HashMap<String, ContainerInternalEndpointOutput>,
     /// Status of each replica
     pub replicas: Vec<ReplicaStatus>,
     /// Persistent volumes, one per replica ordinal, with their latest snapshot.
@@ -953,6 +1067,113 @@ impl ResourceDefinition for Container {
 mod tests {
     use super::*;
     use crate::resources::ExposeProtocol;
+
+    fn network_container() -> Container {
+        Container::new("api".to_string())
+            .code(ContainerCode::Image {
+                image: "example:latest".into(),
+            })
+            .cpu(ResourceSpec {
+                min: "1".into(),
+                desired: "1".into(),
+            })
+            .memory(ResourceSpec {
+                min: "512Mi".into(),
+                desired: "512Mi".into(),
+            })
+            .permissions("execution".into())
+            .public_endpoint(PublicEndpoint {
+                name: "web".into(),
+                port: 8080,
+                protocol: ExposeProtocol::Http,
+                host_label: None,
+                wildcard_subdomains: false,
+            })
+            .internal_endpoint(ContainerInternalEndpoint {
+                name: "web-internal".into(),
+                port: 8080,
+                from: vec![ResourceRef::new(crate::Worker::RESOURCE_TYPE, "caller")],
+            })
+            .build()
+    }
+
+    #[test]
+    fn internal_endpoint_access_is_separate_from_public_exposure_and_dependencies() {
+        let container = network_container();
+        container.validate_update(&container).unwrap();
+        assert_eq!(container.ports, vec![ContainerPort { port: 8080 }]);
+        assert_eq!(container.public_endpoints.len(), 1);
+        assert_eq!(container.internal_endpoints.len(), 1);
+        assert!(!container
+            .get_dependencies()
+            .iter()
+            .any(|resource| resource.id == "caller"));
+        let encoded = serde_json::to_value(&container).unwrap();
+        let decoded: Container = serde_json::from_value(encoded.clone()).unwrap();
+        assert_eq!(container, decoded);
+        assert_eq!(
+            encoded["internalEndpoints"][0]["from"][0],
+            serde_json::json!({"type":"worker","id":"caller"})
+        );
+        let mut missing_from = encoded;
+        missing_from["internalEndpoints"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("from");
+        assert!(serde_json::from_value::<Container>(missing_from).is_err());
+    }
+
+    #[test]
+    fn internal_endpoints_require_valid_ports_and_workload_access_lists() {
+        let valid = network_container();
+        let mut empty = valid.clone();
+        empty.internal_endpoints[0].from.clear();
+        assert!(empty.validate_network_settings().is_err());
+        let mut unrelated = valid.clone();
+        unrelated.internal_endpoints[0].from[0] =
+            ResourceRef::new(crate::Storage::RESOURCE_TYPE, "data");
+        assert!(unrelated.validate_network_settings().is_err());
+        let mut zero = valid.clone();
+        zero.internal_endpoints[0].port = 0;
+        assert!(zero.validate_network_settings().is_err());
+        let mut duplicate = valid.clone();
+        duplicate
+            .internal_endpoints
+            .push(valid.internal_endpoints[0].clone());
+        assert!(duplicate.validate_network_settings().is_err());
+        for resource_type in [
+            crate::Sandbox::RESOURCE_TYPE,
+            crate::Worker::RESOURCE_TYPE,
+            Container::RESOURCE_TYPE,
+            crate::Daemon::RESOURCE_TYPE,
+        ] {
+            let mut supported = valid.clone();
+            supported.internal_endpoints[0].from[0] = ResourceRef::new(resource_type, "caller");
+            supported.validate_network_settings().unwrap();
+        }
+    }
+
+    #[test]
+    fn internet_egress_requires_restricted_security_and_is_opt_in() {
+        let mut container = network_container();
+        assert!(serde_json::to_value(&container)
+            .unwrap()
+            .get("egress")
+            .is_none());
+        container.egress = Some(ContainerEgress::Internet);
+        assert!(container.validate_update(&container).is_err());
+        container.security = Some(ContainerSecurity {
+            profile: ContainerSecurityProfile::Restricted,
+            run_as_user: 65532,
+            run_as_group: 65532,
+            read_only_root_filesystem: true,
+        });
+        container.validate_update(&container).unwrap();
+        assert_eq!(
+            serde_json::to_value(&container).unwrap()["egress"],
+            "internet"
+        );
+    }
 
     #[test]
     fn test_container_creation_with_autoscaling() {
