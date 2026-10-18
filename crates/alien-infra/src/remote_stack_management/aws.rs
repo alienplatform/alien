@@ -1143,7 +1143,7 @@ fn is_remote_conflict(error: &alien_error::AlienError<alien_client_core::ErrorDa
     )
 }
 
-fn is_remote_not_found(error: &alien_error::AlienError<alien_client_core::ErrorData>) -> bool {
+pub(super) fn is_remote_not_found(error: &alien_error::AlienError<alien_client_core::ErrorData>) -> bool {
     matches!(
         error.error,
         Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })

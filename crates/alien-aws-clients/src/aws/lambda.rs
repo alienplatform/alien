@@ -1182,6 +1182,12 @@ pub struct ListVersionsByFunctionResponse {
 #[serde(rename_all = "PascalCase")]
 pub struct UpdateFunctionConfigurationRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub handler: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout: Option<i32>,
