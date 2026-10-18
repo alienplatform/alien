@@ -142,7 +142,6 @@ mod tests {
                 run_as_user: 65532,
                 run_as_group: 65532,
                 read_only_root_filesystem: true,
-                egress: None,
             })
             .permissions("worker".to_string())
             .build();

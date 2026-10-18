@@ -11,16 +11,10 @@
 //! - Service discovery and internal networking
 //! - Load balancer registration for public-facing containers
 
-mod network;
-pub use network::{
-    ContainerInternalLoadBalancer, ContainerLoadBalancerSourceGroup,
-    ContainerLoadBalancerSubnetGroup,
-};
-
 use crate::error::{ErrorData, Result};
 use crate::resource::{ResourceDefinition, ResourceOutputsDefinition, ResourceRef, ResourceType};
 use crate::resources::{
-    APEX_HOST_LABEL, ComputeCluster, PublicEndpoint, PublicEndpointOutput, ToolchainConfig,
+    ComputeCluster, PublicEndpoint, PublicEndpointOutput, ToolchainConfig, APEX_HOST_LABEL,
 };
 use alien_error::AlienError;
 use bon::Builder;
@@ -261,21 +255,6 @@ pub struct ContainerSecurity {
     pub run_as_group: i64,
     /// Mount the root filesystem read-only.
     pub read_only_root_filesystem: bool,
-    /// Alien-internal gateway egress boundary, assigned only by deployment preflight.
-    #[doc(hidden)]
-    #[cfg_attr(feature = "openapi", schema(ignore))]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub egress: Option<ContainerEgress>,
-}
-
-/// Alien-internal outbound boundary for the managed sandbox gateway.
-#[doc(hidden)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum ContainerEgress {
-    /// Public destinations and configured public DNS, plus the container's own
-    /// service-account metadata proxy. Private networks and IPv6 are blocked.
-    InternetOnly,
 }
 
 /// Autoscaling configuration for stateless containers.
@@ -479,12 +458,6 @@ pub struct Container {
     /// Security settings shared by supported container runtimes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub security: Option<ContainerSecurity>,
-
-    /// Alien-internal gateway placement, assigned only by deployment preflight.
-    #[doc(hidden)]
-    #[cfg_attr(feature = "openapi", schema(ignore))]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub internal_load_balancer: Option<ContainerInternalLoadBalancer>,
 
     /// ComputeCluster resource ID that this container runs on.
     /// If None, will be auto-assigned by ComputeClusterMutation at deployment time.
@@ -925,14 +898,6 @@ impl ResourceDefinition for Container {
 
     fn get_dependencies(&self) -> Vec<ResourceRef> {
         let mut deps = self.links.clone();
-        if let Some(network) = self
-            .internal_load_balancer
-            .as_ref()
-            .map(|settings| settings.network.as_str())
-        {
-            deps.push(ResourceRef::new("network".into(), network));
-        }
-
         if let Some(key) = self
             .persistent_storage
             .as_ref()
@@ -1021,13 +986,6 @@ impl ResourceDefinition for Container {
             return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
                 resource_id: self.id.clone(),
                 reason: "the 'publicEndpoints' field is immutable".to_string(),
-            }));
-        }
-
-        if self.internal_load_balancer != new_container.internal_load_balancer {
-            return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
-                resource_id: self.id.clone(),
-                reason: "the 'internalLoadBalancer' field is immutable; replace the resource to change its network boundary".to_string(),
             }));
         }
 

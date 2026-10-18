@@ -2976,7 +2976,6 @@ mod tests {
             run_as_user: 65532,
             run_as_group: 65532,
             read_only_root_filesystem: true,
-                egress: None,
         });
         let harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
         let deployment = manifest_test_controller()
