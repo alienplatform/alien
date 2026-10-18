@@ -171,8 +171,8 @@ pub fn sandbox_egress_network<'a>(
     egress: &SandboxEgress,
 ) -> Result<Option<SandboxEgressNetwork<'a>>, SandboxEgressRefusal> {
     match egress {
-        SandboxEgress::Internet => return Ok(None),
-        SandboxEgress::None => {}
+        SandboxEgress::Allow => return Ok(None),
+        SandboxEgress::None | SandboxEgress::Internet | SandboxEgress::AllowDomains { .. } => {}
     }
     let (id, entry, network) = stack
         .resources()
@@ -297,13 +297,13 @@ mod tests {
         };
 
         let cases = [
-            (SandboxEgress::Internet, None, Ok(None)),
+            (SandboxEgress::Allow, None, Ok(None)),
             (
-                SandboxEgress::Internet,
+                SandboxEgress::Allow,
                 Some(NetworkSettings::UseDefault),
                 Ok(None),
             ),
-            (SandboxEgress::Internet, Some(byo_gcp()), Ok(None)),
+            (SandboxEgress::Allow, Some(byo_gcp()), Ok(None)),
             (SandboxEgress::None, None, Err(NoNetwork)),
             (SandboxEgress::None, Some(create()), Ok(Some(Created))),
             (

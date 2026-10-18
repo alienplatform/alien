@@ -144,6 +144,7 @@ use utoipa::OpenApi;
     SandboxCode,
     SandboxLimits,
     SandboxEgress,
+    LegacySandboxEgress,
     EgressPolicy,
     SandboxLifecyclePolicy,
     SandboxPrivilegedSupervisor,

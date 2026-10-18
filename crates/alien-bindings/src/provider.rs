@@ -1855,6 +1855,15 @@ impl BindingsProviderApi for BindingsProvider {
         let binding: SandboxBinding = self.parse_binding(binding_name, "sandbox")?;
 
         let gateway = binding.egress().and_then(|value| value.gateway());
+        if gateway.is_none()
+            && binding
+                .egress()
+                .is_some_and(|egress| *egress.declaration() == alien_core::SandboxEgress::Internet)
+        {
+            return Err(crate::providers::sandbox::egress::unsupported(
+                "internet declaration",
+            ));
+        }
         let default_policy = binding.default_policy();
         if let Some(policy) = default_policy {
             policy

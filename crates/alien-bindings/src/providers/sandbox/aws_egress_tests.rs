@@ -271,7 +271,7 @@ async fn aws_egress_declared_none_refuses_every_explicit_policy_before_io() {
                 .await
                 .unwrap_err()
                 .code,
-            "SANDBOX_EGRESS_NONE"
+            "SANDBOX_EGRESS_REQUIRES_INTERNET"
         );
         assert_eq!(
             provider
@@ -282,7 +282,7 @@ async fn aws_egress_declared_none_refuses_every_explicit_policy_before_io() {
                 .await
                 .unwrap_err()
                 .code,
-            "SANDBOX_EGRESS_NONE"
+            "SANDBOX_EGRESS_REQUIRES_INTERNET"
         );
     }
 }

@@ -88,12 +88,14 @@ impl AwsSandboxImportData {
         // The cloud's half of the policy, as the setup emitters read it: a privileged supervisor
         // enforces the declared egress in the guest, so the MicroVM itself gets open egress.
         let egress_connector_arns = match sandbox.cloud_egress() {
-            SandboxEgress::Internet => Vec::new(),
-            SandboxEgress::None => vec![recorded_connector_arn
-                .ok_or_else(|| {
-                    refuse("egress: deny has no egress connector recorded yet".to_string())
-                })?
-                .to_string()],
+            SandboxEgress::Allow | SandboxEgress::Internet => Vec::new(),
+            SandboxEgress::None | SandboxEgress::AllowDomains { .. } => {
+                vec![recorded_connector_arn
+                    .ok_or_else(|| {
+                        refuse("egress: deny has no egress connector recorded yet".to_string())
+                    })?
+                    .to_string()]
+            }
         };
 
         Ok(Self {
@@ -104,7 +106,10 @@ impl AwsSandboxImportData {
             bundle_uri: Some(bundle_uri),
             egress_connector_arns,
             preview_ports: sandbox.preview_ports.clone(),
-            allow_egress: matches!(sandbox.cloud_egress(), SandboxEgress::Internet),
+            allow_egress: matches!(
+                sandbox.cloud_egress(),
+                SandboxEgress::Internet | SandboxEgress::Allow
+            ),
         })
     }
 }

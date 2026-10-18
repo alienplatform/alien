@@ -737,16 +737,23 @@ impl EnvironmentVariableBuilder {
     /// Add the container's own binding to its environment variables for self-introspection.
     pub fn add_self_container_binding(
         mut self,
-        container_id: &str,
+        container: &Container,
         binding_params: Option<&serde_json::Value>,
     ) -> Result<Self> {
+        let container_id = &container.id;
         self.env_vars.insert(
             ENV_ALIEN_CURRENT_CONTAINER_BINDING_NAME.to_string(),
             container_id.to_string(),
         );
 
         if let Some(params) = binding_params {
-            let binding_env_vars = serialize_binding_as_env_var(container_id, params).context(
+            let mut params = params.clone();
+            filter_internal_endpoints(
+                &mut params,
+                container,
+                &ResourceRef::new(Container::RESOURCE_TYPE, container_id.clone()),
+            );
+            let binding_env_vars = serialize_binding_as_env_var(container_id, &params).context(
                 ErrorData::ResourceConfigInvalid {
                     message: "Failed to serialize self container binding parameters".to_string(),
                     resource_id: Some(container_id.to_string()),
@@ -1113,7 +1120,7 @@ mod internal_endpoint_tests {
     #[test]
     fn only_authorized_named_urls_reach_the_receiving_binding() {
         let container: Container = serde_json::from_value(serde_json::json!({"id":"api",
-            "code":{"type":"image","image":"example:latest"}, "permissions":"app",
+            "code":{"type":"image","image":"example:latest"}, "permissions":"app", "links":[], "ports":[], "environment":{}, "stateful":false,
             "cpu":{"min":"1","desired":"1"}, "memory":{"min":"512Mi","desired":"512Mi"},
             "internalEndpoints":[
                 {"name":"admin","port":3129,"from":[{"type":"worker","id":"caller"}]},
