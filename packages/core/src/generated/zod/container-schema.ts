@@ -8,7 +8,6 @@ import { ContainerAutoscalingSchema } from "./container-autoscaling-schema.js";
 import { ContainerCodeSchema } from "./container-code-schema.js";
 import { ContainerEgressSchema } from "./container-egress-schema.js";
 import { ContainerGpuSpecSchema } from "./container-gpu-spec-schema.js";
-import { ContainerInternalEndpointSchema } from "./container-internal-endpoint-schema.js";
 import { ContainerPortSchema } from "./container-port-schema.js";
 import { ContainerResourceChoicesSchema } from "./container-resource-choices-schema.js";
 import { ContainerSecuritySchema } from "./container-security-schema.js";
@@ -51,9 +50,6 @@ get "healthCheck"(){
                 return z.union([HealthCheckSchema, z.null()]).optional()
               },
 "id": z.string().describe("Unique identifier for the container.\nMust be DNS-compatible: lowercase alphanumeric with hyphens."),
-get "internalEndpoints"(){
-                return z.array(ContainerInternalEndpointSchema.describe("A port reachable only by the listed resources of this deployment.\nIndependent of public endpoints and the deployment's endpointAccess setting.")).describe("Named ports reachable only by their explicitly allowed deployment resources.").optional()
-              },
 get "kubernetesLivenessProbe"(){
                 return z.union([KubernetesHttpProbeSchema, z.null()]).optional()
               },

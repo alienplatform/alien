@@ -38,8 +38,7 @@ pub use build::{
     AcaBuildBinding, BuildBinding, CloudbuildBuildBinding, CodebuildBuildBinding, LocalBuildBinding,
 };
 pub use container::{
-    ContainerBinding, ContainerInternalEndpointBinding, HorizonContainerBinding,
-    KubernetesContainerBinding, LocalContainerBinding,
+    ContainerBinding, HorizonContainerBinding, KubernetesContainerBinding, LocalContainerBinding,
 };
 pub use container_apps_environment::ContainerAppsEnvironmentBinding;
 pub use key::{AwsKmsKeyBinding, AzureKeyVaultKeyBinding, GcpCloudKmsKeyBinding, KeyBinding};
