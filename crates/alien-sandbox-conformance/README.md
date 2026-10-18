@@ -85,3 +85,7 @@ The report includes pod placements: this checks the selected nodes and address
 family, not every node or both IP families. It does not establish sandbox
 runtime isolation or qualify the sandbox's own network rules. Installation and
 an accepted NetworkPolicy object alone do not establish enforcement.
+
+After-only runtime policy, NAT, gateway-log and connector-refusal probes live in
+[`after/`](after/README.md). They require the implementation under test’s Python
+SDK and preserve this baseline runner unchanged.
