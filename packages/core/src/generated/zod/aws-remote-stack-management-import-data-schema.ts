@@ -14,7 +14,8 @@ export const AwsRemoteStackManagementImportDataSchema = z.object({
     }).catchall(z.array(z.string())).describe("Per-scope revisions of the management grants installed by this setup artifact.").nullish(),
 "managementPermissionsApplied": z.boolean().describe("Whether the management inline policy was attached by the generated stack."),
 "roleArn": z.string().describe("Cross-account management role ARN."),
-"roleName": z.string().describe("Cross-account management role name.")
+"roleName": z.string().describe("Cross-account management role name."),
+"workerGatewayCleanupFunctionArn": z.string().describe("Published setup-owned capability for retiring private worker gateway tasks.").nullish()
     }).describe("AWS RemoteStackManagement ImportData.")
 
 export type AwsRemoteStackManagementImportData = z.infer<typeof AwsRemoteStackManagementImportDataSchema>
