@@ -722,6 +722,7 @@ mod tests {
     use alien_core::SandboxCode;
     use alien_core::SandboxEgress;
     use alien_core::{ResourceLifecycle, SandboxLifecyclePolicy, Stack, StackSettings};
+    use hcl::eval::Evaluate;
     use indexmap::IndexMap;
 
     fn binding_for(egress: SandboxEgress) -> String {
@@ -776,27 +777,32 @@ mod tests {
             .to_string()
     }
 
-    /// The declared mode has to reach the binding, whole.
-    ///
-    /// Azure applies the policy at create rather than through a setup resource, so the binding is
-    /// the only carrier: a mode that stops here leaves every session created under the data
-    /// plane's own default, which is open. A hostname list fails twice over — the mode without the
-    /// domains denies everything, and the domains without the mode are ignored.
+    /// Azure receives policy through the binding, so prove the rendered HCL decodes to it.
     #[test]
     fn the_binding_carries_the_declared_egress() {
-        for expected in [
+        for policy in [
             SandboxEgress::None,
-            SandboxEgress::Internet,
             SandboxEgress::Allow {
                 allow: vec!["api.example.com".to_string()],
             },
+            SandboxEgress::Internet,
         ] {
-            let rendered = binding_for(expected.clone());
-            let value: serde_json::Value =
-                hcl::from_str(&format!("binding = {rendered}")).expect("binding is valid HCL");
-            let actual: SandboxEgress = serde_json::from_value(value["binding"]["egress"].clone())
-                .expect("the emitted policy matches the binding's public schema");
-            assert_eq!(actual, expected);
+            let rendered = binding_for(policy.clone());
+            let expression: Expression = rendered.parse().expect("binding is valid HCL");
+            let Expression::Object(fields) = expression else {
+                panic!("binding must be an object");
+            };
+            let egress = fields
+                .iter()
+                .find(|(key, _)| key.to_string() == "egress")
+                .expect("binding carries egress")
+                .1
+                .evaluate(&hcl::eval::Context::new())
+                .expect("egress has no unresolved expressions");
+            let actual: alien_core::bindings::SandboxEgressBinding =
+                serde_json::from_value(serde_json::to_value(egress).unwrap())
+                    .expect("emitted egress is readable by the binding");
+            assert_eq!(actual, policy.into());
         }
     }
 

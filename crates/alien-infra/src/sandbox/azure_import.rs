@@ -225,7 +225,7 @@ mod tests {
             .expect("imported sandbox should have controller state");
         assert_eq!(internal["sandboxGroup"], "sbg");
         assert_eq!(internal["diskImage"], "ubuntu");
-        assert_eq!(internal["egress"]["mode"], "deny");
+        assert_eq!(internal["egress"], "none");
         assert_eq!(internal["idlePauseSeconds"], 300);
         assert_eq!(internal["limits"]["cpu"], "4000m");
         assert_eq!(internal["limits"]["memory"], "8192Mi");

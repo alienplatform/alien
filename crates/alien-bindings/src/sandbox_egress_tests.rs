@@ -162,6 +162,66 @@ fn claims(delivery: &EgressDelivery) -> crate::sandbox_egress_token::EgressToken
 }
 
 #[tokio::test]
+async fn unused_policy_chunks_expire_without_resetting_generations_or_other_sandboxes() {
+    let harness = Harness::new().await;
+    let manager = &harness.manager;
+    let deadline = now_unix().unwrap() + 3;
+    manager
+        .create("short", &SandboxEgress::Internet, deadline)
+        .await
+        .unwrap();
+    manager.update("short", &SandboxEgress::None).await.unwrap();
+    let lost_policy = SandboxEgress::Allow {
+        allow: vec!["api.example.com".to_string()],
+    };
+    assert_eq!(
+        manager
+            .create("short", &lost_policy, deadline)
+            .await
+            .unwrap_err()
+            .code,
+        "SANDBOX_EGRESS_CONFLICT"
+    );
+    manager
+        .create("long", &SandboxEgress::Internet, deadline + 1000)
+        .await
+        .unwrap();
+    let prefix = format!("sandbox-policy-content:{deadline}:");
+    let chunks = manager.kv.scan_prefix(&prefix, None, None).await.unwrap();
+    assert_eq!(
+        chunks.items.len(),
+        3,
+        "current, replaced and losing policies exist"
+    );
+
+    // Exercise the real store's expiry, allowing its millisecond TTL to pass the Unix deadline.
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    for chunk in chunks.items {
+        assert!(manager.kv.get(&chunk.key).await.unwrap().is_none());
+    }
+    assert!(manager
+        .kv
+        .get(&manager.key("short"))
+        .await
+        .unwrap()
+        .is_some());
+    assert!(manager.renew("short").await.is_err());
+    assert_eq!(
+        manager
+            .create("short", &SandboxEgress::Internet, deadline + 1000)
+            .await
+            .unwrap_err()
+            .code,
+        "SANDBOX_EGRESS_CONFLICT"
+    );
+    let renewed = harness.reopen().await.renew("long").await.unwrap();
+    assert_eq!(
+        claims(&renewed).policy,
+        SandboxEgress::Internet.policy_digest().unwrap()
+    );
+}
+
+#[tokio::test]
 async fn policy_survives_reconnect_and_concurrent_updates_without_extending_lifetime() {
     let harness = Harness::new().await;
     let deadline = now_unix().unwrap() + 1000;

@@ -23,7 +23,6 @@ pub enum SandboxEgress {
     #[serde(untagged)]
     Allow {
         /// Hostnames, wildcard hostnames, IPv4 literals or IPv4 CIDRs, optionally with a port.
-        #[serde(serialize_with = "serialize_targets")]
         allow: Vec<String>,
     },
 }
@@ -58,18 +57,6 @@ impl utoipa::PartialSchema for SandboxEgress {
 
 #[cfg(feature = "openapi")]
 impl utoipa::ToSchema for SandboxEgress {}
-
-fn serialize_targets<S: serde::Serializer>(
-    targets: &[String],
-    serializer: S,
-) -> std::result::Result<S::Ok, S::Error> {
-    let normalized = targets
-        .iter()
-        .map(|value| Target::parse(value).map(|target| target.canonical()))
-        .collect::<Result<Vec<_>>>()
-        .map_err(serde::ser::Error::custom)?;
-    normalized.serialize(serializer)
-}
 
 impl<'de> Deserialize<'de> for SandboxEgress {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
@@ -217,7 +204,8 @@ impl SandboxEgress {
     }
 
     // Setup authorizations predate the JSON rename. Keep only their hash projection stable;
-    // declarations and stored state always serialize using the current public format.
+    // declarations and stored state use the current format but retain the original spelling.
+    // Normalizing at storage time would invalidate approvals after saving and reloading a stack.
     pub(crate) fn setup_digest_value(&self) -> serde_json::Value {
         match self {
             Self::None => serde_json::json!({ "mode": "deny" }),

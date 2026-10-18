@@ -455,18 +455,17 @@ mod tests {
             .expect("binding serializes as an object")
             .remove("allowEgress")
             .expect("the fixture allowed egress");
-        let restored: SandboxBinding =
-            serde_json::from_value(without_ttl).expect("an absent ttl still loads");
+        without_ttl.as_object_mut().unwrap().remove("egress");
+        let restored: SandboxBinding = serde_json::from_value(without_ttl)
+            .expect("legacy binding without optional fields loads");
+        let SandboxBinding::GcpAgentPlatform(restored) = restored else {
+            panic!("the service tag must select Agent Platform");
+        };
+        assert_eq!(restored.max_lifetime_seconds, None);
+        assert!(!restored.allow_egress, "legacy bindings default to deny");
         assert_eq!(
-            restored,
-            SandboxBinding::gcp_agent_platform(
-                "projects/p/locations/us-central1/reasoningEngines/1",
-                "projects/p/locations/us-central1/sandboxTemplates/agent",
-                "us-central1",
-                None,
-                false,
-            ),
-            "an absent ttl deserializes as None and an absent allowEgress as deny"
+            restored.egress, None,
+            "legacy bindings carry no explicit bound"
         );
     }
 
