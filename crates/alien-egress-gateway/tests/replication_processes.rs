@@ -301,14 +301,25 @@ async fn three_process_replication_survives_faults_and_exposes_total_loss_replay
             assert_eq!(connect_status(proxy, &token).await, 200);
             traffic_started.wait().await;
             let (mut allowed, mut denied) = (1, 0);
-            while !*traffic_done.borrow() {
-                match connect_status(proxy, &token).await {
+            loop {
+                let stopping = *traffic_done.borrow();
+                let status = connect_status(proxy, &token).await;
+                if stopping {
+                    assert_eq!(
+                        status, 403,
+                        "final steady request must observe the synchronized denial"
+                    );
+                }
+                match status {
                     200 => {
                         assert_eq!(denied, 0, "allowed after observing the newer denial");
                         allowed += 1;
                     }
                     403 => denied += 1,
                     status => panic!("steady traffic returned unexpected status {status}"),
+                }
+                if stopping {
+                    break;
                 }
                 tokio::time::sleep(Duration::from_millis(25)).await;
             }
@@ -331,6 +342,14 @@ async fn three_process_replication_survives_faults_and_exposes_total_loss_replay
     assert_eq!(cluster.connect(2, &token).await, 403);
     cluster.isolate(2, Fault::Heal);
     cluster.ready_all().await;
+    assert_eq!(
+        cluster.connect(2, &token).await,
+        403,
+        "replacement must snapshot the pending write before ready"
+    );
+    // The earlier 503 did not acknowledge every surviving peer. Follow the SDK
+    // contract: retry this exact record after recovery, then require all peers.
+    assert_eq!(cluster.write(0, &deny, false).await, 204);
     cluster.assert_all(&token, 403).await;
 
     stop_traffic.send(true).unwrap();
