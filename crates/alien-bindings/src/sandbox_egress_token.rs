@@ -44,6 +44,19 @@ pub struct EgressTokenRequest<'a> {
     pub sandbox_expires_at: i64,
 }
 
+/// The exact policy operation authorized by a short-lived admin token.
+pub enum EgressAdminOperation<'a> {
+    /// Read the durable policy version, including a deletion tombstone.
+    ReadVersion,
+    /// Replace the policy at a version greater than the stored version.
+    Put {
+        policy: &'a EgressPolicy,
+        version: u64,
+    },
+    /// Remove the policy while retaining its version against replay.
+    Delete { version: u64 },
+}
+
 /// An issuer with a deployment key. Debug output never includes the private key.
 pub struct EgressTokenIssuer {
     kid: String,
@@ -120,12 +133,12 @@ impl EgressTokenIssuer {
         Ok(issuer)
     }
 
-    /// Signs the operation and exact policy digest, with a sixty-second lifetime.
+    /// Signs the operation, version and exact policy digest with a sixty-second lifetime.
     pub fn mint_admin(
         &self,
         audience: &str,
         sandbox_id: &str,
-        policy: Option<&EgressPolicy>,
+        operation: EgressAdminOperation<'_>,
         now_unix: i64,
     ) -> Result<String> {
         validate_identity(audience, sandbox_id)?;
@@ -135,8 +148,19 @@ impl EgressTokenIssuer {
         let exp = now_unix
             .checked_add(60)
             .ok_or_else(|| invalid("issue time is outside the supported range"))?;
+        let (method, version, policy) = match operation {
+            EgressAdminOperation::ReadVersion => ("GET", None, None),
+            EgressAdminOperation::Put { policy, version } => ("PUT", Some(version), Some(policy)),
+            EgressAdminOperation::Delete { version } => ("DELETE", Some(version), None),
+        };
         let mut claims = serde_json::json!({"iss":"alien-sandbox","aud":audience,"sub":sandbox_id,
-            "method":if policy.is_some() {"PUT"} else {"DELETE"},"iat":now_unix,"exp":exp});
+            "method":method,"iat":now_unix,"exp":exp});
+        if let Some(version) = version {
+            if version == 0 {
+                return Err(invalid("policy write version must be greater than zero"));
+            }
+            claims["version"] = version.into();
+        }
         if let Some(policy) = policy {
             claims["policy"] = policy
                 .policy_digest()
@@ -268,7 +292,15 @@ mod admin_tests {
         let issuer = EgressTokenIssuer::from_vault_json(&secret, "rotation-2").unwrap();
         assert!(EgressTokenIssuer::from_vault_json(&secret, "wrong-kid").is_err());
         let token = issuer
-            .mint_admin("prefix/box", "session", Some(&EgressPolicy::Internet), 1000)
+            .mint_admin(
+                "prefix/box",
+                "session",
+                EgressAdminOperation::Put {
+                    policy: &EgressPolicy::Internet,
+                    version: 42,
+                },
+                1000,
+            )
             .unwrap();
         let parts: Vec<_> = token.split('.').collect();
         let header: serde_json::Value =
@@ -278,7 +310,7 @@ mod admin_tests {
             serde_json::from_slice(&URL_SAFE_NO_PAD.decode(parts[1]).unwrap()).unwrap();
         assert_eq!(
             claims,
-            serde_json::json!({"iss":"alien-sandbox", "aud":"prefix/box", "sub":"session", "method":"PUT", "policy": EgressPolicy::Internet.policy_digest().unwrap(), "iat":1000, "exp":1060})
+            serde_json::json!({"iss":"alien-sandbox", "aud":"prefix/box", "sub":"session", "method":"PUT", "version":42, "policy": EgressPolicy::Internet.policy_digest().unwrap(), "iat":1000, "exp":1060})
         );
         key.pk
             .verify(

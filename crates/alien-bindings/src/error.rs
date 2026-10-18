@@ -62,6 +62,16 @@ pub enum ErrorData {
     )]
     SandboxEgressInvalid { reason: String },
 
+    /// Another policy write superseded this operation; replaying it could undo a restriction.
+    #[error(
+        code = "SANDBOX_EGRESS_CONFLICT",
+        message = "Sandbox '{sandbox_id}' egress policy changed concurrently; choose the desired policy again",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    SandboxEgressConflict { sandbox_id: String },
+
     /// Plaintext or context is outside the portable Key binding limits.
     #[error(
         code = "KEY_INPUT_INVALID",
