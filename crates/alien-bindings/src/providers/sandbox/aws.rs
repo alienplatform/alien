@@ -127,6 +127,20 @@ impl AwsSandbox {
         sandbox_id: &str,
         delivery: crate::sandbox_egress::EgressDelivery,
     ) -> Result<()> {
+        self.deliver_egress(sandbox_id, Some(&delivery.token), &delivery.policy)
+            .await
+    }
+
+    async fn deliver_egress(
+        &self,
+        sandbox_id: &str,
+        token: Option<&str>,
+        policy: &str,
+    ) -> Result<()> {
+        let mut body = serde_json::json!({"policy":policy});
+        if let Some(token) = token {
+            body["token"] = token.into();
+        }
         let deadline = std::time::Instant::now() + SANDBOX_READY_TIMEOUT;
         loop {
             if self
@@ -147,7 +161,7 @@ impl AwsSandbox {
         let request = self
             .authorized_request(sandbox_id, reqwest::Method::PUT, "/v1/egress")
             .await?
-            .json(&serde_json::json!({"token": delivery.token,"policy":delivery.policy}))
+            .json(&body)
             .timeout(SANDBOX_READY_TIMEOUT);
         loop {
             let mut response = request
@@ -175,7 +189,7 @@ impl AwsSandbox {
                 || std::time::Instant::now() >= deadline
             {
                 let status = response.status();
-                let reason = Self::identity_refusal_reason(response, &delivery.token).await?;
+                let reason = Self::identity_refusal_reason(response, token, policy).await?;
                 return Err(AlienError::new(ErrorData::SandboxUnreachable {
                     operation: "sandbox.egress".to_string(),
                     reason: format!("agent refused egress identity: HTTP {status}: {reason}"),
@@ -189,7 +203,8 @@ impl AwsSandbox {
     /// Keep the agent's diagnosis without accepting an unbounded error body or echoing identity.
     async fn identity_refusal_reason(
         mut response: reqwest::Response,
-        token: &str,
+        token: Option<&str>,
+        policy: &str,
     ) -> Result<String> {
         let status = response.status();
         tokio::time::timeout(SANDBOX_READY_TIMEOUT, async {
@@ -207,7 +222,10 @@ impl AwsSandbox {
                 }
                 body.extend_from_slice(&chunk);
             }
-            let body = String::from_utf8_lossy(&body).replace(token, "[redacted]");
+            let mut body = String::from_utf8_lossy(&body).replace(policy, "[redacted]");
+            if let Some(token) = token {
+                body = body.replace(token, "[redacted]");
+            }
             let body: String = body.chars().filter(|c| !c.is_control()).collect();
             Ok(if body.trim().is_empty() {
                 "empty agent refusal body".to_string()
@@ -737,9 +755,25 @@ impl Sandbox for AwsSandbox {
             .egress_manager
             .as_ref()
             .ok_or_else(|| super::egress::unsupported("update_egress"))?;
-        self.ensure_owned("sandbox.updateEgress", sandbox_id)
-            .await?;
-        manager.update(sandbox_id, &policy).await
+        let sandbox = self
+            .fetch(sandbox_id, "sandbox.updateEgress")
+            .await?
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::SandboxUnreachable {
+                    operation: "sandbox.updateEgress".into(),
+                    reason: format!(
+                        "sandbox '{sandbox_id}' does not belong to this sandbox resource"
+                    ),
+                })
+            })?;
+        manager.update(sandbox_id, &policy).await?;
+        if sandbox.state == SandboxState::Running {
+            // Keep the live identity unchanged while refreshing the agent's copy for
+            // recovery after total gateway loss. Paused agents receive it on resume.
+            let record = manager.policy_record(sandbox_id).await?;
+            self.deliver_egress(sandbox_id, None, &record).await?;
+        }
+        Ok(())
     }
 
     async fn get(&self, sandbox_id: &str) -> Result<Option<SandboxInstance>> {
