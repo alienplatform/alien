@@ -5,6 +5,7 @@
 
 import * as z from "zod";
 import { AwsFailureDomainSubnetsSchema } from "./aws-failure-domain-subnets-schema.js";
+import { AwsSandboxNetworkSchema } from "./aws-sandbox-network-schema.js";
 
 /**
  * @description AWS Network ImportData.
@@ -20,6 +21,9 @@ export const AwsNetworkImportDataSchema = z.object({
 "privateSubnetIds": z.array(z.string()).describe("Private subnet IDs."),
 "publicRouteTableId": z.string().describe("Public route table ID.").nullish(),
 "publicSubnetIds": z.array(z.string()).describe("Public subnet IDs."),
+get "sandboxNetwork"(){
+                return z.union([AwsSandboxNetworkSchema, z.null()]).optional()
+              },
 "securityGroupId": z.string().describe("Security group ID for private workloads.").nullish(),
 "subnetsByFailureDomain": z.optional(z.object({
     

@@ -60,6 +60,7 @@ export type { AwsRemoteStackManagementHeartbeatData } from "./zod/aws-remote-sta
 export type { AwsRemoteStackManagementImportData } from "./zod/aws-remote-stack-management-import-data-schema.js";
 export type { AwsS3StorageHeartbeatData } from "./zod/aws-s3-storage-heartbeat-data-schema.js";
 export type { AwsSandboxImportData } from "./zod/aws-sandbox-import-data-schema.js";
+export type { AwsSandboxNetwork } from "./zod/aws-sandbox-network-schema.js";
 export type { AwsServiceAccountImportData } from "./zod/aws-service-account-import-data-schema.js";
 export type { AwsSqsQueueHeartbeatData } from "./zod/aws-sqs-queue-heartbeat-data-schema.js";
 export type { AwsStorageImportData } from "./zod/aws-storage-import-data-schema.js";
@@ -576,6 +577,7 @@ export { AwsRemoteStackManagementHeartbeatDataSchema } from "./zod/aws-remote-st
 export { AwsRemoteStackManagementImportDataSchema } from "./zod/aws-remote-stack-management-import-data-schema.js";
 export { AwsS3StorageHeartbeatDataSchema } from "./zod/aws-s3-storage-heartbeat-data-schema.js";
 export { AwsSandboxImportDataSchema } from "./zod/aws-sandbox-import-data-schema.js";
+export { AwsSandboxNetworkSchema } from "./zod/aws-sandbox-network-schema.js";
 export { AwsServiceAccountImportDataSchema } from "./zod/aws-service-account-import-data-schema.js";
 export { AwsSqsQueueHeartbeatDataSchema } from "./zod/aws-sqs-queue-heartbeat-data-schema.js";
 export { AwsStorageImportDataSchema } from "./zod/aws-storage-import-data-schema.js";
