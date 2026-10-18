@@ -24,6 +24,21 @@ pub fn has_sandbox_gateway(stack: &Stack) -> bool {
         .is_some_and(|entry| entry.config.downcast_ref::<crate::Container>().is_some())
 }
 
+/// A setup-owned sandbox initializes the shared key before runtime work can start.
+/// Within the same lifecycle, resource-id order provides one deterministic writer.
+pub fn sandbox_egress_key_owner(stack: &Stack) -> Option<&str> {
+    stack
+        .resources()
+        .filter(|(_, entry)| {
+            entry
+                .config
+                .downcast_ref::<Sandbox>()
+                .is_some_and(|sandbox| matches!(sandbox.egress, SandboxEgress::Internet))
+        })
+        .min_by_key(|(id, entry)| (entry.lifecycle != crate::ResourceLifecycle::Frozen, *id))
+        .map(|(id, _)| id.as_str())
+}
+
 /// Closed sandboxes retain their denying connector. Only the new internet
 /// declaration opts into the gateway, including in stacks with legacy sandboxes.
 pub fn sandbox_needs_connector(stack: &Stack, sandbox: &Sandbox) -> bool {

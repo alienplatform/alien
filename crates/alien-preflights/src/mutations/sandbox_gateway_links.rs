@@ -43,7 +43,7 @@ impl StackMutation for SandboxGatewayLinksMutation {
             .collect();
         let gateway = ResourceRef::new(Container::RESOURCE_TYPE, SANDBOX_EGRESS_GATEWAY_ID);
         let vault = ResourceRef::new(Vault::RESOURCE_TYPE, SECRETS_VAULT_ID);
-        let owner = sandbox_ids.iter().min().cloned();
+        let owner = alien_core::sandbox_egress::sandbox_egress_key_owner(&stack).map(str::to_owned);
         for id in &sandbox_ids {
             let entry = stack
                 .resources

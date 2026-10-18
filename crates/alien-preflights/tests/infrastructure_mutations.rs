@@ -691,95 +691,201 @@ async fn test_mutation_ordering() {
     }
 }
 
-/// Loading a gateway-backed sandbox needs the vault descriptor even when this workload
-/// can only execute existing sessions. Linking it must not grant signing-key access.
+/// Named and inline management grants may read the signing key; execute-only grants may not.
 #[tokio::test]
-async fn execute_only_sandbox_consumer_gets_vault_binding_without_secret_access() {
-    let sandbox = Sandbox::new("box".into())
-        .code(SandboxCode::Image {
-            image: "example.invalid/sandbox:1".into(),
-        })
-        .egress(SandboxEgress::Internet)
-        .lifecycle(SandboxLifecyclePolicy {
-            max_lifetime_seconds: None,
-            idle_pause_seconds: None,
-        })
-        .build();
-    let worker = Container::new("executor".into())
-        .code(ContainerCode::Image {
-            image: "example.invalid/executor:1".into(),
-        })
-        .cpu(ResourceSpec {
-            min: "0.25".into(),
-            desired: "0.25".into(),
-        })
-        .memory(ResourceSpec {
-            min: "256Mi".into(),
-            desired: "256Mi".into(),
-        })
-        .permissions("execution".into())
-        .link(&sandbox)
-        .build();
-    let stack = Stack::new("sandbox-executor".into())
-        .add(sandbox, ResourceLifecycle::Frozen)
-        .add(worker, ResourceLifecycle::Live)
-        .permission(
-            "execution",
-            PermissionProfile::new().resource("box", ["sandbox/execute"]),
-        )
-        .build();
-    let config = DeploymentConfig::builder()
-        .stack_settings(StackSettings::default())
-        .environment_variables(empty_env_snapshot())
-        .compute_backend(ComputeBackend::Horizon(HorizonConfig {
-            url: "https://example.invalid".into(),
-            horizon_machine_image: None,
-            clusters: Default::default(),
-        }))
-        .allow_frozen_changes(false)
-        .external_bindings(ExternalBindings::default())
-        .build();
-    let state = StackState::new(Platform::Aws);
-    let prepared = PreflightRunner::new()
-        .apply_mutations(stack, &state, &config)
-        .await
-        .expect("prepare execute-only consumer");
-    for pass in [
-        prepared.clone(),
-        PreflightRunner::new()
-            .apply_mutations(prepared, &state, &config)
-            .await
-            .expect("prepare again without widening permissions"),
+async fn sandbox_consumers_get_signing_access_only_with_management_permissions() {
+    for (permission, inline) in [
+        ("sandbox/execute", false),
+        ("sandbox/execute", true),
+        ("sandbox/management", false),
+        ("sandbox/management", true),
     ] {
-        let worker = pass.resources["executor"]
-            .config
-            .downcast_ref::<Container>()
-            .unwrap();
-        assert!(
-            worker
+        let reference = if inline {
+            alien_core::permissions::PermissionSetReference::from_inline(
+                alien_permissions::get_permission_set(permission)
+                    .unwrap()
+                    .clone(),
+            )
+        } else {
+            alien_core::permissions::PermissionSetReference::from_name(permission)
+        };
+        let sandbox = Sandbox::new("box".into())
+            .code(SandboxCode::Image {
+                image: "example.invalid/sandbox:1".into(),
+            })
+            .egress(SandboxEgress::Internet)
+            .lifecycle(SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build();
+        let worker = Container::new("executor".into())
+            .code(ContainerCode::Image {
+                image: "example.invalid/executor:1".into(),
+            })
+            .cpu(ResourceSpec {
+                min: "0.25".into(),
+                desired: "0.25".into(),
+            })
+            .memory(ResourceSpec {
+                min: "256Mi".into(),
+                desired: "256Mi".into(),
+            })
+            .permissions("execution".into())
+            .link(&sandbox)
+            .build();
+        let stack = Stack::new("sandbox-executor".into())
+            .add(sandbox, ResourceLifecycle::Frozen)
+            .add(worker, ResourceLifecycle::Live)
+            .permission(
+                "execution",
+                PermissionProfile::new().resource("box", [reference]),
+            )
+            .build();
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .compute_backend(ComputeBackend::Horizon(HorizonConfig {
+                url: "https://example.invalid".into(),
+                horizon_machine_image: None,
+                clusters: Default::default(),
+            }))
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+        let state = StackState::new(Platform::Aws);
+        let prepared = PreflightRunner::new()
+            .apply_mutations(stack, &state, &config)
+            .await
+            .expect("prepare execute-only consumer");
+        for pass in [
+            prepared.clone(),
+            PreflightRunner::new()
+                .apply_mutations(prepared, &state, &config)
+                .await
+                .expect("prepare again without widening permissions"),
+        ] {
+            let worker = pass.resources["executor"]
+                .config
+                .downcast_ref::<Container>()
+                .unwrap();
+            assert!(
+                worker
+                    .links
+                    .contains(&ResourceRef::new(Vault::RESOURCE_TYPE, SECRETS_VAULT_ID)),
+                "the SDK must be able to load the vault descriptor"
+            );
+            assert!(worker
                 .links
-                .contains(&ResourceRef::new(Vault::RESOURCE_TYPE, SECRETS_VAULT_ID)),
-            "the SDK must be able to load the vault descriptor"
-        );
-        assert!(worker
-            .links
-            .iter()
-            .any(|link| link.id() == SANDBOX_EGRESS_GATEWAY_ID));
-        let profile = &pass.permissions.profiles["execution"];
-        assert_eq!(
-            profile.0["box"]
                 .iter()
-                .map(|set| set.id())
-                .collect::<Vec<_>>(),
-            vec!["sandbox/execute"]
-        );
-        assert_eq!(
-            profile.0[SECRETS_VAULT_ID]
-                .iter()
-                .map(|set| set.id())
-                .collect::<Vec<_>>(),
-            vec!["vault/protect-sandbox-gateway-config"],
-            "no vault read or signing-key grant"
-        );
+                .any(|link| link.id() == SANDBOX_EGRESS_GATEWAY_ID));
+            let profile = &pass.permissions.profiles["execution"];
+            assert_eq!(
+                profile.0["box"]
+                    .iter()
+                    .map(|set| set.id())
+                    .collect::<Vec<_>>(),
+                vec![permission]
+            );
+            assert_eq!(
+                profile.0[SECRETS_VAULT_ID]
+                    .iter()
+                    .map(|set| set.id())
+                    .collect::<Vec<_>>(),
+                if permission == "sandbox/management" {
+                    vec![
+                        "vault/sandbox-egress-signing-key-read",
+                        "vault/protect-sandbox-gateway-config",
+                    ]
+                } else {
+                    vec!["vault/protect-sandbox-gateway-config"]
+                },
+                "permission={permission}, inline={inline}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn internet_sandbox_key_dependencies_respect_setup_ownership() {
+    for (first, last, owner) in [
+        (ResourceLifecycle::Live, ResourceLifecycle::Frozen, "z-last"),
+        (
+            ResourceLifecycle::Frozen,
+            ResourceLifecycle::Live,
+            "a-first",
+        ),
+        (
+            ResourceLifecycle::Frozen,
+            ResourceLifecycle::Frozen,
+            "a-first",
+        ),
+        (ResourceLifecycle::Live, ResourceLifecycle::Live, "a-first"),
+    ] {
+        let mut stack = Stack::new("key-ownership".into());
+        for (id, lifecycle) in [("a-first", first), ("z-last", last)] {
+            let sandbox = Sandbox::new(id.into())
+                .code(SandboxCode::Image {
+                    image: "example.invalid/sandbox:1".into(),
+                })
+                .egress(SandboxEgress::Internet)
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build();
+            stack = stack.add(sandbox, lifecycle);
+        }
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .compute_backend(ComputeBackend::Horizon(HorizonConfig {
+                url: "https://example.invalid".into(),
+                horizon_machine_image: None,
+                clusters: Default::default(),
+            }))
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+        let state = StackState::new(Platform::Aws);
+        let prepared = PreflightRunner::new()
+            .apply_mutations(stack.build(), &state, &config)
+            .await
+            .unwrap();
+        for stack in [
+            prepared.clone(),
+            PreflightRunner::new()
+                .apply_mutations(prepared, &state, &config)
+                .await
+                .unwrap(),
+        ] {
+            assert_eq!(
+                alien_core::sandbox_egress::sandbox_egress_key_owner(&stack),
+                Some(owner),
+                "runtime and setup must agree on the publisher"
+            );
+            for id in ["a-first", "z-last"] {
+                let dependencies = &stack.resources[id].dependencies;
+                let sandbox_dependencies: Vec<_> = dependencies
+                    .iter()
+                    .filter(|dependency| *dependency.resource_type() == Sandbox::RESOURCE_TYPE)
+                    .map(|dependency| dependency.id())
+                    .collect();
+                assert_eq!(
+                    sandbox_dependencies,
+                    if id == owner { vec![] } else { vec![owner] },
+                    "{first:?}/{last:?}: {id}"
+                );
+                for dependency in dependencies {
+                    if stack.resources[id].lifecycle == ResourceLifecycle::Frozen {
+                        assert_ne!(
+                            stack.resources[dependency.id()].lifecycle,
+                            ResourceLifecycle::Live,
+                            "setup cannot wait for runtime work"
+                        );
+                    }
+                }
+            }
+        }
     }
 }

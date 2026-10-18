@@ -470,7 +470,9 @@ impl AwsSandboxController {
         {
             let vault = super::egress::deployment_vault(ctx).await?;
             self.egress_public_key = Some(
-                if ids.first().map(String::as_str) == Some(ctx.desired_config.id()) {
+                if alien_core::sandbox_egress::sandbox_egress_key_owner(ctx.desired_stack)
+                    == Some(ctx.desired_config.id())
+                {
                     super::egress::ensure_signing_key(vault.as_ref()).await?
                 } else {
                     super::egress::read_signing_public_key(vault.as_ref()).await?
@@ -1543,6 +1545,103 @@ mod tests {
     const BUNDLE_URI: &str = "s3://alien-bundles-test/sandbox/bundle.zip";
     const DENY_CONNECTOR_ARN: &str =
         "arn:aws:lambda:us-east-1:123456789012:network-connector:nc-deny123";
+
+    /// The setup-owned image creates the key while the earlier Live image is still pending.
+    #[cfg(feature = "local")]
+    #[tokio::test]
+    async fn frozen_sandbox_initializes_the_key_before_the_live_sandbox() {
+        use crate::{LocalVaultController, LocalVaultState};
+        use alien_bindings::{providers::vault::LocalVault, Vault as _};
+        use alien_core::{
+            ClientConfig, Container, ContainerCode, ResourceLifecycle, ResourceSpec, Vault,
+            SECRETS_VAULT_ID,
+        };
+
+        let directory = tempfile::tempdir().unwrap();
+        let vault = LocalVault::new("secrets".into(), directory.path().into());
+        let mut frozen = sandbox();
+        frozen.id = "z-frozen".into();
+        frozen.egress = SandboxEgress::Internet;
+        let mut live = frozen.clone();
+        live.id = "a-live".into();
+        let gateway = Container::new(alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.into())
+            .code(ContainerCode::Image {
+                image: "example.invalid/gateway:1".into(),
+            })
+            .cpu(ResourceSpec {
+                min: "0.5".into(),
+                desired: "0.5".into(),
+            })
+            .memory(ResourceSpec {
+                min: "512Mi".into(),
+                desired: "512Mi".into(),
+            })
+            .permissions("gateway".into())
+            .build();
+        let mut accepted = None;
+        for (current, lifecycle, other, other_lifecycle) in [
+            (
+                frozen.clone(),
+                ResourceLifecycle::Frozen,
+                live.clone(),
+                ResourceLifecycle::Live,
+            ),
+            (
+                live,
+                ResourceLifecycle::Live,
+                frozen,
+                ResourceLifecycle::Frozen,
+            ),
+        ] {
+            let mut executor = SingleControllerExecutor::builder()
+                .resource(current)
+                .resource_lifecycle(lifecycle)
+                .controller(AwsSandboxController {
+                    state: AwsSandboxState::InitializingEgressKey,
+                    ..Default::default()
+                })
+                .platform(Platform::Aws)
+                .client_config(ClientConfig::Local {
+                    state_directory: directory.path().to_string_lossy().into_owned(),
+                })
+                .with_stack_resource(other, other_lifecycle)
+                .with_stack_resource(gateway.clone(), ResourceLifecycle::Live)
+                .with_dependency(
+                    Vault::new(SECRETS_VAULT_ID.into()).build(),
+                    LocalVaultController {
+                        state: LocalVaultState::Ready,
+                        vault_path: Some(directory.path().to_string_lossy().into_owned()),
+                        ..Default::default()
+                    },
+                )
+                .build()
+                .await
+                .unwrap();
+            executor
+                .step()
+                .await
+                .expect("shared key initialization advances");
+            let controller = executor.internal_state::<AwsSandboxController>().unwrap();
+            assert_eq!(controller.state, AwsSandboxState::PublishingEgressConfig);
+            let public_key = controller
+                .egress_public_key
+                .clone()
+                .expect("public key published");
+            let stored = vault
+                .get_secret(super::super::egress::SIGNING_KEY)
+                .await
+                .unwrap();
+            if let Some((expected_public, expected_stored)) = &accepted {
+                assert_eq!(&public_key, expected_public);
+                assert!(
+                    &stored == expected_stored,
+                    "Live initialization must not rotate the key"
+                );
+            } else {
+                accepted = Some((public_key, stored));
+            }
+        }
+    }
 
     fn sandbox() -> Sandbox {
         Sandbox::new("agents".to_string())
