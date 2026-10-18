@@ -298,6 +298,16 @@ fn patch_settings(
         },
     )?;
     let mut patch = Map::new();
+    if let Some(access) = args.network.endpoint_access {
+        patch.insert(
+            "endpointAccess".into(),
+            serde_json::to_value(access).into_alien_error().context(
+                ErrorData::ConfigurationError {
+                    message: "Invalid endpoint access choice".into(),
+                },
+            )?,
+        );
+    }
     if let Some(config) = config {
         for (key, supplied) in [
             ("compute", config.compute.is_some()),
@@ -981,15 +991,30 @@ storageSecret = "canary-secret"
 
     #[tokio::test]
     async fn fresh_runner_uses_acquired_bindings_and_hands_off_at_provisioning() {
-        run_fresh_runner(false).await;
+        run_fresh_runner(alien_core::EndpointAccess::Internet, None, true).await;
     }
 
     #[tokio::test]
     async fn fresh_runner_rejects_endpoint_access_change_under_claim() {
-        run_fresh_runner(true).await;
+        run_fresh_runner(alien_core::EndpointAccess::Internet, Some(alien_core::EndpointAccess::Private), false).await;
     }
 
-    async fn run_fresh_runner(change_endpoint_access: bool) {
+    #[tokio::test]
+    async fn fresh_runner_saves_all_endpoint_transitions_before_claiming_setup() {
+        for stored in [alien_core::EndpointAccess::Internet, alien_core::EndpointAccess::Private, alien_core::EndpointAccess::Both] {
+            for requested in [alien_core::EndpointAccess::Internet, alien_core::EndpointAccess::Private, alien_core::EndpointAccess::Both] {
+                if requested != stored {
+                    run_fresh_runner(stored, Some(requested), true).await;
+                }
+            }
+        }
+    }
+
+    async fn run_fresh_runner(
+        stored_access: alien_core::EndpointAccess,
+        requested_access: Option<alien_core::EndpointAccess>,
+        claim_matches: bool,
+    ) {
         let server = MockServer::start_async().await;
         let mut bindings = ExternalBindings::new();
         bindings.insert(
@@ -997,6 +1022,7 @@ storageSecret = "canary-secret"
             ExternalBinding::Storage(StorageBinding::s3("customer-archive")),
         );
         let settings = StackSettings {
+            endpoint_access: requested_access.unwrap_or(stored_access),
             external_bindings: Some(bindings.clone()),
             ..Default::default()
         };
@@ -1010,6 +1036,9 @@ storageSecret = "canary-secret"
                 created_at: String::new(),
             })
             .build();
+        if !claim_matches {
+            config.stack_settings.endpoint_access = stored_access;
+        }
         config.deployment_token = Some("test-runtime-token".into());
         let old_stack = Stack::new("demo".into()).build();
         let target_stack = Stack::new("demo".into())
@@ -1024,7 +1053,7 @@ storageSecret = "canary-secret"
                     .path("/v1/deployment-info")
                     .query_param("updateOperationId", "op_blocked");
                 let mut value = info(&server, "op_blocked");
-                value["setupUpdate"]["stackSettings"] = json!({"endpointAccess": "internet"});
+                value["setupUpdate"]["stackSettings"] = json!({"endpointAccess": stored_access});
                 then.status(200).json_body(value);
             })
             .await;
@@ -1107,9 +1136,7 @@ storageSecret = "canary-secret"
         write!(file, "[externalBindings.archive]\ntype = \"storage\"\nservice = \"s3\"\nbucketName = \"customer-archive\"\n").unwrap();
         let mut args = args(&server);
         args.config = Some(file.path().to_path_buf());
-        if change_endpoint_access {
-            args.network.endpoint_access = Some(alien_core::EndpointAccess::Private);
-        }
+        args.network.endpoint_access = requested_access;
         let embedded: DeployCliConfig =
             serde_json::from_value(json!({"setupRevision":"revision_applied"})).unwrap();
         let result = tokio::time::timeout(
@@ -1118,7 +1145,7 @@ storageSecret = "canary-secret"
         )
         .await
         .expect("setup handoff should finish promptly");
-        if change_endpoint_access {
+        if !claim_matches {
             let error = result.expect_err("existing endpoint access must remain fixed");
             assert!(
                 error
@@ -1135,11 +1162,11 @@ storageSecret = "canary-secret"
         deployment.assert_hits_async(2).await;
         for release in releases {
             release
-                .assert_hits_async(if change_endpoint_access { 0 } else { 1 })
+                .assert_hits_async(if !claim_matches { 0 } else { 1 })
                 .await;
         }
         reconcile
-            .assert_hits_async(if change_endpoint_access { 0 } else { 1 })
+            .assert_hits_async(if !claim_matches { 0 } else { 1 })
             .await;
         init.assert_hits_async(0).await;
     }
