@@ -84,11 +84,17 @@ impl CompileTimeCheck for ContainerNetworkSettingsCheck {
             for linker in &linkers {
                 let source = &stack.resources[linker.id()].config;
                 if let Some(other) = source.downcast_ref::<Container>() {
-                    if other.cluster != container.cluster {
+                    if other.cluster.is_some()
+                        && container.cluster.is_some()
+                        && other.cluster != container.cluster
+                    {
                         errors.push(format!("CONTAINER_NETWORK_SETTINGS_UNSUPPORTED: Container '{}' links to '{id}' in a different compute cluster", linker.id()));
                     }
                 } else if let Some(other) = source.downcast_ref::<Daemon>() {
-                    if other.cluster != container.cluster {
+                    if other.cluster.is_some()
+                        && container.cluster.is_some()
+                        && other.cluster != container.cluster
+                    {
                         errors.push(format!("CONTAINER_NETWORK_SETTINGS_UNSUPPORTED: Daemon '{}' links to '{id}' in a different compute cluster", linker.id()));
                     }
                 } else if platform != Platform::Aws {
@@ -265,6 +271,49 @@ mod tests {
                 remote_access: false,
                 enabled_when: None,
             },
+        );
+        // Auto-assignment runs after the initial check. Compare cluster identities
+        // once both are resolved; the post-mutation check enforces the final pair.
+        let mut automatic = stack.clone();
+        let target = automatic
+            .resources
+            .get_mut("api")
+            .unwrap()
+            .config
+            .downcast_mut::<Container>()
+            .unwrap();
+        target.cluster = Some("compute".into());
+        let mut source = target.clone();
+        source.id = "caller".into();
+        source.cluster = None;
+        source.links = vec![alien_core::ResourceRef::new(
+            Container::RESOURCE_TYPE,
+            "api",
+        )];
+        automatic.resources.get_mut("caller").unwrap().config = alien_core::Resource::new(source);
+        assert!(
+            check
+                .check(&automatic, Platform::Aws)
+                .await
+                .unwrap()
+                .success
+        );
+        automatic
+            .resources
+            .get_mut("caller")
+            .unwrap()
+            .config
+            .downcast_mut::<Container>()
+            .unwrap()
+            .cluster = Some("other".into());
+        assert!(
+            check
+                .check(&automatic, Platform::Aws)
+                .await
+                .unwrap()
+                .errors
+                .iter()
+                .any(|error| error.contains("different compute cluster"))
         );
         let previous = stack.clone();
         let mut changed = stack.clone();
