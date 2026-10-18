@@ -15,22 +15,12 @@ use tokio::{
 };
 
 use crate::{
+    config::CredentialRule,
+    credentials::Credentials,
     error::{denied, invalid, unavailable, Result},
     policy::Target,
     server::HEADER_TIMEOUT,
 };
-
-/// A vault value loaded only in the gateway, scoped to one method/path rule.
-pub struct Injection {
-    /// Exact method.
-    pub method: String,
-    /// Exact path or subtree ending in a slash.
-    pub path: String,
-    /// Header name.
-    pub name: HeaderName,
-    /// Secret header value (never Debug/logged).
-    pub value: HeaderValue,
-}
 
 type Body = BoxBody<Bytes, hyper::Error>;
 
@@ -40,7 +30,7 @@ pub async fn forward<G, U>(
     guest: G,
     upstream: U,
     target: Target,
-    injection: Option<Arc<Vec<Injection>>>,
+    injection: Option<(&Credentials, &[CredentialRule])>,
 ) -> Result<()>
 where
     G: AsyncRead + AsyncWrite + Unpin + Send,
@@ -57,16 +47,17 @@ where
     let service = service_fn(move |mut request: Request<Incoming>| {
         let sender = sender.clone();
         let target = target.clone();
-        let injection = injection.clone();
         let failure = service_failure.clone();
         async move {
-            if let Err(error) = prepare(
-                &mut request,
-                &target,
-                injection.as_deref().map(Vec::as_slice).unwrap_or(&[]),
-            ) {
+            if let Err(error) = prepare(&mut request, &target, injection.is_some()) {
                 *failure.lock().await = Some(error);
                 return Ok::<_, Infallible>(empty(StatusCode::FORBIDDEN));
+            }
+            if let Some((credentials, rules)) = injection {
+                if let Err(error) = credentials.inject(&mut request, rules).await {
+                    *failure.lock().await = Some(error);
+                    return Ok(empty(StatusCode::BAD_GATEWAY));
+                }
             }
             let response = match sender.lock().await.send_request(request).await {
                 Ok(response) => response.map(BodyExt::boxed),
@@ -109,11 +100,7 @@ fn empty(status: StatusCode) -> Response<Body> {
     response
 }
 
-fn prepare(
-    request: &mut Request<Incoming>,
-    target: &Target,
-    injection: &[Injection],
-) -> Result<()> {
+fn prepare(request: &mut Request<Incoming>, target: &Target, injection: bool) -> Result<()> {
     let headers = request.headers();
     if headers.get_all(HOST).iter().count() != 1 {
         return Err(invalid("exactly one Host required"));
@@ -170,20 +157,10 @@ fn prepare(
     request
         .headers_mut()
         .insert(CONNECTION, HeaderValue::from_static("close"));
-    if !injection.is_empty() {
+    if injection {
         let path = request.uri().path();
         if path.contains(['%', '\\']) || path.split('/').any(|part| part == "." || part == "..") {
             return Err(denied("ambiguous credential path"));
-        }
-    }
-    for rule in injection {
-        let path = request.uri().path();
-        if request.method().as_str() == rule.method
-            && (path == rule.path || (rule.path.ends_with('/') && path.starts_with(&rule.path)))
-        {
-            request
-                .headers_mut()
-                .insert(rule.name.clone(), rule.value.clone());
         }
     }
     let path = request

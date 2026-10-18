@@ -241,7 +241,7 @@ impl Replication {
         .context(unavailable("join snapshot reader"))?
     }
     /// A successful mutation has reached every discovered healthy replica.
-    pub async fn fanout(&self, record: &Record, recovery: bool) -> Result<()> {
+    pub async fn fanout(&self, record: &Record) -> Result<()> {
         if record.expired(chrono::Utc::now().timestamp_millis().max(0) as u64) {
             return Ok(());
         }
@@ -251,12 +251,9 @@ impl Replication {
         .into_alien_error()
         .context(unavailable("encode replica record"))?;
         for peer in self.peers().await? {
-            let path = if recovery {
-                "/v1/replicas/register"
-            } else {
-                "/v1/replicas/write"
-            };
-            let (status, _) = self.request(peer, path, body.clone()).await?;
+            let (status, _) = self
+                .request(peer, "/v1/replicas/write", body.clone())
+                .await?;
             if status != 204 {
                 return Err(AlienError::new(unavailable(
                     "replica did not acknowledge policy",
