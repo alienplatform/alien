@@ -479,6 +479,8 @@ impl PreflightRegistry {
 
         // Phase 2: Resource creation
         registry.add_mutation(Box::new(mutations::KubernetesClusterMutation));
+        // Add the gateway before compute sizing, vault grants, and service accounts.
+        registry.add_mutation(Box::new(mutations::SandboxGatewayMutation));
         registry.add_mutation(Box::new(mutations::ComputeClusterMutation));
         registry.add_mutation(Box::new(mutations::RemoteStackManagementMutation));
         registry.add_mutation(Box::new(mutations::SecretsVaultMutation));
