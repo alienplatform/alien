@@ -24,21 +24,22 @@ pub fn has_sandbox_gateway(stack: &Stack) -> bool {
         .is_some_and(|entry| entry.config.downcast_ref::<crate::Container>().is_some())
 }
 
-/// Native internet remains available when this deployment cannot host a gateway.
-/// A declared closed sandbox always needs an isolated connector.
+/// Closed sandboxes retain their denying connector. Only the new internet
+/// declaration opts into the gateway, including in stacks with legacy sandboxes.
 pub fn sandbox_needs_connector(stack: &Stack, sandbox: &Sandbox) -> bool {
-    matches!(sandbox.egress, SandboxEgress::None) || has_sandbox_gateway(stack)
+    matches!(sandbox.egress, SandboxEgress::None)
+        || (matches!(sandbox.egress, SandboxEgress::Internet) && has_sandbox_gateway(stack))
 }
 
-/// Activate the agent's network guard for every isolated AWS sandbox. Native
-/// internet deployments keep their original startup path. Command identity is
-/// resolved independently from the image and any legacy supervisor declaration.
+/// Activate the automatic agent guard only for the gateway opt-in. Existing
+/// declarations retain their startup environment and supervisor behavior.
+/// Command identity is resolved independently from the image.
 pub fn aws_sandbox_agent_environment(
     stack: &Stack,
     sandbox: &Sandbox,
 ) -> std::collections::BTreeMap<String, String> {
     let mut environment = sandbox.supervisor_environment();
-    if sandbox_needs_connector(stack, sandbox) {
+    if matches!(sandbox.egress, SandboxEgress::Internet) && has_sandbox_gateway(stack) {
         environment.insert(
             "ALIEN_SANDBOX_EGRESS".into(),
             serde_json::to_string(&sandbox.egress).expect("egress serializes"),

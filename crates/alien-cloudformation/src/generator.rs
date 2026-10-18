@@ -1507,7 +1507,7 @@ fn add_network_parameters(
     network: Option<&NetworkSettings>,
     target: CloudFormationTarget,
 ) {
-    if !target.is_kubernetes() && alien_core::stack_needs_named_subnets_at_setup(stack) {
+    if !target.is_kubernetes() && alien_core::sandbox_egress::has_sandbox_gateway(stack) {
         for (name, description) in [
             ("SandboxSubnetIds", "Only used with use-existing. Dedicated sandbox connector subnets with no default route; at least two availability zones."),
             ("SandboxGatewaySubnetIds", "Only used with use-existing. Two or three dedicated gateway subnets, with only local routes and a default route through the deployment NAT."),

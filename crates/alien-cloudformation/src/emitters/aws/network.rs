@@ -589,7 +589,7 @@ fn has_sandboxes(ctx: &EmitContext<'_>) -> bool {
                 .config
                 .downcast_ref::<Sandbox>()
                 .is_some_and(|sandbox| {
-                    alien_core::sandbox_egress::sandbox_needs_connector(ctx.stack, sandbox)
+                    matches!(sandbox.egress, alien_core::SandboxEgress::Internet)
                 })
         })
 }

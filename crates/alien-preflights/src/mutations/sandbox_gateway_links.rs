@@ -37,7 +37,7 @@ impl StackMutation for SandboxGatewayLinksMutation {
                 entry
                     .config
                     .downcast_ref::<Sandbox>()
-                    .filter(|sandbox| !matches!(sandbox.egress, SandboxEgress::None))
+                    .filter(|sandbox| matches!(sandbox.egress, SandboxEgress::Internet))
                     .map(|_| id.clone())
             })
             .collect();

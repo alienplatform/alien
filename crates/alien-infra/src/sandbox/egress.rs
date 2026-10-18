@@ -186,7 +186,7 @@ pub(crate) fn internet_sandbox_ids(stack: &alien_core::Stack) -> Vec<String> {
             entry
                 .config
                 .downcast_ref::<alien_core::Sandbox>()
-                .filter(|sandbox| !matches!(sandbox.egress, alien_core::SandboxEgress::None))
+                .filter(|sandbox| matches!(sandbox.egress, alien_core::SandboxEgress::Internet))
                 .map(|_| id.clone())
         })
         .collect();
