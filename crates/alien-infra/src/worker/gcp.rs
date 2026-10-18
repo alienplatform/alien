@@ -6914,6 +6914,16 @@ mod tests {
     /// Private workers authenticate Pub/Sub and Scheduler delivery as their execution SA.
     #[tokio::test]
     async fn test_private_function_grants_invoker_to_execution_service_account() {
+        for expression in [
+            None,
+            Some("request.time < timestamp('2020-01-01T00:00:00Z')"),
+            Some("request.time < timestamp('2099-01-01T00:00:00Z')"),
+        ] {
+            private_function_invoker_policy(expression).await;
+        }
+    }
+
+    async fn private_function_invoker_policy(expression: Option<&'static str>) {
         let worker = function_private_ingress();
         let function_name = format!("test-{}", worker.id);
 
@@ -6941,19 +6951,42 @@ mod tests {
             .returning(move |_, _| Ok(create_successful_service_response(&function_name_for_get)))
             .times(1);
 
+        let mut original = create_empty_iam_policy();
+        original.version = Some(3);
+        original.etag = Some("original-etag".to_string());
+        original.bindings.push(alien_gcp_clients::iam::Binding {
+            role: "roles/run.viewer".to_string(),
+            members: vec!["serviceAccount:observer@example-project.iam.gserviceaccount.com".to_string()],
+            condition: None,
+        });
+        if let Some(expression) = expression {
+            original.bindings.push(alien_gcp_clients::iam::Binding {
+                role: "roles/run.invoker".to_string(),
+                members: vec!["serviceAccount:default-profile-sa@mock-project.iam.gserviceaccount.com".to_string()],
+                condition: Some(alien_gcp_clients::iam::Expr {
+                    expression: expression.to_string(),
+                    title: Some("existing-condition".to_string()),
+                    description: None,
+                    location: None,
+                }),
+            });
+        }
+        let read_policy = original.clone();
         mock_cloudrun
             .expect_get_service_iam_policy()
-            .returning(|_, _| Ok(create_empty_iam_policy()));
+            .times(1)
+            .returning(move |_, _| Ok(read_policy.clone()));
 
         mock_cloudrun
             .expect_set_service_iam_policy()
-            .withf(|_, _, policy| {
-                policy.bindings.iter().any(|binding| {
-                    binding.role == "roles/run.invoker"
-                        && binding.members
-                            == ["serviceAccount:default-profile-sa@mock-project.iam.gserviceaccount.com"]
-                        && binding.condition.is_none()
-                })
+            .withf(move |_, _, policy| {
+                let mut expected = original.clone();
+                expected.bindings.push(alien_gcp_clients::iam::Binding {
+                    role: "roles/run.invoker".to_string(),
+                    members: vec!["serviceAccount:default-profile-sa@mock-project.iam.gserviceaccount.com".to_string()],
+                    condition: None,
+                });
+                serde_json::to_value(policy).unwrap() == serde_json::to_value(expected).unwrap()
             })
             .times(1)
             .returning(|_, _, _| Ok(create_empty_iam_policy()));
