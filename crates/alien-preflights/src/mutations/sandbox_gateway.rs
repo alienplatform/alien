@@ -88,8 +88,8 @@ impl StackMutation for SandboxGatewayMutation {
                 desired: "0.25".into(),
             })
             .memory(ResourceSpec {
-                min: "256Mi".into(),
-                desired: "256Mi".into(),
+                min: "1Gi".into(),
+                desired: "1Gi".into(),
             })
             // The managed scheduler prefers different machines for these replicas.
             // Insufficient available capacity may still place them together.
@@ -126,6 +126,7 @@ impl StackMutation for SandboxGatewayMutation {
             if container.code != gateway.code
                 || container.security != gateway.security
                 || container.egress != gateway.egress
+                || container.memory != gateway.memory
                 || container.replicas != gateway.replicas
                 || container.permissions != gateway.permissions
                 || container.ports != gateway.ports
@@ -227,11 +228,37 @@ mod tests {
             .unwrap();
         assert!(gateway.links.is_empty());
         assert_eq!(gateway.replicas, Some(2));
+        assert_eq!(gateway.memory.min, "1Gi");
+        assert_eq!(gateway.memory.desired, "1Gi");
         let repeated = SandboxGatewayMutation
             .mutate(prepared.clone(), &state, &config)
             .await
             .unwrap();
         assert_eq!(prepared, repeated);
+    }
+
+    #[tokio::test]
+    async fn preparation_refuses_gateway_memory_drift() {
+        let (stack, state, config) = fixture();
+        let mut prepared = SandboxGatewayMutation
+            .mutate(stack, &state, &config)
+            .await
+            .unwrap();
+        let entry = prepared
+            .resources
+            .get_mut(SANDBOX_EGRESS_GATEWAY_ID)
+            .unwrap();
+        let mut gateway = entry.config.downcast_ref::<Container>().unwrap().clone();
+        gateway.memory = ResourceSpec {
+            min: "256Mi".into(),
+            desired: "256Mi".into(),
+        };
+        entry.config = Resource::new(gateway);
+        let error = SandboxGatewayMutation
+            .mutate(prepared, &state, &config)
+            .await
+            .unwrap_err();
+        assert!(matches!(error.error, Some(ErrorData::StackMutationFailed { resource_id: Some(id), .. }) if id == SANDBOX_EGRESS_GATEWAY_ID));
     }
 
     #[tokio::test]
