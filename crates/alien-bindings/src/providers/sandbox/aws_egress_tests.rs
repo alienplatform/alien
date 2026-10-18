@@ -184,7 +184,7 @@ async fn exercise(refuse_delivery: bool) {
         let created = created.unwrap();
         assert_eq!(harness.policy(&created.sandbox_id), Some(policy.clone()));
         let delivered = policies.lock().unwrap().len();
-        provider
+        let _request = provider
             .request(&created.sandbox_id, reqwest::Method::GET, "/health")
             .await
             .unwrap();
