@@ -238,12 +238,12 @@ async fn get_local_deployment_id(deployment_name: &str, port: u16) -> Result<Str
     let deployment = deployments
         .items
         .iter()
-        .find(|d| {
-            if deployment_name.starts_with("dep_") {
-                d.id.as_str() == deployment_name
-            } else {
-                d.name.as_str() == deployment_name
-            }
+        .find(|d| d.id.as_str() == deployment_name)
+        .or_else(|| {
+            deployments
+                .items
+                .iter()
+                .find(|d| d.name.as_str() == deployment_name)
         })
         .ok_or_else(|| {
             AlienError::new(ErrorData::ValidationError {
@@ -824,15 +824,24 @@ mod tests {
 
 /// Resolve a deployment ID from a name or ID string.
 ///
-/// Deployment IDs (and legacy UUIDs) are used directly. Otherwise, list deployments
-/// from the manager and find a match by name.
+/// Resolve prefixed IDs first; a missing ID may be an existing deployment name.
+/// Legacy UUIDs retain their direct lookup behavior.
 async fn resolve_deployment_id(
     name_or_id: &str,
     http: &reqwest::Client,
     manager_url: &str,
 ) -> Result<String> {
-    if name_or_id.starts_with("dep_") || uuid::Uuid::try_parse(name_or_id).is_ok() {
+    if uuid::Uuid::try_parse(name_or_id).is_ok() {
         return Ok(name_or_id.to_string());
+    }
+    if name_or_id.starts_with("dep_") {
+        let manager = alien_manager_api::Client::new_with_client(manager_url, http.clone());
+        match crate::deployment_resolver::resolve(&manager, name_or_id, false).await {
+            Ok(deployment) => return Ok(deployment.id.to_string()),
+            // A valid name can also begin with dep_. Only a missing ID permits fallback.
+            Err(error) if error.http_status_code == Some(404) => {}
+            Err(error) => return Err(error),
+        }
     }
 
     // Otherwise, list deployments and find by name.

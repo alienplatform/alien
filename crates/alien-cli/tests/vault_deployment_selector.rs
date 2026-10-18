@@ -9,12 +9,30 @@ const DEPLOYMENT: &str = "dep_0000000000000000000000000000";
 
 #[test]
 fn standalone_vault_accepts_deployment_ids_and_names() {
-    for selector in ["demo", DEPLOYMENT] {
+    for selector in ["demo", "dep_example", DEPLOYMENT] {
+        let name = if selector == "dep_example" {
+            selector
+        } else {
+            "demo"
+        };
         let manager = MockServer::start();
         let list = manager.mock(|when, then| {
             when.method(GET).path("/v1/deployments");
             then.status(200)
-                .json_body(json!({"items":[{"id":DEPLOYMENT,"name":"demo"}],"nextCursor":null}));
+                .json_body(json!({"items":[{"id":DEPLOYMENT,"name":name}],"nextCursor":null}));
+        });
+        let detail = manager.mock(|when, then| {
+            when.method(GET)
+                .path(format!("/v1/deployments/{DEPLOYMENT}"));
+            then.status(200)
+                .json_body(json!({"id":DEPLOYMENT,"name":name,
+                "platform":"local","status":"running","deploymentGroupId":"dg_local",
+                "deploymentProtocolVersion":1,"projectId":"default","workspaceId":"default",
+                "retryRequested":false,"createdAt":"2026-01-01T00:00:00Z"}));
+        });
+        let prefixed_name = manager.mock(|when, then| {
+            when.method(GET).path("/v1/deployments/dep_example");
+            then.status(404);
         });
         let secret = manager.mock(|when, then| {
             when.method(GET)
@@ -62,13 +80,20 @@ fn standalone_vault_accepts_deployment_ids_and_names() {
             "synthetic-value"
         );
         secret.assert_hits(1);
-        list.assert_hits(usize::from(selector == "demo"));
+        detail.assert_hits(usize::from(selector == DEPLOYMENT));
+        prefixed_name.assert_hits(usize::from(selector == "dep_example"));
+        list.assert_hits(usize::from(selector != DEPLOYMENT));
     }
 }
 
 #[tokio::test]
 async fn local_vault_accepts_deployment_ids_and_names() {
-    for selector in ["demo", DEPLOYMENT] {
+    for selector in ["demo", "dep_example", DEPLOYMENT] {
+        let name = if selector == "dep_example" {
+            selector
+        } else {
+            "demo"
+        };
         let manager = MockServer::start_async().await;
         manager
             .mock_async(|when, then| {
@@ -89,7 +114,7 @@ async fn local_vault_accepts_deployment_ids_and_names() {
             .mock_async(|when, then| {
                 when.method(GET).path("/v1/deployments");
                 then.status(200)
-                    .json_body(json!({"items":[{"id":DEPLOYMENT,"name":"demo",
+                    .json_body(json!({"items":[{"id":DEPLOYMENT,"name":name,
                 "platform":"local","status":"running","deploymentGroupId":"dg_local",
                 "deploymentProtocolVersion":1,"projectId":"default","workspaceId":"default",
                 "retryRequested":false,"createdAt":"2026-01-01T00:00:00Z"}]}));
@@ -124,5 +149,59 @@ async fn local_vault_accepts_deployment_ids_and_names() {
         .unwrap();
         assert_eq!(stored["TEST_KEY"], "synthetic-value");
         list.assert_async().await;
+    }
+}
+
+#[test]
+fn standalone_vault_does_not_treat_id_lookup_errors_as_names() {
+    for status in [403, 500] {
+        let manager = MockServer::start();
+        let detail = manager.mock(|when, then| {
+            when.method(GET)
+                .path(format!("/v1/deployments/{DEPLOYMENT}"));
+            then.status(status);
+        });
+        let list = manager.mock(|when, then| {
+            when.method(GET).path("/v1/deployments");
+            then.status(200)
+                .json_body(json!({"items":[{"id":"dep_other","name":DEPLOYMENT}]}));
+        });
+        let secret = manager.mock(|when, then| {
+            when.path_contains("/vault/");
+            then.status(200)
+                .json_body(json!({"value":"wrong-deployment"}));
+        });
+        let config = TempDir::new().unwrap();
+        let checkout = TempDir::new().unwrap();
+        let mut command = Command::new(env!("CARGO_BIN_EXE_alien"));
+        command
+            .current_dir(checkout.path())
+            .env("XDG_CONFIG_HOME", config.path())
+            .env("ALIEN_MANAGER_URL", manager.base_url())
+            .env("ALIEN_API_KEY", "test-key")
+            .args([
+                "vault",
+                "get",
+                "--deployment",
+                DEPLOYMENT,
+                "secrets",
+                "TEST_KEY",
+            ]);
+        for name in [
+            "ALIEN_PROJECT",
+            "ALIEN_BASE_URL",
+            "ALIEN_WORKSPACE",
+            "ALIEN_LOG",
+            "ALIEN_LOG_FILE",
+            "RUST_LOG",
+        ] {
+            command.env_remove(name);
+        }
+        let output = command.output().unwrap();
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("Failed to read deployment"));
+        detail.assert_hits(1);
+        list.assert_hits(0);
+        secret.assert_hits(0);
     }
 }
