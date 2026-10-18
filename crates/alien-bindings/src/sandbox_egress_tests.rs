@@ -445,6 +445,31 @@ async fn released_gateway_contract(long_policy: bool) {
         .create("gateway-session", &policy, now_unix().unwrap() + 600)
         .await
         .unwrap();
+    let issuer = manager.issuer().await.unwrap();
+    let original_authorization = issuer
+        .mint_admin(
+            "prefix/box",
+            "gateway-session",
+            EgressAdminOperation::Put {
+                policy: &policy,
+                version: 1,
+            },
+            now_unix().unwrap(),
+        )
+        .unwrap();
+    let original_body = serde_json::json!({
+        "aud":"prefix/box", "sub":"gateway-session", "version":1, "policy":policy,
+    });
+    let replay = || {
+        client
+            .put(format!("http://{admin}/v1/policies"))
+            .bearer_auth(&original_authorization)
+            .json(&original_body)
+    };
+    assert_eq!(
+        replay().send().await.unwrap().status(),
+        reqwest::StatusCode::NO_CONTENT
+    );
     async fn connect_status(proxy: std::net::SocketAddr, token: &str) -> String {
         let mut stream = tokio::net::TcpStream::connect(proxy).await.unwrap();
         stream.write_all(format!("CONNECT one.one.one.one:443 HTTP/1.1\r\nHost: one.one.one.one:443\r\nProxy-Authorization: Bearer {token}\r\n\r\n").as_bytes()).await.unwrap();
@@ -469,6 +494,11 @@ async fn released_gateway_contract(long_policy: bool) {
         .update("gateway-session", &EgressPolicy::Allow { allow: vec![] })
         .await
         .unwrap();
+    assert_eq!(
+        replay().send().await.unwrap().status(),
+        reqwest::StatusCode::CONFLICT,
+        "a delayed replay must not undo the newer restriction"
+    );
     assert!(
         connect_status(proxy, &initial.token)
             .await
@@ -483,6 +513,18 @@ async fn released_gateway_contract(long_policy: bool) {
         "same identity token must use the updated policy"
     );
     manager.delete("gateway-session").await.unwrap();
+    assert_eq!(
+        replay().send().await.unwrap().status(),
+        reqwest::StatusCode::CONFLICT,
+        "a delayed replay must not resurrect a deleted policy"
+    );
+    assert_eq!(
+        manager
+            .policy_version("gateway-session", &issuer)
+            .await
+            .unwrap(),
+        4
+    );
     assert!(connect_status(proxy, &initial.token)
         .await
         .starts_with("HTTP/1.1 403"));
