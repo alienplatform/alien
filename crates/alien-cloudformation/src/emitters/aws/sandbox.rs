@@ -695,6 +695,8 @@ fn build_policies(
                 CfExpression::list([
                     CfExpression::from("ecr:BatchGetImage"),
                     CfExpression::from("ecr:GetDownloadUrlForLayer"),
+                    CfExpression::from("ecr:BatchImportUpstreamImage"),
+                    CfExpression::from("ecr:GetImageCopyStatus"),
                 ]),
             ),
             (

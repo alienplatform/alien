@@ -530,7 +530,7 @@ fn a_live_sandbox_module_keeps_the_build_role_and_drops_the_image() {
             &serde_json::json!({
                 "Sid": "PullSandboxBaseImage",
                 "Effect": "Allow",
-                "Action": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"],
+                "Action": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer", "ecr:BatchImportUpstreamImage", "ecr:GetImageCopyStatus"],
                 "Resource": "arn:${data.aws_partition.current.partition}:ecr:\
                              ${data.aws_region.current.region}:123456789012:repository/acme/agents-base"
             }),
