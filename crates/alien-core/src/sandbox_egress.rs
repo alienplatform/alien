@@ -1,4 +1,4 @@
-//! What an AWS sandbox with `egress: deny` needs in the customer account, as concrete documents:
+//! AWS sandbox connector documents and gateway network boundaries:
 //! the operator role Lambda assumes to place the connector's network interfaces, and the
 //! `AWS::Lambda::NetworkConnector` those interfaces belong to.
 //!
@@ -12,6 +12,46 @@ use serde_json::{json, Value};
 use crate::{
     setup_resource_tags, Network, NetworkSettings, ResourceEntry, Sandbox, SandboxEgress, Stack,
 };
+
+/// Reserved resource id of the deployment's sandbox egress gateway Container.
+pub const SANDBOX_EGRESS_GATEWAY_ID: &str = "sandbox-egress-gateway";
+
+/// Whether preflight installed the managed gateway for this deployment.
+pub fn has_sandbox_gateway(stack: &Stack) -> bool {
+    stack
+        .resources
+        .get(SANDBOX_EGRESS_GATEWAY_ID)
+        .is_some_and(|entry| entry.config.downcast_ref::<crate::Container>().is_some())
+}
+
+/// Closed sandboxes retain their denying connector. Only the new internet
+/// declaration opts into the gateway, including in stacks with legacy sandboxes.
+pub fn sandbox_needs_connector(stack: &Stack, sandbox: &Sandbox) -> bool {
+    matches!(
+        sandbox.cloud_egress(),
+        SandboxEgress::None | SandboxEgress::AllowDomains { .. }
+    ) || (matches!(sandbox.egress, SandboxEgress::Internet) && has_sandbox_gateway(stack))
+}
+
+/// Activate the automatic agent guard only for the gateway opt-in. Existing
+/// declarations retain their startup environment and supervisor behavior.
+/// Command identity is resolved independently from the image.
+pub fn aws_sandbox_agent_environment(
+    stack: &Stack,
+    sandbox: &Sandbox,
+) -> std::collections::BTreeMap<String, String> {
+    let mut environment = sandbox.supervisor_environment();
+    if matches!(sandbox.egress, SandboxEgress::Internet) && has_sandbox_gateway(stack) {
+        environment.insert(
+            "ALIEN_SANDBOX_EGRESS".into(),
+            serde_json::to_string(&sandbox.egress).expect("egress serializes"),
+        );
+        // The platform must complete its bootstrap before the guest-wide firewall
+        // is installed. The authenticated run hook installs it before user code.
+        environment.insert("ALIEN_SANDBOX_EGRESS_RUN_HOOK".into(), "true".into());
+    }
+    environment
+}
 
 /// The name of the operator role's inline policy.
 pub const SANDBOX_EGRESS_POLICY_NAME: &str = "sandbox-egress-connector";
@@ -125,7 +165,7 @@ pub enum SandboxEgressVpc {
     BroughtByCustomer,
 }
 
-/// The network a deny sandbox's connector attaches to.
+/// The network every sandbox connector attaches to.
 #[derive(Debug, Clone, Copy)]
 pub struct SandboxEgressNetwork<'a> {
     /// The network's resource id in the stack.
@@ -160,20 +200,10 @@ impl fmt::Display for SandboxEgressRefusal {
     }
 }
 
-/// The network an AWS sandbox's egress connector attaches to: none for `allow`, the stack's
-/// first network for `deny`.
-///
-/// A connector names one to sixteen private subnets, and only a created or bring-your-own VPC has
-/// any. Every other case is refused rather than rendered: a session started with no connector
-/// reaches the internet, and a dropped `allowDomains` leaves the customer believing it applies.
-pub fn sandbox_egress_network<'a>(
-    stack: &'a Stack,
-    egress: &SandboxEgress,
-) -> Result<Option<SandboxEgressNetwork<'a>>, SandboxEgressRefusal> {
-    match egress {
-        SandboxEgress::Allow => return Ok(None),
-        SandboxEgress::None | SandboxEgress::Internet | SandboxEgress::AllowDomains { .. } => {}
-    }
+/// Resolve the setup-owned network for a sandbox that needs an isolated connector.
+pub fn sandbox_egress_network(
+    stack: &Stack,
+) -> Result<SandboxEgressNetwork<'_>, SandboxEgressRefusal> {
     let (id, entry, network) = stack
         .resources()
         .find_map(|(id, entry)| Some((id, entry, entry.config.downcast_ref::<Network>()?)))
@@ -186,20 +216,20 @@ pub fn sandbox_egress_network<'a>(
             return Err(SandboxEgressRefusal::OtherCloudNetwork)
         }
     };
-    Ok(Some(SandboxEgressNetwork { id, entry, vpc }))
+    Ok(SandboxEgressNetwork { id, entry, vpc })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ResourceLifecycle, SandboxCode, SandboxLifecyclePolicy};
+    use crate::{ResourceLifecycle, SandboxCode, SandboxEgress, SandboxLifecyclePolicy};
     use SandboxEgressRefusal::{DefaultVpc, NoNetwork, OtherCloudNetwork};
     use SandboxEgressVpc::{BroughtByCustomer, Created};
 
     fn outcome(
         egress: SandboxEgress,
         network: Option<NetworkSettings>,
-    ) -> Result<Option<SandboxEgressVpc>, SandboxEgressRefusal> {
+    ) -> Result<SandboxEgressVpc, SandboxEgressRefusal> {
         let sandbox = Sandbox::new("agents".to_string())
             .code(SandboxCode::Image {
                 image: "s3://acme/agents/bundle.zip".to_string(),
@@ -218,11 +248,9 @@ mod tests {
             );
         }
         let stack = stack.build();
-        let found = sandbox_egress_network(&stack, &egress)?;
-        if let Some(found) = &found {
-            assert_eq!(found.id, "net");
-        }
-        Ok(found.map(|found| found.vpc))
+        let found = sandbox_egress_network(&stack)?;
+        assert_eq!(found.id, "net");
+        Ok(found.vpc)
     }
 
     #[test]
@@ -251,9 +279,8 @@ mod tests {
                     ResourceLifecycle::Frozen,
                 )
                 .build();
-            let found = sandbox_egress_network(&stack, &SandboxEgress::None)
-                .expect("a created or brought VPC is attachable")
-                .expect("deny attaches to a network");
+            let found =
+                sandbox_egress_network(&stack).expect("a created or brought VPC is attachable");
             assert_eq!((found.id, found.vpc), ("first", expected));
         }
     }
@@ -297,20 +324,20 @@ mod tests {
         };
 
         let cases = [
-            (SandboxEgress::Allow, None, Ok(None)),
+            (SandboxEgress::Internet, None, Err(NoNetwork)),
             (
-                SandboxEgress::Allow,
+                SandboxEgress::Internet,
                 Some(NetworkSettings::UseDefault),
-                Ok(None),
+                Err(DefaultVpc),
             ),
-            (SandboxEgress::Allow, Some(byo_gcp()), Ok(None)),
-            (SandboxEgress::None, None, Err(NoNetwork)),
-            (SandboxEgress::None, Some(create()), Ok(Some(Created))),
             (
-                SandboxEgress::None,
-                Some(byo_aws()),
-                Ok(Some(BroughtByCustomer)),
+                SandboxEgress::Internet,
+                Some(byo_gcp()),
+                Err(OtherCloudNetwork),
             ),
+            (SandboxEgress::None, None, Err(NoNetwork)),
+            (SandboxEgress::None, Some(create()), Ok(Created)),
+            (SandboxEgress::None, Some(byo_aws()), Ok(BroughtByCustomer)),
             (
                 SandboxEgress::None,
                 Some(NetworkSettings::UseDefault),

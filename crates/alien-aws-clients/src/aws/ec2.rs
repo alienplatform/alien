@@ -2673,8 +2673,21 @@ pub struct Subnet {
     pub available_ip_address_count: Option<i32>,
     pub default_for_az: Option<bool>,
     pub map_public_ip_on_launch: Option<bool>,
+    pub ipv6_cidr_block_association_set: Option<SubnetIpv6CidrBlockAssociationSet>,
     #[serde(rename = "tagSet")]
     pub tag_set: Option<TagSet>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SubnetIpv6CidrBlockAssociationSet {
+    #[serde(rename = "item", default)]
+    pub items: Vec<SubnetIpv6CidrBlockAssociation>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubnetIpv6CidrBlockAssociation {
+    pub ipv6_cidr_block: Option<String>,
 }
 
 /// Request to create a subnet.
@@ -3007,6 +3020,8 @@ pub struct RouteSet {
 #[serde(rename_all = "camelCase")]
 pub struct Route {
     pub destination_cidr_block: Option<String>,
+    pub destination_ipv6_cidr_block: Option<String>,
+    pub destination_prefix_list_id: Option<String>,
     pub gateway_id: Option<String>,
     pub nat_gateway_id: Option<String>,
     pub instance_id: Option<String>,

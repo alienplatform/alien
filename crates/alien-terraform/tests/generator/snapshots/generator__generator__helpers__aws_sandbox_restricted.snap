@@ -234,11 +234,13 @@ locals {
       id   = "default-network"
       type = "network"
       importData = {
+        sandboxNetwork      = null
         vpcId               = var.network_mode == "create-new" ? aws_vpc.default_network[0].id : var.network_mode == "use-existing" ? var.vpc_id : null
         cidrBlock           = var.network_mode == "create-new" ? aws_vpc.default_network[0].cidr_block : null
         internetGatewayId   = var.network_mode == "create-new" ? aws_internet_gateway.default_network[0].id : null
         natGatewayId        = var.network_mode == "create-new" ? aws_nat_gateway.default_network[0].id : null
         eipAllocationId     = var.network_mode == "create-new" ? aws_eip.default_network_nat[0].id : null
+        egressPublicIps     = var.network_mode == "create-new" ? [aws_eip.default_network_nat[0].public_ip] : []
         publicSubnetIds     = var.network_mode == "create-new" ? aws_subnet.default_network_public[*].id : var.network_mode == "use-existing" ? compact([for id in var.public_subnet_ids : trimspace(id)]) : []
         privateSubnetIds    = var.network_mode == "create-new" ? aws_subnet.default_network_private[*].id : var.network_mode == "use-existing" ? compact([for id in var.private_subnet_ids : trimspace(id)]) : []
         publicRouteTableId  = var.network_mode == "create-new" ? aws_route_table.default_network_public[0].id : null

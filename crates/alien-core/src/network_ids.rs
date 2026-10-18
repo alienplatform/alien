@@ -17,6 +17,28 @@ pub fn deserialize_ids<'de, D: Deserializer<'de>>(
         .collect())
 }
 
+/// Custom-resource attributes are strings when CloudFormation builds JSON outputs.
+/// Accept their comma-separated representation while always serializing typed lists.
+pub fn deserialize_ids_or_csv<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<String>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Input {
+        List(Vec<String>),
+        Csv(String),
+    }
+    let values = match Input::deserialize(deserializer)? {
+        Input::List(values) => values,
+        Input::Csv(value) => value.split(',').map(str::to_string).collect(),
+    };
+    Ok(values
+        .into_iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect())
+}
+
 /// Deserialize an optional network ID; blank values mean no ID was supplied.
 pub fn deserialize_optional_id<'de, D: Deserializer<'de>>(
     deserializer: D,

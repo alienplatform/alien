@@ -8,7 +8,7 @@ use crate::remote_bindings::{
     remote_binding_for_entry, remote_binding_is_deliverable, RemoteBindingDefinition,
 };
 use crate::sandbox_build_role::SandboxBuildRole;
-use crate::sandbox_egress::sandbox_egress_network;
+use crate::sandbox_egress::{sandbox_egress_network, sandbox_needs_connector};
 use crate::{
     ErrorData, ResourceLifecycle, Result, Sandbox, SandboxCode, Stack, BUNDLE_REGION_TOKEN,
 };
@@ -29,15 +29,17 @@ pub const SETUP_INPUTS_COMPARISON_ACCOUNT: SetupAccount<'static> = SetupAccount 
     region: BUNDLE_REGION_TOKEN,
 };
 
-/// The id of the network an AWS sandbox's egress connector attaches to, `None` for `allow`.
+/// The id of the setup-owned network every AWS sandbox connector attaches to.
 /// The error is the refusal message, for the caller to wrap in its own error.
 pub fn aws_sandbox_egress_network_id<'a>(
     stack: &'a Stack,
     sandbox: &Sandbox,
 ) -> std::result::Result<Option<&'a str>, String> {
-    let network = match sandbox_egress_network(stack, sandbox.cloud_egress()) {
-        Ok(Some(network)) => network,
-        Ok(None) => return Ok(None),
+    if !sandbox_needs_connector(stack, sandbox) {
+        return Ok(None);
+    }
+    let network = match sandbox_egress_network(stack) {
+        Ok(network) => network,
         Err(refusal) => return Err(refusal.to_string()),
     };
     if network.entry.lifecycle != ResourceLifecycle::Frozen {

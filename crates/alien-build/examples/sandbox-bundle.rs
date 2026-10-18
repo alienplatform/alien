@@ -3,6 +3,7 @@
 //! ```text
 //! cargo run -p alien-build --example sandbox-bundle -- --agent-binary <path> <base-image> <bundle.zip>
 //! cargo run -p alien-build --example sandbox-bundle -- --agent-image <ref>  <base-image> <bundle.zip>
+//! cargo run -p alien-build --example sandbox-bundle -- --sandbox <sandbox.json> --agent-binary <path> <base-image> <bundle.zip>
 //! ```
 //!
 //! `--agent-image` is the shipping path: the bundle carries only a Dockerfile that copies the
@@ -17,6 +18,28 @@ use alien_build::sandbox_bundle::{write_bundle, write_supervised_bundle, AgentSo
 #[tokio::main]
 async fn main() -> ExitCode {
     let mut arguments: Vec<String> = std::env::args().skip(1).collect();
+    let declaration = if arguments.first().is_some_and(|arg| arg == "--sandbox") {
+        if arguments.len() < 2 {
+            eprintln!("--sandbox requires a sandbox JSON file");
+            return ExitCode::FAILURE;
+        }
+        let path = arguments.remove(1);
+        arguments.remove(0);
+        match std::fs::read(path)
+            .map_err(|error| error.to_string())
+            .and_then(|bytes| {
+                serde_json::from_slice::<alien_core::Sandbox>(&bytes)
+                    .map_err(|error| error.to_string())
+            }) {
+            Ok(sandbox) => Some(sandbox),
+            Err(error) => {
+                eprintln!("read sandbox declaration: {error}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        None
+    };
     let supervised = arguments
         .first()
         .is_some_and(|arg| arg == "--privileged-supervisor");
@@ -90,7 +113,10 @@ async fn main() -> ExitCode {
         reference.repository(),
         build.resolved_manifest_digest
     );
-    let result = if supervised {
+    let internet = declaration
+        .as_ref()
+        .is_some_and(|sandbox| matches!(sandbox.egress, alien_core::SandboxEgress::Internet));
+    let result = if supervised || internet {
         match alien_build::sandbox_identity::image_command(&image) {
             Ok(command) => write_supervised_bundle(
                 Path::new(destination),

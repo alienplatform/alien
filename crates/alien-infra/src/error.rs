@@ -37,6 +37,15 @@ pub enum ErrorData {
         message: String,
     },
 
+    /// Internet sandbox networking currently requires a template-owned AWS setup.
+    #[error(
+        code = "SANDBOX_INTERNET_DIRECT_SETUP_UNSUPPORTED",
+        message = "Sandbox '{resource_id}' uses internet egress, which AWS direct deploy does not support. Deploy this sandbox with CloudFormation or Terraform. Existing allow, deny, and allowDomains declarations are unchanged.",
+        retryable = "false",
+        internal = "false"
+    )]
+    SandboxInternetDirectSetupUnsupported { resource_id: String },
+
     /// Resource configuration validation failed.
     #[error(
         code = "RESOURCE_CONFIG_INVALID",

@@ -1,7 +1,12 @@
+use alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID;
 use alien_core::{
     AwsManagementConfig, AzureManagementConfig, DeploymentConfig, EnvironmentVariablesSnapshot,
     ExternalBindings, ManagementConfig, PermissionsConfig, Platform, Queue, RemoteStackManagement,
     ResourceLifecycle, ResourceRef, Stack, StackSettings, StackState, Storage, Worker, WorkerCode,
+};
+use alien_core::{
+    ComputeBackend, Container, ContainerCode, HorizonConfig, PermissionProfile, ResourceSpec,
+    Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy, Vault, SECRETS_VAULT_ID,
 };
 use alien_preflights::{runner::PreflightRunner, PreflightRegistry, StackMutation};
 use async_trait::async_trait;
@@ -397,7 +402,9 @@ async fn an_azure_sandbox_only_stack_depends_only_on_resources_it_defines() {
         .await
         .expect("mutations apply");
     assert!(
-        !sandbox_only.resources.contains_key("default-resource-group"),
+        !sandbox_only
+            .resources
+            .contains_key("default-resource-group"),
         "unexpected resources: {:?}",
         sandbox_only.resources.keys().collect::<Vec<_>>()
     );
@@ -680,6 +687,99 @@ async fn test_mutation_ordering() {
         assert!(
             rg_pos < sa_pos,
             "Resource group should come before service activations"
+        );
+    }
+}
+
+/// Loading a gateway-backed sandbox needs the vault descriptor even when this workload
+/// can only execute existing sessions. Linking it must not grant signing-key access.
+#[tokio::test]
+async fn execute_only_sandbox_consumer_gets_vault_binding_without_secret_access() {
+    let sandbox = Sandbox::new("box".into())
+        .code(SandboxCode::Image {
+            image: "example.invalid/sandbox:1".into(),
+        })
+        .egress(SandboxEgress::Internet)
+        .lifecycle(SandboxLifecyclePolicy {
+            max_lifetime_seconds: None,
+            idle_pause_seconds: None,
+        })
+        .build();
+    let worker = Container::new("executor".into())
+        .code(ContainerCode::Image {
+            image: "example.invalid/executor:1".into(),
+        })
+        .cpu(ResourceSpec {
+            min: "0.25".into(),
+            desired: "0.25".into(),
+        })
+        .memory(ResourceSpec {
+            min: "256Mi".into(),
+            desired: "256Mi".into(),
+        })
+        .permissions("execution".into())
+        .link(&sandbox)
+        .build();
+    let stack = Stack::new("sandbox-executor".into())
+        .add(sandbox, ResourceLifecycle::Frozen)
+        .add(worker, ResourceLifecycle::Live)
+        .permission(
+            "execution",
+            PermissionProfile::new().resource("box", ["sandbox/execute"]),
+        )
+        .build();
+    let config = DeploymentConfig::builder()
+        .stack_settings(StackSettings::default())
+        .environment_variables(empty_env_snapshot())
+        .compute_backend(ComputeBackend::Horizon(HorizonConfig {
+            url: "https://example.invalid".into(),
+            horizon_machine_image: None,
+            clusters: Default::default(),
+        }))
+        .allow_frozen_changes(false)
+        .external_bindings(ExternalBindings::default())
+        .build();
+    let state = StackState::new(Platform::Aws);
+    let prepared = PreflightRunner::new()
+        .apply_mutations(stack, &state, &config)
+        .await
+        .expect("prepare execute-only consumer");
+    for pass in [
+        prepared.clone(),
+        PreflightRunner::new()
+            .apply_mutations(prepared, &state, &config)
+            .await
+            .expect("prepare again without widening permissions"),
+    ] {
+        let worker = pass.resources["executor"]
+            .config
+            .downcast_ref::<Container>()
+            .unwrap();
+        assert!(
+            worker
+                .links
+                .contains(&ResourceRef::new(Vault::RESOURCE_TYPE, SECRETS_VAULT_ID)),
+            "the SDK must be able to load the vault descriptor"
+        );
+        assert!(worker
+            .links
+            .iter()
+            .any(|link| link.id() == SANDBOX_EGRESS_GATEWAY_ID));
+        let profile = &pass.permissions.profiles["execution"];
+        assert_eq!(
+            profile.0["box"]
+                .iter()
+                .map(|set| set.id())
+                .collect::<Vec<_>>(),
+            vec!["sandbox/execute"]
+        );
+        assert_eq!(
+            profile.0[SECRETS_VAULT_ID]
+                .iter()
+                .map(|set| set.id())
+                .collect::<Vec<_>>(),
+            vec!["vault/protect-sandbox-gateway-config"],
+            "no vault read or signing-key grant"
         );
     }
 }

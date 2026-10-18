@@ -658,6 +658,8 @@ Outputs:
               Fn::GetAtt:
               - DefaultNetworkNatEip
               - AllocationId
+            egressPublicIps:
+            - Ref: DefaultNetworkNatEip
             publicSubnetIds:
             - Ref: DefaultNetworkPublicSubnet1
             - Fn::If:

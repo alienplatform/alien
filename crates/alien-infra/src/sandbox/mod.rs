@@ -1,5 +1,8 @@
 //! Sandbox resource controllers.
 
+#[cfg(any(feature = "aws", feature = "local"))]
+mod egress;
+
 #[cfg(feature = "aws")]
 mod aws;
 #[cfg(feature = "aws")]

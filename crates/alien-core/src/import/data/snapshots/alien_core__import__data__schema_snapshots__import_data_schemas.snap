@@ -335,7 +335,7 @@ expression: schemas
     "description": "AWS Sandbox ImportData.\n\nCarries the sandbox's parent from the setup emitter to the runtime controller. The image **version** is not decoration: `RunMicrovm` has no `tags`, so image plus version is the only sandbox identity there is, and a controller holding a stale version would enumerate the wrong set and orphan every sandbox started on the previous one.\n\nTwo shapes arrive here, and which fields are present says which. A Frozen sandbox is built by stack creation and names its image; a Live one is built by the controller after the deployment registers, so it names the build role and bundle instead, leaving the image fields empty.",
     "properties": {
       "allowEgress": {
-        "description": "Whether the declaration asked for open egress.\n\nThe controller builds the binding from this, and an empty connector list cannot be read without it: a stripped `deny` import would otherwise look exactly like an open sandbox.",
+        "description": "Whether sessions use native cloud internet without a deployment gateway. Isolated sessions must instead name their setup-owned connector.",
         "type": "boolean"
       },
       "buildRoleArn": {
@@ -419,7 +419,7 @@ expression: schemas
         "type": "object"
       },
       "AwsSandboxNetwork": {
-        "description": "Setup-validated network coordinates for the sandbox connector and gateway.",
+        "description": "Setup network coordinates; the deployment controller verifies actual EC2 routes and CIDRs.",
         "properties": {
           "gatewayCidrs": {
             "description": "Only destinations permitted by the connector security group.",
@@ -491,6 +491,14 @@ expression: schemas
           "null"
         ]
       },
+      "egressPublicIps": {
+        "default": [],
+        "description": "Public addresses allocated to this deployment's NAT; empty when unknown.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
       "eipAllocationId": {
         "description": "Elastic IP allocation ID backing the NAT gateway.",
         "type": [
@@ -553,7 +561,7 @@ expression: schemas
             "type": "null"
           }
         ],
-        "description": "Isolated sandbox networking verified during setup; absent on older imports."
+        "description": "Dedicated sandbox networking to verify after setup; absent on older imports."
       },
       "securityGroupId": {
         "description": "Security group ID for private workloads.",
