@@ -20,7 +20,7 @@ use crate::{
     error::{denied, invalid, unavailable, Result},
     generation::GenerationFence,
     io::{Counters, Metered, Prefixed},
-    policy::{check_addresses, Target},
+    policy::{check_addresses, PolicyExt, Target},
     protocol::{read_client_hello, request_target, MAX_HEADER_BYTES},
     token::{self, Claims},
 };
@@ -54,10 +54,11 @@ impl Gateway {
             .bounds
             .get(&claims.aud)
             .ok_or_else(|| denied("unknown audience"))?;
-        self.generations
-            .check(&claims.aud, &claims.sub, claims.gen)
+        let policy = self
+            .generations
+            .resolve(&claims.aud, &claims.sub, claims.gen, &claims.policy)
             .await?;
-        if !bound.intersection_permits(&claims.egress, target) {
+        if !bound.intersection_permits(&policy, target) {
             return Err(alien_error::AlienError::new(
                 crate::error::ErrorData::PolicyDenied,
             ));

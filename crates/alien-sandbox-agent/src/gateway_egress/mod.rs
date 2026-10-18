@@ -29,7 +29,7 @@ use crate::error::{ErrorData, Result};
 use dns::Names;
 
 const TIMEOUT: Duration = Duration::from_secs(5);
-const MAX_HEADER: usize = 192 * 1024;
+const MAX_HEADER: usize = 32 * 1024;
 
 fn failed(reason: &str) -> ErrorData {
     ErrorData::OperationFailed {
@@ -573,7 +573,7 @@ impl GatewayEgress {
 
 fn validate_token(token: &str) -> Result<()> {
     if token.is_empty()
-        || token.len() > 128 * 1024
+        || token.len() > 4 * 1024
         || !token
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))

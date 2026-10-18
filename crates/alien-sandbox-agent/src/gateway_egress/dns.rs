@@ -95,45 +95,6 @@ impl Names {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    fn question(name: &str) -> Vec<u8> {
-        let mut q = vec![0, 7, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0];
-        for label in name.split('.') {
-            q.push(label.len() as u8);
-            q.extend_from_slice(label.as_bytes());
-        }
-        q.extend_from_slice(&[0, 0, 1, 0, 1]);
-        q
-    }
-    #[test]
-    fn names_get_distinct_stable_addresses_without_resolution() {
-        let names = Names::default();
-        let first = names.answer(&question("a.example.com")).unwrap();
-        let second = names.answer(&question("b.example.com")).unwrap();
-        assert_ne!(&first[first.len() - 4..], &second[second.len() - 4..]);
-        assert_eq!(first, names.answer(&question("a.example.com")).unwrap());
-        assert_eq!(
-            names.name(Ipv4Addr::new(198, 18, 0, 1)).as_deref(),
-            Some("a.example.com")
-        );
-        assert!(names.answer(&[0; 512]).is_none());
-    }
-
-    #[test]
-    fn edns_queries_preserve_name_mapping_without_forwarding_options() {
-        let names = Names::default();
-        let plain = question("example.com");
-        let mut edns = plain.clone();
-        edns[11] = 1;
-        edns.extend_from_slice(&[0, 0, 41, 4, 208, 0, 0, 0, 0, 0, 0]);
-        assert_eq!(names.answer(&plain), names.answer(&edns));
-        edns.pop();
-        assert!(names.answer(&edns).is_none());
-    }
-}
-
 /// Resolve the trusted gateway hostname through a marked control socket. Guest DNS never uses
 /// this path: it receives synthetic records and cannot send externally observable DNS questions.
 pub(super) async fn resolve_gateway(
@@ -238,4 +199,43 @@ pub(super) async fn resolve_gateway(
         offset += len;
     }
     Err(io::Error::other("gateway has no IPv4 address"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn question(name: &str) -> Vec<u8> {
+        let mut q = vec![0, 7, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0];
+        for label in name.split('.') {
+            q.push(label.len() as u8);
+            q.extend_from_slice(label.as_bytes());
+        }
+        q.extend_from_slice(&[0, 0, 1, 0, 1]);
+        q
+    }
+    #[test]
+    fn names_get_distinct_stable_addresses_without_resolution() {
+        let names = Names::default();
+        let first = names.answer(&question("a.example.com")).unwrap();
+        let second = names.answer(&question("b.example.com")).unwrap();
+        assert_ne!(&first[first.len() - 4..], &second[second.len() - 4..]);
+        assert_eq!(first, names.answer(&question("a.example.com")).unwrap());
+        assert_eq!(
+            names.name(Ipv4Addr::new(198, 18, 0, 1)).as_deref(),
+            Some("a.example.com")
+        );
+        assert!(names.answer(&[0; 512]).is_none());
+    }
+
+    #[test]
+    fn edns_queries_preserve_name_mapping_without_forwarding_options() {
+        let names = Names::default();
+        let plain = question("example.com");
+        let mut edns = plain.clone();
+        edns[11] = 1;
+        edns.extend_from_slice(&[0, 0, 41, 4, 208, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(names.answer(&plain), names.answer(&edns));
+        edns.pop();
+        assert!(names.answer(&edns).is_none());
+    }
 }

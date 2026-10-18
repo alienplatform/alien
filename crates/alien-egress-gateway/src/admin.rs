@@ -40,6 +40,7 @@ struct Update {
     aud: String,
     sub: String,
     gen: u64,
+    policy: crate::policy::Policy,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -55,7 +56,9 @@ pub fn router(admin: Arc<Admin>) -> Router {
         .route("/metrics", get(metrics))
         .route("/v1/generations", post(advance))
         .route("/v1/ca", post(issue_ca))
-        .layer(DefaultBodyLimit::max(4096))
+        .layer(DefaultBodyLimit::max(
+            crate::policy::MAX_POLICY_BYTES + 4096,
+        ))
         .with_state(admin)
 }
 
@@ -77,14 +80,36 @@ async fn advance(
     if !identity_valid(&admin, &update.aud, &update.sub) {
         return StatusCode::BAD_REQUEST;
     }
+    let Some(digest) = grant.policy else {
+        return StatusCode::FORBIDDEN;
+    };
+    let Some(bound) = admin.gateway.config.bounds.get(&update.aud) else {
+        return StatusCode::BAD_REQUEST;
+    };
+    if update.policy.ensure_subset_of(bound).is_err() {
+        return StatusCode::FORBIDDEN;
+    }
     match admin
         .gateway
         .generations
-        .advance(&update.aud, &update.sub, update.gen)
+        .advance(
+            &update.aud,
+            &update.sub,
+            update.gen,
+            &update.policy,
+            &digest,
+        )
         .await
     {
         Ok(()) => StatusCode::NO_CONTENT,
         Err(error) if error.code == "EGRESS_GENERATION_SUPERSEDED" => StatusCode::CONFLICT,
+        Err(error) if error.code == "EGRESS_DENIED" => StatusCode::FORBIDDEN,
+        Err(error)
+            if error.code == "EGRESS_INVALID"
+                || error.code == "SANDBOX_EGRESS_POLICY_TOO_LARGE" =>
+        {
+            StatusCode::BAD_REQUEST
+        }
         Err(_) => StatusCode::SERVICE_UNAVAILABLE,
     }
 }

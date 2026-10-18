@@ -4,13 +4,10 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use ed25519_compact::{PublicKey, Signature};
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    error::{denied, Result},
-    policy::Policy,
-};
+use crate::error::{denied, Result};
 
 /// Maximum token size, before decoding. Bounds allocation before signature verification.
-pub const MAX_TOKEN_BYTES: usize = 128 * 1024;
+pub const MAX_TOKEN_BYTES: usize = 4 * 1024;
 
 /// Signed identity and narrowed egress grant.
 #[derive(Clone, Serialize, Deserialize)]
@@ -22,8 +19,8 @@ pub struct Claims {
     pub aud: String,
     /// Sandbox instance ID.
     pub sub: String,
-    /// Narrowed policy.
-    pub egress: Policy,
+    /// SHA-256 digest of the canonical policy stored for this exact generation.
+    pub policy: String,
     /// Issued-at Unix timestamp.
     pub iat: u64,
     /// Expiry Unix timestamp.
@@ -49,6 +46,7 @@ pub fn verify(token: &str, keys: &HashMap<String, PublicKey>, now: u64) -> Resul
         || claims.sub.is_empty()
         || claims.aud.len() > 256
         || claims.sub.len() > 256
+        || !valid_digest(&claims.policy)
         || claims.iat > now
         || claims.exp <= now
         || claims.exp <= claims.iat
@@ -57,6 +55,15 @@ pub fn verify(token: &str, keys: &HashMap<String, PublicKey>, now: u64) -> Resul
         return Err(denied("invalid identity or token lifetime"));
     }
     Ok(claims)
+}
+
+pub fn valid_digest(value: &str) -> bool {
+    value.strip_prefix("sha256:").is_some_and(|hex| {
+        hex.len() == 64
+            && hex
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    })
 }
 
 fn verify_signed<T: serde::de::DeserializeOwned>(
@@ -117,6 +124,9 @@ pub struct AdminClaims {
     pub gen: u64,
     pub iat: u64,
     pub exp: u64,
+    /// Required for policy mutation; CA and metrics grants may omit it.
+    #[serde(default)]
+    pub policy: Option<String>,
 }
 
 /// Verify a short-lived admin JWS, distinct from proxy tokens by its mandatory type.
@@ -162,7 +172,7 @@ mod tests {
     fn signature_and_lifetime_are_required() {
         let pair = KeyPair::from_seed(Seed::new([7; 32]));
         let keys = HashMap::from([("test".into(), pair.pk)]);
-        let payload = serde_json::json!({"iss":"alien-sandbox", "aud":"prefix/resource", "sub":"box", "egress":"internet", "iat":100, "exp":200, "gen":0});
+        let payload = serde_json::json!({"iss":"alien-sandbox", "aud":"prefix/resource", "sub":"box", "policy":format!("sha256:{}", "a".repeat(64)), "iat":100, "exp":200, "gen":0});
         let token = signed(&pair, payload.clone());
         assert_eq!(verify(&token, &keys, 100).unwrap().sub, "box");
         assert!(verify(&token, &keys, 200).is_err());
@@ -178,28 +188,14 @@ mod tests {
     }
 
     #[test]
-    fn maximum_policy_fits_the_token_and_proxy_header_limits() {
+    fn referenced_policy_keeps_proxy_tokens_small() {
         let pair = KeyPair::from_seed(Seed::new([7; 32]));
         let keys = HashMap::from([("test".into(), pair.pk)]);
-        let allow: Vec<_> = (0..256)
-            .map(|i| {
-                format!(
-                    "{}.{}.{}.{}.test:65535",
-                    "a".repeat(63),
-                    "b".repeat(63),
-                    "c".repeat(63),
-                    format!("{i:03}{}", "d".repeat(53))
-                )
-            })
-            .collect();
-        let payload = serde_json::json!({"iss":"alien-sandbox", "aud":"prefix/resource", "sub":"box", "egress":{"allow":allow}, "iat":100, "exp":200, "gen":0});
+        let payload = serde_json::json!({"iss":"alien-sandbox", "aud":"prefix/resource", "sub":"box", "policy":format!("sha256:{}", "a".repeat(64)), "iat":100, "exp":200, "gen":0});
         let token = signed(&pair, payload);
-        assert!(token.len() > 65536);
+        assert!(token.len() < MAX_TOKEN_BYTES);
         verify(&token, &keys, 100).unwrap();
-        let request = format!("CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\nProxy-Authorization: Bearer {token}\r\n\r\n");
-        assert!(crate::protocol::request_target(request.as_bytes())
-            .unwrap()
-            .is_some());
+        assert!(verify(&"x".repeat(MAX_TOKEN_BYTES + 1), &keys, 100).is_err());
     }
 }
 

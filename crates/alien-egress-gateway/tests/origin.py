@@ -51,6 +51,8 @@ def dns():
         offset += 1
         question = packet[12 : offset + 4]
         name = ".".join(labels)
+        with open("/fixture/dns.jsonl", "a") as log:
+            log.write(json.dumps({"name": name, "type": packet[offset : offset + 2].hex()}) + "\n")
         ips = ["93.184.216.2"]
         if name == "private.test":
             ips = ["10.77.0.2"]
@@ -68,6 +70,6 @@ def dns():
         server.sendto(answer, sender)
 
 
-for port, certificate in [(80, None), (443, "origin"), (8443, "untrusted")]:
+for port, certificate in [(80, None), (443, "origin"), (9443, "origin"), (8443, "untrusted")]:
     threading.Thread(target=serve, args=(port, certificate), daemon=True).start()
 dns()

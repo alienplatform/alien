@@ -1,27 +1,15 @@
 use std::net::{IpAddr, Ipv4Addr};
 
+use alien_error::{Context, IntoAlienError};
 use ipnet::Ipv4Net;
-use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::error::{denied, invalid, Result};
 
-/// Canonical declaration/token policy on the gateway wire protocol.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum Policy {
-    /// A named mode.
-    Mode(Mode),
-    /// Explicit destinations, with default port 443.
-    Allow { allow: Vec<String> },
-}
+pub use alien_core::SandboxEgress as Policy;
 
-/// Named gateway policy modes.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Mode {
-    None,
-    Internet,
-}
+/// Maximum canonical policy payload shared by all providers.
+pub const MAX_POLICY_BYTES: usize = 256 * 1024;
 
 /// A normalized destination. IPv6 is deliberately unsupported.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,27 +76,60 @@ pub fn normalize_host(host: &str) -> Result<String> {
     }
 }
 
-impl Policy {
+pub trait PolicyExt {
+    fn permits(&self, target: &Target) -> bool;
+    fn intersection_permits(&self, other: &Self, target: &Target) -> bool;
+}
+
+impl PolicyExt for Policy {
     /// Both policies must permit the target. A literal needs an explicit rule in at least one
     /// policy; Internet is the upper bound for an explicitly narrowed literal grant.
-    pub fn intersection_permits(&self, other: &Self, target: &Target) -> bool {
+    fn intersection_permits(&self, other: &Self, target: &Target) -> bool {
         let left = self.permits(target);
         let right = other.permits(target);
         (left && right)
-            || (left && matches!(other, Self::Mode(Mode::Internet)))
-            || (right && matches!(self, Self::Mode(Mode::Internet)))
+            || (left && matches!(other, Self::Internet))
+            || (right && matches!(self, Self::Internet))
     }
 
     /// Check the policy against a destination. Internet never authorizes literal IPs.
-    pub fn permits(&self, target: &Target) -> bool {
+    fn permits(&self, target: &Target) -> bool {
         match self {
-            Self::Mode(Mode::None) => false,
-            Self::Mode(Mode::Internet) => target.host.parse::<IpAddr>().is_err(),
+            Self::None => false,
+            Self::Internet => target.host.parse::<IpAddr>().is_err(),
             Self::Allow { allow } => {
-                allow.len() <= 256 && allow.iter().any(|rule| rule_matches(rule, target))
+                allow.len() <= 4096 && allow.iter().any(|rule| rule_matches(rule, target))
             }
         }
     }
+}
+
+/// Canonical bytes used for the signed policy digest and immutable storage.
+pub fn canonical(policy: &Policy) -> Result<Vec<u8>> {
+    let mut policy = policy
+        .normalized()
+        .context(crate::error::ErrorData::Invalid {
+            reason: "invalid policy".into(),
+        })?;
+    if let Policy::Allow { allow } = &mut policy {
+        allow.sort();
+    }
+    let bytes = serde_json::to_vec(&policy).into_alien_error().context(
+        crate::error::ErrorData::Invalid {
+            reason: "encode policy".into(),
+        },
+    )?;
+    if bytes.len() > MAX_POLICY_BYTES {
+        return Err(alien_error::AlienError::new(
+            crate::error::ErrorData::PolicyTooLarge,
+        ));
+    }
+    Ok(bytes)
+}
+
+/// Digest includes its algorithm name to prevent format ambiguity.
+pub fn digest(bytes: &[u8]) -> String {
+    format!("sha256:{:x}", Sha256::digest(bytes))
 }
 
 fn rule_matches(rule: &str, target: &Target) -> bool {
@@ -182,9 +203,9 @@ mod tests {
             assert!(!policy.permits(&Target::parse(name, Some(443)).unwrap()));
         }
         assert!(policy.permits(&Target::parse("8.8.8.8:53", None).unwrap()));
-        assert!(!Policy::Mode(Mode::Internet).permits(&Target::parse("8.8.8.8:443", None).unwrap()));
+        assert!(!Policy::Internet.permits(&Target::parse("8.8.8.8:443", None).unwrap()));
         let literal = Target::parse("8.8.8.8:53", None).unwrap();
-        let internet = Policy::Mode(Mode::Internet);
+        let internet = Policy::Internet;
         assert!(internet.intersection_permits(&policy, &literal));
         assert!(policy.intersection_permits(&internet, &literal));
         assert!(!internet.intersection_permits(&internet, &literal));

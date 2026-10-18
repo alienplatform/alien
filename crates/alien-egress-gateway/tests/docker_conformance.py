@@ -9,6 +9,7 @@ import argparse
 import base64
 import datetime
 import http.client
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -46,6 +47,12 @@ def encoded(value):
     return base64.urlsafe_b64encode(value).rstrip(b"=").decode()
 
 
+def policy_digest(policy):
+    if isinstance(policy, dict):
+        policy = {"allow": sorted(policy["allow"])}
+    return "sha256:" + hashlib.sha256(json.dumps(policy, separators=(",", ":")).encode()).hexdigest()
+
+
 def certificates(directory):
     now = datetime.datetime.now(datetime.timezone.utc)
     ca_key = ec.generate_private_key(ec.SECP256R1())
@@ -81,12 +88,17 @@ class Suite:
         self.output = output
         self.key = ed25519.Ed25519PrivateKey.generate()
         self.results = []
+        self.policy = "internet"
 
     def token(self, admin=False, **overrides):
         now = int(time.time())
         claims = dict(iss="alien-sandbox", aud=AUD, sub=SUB, iat=now, exp=now + (60 if admin else 3600), gen=0)
         if not admin:
             claims["egress"] = "internet"
+        policy = overrides.pop("egress", self.policy)
+        if not admin:
+            claims.pop("egress", None)
+            claims["policy"] = policy_digest(policy)
         claims.update(overrides)
         header = dict(alg="EdDSA", kid="test")
         if admin:
@@ -102,8 +114,8 @@ class Suite:
         (self.output / "results.json").write_text(json.dumps(self.results, indent=2))
         print(json.dumps(result), flush=True)
 
-    def tunnel(self, host="allowed.test", port=443, token=None, expected=200):
-        stream = socket.create_connection((PROXY, 3128), timeout=8)
+    def tunnel(self, host="allowed.test", port=443, token=None, expected=200, proxy=PROXY):
+        stream = socket.create_connection((proxy, 3128), timeout=8)
         authority = f"{host}:{port}"
         stream.sendall(f"CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\nProxy-Authorization: Bearer {token or self.token()}\r\n\r\n".encode())
         response = b""
@@ -126,8 +138,11 @@ class Suite:
             return response.status, response.read()
 
     def admin(self, path, body, token=None, proxy=PROXY):
+        claims = {k: v for k, v in body.items() if k in ["aud", "sub", "gen"]}
+        if "policy" in body:
+            claims["policy"] = policy_digest(body["policy"])
         conn = http.client.HTTPConnection(proxy, 3129, timeout=5)
-        conn.request("POST", path, json.dumps(body), {"Content-Type": "application/json", "Authorization": "Bearer " + (token or self.token(admin=True, **{k: v for k, v in body.items() if k in ["aud", "sub", "gen"]}))})
+        conn.request("POST", path, json.dumps(body), {"Content-Type": "application/json", "Authorization": "Bearer " + (token or self.token(admin=True, **claims))})
         response = conn.getresponse()
         result = response.status, response.read()
         conn.close()
@@ -154,13 +169,20 @@ class Suite:
         def equal(actual, expected):
             assert actual == expected, (actual, expected)
 
+        equal(self.admin("/v1/generations", {"aud": AUD, "sub": SUB, "gen": 0, "policy": self.policy})[0], 204)
         self.record("direct verified TLS control", lambda: equal(self.tls(direct=True), (200, BODY)))
         self.record("allowed name verified TLS", lambda: equal(self.tls(), (200, BODY)))
         self.record("plain HTTP allowed", lambda: equal(self.plain(), (200, BODY)))
-        self.record("bound denies wider token", lambda: self.tunnel("denied.test", expected=403))
+        self.record("stored policy denies other name", lambda: self.tunnel("denied.test", expected=403))
+        self.record("bound denies wider signed admin policy", lambda: equal(self.admin("/v1/generations", {"aud": AUD, "sub": "wider", "gen": 0, "policy": "internet"})[0], 403))
+        equal(self.admin("/v1/generations", {"aud": AUD, "sub": "narrow", "gen": 0, "policy": "none"})[0], 204)
+        self.record("installed narrow policy denies allowed bound", lambda: self.tunnel(token=self.token(sub="narrow", egress="none"), expected=403))
         self.record("narrow token denies allowed bound", lambda: self.tunnel(token=self.token(egress="none"), expected=403))
         self.record("IP literal denied unless explicit", lambda: self.tunnel(ORIGIN, expected=403))
         self.record("SNI mismatch", lambda: self.denied_tls(sni="denied.test"))
+        self.record("TLS on explicit port", lambda: equal(self.tls(port=9443), (200, BODY)))
+        self.record("SNI mismatch on explicit port", lambda: self.denied_tls(port=9443, sni="denied.test"))
+        self.record("explicit IP HTTP", lambda: equal(self.plain(target=ORIGIN, host=ORIGIN), (200, BODY)))
         self.record("forged HTTP Host", lambda: equal(self.plain(host="denied.test")[0], 403))
         self.record("CONNECT cannot bypass HTTP Host", lambda: equal(self.plain(host="denied.test", connect=True)[0], 403))
         for host in ["private.test", "mixed.test", "metadata.test"]:
@@ -174,8 +196,9 @@ class Suite:
         self.record("forged signature", lambda: self.tunnel(token=forged, expected=403))
         self.record("admin token cannot proxy", lambda: self.tunnel(token=self.token(admin=True), expected=403))
         identity = {"aud": AUD, "sub": SUB}
-        self.record("proxy token cannot administer", lambda: equal(self.admin("/v1/generations", {**identity, "gen": 1}, self.token())[0], 401))
-        self.record("signed admin body cannot change", lambda: equal(self.admin("/v1/generations", {**identity, "gen": 2}, self.token(admin=True, gen=1))[0], 403))
+        generation_body = {**identity, "policy": self.policy}
+        self.record("proxy token cannot administer", lambda: equal(self.admin("/v1/generations", {**generation_body, "gen": 1}, self.token())[0], 401))
+        self.record("signed admin body cannot change", lambda: equal(self.admin("/v1/generations", {**generation_body, "gen": 2}, self.token(admin=True, gen=1, policy=policy_digest(self.policy)))[0], 403))
         status, response = self.admin("/v1/ca", identity)
         assert status == 200, response
         ca = self.output / "guest-ca.pem"
@@ -204,10 +227,13 @@ class Suite:
                     pass
         self.record("oversized header", lambda: limit(b"CONNECT " + b"a" * 220000))
         self.record("slow header deadline", lambda: limit(b"CONNECT ", 5.2))
-        self.record("generation advance", lambda: equal(self.admin("/v1/generations", {**identity, "gen": 2})[0], 204))
+        self.record("generation advance", lambda: equal(self.admin("/v1/generations", {**generation_body, "gen": 2})[0], 204))
+        self.record("stale admin generation conflict", lambda: equal(self.admin("/v1/generations", {**generation_body, "gen": 1})[0], 409))
+        self.record("equal generation cannot replace policy", lambda: equal(self.admin("/v1/generations", {**generation_body, "gen": 2, "policy": "none"})[0], 409))
         self.record("old generation", lambda: self.tunnel(expected=403))
         self.record("current generation", lambda: equal(self.tls(token=self.token(gen=2)), (200, BODY)))
-        self.record("second replica observes fence", lambda: equal(self.admin("/v1/generations", {**identity, "gen": 2}, proxy="93.184.216.4")[0], 204))
+        self.record("second replica denies old generation", lambda: self.tunnel(proxy="93.184.216.4", expected=403))
+        self.record("future generation denied", lambda: self.tunnel(token=self.token(gen=3), expected=403))
         self.benchmark()
 
     def benchmark(self):
@@ -263,6 +289,9 @@ class Suite:
         self.record("agent refuses other sandbox token", lambda: equal(call("PUT", "/v1/egress", {"token": self.token(sub="other", gen=2)})[0], 500))
         self.record("agent token install and path self-check", lambda: equal(call("PUT", "/v1/egress", {"token": self.token(gen=2)})[0], 204))
         self.record("agent ready health", lambda: equal(json.loads(call("GET", "/v1/health")[1])["status"], "ready"))
+        image_env = docker("exec", "-u", "60000:60000", name, "cat", "/data/image-env")
+        assert "HTTP_PROXY=http://127.0.0.1:15002" in image_env
+        assert "ALIEN_SANDBOX_EGRESS_TOKEN" not in image_env and "fake-test-secret" not in image_env
         script = '''import socket,ssl,http.client
 ip=socket.gethostbyname("allowed.test")
 assert ip.startswith("198.18."),ip
@@ -275,7 +304,12 @@ print("root transparent TLS passed")
 '''
         self.record("root-owned TCP uses synthetic DNS and gateway", lambda: equal(docker("exec", "-u", "0", name, "python", "-c", script), "root transparent TLS passed"))
         self.record("command UID TCP uses synthetic DNS and gateway", lambda: equal(docker("exec", "-u", "60000:60000", name, "python", "-c", script), "root transparent TLS passed"))
-        self.record("agent narrows live policy", lambda: equal(call("PUT", "/v1/egress", {"token": self.token(gen=2, egress="none")})[0], 204))
+        docker("exec", name, "python", "-c", 'import socket; assert socket.gethostbyname("exfil-test.test").startswith("198.18.")')
+        queries = [json.loads(line)["name"] for line in (self.output / "origin/dns.jsonl").read_text().splitlines()]
+        assert "allowed.test" in queries and "exfil-test.test" not in queries
+        self.record("guest DNS stays synthetic with working gateway DNS control", lambda: equal("exfil-test.test" in queries, False))
+        equal(self.admin("/v1/generations", {"aud": AUD, "sub": SUB, "gen": 3, "policy": "none"})[0], 204)
+        self.record("agent narrows live policy", lambda: equal(call("PUT", "/v1/egress", {"token": self.token(gen=3, egress="none")})[0], 204))
         denied = '''import socket,ssl
 s=socket.create_connection(("allowed.test",443),timeout=8)
 try:
@@ -284,6 +318,24 @@ except (ssl.SSLError,ConnectionError): print("denied")
 else: raise AssertionError("unexpected egress")
 '''
         self.record("root-owned TCP honors narrowed token", lambda: equal(docker("exec", "-u", "0", name, "python", "-c", denied), "denied"))
+
+        for mode, expected in [("none", 200), ("bridge", 503)]:
+            closed = PREFIX + f"-floor-{mode}"
+            docker("run", "-d", "--name", closed, "--network", mode, "--cap-add", "NET_ADMIN", "-e", 'ALIEN_SANDBOX_EGRESS="none"', image)
+            containers.append(closed)
+            health_script = '''import http.client,json,time
+deadline=time.monotonic()+8
+while True:
+ try:
+  c=http.client.HTTPConnection("127.0.0.1",8080,timeout=1);c.request("GET","/v1/health");r=c.getresponse();print(r.status);break
+ except OSError:
+  if time.monotonic()>deadline:raise
+  time.sleep(.05)
+'''
+            self.record(f"declared none floor {mode}", lambda n=closed, e=expected: equal(docker("exec", n, "python", "-c", health_script), str(e)))
+            if mode == "bridge":
+                control = 'import socket; s=socket.socket();s.setsockopt(socket.SOL_SOCKET,36,0xa11e);s.settimeout(3);s.connect(("1.1.1.1",443));print("reachable")'
+                self.record("open floor direct canary positive control", lambda: equal(docker("exec", closed, "python", "-c", control), "reachable"))
 
 
 def main():
@@ -303,7 +355,8 @@ def main():
     (output / "vault/secrets.json").write_text(json.dumps({"test": "fake-test-secret"}))
     suite = Suite(output)
     public = base64.b64encode(suite.key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)).decode()
-    allowed = ["allowed.test", "allowed.test:80", "inject.test", "inject.test:8443", "rebind.test", "private.test", "mixed.test", "metadata.test"]
+    allowed = ["allowed.test", "allowed.test:80", "allowed.test:9443", f"{ORIGIN}:80", "inject.test", "inject.test:8443", "rebind.test", "private.test", "mixed.test", "metadata.test"]
+    suite.policy = {"allow": allowed}
     rules = [dict(aud=AUD, host="inject.test", port=port, method="GET", path="/v1/", header="X-Test-Credential", vaultBinding="test-vault", secret="test") for port in [443, 8443]]
     config = dict(listen="0.0.0.0:3128", bounds={AUD: {"allow": allowed}}, keys=[dict(kid="test", publicKey=public)], deniedRanges=[], credentials=rules, upstreamCaCertificates=[ca])
     containers, networks = [], []

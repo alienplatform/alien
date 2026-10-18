@@ -12,6 +12,7 @@ local = ["alien-bindings/local"]
 
 [dependencies]
 axum = { workspace = true, features = ["tokio", "http1", "json"] }
+alien-core = { workspace = true }
 alien-error = { workspace = true }
 alien-bindings = { workspace = true }
 base64 = { workspace = true }

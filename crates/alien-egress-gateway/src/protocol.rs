@@ -10,7 +10,7 @@ use crate::{
 };
 
 /// Limit for the entire CONNECT/request header block.
-pub const MAX_HEADER_BYTES: usize = 192 * 1024;
+pub const MAX_HEADER_BYTES: usize = 32 * 1024;
 /// Limit for a fragmented TLS ClientHello, including TLS record framing.
 pub const MAX_HELLO_BYTES: usize = 64 * 1024;
 
@@ -141,6 +141,36 @@ pub async fn read_client_hello(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+    use tokio::io::AsyncWriteExt;
+
+    #[tokio::test]
+    async fn client_hello_can_arrive_one_byte_at_a_time() {
+        let config = rustls::ClientConfig::builder()
+            .with_root_certificates(rustls::RootCertStore::empty())
+            .with_no_client_auth();
+        let mut client =
+            rustls::ClientConnection::new(Arc::new(config), "example.com".try_into().unwrap())
+                .unwrap();
+        let mut hello = Vec::new();
+        client.write_tls(&mut hello).unwrap();
+        let (mut sender, mut receiver) = tokio::io::duplex(1);
+        let expected = hello.clone();
+        let writer = tokio::spawn(async move {
+            sender.write_all(&hello).await.unwrap();
+        });
+        assert_eq!(
+            read_client_hello(
+                &mut receiver,
+                &Target::parse("example.com:443", None).unwrap()
+            )
+            .await
+            .unwrap(),
+            expected
+        );
+        writer.await.unwrap();
+    }
+
     #[test]
     fn connect_requires_unambiguous_matching_host() {
         assert_eq!(

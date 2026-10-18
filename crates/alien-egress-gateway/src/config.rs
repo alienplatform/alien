@@ -78,6 +78,9 @@ impl Config {
         if self.keys.is_empty() || self.bounds.is_empty() || self.generation_binding.is_empty() {
             return Err(invalid("keys, bounds and generationBinding are required"));
         }
+        for bound in self.bounds.values() {
+            crate::policy::canonical(bound)?;
+        }
         let mut keys = HashMap::new();
         for key in &self.keys {
             let bytes = STANDARD

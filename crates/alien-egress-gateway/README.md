@@ -24,10 +24,19 @@ to port 3129 and `generationBinding` to `egress-state`. Supply the normal Alien 
 binding environment for that name. Build features select providers: `aws`, `cloud`
 (AWS, GCP and Kubernetes base-cloud stores), and `local`.
 
-The existing KV conditional-write API provides a durable monotonic generation
-fence. Every authorization reads the store; store failures deny access. There is
-no replica cache or expiring generation record. This avoids a separate state
-service and stale-cache windows at the cost of a KV read per connection. All
+Tokens contain `{iss,aud,sub,gen,iat,exp,policy}`; `policy` is `sha256:<hex>` of
+the normalized, sorted, compact policy JSON. Tokens are limited to 4 KiB. The
+admin API installs the full policy before the agent receives its token. A missing
+record, a different generation (older or newer), or a different digest denies access.
+
+The existing KV conditional-write API provides the durable generation and policy
+reference. Every authorization reads that record; store failures deny access. A
+bounded cache holds only verified immutable policy contents. Policies use 16 KiB
+content-addressed chunks so every KV backend supports the same size limit. Chunks
+are written before the atomic reference update. Records and chunks have no TTL;
+deployment teardown removes the store, and superseded policy content consumes
+storage until then. This avoids another state service and stale-generation windows
+at the cost of a KV read per connection and retained policy versions. All
 replicas must use the same binding. Local replicas must share a local disk; the
 local SQLite provider does not support multi-host network filesystems. Kubernetes
 uses its base-cloud KV; the Redis binding is not implemented by Alien bindings.
@@ -47,10 +56,14 @@ The admin listener is plain HTTP inside the deployment network. Sandbox network
 rules must permit only port 3128 and must deny 3129. Admin calls carry an Ed25519
 JWS in `Authorization: Bearer`, using the deployment's signing keys and mandatory
 header `typ: "alien-egress-admin"`. Claims are
-`{iss:"alien-sandbox",aud,sub,gen,iat,exp}`; the lifetime is at most 60 seconds.
-`POST /v1/generations {aud,sub,gen}` must exactly match the signed claims. Successful
-updates return 204; a superseded update returns 409, and a concurrent conditional-write conflict returns 503 for the
-caller to retry. Captured updates are idempotent and cannot be retargeted. This
+`{iss:"alien-sandbox",aud,sub,gen,iat,exp,policy}`; the lifetime is at most 60 seconds.
+The `policy` claim is the policy digest; it may be omitted for CA/metrics grants.
+`POST /v1/generations {aud,sub,gen,policy:<full policy>}` must match the signed
+identity, generation and digest, and must be a subset of the configured bound.
+Successful updates return 204; a superseded update or a different policy for an
+already-installed generation returns 409. A concurrent conditional-write conflict
+returns 503 for the caller to retry. Captured updates are idempotent and cannot be
+retargeted. This
 listener returns no private key or injected secret. `/health` is unauthenticated;
 `/metrics` requires an admin JWS. Logs contain one JSON record per proxy connection.
 
@@ -71,7 +84,8 @@ public CA through the agent's `PUT /v1/egress {token,caCert?}`. Trust bundle pat
 are passed to standard tools; applications with their own trust stores must import
 the public CA explicitly.
 
-For a gateway-backed resource the agent starts without a token. Health reports `awaiting-egress-policy`, and
+For a gateway-backed resource the agent starts without a token. Health reports
+`awaiting-egress-policy`, and
 session routes are blocked until token installation and the external path check
 succeed. On AWS the Run hook receives the AWS envelope
 `{microvmId,runHookPayload}`; the payload is a JSON string `{gateway,audience}`.
@@ -89,7 +103,8 @@ Validation tools live in `tests/` and `fuzz/`. Build the two release binaries, b
 `tests/Dockerfile.agent` with `alien-sandbox-agent` in its Docker build context, then
 run `python3 tests/docker_conformance.py --image IMAGE --agent-image AGENT_IMAGE
 --output /tmp/egress-proof`. The runner requires Python `cryptography` and a Docker
-daemon, uses only isolated controlled origins, benchmarks verified TLS transfers,
+daemon, uses isolated controlled TLS origins plus the public TCP canary for the
+open-network negative control, benchmarks verified TLS transfers,
 and removes its containers/networks. Run each parser with `cargo +nightly fuzz run
 connect -- -max_total_time=60` and `cargo +nightly fuzz run client_hello --
 -max_total_time=60` from this crate directory. Keep output outside the repository.
