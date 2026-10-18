@@ -10,6 +10,7 @@ pub mod merge;
 pub mod plan;
 pub mod registry;
 pub mod sandbox_bundle;
+pub mod sandbox_identity;
 #[cfg(test)]
 mod sandbox_publish_tests;
 pub mod settings;
@@ -753,6 +754,16 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                                     resource_name: sandbox_id.clone()
                                 }))
                             }
+                        };
+
+                        let result = match result {
+                            Ok(image_uri) => sandbox_identity::validate_declared_uid(
+                                &sandbox,
+                                Path::new(&image_uri),
+                            )
+                            .await
+                            .map(|()| image_uri),
+                            Err(error) => Err(error),
                         };
 
                         match &result {
