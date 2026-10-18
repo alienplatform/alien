@@ -88,54 +88,60 @@ impl TfEmitter for AzureNetworkEmitter {
         let nsg_label = format!("{label}_workload");
 
         Ok(match &network.settings {
-            NetworkSettings::UseDefault | NetworkSettings::Create { .. } => expr::object([
-                ("subscriptionId", expr::raw("var.azure_subscription_id")),
-                ("resourceGroup", expr::raw("var.azure_resource_group_name")),
-                (
-                    "vnetId",
-                    expr::traversal(["azurerm_virtual_network", label, "id"]),
-                ),
-                (
-                    "vnetName",
-                    expr::traversal(["azurerm_virtual_network", label, "name"]),
-                ),
-                (
-                    "subnetIds",
-                    Expression::Array(vec![
-                        expr::traversal(["azurerm_subnet", &public_subnet_label, "id"]),
-                        expr::traversal(["azurerm_subnet", &private_subnet_label, "id"]),
-                    ]),
-                ),
-                (
-                    "applicationGatewaySubnetId",
-                    expr::traversal(["azurerm_subnet", &format!("{label}_appgw"), "id"]),
-                ),
-                (
-                    "applicationGatewaySubnetName",
-                    expr::traversal(["azurerm_subnet", &format!("{label}_appgw"), "name"]),
-                ),
-                (
-                    "privateEndpointSubnetName",
-                    expr::traversal(["azurerm_subnet", &format!("{label}_pe"), "name"]),
-                ),
-                (
-                    "natGatewayId",
-                    expr::traversal(["azurerm_nat_gateway", &nat_label, "id"]),
-                ),
-                (
-                    "networkSecurityGroupId",
-                    expr::traversal(["azurerm_network_security_group", &nsg_label, "id"]),
-                ),
-                (
-                    "egressPublicIps",
-                    Expression::Array(vec![expr::traversal([
-                        "azurerm_public_ip",
-                        &format!("{label}_nat_pip"),
-                        "ip_address",
-                    ])]),
-                ),
-                ("isByoVnet", Expression::Bool(false)),
-            ]),
+            NetworkSettings::UseDefault | NetworkSettings::Create { .. } => {
+                let mut fields = vec![
+                    ("subscriptionId", expr::raw("var.azure_subscription_id")),
+                    ("resourceGroup", expr::raw("var.azure_resource_group_name")),
+                    (
+                        "vnetId",
+                        expr::traversal(["azurerm_virtual_network", label, "id"]),
+                    ),
+                    (
+                        "vnetName",
+                        expr::traversal(["azurerm_virtual_network", label, "name"]),
+                    ),
+                    (
+                        "subnetIds",
+                        Expression::Array(vec![
+                            expr::traversal(["azurerm_subnet", &public_subnet_label, "id"]),
+                            expr::traversal(["azurerm_subnet", &private_subnet_label, "id"]),
+                        ]),
+                    ),
+                    (
+                        "applicationGatewaySubnetId",
+                        expr::traversal(["azurerm_subnet", &format!("{label}_appgw"), "id"]),
+                    ),
+                    (
+                        "applicationGatewaySubnetName",
+                        expr::traversal(["azurerm_subnet", &format!("{label}_appgw"), "name"]),
+                    ),
+                    (
+                        "privateEndpointSubnetName",
+                        expr::traversal(["azurerm_subnet", &format!("{label}_pe"), "name"]),
+                    ),
+                    (
+                        "natGatewayId",
+                        expr::traversal(["azurerm_nat_gateway", &nat_label, "id"]),
+                    ),
+                    (
+                        "networkSecurityGroupId",
+                        expr::traversal(["azurerm_network_security_group", &nsg_label, "id"]),
+                    ),
+                    (
+                        "egressPublicIps",
+                        Expression::Array(vec![expr::traversal([
+                            "azurerm_public_ip",
+                            &format!("{label}_nat_pip"),
+                            "ip_address",
+                        ])]),
+                    ),
+                    ("isByoVnet", Expression::Bool(false)),
+                ];
+                if let Some(handoff) = super::sandbox_network::gateway_handoff(ctx, label)? {
+                    fields.push(("sandboxNetwork", handoff));
+                }
+                expr::object(fields)
+            }
             NetworkSettings::ByoVnetAzure { .. } => expr::object([
                 ("subscriptionId", expr::raw("var.azure_subscription_id")),
                 ("resourceGroup", expr::raw("var.azure_resource_group_name")),

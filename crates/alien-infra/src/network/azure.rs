@@ -118,6 +118,9 @@ fn stack_contains_postgres(ctx: &ResourceControllerContext<'_>) -> bool {
 pub struct AzureNetworkController {
     // Configuration from Network resource
     pub desired_settings: Option<NetworkSettings>,
+    /// Setup-verified subnet coordinates for an internal sandbox gateway load balancer.
+    #[serde(default)]
+    pub sandbox_network: Option<alien_core::import::data::AzureSandboxNetwork>,
 
     // Created or imported network details
     pub vnet_name: Option<String>,
@@ -279,6 +282,7 @@ impl AzureNetworkController {
                 subscription_id, resource_group, network_id
             )),
             egress_public_ips: Vec::new(),
+            sandbox_network: None,
             public_ip_name: Some(format!("test-{}-pip", network_id)),
             public_ip_id: Some(format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/publicIPAddresses/test-{}-pip",

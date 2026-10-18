@@ -27,6 +27,9 @@ pub struct AzureNetworkImportData {
     /// the Container Apps infrastructure ("private") subnet, which a Private Endpoint cannot share.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub private_endpoint_subnet_name: Option<String>,
+    /// Setup-owned sandbox and internal gateway subnet coordinates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox_network: Option<AzureSandboxNetwork>,
     /// NAT gateway resource id when one was created.
     pub nat_gateway_id: Option<String>,
     /// NAT public addresses owned by setup; empty for an unknown external egress path.
@@ -36,4 +39,24 @@ pub struct AzureNetworkImportData {
     pub network_security_group_id: Option<String>,
     /// True when the VNet is owned outside this stack.
     pub is_byo_vnet: bool,
+}
+
+/// Setup-owned subnet coordinates consumed by an internal sandbox gateway load balancer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "jsonschema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct AzureSandboxNetwork {
+    /// Dedicated delegated subnets whose sandboxes use the gateway.
+    pub sandbox_subnet_ids: Vec<String>,
+    /// Undelegated subnet reserved for the gateway load balancer's frontend.
+    pub gateway_subnet_ids: Vec<String>,
+    /// Sandbox source ranges allowed on the proxy listener.
+    pub sandbox_cidrs: Vec<String>,
+    /// Gateway ranges allowed by the sandbox subnet NSGs on TCP3128.
+    pub gateway_cidrs: Vec<String>,
+    /// Workload source ranges allowed on the authenticated admin listener.
+    pub workload_cidrs: Vec<String>,
+    /// Every VNet range excluded from gateway destinations.
+    pub vpc_cidrs: Vec<String>,
 }

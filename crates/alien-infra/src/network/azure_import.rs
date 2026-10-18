@@ -41,6 +41,7 @@ impl ResourceImporter for AzureNetworkImporter {
         let controller = AzureNetworkController {
             state: AzureNetworkState::Ready,
             desired_settings: None,
+            sandbox_network: data.sandbox_network,
             vnet_name: data.vnet_name,
             vnet_resource_id: data.vnet_id,
             public_subnet_name,
@@ -106,8 +107,17 @@ mod tests {
             "subnetIds":["/vnet/network/subnets/public", "/vnet/network/subnets/private"],
             "natGatewayId":"/nat/gateway", "isByoVnet":false,
             "egressPublicIps":["203.0.113.8"],
+            "sandboxNetwork": {
+                "sandboxSubnetIds": ["/vnet/network/subnets/sandbox"],
+                "gatewaySubnetIds": ["/vnet/network/subnets/gateway"],
+                "sandboxCidrs": ["10.0.16.0/23"],
+                "gatewayCidrs": ["10.0.6.0/24"],
+                "workloadCidrs": ["10.0.0.0/24", "10.0.1.0/24"],
+                "vpcCidrs": ["10.0.0.0/16"]
+            },
         });
         for expected in [vec!["203.0.113.8".to_string()], Vec::new()] {
+            let expected_network = json.get("sandboxNetwork").cloned();
             let data = serde_json::from_value(json.clone()).expect("typed import");
             let state = AzureNetworkImporter.import(data, &ctx).expect("import");
             let outputs = state
@@ -121,6 +131,13 @@ mod tests {
             let restored: AzureNetworkController =
                 serde_json::from_value(state.internal_state.unwrap()).expect("controller state");
             assert_eq!(restored.egress_public_ips, expected);
+            assert_eq!(
+                restored
+                    .sandbox_network
+                    .map(|network| serde_json::to_value(network).unwrap()),
+                expected_network,
+            );
+            json.as_object_mut().unwrap().remove("sandboxNetwork");
             json.as_object_mut().unwrap().remove("egressPublicIps");
         }
     }
