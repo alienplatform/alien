@@ -1045,6 +1045,24 @@ fn parse_stack_import_request(raw: serde_json::Value) -> crate::error::Result<St
         ));
     }
 
+    if found_version < 3
+        && raw
+            .get("resources")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|resources| {
+                resources.iter().any(|resource| {
+                    resource
+                        .get("importData")
+                        .and_then(|data| data.get("workerGatewayCleanupFunctionArn"))
+                        .is_some_and(|capability| !capability.is_null())
+                })
+            })
+    {
+        return Err(ErrorData::bad_request(
+            "AWS worker gateway cleanup capabilities require setup import format 3",
+        ));
+    }
+
     serde_json::from_value(raw).map_err(|err| {
         AlienError::new(ErrorData::BadRequest {
             reason: format!("Invalid stack import payload: {err}"),
@@ -1868,6 +1886,38 @@ mod setup_update_authorization_tests {
             "INCOMPATIBLE_SETUP_IMPORT"
         );
         assert!(parse_stack_import_request(serde_json::to_value(request()).unwrap()).is_ok());
+    }
+
+    #[test]
+    fn gateway_cleanup_capability_requires_version_three_and_preserves_legacy_imports() {
+        let capability =
+            "arn:aws:lambda:us-east-1:123456789012:function:_gateway-cleanup-deployment:7";
+        let mut raw = serde_json::to_value(request()).unwrap();
+        raw["resources"] = serde_json::json!([{
+            "id": "management", "type": "remote-stack-management",
+            "importData": {"workerGatewayCleanupFunctionArn": capability}
+        }]);
+        for version in [1, 2] {
+            raw["setupImportFormatVersion"] = serde_json::json!(version);
+            let error = parse_stack_import_request(raw.clone()).unwrap_err();
+            assert_eq!(error.code, "BAD_REQUEST");
+            assert!(error.to_string().contains("require setup import format 3"));
+        }
+        raw["setupImportFormatVersion"] = serde_json::json!(3);
+        let parsed = parse_stack_import_request(raw.clone()).unwrap();
+        assert_eq!(parsed.setup_import_format_version, 3);
+        assert_eq!(
+            parsed.resources[0].import_data["workerGatewayCleanupFunctionArn"],
+            capability
+        );
+        for version in [1, 2] {
+            raw["setupImportFormatVersion"] = serde_json::json!(version);
+            raw["resources"][0]["importData"] = serde_json::json!({});
+            assert!(parse_stack_import_request(raw.clone()).is_ok());
+            raw["resources"][0]["importData"]["workerGatewayCleanupFunctionArn"] =
+                serde_json::Value::Null;
+            assert!(parse_stack_import_request(raw.clone()).is_ok());
+        }
     }
 
     fn request() -> StackImportRequest {
