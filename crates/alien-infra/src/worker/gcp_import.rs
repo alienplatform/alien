@@ -48,6 +48,7 @@ impl ResourceImporter for GcpWorkerImporter {
             ssl_certificate_name: None,
             uses_custom_domain: false,
             certificate_issued_at: None,
+            pending_ssl_certificate: None,
             serverless_neg_name: None,
             backend_service_name: None,
             url_map_name: None,
