@@ -6,6 +6,7 @@
 
 mod dns;
 mod redirect;
+mod transport;
 
 use std::{
     collections::BTreeMap,
@@ -23,7 +24,7 @@ use std::{
 use alien_error::{AlienError, Context, IntoAlienError};
 use base64::Engine;
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{AsyncReadExt, AsyncWriteExt, BufReader},
     net::{TcpListener, TcpStream, UdpSocket},
     sync::Semaphore,
     task::JoinSet,
@@ -32,6 +33,7 @@ use tokio::{
 
 use crate::error::{ErrorData, Result};
 use dns::Names;
+use transport::{accept, read_header};
 
 const TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_HEADER: usize = 32 * 1024;
@@ -506,7 +508,7 @@ impl GatewayEgress {
             self.ready.store(true, Ordering::Release);
             return Ok(());
         }
-        let mut gateway = self.connect(self.gateway_address()?).await?;
+        let mut gateway = BufReader::new(self.connect(self.gateway_address()?).await?);
         let token = self.current_token()?;
         gateway.write_all(format!("GET /health HTTP/1.1\r\nHost: {}\r\nProxy-Authorization: Bearer {token}\r\nConnection: close\r\n\r\n", self.gateway_address()?).as_bytes())
             .await.into_alien_error().context(failed("request authenticated gateway health"))?;
@@ -534,30 +536,34 @@ impl GatewayEgress {
         let mut tasks = JoinSet::new();
         loop {
             tokio::select! {
-                connection = listener.accept() => {
-                    let (stream, _) = connection.into_alien_error().context(failed("accept forwarder"))?;
+                connection = accept(&listener) => {
+                    let (stream, _) = connection;
                     let Ok(permit) = limit.clone().try_acquire_owned() else { continue; };
                     let this = self.clone();
                     tasks.spawn(async move { let _permit = permit; let _result = timeout(Duration::from_secs(3600), this.forward(stream, transparent)).await; });
                 }
-                result = tasks.join_next(), if !tasks.is_empty() => { if result.is_some_and(|r| r.is_err()) { return Err(invalid("forwarder task panicked")); } }
+                result = tasks.join_next(), if !tasks.is_empty() => { if let Some(Err(error)) = result { tracing::error!(%error, "forwarder task failed"); } }
             }
         }
     }
 
-    async fn forward(&self, mut guest: TcpStream, transparent: bool) -> Result<()> {
+    async fn forward(&self, guest: TcpStream, transparent: bool) -> Result<()> {
         self.ensure_ready()?;
-        let mut upstream = self.connect(self.gateway_address()?).await?;
+        let mut guest = BufReader::new(guest);
+        let mut upstream = BufReader::new(self.connect(self.gateway_address()?).await?);
         if transparent {
-            let destination = redirect::original_destination(&guest)
+            let destination = redirect::original_destination(guest.get_ref())
                 .into_alien_error()
                 .context(failed("read original destination"))?;
             let name = self
                 .names
                 .name(*destination.ip())
                 .unwrap_or_else(|| destination.ip().to_string());
-            self.send_connect(&mut upstream, &format!("{name}:{}", destination.port()))
-                .await?;
+            self.send_connect(
+                upstream.get_mut(),
+                &format!("{name}:{}", destination.port()),
+            )
+            .await?;
             let response = timeout(TIMEOUT, read_header(&mut upstream))
                 .await
                 .into_alien_error()
@@ -618,45 +624,50 @@ impl GatewayEgress {
     async fn dns_udp(&self, socket: UdpSocket) -> Result<()> {
         let mut packet = [0; 512];
         loop {
-            let (n, peer) = socket
-                .recv_from(&mut packet)
-                .await
-                .into_alien_error()
-                .context(failed("read DNS"))?;
+            let (n, peer) = match socket.recv_from(&mut packet).await {
+                Ok(received) => received,
+                Err(error) => {
+                    tracing::warn!(%error, "DNS receive failed; retrying");
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    continue;
+                }
+            };
             if let Some(reply) = self.names.answer(&packet[..n]) {
-                socket
-                    .send_to(&reply, peer)
-                    .await
-                    .into_alien_error()
-                    .context(failed("reply DNS"))?;
+                if let Err(error) = socket.send_to(&reply, peer).await {
+                    tracing::warn!(%error, "DNS reply failed");
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
             }
         }
     }
 
-    async fn dns_tcp(&self, listener: TcpListener) -> Result<()> {
+    async fn dns_tcp(self: &Arc<Self>, listener: TcpListener) -> Result<()> {
+        let capacity = Arc::new(Semaphore::new(32));
+        let mut tasks = JoinSet::new();
         loop {
-            let (mut stream, _) = listener
-                .accept()
-                .await
-                .into_alien_error()
-                .context(failed("accept DNS"))?;
-            // Sequential and bounded: DNS questions are tiny; no unbounded per-query tasks.
-            let result = timeout(TIMEOUT, async {
-                let n = stream.read_u16().await? as usize;
-                if n > 512 {
-                    return Err(std::io::Error::other("DNS question too large"));
+            tokio::select! {
+                connection = accept(&listener) => {
+                    let (mut stream, _) = connection;
+                    let Ok(permit) = capacity.clone().try_acquire_owned() else { continue; };
+                    let this = self.clone();
+                    tasks.spawn(async move {
+                        let _permit = permit;
+                        let _ = timeout(TIMEOUT, async {
+                            let n = stream.read_u16().await? as usize;
+                            if n > 512 { return Err(std::io::Error::other("DNS question too large")); }
+                            let mut packet = vec![0; n];
+                            stream.read_exact(&mut packet).await?;
+                            if let Some(reply) = this.names.answer(&packet) {
+                                stream.write_u16(reply.len() as u16).await?;
+                                stream.write_all(&reply).await?;
+                            }
+                            Ok::<_, std::io::Error>(())
+                        }).await;
+                    });
                 }
-                let mut packet = vec![0; n];
-                stream.read_exact(&mut packet).await?;
-                if let Some(reply) = self.names.answer(&packet) {
-                    stream.write_u16(reply.len() as u16).await?;
-                    stream.write_all(&reply).await?;
+                result = tasks.join_next(), if !tasks.is_empty() => {
+                    if let Some(Err(error)) = result { tracing::error!(%error, "DNS task failed"); }
                 }
-                Ok::<_, std::io::Error>(())
-            })
-            .await;
-            if result.is_err() {
-                continue;
             }
         }
     }
@@ -673,25 +684,6 @@ fn validate_token(token: &str) -> Result<()> {
         return Err(invalid("invalid egress token encoding"));
     }
     Ok(())
-}
-
-async fn read_header(stream: &mut TcpStream) -> Result<Vec<u8>> {
-    let mut input = Vec::new();
-    // Read to the exact boundary so CONNECT never discards server-first protocol bytes.
-    loop {
-        let byte = stream
-            .read_u8()
-            .await
-            .into_alien_error()
-            .context(failed("read proxy header"))?;
-        input.push(byte);
-        if input.len() > MAX_HEADER {
-            return Err(invalid("proxy header too large"));
-        }
-        if input.ends_with(b"\r\n\r\n") {
-            return Ok(input);
-        }
-    }
 }
 
 fn token_identity(token: &str) -> Result<(String, String)> {

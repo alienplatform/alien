@@ -302,8 +302,9 @@ class Suite:
         self.record("rebinding public control", lambda: equal(self.tls(host="rebind.test"), (200, BODY)))
         (self.output / "origin/rebind").write_text("10.77.91.2")
         self.record("rebinding private next connection", lambda: self.tunnel("rebind.test", expected=403))
-        for name, overrides in [("expired", {"iat": 1, "exp": 2}), ("future", {"iat": int(time.time()) + 60}), ("wrong audience", {"aud": "other/box"}), ("excess lifetime", {"exp": int(time.time()) + 90000})]:
+        for name, overrides in [("expired", {"iat": 1, "exp": 2}), ("future beyond clock leeway", {"iat": int(time.time()) + 120}), ("wrong audience", {"aud": "other/box"}), ("excess lifetime", {"exp": int(time.time()) + 90000})]:
             self.record(name, lambda o=overrides: self.tunnel(token=self.token(**o), expected=403))
+        self.record("proxy issuance clock leeway", lambda: equal(self.tls(token=self.token(iat=int(time.time()) + 30)), (200, BODY)))
         forged = self.token().rsplit(".", 1)[0] + "." + encoded(bytes(64))
         self.record("forged signature", lambda: self.tunnel(token=forged, expected=403))
         self.record("admin token cannot proxy", lambda: self.tunnel(token=self.token(admin=True), expected=403))
@@ -511,6 +512,24 @@ else: raise AssertionError("command can read agent memory")
         queries = [json.loads(line)["name"] for line in (self.output / "origin/dns.jsonl").read_text().splitlines()]
         assert "allowed.test" in queries and "exfil-test.test" not in queries
         self.record("guest DNS stays synthetic with working gateway DNS control", lambda: equal("exfil-test.test" in queries, False))
+        dns_concurrent = """import socket,struct,time
+slow=socket.create_connection(("8.8.8.8",53),timeout=2)
+slow.sendall(b"\\x00")
+q=struct.pack("!6H",123,0x100,1,0,0,0)+b"\\x07allowed\\x04test\\x00\\x00\\x01\\x00\\x01"
+started=time.monotonic()
+with socket.create_connection(("8.8.8.8",53),timeout=1) as fast:
+ fast.sendall(struct.pack("!H",len(q))+q)
+ response=b""
+ while len(response)<2 or len(response)<2+struct.unpack("!H",response[:2])[0]:
+  part=fast.recv(512)
+  assert part,"truncated DNS reply"
+  response+=part
+ assert len(response)>14 and response[2:4]==b"\\x00{",response
+assert time.monotonic()-started<1
+slow.close()
+print("concurrent DNS passed")
+"""
+        self.record("slow TCP DNS client does not block another client", lambda: equal(docker("exec", "-u", f"{AGENT_UID}:{AGENT_UID}", name, "python", "-c", dns_concurrent), "concurrent DNS passed"))
         self.record("live policy replacement without agent PUT", lambda: equal(self.admin("/v1/policies", {"aud": AUD, "sub": SUB, "policy": {"allow":["blocked.example.test"]}})[0], 204))
         denied = '''import socket,ssl
 s=socket.create_connection(("allowed.test",443),timeout=8)
