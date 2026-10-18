@@ -745,6 +745,10 @@ fn convert_docker_archive(path: &Path, target_arch: &str, saved: &Value) -> Resu
         .iter()
         .map(|layer| layer.as_str().ok_or_else(|| AlienError::new(failure())))
         .collect::<Result<Vec<_>>>()?;
+    let directory = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
     let mut descriptors = HashMap::new();
     let mut compressed_layers = HashMap::new();
     let mut layer_links = HashMap::new();
@@ -824,7 +828,9 @@ fn convert_docker_archive(path: &Path, target_arch: &str, saved: &Value) -> Resu
             );
             digest.update(&bytes);
         } else {
-            let compressed = tempfile::tempfile().into_alien_error().context(failure())?;
+            let compressed = tempfile::tempfile_in(directory)
+                .into_alien_error()
+                .context(failure())?;
             // Hash each side of gzip as bytes pass through; diff IDs refer to the input,
             // while OCI descriptors refer to the compressed bytes stored in the archive.
             let mut uncompressed = HashingWriter::new(GzEncoder::new(
@@ -903,10 +909,7 @@ fn convert_docker_archive(path: &Path, target_arch: &str, saved: &Value) -> Resu
     };
     let docker_manifest = json!([{"Config": blob_path(config)?, "RepoTags": images[0]["RepoTags"],
         "Layers": layer_descriptors.iter().map(blob_path).collect::<Result<Vec<_>>>()?}]);
-    let directory = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty());
-    let mut temporary = tempfile::NamedTempFile::new_in(directory.unwrap_or(Path::new(".")))
+    let mut temporary = tempfile::NamedTempFile::new_in(directory)
         .into_alien_error()
         .context(failure())?;
     let mut builder = tar::Builder::new(temporary.as_file_mut());
