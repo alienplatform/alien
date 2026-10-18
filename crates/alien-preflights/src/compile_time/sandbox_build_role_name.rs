@@ -81,7 +81,7 @@ impl CompileTimeCheck for SandboxBuildRoleNameCheck {
                 entry
                     .config
                     .downcast_ref::<Sandbox>()
-                    .is_some_and(|sandbox| sandbox.egress == SandboxEgress::Deny)
+                    .is_some_and(|sandbox| sandbox.egress == SandboxEgress::None)
             })
             .map(|(resource_id, _)| resource_id.as_str())
             .collect();
@@ -155,7 +155,7 @@ mod tests {
             .code(SandboxCode::Image {
                 image: "s3://bucket/sandbox.zip".to_string(),
             })
-            .egress(SandboxEgress::Allow)
+            .egress(SandboxEgress::Internet)
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
@@ -247,7 +247,7 @@ mod tests {
 
     fn deny_sandbox(id: &str) -> Sandbox {
         Sandbox {
-            egress: SandboxEgress::Deny,
+            egress: SandboxEgress::None,
             ..sandbox(id)
         }
     }

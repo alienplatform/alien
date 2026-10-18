@@ -6400,7 +6400,7 @@ mod sandbox_build_tests {
                 src: "./sandbox".to_string(),
                 toolchain,
             })
-            .egress(SandboxEgress::Allow)
+            .egress(SandboxEgress::Internet)
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
@@ -6458,7 +6458,7 @@ mod sandbox_build_tests {
             .code(SandboxCode::Image {
                 image: "public.ecr.aws/acme/base:v1".to_string(),
             })
-            .egress(SandboxEgress::Allow)
+            .egress(SandboxEgress::Internet)
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
@@ -6501,7 +6501,7 @@ mod sandbox_push_tests {
             .code(SandboxCode::Image {
                 image: image.to_string(),
             })
-            .egress(SandboxEgress::Allow)
+            .egress(SandboxEgress::Internet)
             .lifecycle(lifecycle())
             .build()
     }
@@ -6713,7 +6713,7 @@ mod sandbox_push_tests {
                             binary_name: "box".to_string(),
                         },
                     })
-                    .egress(SandboxEgress::Allow)
+                    .egress(SandboxEgress::Internet)
                     .lifecycle(lifecycle())
                     .build(),
                 ResourceLifecycle::Live,

@@ -38,7 +38,7 @@ fn public(ip: Ipv4Addr) -> bool {
 /// allowing arbitrary DNS queries would let them bypass a deny/allowlist with query names.
 fn destinations(policy: &SandboxEgress) -> Result<BTreeSet<Ipv4Addr>> {
     let mut ips = BTreeSet::new();
-    if let SandboxEgress::AllowDomains { domains } = policy {
+    if let SandboxEgress::Allow { allow: domains } = policy {
         let mut hosts = String::new();
         for domain in domains {
             if domain.is_empty()
@@ -144,13 +144,13 @@ pub fn install(policy: &SandboxEgress, command_uid: u32) -> Result<()> {
     let mut rules = format!("add table ip alien_egress\nflush table ip alien_egress\nadd chain ip alien_egress output {{ type filter hook output priority 0; policy accept; }}\nadd chain ip alien_egress commands\nadd rule ip alien_egress output meta skuid {command_uid} jump commands\n");
     let mut add =
         |rule: &str| rules.push_str(&format!("add rule ip alien_egress commands {rule}\n"));
-    if !matches!(policy, SandboxEgress::Allow) {
+    if !matches!(policy, SandboxEgress::Internet) {
         add("udp dport 53 drop");
         add("tcp dport 53 drop");
     }
     add("oifname \"lo\" accept");
     add("ct state established,related accept");
-    if matches!(policy, SandboxEgress::Allow) {
+    if matches!(policy, SandboxEgress::Internet) {
         let resolv = fs::read_to_string("/etc/resolv.conf")
             .into_alien_error()
             .context(failed("read resolver configuration"))?;
@@ -166,13 +166,13 @@ pub fn install(policy: &SandboxEgress, command_uid: u32) -> Result<()> {
         }
     }
     match policy {
-        SandboxEgress::Deny => {}
-        SandboxEgress::AllowDomains { .. } => {
+        SandboxEgress::None => {}
+        SandboxEgress::Allow { .. } => {
             for ip in ips {
                 add(&format!("ip daddr {ip} accept"));
             }
         }
-        SandboxEgress::Allow => {
+        SandboxEgress::Internet => {
             for cidr in [
                 "0.0.0.0/8",
                 "10.0.0.0/8",

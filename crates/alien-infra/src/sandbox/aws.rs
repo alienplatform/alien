@@ -1414,7 +1414,7 @@ mod tests {
             .code(SandboxCode::Image {
                 image: BUNDLE_URI.to_string(),
             })
-            .egress(SandboxEgress::Deny)
+            .egress(SandboxEgress::None)
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: Some(1800),
                 idle_pause_seconds: Some(600),
@@ -1430,7 +1430,7 @@ mod tests {
             .code(SandboxCode::Image {
                 image: bundle_uri.to_string(),
             })
-            .egress(SandboxEgress::Deny)
+            .egress(SandboxEgress::None)
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: Some(1800),
                 idle_pause_seconds: Some(600),

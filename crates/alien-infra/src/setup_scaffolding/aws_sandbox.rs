@@ -741,7 +741,7 @@ mod tests {
             .code(SandboxCode::Image {
                 image: BUNDLE_URI.to_string(),
             })
-            .egress(SandboxEgress::Allow)
+            .egress(SandboxEgress::Internet)
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
@@ -1314,7 +1314,7 @@ mod tests {
         let frozen = |bundle: &str| {
             stack_as(
                 ResourceLifecycle::Frozen,
-                with(SandboxEgress::Allow, bundle),
+                with(SandboxEgress::Internet, bundle),
                 None,
             )
         };
@@ -1329,7 +1329,7 @@ mod tests {
         );
         assert_eq!(
             changes(
-                &stack_of(with(SandboxEgress::Allow, BUNDLE_URI), None),
+                &stack_of(with(SandboxEgress::Internet, BUNDLE_URI), None),
                 &frozen(BUNDLE_URI),
                 Platform::Aws
             ),
@@ -1340,7 +1340,7 @@ mod tests {
     #[test]
     fn scaffolding_inputs_that_change_need_setup() {
         let allow = stack_of(sandbox(), Some("net"));
-        let deny = stack_of(with(SandboxEgress::Deny, BUNDLE_URI), Some("net"));
+        let deny = stack_of(with(SandboxEgress::None, BUNDLE_URI), Some("net"));
         assert_eq!(
             changes(&allow, &deny, Platform::Aws),
             vec![
@@ -1358,7 +1358,7 @@ mod tests {
         assert_eq!(
             changes(
                 &deny,
-                &stack_of(with(SandboxEgress::Deny, BUNDLE_URI), Some("other-net")),
+                &stack_of(with(SandboxEgress::None, BUNDLE_URI), Some("other-net")),
                 Platform::Aws
             ),
             vec!["sandbox 'agents' changes its egress network"]
@@ -1368,7 +1368,7 @@ mod tests {
                 &allow,
                 &stack_of(
                     with(
-                        SandboxEgress::Allow,
+                        SandboxEgress::Internet,
                         "s3://other-artifacts/sandbox-bundle/f00dcafe/bundle.zip"
                     ),
                     Some("net")
@@ -1457,7 +1457,7 @@ mod tests {
 
     #[test]
     fn a_new_bundle_version_or_session_policy_needs_no_setup() {
-        let installed = stack_of(with(SandboxEgress::Deny, BUNDLE_URI), Some("net"));
+        let installed = stack_of(with(SandboxEgress::None, BUNDLE_URI), Some("net"));
         let target = stack_of(
             Sandbox {
                 lifecycle: SandboxLifecyclePolicy {
@@ -1465,7 +1465,7 @@ mod tests {
                     idle_pause_seconds: Some(60),
                 },
                 ..with(
-                    SandboxEgress::Deny,
+                    SandboxEgress::None,
                     "s3://acme-artifacts/sandbox-bundle/0ddba11/bundle.zip",
                 )
             },

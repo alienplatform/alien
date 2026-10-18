@@ -892,7 +892,7 @@ mod setup_update_authorization_tests {
                 image: image.to_string(),
             })
             .maybe_private_base_image(private_base_image.map(str::to_string))
-            .egress(alien_core::SandboxEgress::Allow)
+            .egress(alien_core::SandboxEgress::Internet)
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,

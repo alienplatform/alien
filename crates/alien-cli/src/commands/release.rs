@@ -2683,7 +2683,7 @@ mod tests {
             .code(SandboxCode::Image {
                 image: image.to_string(),
             })
-            .egress(alien_core::SandboxEgress::Allow)
+            .egress(alien_core::SandboxEgress::Internet)
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,

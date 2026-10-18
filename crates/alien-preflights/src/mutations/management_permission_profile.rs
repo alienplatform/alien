@@ -1172,7 +1172,7 @@ mod tests {
                     .code(SandboxCode::Image {
                         image: "ubuntu".to_string(),
                     })
-                    .egress(SandboxEgress::Allow)
+                    .egress(SandboxEgress::Internet)
                     .lifecycle(SandboxLifecyclePolicy {
                         max_lifetime_seconds: None,
                         idle_pause_seconds: None,
@@ -1239,7 +1239,7 @@ mod tests {
                 .code(SandboxCode::Image {
                     image: "s3://acme-artifacts/sandbox-bundle/f00dcafe/bundle.zip".to_string(),
                 })
-                .egress(SandboxEgress::Allow)
+                .egress(SandboxEgress::Internet)
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
@@ -1343,7 +1343,7 @@ mod tests {
             .code(SandboxCode::Image {
                 image: "public.ecr.aws/docker/library/alpine:3.20".to_string(),
             })
-            .egress(SandboxEgress::Allow)
+            .egress(SandboxEgress::Internet)
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
@@ -1393,7 +1393,7 @@ mod tests {
                 .code(SandboxCode::Image {
                     image: "us-central1-docker.pkg.dev/p/r/agent:1".to_string(),
                 })
-                .egress(SandboxEgress::Allow)
+                .egress(SandboxEgress::Internet)
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
@@ -1443,7 +1443,7 @@ mod tests {
                 .code(SandboxCode::Image {
                     image: image.to_string(),
                 })
-                .egress(SandboxEgress::Allow)
+                .egress(SandboxEgress::Internet)
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,

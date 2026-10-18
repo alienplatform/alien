@@ -469,7 +469,7 @@ impl TfEmitter for AwsSandboxEmitter {
             ("egressConnectorArns", egress_connector_arns(sandbox, label)),
             (
                 "allowEgress",
-                Expression::Bool(matches!(sandbox.cloud_egress(), SandboxEgress::Allow)),
+                Expression::Bool(matches!(sandbox.cloud_egress(), SandboxEgress::Internet)),
             ),
             // The ARN, not the name. Measured against the live API: `GetMicrovmImage` and
             // `RunMicrovm` both refuse a bare name — the latter with "Malformed ARN - doesn't
@@ -501,7 +501,7 @@ impl TfEmitter for AwsSandboxEmitter {
             ("egressConnectorArns", egress_connector_arns(sandbox, label)),
             (
                 "allowEgress",
-                Expression::Bool(matches!(sandbox.cloud_egress(), SandboxEgress::Allow)),
+                Expression::Bool(matches!(sandbox.cloud_egress(), SandboxEgress::Internet)),
             ),
             ("imageArn", image_property(label, "ImageArn")),
             (
@@ -550,7 +550,7 @@ fn runtime_import_ref(sandbox: &Sandbox, label: &str) -> Result<Expression> {
         ("egressConnectorArns", egress_connector_arns(sandbox, label)),
         (
             "allowEgress",
-            Expression::Bool(matches!(sandbox.cloud_egress(), SandboxEgress::Allow)),
+            Expression::Bool(matches!(sandbox.cloud_egress(), SandboxEgress::Internet)),
         ),
         (
             "buildRoleArn",
@@ -941,7 +941,7 @@ fn egress_subnet_ids(ctx: &EmitContext<'_>, sandbox: &Sandbox) -> Result<Option<
 /// `allowEgress` travels beside it so a stripped `deny` cannot be mistaken for it.
 fn egress_connector_arns(sandbox: &Sandbox, label: &str) -> Expression {
     match sandbox.cloud_egress() {
-        SandboxEgress::Allow => Expression::from(Vec::<Expression>::new()),
+        SandboxEgress::Internet => Expression::from(Vec::<Expression>::new()),
         _ => Expression::from(vec![expr::traversal([
             NETWORK_CONNECTOR_RESOURCE,
             label,
@@ -1073,7 +1073,7 @@ mod tests {
             .code(SandboxCode::Image {
                 image: LITERAL.to_string(),
             })
-            .egress(SandboxEgress::Allow)
+            .egress(SandboxEgress::Internet)
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: lifetime,
                 idle_pause_seconds: idle,
@@ -1188,7 +1188,7 @@ mod tests {
                 disk: "20Gi".to_string(),
                 max_processes: None,
             })
-            .egress(SandboxEgress::Allow)
+            .egress(SandboxEgress::Internet)
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,

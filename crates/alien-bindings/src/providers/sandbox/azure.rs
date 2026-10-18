@@ -1287,16 +1287,16 @@ fn egress_policy(egress: &SandboxEgress) -> Option<EgressPolicy> {
     };
 
     match egress {
-        SandboxEgress::Allow => None,
+        SandboxEgress::Internet => None,
         // Written as a rule as well as a default, because Microsoft documents `Partial`
         // inspection as evaluating only traffic a rule matches and never states that `Full`
         // differs. A policy holding no rule at all is the one shape where "deny" could mean
         // nothing, and this is one rule to be out of it.
-        SandboxEgress::Deny => bounded(vec![EgressHostRule {
+        SandboxEgress::None => bounded(vec![EgressHostRule {
             pattern: EVERY_HOST.to_string(),
             action: DENY.to_string(),
         }]),
-        SandboxEgress::AllowDomains { domains } => bounded(
+        SandboxEgress::Allow { allow: domains } => bounded(
             domains
                 .iter()
                 .map(|domain| EgressHostRule {
@@ -1514,7 +1514,7 @@ mod tests {
             std::sync::Arc::new(client),
             "grp".to_string(),
             "ubuntu".to_string(),
-            SandboxEgress::Allow,
+            SandboxEgress::Internet,
             None,
             "1000m".to_string(),
             "2048Mi".to_string(),
@@ -1547,7 +1547,7 @@ mod tests {
             std::sync::Arc::new(client),
             "grp".to_string(),
             "my-toolchain".to_string(),
-            SandboxEgress::Allow,
+            SandboxEgress::Internet,
             None,
             "1000m".to_string(),
             "2048Mi".to_string(),
@@ -1576,7 +1576,7 @@ mod tests {
             std::sync::Arc::new(client),
             "grp".to_string(),
             "docker.io/library/python:3.14-slim".to_string(),
-            SandboxEgress::Allow,
+            SandboxEgress::Internet,
             None,
             "1000m".to_string(),
             "2048Mi".to_string(),
@@ -2132,7 +2132,7 @@ mod tests {
             client,
             "grp".to_string(),
             "ubuntu".to_string(),
-            SandboxEgress::Allow,
+            SandboxEgress::Internet,
             None,
             "1000m".to_string(),
             "2048Mi".to_string(),
@@ -2888,7 +2888,7 @@ mod tests {
                 traffic_inspection: Some("Full".to_string()),
             }),
         );
-        sandbox_denying(client, SandboxEgress::Deny)
+        sandbox_denying(client, SandboxEgress::None)
             .create(CreateSandboxRequest::default())
             .await
             .expect("deny should create");
@@ -2925,8 +2925,8 @@ mod tests {
         );
         sandbox_denying(
             client,
-            SandboxEgress::AllowDomains {
-                domains: vec!["api.example.com".to_string()],
+            SandboxEgress::Allow {
+                allow: vec!["api.example.com".to_string()],
             },
         )
         .create(CreateSandboxRequest::default())
@@ -2945,7 +2945,7 @@ mod tests {
                 Ok(running("s1", None))
             });
         settles_running(&mut client, None);
-        sandbox_denying(client, SandboxEgress::Allow)
+        sandbox_denying(client, SandboxEgress::Internet)
             .create(CreateSandboxRequest::default())
             .await
             .expect("allow should create");
@@ -2987,7 +2987,7 @@ mod tests {
                 .times(1)
                 .returning(|_, _| Ok(()));
 
-            let error = sandbox_denying(client, SandboxEgress::Deny)
+            let error = sandbox_denying(client, SandboxEgress::None)
                 .create(CreateSandboxRequest::default())
                 .await
                 .expect_err("a sandbox without its policy must not be handed back");
@@ -3025,8 +3025,8 @@ mod tests {
 
         let error = sandbox_denying(
             client,
-            SandboxEgress::AllowDomains {
-                domains: vec!["api.example.com".to_string()],
+            SandboxEgress::Allow {
+                allow: vec!["api.example.com".to_string()],
             },
         )
         .create(CreateSandboxRequest::default())
@@ -3071,7 +3071,7 @@ mod tests {
 
         // Declared `deny`, because a terminated sandbox carries no policy — judging it before
         // reading the state reported a disappearing sandbox as an uncontained one.
-        let sandbox = sandbox_denying(client, SandboxEgress::Deny)
+        let sandbox = sandbox_denying(client, SandboxEgress::None)
             .get_or_create(CreateSandboxRequest {
                 sandbox_id: Some("going-away".to_string()),
                 tenant_key: None,
@@ -3092,8 +3092,8 @@ mod tests {
     /// documented way for one to appear.
     #[tokio::test]
     async fn a_permission_nobody_asked_for_fails_the_create() {
-        let asked_for = || SandboxEgress::AllowDomains {
-            domains: vec!["api.example.com".to_string()],
+        let asked_for = || SandboxEgress::Allow {
+            allow: vec!["api.example.com".to_string()],
         };
         let declared = EgressHostRule {
             pattern: "api.example.com".to_string(),
@@ -3295,7 +3295,7 @@ mod tests {
             std::sync::Arc::new(client),
             "grp".to_string(),
             "ubuntu".to_string(),
-            SandboxEgress::Allow,
+            SandboxEgress::Internet,
             Some(900),
             "1000m".to_string(),
             "2048Mi".to_string(),
@@ -3319,7 +3319,7 @@ mod tests {
             Ok(running(id, None))
         });
 
-        let error = sandbox_denying(client, SandboxEgress::Deny)
+        let error = sandbox_denying(client, SandboxEgress::None)
             .get("built-under-allow")
             .await
             .expect_err("a sandbox without the declared policy must not be handed back");
@@ -3365,7 +3365,7 @@ mod tests {
     /// The three shapes a permitting policy can arrive in that a looser check would pass.
     #[tokio::test]
     async fn a_policy_this_client_cannot_read_whole_fails_the_create() {
-        let declared = || SandboxEgress::Deny;
+        let declared = || SandboxEgress::None;
         let catch_all = EgressHostRule {
             pattern: "*".to_string(),
             action: "Deny".to_string(),
@@ -3489,7 +3489,7 @@ mod tests {
             .times(1)
             .returning(|_, request| Ok(running("fresh", request.egress)));
 
-        let sandbox = sandbox_denying(client, SandboxEgress::Deny)
+        let sandbox = sandbox_denying(client, SandboxEgress::None)
             .get_or_create(CreateSandboxRequest {
                 sandbox_id: Some("built-under-allow".to_string()),
                 tenant_key: None,
@@ -3545,7 +3545,7 @@ mod tests {
         client.expect_delete_sandbox().never();
         client.expect_execute_shell_command().never();
 
-        let error = match sandbox_denying(client, SandboxEgress::Deny)
+        let error = match sandbox_denying(client, SandboxEgress::None)
             .run_command("built-under-allow", command(5))
             .await
         {
@@ -3624,7 +3624,7 @@ mod tests {
             .times(1)
             .returning(|_, request| Ok(running("fresh", request.egress)));
 
-        let sandbox = sandbox_denying(client, SandboxEgress::Deny)
+        let sandbox = sandbox_denying(client, SandboxEgress::None)
             .get_or_create(CreateSandboxRequest {
                 sandbox_id: Some("was-suspended".to_string()),
                 tenant_key: None,
@@ -3703,7 +3703,7 @@ mod tests {
             .times(1)
             .returning(|_, _| Ok(()));
 
-        let error = sandbox_denying(client, SandboxEgress::Deny)
+        let error = sandbox_denying(client, SandboxEgress::None)
             .resume("built-under-allow")
             .await
             .expect_err("a sandbox without the declared policy must not be woken");
@@ -3726,7 +3726,7 @@ mod tests {
         client.expect_stop_sandbox().never();
         client.expect_delete_sandbox().never();
 
-        let error = sandbox_denying(client, SandboxEgress::Deny)
+        let error = sandbox_denying(client, SandboxEgress::None)
             .resume("someone-elses-sandbox")
             .await
             .expect_err("a sandbox without the declared policy must not be handed back");
@@ -3755,7 +3755,7 @@ mod tests {
         client.expect_stop_sandbox().never();
         client.expect_delete_sandbox().never();
 
-        let error = sandbox_denying(client, SandboxEgress::Deny)
+        let error = sandbox_denying(client, SandboxEgress::None)
             .resume("created-by-another-revision")
             .await
             .expect_err("a sandbox without the declared policy must not be handed back");
@@ -3776,7 +3776,7 @@ mod tests {
             Ok(sandbox)
         });
 
-        let sandbox = sandbox_denying(client, SandboxEgress::Deny)
+        let sandbox = sandbox_denying(client, SandboxEgress::None)
             .get("asleep")
             .await
             .expect("a sleeping sandbox must still be readable")
@@ -3810,7 +3810,7 @@ mod tests {
         client.expect_stop_sandbox().never();
         client.expect_delete_sandbox().never();
 
-        let error = sandbox_denying(client, SandboxEgress::Deny)
+        let error = sandbox_denying(client, SandboxEgress::None)
             .resume("built-under-allow")
             .await
             .expect_err("a stored policy that already fails must not be woken");
@@ -3842,7 +3842,7 @@ mod tests {
             .times(1)
             .returning(|_, _| Ok(()));
 
-        let error = sandbox_denying(client, SandboxEgress::Deny)
+        let error = sandbox_denying(client, SandboxEgress::None)
             .resume("wakes-then-breaks")
             .await
             .expect_err("a wait that cannot finish must not report a resumed sandbox");
@@ -4022,7 +4022,7 @@ mod tests {
             .times(1)
             .returning(|_, _| Ok(()));
 
-        let error = sandbox_denying(client, SandboxEgress::Deny)
+        let error = sandbox_denying(client, SandboxEgress::None)
             .resume("woke-or-did-not")
             .await
             .expect_err("a sandbox that came up uncontained is not a resumed sandbox");
@@ -4053,7 +4053,7 @@ mod tests {
         client.expect_stop_sandbox().never();
         client.expect_delete_sandbox().never();
 
-        let error = sandbox_denying(client, SandboxEgress::Deny)
+        let error = sandbox_denying(client, SandboxEgress::None)
             .resume("someone-elses-sandbox")
             .await
             .expect_err("a sandbox without the declared policy must not be handed back");
@@ -4084,7 +4084,7 @@ mod tests {
             .times(1)
             .returning(|_, _| Err(http_error(404, "SandboxNotFound")));
 
-        let error = sandbox_denying(client, SandboxEgress::Deny)
+        let error = sandbox_denying(client, SandboxEgress::None)
             .resume("gone-by-then")
             .await
             .expect_err("the refusal still travels");
@@ -4118,7 +4118,7 @@ mod tests {
             });
             client.expect_execute_shell_command().never();
             client.expect_resume_sandbox().never();
-            let sandbox = sandbox_denying(client, SandboxEgress::Deny);
+            let sandbox = sandbox_denying(client, SandboxEgress::None);
 
             let ran = match sandbox.run_command("on-its-way-out", command(5)).await {
                 Ok(_) => panic!("{outcome}: a sandbox that cannot take work must not run code"),
@@ -4187,7 +4187,7 @@ mod tests {
         });
         client.expect_delete_sandbox().never();
 
-        let sandbox = sandbox_denying(client, SandboxEgress::Deny)
+        let sandbox = sandbox_denying(client, SandboxEgress::None)
             .get("still-booting")
             .await
             .expect("a booting sandbox is not a contained-ness failure")
@@ -4211,7 +4211,7 @@ mod tests {
         client.expect_delete_sandbox().never();
         client.expect_write_file().never();
 
-        let error = sandbox_denying(client, SandboxEgress::Deny)
+        let error = sandbox_denying(client, SandboxEgress::None)
             .write_files(
                 "built-under-allow",
                 BTreeMap::from([("app.py".to_string(), vec![1u8])]),
@@ -4281,7 +4281,7 @@ mod tests {
         client.expect_resume_sandbox().never();
         client.expect_write_file().never();
         client.expect_execute_shell_command().never();
-        let sandbox = sandbox_denying(client, SandboxEgress::Deny);
+        let sandbox = sandbox_denying(client, SandboxEgress::None);
 
         let wrote = sandbox
             .write_files(
@@ -4344,7 +4344,7 @@ mod tests {
             .times(1)
             .returning(|_, request| Ok(running("fresh", request.egress)));
 
-        let sandbox = sandbox_denying(client, SandboxEgress::Deny)
+        let sandbox = sandbox_denying(client, SandboxEgress::None)
             .get_or_create(CreateSandboxRequest {
                 sandbox_id: Some("asleep-under-allow".to_string()),
                 tenant_key: None,
@@ -4413,7 +4413,7 @@ mod tests {
             Ok(sandbox)
         });
 
-        let sandbox = sandbox_denying(client, SandboxEgress::Deny)
+        let sandbox = sandbox_denying(client, SandboxEgress::None)
             .get("broken")
             .await
             .expect("a failed sandbox is a state, not an unreadable response")
@@ -4497,7 +4497,7 @@ mod tests {
         client.expect_delete_sandbox().never();
         client.expect_create_sandbox().never();
 
-        let sandbox = sandbox_denying(client, SandboxEgress::Deny)
+        let sandbox = sandbox_denying(client, SandboxEgress::None)
             .get_or_create(CreateSandboxRequest {
                 sandbox_id: Some("asleep-and-fine".to_string()),
                 tenant_key: None,
@@ -4551,7 +4551,7 @@ mod tests {
         client.expect_delete_sandbox().never();
         client.expect_create_sandbox().never();
 
-        let sandbox = sandbox_denying(client, SandboxEgress::Deny)
+        let sandbox = sandbox_denying(client, SandboxEgress::None)
             .get_or_create(CreateSandboxRequest {
                 sandbox_id: Some("asleep-without-a-record".to_string()),
                 tenant_key: None,
@@ -4592,7 +4592,7 @@ mod tests {
             .times(1)
             .returning(|_, _| Err(http_error(500, "SuspendFailed")));
 
-        let error = sandbox_denying(client, SandboxEgress::Deny)
+        let error = sandbox_denying(client, SandboxEgress::None)
             .resume("built-under-allow")
             .await
             .expect_err("a sandbox that woke up uncontained must not be reported as resumed");
@@ -4644,8 +4644,8 @@ mod tests {
             std::sync::Arc::new(MockSandboxDataPlaneApi::new()),
             "grp".to_string(),
             "ubuntu".to_string(),
-            SandboxEgress::AllowDomains {
-                domains: vec!["api.example.com".to_string()],
+            SandboxEgress::Allow {
+                allow: vec!["api.example.com".to_string()],
             },
             None,
             "1000m".to_string(),

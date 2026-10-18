@@ -229,7 +229,7 @@ async fn azure_declares_no_jobs_and_sends_nothing() {
         Arc::new(alien_azure_clients::azure::sandbox_data_plane::MockSandboxDataPlaneApi::new()),
         "group".to_string(),
         "ubuntu".to_string(),
-        SandboxEgress::Allow,
+        SandboxEgress::Internet,
         None,
         "1".to_string(),
         "2Gi".to_string(),

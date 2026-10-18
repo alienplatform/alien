@@ -82,7 +82,7 @@ fn gated_fixture(resource_type: &str) -> Option<(Stack, StackSettings)> {
                         disk: "10Gi".to_string(),
                         max_processes: None,
                     })
-                    .egress(SandboxEgress::Deny)
+                    .egress(SandboxEgress::None)
                     .lifecycle(SandboxLifecyclePolicy {
                         max_lifetime_seconds: None,
                         idle_pause_seconds: None,

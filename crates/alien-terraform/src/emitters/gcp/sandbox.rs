@@ -97,7 +97,7 @@ fn agent_platform_fields(
         ("region", expr::raw("var.gcp_region")),
         (
             "allowEgress",
-            Expression::Bool(matches!(sandbox.egress, SandboxEgress::Allow)),
+            Expression::Bool(matches!(sandbox.egress, SandboxEgress::Internet)),
         ),
     ];
     if let Some(seconds) = sandbox.lifecycle.max_lifetime_seconds {
@@ -377,7 +377,12 @@ mod tests {
         /// would hold no session access at all while `PERMISSIONS.md` still advertised the grant.
         #[test]
         fn the_engine_grant_references_the_created_engine() {
-            let stack = stack_with(SandboxEgress::Allow, None, ResourceLifecycle::Frozen, true);
+            let stack = stack_with(
+                SandboxEgress::Internet,
+                None,
+                ResourceLifecycle::Frozen,
+                true,
+            );
             let fragment = with_context(&stack, |ctx| {
                 GcpAgentPlatformSandboxEmitter
                     .emit(ctx)
@@ -409,8 +414,12 @@ mod tests {
             );
 
             // A sandbox nobody published gets no grant, whatever else the stack declares.
-            let unpublished =
-                stack_with(SandboxEgress::Allow, None, ResourceLifecycle::Frozen, false);
+            let unpublished = stack_with(
+                SandboxEgress::Internet,
+                None,
+                ResourceLifecycle::Frozen,
+                false,
+            );
             let fragment = with_context(&unpublished, |ctx| {
                 GcpAgentPlatformSandboxEmitter.emit(ctx).expect("renders")
             });
@@ -427,7 +436,7 @@ mod tests {
                     .code(SandboxCode::Image {
                         image: "ubuntu".to_string(),
                     })
-                    .egress(SandboxEgress::Allow)
+                    .egress(SandboxEgress::Internet)
                     .lifecycle(SandboxLifecyclePolicy {
                         max_lifetime_seconds: None,
                         idle_pause_seconds: None,
@@ -485,7 +494,7 @@ mod tests {
         /// template never renders.
         #[test]
         fn a_live_remote_sandbox_is_refused_naming_the_lifecycle() {
-            let stack = stack_with(SandboxEgress::Allow, None, ResourceLifecycle::Live, true);
+            let stack = stack_with(SandboxEgress::Internet, None, ResourceLifecycle::Live, true);
             let error = with_context(&stack, |ctx| {
                 GcpAgentPlatformSandboxEmitter
                     .emit(ctx)
@@ -503,7 +512,7 @@ mod tests {
         /// set on both sides so the key sets are comparable whole.
         #[test]
         fn emitted_binding_keys_match_the_binding_type() {
-            let emitted = emit_binding(SandboxEgress::Allow, Some(3600))
+            let emitted = emit_binding(SandboxEgress::Internet, Some(3600))
                 .expect("the binding renders")
                 .expect("an Agent Platform sandbox has a binding");
 
@@ -533,7 +542,10 @@ mod tests {
         /// render its own value, not only a key of the right name.
         #[test]
         fn allow_egress_renders_the_declared_mode() {
-            for (egress, expected) in [(SandboxEgress::Deny, false), (SandboxEgress::Allow, true)] {
+            for (egress, expected) in [
+                (SandboxEgress::None, false),
+                (SandboxEgress::Internet, true),
+            ] {
                 let emitted = emit_binding(egress.clone(), None)
                     .expect("the binding renders")
                     .expect("an Agent Platform sandbox has a binding");
@@ -560,8 +572,8 @@ mod tests {
         #[test]
         fn domain_egress_is_refused_naming_the_sandbox_and_modes() {
             let error = emit_binding(
-                SandboxEgress::AllowDomains {
-                    domains: vec!["api.example.com".to_string()],
+                SandboxEgress::Allow {
+                    allow: vec!["api.example.com".to_string()],
                 },
                 None,
             )
@@ -575,7 +587,7 @@ mod tests {
                 "names both accepted modes: {rendered}"
             );
 
-            for accepted in [SandboxEgress::Deny, SandboxEgress::Allow] {
+            for accepted in [SandboxEgress::None, SandboxEgress::Internet] {
                 emit_binding(accepted.clone(), None)
                     .unwrap_or_else(|error| panic!("{accepted:?} is a switch position: {error}"));
             }
@@ -587,7 +599,7 @@ mod tests {
         /// declared ceiling would be dropped rather than refused.
         #[test]
         fn a_lifetime_ceiling_is_present_only_when_declared() {
-            let with_ttl = emit_binding(SandboxEgress::Deny, Some(1800))
+            let with_ttl = emit_binding(SandboxEgress::None, Some(1800))
                 .expect("renders")
                 .expect("binding");
             assert!(
@@ -611,7 +623,7 @@ mod tests {
                 "the binding type must read the name the module emits"
             );
 
-            let without = emit_binding(SandboxEgress::Deny, None)
+            let without = emit_binding(SandboxEgress::None, None)
                 .expect("renders")
                 .expect("binding");
             assert!(

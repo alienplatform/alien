@@ -42,7 +42,7 @@ async fn executor(image: &str) -> SingleControllerExecutor {
                 .code(SandboxCode::Image {
                     image: image.to_string(),
                 })
-                .egress(SandboxEgress::Allow)
+                .egress(SandboxEgress::Internet)
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,

@@ -2322,7 +2322,7 @@ mod tests {
                 .code(SandboxCode::Image {
                     image: image.to_string(),
                 })
-                .egress(SandboxEgress::Allow)
+                .egress(SandboxEgress::Internet)
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
@@ -2361,7 +2361,7 @@ mod tests {
             .code(SandboxCode::Image {
                 image: "manager.example.com/artifacts/prj_other:sandbox-v1".to_string(),
             })
-            .egress(SandboxEgress::Allow)
+            .egress(SandboxEgress::Internet)
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,

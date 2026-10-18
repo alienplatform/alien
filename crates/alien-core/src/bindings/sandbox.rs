@@ -294,7 +294,7 @@ mod tests {
                 "swedencentral",
                 "rg",
                 "ubuntu",
-                SandboxEgress::Deny,
+                SandboxEgress::None,
                 None,
             ),
             SandboxBinding::gcp_agent_platform(
@@ -382,7 +382,7 @@ mod tests {
     fn service_tags_are_prefixed_and_distinct() {
         let tags: Vec<String> = vec![
             SandboxBinding::aws("a", "1", "r"),
-            SandboxBinding::azure("g", "e", "r", "rg", "ubuntu", SandboxEgress::Deny, None),
+            SandboxBinding::azure("g", "e", "r", "rg", "ubuntu", SandboxEgress::None, None),
             SandboxBinding::gcp_agent_platform("e", "t", "us-central1", None, false),
             SandboxBinding::kubernetes("n", "gvisor", "s", "http://op:8080", "k", "/t"),
             SandboxBinding::local("u", "k", "t"),

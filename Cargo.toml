@@ -77,6 +77,10 @@ repository = "https://github.com/alienplatform/alien"
 license-file = "LICENSE.md"
 
 [workspace.dependencies]
+idna = "1.1"
+ipnet = "2.11"
+psl = "2.1"
+proptest = "1.9"
 strip-ansi-escapes = "0.2"
 lognorm = "0.2.0"
 alien-commands = { path = "crates/alien-commands", version = "3.3.34", default-features = false }

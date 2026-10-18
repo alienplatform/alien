@@ -242,7 +242,7 @@ mod tests {
     #[test]
     fn a_pod_always_carries_a_sandboxed_runtime_class() {
         let pod = sandbox_pod(
-            &sandbox(SandboxEgress::Deny),
+            &sandbox(SandboxEgress::None),
             "s1",
             "sbx",
             "gvisor",
@@ -257,7 +257,7 @@ mod tests {
     #[test]
     fn operator_pool_pod_carries_deployment_cleanup_ownership() {
         let pod = idle_pool_pod_with_labels(
-            &sandbox(SandboxEgress::Deny),
+            &sandbox(SandboxEgress::None),
             "sbx",
             "gvisor",
             None,
@@ -286,7 +286,7 @@ mod tests {
     #[test]
     fn a_pod_mounts_no_service_account_token() {
         let pod = sandbox_pod(
-            &sandbox(SandboxEgress::Deny),
+            &sandbox(SandboxEgress::None),
             "s1",
             "sbx",
             "gvisor",
@@ -302,7 +302,7 @@ mod tests {
     #[test]
     fn a_pod_is_unprivileged_with_a_read_only_root() {
         let pod = sandbox_pod(
-            &sandbox(SandboxEgress::Deny),
+            &sandbox(SandboxEgress::None),
             "s1",
             "sbx",
             "gvisor",
@@ -326,7 +326,7 @@ mod tests {
     #[test]
     fn a_pod_never_restarts() {
         let pod = sandbox_pod(
-            &sandbox(SandboxEgress::Deny),
+            &sandbox(SandboxEgress::None),
             "s1",
             "sbx",
             "gvisor",
@@ -349,7 +349,7 @@ mod tests {
     /// collision impossible rather than unlikely.
     #[test]
     fn a_pool_pod_is_named_by_the_apiserver_so_two_can_never_collide() {
-        let pod = idle_pool_pod(&sandbox(SandboxEgress::Deny), "sbx", "gvisor", None, None);
+        let pod = idle_pool_pod(&sandbox(SandboxEgress::None), "sbx", "gvisor", None, None);
 
         assert_eq!(pod.metadata.name, None, "a fixed name is what collides");
         assert_eq!(
@@ -362,7 +362,7 @@ mod tests {
     #[test]
     fn a_pod_carries_the_declared_session_deadline() {
         let pod = sandbox_pod(
-            &sandbox(SandboxEgress::Deny),
+            &sandbox(SandboxEgress::None),
             "s1",
             "sbx",
             "gvisor",
@@ -379,7 +379,7 @@ mod tests {
     /// mid-session is worse than an unbounded one the caller chose.
     #[test]
     fn a_pod_without_a_declared_deadline_carries_none() {
-        let mut config = sandbox(SandboxEgress::Deny);
+        let mut config = sandbox(SandboxEgress::None);
         config.lifecycle.max_lifetime_seconds = None;
         let pod = sandbox_pod(&config, "s1", "sbx", "gvisor", None, None);
         assert_eq!(pod.spec.expect("a spec").active_deadline_seconds, None);
@@ -388,7 +388,7 @@ mod tests {
     #[test]
     fn a_pod_carries_the_declared_ceilings() {
         let pod = sandbox_pod(
-            &sandbox(SandboxEgress::Deny),
+            &sandbox(SandboxEgress::None),
             "s1",
             "sbx",
             "gvisor",
@@ -414,7 +414,7 @@ mod tests {
     /// would silently downgrade isolation for every warm start — the common path.
     #[test]
     fn a_pooled_pod_has_identical_isolation_to_a_session_pod() {
-        let sandbox = sandbox(SandboxEgress::Deny);
+        let sandbox = sandbox(SandboxEgress::None);
         let session = sandbox_pod(&sandbox, "s1", "sbx", "gvisor", None, None);
         let pooled = idle_pool_pod(&sandbox, "sbx", "gvisor", None, None);
 
@@ -428,7 +428,7 @@ mod tests {
     /// destroy the pool, and enumeration could not tell a spare from a live session.
     #[test]
     fn a_pooled_pod_carries_no_session_label_until_claimed() {
-        let pooled = idle_pool_pod(&sandbox(SandboxEgress::Deny), "sbx", "gvisor", None, None);
+        let pooled = idle_pool_pod(&sandbox(SandboxEgress::None), "sbx", "gvisor", None, None);
         let labels = pooled.metadata.labels.expect("labels");
 
         assert_eq!(labels.get(LABEL_SANDBOX), Some(&"agent".to_string()));
@@ -440,7 +440,7 @@ mod tests {
     #[test]
     fn a_pod_carries_the_public_key_and_the_capability_mode() {
         let pod = sandbox_pod(
-            &sandbox(SandboxEgress::Deny),
+            &sandbox(SandboxEgress::None),
             "s1",
             "sbx",
             "gvisor",
@@ -480,7 +480,7 @@ mod tests {
     #[test]
     fn pods_are_enumerable_by_sandbox_for_reaping() {
         let pod = sandbox_pod(
-            &sandbox(SandboxEgress::Deny),
+            &sandbox(SandboxEgress::None),
             "s1",
             "sbx",
             "gvisor",

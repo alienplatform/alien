@@ -292,9 +292,9 @@ fn session_template(sandbox: &Sandbox) -> Result<alien_local::SandboxSessionConf
     };
 
     let egress = match &sandbox.egress {
-        SandboxEgress::Deny => alien_local::SandboxEgressMode::Deny,
-        SandboxEgress::Allow => alien_local::SandboxEgressMode::Allow,
-        SandboxEgress::AllowDomains { .. } => {
+        SandboxEgress::None => alien_local::SandboxEgressMode::Deny,
+        SandboxEgress::Internet => alien_local::SandboxEgressMode::Allow,
+        SandboxEgress::Allow { .. } => {
             return Err(AlienError::new(ErrorData::CloudPlatformError {
                 message: "a local sandbox has one network switch and no filter, so a hostname \
                           list has nothing to render into; Azure matches on host pattern"
@@ -415,8 +415,8 @@ mod tests {
                 disk: "1Gi".to_string(),
                 max_processes: Some(64),
             })
-            .egress(SandboxEgress::AllowDomains {
-                domains: vec!["example.com".to_string()],
+            .egress(SandboxEgress::Allow {
+                allow: vec!["example.com".to_string()],
             })
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,

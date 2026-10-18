@@ -675,9 +675,9 @@ mod tests {
                 image: image.to_string(),
             })
             .egress(if remote {
-                SandboxEgress::Allow
+                SandboxEgress::Internet
             } else {
-                SandboxEgress::Deny
+                SandboxEgress::None
             })
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: Some(3600),

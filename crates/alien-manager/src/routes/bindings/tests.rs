@@ -200,7 +200,7 @@ fn sandbox_resource() -> Sandbox {
         .code(SandboxCode::Image {
             image: "ubuntu:24.04".to_string(),
         })
-        .egress(SandboxEgress::Allow)
+        .egress(SandboxEgress::Internet)
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,
@@ -257,7 +257,7 @@ fn open_sandbox_binding_for(platform: Platform) -> SandboxBinding {
             "westus2",
             "rg",
             "ubuntu",
-            alien_core::SandboxEgress::Allow,
+            alien_core::SandboxEgress::Internet,
             None,
         ),
         Platform::Gcp => SandboxBinding::gcp_agent_platform(

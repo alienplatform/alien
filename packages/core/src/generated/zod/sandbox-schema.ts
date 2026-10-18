@@ -18,7 +18,7 @@ export const SandboxSchema = z.object({
                 return SandboxCodeSchema.describe("Specifies where the sandbox's root filesystem comes from.")
               },
 get "egress"(){
-                return SandboxEgressSchema.describe("Outbound network policy for a sandbox.")
+                return SandboxEgressSchema.describe("Outbound network policy")
               },
 "id": z.string().describe("Identifier for the sandbox. Must contain only alphanumeric characters, hyphens, and\nunderscores ([A-Za-z0-9-_]). Maximum 64 characters."),
 get "lifecycle"(){

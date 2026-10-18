@@ -200,7 +200,7 @@ mod tests {
                 .code(SandboxCode::Image {
                     image: "ubuntu".to_string(),
                 })
-                .egress(SandboxEgress::Deny)
+                .egress(SandboxEgress::None)
                 .limits(SandboxLimits {
                     cpu: "4000m".to_string(),
                     memory: "8192Mi".to_string(),
@@ -242,7 +242,7 @@ mod tests {
                 .code(SandboxCode::Image {
                     image: "docker.io/library/python:3.14-slim".to_string(),
                 })
-                .egress(SandboxEgress::Deny)
+                .egress(SandboxEgress::None)
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
@@ -276,7 +276,7 @@ mod tests {
                 .code(SandboxCode::Image {
                     image: PYTHON.to_string(),
                 })
-                .egress(SandboxEgress::Deny)
+                .egress(SandboxEgress::None)
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
@@ -364,7 +364,7 @@ mod tests {
                         target: None,
                     },
                 })
-                .egress(SandboxEgress::Deny)
+                .egress(SandboxEgress::None)
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,

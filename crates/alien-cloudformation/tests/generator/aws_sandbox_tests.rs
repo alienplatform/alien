@@ -189,7 +189,7 @@ fn emitted_import_data(
 fn a_live_sandbox_ships_its_build_role_but_not_its_image() {
     let (stack, settings) = sandbox_stack_with_lifecycle(
         "acme-sandbox-live",
-        SandboxEgress::Deny,
+        SandboxEgress::None,
         ResourceLifecycle::Live,
     );
     let (template, _yaml) = render_built_ins_template(
@@ -272,7 +272,7 @@ fn a_live_sandbox_ships_its_build_role_but_not_its_image() {
 fn a_declared_private_base_is_the_only_repository_a_live_build_pulls() {
     let (stack, settings) = sandbox_stack_with_lifecycle(
         "acme-sandbox-live-base",
-        SandboxEgress::Allow,
+        SandboxEgress::Internet,
         ResourceLifecycle::Live,
     );
     let mut stack = stack;
@@ -333,7 +333,7 @@ fn a_declared_private_base_is_the_only_repository_a_live_build_pulls() {
 fn only_a_live_build_role_reads_the_bundle_prefix() {
     let (live, live_settings) = sandbox_stack_with_lifecycle(
         "acme-sandbox-live-grant",
-        SandboxEgress::Deny,
+        SandboxEgress::None,
         ResourceLifecycle::Live,
     );
     let (live_template, _yaml) = render_built_ins_template(
@@ -344,7 +344,7 @@ fn only_a_live_build_role_reads_the_bundle_prefix() {
         "aws",
         "live sandbox",
     );
-    let (frozen, frozen_settings) = sandbox_stack("acme-sandbox-frozen-grant", SandboxEgress::Deny);
+    let (frozen, frozen_settings) = sandbox_stack("acme-sandbox-frozen-grant", SandboxEgress::None);
     let (frozen_template, _yaml) = render_built_ins_template(
         &frozen,
         frozen_settings,
@@ -369,7 +369,7 @@ fn only_a_live_build_role_reads_the_bundle_prefix() {
 /// The Frozen path is the one every installed stack is on.
 #[test]
 fn a_frozen_sandbox_still_bakes_its_image_into_the_setup_stack() {
-    let (stack, settings) = sandbox_stack("acme-sandbox-frozen", SandboxEgress::Deny);
+    let (stack, settings) = sandbox_stack("acme-sandbox-frozen", SandboxEgress::None);
     let (template, _yaml) = render_built_ins_template(
         &stack,
         settings,
@@ -432,7 +432,7 @@ fn a_frozen_sandbox_still_bakes_its_image_into_the_setup_stack() {
 fn an_open_live_sandbox_ships_only_the_build_role() {
     let stack = Stack::new("acme-sandbox-open-live".to_string())
         .add(
-            sandbox_fixture_with(SandboxEgress::Allow, LIVE_BUNDLE),
+            sandbox_fixture_with(SandboxEgress::Internet, LIVE_BUNDLE),
             ResourceLifecycle::Live,
         )
         .build();
@@ -479,7 +479,7 @@ fn an_open_live_sandbox_ships_only_the_build_role() {
 fn a_kubernetes_target_description_makes_no_runtime_build_promise() {
     let (stack, settings) = sandbox_stack_with_lifecycle(
         "acme-sandbox-eks-live",
-        SandboxEgress::Deny,
+        SandboxEgress::None,
         ResourceLifecycle::Live,
     );
     let (template, _yaml) = render_built_ins_template(
@@ -506,7 +506,7 @@ fn a_kubernetes_target_description_makes_no_runtime_build_promise() {
 /// states none, so the only rule present must be the one that reaches nothing.
 #[test]
 fn aws_sandbox_deny_builds_a_connector_that_permits_nothing_outbound() {
-    let (stack, settings) = sandbox_stack("acme-sandbox-deny", SandboxEgress::Deny);
+    let (stack, settings) = sandbox_stack("acme-sandbox-deny", SandboxEgress::None);
     let (template, _yaml) = render_built_ins_template(
         &stack,
         settings,
@@ -599,12 +599,12 @@ fn a_deny_sandbox_attaches_to_the_first_of_two_networks() {
                 ResourceLifecycle::Frozen,
             )
             .add(
-                sandbox_fixture_with(SandboxEgress::Deny, LIVE_BUNDLE),
+                sandbox_fixture_with(SandboxEgress::None, LIVE_BUNDLE),
                 ResourceLifecycle::Live,
             )
             .build();
         let chosen =
-            alien_core::sandbox_egress::sandbox_egress_network(&stack, &SandboxEgress::Deny)
+            alien_core::sandbox_egress::sandbox_egress_network(&stack, &SandboxEgress::None)
                 .expect("both networks are attachable")
                 .expect("deny attaches to a network");
         assert_eq!(chosen.id, "first-net");
@@ -648,7 +648,7 @@ fn a_deny_sandbox_attaches_to_the_first_of_two_networks() {
 fn aws_sandbox_refuses_to_render_without_a_network_to_attach_to() {
     let stack = Stack::new("acme-sandbox-no-network".to_string())
         .add(
-            sandbox_fixture(SandboxEgress::Deny),
+            sandbox_fixture(SandboxEgress::None),
             ResourceLifecycle::Frozen,
         )
         .build();
@@ -678,7 +678,7 @@ fn aws_sandbox_refuses_to_render_without_a_network_to_attach_to() {
 fn aws_sandbox_allowing_egress_builds_no_connector() {
     let stack = Stack::new("acme-sandbox-open".to_string())
         .add(
-            sandbox_fixture(SandboxEgress::Allow),
+            sandbox_fixture(SandboxEgress::Internet),
             ResourceLifecycle::Frozen,
         )
         .build();
@@ -720,8 +720,8 @@ fn aws_sandbox_allowing_egress_builds_no_connector() {
 /// would otherwise be silently ignored while the customer believed it applied.
 #[test]
 fn aws_sandbox_refuses_an_egress_mode_it_cannot_deliver() {
-    for mode in [SandboxEgress::AllowDomains {
-        domains: vec!["example.com".to_string()],
+    for mode in [SandboxEgress::Allow {
+        allow: vec!["example.com".to_string()],
     }] {
         let (stack, settings) = sandbox_stack("acme-sandbox-egress", mode.clone());
         let error = try_render_built_ins(
@@ -761,7 +761,7 @@ fn a_restricted_sandbox_never_defaults_to_the_mode_it_withholds() {
             ResourceLifecycle::Frozen,
         )
         .add(
-            sandbox_fixture(SandboxEgress::Deny),
+            sandbox_fixture(SandboxEgress::None),
             ResourceLifecycle::Frozen,
         )
         .build();
@@ -795,7 +795,7 @@ fn a_restricted_sandbox_never_defaults_to_the_mode_it_withholds() {
 /// declaration has to install the same thing in both formats.
 #[test]
 fn an_eks_install_provisions_none_of_the_microvm_backend() {
-    let (stack, settings) = sandbox_stack("acme-sandbox-on-eks", SandboxEgress::Deny);
+    let (stack, settings) = sandbox_stack("acme-sandbox-on-eks", SandboxEgress::None);
 
     let (template, _yaml) = render_built_ins_template(
         &stack,
@@ -850,19 +850,19 @@ fn the_sandbox_templates_render_whole() {
     for (name, egress, target, setup_target) in [
         (
             "sandbox_restricted_aws",
-            SandboxEgress::Deny,
+            SandboxEgress::None,
             CloudFormationTarget::Aws,
             "aws",
         ),
         (
             "sandbox_open_aws",
-            SandboxEgress::Allow,
+            SandboxEgress::Internet,
             CloudFormationTarget::Aws,
             "aws",
         ),
         (
             "sandbox_restricted_eks",
-            SandboxEgress::Deny,
+            SandboxEgress::None,
             CloudFormationTarget::Eks,
             "eks",
         ),
@@ -900,7 +900,7 @@ fn the_sandbox_templates_render_whole() {
 fn aws_remote_sandbox_grants_the_access_identity_its_own_image_and_nothing_wider() {
     let stack = Stack::new("byo-sandbox".to_string())
         .add_with_remote_access(
-            sandbox_fixture(SandboxEgress::Allow),
+            sandbox_fixture(SandboxEgress::Internet),
             ResourceLifecycle::Frozen,
         )
         .add(
@@ -992,7 +992,7 @@ fn aws_remote_sandbox_with_restricted_egress_carries_no_grant() {
             ResourceLifecycle::Frozen,
         )
         .add_with_remote_access(
-            sandbox_fixture(SandboxEgress::Deny),
+            sandbox_fixture(SandboxEgress::None),
             ResourceLifecycle::Frozen,
         )
         .add(
@@ -1047,7 +1047,7 @@ fn aws_remote_sandbox_management_role_heartbeats_without_reaching_a_session() {
                 .global(["sandbox/heartbeat", "sandbox/management"]),
         ))
         .add_with_remote_access(
-            sandbox_fixture(SandboxEgress::Allow),
+            sandbox_fixture(SandboxEgress::Internet),
             ResourceLifecycle::Frozen,
         )
         .add(
@@ -1104,7 +1104,7 @@ fn aws_remote_sandbox_management_role_heartbeats_without_reaching_a_session() {
 /// both sandbox roles carry, including the egress operator role CloudFormation names itself.
 #[test]
 fn the_management_role_may_not_rewrite_a_sandboxs_setup_roles() {
-    let (mut stack, settings) = sandbox_stack("acme-guarded", SandboxEgress::Deny);
+    let (mut stack, settings) = sandbox_stack("acme-guarded", SandboxEgress::None);
     stack.permissions.management = alien_core::permissions::ManagementPermissions::extend(
         alien_core::PermissionProfile::new().global([
             "sandbox/management",
@@ -1271,7 +1271,7 @@ fn aws_remote_storage_management_role_keeps_its_heartbeat() {
 fn aws_remote_sandbox_grants_a_live_sandbox_the_same_execute_set() {
     let stack = Stack::new("byo-sandbox".to_string())
         .add_with_remote_access(
-            sandbox_fixture_with(SandboxEgress::Allow, LIVE_BUNDLE),
+            sandbox_fixture_with(SandboxEgress::Internet, LIVE_BUNDLE),
             ResourceLifecycle::Live,
         )
         .add(
@@ -1426,7 +1426,7 @@ fn the_emitted_build_role_matches_the_shared_policy_builder() {
             .add(
                 Sandbox {
                     private_base_image: private_base_image.map(str::to_string),
-                    ..sandbox_fixture_with(SandboxEgress::Allow, bundle_uri)
+                    ..sandbox_fixture_with(SandboxEgress::Internet, bundle_uri)
                 },
                 lifecycle,
             )
@@ -1548,7 +1548,7 @@ fn deny_template(network: &NetworkSettings) -> alien_cloudformation::CfTemplate 
             ResourceLifecycle::Frozen,
         )
         .add(
-            sandbox_fixture_with(SandboxEgress::Deny, LIVE_BUNDLE),
+            sandbox_fixture_with(SandboxEgress::None, LIVE_BUNDLE),
             ResourceLifecycle::Live,
         )
         .build();
@@ -1869,26 +1869,26 @@ fn the_emitted_registration_matches_the_direct_seed() {
     let supervised = Some(SandboxPrivilegedSupervisor { command_uid: 60001 });
     for (egress, privileged_supervisor, bundle_uri) in [
         (
-            SandboxEgress::Allow,
+            SandboxEgress::Internet,
             None,
             "s3://acme-artifacts-{region}/sandbox-bundle/f00dcafe/bundle.zip",
         ),
-        (SandboxEgress::Deny, None, LIVE_BUNDLE),
+        (SandboxEgress::None, None, LIVE_BUNDLE),
         (
-            SandboxEgress::Deny,
+            SandboxEgress::None,
             None,
             "s3://acme-artifacts-{region}/sandbox-bundle/f00dcafe/bundle.zip",
         ),
         // The agent enforces these in the guest, so the cloud side sees open egress. A registration
         // that read the declared egress instead refused this sandbox on direct deployments only.
         (
-            SandboxEgress::AllowDomains {
-                domains: vec!["example.com".to_string()],
+            SandboxEgress::Allow {
+                allow: vec!["example.com".to_string()],
             },
             supervised.clone(),
             LIVE_BUNDLE,
         ),
-        (SandboxEgress::Deny, supervised.clone(), LIVE_BUNDLE),
+        (SandboxEgress::None, supervised.clone(), LIVE_BUNDLE),
     ] {
         let sandbox = Sandbox {
             preview_ports: vec![8080, 3000],
@@ -1975,8 +1975,8 @@ fn profile_sandbox_stack(
         )
         .add(
             match lifecycle {
-                ResourceLifecycle::Live => sandbox_fixture_with(SandboxEgress::Deny, LIVE_BUNDLE),
-                _ => sandbox_fixture(SandboxEgress::Deny),
+                ResourceLifecycle::Live => sandbox_fixture_with(SandboxEgress::None, LIVE_BUNDLE),
+                _ => sandbox_fixture(SandboxEgress::None),
             },
             lifecycle,
         )

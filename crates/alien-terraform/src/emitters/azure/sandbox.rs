@@ -73,9 +73,11 @@ fn sandbox_group_expression(resource_id: &str) -> String {
 /// the policy at create — so the declaration has to survive as far as the binding intact.
 fn egress(sandbox: &Sandbox) -> Expression {
     match &sandbox.egress {
-        SandboxEgress::Deny => expr::object([("mode", Expression::String("deny".to_string()))]),
-        SandboxEgress::Allow => expr::object([("mode", Expression::String("allow".to_string()))]),
-        SandboxEgress::AllowDomains { domains } => expr::object([
+        SandboxEgress::None => expr::object([("mode", Expression::String("deny".to_string()))]),
+        SandboxEgress::Internet => {
+            expr::object([("mode", Expression::String("allow".to_string()))])
+        }
+        SandboxEgress::Allow { allow: domains } => expr::object([
             ("mode", Expression::String("allowDomains".to_string())),
             (
                 "domains",
@@ -695,7 +697,7 @@ mod tests {
                     .code(SandboxCode::Image {
                         image: "ubuntu".to_string(),
                     })
-                    .egress(SandboxEgress::Allow)
+                    .egress(SandboxEgress::Internet)
                     .lifecycle(SandboxLifecyclePolicy {
                         max_lifetime_seconds: None,
                         idle_pause_seconds: None,
@@ -782,18 +784,18 @@ mod tests {
         // The key names are asserted, not just the values: `AzureSandboxBinding.egress` has no
         // serde default, so a misspelled key here is a deserialization failure on the customer's
         // cluster rather than a failure at emit.
-        let denied = binding_for(SandboxEgress::Deny);
+        let denied = binding_for(SandboxEgress::None);
         assert!(denied.contains("egress = {"), "{denied}");
         assert!(denied.contains(r#"mode = "deny""#), "{denied}");
 
-        let listed = binding_for(SandboxEgress::AllowDomains {
-            domains: vec!["api.example.com".to_string()],
+        let listed = binding_for(SandboxEgress::Allow {
+            allow: vec!["api.example.com".to_string()],
         });
         assert!(listed.contains(r#"mode = "allowDomains""#), "{listed}");
         assert!(listed.contains("domains = ["), "{listed}");
         assert!(listed.contains(r#""api.example.com""#), "{listed}");
 
-        let open = binding_for(SandboxEgress::Allow);
+        let open = binding_for(SandboxEgress::Internet);
         assert!(open.contains(r#"mode = "allow""#), "{open}");
     }
 
@@ -804,8 +806,8 @@ mod tests {
     #[test]
     fn the_emitted_keys_are_the_ones_the_binding_deserializes() {
         let rendered = binding_with(
-            SandboxEgress::AllowDomains {
-                domains: vec!["api.example.com".to_string()],
+            SandboxEgress::Allow {
+                allow: vec!["api.example.com".to_string()],
             },
             Some(900),
         );
@@ -815,7 +817,7 @@ mod tests {
             data_plane_endpoint: BindingValue::Value("https://example.invalid".to_string()),
             region: BindingValue::Value("eastus".to_string()),
             resource_group: BindingValue::Value("rg".to_string()),
-            egress: SandboxEgress::Allow,
+            egress: SandboxEgress::Internet,
             idle_pause_seconds: Some(900),
             disk_image: BindingValue::Value("ubuntu".to_string()),
             cpu: Some(BindingValue::Value("1000m".to_string())),
@@ -842,10 +844,10 @@ mod tests {
     /// service default — and an emitted zero would be a policy nobody asked for.
     #[test]
     fn the_binding_carries_a_declared_idle_pause_and_nothing_otherwise() {
-        let declared = binding_with(SandboxEgress::Allow, Some(900));
+        let declared = binding_with(SandboxEgress::Internet, Some(900));
         assert!(declared.contains("idlePauseSeconds = 900"), "{declared}");
 
-        let undeclared = binding_with(SandboxEgress::Allow, None);
+        let undeclared = binding_with(SandboxEgress::Internet, None);
         assert!(!undeclared.contains("idlePauseSeconds"), "{undeclared}");
     }
 }

@@ -2143,7 +2143,7 @@ mod tests {
                 disk: "20Gi".to_string(),
                 max_processes: None,
             })
-            .egress(alien_core::SandboxEgress::Allow)
+            .egress(alien_core::SandboxEgress::Internet)
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,

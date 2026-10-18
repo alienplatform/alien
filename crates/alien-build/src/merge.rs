@@ -687,7 +687,7 @@ mod tests {
                 .into_owned();
             let sandbox = Sandbox::new("sbx".to_string())
                 .code(SandboxCode::Image { image })
-                .egress(alien_core::SandboxEgress::Allow)
+                .egress(alien_core::SandboxEgress::Internet)
                 .lifecycle(alien_core::SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
