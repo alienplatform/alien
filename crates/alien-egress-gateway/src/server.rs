@@ -11,13 +11,14 @@ use ed25519_compact::PublicKey;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
-    sync::Semaphore,
+    sync::{watch, Semaphore},
     task::JoinSet,
     time::timeout,
 };
 
 use crate::{
     config::Config,
+    connections::{Connections, IdentityPermit, SourcePermit, MAX_CONNECTIONS},
     error::{denied, invalid, unavailable, Result},
     io::{Counters, Metered, Prefixed},
     policy::{check_addresses, PolicyExt, Target},
@@ -38,13 +39,15 @@ pub struct Gateway {
     /// Parsed public keys.
     pub keys: HashMap<String, PublicKey>,
     /// Current policies shared by all replicas.
-    pub policies: PolicyStore,
+    pub policies: Arc<PolicyStore>,
     /// Gateway-only CA and vault access.
-    pub credentials: crate::credentials::Credentials,
+    pub credentials: Arc<crate::credentials::Credentials>,
     /// Total accepted proxy connections.
     pub accepted: Arc<std::sync::atomic::AtomicU64>,
     /// Total denied or failed proxy connections.
     pub denied: Arc<std::sync::atomic::AtomicU64>,
+    pub connections: Arc<Connections>,
+    pub resolver: hickory_resolver::TokioResolver,
 }
 
 impl Gateway {
@@ -55,6 +58,11 @@ impl Gateway {
         }
         let policy = self.policies.resolve(&claims.aud, &claims.sub).await?;
         if !policy.permits(target) {
+            if matches!(target.port, 25 | 465 | 587) {
+                return Err(denied(
+                    "mail port requires an explicit destination:port grant",
+                ));
+            }
             return Err(alien_error::AlienError::new(
                 crate::error::ErrorData::PolicyDenied,
             ));
@@ -64,18 +72,32 @@ impl Gateway {
 
     /// Resolve once, validate every returned address, then dial a validated socket address.
     /// The connect operation cannot resolve the name a second time.
-    pub async fn connect(&self, target: &Target) -> Result<TcpStream> {
-        let addresses: Vec<_> = timeout(
-            HEADER_TIMEOUT,
-            tokio::net::lookup_host((target.host.as_str(), target.port)),
-        )
-        .await
-        .into_alien_error()
-        .context(unavailable("DNS timeout"))?
-        .into_alien_error()
-        .context(unavailable("resolve destination"))?
-        .filter(|address| address.is_ipv4())
-        .collect();
+    pub async fn connect(&self, target: &Target, identity: &IdentityPermit) -> Result<TcpStream> {
+        let _dns = identity
+            .dns
+            .try_acquire()
+            .map_err(|_| crate::connections::capacity())?;
+        let addresses: Vec<_> = if let Ok(ip) = target.host.parse::<std::net::Ipv4Addr>() {
+            vec![SocketAddr::new(ip.into(), target.port)]
+        } else {
+            // An absolute DNS name never applies deployment search domains.
+            timeout(
+                HEADER_TIMEOUT,
+                self.resolver.ipv4_lookup(format!("{}.", target.host)),
+            )
+            .await
+            .into_alien_error()
+            .context(unavailable("DNS timeout"))?
+            .into_alien_error()
+            .context(unavailable("resolve destination"))?
+            .answers()
+            .iter()
+            .filter_map(|record| record.data.ip_addr())
+            .filter(|ip| ip.is_ipv4())
+            .map(|ip| SocketAddr::new(ip, target.port))
+            .collect()
+        };
+        drop(_dns);
         check_addresses(
             &addresses.iter().map(SocketAddr::ip).collect::<Vec<_>>(),
             &self.config.denied_ranges,
@@ -96,39 +118,67 @@ impl Gateway {
 }
 
 /// Serve proxy connections with bounded concurrency and supervised connection tasks.
-pub async fn serve(listener: TcpListener, live: Arc<crate::runtime::LiveGateway>) -> Result<()> {
-    let limit = Arc::new(Semaphore::new(1024));
+pub async fn serve(
+    listener: TcpListener,
+    live: Arc<crate::runtime::LiveGateway>,
+    mut shutdown: watch::Receiver<bool>,
+) -> Result<()> {
+    let limit = Arc::new(Semaphore::new(MAX_CONNECTIONS));
+    let registry = live
+        .snapshot()
+        .ok_or_else(|| denied("config unavailable"))?
+        .connections
+        .clone();
     let mut tasks = JoinSet::new();
+    let mut sweep = tokio::time::interval(Duration::from_secs(1));
+    let revalidate = async {
+        let mut interval = tokio::time::interval(Duration::from_secs(30));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+            registry.revalidate(&live).await;
+        }
+    };
+    tokio::pin!(revalidate);
     loop {
         tokio::select! {
+            _ = shutdown.changed() => break,
+            _ = sweep.tick() => registry.expire_idle(),
+            _ = &mut revalidate => break,
             accepted = listener.accept() => {
-                let (stream, _) = accepted.into_alien_error().context(unavailable("accept proxy connection"))?;
-                let Some(gateway) = live.snapshot() else {
-                    tracing::info!(ts = %chrono::Utc::now().to_rfc3339(), aud = "", sub = "", host = "", port = 0,
-                        decision = "deny", reason = "config unavailable", bytesUp = 0, bytesDown = 0, durationMs = 0, "egress connection");
-                    drop(stream);
-                    continue;
+                let (stream, peer) = match accepted {
+                    Ok(connection) => connection,
+                    Err(error) => { tracing::warn!(%error, "proxy accept failed; retrying"); tokio::time::sleep(Duration::from_millis(100)).await; continue; }
                 };
-                let permit = match limit.clone().try_acquire_owned() {
-                    Ok(permit) => permit,
+                let Some(gateway) = live.snapshot() else { drop(stream); continue; };
+                gateway.accepted.fetch_add(1, Ordering::Relaxed);
+                let admission = registry.source(peer.ip()).and_then(|source| {
+                    limit.clone().try_acquire_owned().map(|permit| (source, permit)).map_err(|_| crate::connections::capacity())
+                });
+                let (source, permit) = match admission {
+                    Ok(permits) => permits,
                     Err(_) => {
-                        gateway.accepted.fetch_add(1, Ordering::Relaxed);
                         gateway.denied.fetch_add(1, Ordering::Relaxed);
-                        tracing::info!(ts = %chrono::Utc::now().to_rfc3339(), aud = "", sub = "",
-                            host = "", port = 0, decision = "deny", reason = "connection capacity",
-                            bytesUp = 0, bytesDown = 0, durationMs = 0, "egress connection");
-                        drop(stream);
+                        if registry.record_denial(0) { tracing::info!(event = "close", decision = "deny", reason = "connection capacity", "egress connection"); }
                         continue;
                     }
                 };
-                let gateway = gateway.clone();
-                tasks.spawn(async move { let _permit = permit; connection(stream, gateway).await; });
+                tasks.spawn(async move { let _permit = permit; connection(stream, gateway, source).await; });
             }
             result = tasks.join_next(), if !tasks.is_empty() => {
                 if let Some(Err(error)) = result { tracing::error!(%error, "proxy task failed"); }
             }
         }
     }
+    drop(listener);
+    // Stop accepting immediately; existing requests get a bounded completion window.
+    let _ = timeout(Duration::from_secs(15), async {
+        while tasks.join_next().await.is_some() {}
+    })
+    .await;
+    tasks.abort_all();
+    while tasks.join_next().await.is_some() {}
+    Ok(())
 }
 
 #[derive(Default)]
@@ -137,10 +187,10 @@ struct Audit {
     sub: String,
     host: String,
     port: u16,
+    allowed: bool,
 }
 
-async fn connection(stream: TcpStream, gateway: Arc<Gateway>) {
-    gateway.accepted.fetch_add(1, Ordering::Relaxed);
+async fn connection(stream: TcpStream, gateway: Arc<Gateway>, source: SourcePermit) {
     let counters = Arc::new(Counters::default());
     let mut stream = Metered {
         inner: stream,
@@ -150,29 +200,48 @@ async fn connection(stream: TcpStream, gateway: Arc<Gateway>) {
     let mut audit = Audit::default();
     let result = timeout(
         CONNECTION_TIMEOUT,
-        proxy(&mut stream, gateway.clone(), &mut audit),
+        proxy(&mut stream, gateway.clone(), &mut audit, source),
     )
     .await;
-    let reason = match result {
-        Ok(Ok(())) => None,
-        Ok(Err(error)) => Some(error.message),
-        Err(_) => Some("connection timeout".into()),
+    let (reason, category, protocol_denial) = match result {
+        Ok(Ok(())) => ("completed".to_string(), 4, false),
+        Ok(Err(error)) => {
+            let category = match error.code.as_str() {
+                "EGRESS_CAPACITY" => 0,
+                "EGRESS_INVALID" => 3,
+                _ if audit.aud.is_empty() => 1,
+                "EGRESS_DENIED" | "EGRESS_POLICY_DENIED" => 2,
+                _ => 4,
+            };
+            let protocol_denial = matches!(
+                error.code.as_str(),
+                "EGRESS_INVALID" | "EGRESS_DENIED" | "EGRESS_POLICY_DENIED"
+            );
+            (error.message, category, protocol_denial)
+        }
+        Err(_) => ("connection lifetime exceeded".into(), 4, false),
     };
-    if reason.is_some() {
+    let allowed = audit.allowed && !protocol_denial;
+    let log = if allowed {
+        true
+    } else {
         gateway.denied.fetch_add(1, Ordering::Relaxed);
+        gateway.connections.record_denial(category)
+    };
+    if log {
+        tracing::info!(event = "close", ts = %chrono::Utc::now().to_rfc3339(), aud = %audit.aud, sub = %audit.sub,
+            host = %audit.host, port = audit.port, decision = if allowed { "allow" } else { "deny" },
+            closeReason = %reason, reason = %reason, bytesUp = counters.up.load(Ordering::Relaxed),
+            bytesDown = counters.down.load(Ordering::Relaxed), durationMs = started.elapsed().as_millis() as u64,
+            "egress connection");
     }
-    // Fixed fields only: never include tokens, headers, URLs with queries, or secret values.
-    tracing::info!(ts = %chrono::Utc::now().to_rfc3339(), aud = %audit.aud, sub = %audit.sub,
-        host = %audit.host, port = audit.port, decision = if reason.is_none() { "allow" } else { "deny" },
-        reason = reason.as_deref().unwrap_or("permitted"), bytesUp = counters.up.load(Ordering::Relaxed),
-        bytesDown = counters.down.load(Ordering::Relaxed), durationMs = started.elapsed().as_millis() as u64,
-        "egress connection");
 }
 
 async fn proxy(
     stream: &mut Metered<TcpStream>,
     gateway: Arc<Gateway>,
     audit: &mut Audit,
+    source: SourcePermit,
 ) -> Result<()> {
     stream
         .inner
@@ -208,6 +277,32 @@ async fn proxy(
     };
     audit.aud = claims.aud.clone();
     audit.sub = claims.sub.clone();
+    let (identity, mut cancel) =
+        gateway
+            .connections
+            .register(claims.clone(), target.clone(), stream.counters.clone())?;
+    drop(source);
+    tokio::select! {
+        result = authorized_proxy(stream, &gateway, audit, &claims, target, connect, input, head_len, &identity) => result,
+        _ = cancel.changed() => Err(alien_error::AlienError::new(unavailable(cancel.borrow().unwrap_or("connection cancelled")))),
+    }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "parsed proxy request and authenticated connection context"
+)]
+async fn authorized_proxy(
+    stream: &mut Metered<TcpStream>,
+    gateway: &Gateway,
+    audit: &mut Audit,
+    claims: &Claims,
+    target: Option<Target>,
+    connect: bool,
+    input: Vec<u8>,
+    head_len: usize,
+    identity: &IdentityPermit,
+) -> Result<()> {
     let Some(target) = target else {
         if !gateway.config.audiences.contains(&claims.aud)
             || gateway
@@ -219,6 +314,8 @@ async fn proxy(
             refuse(stream, false).await?;
             return Err(denied("health identity or policy unavailable"));
         }
+        audit.allowed = true;
+        log_open(audit);
         stream
             .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nok\n")
             .await
@@ -226,23 +323,27 @@ async fn proxy(
             .context(unavailable("reply to authenticated health"))?;
         return Ok(());
     };
-    if let Err(error) = gateway.authorize(&claims, &target).await {
+    if let Err(error) = gateway.authorize(claims, &target).await {
         refuse(stream, error.code == "EGRESS_POLICY_DENIED").await?;
         return Err(error);
     }
     if !connect {
-        let upstream = gateway.connect(&target).await?;
+        let upstream = gateway.connect(&target, identity).await?;
+        audit.allowed = true;
+        log_open(audit);
         return crate::http_proxy::forward(Prefixed::new(input, stream), upstream, target, None)
             .await;
     }
     // Resolve before acknowledging, so denied ranges receive an explicit gateway denial.
-    let mut upstream = match gateway.connect(&target).await {
+    let mut upstream = match gateway.connect(&target, identity).await {
         Ok(stream) => stream,
         Err(error) => {
             refuse(stream, error.code == "EGRESS_POLICY_DENIED").await?;
             return Err(error);
         }
     };
+    audit.allowed = true;
+    log_open(audit);
     stream
         .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
         .await
@@ -309,6 +410,11 @@ async fn proxy(
         .into_alien_error()
         .context(unavailable("relay connection"))?;
     Ok(())
+}
+
+fn log_open(audit: &Audit) {
+    tracing::info!(event = "open", ts = %chrono::Utc::now().to_rfc3339(), aud = %audit.aud, sub = %audit.sub,
+        host = %audit.host, port = audit.port, decision = "allow", "egress connection");
 }
 
 async fn refuse(stream: &mut (impl tokio::io::AsyncWrite + Unpin), policy: bool) -> Result<()> {

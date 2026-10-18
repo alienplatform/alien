@@ -1,12 +1,12 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use alien_bindings::{traits::PutOptions, Bindings, Kv, PutCondition};
 use alien_error::{AlienError, Context, IntoAlienError};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use http::{HeaderName, HeaderValue};
 use rcgen::{
-    BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, Issuer, KeyPair,
-    KeyUsagePurpose,
+    BasicConstraints, CertificateParams, CidrSubnet, DnType, ExtendedKeyUsagePurpose,
+    GeneralSubtree, IsCa, Issuer, KeyPair, KeyUsagePurpose, NameConstraints,
 };
 use rustls::{
     pki_types::{PrivatePkcs8KeyDer, ServerName},
@@ -23,6 +23,7 @@ use tokio_rustls::{TlsAcceptor, TlsConnector};
 
 use crate::{
     config::CredentialRule,
+    credential_cache::Cache,
     error::{invalid, unavailable, Result},
     http_proxy::{self, Injection},
     policy::{normalize_host, Target},
@@ -34,6 +35,9 @@ pub struct Credentials {
     kv: Arc<dyn Kv>,
     bindings: Arc<Bindings>,
     upstream: Arc<ClientConfig>,
+    rules: Vec<CredentialRule>,
+    certificates: Cache<(String, String, String), Arc<ServerConfig>>,
+    secrets: Cache<(String, String), String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -49,6 +53,7 @@ impl Credentials {
         kv: Arc<dyn Kv>,
         bindings: Arc<Bindings>,
         additional_roots: &[String],
+        rules: &[CredentialRule],
     ) -> Result<Self> {
         let mut roots = RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
         for root in additional_roots {
@@ -69,6 +74,9 @@ impl Credentials {
             kv,
             bindings,
             upstream: Arc::new(config),
+            rules: rules.to_vec(),
+            certificates: Cache::new(Duration::from_secs(3600)),
+            secrets: Cache::new(Duration::from_secs(60)),
         })
     }
 
@@ -82,6 +90,14 @@ impl Credentials {
             .into_alien_error()
             .context(unavailable("generate sandbox CA"))?;
         let mut params = CertificateParams::default();
+        let hosts = self.hosts(aud);
+        params.name_constraints = Some(NameConstraints {
+            permitted_subtrees: hosts.into_iter().map(GeneralSubtree::DnsName).collect(),
+            excluded_subtrees: vec![
+                GeneralSubtree::IpAddress(CidrSubnet::V4([0; 4], [0; 4])),
+                GeneralSubtree::IpAddress(CidrSubnet::V6([0; 16], [0; 16])),
+            ],
+        });
         params.is_ca = IsCa::Ca(BasicConstraints::Constrained(0));
         params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
         params
@@ -101,7 +117,7 @@ impl Credentials {
         if !self
             .kv
             .put(
-                &ca_key(aud, sub),
+                &self.ca_key(aud, sub),
                 value,
                 Some(PutOptions {
                     ttl: None,
@@ -118,9 +134,56 @@ impl Credentials {
         Ok(ca.certificate)
     }
 
+    fn hosts(&self, aud: &str) -> Vec<String> {
+        let mut hosts: Vec<_> = self
+            .rules
+            .iter()
+            .filter(|rule| rule.aud == aud)
+            .map(|rule| rule.host.clone())
+            .collect();
+        hosts.sort();
+        hosts.dedup();
+        // Empty permitted subtrees mean unrestricted trust. Keep an unused CA constrained too.
+        if hosts.is_empty() {
+            hosts.push("no-credential-host.invalid".into());
+        }
+        hosts
+    }
+
+    fn ca_key(&self, aud: &str, sub: &str) -> String {
+        let mut hash = Sha256::new();
+        for host in self.hosts(aud) {
+            hash.update((host.len() as u64).to_be_bytes());
+            hash.update(host.as_bytes());
+        }
+        format!(
+            "{}:scoped:{}",
+            ca_key(aud, sub),
+            URL_SAFE_NO_PAD.encode(hash.finalize())
+        )
+    }
+
+    async fn secret(&self, binding: &str, name: &str) -> Result<String> {
+        let key = (binding.to_string(), name.to_string());
+        if let Some(secret) = self.secrets.get(&key) {
+            return Ok(secret);
+        }
+        let vault = self
+            .bindings
+            .vault(binding)
+            .await
+            .context(unavailable("load credential vault"))?;
+        let secret = vault
+            .get_secret(name)
+            .await
+            .context(unavailable("read injection credential"))?;
+        self.secrets.insert(key, secret.clone());
+        Ok(secret)
+    }
+
     async fn load_ca(&self, aud: &str, sub: &str) -> Result<Option<Ca>> {
         self.kv
-            .get(&ca_key(aud, sub))
+            .get(&self.ca_key(aud, sub))
             .await
             .context(unavailable("load sandbox CA"))?
             .map(|entry| {
@@ -137,6 +200,13 @@ impl Credentials {
         sub: &str,
         target: &Target,
     ) -> Result<Arc<ServerConfig>> {
+        if !self.hosts(aud).contains(&target.host) {
+            return Err(invalid("host outside sandbox CA scope"));
+        }
+        let cache_key = (aud.to_string(), sub.to_string(), target.host.clone());
+        if let Some(config) = self.certificates.get(&cache_key) {
+            return Ok(config);
+        }
         let ca = self
             .load_ca(aud, sub)
             .await?
@@ -168,7 +238,9 @@ impl Credentials {
             .into_alien_error()
             .context(unavailable("configure guest TLS"))?;
         config.alpn_protocols = vec![b"http/1.1".to_vec()];
-        Ok(Arc::new(config))
+        let config = Arc::new(config);
+        self.certificates.insert(cache_key, config.clone());
+        Ok(config)
     }
 
     /// Terminate guest TLS, obtain vault values, and re-originate verified TLS to the pinned address.
@@ -203,15 +275,7 @@ impl Credentials {
             .context(unavailable("accept guest TLS"))?;
         let mut headers = Vec::new();
         for rule in rules {
-            let vault = self
-                .bindings
-                .vault(&rule.vault_binding)
-                .await
-                .context(unavailable("load credential vault"))?;
-            let secret = vault
-                .get_secret(&rule.secret)
-                .await
-                .context(unavailable("read injection credential"))?;
+            let secret = self.secret(&rule.vault_binding, &rule.secret).await?;
             let value = HeaderValue::from_str(&format!("{}{}", rule.value_prefix, secret))
                 .map_err(|_| invalid("credential is not a valid HTTP header value"))?;
             headers.push(Injection {
@@ -269,4 +333,116 @@ fn ca_key(aud: &str, sub: &str) -> String {
     hash.update(aud.as_bytes());
     hash.update(sub.as_bytes());
     format!("egress-ca:{}", URL_SAFE_NO_PAD.encode(hash.finalize()))
+}
+
+#[cfg(all(test, feature = "local"))]
+mod tests {
+    use super::*;
+    use rustls::client::danger::ServerCertVerifier;
+    use std::collections::HashMap;
+
+    #[tokio::test(start_paused = true)]
+    async fn constrained_ca_and_expiring_caches_preserve_credential_scope() {
+        let dir = tempfile::tempdir().unwrap();
+        let bindings = Arc::new(Bindings::from_env_map(HashMap::from([
+            ("ALIEN_DEPLOYMENT_TYPE".into(), "local".into()),
+            ("ALIEN_TEST_VAULT_BINDING".into(), serde_json::json!({"service":"local-vault","dataDir":dir.path().join("vault"),"vaultName":"test"}).to_string()),
+            ("ALIEN_EGRESS_STATE_BINDING".into(), serde_json::json!({"service":"local-kv","dataDir":dir.path().join("kv")}).to_string()),
+        ])).unwrap());
+        let rule: CredentialRule = serde_json::from_value(serde_json::json!({"aud":"p/r","host":"inject.example.com","port":443,"method":"GET","path":"/","header":"Authorization","vaultBinding":"test-vault","secret":"key"})).unwrap();
+        let credentials = Credentials::new(
+            bindings.kv("egress-state").await.unwrap(),
+            bindings.clone(),
+            &[],
+            &[rule],
+        )
+        .unwrap();
+        let certificate = credentials.issue_ca("p/r", "box").await.unwrap();
+        let ca = credentials.load_ca("p/r", "box").await.unwrap().unwrap();
+        let issuer =
+            Issuer::from_ca_cert_pem(&ca.certificate, KeyPair::from_pem(&ca.private_key).unwrap())
+                .unwrap();
+        let encoded: String = certificate
+            .lines()
+            .filter(|line| !line.starts_with("---"))
+            .collect();
+        let mut roots = RootCertStore::empty();
+        roots
+            .add(rustls::pki_types::CertificateDer::from(
+                base64::engine::general_purpose::STANDARD
+                    .decode(encoded)
+                    .unwrap(),
+            ))
+            .unwrap();
+        let verifier = rustls::client::WebPkiServerVerifier::builder(Arc::new(roots))
+            .build()
+            .unwrap();
+        for (host, allowed) in [
+            ("inject.example.com", true),
+            ("unrelated.example.com", false),
+            ("1.1.1.1", false),
+        ] {
+            // Deliberately sign an out-of-scope certificate using the fixture CA key: the client
+            // must reject it even when its SAN matches the requested name and signature is valid.
+            let key = KeyPair::generate().unwrap();
+            let params = CertificateParams::new(vec![host.into()]).unwrap();
+            let leaf = params.signed_by(&key, &issuer).unwrap();
+            let result = verifier.verify_server_cert(
+                leaf.der(),
+                &[],
+                &ServerName::try_from(host).unwrap(),
+                &[],
+                rustls::pki_types::UnixTime::now(),
+            );
+            assert_eq!(result.is_ok(), allowed, "{host}: {result:?}");
+        }
+        let target = Target {
+            host: "inject.example.com".into(),
+            port: 443,
+        };
+        let first = credentials
+            .server_config("p/r", "box", &target)
+            .await
+            .unwrap();
+        assert!(Arc::ptr_eq(
+            &first,
+            &credentials
+                .server_config("p/r", "box", &target)
+                .await
+                .unwrap()
+        ));
+        tokio::time::advance(Duration::from_secs(3601)).await;
+        assert!(!Arc::ptr_eq(
+            &first,
+            &credentials
+                .server_config("p/r", "box", &target)
+                .await
+                .unwrap()
+        ));
+        let vault = bindings.vault("test-vault").await.unwrap();
+        vault
+            .set_secret("key", "first-fixture-secret")
+            .await
+            .unwrap();
+        assert_eq!(
+            credentials.secret("test-vault", "key").await.unwrap(),
+            "first-fixture-secret"
+        );
+        vault
+            .set_secret("key", "rotated-fixture-secret")
+            .await
+            .unwrap();
+        assert_eq!(
+            credentials.secret("test-vault", "key").await.unwrap(),
+            "first-fixture-secret"
+        );
+        tokio::time::advance(Duration::from_secs(60)).await;
+        assert_eq!(
+            credentials.secret("test-vault", "key").await.unwrap(),
+            "rotated-fixture-secret"
+        );
+        vault.delete_secret("key").await.unwrap();
+        tokio::time::advance(Duration::from_secs(60)).await;
+        assert!(credentials.secret("test-vault", "key").await.is_err());
+    }
 }

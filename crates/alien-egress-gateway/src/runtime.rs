@@ -1,11 +1,18 @@
-//! Atomic configuration snapshots. A failed refresh closes new proxy and admin requests.
+//! Atomic configuration snapshots with a bounded last-good window.
 use std::{
     net::SocketAddr,
-    sync::{atomic::AtomicU64, Arc, RwLock},
+    sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc, RwLock,
+    },
     time::Duration,
 };
 
 use alien_bindings::Bindings;
+use tokio::time::Instant;
+
+/// A vault outage may delay key/range changes by at most ten minutes.
+pub const MAX_CONFIG_AGE: Duration = Duration::from_secs(600);
 use alien_error::{AlienError, Context, IntoAlienError};
 
 use crate::{
@@ -18,41 +25,78 @@ use crate::{
 
 /// One consistent config/key/policy-store snapshot per request.
 pub struct LiveGateway {
-    current: RwLock<Option<Arc<Gateway>>>,
+    stopping: AtomicBool,
+    current: RwLock<(Arc<Gateway>, Option<Instant>)>,
     accepted: Arc<AtomicU64>,
     denied: Arc<AtomicU64>,
     addresses: (SocketAddr, SocketAddr),
+    connections: Arc<crate::connections::Connections>,
 }
 
 impl LiveGateway {
     pub fn new(gateway: Gateway) -> Self {
+        Self::with_deadline(gateway, Some(Instant::now()))
+    }
+
+    fn with_deadline(gateway: Gateway, loaded: Option<Instant>) -> Self {
         Self {
+            stopping: AtomicBool::new(false),
+            connections: gateway.connections.clone(),
             accepted: gateway.accepted.clone(),
             denied: gateway.denied.clone(),
             addresses: (gateway.config.listen, gateway.config.admin),
-            current: RwLock::new(Some(Arc::new(gateway))),
+            current: RwLock::new((Arc::new(gateway), loaded)),
         }
     }
 
+    /// Explicit local configuration has no refresh source or stale deadline.
+    pub fn static_config(gateway: Gateway) -> Self {
+        Self::with_deadline(gateway, None)
+    }
+
+    pub fn stop(&self) {
+        self.stopping.store(true, Ordering::Release);
+    }
+
     pub fn snapshot(&self) -> Option<Arc<Gateway>> {
-        self.current.read().ok().and_then(|value| value.clone())
+        if self.stopping.load(Ordering::Acquire) {
+            return None;
+        }
+        self.current.read().ok().and_then(|current| {
+            let (gateway, loaded) = &*current;
+            (loaded.is_none_or(|loaded| loaded.elapsed() < MAX_CONFIG_AGE)).then(|| gateway.clone())
+        })
     }
 
     /// Poll only the rendered public config entry, never the signing-key entry.
     pub async fn refresh(&self, bindings: &Arc<Bindings>) -> Result<()> {
         let result = tokio::time::timeout(Duration::from_secs(10), async {
             let encoded = read_vault_config(bindings).await?;
-            let gateway = build(
+            let mut gateway = build(
                 &encoded,
                 bindings.clone(),
                 self.accepted.clone(),
                 self.denied.clone(),
             )
             .await?;
+            gateway.connections = self.connections.clone();
             if (gateway.config.listen, gateway.config.admin) != self.addresses {
                 return Err(invalid(
                     "listener address changes require a container restart",
                 ));
+            }
+            if let Some(previous) = self.snapshot() {
+                if previous.config.generation_store.binding
+                    == gateway.config.generation_store.binding
+                {
+                    gateway.policies = previous.policies.clone();
+                    if previous.config.credentials == gateway.config.credentials
+                        && previous.config.upstream_ca_certificates
+                            == gateway.config.upstream_ca_certificates
+                    {
+                        gateway.credentials = previous.credentials.clone();
+                    }
+                }
             }
             Ok(Arc::new(gateway))
         })
@@ -66,13 +110,10 @@ impl LiveGateway {
             .map_err(|_| AlienError::new(unavailable("config lock poisoned")))?;
         match result {
             Ok(gateway) => {
-                *current = Some(gateway);
+                *current = (gateway, Some(Instant::now()));
                 Ok(())
             }
-            Err(error) => {
-                *current = None;
-                Err(error)
-            }
+            Err(error) => Err(error),
         }
     }
 }
@@ -102,12 +143,28 @@ pub async fn build(
         .kv(&config.generation_store.binding)
         .await
         .context(unavailable("load policy binding"))?;
-    let credentials = Credentials::new(kv.clone(), bindings, &config.upstream_ca_certificates)?;
+    let credentials = Credentials::new(
+        kv.clone(),
+        bindings,
+        &config.upstream_ca_certificates,
+        &config.credentials,
+    )?;
+    let mut resolver = hickory_resolver::TokioResolver::builder_tokio()
+        .into_alien_error()
+        .context(unavailable("read DNS configuration"))?;
+    // Every connection validates fresh answers. Do not retain stale DNS cache grants.
+    resolver.options_mut().cache_size = 0;
+    let resolver = resolver
+        .build()
+        .into_alien_error()
+        .context(unavailable("build DNS resolver"))?;
     Ok(Gateway {
+        connections: Arc::new(crate::connections::Connections::default()),
+        resolver,
         config,
         keys,
-        policies: PolicyStore::new(kv),
-        credentials,
+        policies: Arc::new(PolicyStore::new(kv)),
+        credentials: Arc::new(credentials),
         accepted,
         denied,
     })

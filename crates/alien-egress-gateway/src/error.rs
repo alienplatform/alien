@@ -41,6 +41,24 @@ pub enum ErrorData {
         http_status_code = 403
     )]
     Denied { reason: String },
+    /// Bounded connection or resolver admission is exhausted.
+    #[error(
+        code = "EGRESS_CAPACITY",
+        message = "Egress connection capacity reached",
+        retryable = "true",
+        internal = "false",
+        http_status_code = 429
+    )]
+    Capacity,
+    /// The caller must not replay an older intent with a newly allocated version.
+    #[error(
+        code = "EGRESS_POLICY_VERSION_CONFLICT",
+        message = "Egress policy version conflict",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    PolicyVersionConflict,
     /// A required network or storage operation failed.
     #[error(
         code = "EGRESS_UNAVAILABLE",

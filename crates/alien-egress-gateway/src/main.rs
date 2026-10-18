@@ -69,7 +69,11 @@ async fn main() -> Result<()> {
         .await
         .into_alien_error()
         .context(failed("bind admin"))?;
-    let gateway = Arc::new(LiveGateway::new(gateway));
+    let gateway = Arc::new(if refresh {
+        LiveGateway::new(gateway)
+    } else {
+        LiveGateway::static_config(gateway)
+    });
     let refresh_config = async {
         if !refresh {
             std::future::pending::<()>().await;
@@ -81,14 +85,54 @@ async fn main() -> Result<()> {
             interval.tick().await;
             if let Err(error) = gateway.refresh(&bindings).await {
                 // Do not log vault content or nested errors that might contain its value.
-                tracing::error!(code = %error.code, "gateway config unavailable; new requests denied");
+                tracing::error!(code = %error.code, "gateway config refresh failed; last-good window applies");
             }
         }
     };
+    let (shutdown, receiver) = tokio::sync::watch::channel(false);
+    let proxy = server::serve(proxy, gateway.clone(), receiver);
+    let admin_shutdown = shutdown.subscribe();
+    let admin = axum::serve(admin_listener, admin::router(gateway.clone())).with_graceful_shutdown(
+        async move {
+            let mut receiver = admin_shutdown;
+            let _ = receiver.changed().await;
+        },
+    );
+    tokio::pin!(proxy);
+    let admin = std::future::IntoFuture::into_future(admin);
+    tokio::pin!(admin);
     tokio::select! {
-        result = server::serve(proxy, gateway.clone()) => result,
-        result = axum::serve(admin_listener, admin::router(gateway.clone())) => result.into_alien_error().context(failed("serve admin")),
-        result = refresh_config => result,
-        result = tokio::signal::ctrl_c() => result.into_alien_error().context(failed("shutdown signal")),
+        result = &mut proxy => return result,
+        result = &mut admin => return result.into_alien_error().context(failed("serve admin")),
+        result = refresh_config => return result,
+        result = shutdown_signal() => result?,
+    }
+    gateway.stop();
+    shutdown.send_replace(true);
+    // One deadline bounds both proxy and admin drain, including hung dependencies.
+    let _ = tokio::time::timeout(Duration::from_secs(16), async {
+        let _ = tokio::join!(proxy, admin);
+    })
+    .await;
+    Ok(())
+}
+
+async fn shutdown_signal() -> Result<()> {
+    #[cfg(unix)]
+    {
+        let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .into_alien_error()
+            .context(failed("install SIGTERM handler"))?;
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => result.into_alien_error().context(failed("shutdown signal")),
+            _ = term.recv() => Ok(()),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c()
+            .await
+            .into_alien_error()
+            .context(failed("shutdown signal"))
     }
 }

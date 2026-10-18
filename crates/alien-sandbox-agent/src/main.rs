@@ -46,6 +46,16 @@ const ENV_ISOLATION: &str = "ALIEN_SANDBOX_ISOLATION";
 const DEFAULT_OUTPUT_CAP: usize = 4 * 1024 * 1024;
 
 fn main() -> Result<()> {
+    #[cfg(target_os = "linux")]
+    if std::env::args().nth(1).as_deref() == Some("--egress-path-check") {
+        std::process::exit(
+            if alien_sandbox_agent::gateway_egress::command_path_is_closed() {
+                0
+            } else {
+                1
+            },
+        );
+    }
     tracing_subscriber::fmt::init();
 
     let state = Arc::new(load_state()?);
@@ -308,7 +318,9 @@ fn load_state() -> Result<AgentState> {
         output_cap,
         jobs: JobRegistry::new(),
         #[cfg(target_os = "linux")]
-        gateway_egress: alien_sandbox_agent::gateway_egress::GatewayEgress::from_env(exec_identity.uid)?,
+        gateway_egress: alien_sandbox_agent::gateway_egress::GatewayEgress::from_env(
+            exec_identity,
+        )?,
     })
 }
 

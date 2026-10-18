@@ -780,6 +780,7 @@ dependencies = [
  "bytes",
  "chrono",
  "ed25519-compact",
+ "hickory-resolver",
  "http 1.5.0",
  "http-body-util",
  "httparse",

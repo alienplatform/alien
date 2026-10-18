@@ -42,7 +42,7 @@ pub fn verify(token: &str, keys: &HashMap<String, PublicKey>, now: u64) -> Resul
         || claims.sub.is_empty()
         || claims.aud.len() > 256
         || claims.sub.len() > 256
-        || claims.iat > now
+        || claims.iat > now.saturating_add(60)
         || claims.exp <= now
         || claims.exp <= claims.iat
         || claims.exp - claims.iat > 86400
@@ -122,6 +122,9 @@ pub struct AdminClaims {
     /// Required for policy mutation; CA and metrics grants may omit it.
     #[serde(default)]
     pub policy: Option<String>,
+    /// Required and request-bound for PUT and DELETE.
+    #[serde(default)]
+    pub version: Option<u64>,
 }
 
 /// Verify a short-lived admin JWS, distinct from proxy tokens by its mandatory type.
@@ -136,7 +139,7 @@ pub fn verify_admin(
         || claims.sub.is_empty()
         || claims.aud.len() > 256
         || claims.sub.len() > 256
-        || claims.iat > now
+        || claims.iat > now.saturating_add(60)
         || claims.exp <= now
         || claims.exp <= claims.iat
         || claims.exp - claims.iat > 60
@@ -171,7 +174,8 @@ mod tests {
         let token = signed(&pair, payload.clone());
         assert_eq!(verify(&token, &keys, 100).unwrap().sub, "box");
         assert!(verify(&token, &keys, 200).is_err());
-        assert!(verify(&token, &keys, 99).is_err());
+        assert!(verify(&token, &keys, 40).is_ok());
+        assert!(verify(&token, &keys, 39).is_err());
         let other = KeyPair::from_seed(Seed::new([8; 32]));
         assert!(verify(&signed(&other, payload.clone()), &keys, 100).is_err());
         let mut long = payload.clone();
@@ -222,6 +226,8 @@ mod admin_tests {
                 .method,
             "PUT"
         );
+        assert!(verify_admin(&sign("alien-egress-admin", 160), &keys, 40).is_ok());
+        assert!(verify_admin(&sign("alien-egress-admin", 160), &keys, 39).is_err());
         assert!(verify_admin(&sign("JWT", 160), &keys, 100).is_err());
         assert!(verify_admin(&sign("alien-egress-admin", 161), &keys, 100).is_err());
         assert!(verify_admin(&sign("alien-egress-admin", 160), &keys, 160).is_err());
