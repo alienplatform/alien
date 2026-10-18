@@ -1749,6 +1749,7 @@ impl KubernetesContainerController {
                     Some(namespace) => format!("{workload_name}.{namespace}.svc.cluster.local"),
                     None => format!("{workload_name}.svc.cluster.local"),
                 },
+                internal_endpoints: HashMap::new(),
                 replicas: Vec::new(), // Replica details tracked separately
                 // Kubernetes leaves volume snapshots to the cluster's own tooling. With no
                 // volumes reported, there is nothing to restore.

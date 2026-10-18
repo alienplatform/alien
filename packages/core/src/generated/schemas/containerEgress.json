@@ -1,0 +1,1 @@
+{"type":"string","description":"Outbound network restriction enforced outside the container.\nAbsence preserves the runtime's existing full-network behavior.","enum":["internet"],"x-readme-ref-name":"ContainerEgress"}
