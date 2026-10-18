@@ -1124,7 +1124,11 @@ mod tests {
             }
         };
 
-        for egress in [SandboxEgress::Internet, SandboxEgress::None] {
+        for egress in [
+            SandboxEgress::Internet,
+            SandboxEgress::Allow,
+            SandboxEgress::None,
+        ] {
             let mut executor = build_executor(
                 sandbox_with(egress.clone(), "ubuntu:24.04", None, None),
                 provider_with(happy_client()),
@@ -1133,7 +1137,9 @@ mod tests {
             executor.run_until_terminal().await.expect("create runs");
             assert_eq!(
                 allow_egress(&executor),
-                egress == SandboxEgress::Internet,
+                egress
+                    .internet_access_switch()
+                    .expect("supported declaration"),
                 "{egress:?}"
             );
         }
@@ -1141,6 +1147,8 @@ mod tests {
         for (previous, desired) in [
             (SandboxEgress::None, SandboxEgress::Internet),
             (SandboxEgress::Internet, SandboxEgress::None),
+            (SandboxEgress::Allow, SandboxEgress::None),
+            (SandboxEgress::None, SandboxEgress::Allow),
         ] {
             let mut m = MockAgentPlatformApi::new();
             serve_created_egress(&mut m);
@@ -1165,7 +1173,9 @@ mod tests {
             executor.run_until_terminal().await.expect("replace runs");
             assert_eq!(
                 allow_egress(&executor),
-                desired == SandboxEgress::Internet,
+                desired
+                    .internet_access_switch()
+                    .expect("supported declaration"),
                 "the replacement serves the requested egress mode"
             );
         }

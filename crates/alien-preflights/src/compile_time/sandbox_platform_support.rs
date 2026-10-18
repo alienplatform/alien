@@ -187,6 +187,15 @@ mod tests {
             .expect("check runs");
         assert!(result.success);
         assert!(result.warnings.is_empty());
+        let result = SandboxPlatformSupportCheck
+            .check(
+                &stack_with(sandbox("legacy-open", None, SandboxEgress::Allow)),
+                Platform::Gcp,
+            )
+            .await
+            .expect("legacy check runs");
+        assert!(result.success);
+        assert!(result.warnings.is_empty());
     }
 
     #[tokio::test]

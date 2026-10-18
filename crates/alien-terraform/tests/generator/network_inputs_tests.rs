@@ -144,6 +144,7 @@ fn gcp_nat_address_reservation_requires_gateway_opt_in() {
     for egress in [
         None,
         Some(SandboxEgress::None),
+        Some(SandboxEgress::Allow),
         Some(SandboxEgress::Internet),
     ] {
         let reserved = egress == Some(SandboxEgress::Internet);

@@ -571,9 +571,11 @@ async fn language_bindings_preserve_egress_requests_against_local() {
     let binding = json!({
         "service": "sandbox-local", "managerUrl": harness.route.base_url,
         "sandboxKey": SANDBOX, "tokenPath": harness.route.token_path,
-        "egress": "internet",
+        "egress": {"mode":"allow"},
     })
     .to_string();
+    let mut unsupported: serde_json::Value = serde_json::from_str(&binding).unwrap();
+    unsupported["egress"] = json!("internet");
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let python = std::env::var("ALIEN_TEST_PYTHON")
         .expect("set ALIEN_TEST_PYTHON to the wheel's interpreter");
@@ -591,6 +593,7 @@ async fn language_bindings_preserve_egress_requests_against_local() {
             .arg(root.join(script))
             .env("ALIEN_DEPLOYMENT_TYPE", "local")
             .env("ALIEN_EGRESS_TEST_BINDING", &binding)
+            .env("ALIEN_EGRESS_UNSUPPORTED_BINDING", unsupported.to_string())
             .output()
             .await
             .expect("language process starts");

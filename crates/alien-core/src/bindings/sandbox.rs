@@ -42,7 +42,7 @@ pub enum SandboxEgressBinding {
     Gateway(SandboxEgressGateway),
     /// Legacy declaration; no runtime enforcement capability is implied.
     Policy(SandboxEgress),
-    /// Migrated legacy allowDomains policy, retained in durable controller state.
+    /// Default policy for a new Internet declaration, retained in controller state.
     Defaults {
         #[serde(rename = "defaultPolicy")]
         default_policy: EgressPolicy,
@@ -58,7 +58,7 @@ impl SandboxEgressBinding {
             Self::Defaults { .. } => &SandboxEgress::Internet,
         }
     }
-    /// Default preserved from a released allowDomains binding or declaration.
+    /// Default runtime policy for an Internet declaration.
     pub fn default_policy(&self) -> Option<&EgressPolicy> {
         match self {
             Self::Defaults { default_policy } => Some(default_policy),
@@ -87,20 +87,11 @@ impl<'de> Deserialize<'de> for SandboxEgressBinding {
                 #[serde(rename = "defaultPolicy")]
                 default_policy: EgressPolicy,
             },
-            Legacy(Legacy),
-        }
-        #[derive(Deserialize)]
-        #[serde(tag = "mode", rename_all = "camelCase", deny_unknown_fields)]
-        enum Legacy {
-            AllowDomains { domains: Vec<String> },
         }
         Ok(match Input::deserialize(deserializer)? {
             Input::Gateway(value) => Self::Gateway(value),
             Input::Policy(value) => Self::Policy(value),
             Input::Defaults { default_policy } => Self::Defaults { default_policy },
-            Input::Legacy(Legacy::AllowDomains { domains }) => Self::Defaults {
-                default_policy: EgressPolicy::Allow { allow: domains },
-            },
         })
     }
 }
@@ -110,7 +101,7 @@ impl From<&crate::Sandbox> for SandboxEgressBinding {
             Some(default_policy) => Self::Defaults {
                 default_policy: default_policy.clone(),
             },
-            None => Self::Policy(value.egress),
+            None => Self::Policy(value.egress.clone()),
         }
     }
 }

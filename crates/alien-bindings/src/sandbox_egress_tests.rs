@@ -346,27 +346,35 @@ async fn linked_container_resolves_both_gateway_ports_without_storing_an_address
         },
         [(
             "sandbox-egress-gateway".into(),
-            serde_json::to_value(alien_core::bindings::ContainerBinding::local(
-                "gateway",
-                "http://gateway.internal:8080",
-            ))
+            serde_json::to_value(
+                alien_core::bindings::ContainerBinding::local(
+                    "gateway",
+                    "http://gateway.internal:8080",
+                )
+                .with_internal_urls(std::collections::HashMap::from([
+                    (3128, "http://proxy.internal:3128".to_string().into()),
+                    (3129, "http://admin.internal:3129".to_string().into()),
+                ])),
+            )
             .unwrap(),
         )]
         .into(),
     )
     .unwrap();
     let container = provider.load_container(&h.config.container).await.unwrap();
+    let urls = container.get_internal_urls();
     let manager = SandboxEgressManager::new(
         h.config.clone(),
         h.vault.clone(),
-        container.get_internal_url(),
+        &urls[&3128],
+        &urls[&3129],
     )
     .unwrap();
-    assert_eq!(manager.gateway, "gateway.internal:3128");
-    assert_eq!(manager.admin_url, "http://gateway.internal:3129/");
+    assert_eq!(manager.gateway, "proxy.internal:3128");
+    assert_eq!(manager.admin_url, "http://admin.internal:3129/");
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&manager.bootstrap_payload()).unwrap()["gateway"],
-        "gateway.internal:3128"
+        "proxy.internal:3128"
     );
     for invalid in [
         "http://user:secret@gateway",
@@ -374,6 +382,12 @@ async fn linked_container_resolves_both_gateway_ports_without_storing_an_address
         "file:///tmp/gateway",
         "http://gateway?token=secret",
     ] {
-        assert!(SandboxEgressManager::new(h.config.clone(), h.vault.clone(), invalid).is_err());
+        assert!(SandboxEgressManager::new(
+            h.config.clone(),
+            h.vault.clone(),
+            invalid,
+            &urls[&3129]
+        )
+        .is_err());
     }
 }

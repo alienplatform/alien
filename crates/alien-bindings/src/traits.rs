@@ -1020,6 +1020,11 @@ pub trait Worker: Binding {
 /// A trait for container bindings that enable container-to-container communication
 #[async_trait]
 pub trait Container: Binding {
+    /// Internal URLs for the ports this binding grants access to.
+    fn get_internal_urls(&self) -> std::collections::HashMap<u16, String> {
+        std::collections::HashMap::new()
+    }
+
     /// Get the internal URL for container-to-container communication.
     ///
     /// This returns the internal service discovery URL that other containers

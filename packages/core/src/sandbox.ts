@@ -6,12 +6,14 @@ import {
   type SandboxEgress,
   type SandboxLifecyclePolicy,
   type SandboxLimits,
+  type SandboxPrivilegedSupervisor,
   SandboxSchema,
 } from "./generated/index.js"
 import { type Resource, ResourceBuilder } from "./resource.js"
 
 export type {
   EgressPolicy,
+  LegacySandboxEgress,
   Sandbox as SandboxConfig,
   SandboxCapabilities,
   SandboxCode,
@@ -19,6 +21,7 @@ export type {
   SandboxLifecyclePolicy,
   SandboxLimits,
   SandboxOutputs,
+  SandboxPrivilegedSupervisor,
 } from "./generated/index.js"
 export { SandboxSchema as SandboxConfigSchema } from "./generated/index.js"
 
@@ -70,14 +73,27 @@ export class Sandbox extends ResourceBuilder {
   }
 
   /**
-   * Sets whether the sandbox may access the public internet.
+   * "none" disables outbound networking. "internet" opts into the deployment
+   * gateway, public addresses only, a fixed outbound IP, connection logs and
+   * per-sandbox runtime policies. Opting in requires updating deployment setup.
+   * Legacy object values retain their released backend behavior and do not
+   * opt into the gateway. They are deprecated in favor of the new values.
    */
   public egress(egress: SandboxEgress): this {
     this._config.egress = egress
     return this
   }
 
-  /** Sets the runtime policy used when create omits an explicit policy. */
+  /**
+   * @deprecated Existing supervisor enforcement is preserved. The new
+   * egress("internet") enables gateway enforcement and the supervisor automatically.
+   */
+  public privilegedSupervisor(settings: SandboxPrivilegedSupervisor): this {
+    this._config.privilegedSupervisor = settings
+    return this
+  }
+
+  /** Sets the runtime policy used when create omits one; requires egress("internet"). */
   public defaultPolicy(policy: EgressPolicy): this {
     this._config.defaultPolicy = policy
     return this

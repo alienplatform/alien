@@ -17,6 +17,9 @@ export const ContainerOutputsSchema = z.object({
     "currentReplicas": z.int().min(0).describe("Number of current replicas"),
 "desiredReplicas": z.int().min(0).describe("Desired number of replicas"),
 "internalDns": z.string().describe("Internal DNS name (e.g., \"api.svc\")"),
+"internalUrls": z.optional(z.object({
+    
+    }).catchall(z.string()).describe("Internal URLs keyed by port for cluster members and linking resources.")),
 "name": z.string().describe("Container name in the managed container backend"),
 "publicEndpoints": z.optional(z.object({
     

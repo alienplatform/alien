@@ -6,6 +6,7 @@
 
 use super::BindingValue;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Represents a container binding for container-to-container or external communication
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -30,6 +31,13 @@ pub struct HorizonContainerBinding {
     /// Optional public URL (if exposed publicly via load balancer)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub public_url: Option<BindingValue<String>>,
+    /// Internal URLs keyed by port, available to every linking resource.
+    #[serde(
+        default,
+        skip_serializing_if = "HashMap::is_empty",
+        deserialize_with = "deserialize_internal_urls"
+    )]
+    pub internal_urls: HashMap<u16, BindingValue<String>>,
 }
 
 /// Kubernetes container binding configuration
@@ -47,6 +55,13 @@ pub struct KubernetesContainerBinding {
     /// Optional public URL if container is exposed publicly
     #[serde(skip_serializing_if = "Option::is_none")]
     pub public_url: Option<BindingValue<String>>,
+    /// Internal URLs keyed by port, available to every linking resource.
+    #[serde(
+        default,
+        skip_serializing_if = "HashMap::is_empty",
+        deserialize_with = "deserialize_internal_urls"
+    )]
+    pub internal_urls: HashMap<u16, BindingValue<String>>,
 }
 
 /// Local Docker container binding configuration
@@ -60,6 +75,30 @@ pub struct LocalContainerBinding {
     /// Optional public URL (localhost with mapped port, e.g., "http://localhost:62844")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub public_url: Option<BindingValue<String>>,
+    /// Internal URLs keyed by port, available to every linking resource.
+    #[serde(
+        default,
+        skip_serializing_if = "HashMap::is_empty",
+        deserialize_with = "deserialize_internal_urls"
+    )]
+    pub internal_urls: HashMap<u16, BindingValue<String>>,
+}
+
+// Internally tagged bindings buffer map keys as strings; parse ports explicitly.
+fn deserialize_internal_urls<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<u16, BindingValue<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    HashMap::<String, BindingValue<String>>::deserialize(deserializer)?
+        .into_iter()
+        .map(|(port, url)| {
+            port.parse::<u16>()
+                .map(|port| (port, url))
+                .map_err(serde::de::Error::custom)
+        })
+        .collect()
 }
 
 impl ContainerBinding {
@@ -72,6 +111,7 @@ impl ContainerBinding {
             container_name: container_name.into(),
             internal_url: internal_url.into(),
             public_url: None,
+            internal_urls: HashMap::new(),
         })
     }
 
@@ -85,6 +125,7 @@ impl ContainerBinding {
             container_name: container_name.into(),
             internal_url: internal_url.into(),
             public_url: Some(public_url.into()),
+            internal_urls: HashMap::new(),
         })
     }
 
@@ -97,6 +138,7 @@ impl ContainerBinding {
             container_name: container_name.into(),
             internal_url: internal_url.into(),
             public_url: None,
+            internal_urls: HashMap::new(),
         })
     }
 
@@ -110,6 +152,7 @@ impl ContainerBinding {
             container_name: container_name.into(),
             internal_url: internal_url.into(),
             public_url: Some(public_url.into()),
+            internal_urls: HashMap::new(),
         })
     }
 
@@ -126,6 +169,7 @@ impl ContainerBinding {
             service_name: service_name.into(),
             service_port: service_port.into(),
             public_url: None,
+            internal_urls: HashMap::new(),
         })
     }
 
@@ -143,7 +187,27 @@ impl ContainerBinding {
             service_name: service_name.into(),
             service_port: service_port.into(),
             public_url: Some(public_url.into()),
+            internal_urls: HashMap::new(),
         })
+    }
+
+    /// Internal URLs keyed by declared port.
+    pub fn internal_urls(&self) -> &HashMap<u16, BindingValue<String>> {
+        match self {
+            Self::Horizon(binding) => &binding.internal_urls,
+            Self::Kubernetes(binding) => &binding.internal_urls,
+            Self::Local(binding) => &binding.internal_urls,
+        }
+    }
+
+    /// Sets the internal URLs supplied by the backend.
+    pub fn with_internal_urls(mut self, endpoints: HashMap<u16, BindingValue<String>>) -> Self {
+        match &mut self {
+            Self::Horizon(binding) => binding.internal_urls = endpoints,
+            Self::Kubernetes(binding) => binding.internal_urls = endpoints,
+            Self::Local(binding) => binding.internal_urls = endpoints,
+        }
+        self
     }
 
     /// Gets the internal URL for any platform
