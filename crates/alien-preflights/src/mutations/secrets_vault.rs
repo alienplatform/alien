@@ -8,7 +8,7 @@ use alien_core::vault_naming;
 use alien_core::{
     ComputeCluster, ComputeKind, Container, Daemon, DeploymentConfig, ExposeProtocol, Platform,
     Postgres, RemoteStackManagement, ResourceEntry, ResourceLifecycle, ResourceRef, SecretDelivery,
-    Stack, StackState, Vault, Worker, DEPLOYER_SECRETS_VAULT_ID,
+    ServiceAccount, Stack, StackState, Vault, Worker, DEPLOYER_SECRETS_VAULT_ID,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
@@ -156,15 +156,16 @@ impl StackMutation for DeployerSecretsVaultMutation {
     }
 
     fn should_run(&self, stack: &Stack, state: &StackState, config: &DeploymentConfig) -> bool {
-        alien_core::deployer_secret_slots(
-            &stack.inputs,
-            &config.input_values,
-            config.stored_secret_input_ids.as_deref(),
-            &config.environment_variables.variables,
-            state.platform,
-        )
-        .iter()
-        .any(|slot| !slot.has_stored_value)
+        state.resources.contains_key(DEPLOYER_SECRETS_VAULT_ID)
+            || alien_core::deployer_secret_slots(
+                &stack.inputs,
+                &config.input_values,
+                config.stored_secret_input_ids.as_deref(),
+                &config.environment_variables.variables,
+                state.platform,
+            )
+            .iter()
+            .any(|slot| !slot.has_stored_value)
             || (state.platform == Platform::Aws
                 && stack
                     .permissions
@@ -188,7 +189,8 @@ impl StackMutation for DeployerSecretsVaultMutation {
         )
         .iter()
         .any(|slot| !slot.has_stored_value);
-        if !has_native_slots {
+        let installed_vault = state.resources.contains_key(DEPLOYER_SECRETS_VAULT_ID);
+        if !has_native_slots && !installed_vault {
             if state.platform == Platform::Aws {
                 // Install future-slot protection even before the first native
                 // input is declared, without creating an unnecessary vault.
@@ -201,7 +203,32 @@ impl StackMutation for DeployerSecretsVaultMutation {
             .into_iter()
             .any(|platform| runs_on_platform_or_base(state, config, platform))
         {
-            deployer_secret_keys_by_profile(&stack, config, state.platform)?
+            let mut keys = deployer_secret_keys_by_profile(&stack, config, state.platform)?;
+            if installed_vault {
+                // Setup packages declare slot access before stored input values are known.
+                // Delivery can change without changing the IAM policy setup installed.
+                // Retain only an exact canonical grant for this profile's current mappings;
+                // new or remapped slots still go through ordinary compatibility checks.
+                for (profile, declared_keys) in
+                    declared_deployer_secret_grant_candidates(&stack, state.platform)
+                {
+                    let installed = state
+                        .resources
+                        .get(&format!("{profile}-sa"))
+                        .filter(|resource| resource.lifecycle == Some(ResourceLifecycle::Frozen))
+                        .and_then(|resource| resource.config.downcast_ref::<ServiceAccount>())
+                        .and_then(|account| {
+                            account
+                                .resource_permission_sets
+                                .get(DEPLOYER_SECRETS_VAULT_ID)
+                        });
+                    let declared = deployer_secrets_read_permission_set(&declared_keys)?;
+                    if installed.is_some_and(|grants| grants.contains(&declared)) {
+                        keys.insert(profile, declared_keys);
+                    }
+                }
+            }
+            keys
         } else {
             BTreeMap::new()
         };
@@ -571,6 +598,56 @@ fn deployer_secret_keys_by_profile(
         .collect())
 }
 
+/// Candidate grants only: stored-only mappings need not satisfy vault delivery's
+/// identity rules. A shared profile is a candidate only when all its workloads
+/// have identical declared mappings; an exact installed grant must still match.
+fn declared_deployer_secret_grant_candidates(
+    stack: &Stack,
+    platform: Platform,
+) -> BTreeMap<String, BTreeSet<String>> {
+    let slots = alien_core::deployer_secret_slots(
+        &stack.inputs,
+        &Default::default(),
+        Some(&[]),
+        &[],
+        platform,
+    );
+    let mut candidates: BTreeMap<String, Option<BTreeSet<String>>> = BTreeMap::new();
+    for (id, entry) in &stack.resources {
+        let profile = if let Some(worker) = entry.config.downcast_ref::<Worker>() {
+            Some(&worker.permissions)
+        } else if let Some(container) = entry.config.downcast_ref::<Container>() {
+            Some(&container.permissions)
+        } else {
+            entry
+                .config
+                .downcast_ref::<Daemon>()
+                .and_then(|daemon| daemon.permissions.as_ref())
+        };
+        let Some(profile) = profile else { continue };
+        let keys = slots
+            .iter()
+            .filter(|slot| slot.input.env.iter().any(|mapping| mapping.targets(id)))
+            .map(|slot| slot.vault_key.clone())
+            .collect();
+        candidates
+            .entry(profile.clone())
+            .and_modify(|candidate| {
+                if candidate.as_ref() != Some(&keys) {
+                    *candidate = None;
+                }
+            })
+            .or_insert(Some(keys));
+    }
+    candidates
+        .into_iter()
+        .filter_map(|(profile, keys)| {
+            keys.filter(|keys| !keys.is_empty())
+                .map(|keys| (profile, keys))
+        })
+        .collect()
+}
+
 /// Id of the inline permission set that reads a profile's deployer secret slots.
 const DEPLOYER_SECRETS_READ_ID: &str = "vault/deployer-secrets-read";
 
@@ -785,14 +862,15 @@ fn add_vault_permissions_to_management(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compatibility::PermissionProfilesUnchangedCheck;
+    use crate::compatibility::{FrozenResourcesUnchangedCheck, PermissionProfilesUnchangedCheck};
+    use crate::mutations::service_account::ServiceAccountMutation;
     use crate::StackCompatibilityCheck;
     use alien_core::permissions::{ManagementPermissions, PermissionsConfig};
     use alien_core::{
         Container, ContainerCode, EnvironmentVariablesSnapshot, ExternalBindings, Platform,
         ResourceEntry, ResourceLifecycle, ResourceSpec, StackInputDefinition,
-        StackInputEnvironmentMapping, StackInputKind, StackInputProvider, StackSettings,
-        StackState, Worker, WorkerCode,
+        StackInputEnvironmentMapping, StackInputKind, StackInputProvider, StackResourceState,
+        StackSettings, StackState, Worker, WorkerCode,
     };
     use indexmap::IndexMap;
 
@@ -2146,6 +2224,202 @@ mod tests {
             .await
             .unwrap();
         assert!(deployer_secrets_read_set(&result, "shared").is_some());
+    }
+
+    #[tokio::test]
+    async fn imported_slot_grants_survive_stored_input_edits() {
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            let mut stack = deployer_secret_stack(&[("api", "api-profile")], &["api"]);
+            stack.inputs[0].provided_by =
+                vec![StackInputProvider::Developer, StackInputProvider::Deployer];
+            for id in ["searchKey", "modelKey"] {
+                let mut input = stack.inputs[0].clone();
+                input.id = id.to_string();
+                input.env[0].name = format!("{id}_ENV");
+                stack.inputs.push(input);
+            }
+            let mut state = StackState::new(platform);
+            let setup_config = deployer_secret_config();
+            let setup = DeployerSecretsVaultMutation
+                .mutate(stack.clone(), &state, &setup_config)
+                .await
+                .unwrap();
+            let setup = ServiceAccountMutation
+                .mutate(setup, &state, &setup_config)
+                .await
+                .unwrap();
+            for (id, entry) in &setup.resources {
+                if entry.lifecycle == ResourceLifecycle::Frozen {
+                    let mut resource = StackResourceState::new_pending(
+                        entry.config.resource_type().to_string(),
+                        entry.config.clone(),
+                        Some(entry.lifecycle),
+                        entry.dependencies.clone(),
+                    );
+                    resource.status = alien_core::ResourceStatus::Running;
+                    state.resources.insert(id.clone(), resource);
+                }
+            }
+            // The package imports three slots. The first apply has two stored developer
+            // values; an input PATCH supplies the third before any release is installed.
+            for stored_ids in [
+                vec!["apiKey", "modelKey"],
+                vec!["apiKey", "modelKey", "searchKey"],
+                vec![],
+            ] {
+                let mut config = deployer_secret_config();
+                config.stored_secret_input_ids =
+                    Some(stored_ids.iter().map(|id| id.to_string()).collect());
+                assert!(DeployerSecretsVaultMutation.should_run(&stack, &state, &config));
+                let updated = DeployerSecretsVaultMutation
+                    .mutate(stack.clone(), &state, &config)
+                    .await
+                    .unwrap();
+                let updated = ServiceAccountMutation
+                    .mutate(updated, &state, &config)
+                    .await
+                    .unwrap();
+                assert_eq!(updated.permissions.profiles, setup.permissions.profiles);
+                assert_eq!(
+                    updated.resources["api-profile-sa"].config,
+                    setup.resources["api-profile-sa"].config
+                );
+                assert!(updated.resources.contains_key(DEPLOYER_SECRETS_VAULT_ID));
+                for result in [
+                    PermissionProfilesUnchangedCheck
+                        .check_with_config(&setup, &updated, &config)
+                        .await
+                        .unwrap(),
+                    FrozenResourcesUnchangedCheck { platform }
+                        .check_with_config(&setup, &updated, &config)
+                        .await
+                        .unwrap(),
+                ] {
+                    assert!(
+                        result.errors.is_empty(),
+                        "{platform:?}: {:?}",
+                        result.errors
+                    );
+                }
+            }
+            let mut added = stack.clone();
+            let mut input = added.inputs[0].clone();
+            input.id = "newKey".to_string();
+            added.inputs.push(input);
+            let updated = DeployerSecretsVaultMutation
+                .mutate(added, &state, &setup_config)
+                .await
+                .unwrap();
+            let result = PermissionProfilesUnchangedCheck
+                .check_with_config(&setup, &updated, &setup_config)
+                .await
+                .unwrap();
+            assert!(!result.errors.is_empty(), "a new slot still requires setup");
+
+            let mut moved = stack;
+            moved
+                .resources
+                .get_mut("api")
+                .unwrap()
+                .config
+                .downcast_mut::<Container>()
+                .unwrap()
+                .permissions = "replacement".to_string();
+            moved
+                .permissions
+                .profiles
+                .insert("replacement".to_string(), PermissionProfile::new());
+            let updated = DeployerSecretsVaultMutation
+                .mutate(moved, &state, &setup_config)
+                .await
+                .unwrap();
+            let updated = ServiceAccountMutation
+                .mutate(updated, &state, &setup_config)
+                .await
+                .unwrap();
+            let result = FrozenResourcesUnchangedCheck { platform }
+                .check_with_config(&setup, &updated, &setup_config)
+                .await
+                .unwrap();
+            assert!(
+                !result.errors.is_empty(),
+                "moving a slot to another identity still requires setup"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn installed_vault_does_not_turn_stored_only_mappings_into_slots() {
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            for mut stack in [
+                deployer_secret_stack(&[("api", "shared"), ("web", "shared")], &["api"]),
+                secret_daemon_stack(),
+            ] {
+                stack.inputs[0]
+                    .provided_by
+                    .push(StackInputProvider::Developer);
+                let unrelated = deployer_secret_stack(&[("other", "other-profile")], &["other"]);
+                let mut native = unrelated.inputs[0].clone();
+                native.id = "nativeKey".to_string();
+                stack.inputs.push(native);
+                stack.resources.extend(unrelated.resources);
+                stack
+                    .permissions
+                    .profiles
+                    .extend(unrelated.permissions.profiles);
+                let mut config = deployer_secret_config();
+                config.stored_secret_input_ids = Some(vec!["apiKey".to_string()]);
+                let mut state = StackState::new(platform);
+                let setup = DeployerSecretsVaultMutation
+                    .mutate(stack.clone(), &state, &config)
+                    .await
+                    .unwrap();
+                let setup = ServiceAccountMutation
+                    .mutate(setup, &state, &config)
+                    .await
+                    .unwrap();
+                for (id, entry) in &setup.resources {
+                    if entry.lifecycle == ResourceLifecycle::Frozen {
+                        state.resources.insert(
+                            id.clone(),
+                            StackResourceState::new_pending(
+                                entry.config.resource_type().to_string(),
+                                entry.config.clone(),
+                                Some(entry.lifecycle),
+                                entry.dependencies.clone(),
+                            ),
+                        );
+                    }
+                }
+                assert!(state.resources.contains_key(DEPLOYER_SECRETS_VAULT_ID));
+                let updated = DeployerSecretsVaultMutation
+                    .mutate(stack.clone(), &state, &config)
+                    .await
+                    .expect("stored-only mappings keep their existing delivery rules");
+                let updated = ServiceAccountMutation
+                    .mutate(updated, &state, &config)
+                    .await
+                    .unwrap();
+                assert_eq!(updated.permissions.profiles, setup.permissions.profiles);
+                let compatibility = FrozenResourcesUnchangedCheck { platform }
+                    .check_with_config(&setup, &updated, &config)
+                    .await
+                    .unwrap();
+                assert!(
+                    compatibility.errors.is_empty(),
+                    "{:?}",
+                    compatibility.errors
+                );
+                config.stored_secret_input_ids = Some(vec![]);
+                assert!(
+                    DeployerSecretsVaultMutation
+                        .mutate(stack, &state, &config)
+                        .await
+                        .is_err(),
+                    "actual native delivery still requires valid workload identities and mappings"
+                );
+            }
+        }
     }
 
     /// A deployment installed before deployer secrets were vault-native still
