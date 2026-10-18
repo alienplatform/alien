@@ -518,6 +518,10 @@ mod tests {
 
 #[async_trait]
 impl DeploymentStore for SqliteDeploymentStore {
+    fn supports_acquire_exclusions(&self) -> bool {
+        true
+    }
+
     async fn create_deployment(
         &self,
         caller: &crate::auth::Subject,

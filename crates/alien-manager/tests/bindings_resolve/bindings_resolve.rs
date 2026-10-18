@@ -24,7 +24,15 @@ impl CredentialResolver for RemoteAwsCredentialResolver {
 }
 
 async fn persist_remote_storage_state(fixture: &Fixture) {
-    let mut stack_state = StackState::new(Platform::Aws);
+    let platform = fixture
+        .state
+        .deployment_store
+        .get_deployment(&Subject::system(), &fixture.deployment_a)
+        .await
+        .unwrap()
+        .unwrap()
+        .platform;
+    let mut stack_state = StackState::new(platform);
     stack_state.resources.insert(
         "files".to_string(),
         StackResourceState::builder()
@@ -39,10 +47,11 @@ async fn persist_remote_storage_state(fixture: &Fixture) {
                 encryption_key: None,
             }))
             .maybe_lifecycle(Some(ResourceLifecycle::Frozen))
-            .maybe_remote_binding_params(Some(serde_json::json!({
-                "service": "s3",
-                "bucketName": "remote-files",
-            })))
+            .maybe_remote_binding_params(Some(if platform == Platform::Azure {
+                serde_json::json!({"service": "blob", "accountName": "syntheticstorage", "containerName": "remote-files"})
+            } else {
+                serde_json::json!({"service": "s3", "bucketName": "remote-files"})
+            }))
             .dependencies(Vec::new())
             .build(),
     );
@@ -744,5 +753,104 @@ async fn aws_first_hop_classification_survives_the_binding_route() {
         assert_eq!(body["retryable"], retryable, "AWS {code}: {body}");
         assert!(response.hits_async().await > 0);
         response.delete_async().await;
+    }
+}
+
+struct AzureTokenResolver {
+    config: alien_core::AzureClientConfig,
+}
+
+#[async_trait]
+impl CredentialResolver for AzureTokenResolver {
+    async fn resolve(&self, _: &DeploymentRecord) -> Result<ClientConfig, AlienError> {
+        use alien_azure_clients::AzureClientConfigExt;
+        self.config
+            .get_bearer_token()
+            .await
+            .map_err(|error| error.into_generic())?;
+        Ok(ClientConfig::Azure(Box::new(self.config.clone())))
+    }
+
+    async fn resolve_remote_storage_source(
+        &self,
+        _deployment: &DeploymentRecord,
+        _: &str,
+    ) -> Result<RemoteStorageCredentialSource, AlienError> {
+        Ok(RemoteStorageCredentialSource::Direct(ClientConfig::Azure(
+            Box::new(self.config.clone()),
+        )))
+    }
+}
+
+#[tokio::test]
+async fn azure_token_failures_preserve_cached_lease_retryability_through_binding_route() {
+    let server = httpmock::MockServer::start_async().await;
+    let directory = tempfile::TempDir::new().unwrap();
+    let token_file = directory.path().join("synthetic-token");
+    std::fs::write(&token_file, "synthetic-workload-token").unwrap();
+    for workload_identity in [false, true] {
+        for (status, retryable) in [
+            (400, false),
+            (401, false),
+            (403, false),
+            (429, true),
+            (503, true),
+            (0, true),
+        ] {
+            let response = server
+                .mock_async(|_, then| {
+                    then.status(if status == 0 { 503 } else { status })
+                        .json_body(serde_json::json!({"error": "synthetic token rejection"}));
+                })
+                .await;
+            let endpoint = if status == 0 {
+                "http://127.0.0.1:0".to_string()
+            } else {
+                server.base_url()
+            };
+            let credentials = if workload_identity {
+                alien_core::AzureCredentials::WorkloadIdentity {
+                    client_id: "synthetic-client".to_string(),
+                    tenant_id: "synthetic-tenant".to_string(),
+                    federated_token_file: token_file.to_string_lossy().to_string(),
+                    authority_host: endpoint,
+                }
+            } else {
+                alien_core::AzureCredentials::ManagedIdentity {
+                    client_id: "synthetic-client".to_string(),
+                    identity_endpoint: format!("{endpoint}/token"),
+                    identity_header: "synthetic-header".to_string(),
+                }
+            };
+            let fixture = build_for_platform(
+                Arc::new(AzureTokenResolver {
+                    config: alien_core::AzureClientConfig {
+                        subscription_id: "synthetic-subscription".to_string(),
+                        tenant_id: "synthetic-tenant".to_string(),
+                        region: None,
+                        service_overrides: None,
+                        credentials,
+                    },
+                }),
+                Platform::Azure,
+            )
+            .await;
+            persist_remote_storage_state(&fixture).await;
+            let (http_status, _, body) = post_resolve_binding(
+                &fixture,
+                &fixture.admin_token,
+                resolve_body(&fixture, "files"),
+            )
+            .await;
+            assert!(!http_status.is_success(), "{body}");
+            assert_eq!(
+                body["retryable"], retryable,
+                "Azure workload={workload_identity} HTTP {status}: {body}"
+            );
+            if status != 0 {
+                response.assert_hits_async(1).await;
+            }
+            response.delete_async().await;
+        }
     }
 }

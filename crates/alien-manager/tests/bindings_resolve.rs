@@ -83,7 +83,13 @@ struct Fixture {
 }
 
 async fn build(credential_resolver: Arc<dyn CredentialResolver>) -> Fixture {
-    let platform = Platform::Aws;
+    build_for_platform(credential_resolver, Platform::Aws).await
+}
+
+async fn build_for_platform(
+    credential_resolver: Arc<dyn CredentialResolver>,
+    platform: Platform,
+) -> Fixture {
     let tmp = tempfile::tempdir().unwrap();
     let db_path = tmp.path().join("test.db");
     std::mem::forget(tmp);

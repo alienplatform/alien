@@ -10,7 +10,6 @@ pub(crate) fn classify_credential_error(mut error: AlienError) -> AlienError {
     while let Some(cause) = current {
         retryable = match cause.code.as_str() {
             "REMOTE_ACCESS_DENIED"
-            | "AUTHENTICATION_ERROR"
             | "REMOTE_RESOURCE_NOT_FOUND"
             | "REMOTE_ACCESS_INVALID"
             | "INVALID_CLIENT_CONFIG"
@@ -18,8 +17,10 @@ pub(crate) fn classify_credential_error(mut error: AlienError) -> AlienError {
             "RATE_LIMIT_EXCEEDED"
             | "REMOTE_SERVICE_UNAVAILABLE"
             | "TIMEOUT"
-            | "NETWORK_ERROR"
-            | "HTTP_REQUEST_ERROR" => Some(true),
+            | "HTTP_REQUEST_FAILED" => Some(true),
+            // Authentication wrappers can contain transport failures or token HTTP
+            // responses. Only a wrapper without a more specific cause is permanent.
+            "AUTHENTICATION_ERROR" if cause.source.is_none() => Some(false),
             "HTTP_RESPONSE_ERROR" | "REMOTE_REQUEST_REJECTED" => cause
                 .context
                 .as_ref()

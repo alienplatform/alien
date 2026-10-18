@@ -353,15 +353,38 @@ impl DeploymentLoop {
                 }
             }
         }
-        filter.excluded_deployment_ids.extend(
-            self.deferred
-                .lock()
-                .expect("deferred poisoned")
-                .keys()
-                .cloned(),
-        );
-        filter.excluded_deployment_ids.sort();
-        filter.excluded_deployment_ids.dedup();
+        let deferred_ids: std::collections::HashSet<String> = self
+            .deferred
+            .lock()
+            .expect("deferred poisoned")
+            .keys()
+            .cloned()
+            .collect();
+        if self.deployment_store.supports_acquire_exclusions() {
+            filter.excluded_deployment_ids.extend(deferred_ids);
+            filter.excluded_deployment_ids.sort();
+            filter.excluded_deployment_ids.dedup();
+        } else if !deferred_ids.is_empty() {
+            // Preserve the candidate snapshot fallback for stores that cannot
+            // exclude before acquisition. Snapshot at most once per tick; later
+            // batches remove newly deferred IDs from the same inclusion list.
+            if filter.deployment_ids.is_none() {
+                filter.deployment_ids = Some(
+                    self.deployment_store
+                        .list_deployments(caller, filter)
+                        .await?
+                        .into_iter()
+                        .map(|record| record.id)
+                        .collect(),
+                );
+            }
+            let ids = filter
+                .deployment_ids
+                .as_mut()
+                .expect("candidate IDs set above");
+            ids.retain(|id| !deferred_ids.contains(id));
+            return Ok(!ids.is_empty());
+        }
         Ok(true)
     }
 
@@ -523,7 +546,6 @@ impl DeploymentLoop {
             }
         }
 
-        let skipped_ids = Mutex::new(Vec::new());
         for batch_index in 0..MAX_ACQUIRE_BATCHES_PER_TICK {
             let session = uuid::Uuid::new_v4().to_string();
 
@@ -550,27 +572,23 @@ impl DeploymentLoop {
                     );
                     stream::iter(acquired)
                         .for_each_concurrent(MAX_CONCURRENT_DEPLOYMENTS, |item| async {
-                            let deployment_id = item.deployment.id.clone();
-                            let skipped = self
-                                .process_deployment(
-                                    item.deployment,
-                                    item.execution_claim,
-                                    &session,
-                                    ProcessOptions::deployment_tick(),
-                                )
-                                .await;
-                            if skipped {
-                                skipped_ids
-                                    .lock()
-                                    .expect("skipped IDs poisoned")
-                                    .push(deployment_id);
-                            }
+                            self.process_deployment(
+                                item.deployment,
+                                item.execution_claim,
+                                &session,
+                                ProcessOptions::deployment_tick(),
+                            )
+                            .await;
                         })
                         .await;
-                    let skipped = skipped_ids.lock().expect("skipped IDs poisoned").clone();
-                    filter.excluded_deployment_ids.extend(skipped);
-                    filter.excluded_deployment_ids.sort();
-                    filter.excluded_deployment_ids.dedup();
+                    match self.exclude_deferred(&caller, &mut filter, false).await {
+                        Ok(true) => {}
+                        Ok(false) => break,
+                        Err(error) => {
+                            error!(%error, "Failed to filter remaining deployment candidates");
+                            break;
+                        }
+                    }
                 }
                 Err(e) => {
                     error!(error = %e, "Failed to acquire deployments");
@@ -1603,12 +1621,71 @@ fn has_remote_stack_management_outputs(stack_state: &alien_core::StackState) -> 
     })
 }
 
+/// Newly granted GCP target-SA permissions can take minutes to propagate after setup.
+/// Limit this exception to the first provisioning and the target impersonation hop.
+fn is_initial_gcp_iam_propagation(deployment: &DeploymentRecord, error: &AlienError) -> bool {
+    if deployment.platform != Platform::Gcp
+        || parse_status(&deployment.status) != DeploymentStatus::Provisioning
+        || deployment.current_release_id.is_some()
+    {
+        return false;
+    }
+    let target_email = deployment.stack_state.as_ref().and_then(|stack| {
+        stack
+            .resources
+            .values()
+            .filter(|resource| resource.resource_type == "remote-stack-management")
+            .find_map(|resource| {
+                resource
+                    .outputs
+                    .as_ref()?
+                    .downcast_ref::<alien_core::RemoteStackManagementOutputs>()
+            })
+            .map(|outputs| outputs.access_configuration.as_str())
+    });
+    let Some(target_email) = target_email else {
+        return false;
+    };
+    let target_operation = format!("{target_email}:generateAccessToken");
+    let mut handoff = false;
+    let mut cause = Some(error);
+    while let Some(error) = cause {
+        handoff |= error.code == "REMOTE_CREDENTIAL_HANDOFF_FAILED";
+        if handoff && error.code == "HTTP_RESPONSE_ERROR" {
+            if let Some(context) = error.context.as_ref() {
+                let is_target_request = context
+                    .get("url")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(|url| url::Url::parse(url).ok())
+                    .is_some_and(|url| {
+                        url.path().rsplit('/').next().is_some_and(|operation| {
+                            urlencoding::decode(operation)
+                                .is_ok_and(|operation| operation == target_operation)
+                        })
+                    });
+                if context
+                    .get("http_status")
+                    .and_then(serde_json::Value::as_u64)
+                    == Some(403)
+                    && is_target_request
+                {
+                    return true;
+                }
+            }
+        }
+        cause = error.source.as_deref();
+    }
+    false
+}
+
 fn credential_error_retry_remaining(
     deployment: &DeploymentRecord,
     error: &AlienError,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Option<Duration> {
-    if !error.retryable || parse_status(&deployment.status).is_failed() {
+    if parse_status(&deployment.status).is_failed()
+        || (!error.retryable && !is_initial_gcp_iam_propagation(deployment, error))
+    {
         return None;
     }
     credential_retry_remaining(deployment, now)
@@ -2528,6 +2605,14 @@ mod tests {
 
         impl Fixture {
             async fn new(status: DeploymentStatus, error: AlienError) -> Self {
+                Self::new_for_platform(status, error, Platform::Local).await
+            }
+
+            async fn new_for_platform(
+                status: DeploymentStatus,
+                error: AlienError,
+                platform: Platform,
+            ) -> Self {
                 let directory = TempDir::new().unwrap();
                 let db_path = directory.path().join("manager.db");
                 let credentials = Arc::new(Credentials {
@@ -2561,7 +2646,7 @@ mod tests {
                         crate::traits::release_store::CreateReleaseParams {
                             project_id: "default".to_string(),
                             stacks: HashMap::from([(
-                                Platform::Local,
+                                platform,
                                 Stack::new("test".to_string()).build(),
                             )]),
                             git_commit_sha: None,
@@ -2578,14 +2663,14 @@ mod tests {
                         CreateDeploymentParams {
                             name: "credential-retry".to_string(),
                             deployment_group_id: "dg_test".to_string(),
-                            platform: Platform::Local,
+                            platform,
                             deployment_protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
                             base_platform: None,
                             stack_settings: StackSettings {
                                 deployment_model: alien_core::DeploymentModel::Push,
                                 ..Default::default()
                             },
-                            stack_state: Some(StackState::new(Platform::Local)),
+                            stack_state: Some(StackState::new(platform)),
                             environment_variables: None,
                             public_subdomain: None,
                             input_values: Default::default(),
@@ -2700,6 +2785,218 @@ mod tests {
                 http_response_text: None,
             })
             .into_generic()
+        }
+
+        #[tokio::test]
+        async fn unsupported_exclusions_preserve_batches_without_reacquiring_deferred_work() {
+            for status in [DeploymentStatus::UpdatePending, DeploymentStatus::Running] {
+                let fixture = Fixture::new(status, transient_error()).await;
+                let record = fixture.record().await;
+                let records = Arc::new(Mutex::new(
+                    (0..8)
+                        .map(|index| {
+                            let mut record = record.clone();
+                            record.id = format!("candidate-{index}");
+                            (record.id.clone(), record)
+                        })
+                        .collect::<HashMap<_, _>>(),
+                ));
+                let mut store = crate::traits::deployment_store::MockDeploymentStore::new();
+                store
+                    .expect_supports_acquire_exclusions()
+                    .return_const(false);
+                let available = records.clone();
+                store
+                    .expect_acquire()
+                    .times(2)
+                    .returning(move |_, _, filter, limit| {
+                        assert!(filter.excluded_deployment_ids.is_empty());
+                        Ok(available
+                            .lock()
+                            .unwrap()
+                            .values()
+                            .filter(|record| {
+                                filter
+                                    .deployment_ids
+                                    .as_ref()
+                                    .is_none_or(|ids| ids.contains(&record.id))
+                            })
+                            .take(limit as usize)
+                            .map(
+                                |record| crate::traits::deployment_store::AcquiredDeployment {
+                                    deployment: record.clone(),
+                                    execution_claim: None,
+                                },
+                            )
+                            .collect())
+                    });
+                let listed = records.clone();
+                store
+                    .expect_list_deployments()
+                    .times(1)
+                    .returning(move |_, _| Ok(listed.lock().unwrap().values().cloned().collect()));
+                let saved = records.clone();
+                store.expect_reconcile().times(8).returning(move |_, data| {
+                    let mut records = saved.lock().unwrap();
+                    let record = records.get_mut(&data.deployment_id).unwrap();
+                    record.runtime_metadata = data.state.runtime_metadata;
+                    Ok(crate::traits::deployment_store::ReconcileOutcome {
+                        record: record.clone(),
+                        target_operations_bundle_set: None,
+                        target_dynamic_containers: None,
+                    })
+                });
+                store
+                    .expect_get_deployment()
+                    .returning(move |_, id| Ok(records.lock().unwrap().get(id).cloned()));
+                store
+                    .expect_release()
+                    .times(8)
+                    .returning(|_, _, _, _| Ok(()));
+                let store = Arc::new(store);
+                let mut runner = fixture.runner();
+                runner.deployment_store = store.clone();
+                if status == DeploymentStatus::Running {
+                    crate::loops::heartbeat::HeartbeatLoop::new(
+                        fixture.manager.config.clone(),
+                        store,
+                        Arc::new(runner),
+                    )
+                    .tick()
+                    .await;
+                } else {
+                    runner.tick().await;
+                }
+                assert_eq!(fixture.credentials.visits.load(Ordering::SeqCst), 8);
+            }
+        }
+
+        #[tokio::test]
+        async fn first_gcp_provisioning_waits_for_target_iam_but_other_phases_fail_fast() {
+            let error = gcp_target_iam_denial().await;
+            for (status, installed) in [
+                (DeploymentStatus::Provisioning, false),
+                (DeploymentStatus::Provisioning, true),
+                (DeploymentStatus::UpdatePending, false),
+                (DeploymentStatus::Running, true),
+            ] {
+                let fixture = Fixture::new_for_platform(status, error.clone(), Platform::Gcp).await;
+                let stack = gcp_stack_with_target_identity();
+                let encoded = serde_json::to_string(&stack).unwrap().replace('\'', "''");
+                fixture
+                    .db
+                    .execute(&format!(
+                        "UPDATE deployments SET stack_state = '{encoded}'{}",
+                        if installed {
+                            ""
+                        } else {
+                            ", current_release_id = NULL"
+                        }
+                    ))
+                    .await
+                    .unwrap();
+                fixture.process(&fixture.runner()).await;
+                if status == DeploymentStatus::Provisioning && !installed {
+                    assert_eq!(fixture.record().await.status, "provisioning");
+                    for minutes in [8, 11] {
+                        let mut metadata = fixture.record().await.runtime_metadata.unwrap();
+                        metadata.credential_retry.as_mut().unwrap().started_at =
+                            Utc::now() - chrono::Duration::minutes(minutes);
+                        let encoded = serde_json::to_string(&metadata)
+                            .unwrap()
+                            .replace('\'', "''");
+                        fixture
+                            .db
+                            .execute(&format!(
+                                "UPDATE deployments SET runtime_metadata = '{encoded}'"
+                            ))
+                            .await
+                            .unwrap();
+                        fixture.process(&fixture.runner()).await;
+                        assert_eq!(
+                            fixture.record().await.status,
+                            if minutes == 8 {
+                                "provisioning"
+                            } else {
+                                "provisioning-failed"
+                            }
+                        );
+                    }
+                } else {
+                    assert!(parse_status(&fixture.record().await.status).is_failed());
+                }
+                assert_eq!(
+                    fixture.record().await.error.unwrap(),
+                    serde_json::to_value(&error).unwrap()
+                );
+            }
+        }
+
+        #[tokio::test]
+        async fn azure_token_endpoint_failures_reach_the_real_loop() {
+            use alien_azure_clients::AzureClientConfigExt;
+            let server = httpmock::MockServer::start_async().await;
+            let mut config = alien_core::AzureClientConfig {
+                subscription_id: "synthetic-subscription".to_string(),
+                tenant_id: "synthetic-tenant".to_string(),
+                region: None,
+                service_overrides: None,
+                credentials: alien_core::AzureCredentials::ManagedIdentity {
+                    client_id: "synthetic-client".to_string(),
+                    identity_endpoint: server.url("/token"),
+                    identity_header: "synthetic-header".to_string(),
+                },
+            };
+            for (status, retryable) in [
+                (400, false),
+                (401, false),
+                (403, false),
+                (429, true),
+                (503, true),
+                (0, true),
+            ] {
+                let response = server
+                    .mock_async(|when, then| {
+                        when.method(httpmock::Method::GET).path("/token");
+                        then.status(if status == 0 { 503 } else { status })
+                            .json_body(serde_json::json!({"error": "synthetic rejection"}));
+                    })
+                    .await;
+                if status == 0 {
+                    config.credentials = alien_core::AzureCredentials::ManagedIdentity {
+                        client_id: "synthetic-client".to_string(),
+                        identity_endpoint: "http://127.0.0.1:0/token".to_string(),
+                        identity_header: "synthetic-header".to_string(),
+                    };
+                }
+                let error = config.get_bearer_token().await.unwrap_err().into_generic();
+                assert_eq!(error.code, "AUTHENTICATION_ERROR");
+                let fixture = Fixture::new_for_platform(
+                    DeploymentStatus::UpdatePending,
+                    error.clone(),
+                    Platform::Azure,
+                )
+                .await;
+                fixture.process(&fixture.runner()).await;
+                let record = fixture.record().await;
+                assert_eq!(
+                    record.status,
+                    if retryable {
+                        "update-pending"
+                    } else {
+                        "update-failed"
+                    },
+                    "HTTP {status}: {error}"
+                );
+                assert_eq!(
+                    record.runtime_metadata.unwrap().credential_retry.is_some(),
+                    retryable
+                );
+                if status != 0 {
+                    response.assert_hits_async(1).await;
+                }
+                response.delete_async().await;
+            }
         }
 
         #[tokio::test]
@@ -3257,12 +3554,59 @@ mod tests {
         }
     }
 
-    #[test]
-    fn gcp_provisioning_retries_target_credential_handoff_during_grace_period() {
+    fn gcp_stack_with_target_identity() -> StackState {
+        let mut stack = stack_state_with_remote_management_outputs(true);
+        stack.platform = Platform::Gcp;
+        stack
+            .resources
+            .get_mut("remote-stack-management")
+            .unwrap()
+            .outputs = Some(ResourceOutputs::new(RemoteStackManagementOutputs {
+            management_resource_id: "target@example.invalid".to_string(),
+            access_configuration: "target@example.invalid".to_string(),
+            legacy_remote_bindings_access: None,
+        }));
+        stack
+    }
+
+    async fn gcp_target_iam_denial() -> AlienError {
+        use alien_error::Context;
+        let server = httpmock::MockServer::start_async().await;
+        let response = server.mock_async(|when, then| {
+            when.method(httpmock::Method::POST);
+            then.status(403).json_body(serde_json::json!({"error": {"code": 403, "message": "synthetic target IAM propagation"}}));
+        }).await;
+        let config = alien_core::ClientConfig::Gcp(Box::new(alien_core::GcpClientConfig {
+            project_id: "synthetic-project".to_string(),
+            region: "us-central1".to_string(),
+            project_number: None,
+            credentials: alien_core::GcpCredentials::AccessToken {
+                token: "synthetic-token".to_string(),
+            },
+            service_overrides: Some(alien_core::GcpServiceOverrides {
+                endpoints: HashMap::from([("iamcredentials".to_string(), server.base_url())]),
+            }),
+        }));
+        let stack = gcp_stack_with_target_identity();
+        let error = alien_infra::RemoteAccessResolver::new(HashMap::new())
+            .resolve(config, &stack, None)
+            .await
+            .context(ErrorData::RemoteCredentialHandoffFailed {
+                deployment_id: "dep_test".to_string(),
+                platform: Platform::Gcp,
+            })
+            .unwrap_err()
+            .into_generic();
+        assert!(response.hits_async().await > 0);
+        crate::providers::credential_errors::classify_credential_error(error)
+    }
+
+    #[tokio::test]
+    async fn gcp_provisioning_retries_target_credential_handoff_during_grace_period() {
         let now = Utc::now();
         let mut deployment = deployment_record(
             DeploymentStatus::Provisioning,
-            Some(stack_state_with_remote_management_outputs(true)),
+            Some(gcp_stack_with_target_identity()),
         );
         deployment.platform = Platform::Gcp;
         deployment.runtime_metadata = Some(alien_core::RuntimeMetadata {
@@ -3272,12 +3616,11 @@ mod tests {
             }),
             ..Default::default()
         });
-        let mut error = AlienError::new(ErrorData::RemoteCredentialHandoffFailed {
-            deployment_id: deployment.id.clone(),
-            platform: Platform::Gcp,
-        })
-        .into_generic();
-        error.retryable = true;
+        let error = gcp_target_iam_denial().await;
+        assert!(
+            !error.retryable,
+            "only the first provisioning gets propagation grace"
+        );
 
         let remaining = credential_error_retry_remaining(&deployment, &error, now)
             .expect("fresh GCP handoff failure should remain retryable");
@@ -3286,14 +3629,31 @@ mod tests {
             remaining,
             CREDENTIAL_ERROR_GRACE_PERIOD - Duration::from_secs(2 * 60)
         );
+
+        deployment
+            .stack_state
+            .as_mut()
+            .unwrap()
+            .resources
+            .get_mut("remote-stack-management")
+            .unwrap()
+            .outputs = Some(ResourceOutputs::new(RemoteStackManagementOutputs {
+            management_resource_id: "other@example.invalid".to_string(),
+            access_configuration: "other@example.invalid".to_string(),
+            legacy_remote_bindings_access: None,
+        }));
+        assert!(
+            credential_error_retry_remaining(&deployment, &error, now).is_none(),
+            "only the freshly granted target identity gets propagation grace"
+        );
     }
 
-    #[test]
-    fn gcp_provisioning_handoff_becomes_hard_failure_after_grace_period() {
+    #[tokio::test]
+    async fn gcp_provisioning_handoff_becomes_hard_failure_after_grace_period() {
         let now = Utc::now();
         let mut deployment = deployment_record(
             DeploymentStatus::Provisioning,
-            Some(stack_state_with_remote_management_outputs(true)),
+            Some(gcp_stack_with_target_identity()),
         );
         deployment.platform = Platform::Gcp;
         deployment.runtime_metadata = Some(alien_core::RuntimeMetadata {
@@ -3304,12 +3664,11 @@ mod tests {
             }),
             ..Default::default()
         });
-        let mut error = AlienError::new(ErrorData::RemoteCredentialHandoffFailed {
-            deployment_id: deployment.id.clone(),
-            platform: Platform::Gcp,
-        })
-        .into_generic();
-        error.retryable = true;
+        let error = gcp_target_iam_denial().await;
+        assert!(
+            !error.retryable,
+            "only the first provisioning gets propagation grace"
+        );
 
         assert_eq!(
             credential_error_retry_remaining(&deployment, &error, now,),
