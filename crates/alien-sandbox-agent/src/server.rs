@@ -638,7 +638,7 @@ async fn agent_platform(
         "updateEgress" => {
             #[derive(Deserialize)]
             struct Envelope {
-                token: String,
+                token: Option<String>,
                 policy: String,
                 #[serde(rename = "caCert")]
                 ca_certificate: Option<String>,
@@ -772,7 +772,7 @@ impl axum::response::IntoResponse for ApiError {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct EgressUpdate {
-    token: String,
+    token: Option<String>,
     policy: String,
     #[serde(default)]
     #[serde(rename = "caCert")]
@@ -794,8 +794,11 @@ async fn update_egress(
     if let Some(certificate) = update.ca_certificate {
         egress.install_ca(&certificate)?;
     }
+    let full_delivery = update.token.is_some();
     egress.update(update.token, update.policy).await?;
-    egress.start_image_once(state.exec_identity)?;
+    if full_delivery {
+        egress.start_image_once(state.exec_identity)?;
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 

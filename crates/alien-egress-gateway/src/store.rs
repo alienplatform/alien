@@ -20,7 +20,7 @@ struct Stored {
     record: Arc<Record>,
     policy: Option<Arc<Policy>>,
     bytes: usize,
-    expires: Option<tokio::time::Instant>,
+    expires: Option<u64>,
 }
 #[derive(Default)]
 struct State {
@@ -54,6 +54,11 @@ impl PolicyStore {
             .map_err(|_| AlienError::new(unavailable("policy state lock")))?
             .entries
             .get(&(aud.to_string(), sub.to_string()))
+            .filter(|entry| {
+                !entry
+                    .record
+                    .expired(chrono::Utc::now().timestamp_millis().max(0) as u64)
+            })
             .and_then(|entry| entry.policy.clone())
             .ok_or_else(|| denied("policy missing or deleted"))
     }
@@ -64,6 +69,11 @@ impl PolicyStore {
             .map_err(|_| AlienError::new(unavailable("policy state lock")))?
             .entries
             .get(&(aud.to_string(), sub.to_string()))
+            .filter(|entry| {
+                !entry
+                    .record
+                    .expired(chrono::Utc::now().timestamp_millis().max(0) as u64)
+            })
             .map(|entry| entry.record.claims.ver.clone()))
     }
     pub fn record(&self, aud: &str, sub: &str) -> Result<Option<Arc<Record>>> {
@@ -73,6 +83,11 @@ impl PolicyStore {
             .map_err(|_| AlienError::new(unavailable("policy state lock")))?
             .entries
             .get(&(aud.to_string(), sub.to_string()))
+            .filter(|entry| {
+                !entry
+                    .record
+                    .expired(chrono::Utc::now().timestamp_millis().max(0) as u64)
+            })
             .map(|entry| entry.record.clone()))
     }
     pub fn summary(&self) -> Result<Vec<Summary>> {
@@ -82,6 +97,11 @@ impl PolicyStore {
             .map_err(|_| AlienError::new(unavailable("policy state lock")))?
             .entries
             .values()
+            .filter(|entry| {
+                !entry
+                    .record
+                    .expired(chrono::Utc::now().timestamp_millis().max(0) as u64)
+            })
             .map(|entry| Summary {
                 aud: entry.record.claims.aud.clone(),
                 sub: entry.record.claims.sub.clone(),
@@ -91,16 +111,26 @@ impl PolicyStore {
     }
     pub fn newer_than(&self, versions: &[Summary]) -> Result<Vec<Arc<Record>>> {
         let mut page_bytes = 0;
-        let known: BTreeMap<_, _> = versions
-            .iter()
-            .map(|version| ((version.aud.as_str(), version.sub.as_str()), &version.ver))
-            .collect();
+        let mut known = BTreeMap::new();
+        for version in versions {
+            let current = known
+                .entry((version.aud.as_str(), version.sub.as_str()))
+                .or_insert(&version.ver);
+            if compare_versions(current, &version.ver).is_lt() {
+                *current = &version.ver;
+            }
+        }
         Ok(self
             .state
             .read()
             .map_err(|_| AlienError::new(unavailable("policy state lock")))?
             .entries
             .values()
+            .filter(|entry| {
+                !entry
+                    .record
+                    .expired(chrono::Utc::now().timestamp_millis().max(0) as u64)
+            })
             .filter(|entry| {
                 known
                     .get(&(
@@ -120,16 +150,18 @@ impl PolicyStore {
             .map(|entry| entry.record.clone())
             .collect())
     }
-    /// Expiration only removes tombstones, at least 25 hours after this replica accepted them.
+    /// All replicas use the signed timestamp, so catch-up never extends retention.
     pub fn expire_tombstones(&self) -> Result<()> {
+        self.expire_at(chrono::Utc::now().timestamp_millis().max(0) as u64)
+    }
+    fn expire_at(&self, now: u64) -> Result<()> {
         let mut state = self
             .state
             .write()
             .map_err(|_| AlienError::new(unavailable("policy state lock")))?;
-        let now = tokio::time::Instant::now();
         let mut removed = 0;
         state.entries.retain(|_, entry| {
-            let keep = entry.expires.is_none_or(|expires| expires > now);
+            let keep = entry.expires.is_none_or(|expires| expires >= now);
             if !keep {
                 removed += entry.bytes;
             }
@@ -141,6 +173,16 @@ impl PolicyStore {
 
     /// Apply a verified record; equal and older versions are no-ops on every path.
     pub fn apply(&self, record: Record, only_missing: bool) -> Result<bool> {
+        self.apply_at(
+            record,
+            only_missing,
+            chrono::Utc::now().timestamp_millis().max(0) as u64,
+        )
+    }
+    fn apply_at(&self, record: Record, only_missing: bool, now_ms: u64) -> Result<bool> {
+        if record.expired(now_ms) {
+            return Ok(false);
+        }
         if let Some(policy) = &record.claims.policy {
             canonical(policy)?;
         }
@@ -156,7 +198,7 @@ impl PolicyStore {
             }
             _ => 0,
         };
-        let bytes = policy_bytes
+        let allocated_bytes = policy_bytes
             + record.signed.capacity()
             + record.claims.aud.capacity()
             + record.claims.sub.capacity()
@@ -164,11 +206,24 @@ impl PolicyStore {
             + record.claims.sub.len()
             + record.claims.ver.1.capacity()
             + 512;
+        // Release-load measurements show allocator size classes and fragmentation can
+        // nearly double resident memory. Charge that overhead inside the policy budget,
+        // leaving the other half of the container for connections and transient requests.
+        let bytes = allocated_bytes.saturating_mul(2);
         let key = (record.claims.aud.clone(), record.claims.sub.clone());
         let mut state = self
             .state
             .write()
             .map_err(|_| AlienError::new(unavailable("policy state lock")))?;
+        if state
+            .entries
+            .get(&key)
+            .is_some_and(|entry| entry.expires.is_some_and(|expiry| now_ms > expiry))
+        {
+            if let Some(expired) = state.entries.remove(&key) {
+                state.bytes -= expired.bytes;
+            }
+        }
         let previous_bytes = if let Some(current) = state.entries.get(&key) {
             if only_missing
                 || !crate::record::should_replace(
@@ -190,14 +245,80 @@ impl PolicyStore {
             key,
             Stored {
                 policy: record.claims.policy.clone().map(Arc::new),
-                expires: record.claims.deleted.then(|| {
-                    tokio::time::Instant::now()
-                        + std::time::Duration::from_millis(TOMBSTONE_RETENTION_MS)
-                }),
+                expires: record
+                    .claims
+                    .deleted
+                    .then(|| record.claims.ver.0.saturating_add(TOMBSTONE_RETENTION_MS)),
                 record: Arc::new(record),
                 bytes,
             },
         );
         Ok(true)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::record::Claims;
+
+    #[tokio::test]
+    async fn signed_expiry_is_identical_across_staggered_replicas_and_never_refreshes() {
+        let issued = chrono::Utc::now().timestamp_millis() as u64;
+        let deadline = issued + TOMBSTONE_RETENTION_MS;
+        let record = Record {
+            signed: "verified-by-caller".into(),
+            claims: Claims {
+                v: 1,
+                aud: "p/r".into(),
+                sub: "box".into(),
+                ver: (issued, "0".repeat(32)),
+                policy: None,
+                deleted: true,
+            },
+        };
+        let replicas = [
+            PolicyStore::new(true, 1024 * 1024),
+            PolicyStore::new(true, 1024 * 1024),
+            PolicyStore::new(true, 1024 * 1024),
+        ];
+        for (replica, arrival) in replicas
+            .iter()
+            .zip([issued, issued + 3600_000, deadline - 1])
+        {
+            assert!(replica.apply_at(record.clone(), false, arrival).unwrap());
+            assert_eq!(
+                replica
+                    .state
+                    .read()
+                    .unwrap()
+                    .entries
+                    .values()
+                    .next()
+                    .unwrap()
+                    .expires,
+                Some(deadline)
+            );
+            replica.expire_at(deadline).unwrap();
+            assert_eq!(replica.state.read().unwrap().entries.len(), 1);
+        }
+        for replica in &replicas {
+            assert!(!replica.apply_at(record.clone(), false, deadline).unwrap());
+            replica.expire_at(deadline + 1).unwrap();
+            assert!(replica.state.read().unwrap().entries.is_empty());
+            assert!(!replica
+                .apply_at(record.clone(), false, deadline + 2)
+                .unwrap());
+            assert!(replica.state.read().unwrap().entries.is_empty());
+        }
+        let mut live = record;
+        live.claims.deleted = false;
+        live.claims.policy = Some(Policy::Internet);
+        replicas[0].apply_at(live, false, deadline + 2).unwrap();
+        replicas[0].expire_at(deadline + 100 * 3600_000).unwrap();
+        assert_eq!(
+            *replicas[0].resolve("p/r", "box").await.unwrap(),
+            Policy::Internet
+        );
     }
 }

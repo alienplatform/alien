@@ -59,7 +59,7 @@ impl GatewayEgress {
         *current = Some(record);
         Ok(())
     }
-    async fn policy_request(&self, record: Option<String>) -> Result<u16> {
+    pub(super) async fn policy_request(&self, record: Option<String>) -> Result<u16> {
         let address = self.gateway_address()?;
         let token = self.current_token()?;
         let mut gateway = BufReader::new(self.connect(address).await?);
@@ -237,5 +237,45 @@ mod tests {
         assert_eq!(agent.status().unwrap(), "awaiting-egress-policy");
         agent.path_verified.store(false, Ordering::Release);
         assert!(agent.status().is_err());
+    }
+
+    #[tokio::test]
+    async fn record_only_delivery_preserves_token_and_cannot_release_resume() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let agent = agent(listener.local_addr().unwrap());
+        let token = format!(
+            "e30.{}.eA",
+            URL_SAFE_NO_PAD.encode(br#"{"aud":"p/r","sub":"box"}"#)
+        );
+        *agent.token.write().unwrap() = token.clone();
+        let expected_token = token.clone();
+        let server = tokio::spawn(async move {
+            for status in [200, 200, 403] {
+                let (socket, _) = listener.accept().await.unwrap();
+                let mut socket = BufReader::new(socket);
+                let header = String::from_utf8(read_header(&mut socket).await.unwrap()).unwrap();
+                assert!(header.starts_with("GET /health "));
+                assert!(header.contains(&format!("Proxy-Authorization: Bearer {expected_token}")));
+                socket
+                    .write_all(
+                        format!("HTTP/1.1 {status} Test\r\nContent-Length: 0\r\n\r\n").as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+            }
+        });
+        agent.ready.store(true, Ordering::Release);
+        agent.update(None, record(3)).await.unwrap();
+        assert!(agent.ensure_ready().is_ok());
+        assert_eq!(agent.current_token().unwrap(), token);
+        agent.awaiting_delivery.store(true, Ordering::Release);
+        agent.update(None, record(4)).await.unwrap();
+        assert!(agent.ensure_ready().is_err());
+        assert_eq!(agent.current_token().unwrap(), token);
+        assert!(agent.update(None, record(5)).await.is_err());
+        assert_eq!(*agent.policy.read().unwrap(), Some(record(4)));
+        server.await.unwrap();
+        agent.token.write().unwrap().clear();
+        assert!(agent.update(None, record(6)).await.is_err());
     }
 }

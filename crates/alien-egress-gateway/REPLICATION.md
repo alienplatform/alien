@@ -7,7 +7,7 @@ admin addresses (exclude the current replica). Service discovery uses
 `peers: {"dns": "gateway.svc", "port": 3129}`. Omit `peers` for a single replica.
 `replicaSecret` is a base64-encoded 32-byte secret shared only by gateway replicas.
 The optional `policyMemoryBytes` overrides half the finite cgroup v2 `memory.max`
-limit (512 MiB for a 1 GiB container). Without a finite limit or explicit override,
+limit (256 MiB for the default 512 MiB container). Without a finite limit or explicit override,
 startup fails. Local processes in an unbounded host must set an override.
 
 A record is a compact Ed25519 JWS with `typ: "alien-egress-record"` and the same
@@ -58,9 +58,16 @@ replication failed. The agent never registers after a 403.
 Agent delivery is `PUT /v1/egress` with `{token,policy:"<compact JWS>",caCert?}`;
 the `updateEgress` envelope carries the same fields. Resume checks the physical
 network and waits for a fresh delivery before allowing commands or recovery.
+For a running policy update, `{policy:"<compact JWS>"}` refreshes only the saved
+record, preserving the installed token. It requires an existing identity that
+the gateway still accepts, and cannot release the Resume delivery gate.
 A running agent checks gateway state every five seconds, re-registering only on
-404. The saved record and token remain in supervisor memory. Tombstones expire
-at least 25 hours after local acceptance; live records are never evicted.
+404. The saved record and token remain in supervisor memory. Tombstones expire when `now > ver.millis + 25h + 60s`, independently on each
+replica. Already-expired tombstones are ignored and never forwarded; catch-up
+cannot extend their life. The 25-hour retention exceeds the maximum 24-hour token
+lifetime, and a deleted sandbox never gets a renewed token. Therefore, even if an
+old policy reappears after its tombstone is gone, no valid token can use it. Live
+records are never evicted.
 
 Total loss of every replica also loses version and deletion history. A live
 identity token can therefore re-register an older signed policy while the entry
@@ -70,3 +77,8 @@ entry first, absent-only recovery cannot replace it: stale authorization remains
 until an explicit newer management write. The five-second agent poll is not a
 revocation bound after total state loss. Agentless clients
 remain denied until their application publishes a policy again.
+
+`maxConnections` limits all open proxy connections (default 2048, configurable
+between 1 and 65536). Excess connections are refused before tunnel buffers are
+allocated, with a rate-limited `global connection capacity` log and denial counter.
+Changing the limit requires a restart. Per-source and per-identity limits still apply.

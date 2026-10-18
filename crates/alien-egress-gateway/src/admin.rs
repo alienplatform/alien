@@ -144,6 +144,9 @@ async fn publish(gateway: &Gateway, record: Record) -> Response {
             crate::error::ErrorData::GatewayUnavailable,
         ));
     }
+    if record.expired(chrono::Utc::now().timestamp_millis().max(0) as u64) {
+        return StatusCode::NO_CONTENT.into_response();
+    }
     if let Err(error) = gateway.policies.apply(record.clone(), false) {
         return failure(error);
     }
