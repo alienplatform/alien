@@ -62,15 +62,25 @@ pub enum ErrorData {
     )]
     SandboxEgressInvalid { reason: String },
 
-    /// Another policy write superseded this operation; replaying it could undo a restriction.
+    /// The SDK clock is too far ahead of the gateway clock.
     #[error(
-        code = "SANDBOX_EGRESS_CONFLICT",
-        message = "Sandbox '{sandbox_id}' egress policy changed concurrently; choose the desired policy again",
+        code = "SANDBOX_EGRESS_VERSION_IN_FUTURE",
+        message = "Policy version is more than 60 seconds ahead of the gateway; correct the SDK clock",
         retryable = "false",
         internal = "false",
-        http_status_code = 409
+        http_status_code = 400
     )]
-    SandboxEgressConflict { sandbox_id: String },
+    SandboxEgressVersionInFuture,
+
+    /// The gateway cannot retain another record without exceeding its memory budget.
+    #[error(
+        code = "SANDBOX_EGRESS_POLICY_STORE_FULL",
+        message = "Sandbox egress policy store is full",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 503
+    )]
+    SandboxEgressPolicyStoreFull,
 
     /// Plaintext or context is outside the portable Key binding limits.
     #[error(

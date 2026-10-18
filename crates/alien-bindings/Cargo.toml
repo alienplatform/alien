@@ -21,7 +21,7 @@ openapi = ["dep:utoipa", "alien-core/openapi"]
 platform-sdk = ["dep:alien-platform-api", "dep:alien-manager-api"]  # Platform/manager API access for RemoteBindings
 
 [dependencies]
-ed25519-compact = { workspace = true }
+ed25519-compact = { workspace = true, features = ["random"] }
 pkcs8 = { workspace = true }
 bon = { workspace = true }
 async-trait = { workspace = true }
