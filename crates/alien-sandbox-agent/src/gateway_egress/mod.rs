@@ -92,6 +92,10 @@ impl GatewayEgress {
             .zip(std::env::var("ALIEN_SANDBOX_SESSION_ID").ok());
         let privileged = unsafe { libc::geteuid() } == 0;
         if privileged {
+            // IPv6 sockets can exist on kernels without IPv6 netfilter support.
+            // Every image command and exec child installs the irreversible socket
+            // filter before executing; an installation failure prevents its launch.
+            crate::privilege::block_command_ipv6();
             redirect::install()
                 .into_alien_error()
                 .context(failed("install transparent forwarding"))?;
