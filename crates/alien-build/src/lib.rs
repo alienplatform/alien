@@ -1567,15 +1567,26 @@ fn apply_pushed_images(stack: &mut Stack, updates: Vec<(String, String)>) {
 /// Push built images from local OCI tarballs to a container registry.
 /// Reads a stack with local image directory references, pushes them to the registry,
 /// and returns an updated stack with pushed image URLs (in memory, not saved to disk).
+/// Push images to one destination, preserving the original registry API.
+pub async fn push_stack(
+    stack: Stack,
+    platform: Platform,
+    push_settings: &PushSettings,
+) -> Result<Stack> {
+    push_stack_with_sandbox_repository(stack, platform, push_settings, None).await
+}
+
+/// Push sandbox images to an independently assigned destination when configured.
 #[alien_event(AlienEvent::PushingStack {
     stack: stack.id().to_string(),
     platform: platform.as_str().to_string(),
     destination: push_settings.destination_label.clone(),
 })]
-pub async fn push_stack(
+pub async fn push_stack_with_sandbox_repository(
     mut stack: Stack,
     platform: Platform,
     push_settings: &PushSettings,
+    sandbox_repository: Option<&str>,
 ) -> Result<Stack> {
     let push_started = Instant::now();
     info!(
@@ -1614,7 +1625,9 @@ pub async fn push_stack(
             let resource_name = target.resource_name().to_string();
             let resource_names = target.resource_names.clone();
             let platform = platform.clone();
-            let repository = push_settings.repository.clone();
+            let repository = if target.resource_type == "sandbox" {
+                sandbox_repository.unwrap_or(&push_settings.repository)
+            } else { &push_settings.repository }.to_string();
             let push_opts = push_settings.options.clone();
             let bus = current_bus.clone();
             let cancel_token = cancel_token.clone();

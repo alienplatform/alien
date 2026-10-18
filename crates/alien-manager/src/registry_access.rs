@@ -842,6 +842,7 @@ fn repository_access_with_proxy(
         let refused = collect_image_repositories(
             state,
             &prefix,
+            artifact_registry.sandbox_repository_prefix().as_deref(),
             &artifact_registry.registry_endpoint(),
             project_id,
             proxy_url,
@@ -998,6 +999,7 @@ fn served_by_registry(image: &str, registry_endpoint: &str) -> bool {
 fn collect_image_repositories(
     state: &DeploymentState,
     prefix: &str,
+    sandbox_prefix: Option<&str>,
     registry_endpoint: &str,
     project_id: &str,
     proxy_url: Option<&str>,
@@ -1013,8 +1015,22 @@ fn collect_image_repositories(
             let Some(image) = resource_image_reference(entry, sandbox_source) else {
                 continue;
             };
-            let Some(image_path) = repository_path_under_prefix(image, prefix) else {
+            let is_sandbox = entry.config.downcast_ref::<Sandbox>().is_some();
+            let image_prefix = if is_sandbox
+                && sandbox_prefix
+                    .is_some_and(|sandbox| repository_path_under_prefix(image, sandbox).is_some())
+            {
+                sandbox_prefix.expect("matched sandbox prefix")
+            } else {
+                prefix
+            };
+            let Some(image_path) = repository_path_under_prefix(image, image_prefix) else {
                 continue;
+            };
+            let own_repository = if image_prefix != prefix {
+                format!("{image_prefix}-{project_id}")
+            } else {
+                own_repository.clone()
             };
             let (repo_id, own_repository) = if let Some((cloud_project, gar_prefix)) = prefix
                 .split_once('/')
@@ -1323,6 +1339,10 @@ mod tests {
 
     #[async_trait]
     impl ArtifactRegistry for TestArtifactRegistry {
+        fn sandbox_repository_prefix(&self) -> Option<String> {
+            Some("sandbox-acme/alien-artifacts".to_string())
+        }
+
         fn registry_endpoint(&self) -> String {
             if self.prefix.contains('/') {
                 "https://region-docker.pkg.dev".to_string()
@@ -3883,5 +3903,45 @@ mod tests {
             vec!["alien-artifacts", "alien-artifacts-prj-test"],
             "both the project repository and the shared one lose the service agent"
         );
+    }
+
+    #[test]
+    fn sandbox_upgrade_and_rollback_grant_both_repositories_but_refuse_neighbors() {
+        let registry = TestArtifactRegistry {
+            prefix: "alien-artifacts".to_string(),
+            fail_remove: false,
+            removed_repository_is_gone: false,
+        };
+        let old_image = "123456789012.dkr.ecr.{region}.amazonaws.com/alien-artifacts-prj_test:old";
+        let cache_image =
+            "123456789012.dkr.ecr.{region}.amazonaws.com/sandbox-acme/alien-artifacts-prj_test:new";
+        let mut state = aws_state_with_stack(sandbox_stack(Some(old_image)));
+        let mut next = state.current_release.clone().expect("release");
+        next.stack = sandbox_stack(Some(cache_image));
+        state.target_release = Some(next);
+        let (repositories, refused) = repository_access(&registry, &state, PROJECT);
+        assert!(refused.is_empty());
+        assert_eq!(
+            repositories,
+            vec![
+                "alien-artifacts-prj_test",
+                "sandbox-acme/alien-artifacts-prj_test"
+            ]
+        );
+        std::mem::swap(&mut state.current_release, &mut state.target_release);
+        assert_eq!(
+            repository_access(&registry, &state, PROJECT).0,
+            repositories,
+            "rollback keeps access to both sides of the transition"
+        );
+        for image in [
+            "123456789012.dkr.ecr.{region}.amazonaws.com/sandbox-acme/alien-artifacts-prj_other:new",
+            "999999999999.dkr.ecr.{region}.amazonaws.com/sandbox-acme/alien-artifacts-prj_test:new",
+            "123456789012.dkr.ecr.{region}.amazonaws.com/sandbox-acme/alien-artifacts-prj_test/nested:new",
+        ] {
+            let (repositories, refused) = repository_access(&registry, &aws_state_with_stack(sandbox_stack(Some(image))), PROJECT);
+            assert!(repositories.is_empty(), "{image}");
+            assert_eq!(refused.len(), 1, "{image}");
+        }
     }
 }
