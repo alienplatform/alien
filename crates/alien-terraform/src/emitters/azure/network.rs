@@ -448,6 +448,10 @@ fn create_topology(ctx: &EmitContext<'_>, label: &str, cidr: Option<String>) -> 
             ),
             attr("sku", Expression::String("Standard".to_string())),
             attr("tags", tags(ctx, "network")),
+            nested(crate::block::block(
+                "lifecycle",
+                [attr("prevent_destroy", Expression::Bool(true))],
+            )),
         ],
     ));
 

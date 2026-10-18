@@ -370,6 +370,11 @@ resource "azurerm_public_ip" "sandbox_network_nat_pip" {
     resource        = "sandbox-network"
     "resource-type" = "network"
   }
+
+  lifecycle {
+    prevent_destroy = true
+  }
+
   depends_on = [
     azurerm_resource_group.default_resource_group
   ]
@@ -487,7 +492,7 @@ resource "azurerm_network_security_rule" "sandbox_network_sandbox_agents_metadat
   name                        = "metadata"
   resource_group_name         = var.azure_resource_group_name
   network_security_group_name = azurerm_network_security_group.sandbox_network_sandbox_agents.name
-  priority                    = 100
+  priority                    = 101
   direction                   = "Outbound"
   access                      = "Deny"
   protocol                    = "*"
