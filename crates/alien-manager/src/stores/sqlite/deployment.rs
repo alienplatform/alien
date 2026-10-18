@@ -1145,6 +1145,40 @@ impl DeploymentStore for SqliteDeploymentStore {
         Ok(self.db.execute_returning_rows_affected(&sql).await? == 1)
     }
 
+    async fn set_endpoint_access(
+        &self,
+        _caller: &crate::auth::Subject,
+        id: &str,
+        access: alien_core::EndpointAccess,
+    ) -> Result<bool, AlienError> {
+        let json = serde_json::to_string(&access)
+            .into_alien_error()
+            .context(GenericError {
+                message: "Failed to serialize endpoint access".to_string(),
+            })?;
+        let sql = Query::update()
+            .table(Deployments::Table)
+            .value(
+                Deployments::StackSettings,
+                Expr::cust_with_values(
+                    "json_set(stack_settings, '$.endpointAccess', json(?))",
+                    [json],
+                ),
+            )
+            .value(Deployments::Status, "update-pending")
+            .value(Deployments::NextStepAfter, Option::<String>::None)
+            .value(Deployments::UpdatedAt, Utc::now().to_rfc3339())
+            .and_where(Expr::col(Deployments::Id).eq(id))
+            .and_where(Expr::col(Deployments::LockedBy).is_null())
+            .and_where(Expr::col(Deployments::Status).is_in([
+                "running",
+                "update-failed",
+                "refresh-failed",
+            ]))
+            .to_string(SqliteQueryBuilder);
+        Ok(self.db.execute_returning_rows_affected(&sql).await? == 1)
+    }
+
     async fn set_retry_requested(
         &self,
         _caller: &crate::auth::Subject,
@@ -2107,6 +2141,113 @@ mod gcp_project_consumer_tests {
             .await
             .expect("create GCP deployment")
             .id
+    }
+
+    #[tokio::test]
+    async fn endpoint_access_patch_queues_only_idle_unlocked_deployments() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("manager.db");
+        let db = Arc::new(SqliteDatabase::new(path.to_str().unwrap()).await.unwrap());
+        let store = SqliteDeploymentStore::new(db.clone());
+        let caller = Subject::system();
+        let group = store
+            .create_deployment_group(
+                &caller,
+                CreateDeploymentGroupParams {
+                    name: "endpoint-access".into(),
+                    max_deployments: 30,
+                    setup: DeploymentGroupSetup::default(),
+                },
+            )
+            .await
+            .unwrap();
+        for (index, (status, locked, accepted)) in [
+            ("running", false, true),
+            ("update-failed", false, true),
+            ("refresh-failed", false, true),
+            ("running", true, false),
+            ("update-failed", true, false),
+            ("refresh-failed", true, false),
+            ("pending", false, false),
+            ("preflights-failed", false, false),
+            ("initial-setup", false, false),
+            ("provisioning", false, false),
+            ("update-pending", false, false),
+            ("updating", false, false),
+            ("refreshing", false, false),
+            ("deleting", false, false),
+            ("teardown-required", false, false),
+            ("deleted", false, false),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let id = create_gcp_deployment(
+                &store,
+                &group.id,
+                &format!("access-{index}"),
+                SHARED_PROJECT,
+                status,
+            )
+            .await;
+            let original = serde_json::json!({"endpointAccess": "private",
+                "futureSetting": {"keep": true}, "quotaWarningOverrides": ["CPUS"]});
+            let sql = sea_query::Query::update()
+                .table(super::Deployments::Table)
+                .value(super::Deployments::StackSettings, original.to_string())
+                .value(super::Deployments::LockedBy, locked.then_some("owner"))
+                .and_where(sea_query::Expr::col(super::Deployments::Id).eq(id.as_str()))
+                .to_string(sea_query::SqliteQueryBuilder);
+            db.execute(&sql).await.unwrap();
+            assert_eq!(
+                store
+                    .set_endpoint_access(&caller, &id, alien_core::EndpointAccess::Both)
+                    .await
+                    .unwrap(),
+                accepted,
+                "{status}, locked={locked}"
+            );
+            let sql = sea_query::Query::select()
+                .columns([
+                    super::Deployments::StackSettings,
+                    super::Deployments::Status,
+                    super::Deployments::LockedBy,
+                ])
+                .from(super::Deployments::Table)
+                .and_where(sea_query::Expr::col(super::Deployments::Id).eq(id.as_str()))
+                .to_string(sea_query::SqliteQueryBuilder);
+            let conn = db.conn().lock().await;
+            let mut rows = conn.query(&sql, ()).await.unwrap();
+            let row = rows.next().await.unwrap().unwrap();
+            let actual: serde_json::Value =
+                serde_json::from_str(&row.get::<String>(0).unwrap()).unwrap();
+            let mut expected = original;
+            if accepted {
+                expected["endpointAccess"] = serde_json::json!("both");
+            }
+            assert_eq!(actual, expected);
+            assert_eq!(
+                row.get::<String>(1).unwrap(),
+                if accepted { "update-pending" } else { status }
+            );
+            assert_eq!(
+                row.get::<Option<String>>(2).unwrap().as_deref(),
+                locked.then_some("owner")
+            );
+            drop(rows);
+            drop(conn);
+            assert!(
+                !store
+                    .set_endpoint_access(&caller, &id, alien_core::EndpointAccess::Internet)
+                    .await
+                    .unwrap(),
+                "a queued update cannot be overwritten"
+            );
+        }
+        assert!(!store
+            .set_endpoint_access(&caller, "missing", alien_core::EndpointAccess::Both)
+            .await
+            .unwrap());
     }
 
     #[tokio::test]

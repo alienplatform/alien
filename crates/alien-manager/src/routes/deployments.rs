@@ -44,6 +44,14 @@ pub struct CreateDeploymentRequest {
     pub input_values: std::collections::HashMap<String, serde_json::Value>,
 }
 
+/// Set the desired endpoint access and schedule deployment reconciliation.
+#[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SetEndpointAccessRequest {
+    pub endpoint_access: alien_core::EndpointAccess,
+}
+
 /// Replace the saved quota warning overrides. An empty list explicitly clears them.
 #[derive(Debug, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -293,6 +301,10 @@ pub fn router() -> Router<AppState> {
         .route("/v1/deployments/{id}/delete", post(delete_deployment))
         .route("/v1/deployments/{id}/info", get(get_deployment_info))
         .route("/v1/deployments/{id}/retry", post(retry_deployment))
+        .route(
+            "/v1/deployments/{id}/endpoint-access",
+            patch(set_endpoint_access),
+        )
         .route(
             "/v1/deployments/{id}/quota-warning-overrides",
             patch(set_quota_warning_overrides),
@@ -1014,6 +1026,54 @@ async fn delete_deployment(
     (StatusCode::ACCEPTED, Json(response)).into_response()
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    patch,
+    path = "/v1/deployments/{id}/endpoint-access",
+    tag = "deployments",
+    security(("bearer" = [])),
+    params(("id" = String, Path, description = "Deployment ID")),
+    request_body = SetEndpointAccessRequest,
+    responses(
+        (status = 202, description = "Endpoint access saved and reconciliation queued"),
+        (status = 400, description = "Invalid endpoint access or unsupported store"),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden"),
+        (status = 404, description = "Not found"),
+        (status = 409, description = "Deployment is active or locked"),
+    )
+))]
+async fn set_endpoint_access(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(req): Json<SetEndpointAccessRequest>,
+) -> Response {
+    let subject = match auth::require_auth(&state, &headers).await {
+        Ok(subject) => subject,
+        Err(error) => return error.into_response(),
+    };
+    let deployment = match state.deployment_store.get_deployment(&subject, &id).await {
+        Ok(Some(deployment)) => deployment,
+        Ok(None) => return ErrorData::not_found_deployment(&id).into_response(),
+        Err(error) => return error.into_response(),
+    };
+    if !state.authz.can_update_deployment(&subject, &deployment) {
+        return ErrorData::forbidden("Cannot update endpoint access").into_response();
+    }
+    match state
+        .deployment_store
+        .set_endpoint_access(&subject, &id, req.endpoint_access)
+        .await
+    {
+        Ok(true) => StatusCode::ACCEPTED.into_response(),
+        Ok(false) => {
+            alien_error::AlienError::new(ErrorData::EndpointAccessNotSaved { deployment_id: id })
+                .into_response()
+        }
+        Err(error) => error.into_response(),
+    }
+}
+
 /// Save settings only; retrying a failed deployment remains an explicit operation.
 #[cfg_attr(feature = "openapi", utoipa::path(
     patch,
@@ -1650,6 +1710,36 @@ mod tests {
             true,
         )
         .await
+    }
+
+    #[tokio::test]
+    async fn endpoint_access_patch_authorizes_and_preserves_atomic_refusal() {
+        for (saved, expected) in [(true, StatusCode::ACCEPTED), (false, StatusCode::CONFLICT)] {
+            let mut store = MockDeploymentStore::new();
+            store
+                .expect_get_deployment()
+                .times(1)
+                .returning(|_, _| Ok(Some(deployment_record())));
+            store
+                .expect_set_endpoint_access()
+                .withf(|_, id, access| {
+                    id == "deployment-1" && *access == alien_core::EndpointAccess::Both
+                })
+                .times(1)
+                .return_once(move |_, _, _| Ok(saved));
+            let request = Request::builder()
+                .method("PATCH")
+                .uri("/v1/deployments/deployment-1/endpoint-access")
+                .header(http::header::AUTHORIZATION, "Bearer test-token")
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"endpointAccess":"both"}"#))
+                .unwrap();
+            let (status, body) = send_with_transport(store, request, true).await;
+            assert_eq!(status, expected, "{body}");
+            if !saved {
+                assert_eq!(body["code"], "ENDPOINT_ACCESS_NOT_SAVED");
+            }
+        }
     }
 
     fn override_request(overrides: &[&str]) -> Request<Body> {
