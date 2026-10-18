@@ -14,6 +14,7 @@ import tempfile
 import threading
 import time
 import unittest
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -96,9 +97,10 @@ class Box:
         self.name, self.tls, self.cert = name, tls, cert
         self.sessions = {}
 
-    async def create(self, *, sandbox_id, egress, timeout_ms):
+    async def create(self, *, egress, timeout_ms):
         if self.name == "without-connector":
             raise Refused()
+        sandbox_id = "provider-" + uuid.uuid4().hex
         server = Proxy(("127.0.0.1", 0), Handler)
         server.policy, server.tls = egress, self.tls
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -133,6 +135,11 @@ class Box:
         await asyncio.to_thread(server.shutdown)
         server.server_close()
         thread.join()
+
+
+class TimeoutBox(Box):
+    async def update_egress(self, sandbox_id, egress):
+        raise TimeoutError()
 
 
 class After(unittest.IsolatedAsyncioTestCase):
@@ -198,7 +205,14 @@ class After(unittest.IsolatedAsyncioTestCase):
                         all(item["verdict"] == "pass" for item in runner.results),
                         runner.results,
                     )
-                    self.assertEqual(5, len(runner.sessions))
+                    self.assertEqual(4, len(runner.sessions))
+                    self.assertTrue(
+                        all(
+                            record["sandboxId"].startswith("provider-")
+                            for _, record in runner.sessions
+                        )
+                    )
+                    self.assertEqual(1, len(runner.intents))
                     # A faulty implementation that ignores policy replacement must fail the probe.
                     control, limited = runner.sessions[:2]
                     limited[0].sessions[limited[1]["sandboxId"]][0].policy = "internet"
@@ -226,7 +240,31 @@ class After(unittest.IsolatedAsyncioTestCase):
                     all(item["terminationCallCompleted"] for item in cleanup)
                 )
                 self.assertEqual(
-                    5, len((root / "sessions.jsonl").read_text().splitlines())
+                    9, len((root / "sessions.jsonl").read_text().splitlines())
+                )
+            partial = dict(suite, floor=[], identityCommand=None)
+            run.validate(partial)
+            with (root / "partial.jsonl").open("x") as journal:
+                runner = run.Run(
+                    partial, journal, lambda name: TimeoutBox(name, tls, cert)
+                )
+                try:
+                    await runner.execute()
+                    rows = {item["name"]: item for item in runner.results}
+                    self.assertEqual("fail", rows["update-within-10s"]["verdict"])
+                    self.assertEqual(
+                        "unproven", rows["update-without-new-token"]["verdict"]
+                    )
+                    self.assertEqual("pass", rows["egress-ip-equals-nat"]["verdict"])
+                    floors = [
+                        row for name, row in rows.items() if name.startswith("floor-")
+                    ]
+                    self.assertEqual(8, len(floors))
+                    self.assertTrue(all(row["verdict"] == "unproven" for row in floors))
+                finally:
+                    cleanup = await runner.cleanup()
+                self.assertTrue(
+                    all(item["terminationCallCompleted"] for item in cleanup)
                 )
 
     @unittest.skipUnless(os.geteuid() == 0, "host packet witness requires CAP_NET_RAW")

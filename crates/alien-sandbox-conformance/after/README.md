@@ -71,8 +71,13 @@ tail -f after-run.log
 ```
 
 The new output directory contains `report.json` and a durable `sessions.jsonl`.
-The journal records intent **before** create, including the deliberately failing
-connector fixture. Cleanup runs after both success and failure. Retry interrupted
+The journal records intent **before** create and the provider-assigned ID immediately
+after create returns. AWS ignores caller-selected IDs. Cleanup uses only returned
+provider IDs and runs after both success and failure. Creates that never return an
+ID appear in `unresolvedCreateIntents`; they require a scoped provider list audit,
+including the intentionally failing connector fixture. Never assume an arbitrary
+requested ID identifies a VM, and never delete unrelated sessions to resolve an
+intent. The runner exits nonzero while such an audit remains outstanding. Retry interrupted
 cleanup with the same binding environment:
 
 ```sh
@@ -140,3 +145,8 @@ packet. Segmentation, VLAN framing or an unsuitable capture interface can preven
 a sample; the result is unproven, never an invented fingerprint. Use a trusted
 reassembling observer through the same command interface if the environment
 requires it. Observer failure leaves other policy probes runnable.
+
+For an initial deployment smoke run, `floor` may contain only the fixtures already
+available. Omitted category/address pairs produce explicit unproven rows while
+the other probes run. An update API timeout fails its timing row and likewise
+leaves the remaining probes runnable; it does not discard later floor/NAT checks.

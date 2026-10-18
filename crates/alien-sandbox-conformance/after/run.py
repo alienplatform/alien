@@ -93,8 +93,11 @@ def validate(suite):
         for kind in ("vpc", "overlay", "private", "metadata")
         for form in ("name", "ip")
     }
-    if {(item["category"], item["addressForm"]) for item in suite["floor"]} != required:
-        raise ValueError("supply name and IP probes for all four floor categories")
+    supplied = [(item["category"], item["addressForm"]) for item in suite["floor"]]
+    if not set(supplied) <= required or len(supplied) != len(set(supplied)):
+        raise ValueError(
+            "supply at most one probe for each floor category and address form"
+        )
     for address in suite["natIps"]:
         ipaddress.ip_address(address)
     if not suite["natIps"] or urlsplit(suite["ipEchoUrl"]).scheme != "https":
@@ -197,21 +200,38 @@ class Run:
         self.journal = journal
         self.factory = factory
         self.sessions = []
+        self.intents = {}
         self.results = []
 
-    async def create(self, binding, policy):
-        box = self.factory(binding)
-        # Persist intent before create: a failed response can still leave a live VM.
-        sid = "egress-after-" + uuid.uuid4().hex
-        record = {"binding": binding, "sandboxId": sid}
-        self.sessions.append((box, record))
+    def persist(self, record):
         self.journal.write(json.dumps(record) + "\n")
         self.journal.flush()
         os.fsync(self.journal.fileno())
-        info = await box.create(sandbox_id=sid, egress=policy, timeout_ms=600000)
-        if info.sandbox_id != sid:
-            raise RuntimeError("provider did not retain the requested sandbox ID")
-        return box, sid
+
+    async def create(self, binding, policy):
+        box = self.factory(binding)
+        attempt = uuid.uuid4().hex
+        intent = {
+            "event": "createRequested",
+            "binding": binding,
+            "attemptId": attempt,
+            "startedAt": now(),
+        }
+        self.intents[attempt] = intent
+        self.persist(intent)
+        # AWS assigns the ID and intentionally ignores a caller-selected sandbox_id.
+        info = await box.create(egress=policy, timeout_ms=600000)
+        record = {
+            "event": "created",
+            "binding": binding,
+            "attemptId": attempt,
+            "sandboxId": info.sandbox_id,
+        }
+        # Retain the provider handle before a possible journal write failure.
+        self.sessions.append((box, record))
+        self.intents.pop(attempt)
+        self.persist(record)
+        return box, info.sandbox_id
 
     async def paired(self, name, control, subject, endpoint, expect_denied=False):
         positive = await observe(*control, http(endpoint["url"]))
@@ -250,24 +270,16 @@ class Run:
         )
         start = time.monotonic()
         started_at = now()
+        update_timed_out = False
         try:
             await asyncio.wait_for(
                 changing[0].update_egress(changing[1], {"allow": targets[:1]}), 10
             )
         except TimeoutError:
-            self.results.append(
-                {
-                    "name": "update-within-10s",
-                    "startedAt": started_at,
-                    "elapsedSeconds": time.monotonic() - start,
-                    "attempts": [],
-                    "verdict": "fail" if before_b["verdict"] == "pass" else "unproven",
-                }
-            )
-            return
+            update_timed_out = True
         # Include API latency and cold command dispatch in the ten-second budget.
         attempts = []
-        while time.monotonic() - start < 10:
+        while not update_timed_out and time.monotonic() - start < 10:
             try:
                 actual = await asyncio.wait_for(
                     observe(*changing, http(b["url"])), 10 - (time.monotonic() - start)
@@ -294,6 +306,7 @@ class Run:
                 "name": "update-within-10s",
                 "startedAt": started_at,
                 "elapsedSeconds": elapsed,
+                "updateTimedOut": update_timed_out,
                 "attempts": attempts,
                 "verdict": "unproven" if not healthy else "pass" if timely else "fail",
             }
@@ -316,6 +329,19 @@ class Run:
                 else "fail",
             }
         )
+        supplied = {
+            (target["category"], target["addressForm"]) for target in suite["floor"]
+        }
+        for category in ("vpc", "overlay", "private", "metadata"):
+            for form in ("name", "ip"):
+                if (category, form) not in supplied:
+                    self.results.append(
+                        {
+                            "name": "floor-" + category + "-" + form,
+                            "verdict": "unproven",
+                            "reason": "fixture not supplied",
+                        }
+                    )
         for target in suite["floor"]:
             positive = await observe(*control, http(a["url"]))
             actual = await observe(*control, http(target["url"]))
@@ -412,6 +438,7 @@ async def run(suite, directory):
             report["errorCode"] = getattr(error, "code", type(error).__name__)
         finally:
             report["cleanup"] = await runner.cleanup()
+            report["unresolvedCreateIntents"] = list(runner.intents.values())
             report["cases"] = runner.results
             report["finishedAt"] = now()
             report["gatewayLogs"] = (
@@ -423,6 +450,7 @@ async def run(suite, directory):
         0
         if (
             not report.get("errorCode")
+            and not report["unresolvedCreateIntents"]
             and runner.results
             and all(row["verdict"] == "pass" for row in runner.results)
             and all(row["terminationCallCompleted"] for row in report["cleanup"])
