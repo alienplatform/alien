@@ -1854,6 +1854,67 @@ impl BindingsProviderApi for BindingsProvider {
         // a missing backend, which would send a reader looking in the wrong place.
         let binding: SandboxBinding = self.parse_binding(binding_name, "sandbox")?;
 
+        let gateway = binding.egress().and_then(|value| value.gateway());
+        if gateway.is_none()
+            && binding
+                .egress()
+                .is_some_and(|egress| *egress.declaration() == alien_core::SandboxEgress::Internet)
+        {
+            return Err(crate::providers::sandbox::egress::unsupported(
+                "internet declaration",
+            ));
+        }
+        let default_policy = binding.default_policy();
+        if let Some(policy) = default_policy {
+            policy
+                .validate()
+                .map_err(crate::providers::sandbox::egress::policy_error)?;
+            if gateway.is_none() {
+                return Err(crate::providers::sandbox::egress::unsupported(
+                    "defaultPolicy",
+                ));
+            }
+        }
+        // Do not silently treat a gateway binding as a legacy policy-only binding on backends
+        // whose authenticated token-delivery path has not landed yet.
+        if gateway.is_some() && !matches!(&binding, SandboxBinding::Aws(_)) {
+            return Err(crate::providers::sandbox::egress::unsupported(
+                "gateway-backed sandbox",
+            ));
+        }
+        let egress_manager = if let Some(config) = gateway {
+            let container = self.load_container(&config.container).await.context(
+                ErrorData::SandboxEgressGatewayUnavailable {
+                    reason: format!(
+                        "linked gateway Container '{}' is unavailable",
+                        config.container
+                    ),
+                },
+            )?;
+            let urls = container.get_internal_urls();
+            let port_url = |port| {
+                urls.get(&port).ok_or_else(|| {
+                    AlienError::new(ErrorData::SandboxEgressGatewayUnavailable {
+                        reason: format!(
+                            "gateway Container '{}' is missing internal URL for port {port}",
+                            config.container
+                        ),
+                    })
+                })
+            };
+            let proxy_url = port_url(3128)?;
+            let admin_url = port_url(3129)?;
+            let vault = self.load_vault(&config.signing_key.vault).await?;
+            Some(Arc::new(crate::sandbox_egress::SandboxEgressManager::new(
+                config.clone(),
+                vault,
+                proxy_url,
+                admin_url,
+            )?))
+        } else {
+            None
+        };
+
         match binding {
             #[cfg(feature = "local")]
             SandboxBinding::Local(local_binding) => {
@@ -1914,13 +1975,20 @@ impl BindingsProviderApi for BindingsProvider {
                 config.region = region;
 
                 let client = AgentPlatformClient::new(reqwest::Client::new(), config);
-                let sandbox: Arc<dyn crate::traits::Sandbox> =
-                    Arc::new(GcpAgentPlatformSandbox::new(
+                let sandbox: Arc<dyn crate::traits::Sandbox> = Arc::new(
+                    GcpAgentPlatformSandbox::new(
                         Arc::new(client),
                         engine,
                         template,
                         gcp_binding.max_lifetime_seconds,
-                    ));
+                    )
+                    .with_egress(
+                        gcp_binding
+                            .egress
+                            .as_ref()
+                            .map(|egress| egress.declaration().clone()),
+                    ),
+                );
                 Ok(sandbox)
             }
             #[cfg(feature = "azure")]
@@ -1986,7 +2054,7 @@ impl BindingsProviderApi for BindingsProvider {
                     Arc::new(client),
                     group,
                     disk_image,
-                    azure_binding.egress,
+                    azure_binding.egress.declaration().clone(),
                     azure_binding.idle_pause_seconds,
                     cpu.unwrap_or_else(|| DEFAULT_AZURE_CPU.to_string()),
                     memory.unwrap_or_else(|| DEFAULT_AZURE_MEMORY.to_string()),
@@ -2067,7 +2135,18 @@ impl BindingsProviderApi for BindingsProvider {
                 // A MicroVM started with no connector reaches the internet, so the two fields have
                 // to agree: under `deny` setup always emits a connector, and an empty list is a
                 // binding that did not come from a generated module rather than an open sandbox.
-                if egress_connector_arns.is_empty() != aws_binding.allow_egress {
+                if egress_manager.is_some() && egress_connector_arns.is_empty() {
+                    return Err(AlienError::new(ErrorData::BindingConfigInvalid {
+                        binding_name: binding_name.to_string(),
+                        env_var: alien_core::bindings::binding_env_var_name(binding_name),
+                        reason:
+                            "gateway-backed sandboxes require an egress connector for every policy"
+                                .to_string(),
+                    }));
+                }
+                if egress_manager.is_none()
+                    && egress_connector_arns.is_empty() != aws_binding.allow_egress
+                {
                     let reason = if aws_binding.allow_egress {
                         "sandbox binding declares open egress and also names egress connectors; \
                          a sandbox cannot be both open and routed through a denying connector"
@@ -2082,7 +2161,7 @@ impl BindingsProviderApi for BindingsProvider {
                     }));
                 }
 
-                let sandbox: Arc<dyn crate::traits::Sandbox> = Arc::new(AwsSandbox::new(
+                let sandbox = AwsSandbox::new(
                     Arc::new(client),
                     image_arn,
                     image_version,
@@ -2090,7 +2169,25 @@ impl BindingsProviderApi for BindingsProvider {
                     aws_binding.preview_ports,
                     aws_binding.idle_pause_seconds,
                     aws_binding.max_lifetime_seconds,
-                ));
+                )
+                .with_egress(
+                    aws_binding
+                        .egress
+                        .as_ref()
+                        .map(|egress| egress.declaration().clone()),
+                );
+                let sandbox =
+                    sandbox.with_default_policy(aws_binding.default_policy.clone().or_else(|| {
+                        aws_binding
+                            .egress
+                            .as_ref()
+                            .and_then(|value| value.default_policy().cloned())
+                    }));
+                let sandbox = match egress_manager {
+                    Some(manager) => sandbox.with_egress_manager(manager),
+                    None => sandbox,
+                };
+                let sandbox: Arc<dyn crate::traits::Sandbox> = Arc::new(sandbox);
                 Ok(sandbox)
             }
             // A backend whose feature is off reports which one, rather than a bare
@@ -2143,7 +2240,7 @@ mod tests {
                 disk: "20Gi".to_string(),
                 max_processes: None,
             })
-            .egress(alien_core::SandboxEgress::Allow)
+            .egress(alien_core::SandboxEgress::Internet)
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,

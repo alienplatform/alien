@@ -114,7 +114,7 @@ mod tests {
     async fn ceilings_outside_the_platform_rule_fail_at_plan_time() {
         let mut limits = ceilings();
         limits.cpu = "333m".to_string();
-        let stack = stack_with(sandbox("agent", Some(limits), SandboxEgress::Deny));
+        let stack = stack_with(sandbox("agent", Some(limits), SandboxEgress::None));
 
         let result = SandboxPlatformSupportCheck
             .check(&stack, Platform::Azure)
@@ -129,7 +129,7 @@ mod tests {
     /// The same declaration is fine where the platform enforces it.
     #[tokio::test]
     async fn the_same_ceilings_pass_where_they_are_enforced() {
-        let stack = stack_with(sandbox("agent", Some(ceilings()), SandboxEgress::Deny));
+        let stack = stack_with(sandbox("agent", Some(ceilings()), SandboxEgress::None));
 
         for platform in [Platform::Aws, Platform::Azure, Platform::Kubernetes] {
             let result = SandboxPlatformSupportCheck
@@ -142,45 +142,6 @@ mod tests {
                 result.errors
             );
         }
-    }
-
-    /// Azure's egress proxy matches on host pattern; the other four filter by address or carry a
-    /// single switch, so the declaration is refused there rather than accepted and dropped.
-    #[tokio::test]
-    async fn domain_egress_rules_are_refused_where_they_cannot_be_expressed() {
-        let stack = stack_with(sandbox(
-            "agent",
-            None,
-            SandboxEgress::AllowDomains {
-                domains: vec!["registry.npmjs.org".to_string()],
-            },
-        ));
-
-        for platform in [
-            Platform::Aws,
-            Platform::Gcp,
-            Platform::Kubernetes,
-            Platform::Local,
-        ] {
-            let result = SandboxPlatformSupportCheck
-                .check(&stack, platform)
-                .await
-                .expect("check runs");
-            assert!(
-                !result.success,
-                "{platform} has no hostname allowlist and must refuse the declaration"
-            );
-        }
-
-        let azure = SandboxPlatformSupportCheck
-            .check(&stack, Platform::Azure)
-            .await
-            .expect("check runs");
-        assert!(
-            azure.success,
-            "Azure creates the sandbox under host rules: {:?}",
-            azure.errors
-        );
     }
 
     #[tokio::test]

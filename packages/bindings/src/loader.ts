@@ -1,3 +1,4 @@
+import type { EgressPolicy } from "@alienplatform/core"
 /**
  * Native addon loader.
  *
@@ -140,7 +141,7 @@ export interface RawQueueHandle {
 }
 
 export interface RawContainerHandle {
-  getInternalEndpoints(): Promise<Record<string, { url: string }>>
+  getInternalUrls(): Promise<Record<number, string>>
   getInternalUrl(): Promise<string>
   getPublicUrl(): Promise<string | null>
 }
@@ -227,6 +228,7 @@ export interface RawSandboxHandle {
     tenantKey?: string | null,
     env?: Record<string, string> | null,
     timeoutMs?: number | null,
+    egress?: EgressPolicy | null,
   ): Promise<RawSandboxInstance>
   get(sandboxId: string): Promise<RawSandboxInstance | null>
   getOrCreate(
@@ -234,7 +236,9 @@ export interface RawSandboxHandle {
     tenantKey?: string | null,
     env?: Record<string, string> | null,
     timeoutMs?: number | null,
+    egress?: EgressPolicy | null,
   ): Promise<RawResolvedSandbox>
+  updateEgress(sandboxId: string, egress: EgressPolicy): Promise<void>
   list(): Promise<RawSandboxInstance[]>
   runCommand(
     sandboxId: string,

@@ -38,7 +38,7 @@ fn sandbox(limits: Option<SandboxLimits>) -> Sandbox {
         .code(SandboxCode::Image {
             image: "ubuntu".to_string(),
         })
-        .egress(SandboxEgress::Deny)
+        .egress(SandboxEgress::None)
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,
@@ -105,7 +105,7 @@ fn source_sandbox() -> Sandbox {
                 build_args: None,
             },
         })
-        .egress(SandboxEgress::Deny)
+        .egress(SandboxEgress::None)
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,

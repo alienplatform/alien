@@ -732,7 +732,10 @@ async fn remote_sandbox_decodes_every_declared_field_and_reaches_the_azure_provi
     assert_eq!(binding.region, value("westus2"));
     assert_eq!(binding.resource_group, value("acme-rg"));
     assert_eq!(binding.disk_image, value("ubuntu"));
-    assert_eq!(binding.egress, alien_core::SandboxEgress::Allow);
+    assert_eq!(
+        binding.egress.declaration(),
+        &alien_core::SandboxEgress::Internet
+    );
     assert_eq!(binding.idle_pause_seconds, Some(300));
     assert_eq!(binding.cpu, Some(value("1000m")));
     assert_eq!(binding.memory, Some(value("2048Mi")));

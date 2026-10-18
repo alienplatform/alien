@@ -119,7 +119,7 @@ function fakeAddon(): { addon: NativeAddon; constructions: unknown[] } {
     listSecrets: async () => [],
   }
   const containerHandle: RawContainerHandle = {
-    getInternalEndpoints: async () => ({ admin: { url: "http://service.internal:3129" } }),
+    getInternalUrls: async () => ({ 3129: "http://service.internal:3129" }),
     getInternalUrl: async () => "http://service.internal:8080",
     getPublicUrl: async () => null,
   }
@@ -128,6 +128,7 @@ function fakeAddon(): { addon: NativeAddon; constructions: unknown[] } {
   }
 
   const sandboxHandle: RawSandboxHandle = {
+    updateEgress: async () => {},
     capabilities: () => ["reconnect"],
     create: async sandboxId => ({ sandboxId: sandboxId ?? "s1", state: "running", generation: 1 }),
     get: async sandboxId => ({ sandboxId, state: "running", generation: 1 }),
@@ -541,8 +542,8 @@ describe("createFactories method mapping", () => {
     const { addon } = fakeAddon()
     const { container } = createFactories(() => addon)
 
-    await expect(container("database").getInternalEndpoints()).resolves.toEqual({
-      admin: { url: "http://service.internal:3129" },
+    await expect(container("database").getInternalUrls()).resolves.toEqual({
+      3129: "http://service.internal:3129",
     })
     await expect(container("database").getInternalUrl()).resolves.toBe(
       "http://service.internal:8080",
@@ -681,15 +682,15 @@ describe("sandbox create", () => {
     expect(created.sandboxId).toBe("provider-assigned")
     // Positional, because the addon takes them positionally: a lifetime that arrives as the
     // tenant key, or not at all, is a sandbox with no deadline and no error to show for it.
-    expect(create).toHaveBeenCalledWith("mine", null, null, 600_000)
+    expect(create).toHaveBeenCalledWith("mine", null, null, 600_000, null)
 
     const resolved = await handle.getOrCreate({ sandboxId: "requested", timeoutMs: 1_000 })
     expect(resolved.sandbox.sandboxId).toBe("provider-recovered")
     expect(resolved.created).toBe(true)
-    expect(getOrCreate).toHaveBeenCalledWith("requested", null, null, 1_000)
+    expect(getOrCreate).toHaveBeenCalledWith("requested", null, null, 1_000, null)
 
     await handle.getOrCreate({ timeoutMs: 2_000 })
-    expect(getOrCreate).toHaveBeenNthCalledWith(2, null, null, null, 2_000)
+    expect(getOrCreate).toHaveBeenNthCalledWith(2, null, null, null, 2_000, null)
   })
 })
 

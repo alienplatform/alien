@@ -131,52 +131,112 @@ const MICROVM_TIERS: &[MicrovmTier] = &[
     },
 ];
 
-/// Outbound network policy for a sandbox.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "camelCase", tag = "mode")]
+pub use super::sandbox_policy::EgressPolicy;
+
+/// Outbound policy. Only the new Internet value opts into gateway enforcement.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SandboxEgress {
-    /// No outbound network access.
-    ///
-    /// Routed traffic only. Link-local is not outbound and no backend's egress control reaches
-    /// it, so this is not a boundary against instance metadata.
-    ///
-    /// Nor, on AWS, against DNS: while the connector VPC has DNS support on, a session resolves
-    /// names through that VPC's resolver, which no security group filters, so a query name can
-    /// carry data out.
-    Deny,
-    /// Unrestricted outbound access to the public internet, and none to private ranges or the
-    /// deployment's own network.
-    ///
-    /// Link-local carries the same exception as `Deny`. AWS and Kubernetes deliver both halves.
-    /// Azure and GCP deliver the first only: one matches host patterns and the other is a single
-    /// switch, so neither can name an address range to exclude.
+    None,
+    Internet,
+    /// Deprecated direct backend access, unchanged from released deployments.
     Allow,
-    /// Outbound access only to the listed hostnames.
-    ///
-    /// Azure matches host patterns. With `privilegedSupervisor`, AWS resolves the names at
-    /// startup, pins their public IPv4 addresses in /etc/hosts, and filters by those addresses.
-    /// Other services sharing an allowed address are reachable; addresses remain pinned for the
-    /// session lifetime. Backends without either enforcement path refuse this mode.
-    #[serde(rename_all = "camelCase")]
+    /// Deprecated backend hostname allowlist, unchanged from released deployments.
     AllowDomains {
-        /// Hostnames the sandbox may reach
         domains: Vec<String>,
     },
 }
 
+/// Deprecated object declarations preserve their released backend behavior.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(tag = "mode", rename_all = "camelCase", deny_unknown_fields)]
+pub enum LegacySandboxEgress {
+    /// Deprecated alias of "none".
+    Deny,
+    /// Deprecated direct backend access. Use "internet" to opt into the gateway,
+    /// fixed outbound IP, connection logs and per-sandbox runtime policies.
+    Allow,
+    /// Deprecated backend hostname rules. Use "internet" and runtime policies
+    /// to opt into gateway enforcement instead.
+    AllowDomains { domains: Vec<String> },
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum SandboxEgressMode {
+    None,
+    Internet,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum SandboxEgressInput {
+    Mode(SandboxEgressMode),
+    Legacy(LegacySandboxEgress),
+}
+
+impl Serialize for SandboxEgress {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        match self {
+            Self::None => serializer.serialize_str("none"),
+            Self::Internet => serializer.serialize_str("internet"),
+            Self::Allow => LegacySandboxEgress::Allow.serialize(serializer),
+            Self::AllowDomains { domains } => LegacySandboxEgress::AllowDomains {
+                domains: domains.clone(),
+            }
+            .serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for SandboxEgress {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        Ok(match SandboxEgressInput::deserialize(deserializer)? {
+            SandboxEgressInput::Mode(SandboxEgressMode::None)
+            | SandboxEgressInput::Legacy(LegacySandboxEgress::Deny) => Self::None,
+            SandboxEgressInput::Mode(SandboxEgressMode::Internet) => Self::Internet,
+            SandboxEgressInput::Legacy(LegacySandboxEgress::Allow) => Self::Allow,
+            SandboxEgressInput::Legacy(LegacySandboxEgress::AllowDomains { domains }) => {
+                Self::AllowDomains { domains }
+            }
+        })
+    }
+}
+
+#[cfg(feature = "openapi")]
+impl utoipa::PartialSchema for SandboxEgress {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        use utoipa::openapi::schema::{ObjectBuilder, OneOfBuilder, Type};
+        OneOfBuilder::new()
+            .item(
+                ObjectBuilder::new()
+                    .schema_type(Type::String)
+                    .enum_values(Some(["none", "internet"])),
+            )
+            .item(LegacySandboxEgress::schema())
+            .into()
+    }
+}
+#[cfg(feature = "openapi")]
+impl utoipa::ToSchema for SandboxEgress {}
+
 impl SandboxEgress {
-    /// The single outbound switch for a backend that has no host matcher, or `None` for a mode a
-    /// boolean cannot carry.
-    ///
-    /// `AllowDomains` needs a host list, so it maps to nothing and each caller refuses it in its
-    /// own error naming the sandbox. One source for what a mode means, so a template and a sandbox
-    /// cannot disagree on it.
+    /// Deprecated spelling retained for Rust callers of the released API.
+    #[allow(non_upper_case_globals)]
+    #[deprecated(note = "use SandboxEgress::None")]
+    pub const Deny: Self = Self::None;
+
+    /// Backend switch; hostname rules must be handled by a backend matcher.
     pub fn internet_access_switch(&self) -> Option<bool> {
         match self {
-            SandboxEgress::Allow => Some(true),
-            SandboxEgress::Deny => Some(false),
-            SandboxEgress::AllowDomains { .. } => None,
+            Self::None => Some(false),
+            Self::Internet | Self::Allow => Some(true),
+            Self::AllowDomains { .. } => None,
         }
     }
 }
@@ -519,6 +579,12 @@ pub struct Sandbox {
     /// underscores ([A-Za-z0-9-_]). Maximum 64 characters.
     #[builder(start_fn)]
     pub id: String,
+    /// Runtime network links authored by preflight, not parent lifecycle dependencies.
+    /// Sandbox has no public link builder; gateway reach is wired during planning.
+    #[builder(field)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(feature = "openapi", schema(ignore))]
+    pub links: Vec<ResourceRef>,
     /// Where the sandbox's root filesystem comes from
     pub code: SandboxCode,
     /// Private ECR base image an AWS build pulls; `code.image` names only the S3 bundle, so this is
@@ -535,6 +601,9 @@ pub struct Sandbox {
     pub limits: Option<SandboxLimits>,
     /// Outbound network policy
     pub egress: SandboxEgress,
+    /// Default runtime policy for creates that omit one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_policy: Option<EgressPolicy>,
     /// Have Alien's agent install the declared egress policy before running any image code.
     /// Unsupported backends refuse this at plan time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -576,6 +645,13 @@ pub fn stack_needs_named_subnets_at_setup(stack: &crate::Stack) -> bool {
 }
 
 impl Sandbox {
+    pub(crate) fn setup_digest_value(&self) -> serde_json::Value {
+        match &self.egress {
+            SandboxEgress::None => serde_json::json!({"mode":"deny"}),
+            value => serde_json::to_value(value).expect("egress serializes"),
+        }
+    }
+
     /// The resource type identifier for Sandbox
     pub const RESOURCE_TYPE: ResourceType = ResourceType::from_static("sandbox");
 
@@ -584,9 +660,10 @@ impl Sandbox {
         &self.id
     }
 
-    /// Cloud routing stays open when the agent owns enforcement.
+    /// Released supervisor declarations retain their direct cloud route; only
+    /// the new Internet declaration uses the deployment gateway.
     pub fn cloud_egress(&self) -> &SandboxEgress {
-        if self.privileged_supervisor.is_some() {
+        if self.privileged_supervisor.is_some() && self.egress != SandboxEgress::Internet {
             &SandboxEgress::Allow
         } else {
             &self.egress
@@ -607,7 +684,12 @@ impl Sandbox {
             );
             env.insert(
                 "ALIEN_SANDBOX_EGRESS".to_string(),
-                serde_json::to_string(&self.egress).expect("egress serializes"),
+                // A runtime default is mutable gateway policy, never a startup allowlist.
+                if self.egress == SandboxEgress::None {
+                    r#"{"mode":"deny"}"#.to_string()
+                } else {
+                    serde_json::to_string(&self.egress).expect("egress serializes")
+                },
             );
         }
         env
@@ -627,6 +709,15 @@ impl Sandbox {
     /// Runs at plan time so an unenforceable limit or an unsupported egress mode fails before
     /// anything is provisioned, rather than at the first exec.
     pub fn validate_for_platform(&self, platform: Platform) -> Result<()> {
+        if let Some(policy) = &self.default_policy {
+            if self.egress != SandboxEgress::Internet {
+                return Err(AlienError::new(ErrorData::SandboxEgressInvalid {
+                    target: "defaultPolicy".into(),
+                    reason: "defaultPolicy requires the new internet declaration".into(),
+                }));
+            }
+            policy.validate()?;
+        }
         let mut capabilities = SandboxCapabilities::for_platform(platform)?;
         if let Some(supervisor) = &self.privileged_supervisor {
             if platform != Platform::Aws {
@@ -965,7 +1056,7 @@ impl Sandbox {
             }
         }
 
-        if matches!(self.egress, SandboxEgress::Deny) {
+        if matches!(self.egress, SandboxEgress::None) {
             capabilities.require(SandboxCapability::EgressDeny, platform)?;
         }
 
@@ -1843,7 +1934,7 @@ mod tests {
     /// it has to refuse rather than accept it and run the code with open egress.
     #[test]
     fn a_denied_egress_is_refused_where_it_would_not_be_enforced() {
-        let sandbox = sandbox_with(SandboxEgress::Deny, vec![]);
+        let sandbox = sandbox_with(SandboxEgress::None, vec![]);
 
         // GCP is asserted at the capability rather than through validation: this sandbox declares
         // ceilings GCP cannot enforce, so it is refused for a reason unrelated to egress.
@@ -1864,7 +1955,7 @@ mod tests {
             .code(SandboxCode::Image {
                 image: "alpine".to_string(),
             })
-            .egress(SandboxEgress::Deny)
+            .egress(SandboxEgress::None)
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
@@ -1885,7 +1976,7 @@ mod tests {
             .code(SandboxCode::Image {
                 image: "alpine".to_string(),
             })
-            .egress(SandboxEgress::Deny)
+            .egress(SandboxEgress::None)
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
@@ -1906,7 +1997,7 @@ mod tests {
     #[test]
     fn azure_sizes_follow_the_rule_the_data_plane_states() {
         let sized = |cpu: &str, memory: &str, disk: &str| {
-            let mut sandbox = sandbox_with(SandboxEgress::Deny, vec![]);
+            let mut sandbox = sandbox_with(SandboxEgress::None, vec![]);
             let limits = sandbox
                 .limits
                 .as_mut()
@@ -1942,7 +2033,7 @@ mod tests {
 
     #[test]
     fn preview_ports_require_the_preview_capability() {
-        let sandbox = sandbox_with(SandboxEgress::Deny, vec![8080]);
+        let sandbox = sandbox_with(SandboxEgress::None, vec![8080]);
 
         sandbox
             .validate_for_platform(Platform::Aws)
@@ -1997,7 +2088,7 @@ mod tests {
 
     #[test]
     fn invalid_quantities_are_rejected_with_the_offending_field() {
-        let mut sandbox = sandbox_with(SandboxEgress::Deny, vec![]);
+        let mut sandbox = sandbox_with(SandboxEgress::None, vec![]);
         sandbox
             .limits
             .as_mut()
@@ -2028,7 +2119,7 @@ mod tests {
 
     #[test]
     fn zero_max_processes_is_rejected() {
-        let mut sandbox = sandbox_with(SandboxEgress::Deny, vec![]);
+        let mut sandbox = sandbox_with(SandboxEgress::None, vec![]);
         sandbox
             .limits
             .as_mut()
@@ -2047,7 +2138,7 @@ mod tests {
     /// anywhere else would mean carrying a bound nothing applies.
     #[test]
     fn a_process_ceiling_is_accepted_only_where_a_runtime_can_apply_it() {
-        let mut sandbox = sandbox_with(SandboxEgress::Deny, vec![]);
+        let mut sandbox = sandbox_with(SandboxEgress::None, vec![]);
         sandbox
             .limits
             .as_mut()
@@ -2071,7 +2162,7 @@ mod tests {
     /// takes the same field with no such bound, so the check is AWS's alone.
     #[test]
     fn a_lifetime_aws_would_reject_is_refused_while_planning() {
-        let mut sandbox = sandbox_with(SandboxEgress::Deny, vec![]);
+        let mut sandbox = sandbox_with(SandboxEgress::None, vec![]);
 
         for seconds in [0, 28_801, 100_000] {
             sandbox.lifecycle.max_lifetime_seconds = Some(seconds);
@@ -2096,7 +2187,7 @@ mod tests {
     /// planning, not at the first sandbox.
     #[test]
     fn an_image_azure_cannot_pull_is_refused_while_planning() {
-        let mut sandbox = sandbox_with(SandboxEgress::Deny, vec![]);
+        let mut sandbox = sandbox_with(SandboxEgress::None, vec![]);
         // Azure enforces no declared ceiling, so a sandbox carrying limits is refused before the
         // image is ever read.
         sandbox.limits = None;
@@ -2214,7 +2305,7 @@ mod tests {
     /// need a reaper that does not exist, so it is refused rather than accepted and dropped.
     #[test]
     fn a_sandbox_deadline_is_accepted_only_where_the_platform_applies_it() {
-        let mut sandbox = sandbox_with(SandboxEgress::Deny, vec![]);
+        let mut sandbox = sandbox_with(SandboxEgress::None, vec![]);
         sandbox.lifecycle.max_lifetime_seconds = Some(3600);
 
         sandbox
@@ -2237,7 +2328,7 @@ mod tests {
     /// sandbox that can reach four times what the customer declared.
     #[test]
     fn an_aws_size_is_chosen_so_its_peak_stays_inside_the_declared_ceiling() {
-        let sandbox = sandbox_with(SandboxEgress::Deny, vec![]);
+        let sandbox = sandbox_with(SandboxEgress::None, vec![]);
         let tier = sandbox
             .microvm_tier()
             .expect("2Gi/1cpu/20Gi is satisfiable");
@@ -2258,7 +2349,7 @@ mod tests {
     /// machine four times smaller than the memory asked for, with nothing to indicate it.
     #[test]
     fn a_cpu_ceiling_below_what_the_memory_implies_is_refused_not_quietly_downsized() {
-        let mut sandbox = sandbox_with(SandboxEgress::Deny, vec![]);
+        let mut sandbox = sandbox_with(SandboxEgress::None, vec![]);
         {
             let limits = sandbox
                 .limits
@@ -2289,7 +2380,7 @@ mod tests {
     /// nearest one would silently exceed it.
     #[test]
     fn an_aws_ceiling_smaller_than_any_size_is_refused_rather_than_rounded() {
-        let mut sandbox = sandbox_with(SandboxEgress::Deny, vec![]);
+        let mut sandbox = sandbox_with(SandboxEgress::None, vec![]);
         sandbox
             .limits
             .as_mut()
@@ -2319,7 +2410,7 @@ mod tests {
                     target: None,
                 },
             })
-            .egress(SandboxEgress::Deny)
+            .egress(SandboxEgress::None)
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
@@ -2432,7 +2523,7 @@ mod tests {
 
     #[test]
     fn id_is_immutable_across_updates() {
-        let original = sandbox_with(SandboxEgress::Deny, vec![]);
+        let original = sandbox_with(SandboxEgress::None, vec![]);
         let renamed = Sandbox::new("other".to_string())
             .code(SandboxCode::Image {
                 image: "ubuntu".to_string(),
@@ -2443,7 +2534,7 @@ mod tests {
                     .clone()
                     .expect("the fixture declares limits"),
             )
-            .egress(SandboxEgress::Deny)
+            .egress(SandboxEgress::None)
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
@@ -2528,7 +2619,7 @@ mod tests {
     #[test]
     fn internet_access_switch_maps_only_the_two_expressible_modes() {
         assert_eq!(SandboxEgress::Allow.internet_access_switch(), Some(true));
-        assert_eq!(SandboxEgress::Deny.internet_access_switch(), Some(false));
+        assert_eq!(SandboxEgress::None.internet_access_switch(), Some(false));
         assert_eq!(
             SandboxEgress::AllowDomains {
                 domains: vec!["api.example.com".to_string()]

@@ -58,7 +58,10 @@ fn get_fic_name(prefix: &str) -> String {
 /// Where to create a role assignable only at `assignable_scope`: that resource group when it is
 /// in this subscription, otherwise the subscription.
 fn role_definition_scope_for(assignable_scope: &str, subscription_id: &str) -> Scope {
-    let segments: Vec<&str> = assignable_scope.split('/').filter(|s| !s.is_empty()).collect();
+    let segments: Vec<&str> = assignable_scope
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .collect();
     match segments.as_slice() {
         [subscriptions, subscription, groups, group]
             if subscriptions.eq_ignore_ascii_case("subscriptions")
@@ -1114,8 +1117,16 @@ mod tests {
         };
         let plan = AzureGrantPlan {
             custom_roles: vec![
-                role("own", "/subscriptions/sub-123/resourceGroups/rg-123", "a/write"),
-                role("cluster", "/subscriptions/sub-123/resourceGroups/aks-rg", "b/read"),
+                role(
+                    "own",
+                    "/subscriptions/sub-123/resourceGroups/rg-123",
+                    "a/write",
+                ),
+                role(
+                    "cluster",
+                    "/subscriptions/sub-123/resourceGroups/aks-rg",
+                    "b/read",
+                ),
                 role("skus", "/subscriptions/sub-123", "c/read"),
             ],
             bindings: vec![],
@@ -1139,7 +1150,10 @@ mod tests {
             name_at("/subscriptions/sub-123/resourceGroups/rg-123"),
             "test-management-resource-group-role"
         );
-        assert_eq!(name_at("/subscriptions/sub-123"), "test-management-subscription-role");
+        assert_eq!(
+            name_at("/subscriptions/sub-123"),
+            "test-management-subscription-role"
+        );
         assert!(name_at("/subscriptions/sub-123/resourceGroups/aks-rg")
             .starts_with("test-management-resource-group-role-"));
         assert!(matches!(
@@ -1168,7 +1182,10 @@ mod tests {
                 "own-role".to_string(),
             ),
         ]);
-        assert_eq!(controller.reported_role_definition_id().as_deref(), Some("own-role"));
+        assert_eq!(
+            controller.reported_role_definition_id().as_deref(),
+            Some("own-role")
+        );
         let cluster_delete_scope = controller
             .management_role_definition_ids("sub-123", "rg-123")
             .into_iter()
@@ -1246,15 +1263,24 @@ mod tests {
         let state = executor
             .internal_state::<AzureRemoteStackManagementController>()
             .expect("controller");
-        assert_eq!(state.state, AzureRemoteStackManagementState::CreatingRoleDefinition);
+        assert_eq!(
+            state.state,
+            AzureRemoteStackManagementState::CreatingRoleDefinition
+        );
 
-        executor.step().await.expect("role creation replaces the combined role");
+        executor
+            .step()
+            .await
+            .expect("role creation replaces the combined role");
         let state = executor
             .internal_state::<AzureRemoteStackManagementController>()
             .expect("controller");
         assert_eq!(state.role_definition_id, None);
         assert!(state.role_assignment_ids.is_empty());
-        assert_eq!(state.state, AzureRemoteStackManagementState::CreatingRoleAssignments);
+        assert_eq!(
+            state.state,
+            AzureRemoteStackManagementState::CreatingRoleAssignments
+        );
     }
 
     /// A custom role grants its actions on everything under the scope it is assigned at, so each
@@ -1593,7 +1619,10 @@ mod tests {
                     })
                     .collect();
                 assert_eq!(
-                    holders.iter().map(|role| role.scope.as_str()).collect::<Vec<_>>(),
+                    holders
+                        .iter()
+                        .map(|role| role.scope.as_str())
+                        .collect::<Vec<_>>(),
                     [resource_group_scope],
                     "{workload_set}: {action} must be in the resource-group management role only"
                 );
@@ -1884,8 +1913,11 @@ fn management_role_definitions(
             let kind = role.scope_kind.as_str();
             let uuid = Uuid::new_v5(
                 &Uuid::NAMESPACE_OID,
-                format!("deployment:azure:mgmt-role-def:{resource_prefix}:{}", role.scope)
-                    .as_bytes(),
+                format!(
+                    "deployment:azure:mgmt-role-def:{resource_prefix}:{}",
+                    role.scope
+                )
+                .as_bytes(),
             )
             .to_string();
             let own_scope = role.scope.eq_ignore_ascii_case(&subscription_scope)
@@ -2062,11 +2094,12 @@ impl AzureRemoteStackManagementController {
                     role_definition_scope_from_id(id, resource_group_name),
                 )
             })
-            .chain(
-                self.scoped_role_definition_ids
-                    .iter()
-                    .map(|(scope, id)| (id.clone(), role_definition_scope_for(scope, subscription_id))),
-            )
+            .chain(self.scoped_role_definition_ids.iter().map(|(scope, id)| {
+                (
+                    id.clone(),
+                    role_definition_scope_for(scope, subscription_id),
+                )
+            }))
             .collect()
     }
 

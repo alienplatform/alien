@@ -75,7 +75,7 @@ get "persistentStorage"(){
               },
 "pool": z.string().describe("Capacity group to run on (must exist in the cluster)\nIf not specified, containers are scheduled to any available group.").nullish(),
 get "ports"(){
-                return z.array(ContainerPortSchema.describe("Container port configuration.")).describe("Internal container ports (at least one required).")
+                return z.array(ContainerPortSchema.describe("Container port configuration.")).describe("Ports reachable by compute-cluster members and resources that link to this container.")
               },
 get "publicEndpoints"(){
                 return z.array(PublicEndpointSchema.describe("Public endpoint configuration for port-backed workload resources.")).describe("Public endpoints exposed by the container.").optional()

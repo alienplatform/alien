@@ -11,8 +11,7 @@ use async_trait::async_trait;
 pub struct KubernetesContainer {
     service_name: String,
     public_url: Option<String>,
-    internal_endpoints:
-        std::collections::HashMap<String, alien_core::ContainerInternalEndpointOutput>,
+    internal_urls: std::collections::HashMap<u16, String>,
     internal_url: String,
 }
 
@@ -64,9 +63,9 @@ impl KubernetesContainer {
             service_name, namespace, service_port
         );
 
-        let internal_endpoints = super::resolve_internal_endpoints(binding.internal_endpoints)?;
+        let internal_urls = super::resolve_internal_urls(binding.internal_urls)?;
         Ok(Self {
-            internal_endpoints,
+            internal_urls,
             service_name: service_name.clone(),
             public_url,
             internal_url,
@@ -78,10 +77,8 @@ impl KubernetesContainer {
 impl Binding for KubernetesContainer {}
 
 impl Container for KubernetesContainer {
-    fn get_internal_endpoints(
-        &self,
-    ) -> std::collections::HashMap<String, alien_core::ContainerInternalEndpointOutput> {
-        self.internal_endpoints.clone()
+    fn get_internal_urls(&self) -> std::collections::HashMap<u16, String> {
+        self.internal_urls.clone()
     }
 
     fn get_internal_url(&self) -> &str {

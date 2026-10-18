@@ -19,6 +19,8 @@ pub use traits::{
 pub mod bindings;
 pub mod error;
 pub mod providers;
+pub mod sandbox_egress;
+pub mod sandbox_egress_token;
 pub mod traits;
 // Re-export presigned types from alien-core
 pub mod presigned {

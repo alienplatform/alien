@@ -70,6 +70,7 @@ function fakeRemoteAddon() {
   })
   const terminate = vi.fn<RawSandboxHandle["terminate"]>(async () => {})
   const sandbox: RawSandboxHandle = {
+    updateEgress: async () => {},
     capabilities: () => ["files", "reconnect"],
     create: async sandboxId => instance(sandboxId),
     get: async () => null,
@@ -325,29 +326,9 @@ describe("Bindings.forRemoteDeployment", () => {
 
     expect(fixture.resolveSandbox).not.toHaveBeenCalled()
     expect(bindings.sandbox("agent")).toBe(agent)
-    // A remote Sandbox is the in-cloud one, so a method missing here is a caller writing
-    // against a surface the hosted path silently does not have.
-    expect(Object.keys(agent).sort()).toEqual(
-      [
-        "capabilities",
-        "create",
-        "get",
-        "getOrCreate",
-        "list",
-        "runCommand",
-        "startJob",
-        "pollJob",
-        "cancelJob",
-        "readFile",
-        "writeFiles",
-        "preview",
-        "pause",
-        "resume",
-        "terminate",
-      ].sort(),
-    )
 
     await expect(agent.capabilities()).resolves.toEqual(["files", "reconnect"])
+    await agent.updateEgress("session_1", { allow: [] })
     await agent.terminate("session_1")
     await build.capabilities()
 

@@ -13,8 +13,7 @@ pub struct HorizonContainer {
     container_name: String,
     internal_url: String,
     public_url: Option<String>,
-    internal_endpoints:
-        std::collections::HashMap<String, alien_core::ContainerInternalEndpointOutput>,
+    internal_urls: std::collections::HashMap<u16, String>,
 }
 
 impl HorizonContainer {
@@ -53,9 +52,9 @@ impl HorizonContainer {
             })
             .transpose()?;
 
-        let internal_endpoints = super::resolve_internal_endpoints(binding.internal_endpoints)?;
+        let internal_urls = super::resolve_internal_urls(binding.internal_urls)?;
         Ok(Self {
-            internal_endpoints,
+            internal_urls,
             container_name,
             internal_url,
             public_url,
@@ -67,10 +66,8 @@ impl Binding for HorizonContainer {}
 
 #[async_trait]
 impl Container for HorizonContainer {
-    fn get_internal_endpoints(
-        &self,
-    ) -> std::collections::HashMap<String, alien_core::ContainerInternalEndpointOutput> {
-        self.internal_endpoints.clone()
+    fn get_internal_urls(&self) -> std::collections::HashMap<u16, String> {
+        self.internal_urls.clone()
     }
 
     fn get_internal_url(&self) -> &str {

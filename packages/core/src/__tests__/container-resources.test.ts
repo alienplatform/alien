@@ -17,19 +17,14 @@ it("clears deployment choices when both resources become fixed", () => {
   expect(resource.config).not.toHaveProperty("resourceChoices", expect.anything())
 })
 
-it("keeps source-restricted endpoints separate from ordinary and public ports", () => {
-  const caller = new Container("caller")
+it("keeps internet egress opt-in and container ports reachable through links", () => {
+  const api = new Container("api")
     .code({ type: "image", image: "example:latest" })
     .cpu(1)
     .memory("512Mi")
     .permissions("app")
-    .build()
-  const endpoint = new Container("api")
-    .code({ type: "image", image: "example:latest" })
-    .cpu(1)
-    .memory("512Mi")
-    .permissions("app")
-    .internalEndpoint("admin", 3129, { from: [caller] })
+    .port(3128)
+    .port(3129)
     .security({
       profile: "restricted",
       runAsUser: 65532,
@@ -38,20 +33,14 @@ it("keeps source-restricted endpoints separate from ordinary and public ports", 
     })
     .egress("internet")
     .build()
-  expect(endpoint.config).toMatchObject({
-    ports: [],
-    publicEndpoints: [],
-    links: [],
-    egress: "internet",
-    internalEndpoints: [{ name: "admin", port: 3129, from: [{ type: "container", id: "caller" }] }],
-  })
-  expect(() =>
-    new Container("invalid")
-      .code({ type: "image", image: "example:latest" })
-      .cpu(1)
-      .memory("512Mi")
-      .permissions("app")
-      .internalEndpoint("admin", 3129, { from: [] })
-      .build(),
-  ).toThrow()
+  const caller = new Container("caller")
+    .code({ type: "image", image: "example:latest" })
+    .cpu(1)
+    .memory("512Mi")
+    .permissions("app")
+    .link(api)
+    .build()
+  expect(api.config).toMatchObject({ ports: [{ port: 3128 }, { port: 3129 }], egress: "internet" })
+  expect(caller.config).toMatchObject({ links: [{ type: "container", id: "api" }] })
+  expect(caller.config.egress).toBeUndefined()
 })

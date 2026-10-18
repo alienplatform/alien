@@ -715,7 +715,7 @@ impl LocalContainerController {
                 desired_replicas: 1,
                 internal_dns: info.internal_dns.clone(),
                 public_endpoints: local_public_endpoint_outputs(info),
-                internal_endpoints: std::collections::HashMap::new(),
+                internal_urls: local_internal_urls(info),
                 replicas: Vec::new(), // TODO: Add replica status
                 // A local volume is a host directory: nothing is snapshotted, and with no
                 // volumes reported there is nothing to restore.
@@ -764,7 +764,7 @@ fn local_container_binding(info: &ContainerInfo) -> ContainerBinding {
     let scheme = local_endpoint_scheme(protocol);
     let internal_url = format!("{scheme}://{}:{internal_port}", info.internal_dns);
 
-    if let Some(host_port) = info.host_port {
+    let binding = if let Some(host_port) = info.host_port {
         ContainerBinding::local_with_public_url(
             BindingValue::value(info.container_id.clone()),
             BindingValue::value(internal_url),
@@ -775,7 +775,34 @@ fn local_container_binding(info: &ContainerInfo) -> ContainerBinding {
             BindingValue::value(info.container_id.clone()),
             BindingValue::value(internal_url),
         )
-    }
+    };
+    binding.with_internal_urls(
+        local_internal_urls(info)
+            .into_iter()
+            .map(|(port, url)| (port, BindingValue::value(url)))
+            .collect(),
+    )
+}
+
+fn local_internal_urls(info: &ContainerInfo) -> std::collections::HashMap<u16, String> {
+    info.ports
+        .iter()
+        .map(|port| {
+            let protocol = info
+                .public_endpoint
+                .as_ref()
+                .filter(|endpoint| endpoint.port == *port)
+                .map_or(ExposeProtocol::Http, |endpoint| endpoint.protocol);
+            (
+                *port,
+                format!(
+                    "{}://{}:{port}",
+                    local_endpoint_scheme(protocol),
+                    info.internal_dns
+                ),
+            )
+        })
+        .collect()
 }
 
 fn local_public_endpoint_outputs(
@@ -1153,7 +1180,7 @@ mod tests {
             "containerId": "web",
             "dockerContainerId": "docker-id",
             "hostPort": 49153,
-            "ports": [8080],
+            "ports": [8080, 3129],
             "internalDns": "web.svc"
         }))
         .expect("old controller state should deserialize");
@@ -1161,6 +1188,10 @@ mod tests {
         let binding =
             serde_json::to_value(local_container_binding(&info)).expect("binding should serialize");
         assert_eq!(binding["internalUrl"], "http://web.svc:8080");
+        assert_eq!(
+            binding["internalUrls"],
+            serde_json::json!({"8080":"http://web.svc:8080", "3129":"http://web.svc:3129"})
+        );
         assert_eq!(binding["publicUrl"], "http://localhost:49153");
     }
 

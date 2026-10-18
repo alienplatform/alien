@@ -12,7 +12,7 @@ fn sandbox(id: &str, image: &str) -> Sandbox {
         .code(SandboxCode::Image {
             image: image.to_string(),
         })
-        .egress(SandboxEgress::Deny)
+        .egress(SandboxEgress::None)
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,

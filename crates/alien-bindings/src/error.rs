@@ -13,6 +13,55 @@ pub fn binding_env_var(binding_name: &str) -> String {
 #[derive(Debug, Clone, AlienErrorData, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ErrorData {
+    /// Policy exceeds the portable target-count or canonical JSON size limit.
+    #[error(
+        code = "SANDBOX_EGRESS_POLICY_TOO_LARGE",
+        message = "Sandbox egress policy exceeds {limit}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    SandboxEgressPolicyTooLarge { limit: String },
+
+    /// Runtime policies require the new internet declaration.
+    #[error(
+        code = "SANDBOX_EGRESS_REQUIRES_INTERNET",
+        message = "A runtime egress policy requires a sandbox declared internet",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    SandboxEgressRequiresInternet,
+    /// No gateway can enforce a requested runtime policy.
+    #[error(
+        code = "SANDBOX_EGRESS_GATEWAY_UNAVAILABLE",
+        message = "Sandbox egress gateway unavailable: {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    SandboxEgressGatewayUnavailable { reason: String },
+
+    /// The agent's self-check found an unsafe or unverified outbound path.
+    #[error(
+        code = "EGRESS_PATH_UNEXPECTED",
+        message = "Sandbox egress path is not verified",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 503
+    )]
+    SandboxEgressPathUnexpected,
+
+    /// An egress target is invalid.
+    #[error(
+        code = "SANDBOX_EGRESS_INVALID",
+        message = "Invalid sandbox egress: {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    SandboxEgressInvalid { reason: String },
+
     /// Plaintext or context is outside the portable Key binding limits.
     #[error(
         code = "KEY_INPUT_INVALID",

@@ -1,3 +1,6 @@
+import type { EgressPolicy } from "@alienplatform/core"
+
+export type { EgressPolicy } from "@alienplatform/core"
 /**
  * Public types for `@alienplatform/bindings`: the app-facing resource handle
  * interfaces and their operation option/result shapes. These mirror the Rust
@@ -257,7 +260,7 @@ export interface Queue {
 /** Read-only service discovery for a linked container. */
 export interface Container {
   /** Get the URL reachable from the deployment's private network. */
-  getInternalEndpoints(): Promise<Record<string, { url: string }>>
+  getInternalUrls(): Promise<Record<number, string>>
   getInternalUrl(): Promise<string>
   /** Get the public URL when the container is publicly exposed. */
   getPublicUrl(): Promise<string | null>
@@ -432,6 +435,8 @@ export interface ResolvedSandbox {
 
 /** What a sandbox is created with. */
 export interface CreateSandboxOptions {
+  /** Sets the runtime policy; omission uses the resource default or public internet. */
+  egress?: EgressPolicy
   /**
    * A provider-scoped id to reconnect to when passed to `getOrCreate`, or a requested id when a
    * sandbox is created.
@@ -531,6 +536,12 @@ export interface Sandbox {
    * created with, and `created` is how a caller tells the two apart.
    */
   getOrCreate(options?: CreateSandboxOptions): Promise<ResolvedSandbox>
+  getOrCreate(
+    sandboxId: string,
+    options?: Omit<CreateSandboxOptions, "sandboxId">,
+  ): Promise<ResolvedSandbox>
+  /** Changes the runtime policy; backends without a gateway refuse explicitly. */
+  updateEgress(sandboxId: string, egress: EgressPolicy): Promise<void>
   /**
    * Lists this binding's sandboxes. Not offered on AWS, Azure or GCP — those raise rather than
    * enumerate. Reach a sandbox whose id you hold with `get`.

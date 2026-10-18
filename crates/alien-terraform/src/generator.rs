@@ -1675,7 +1675,10 @@ fn deployer_secret_outputs(
     deployer_secrets_vault_binding: Option<&Expression>,
 ) -> Result<Vec<(String, Expression, String)>> {
     // Preflights omit this vault when every deployer input retains a stored value.
-    if !stack.resources.contains_key(alien_core::DEPLOYER_SECRETS_VAULT_ID) {
+    if !stack
+        .resources
+        .contains_key(alien_core::DEPLOYER_SECRETS_VAULT_ID)
+    {
         return Ok(Vec::new());
     }
     let platform = target.deployment_platform();
@@ -4273,7 +4276,7 @@ fn readme_md(
         // approver looking for it.
         let scaffolding = if live_sandboxes
             .iter()
-            .any(|sandbox| !matches!(sandbox.cloud_egress(), SandboxEgress::Allow))
+            .any(|sandbox| !matches!(sandbox.cloud_egress(), SandboxEgress::Internet))
         {
             "build scaffolding — the build role, egress connector, operator role, and security \
              group —"

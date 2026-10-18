@@ -134,6 +134,7 @@ pub fn egress_control_config(
 /// A Sandbox backed by the Vertex AI Agent Platform.
 #[derive(Debug)]
 pub struct GcpAgentPlatformSandbox {
+    egress: Option<alien_core::SandboxEgress>,
     client: Arc<dyn AgentPlatformApi>,
     /// Bare reasoning-engine id the client interpolates into its paths. The binding may carry a
     /// full resource name, so it is reduced to its last segment once, here.
@@ -145,6 +146,12 @@ pub struct GcpAgentPlatformSandbox {
 }
 
 impl GcpAgentPlatformSandbox {
+    /// Supplies the declaration carried by the resolved binding.
+    pub fn with_egress(mut self, egress: Option<alien_core::SandboxEgress>) -> Self {
+        self.egress = egress;
+        self
+    }
+
     /// The `ttl` a create is sent with: what the caller asked for, never above what the
     /// declaration allows.
     fn lifetime_seconds(&self, timeout_ms: Option<u64>, operation: &str) -> Result<Option<u32>> {
@@ -169,6 +176,7 @@ impl GcpAgentPlatformSandbox {
     ) -> Self {
         let engine = engine.rsplit('/').next().unwrap_or(&engine).to_string();
         Self {
+            egress: None,
             client,
             engine,
             template,
@@ -567,6 +575,9 @@ impl Binding for GcpAgentPlatformSandbox {}
 
 #[async_trait]
 impl Sandbox for GcpAgentPlatformSandbox {
+    fn egress_declaration(&self) -> Option<&alien_core::SandboxEgress> {
+        self.egress.as_ref()
+    }
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
@@ -579,6 +590,7 @@ impl Sandbox for GcpAgentPlatformSandbox {
     }
 
     async fn create(&self, request: CreateSandboxRequest) -> Result<SandboxInstance> {
+        super::egress::require_default(request.egress.as_ref(), self.egress_declaration())?;
         // A sandbox takes no environment of its own: `SandboxCreateRequest` has no env field,
         // so silently dropping one would run the caller's code without the variables it asked for.
         // They travel per command through `run_command` instead.
@@ -687,6 +699,7 @@ impl Sandbox for GcpAgentPlatformSandbox {
     }
 
     async fn get_or_create(&self, request: CreateSandboxRequest) -> Result<ResolvedSandbox> {
+        super::egress::require_default(request.egress.as_ref(), self.egress_declaration())?;
         if let Some(id) = request.sandbox_id.as_deref() {
             // A running, reachable sandbox is handed back; anything else is served by a fresh
             // sandbox rather than by destroying one this call did not create, which may be

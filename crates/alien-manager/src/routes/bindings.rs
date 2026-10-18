@@ -1927,6 +1927,12 @@ fn remote_sandbox_binding(
                 reason: format!("Sandbox resource '{resource_id}' has an invalid remote binding"),
             })?;
 
+    if binding.default_policy().is_some()
+        || binding.egress().and_then(|value| value.gateway()).is_some()
+    {
+        return Err(ErrorData::bad_request(format!("Sandbox resource '{resource_id}' requires gateway policy support; use an ordinary workload binding")));
+    }
+
     // The stored binding must be the deployment's own cloud. The platform gate above only says
     // the grant exists there; without this, an AWS binding recorded on an Azure deployment would
     // resolve into an AWS credential lease for a sandbox that is not on AWS.
@@ -1958,7 +1964,10 @@ fn remote_sandbox_binding(
             // Bypassable rather than unreachable: the grant is a data-plane role whose holder
             // creates sandboxes directly, so handing out the lease would report a restriction
             // that is not one. Same reference as the AWS arm for the full contrast.
-            if !matches!(binding.egress, alien_core::SandboxEgress::Allow) {
+            if !matches!(
+                binding.egress.declaration(),
+                alien_core::SandboxEgress::Internet
+            ) {
                 return Err(ErrorData::bad_request(format!(
                     "Sandbox resource '{resource_id}' restricts egress; Remote Bindings can only reach a sandbox declared with open egress"
                 )));
@@ -1989,7 +1998,10 @@ fn remote_sandbox_binding(
                 )?,
                 disk_image: concrete_binding_value(&binding.disk_image, "Azure sandbox diskImage")?,
                 // Checked immediately above, so this is the checked value rather than a literal.
-                allow_egress: matches!(binding.egress, alien_core::SandboxEgress::Allow),
+                allow_egress: matches!(
+                    binding.egress.declaration(),
+                    alien_core::SandboxEgress::Internet
+                ),
                 idle_pause_seconds: binding.idle_pause_seconds,
                 cpu: optional(binding.cpu, "Azure sandbox cpu")?,
                 memory: optional(binding.memory, "Azure sandbox memory")?,

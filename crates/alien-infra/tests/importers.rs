@@ -1200,7 +1200,7 @@ fn sandbox_resource() -> Sandbox {
         .code(SandboxCode::Image {
             image: "manager.example.com/alien-artifacts-proj:base".to_string(),
         })
-        .egress(SandboxEgress::Deny)
+        .egress(SandboxEgress::None)
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: Some(1800),
             idle_pause_seconds: None,

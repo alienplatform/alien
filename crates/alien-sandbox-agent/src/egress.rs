@@ -9,7 +9,17 @@ use std::{
     process::{Command, Stdio},
 };
 
-use alien_core::SandboxEgress;
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+/// Startup policy retained for images using the legacy supervisor contract.
+pub enum StartupEgressPolicy {
+    None,
+    Internet,
+    #[serde(untagged)]
+    Allow {
+        allow: Vec<String>,
+    },
+}
 use alien_error::{AlienError, Context, IntoAlienError};
 
 use crate::error::{ErrorData, Result};
@@ -36,9 +46,9 @@ fn public(ip: Ipv4Addr) -> bool {
 
 /// Resolves once at startup and pins the result in /etc/hosts. Commands get no DNS exception:
 /// allowing arbitrary DNS queries would let them bypass a deny/allowlist with query names.
-fn destinations(policy: &SandboxEgress) -> Result<BTreeSet<Ipv4Addr>> {
+fn destinations(policy: &StartupEgressPolicy) -> Result<BTreeSet<Ipv4Addr>> {
     let mut ips = BTreeSet::new();
-    if let SandboxEgress::AllowDomains { domains } = policy {
+    if let StartupEgressPolicy::Allow { allow: domains } = policy {
         let mut hosts = String::new();
         for domain in domains {
             if domain.is_empty()
@@ -131,7 +141,7 @@ fn pin_hosts(hosts: &str) -> std::io::Result<()> {
 /// AWS's internal transport must initialize after image restore; filtering its root traffic
 /// prevents the VM from serving requests. Native nftables uid matching is supported even
 /// though this kernel lacks the iptables owner extension.
-pub fn install(policy: &SandboxEgress, command_uid: u32) -> Result<()> {
+pub fn install(policy: &StartupEgressPolicy, command_uid: u32) -> Result<()> {
     if unsafe { libc::geteuid() } != 0 || command_uid == 0 {
         return Err(AlienError::new(failed(
             "requires a root supervisor and a non-root command uid",
@@ -144,13 +154,13 @@ pub fn install(policy: &SandboxEgress, command_uid: u32) -> Result<()> {
     let mut rules = format!("add table ip alien_egress\nflush table ip alien_egress\nadd chain ip alien_egress output {{ type filter hook output priority 0; policy accept; }}\nadd chain ip alien_egress commands\nadd rule ip alien_egress output meta skuid {command_uid} jump commands\n");
     let mut add =
         |rule: &str| rules.push_str(&format!("add rule ip alien_egress commands {rule}\n"));
-    if !matches!(policy, SandboxEgress::Allow) {
+    if !matches!(policy, StartupEgressPolicy::Internet) {
         add("udp dport 53 drop");
         add("tcp dport 53 drop");
     }
     add("oifname \"lo\" accept");
     add("ct state established,related accept");
-    if matches!(policy, SandboxEgress::Allow) {
+    if matches!(policy, StartupEgressPolicy::Internet) {
         let resolv = fs::read_to_string("/etc/resolv.conf")
             .into_alien_error()
             .context(failed("read resolver configuration"))?;
@@ -166,13 +176,13 @@ pub fn install(policy: &SandboxEgress, command_uid: u32) -> Result<()> {
         }
     }
     match policy {
-        SandboxEgress::Deny => {}
-        SandboxEgress::AllowDomains { .. } => {
+        StartupEgressPolicy::None => {}
+        StartupEgressPolicy::Allow { .. } => {
             for ip in ips {
                 add(&format!("ip daddr {ip} accept"));
             }
         }
-        SandboxEgress::Allow => {
+        StartupEgressPolicy::Internet => {
             for cidr in [
                 "0.0.0.0/8",
                 "10.0.0.0/8",
@@ -216,4 +226,54 @@ pub fn install(policy: &SandboxEgress, command_uid: u32) -> Result<()> {
         ))));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_core::{
+        EgressPolicy, Platform, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy,
+        SandboxPrivilegedSupervisor,
+    };
+
+    #[test]
+    fn runtime_defaults_do_not_become_the_startup_network_floor() {
+        let mut sandbox = Sandbox::new("box".into())
+            .code(SandboxCode::Image {
+                image: "ubuntu".into(),
+            })
+            .egress(SandboxEgress::Internet)
+            .lifecycle(SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build();
+        sandbox.privileged_supervisor = Some(SandboxPrivilegedSupervisor { command_uid: 60001 });
+        for target in [
+            "*.example.com",
+            "8.8.8.0/24",
+            "bücher.de",
+            "api.example.com:8443",
+        ] {
+            sandbox.default_policy = Some(EgressPolicy::Allow {
+                allow: vec![target.into()],
+            });
+            sandbox.validate_for_platform(Platform::Aws).unwrap();
+            let env = sandbox.supervisor_environment();
+            let policy: StartupEgressPolicy =
+                serde_json::from_str(&env["ALIEN_SANDBOX_EGRESS"]).unwrap();
+            destinations(&policy)
+                .expect("accepted runtime targets must not stop legacy agent startup");
+            assert!(
+                matches!(policy, StartupEgressPolicy::Internet),
+                "a runtime default must not become a permanent startup allowlist"
+            );
+        }
+        sandbox.default_policy = None;
+        sandbox.egress = SandboxEgress::None;
+        let env = sandbox.supervisor_environment();
+        let policy: StartupEgressPolicy =
+            serde_json::from_str(&env["ALIEN_SANDBOX_EGRESS"]).unwrap();
+        assert!(matches!(policy, StartupEgressPolicy::None));
+    }
 }

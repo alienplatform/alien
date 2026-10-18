@@ -103,7 +103,11 @@ mod schema_snapshots {
     use indexmap::IndexMap;
 
     fn schema<T: schemars::JsonSchema>() -> serde_json::Value {
-        serde_json::to_value(schemars::schema_for!(T)).expect("schema should serialize")
+        let mut schema =
+            serde_json::to_value(schemars::schema_for!(T)).expect("schema should serialize");
+        // Dependency features can enable preserve_order; object key order is not schema data.
+        schema.sort_all_objects();
+        schema
     }
 
     #[test]

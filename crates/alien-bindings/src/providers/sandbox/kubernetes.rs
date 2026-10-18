@@ -46,6 +46,7 @@ struct ClaimRequest<'a> {
 /// A Sandbox backed by pods under a sandboxed runtime class.
 #[derive(Debug)]
 pub struct KubernetesSandbox {
+    egress: Option<alien_core::SandboxEgress>,
     resource_id: String,
     broker_url: String,
     token_path: String,
@@ -66,6 +67,24 @@ impl KubernetesSandbox {
         binding: &KubernetesSandboxBinding,
         resource_id: &str,
     ) -> Result<Self> {
+        if binding
+            .egress
+            .as_ref()
+            .and_then(|value| value.gateway())
+            .is_some()
+        {
+            return Err(super::egress::unsupported("gateway-backed sandbox"));
+        }
+        super::egress::require_default(
+            binding.default_policy.as_ref().or_else(|| {
+                binding
+                    .egress
+                    .as_ref()
+                    .and_then(|value| value.default_policy())
+            }),
+            binding.egress.as_ref().map(|value| value.declaration()),
+        )?;
+
         let value = |field: &'static str, value: alien_core::bindings::BindingValue<String>| {
             value.into_value(binding_name, field).map_err(|error| {
                 AlienError::new(ErrorData::BindingConfigInvalid {
@@ -77,6 +96,10 @@ impl KubernetesSandbox {
         };
 
         Ok(Self {
+            egress: binding
+                .egress
+                .as_ref()
+                .map(|egress| egress.declaration().clone()),
             resource_id: resource_id.to_string(),
             broker_url: value("brokerUrl", binding.broker_url.clone())?
                 .trim_end_matches('/')
@@ -178,6 +201,9 @@ impl Binding for KubernetesSandbox {}
 
 #[async_trait]
 impl Sandbox for KubernetesSandbox {
+    fn egress_declaration(&self) -> Option<&alien_core::SandboxEgress> {
+        self.egress.as_ref()
+    }
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
@@ -194,6 +220,7 @@ impl Sandbox for KubernetesSandbox {
 
     /// Claims a warm pod through the broker.
     async fn create(&self, request: CreateSandboxRequest) -> Result<SandboxInstance> {
+        super::egress::require_default(request.egress.as_ref(), self.egress_declaration())?;
         self.refuse_create_time_lifetime(&request)?;
         let sandbox_id = request
             .sandbox_id
@@ -263,6 +290,7 @@ impl Sandbox for KubernetesSandbox {
     }
 
     async fn get_or_create(&self, request: CreateSandboxRequest) -> Result<ResolvedSandbox> {
+        super::egress::require_default(request.egress.as_ref(), self.egress_declaration())?;
         // Refused on the reconnect path too: a claimed pod honors a lifetime no more than a
         // freshly claimed one would.
         self.refuse_create_time_lifetime(&request)?;
@@ -414,6 +442,8 @@ mod tests {
         KubernetesSandbox::new(
             "sbx",
             &KubernetesSandboxBinding {
+                default_policy: None,
+                egress: None,
                 namespace: BindingValue::Value("alien".to_string()),
                 runtime_class: BindingValue::Value("gvisor".to_string()),
                 selector: BindingValue::Value("alien/sandbox=sbx-pool".to_string()),

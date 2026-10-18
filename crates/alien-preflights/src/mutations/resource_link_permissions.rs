@@ -372,7 +372,7 @@ mod tests {
             .code(alien_core::SandboxCode::Image {
                 image: "example.com/sandbox:latest".to_string(),
             })
-            .egress(alien_core::SandboxEgress::Allow)
+            .egress(alien_core::SandboxEgress::Internet)
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,

@@ -45,7 +45,7 @@ fn sandbox_denies_egress(entry: &ResourceEntry) -> bool {
     entry
         .config
         .downcast_ref::<Sandbox>()
-        .is_some_and(|sandbox| !matches!(sandbox.cloud_egress(), SandboxEgress::Allow))
+        .is_some_and(|sandbox| !matches!(sandbox.cloud_egress(), SandboxEgress::Internet))
 }
 
 /// Ensures public subnets are configured when resources need public ingress.
@@ -445,14 +445,8 @@ mod tests {
     #[test]
     fn a_sandbox_requires_a_network_only_when_its_egress_is_restricted() {
         for (egress, expected) in [
-            (SandboxEgress::Deny, true),
-            (
-                SandboxEgress::AllowDomains {
-                    domains: vec!["example.com".to_string()],
-                },
-                true,
-            ),
-            (SandboxEgress::Allow, false),
+            (SandboxEgress::None, true),
+            (SandboxEgress::Internet, false),
         ] {
             let mut resources = IndexMap::new();
             resources.insert("runner".to_string(), create_sandbox_entry(egress.clone()));
