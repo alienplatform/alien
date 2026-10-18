@@ -64,3 +64,77 @@ Use `traffic-proxy.py` with a local S3 emulator or registry to count request/res
 payload bytes. It logs no headers, but it is a test-only buffering proxy, not a service.
 Read-only, network-disabled container runs must verify application/dependency output.
 No cloud deployment is needed for these checks.
+
+## Complete local transport setup
+
+From this repository root, in a disposable environment (ports below must be free):
+
+```sh
+python3 -m venv /tmp/cache-probe-tools
+/tmp/cache-probe-tools/bin/pip install 'moto[server]==5.1.17'
+/tmp/cache-probe-tools/bin/moto_server -H 127.0.0.1 -p 51615 >/tmp/cache-moto.log 2>&1 &
+docker run -d --name cache-probe-registry -p 127.0.0.1:51614:5000 \
+  registry@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
+python3 scripts/docker-cache/traffic-proxy.py --listen 51616 --upstream 51614 --log /tmp/cache-registry.jsonl &
+python3 scripts/docker-cache/traffic-proxy.py --listen 51617 --upstream 51615 --log /tmp/cache-s3.jsonl &
+/tmp/cache-probe-tools/bin/python - <<'PY'
+import boto3
+client = boto3.client('s3', endpoint_url='http://127.0.0.1:51617',
+    aws_access_key_id='synthetic', aws_secret_access_key='synthetic', region_name='us-east-1')
+client.create_bucket(Bucket='synthetic-build-cache')
+PY
+
+# The public push probe is committed source, not a hidden test dependency.
+git clone https://github.com/alienplatform/dockdash.git /tmp/cache-push-probe
+git -C /tmp/cache-push-probe checkout 04a56d0c750884d8ed66de13f86e0279132d135b
+cargo +stable build --manifest-path /tmp/cache-push-probe/Cargo.toml --example cache-evidence-push
+cargo build -p alien-build --example docker-cache-probe
+AWS_ACCESS_KEY_ID=synthetic AWS_SECRET_ACCESS_KEY=synthetic AWS_REGION=us-east-1 \
+AWS_ENDPOINT=http://127.0.0.1:51617 AWS_ALLOW_HTTP=true \
+python3 scripts/docker-cache/run-matrix.py \
+  --output /tmp/cache-matrix-results --prefix cache-proof \
+  --cache-url s3://synthetic-build-cache/proof \
+  --cache-log /tmp/cache-s3.jsonl --registry-log /tmp/cache-registry.jsonl \
+  --push-probe /tmp/cache-push-probe/target/debug/examples/cache-evidence-push
+```
+
+The runner compares archive app/dependency bytes and version to the source files and
+requested build argument, then compares read-only/network-none runtime output to those
+independent inputs. It records exit statuses and checks preserved nonces/layers for cache
+reuse, changed nonces for invalidation, normalization and registry payload identity,
+failure recovery, and concurrent distinct app builds. It creates only prefixed test
+builders; the first *local* result is cold only if the daemon's fallback was empty.
+It never clears an existing fallback cache. Its HTTP counts cover cache and image-push
+payloads, not headers, TLS, base-image pulls, or provider billing.
+
+For simultaneous first-creation validation, use a disposable daemon or remove only a
+fallback known to belong to your test, then start two probe processes with
+`BUILDX_BUILDER=default`, distinct app source directories, and separate output directories.
+Inspect and run both images against their independent inputs, and inspect the retained
+shared builder. Delete only test-created containers/builders when finished.
+
+## Reproduce the unchanged-main baseline
+
+Use the same committed fixture with the old toolchain, not a hand-written approximation:
+
+```sh
+git worktree add --detach /tmp/cache-before 5629803a7a704879a308dd1d724a88b81d9585ae
+python3 - <<'PY'
+from pathlib import Path
+probe = Path('crates/alien-build/examples/docker-cache-probe.rs').read_text()
+probe = probe.replace('cache_utils::store_from_url, ', '')
+probe = probe.replace('cache_store: store_from_url(std::env::var("PROBE_CACHE_URL").ok().as_deref())?,', 'cache_store: None,')
+Path('/tmp/cache-before/crates/alien-build/examples/docker-cache-probe.rs').write_text(probe)
+PY
+cargo build --manifest-path /tmp/cache-before/Cargo.toml -p alien-build --example docker-cache-probe
+BUILDX_BUILDER=default /tmp/cache-before/target/debug/examples/docker-cache-probe scripts/docker-cache /tmp/cold-one
+BUILDX_BUILDER=default /tmp/cache-before/target/debug/examples/docker-cache-probe scripts/docker-cache /tmp/cold-two
+python3 scripts/docker-cache/inspect-image.py /tmp/cold-one/linux-x64.oci.tar
+python3 scripts/docker-cache/inspect-image.py /tmp/cold-two/linux-x64.oci.tar
+```
+
+Only the harness is added to the detached baseline checkout; the baseline Docker
+implementation stays unchanged. Both builds execute the dependency step, changing its
+random nonce and layer digest. Use the same wrapper/push/inspection commands above to
+capture normalization and registry bytes. The baseline and fixed implementations need
+not use the same Cargo target directory.
