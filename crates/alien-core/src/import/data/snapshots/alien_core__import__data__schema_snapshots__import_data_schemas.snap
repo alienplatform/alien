@@ -417,6 +417,62 @@ expression: schemas
           }
         },
         "type": "object"
+      },
+      "AwsSandboxNetwork": {
+        "description": "Setup-validated network coordinates for the sandbox connector and gateway.",
+        "properties": {
+          "gatewayCidrs": {
+            "description": "Only destinations permitted by the connector security group.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "gatewaySubnetIds": {
+            "description": "Dedicated NAT-routed subnets for the gateway's internal load balancer.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "sandboxCidrs": {
+            "description": "Source ranges permitted on the gateway proxy port.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "sandboxSubnetIds": {
+            "description": "Route-less connector subnet identifiers.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "vpcCidrs": {
+            "description": "Every associated VPC IPv4 range, denied by the gateway.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "workloadCidrs": {
+            "description": "Source ranges permitted on the gateway admin port.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "gatewayCidrs",
+          "gatewaySubnetIds",
+          "sandboxCidrs",
+          "sandboxSubnetIds",
+          "vpcCidrs",
+          "workloadCidrs"
+        ],
+        "type": "object"
       }
     },
     "description": "AWS Network ImportData.",
@@ -487,6 +543,17 @@ expression: schemas
           "type": "string"
         },
         "type": "array"
+      },
+      "sandboxNetwork": {
+        "anyOf": [
+          {
+            "$ref": "#/definitions/AwsSandboxNetwork"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "Isolated sandbox networking verified during setup; absent on older imports."
       },
       "securityGroupId": {
         "description": "Security group ID for private workloads.",

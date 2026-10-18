@@ -405,6 +405,7 @@ fn eks_cluster_import_request(deployment_name: &str, region: &str) -> StackImpor
                     internet_gateway_id: None,
                     nat_gateway_id: None,
                     eip_allocation_id: None,
+                    sandbox_network: None,
                     public_subnet_ids: vec![
                         "subnet-public-a".to_string(),
                         "subnet-public-b".to_string(),
@@ -1850,6 +1851,7 @@ fn aws_create_new_network_import_request(
             internet_gateway_id: Some("igw-0123456789abcdef0".to_string()),
             nat_gateway_id: Some("nat-0123456789abcdef0".to_string()),
             eip_allocation_id: Some("eipalloc-0123456789abcdef0".to_string()),
+            sandbox_network: None,
             public_subnet_ids: public_subnet_ids.map(str::to_string).to_vec(),
             private_subnet_ids: private_subnet_ids.map(str::to_string).to_vec(),
             public_route_table_id: Some("rtb-public".to_string()),

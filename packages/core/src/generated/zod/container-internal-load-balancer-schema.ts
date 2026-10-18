@@ -4,16 +4,27 @@
 */
 
 import * as z from "zod";
+import { ContainerLoadBalancerSourceGroupSchema } from "./container-load-balancer-source-group-schema.js";
+import { ContainerLoadBalancerSubnetGroupSchema } from "./container-load-balancer-subnet-group-schema.js";
 
 /**
- * @description A dedicated internal TCP load balancer for a single container.
+ * @description A dedicated internal TCP load balancer for one container. Its placement and\nsource rules are immutable; replace the resource to change the boundary.
  */
-export const ContainerInternalLoadBalancerSchema = z.object({
-    "allowedSources": z.object({
+export const ContainerInternalLoadBalancerSchema = z.union([z.object({
+    "allowed_sources": z.object({
     
-    }).catchall(z.array(z.string())).describe("Allowed IPv4 source CIDRs for each listener port. Every port must have\nan entry. An empty list denies all clients on that port."),
-"ports": z.array(z.int().min(0)).describe("TCP listener ports, each matching a declared container port."),
-"subnets": z.array(z.string()).describe("Existing subnet identifiers in the container's network.")
-    }).describe("A dedicated internal TCP load balancer for a single container.")
+    }).catchall(z.array(z.string())).describe("Exactly one entry per listener. An empty list denies every client."),
+"ports": z.array(z.int().min(0)),
+"subnets": z.array(z.string())
+    }), z.object({
+    "allowed_source_groups": z.object({
+    
+    }).catchall(z.lazy(() => ContainerLoadBalancerSourceGroupSchema)),
+"network": z.string(),
+"ports": z.array(z.int().min(0)),
+get "subnet_group"(){
+                return ContainerLoadBalancerSubnetGroupSchema
+              }
+    })]).describe("A dedicated internal TCP load balancer for one container. Its placement and\nsource rules are immutable; replace the resource to change the boundary.")
 
 export type ContainerInternalLoadBalancer = z.infer<typeof ContainerInternalLoadBalancerSchema>
