@@ -1093,6 +1093,9 @@ pub struct AwsNetworkController {
     // NAT Gateway
     pub nat_gateway_id: Option<String>,
     pub(crate) eip_allocation_id: Option<String>,
+    /// NAT addresses learned during creation or handed off by setup.
+    #[serde(default)]
+    pub egress_public_ips: Vec<String>,
 
     // Subnets
     #[serde(deserialize_with = "alien_core::network_ids::deserialize_ids")]
@@ -4039,6 +4042,15 @@ impl AwsNetworkController {
 
         match nat_gateway.state.as_deref() {
             Some("available") => {
+                self.egress_public_ips = nat_gateway
+                    .nat_gateway_address_set
+                    .as_ref()
+                    .into_iter()
+                    .flat_map(|addresses| &addresses.items)
+                    .filter_map(|address| address.public_ip.clone())
+                    .collect();
+                self.egress_public_ips.sort();
+                self.egress_public_ips.dedup();
                 info!(nat_gateway_id = %nat_gateway_id, "NAT Gateway is available, adding route");
 
                 // Add route to NAT Gateway in private route table
@@ -4119,6 +4131,7 @@ impl AwsNetworkController {
                 let reason = nat_gateway_failure_reason(&nat_gateway);
                 let failed_id = nat_gateway_id.clone();
                 self.nat_gateway_id = None;
+                self.egress_public_ips.clear();
                 self.nat_gateway_create_token = None;
                 self.nat_gateway_attempt += 1;
                 // The executor keeps what a failed handler wrote, so the retry of this failure
@@ -4629,6 +4642,7 @@ impl AwsNetworkController {
             Err(error) if is_not_found(&error) => {
                 info!(nat_gateway_id = %nat_gateway_id, "NAT Gateway already deleted");
                 self.nat_gateway_id = None;
+                self.egress_public_ips.clear();
                 Ok(HandlerAction::Continue {
                     state: ReleasingElasticIp,
                     suggested_delay: None,
@@ -4714,6 +4728,7 @@ impl AwsNetworkController {
             None | Some("deleted") | Some("failed") => {
                 info!(nat_gateway_id = %nat_gateway_id, "NAT Gateway deleted");
                 self.nat_gateway_id = None;
+                self.egress_public_ips.clear();
                 Ok(HandlerAction::Continue {
                     state: ReleasingElasticIp,
                     suggested_delay: None,
@@ -5439,6 +5454,7 @@ impl AwsNetworkController {
                 availability_zones: self.availability_zones.len() as u8,
                 has_public_subnets: !self.public_subnet_ids.is_empty(),
                 has_nat_gateway: self.nat_gateway_id.is_some(),
+                egress_public_ips: self.egress_public_ips.clone(),
                 cidr: self.cidr_block.clone(),
             })
         })
@@ -5461,6 +5477,7 @@ impl AwsNetworkController {
             internet_gateway_id: Some(format!("igw-{}", vpc_id)),
             nat_gateway_id: Some(format!("nat-{}", vpc_id)),
             eip_allocation_id: Some(format!("eipalloc-{}", vpc_id)),
+            egress_public_ips: vec!["203.0.113.10".to_string()],
             public_subnet_ids: (0..az_count)
                 .map(|i| format!("subnet-pub-{}-{}", vpc_id, i))
                 .collect(),
@@ -5516,6 +5533,7 @@ impl AwsNetworkController {
             internet_gateway_id: None,
             nat_gateway_id: None,
             eip_allocation_id: None,
+            egress_public_ips: Vec::new(),
             public_subnet_ids,
             private_subnet_ids: private_subnet_ids.clone(),
             public_route_table_id: None,

@@ -747,6 +747,7 @@ mod tests {
             availability_zones: 2,
             has_public_subnets: true,
             has_nat_gateway: false,
+            egress_public_ips: Vec::new(),
             cidr: None,
         }));
         state.resources.insert("network".into(), current);
@@ -757,6 +758,7 @@ mod tests {
                 availability_zones: 2,
                 has_public_subnets: true,
                 has_nat_gateway: true,
+                egress_public_ips: Vec::new(),
                 cidr: None,
             }));
         let demand = elastic_ip_demand(&stack, &state).unwrap();
@@ -800,6 +802,7 @@ mod tests {
                 availability_zones: 2,
                 has_public_subnets: true,
                 has_nat_gateway: true,
+                egress_public_ips: Vec::new(),
                 cidr: None,
             }));
         assert_eq!(vpc_demand(&stack, &state).unwrap().additional(), Some(0.0));
@@ -947,6 +950,7 @@ mod tests {
             availability_zones: 2,
             has_public_subnets: true,
             has_nat_gateway: false,
+            egress_public_ips: Vec::new(),
             cidr: None,
         }));
         state.resources.insert("network".into(), current);
