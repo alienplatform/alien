@@ -1079,6 +1079,54 @@ storageSecret = "canary-secret"
     }
 
     #[tokio::test]
+    async fn cloud_endpoint_choices_are_saved_before_acquiring_a_setup_claim() {
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            for stored in ["internet", "private", "both"] {
+                for requested in ["internet", "private", "both"] {
+                    if stored == requested {
+                        continue;
+                    }
+                    let server = MockServer::start_async().await;
+                    server.mock_async(|when, then| {
+                        when.method(GET).path("/v1/deployment-info");
+                        then.status(200).json_body(json!({
+                            "setupUpdate": {"deploymentId":"dep_demo", "updateOperationId":"op_blocked",
+                                "releaseId":"rel_target", "platform":platform, "setupMethod":"cli",
+                                "stackSettings":{"endpointAccess":stored,"futureSetting":{"preserve":true}}},
+                            "installContext":{"targets":{(platform.as_str()):{
+                                "platform":platform,"managerUrl":server.base_url()}}}
+                        }));
+                    }).await;
+                    let prepare = server.mock_async(|when, then| {
+                        when.method(POST).path("/v1/deployment-info/prepare-stack").json_body(json!({
+                            "deploymentId":"dep_demo", "updateOperationId":"op_blocked", "platform":platform,
+                            "setupMethod":"cli", "saveForSetup":true,
+                            "stackSettings":{"endpointAccess":requested,"futureSetting":{"preserve":true}}
+                        }));
+                        then.status(503);
+                    }).await;
+                    let acquire = server
+                        .mock_async(|when, then| {
+                            when.method(POST).path("/v1/sync/acquire");
+                            then.status(500);
+                        })
+                        .await;
+                    let mut args = args(&server);
+                    args.platform = Some(platform.as_str().into());
+                    args.network.endpoint_access =
+                        Some(serde_json::from_value(json!(requested)).unwrap());
+                    let error = run(&args, None, None)
+                        .await
+                        .expect_err("failed save must stop setup");
+                    assert!(error.to_string().contains("503"));
+                    prepare.assert_hits_async(1).await;
+                    acquire.assert_hits_async(0).await;
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn fresh_runner_uses_acquired_bindings_and_hands_off_at_provisioning() {
         run_fresh_runner(alien_core::EndpointAccess::Internet, None, true).await;
     }

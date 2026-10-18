@@ -400,14 +400,14 @@ pub enum DeploymentsCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Request internet, private, or both endpoint paths for a Platform deployment
+    /// Request internet, private, or both endpoint paths for a deployment
     SetEndpointAccess {
         /// Deployment ID, or <deployment-group-name>/<deployment-name>
         id: String,
         /// Endpoint access mode: internet, private, or both
         #[arg(value_parser = network::parse_endpoint_access)]
         access: alien_core::EndpointAccess,
-        /// Print the accepted operation or unchanged result as JSON
+        /// Print the acceptance or unchanged result as JSON
         #[arg(long)]
         json: bool,
     },
