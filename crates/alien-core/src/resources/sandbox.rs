@@ -191,10 +191,9 @@ impl SandboxEgress {
 pub struct SandboxLifecyclePolicy {
     /// Wall-clock ceiling on a single sandbox, after which the platform terminates it.
     ///
-    /// Optional because not every backend has the primitive: Kubernetes has
-    /// `activeDeadlineSeconds` and AWS `maximumDurationInSeconds`, while neither Azure nor Local
-    /// expose one, so declaring a ceiling there is refused at plan time rather than accepted and
-    /// never applied. AWS caps it at 8 hours.
+    /// Kubernetes and AWS enforce this natively. Local's running manager removes expired
+    /// containers from outside the guest, within its 250ms sweep interval plus Docker latency.
+    /// Azure currently refuses a ceiling. AWS caps it at 8 hours.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_lifetime_seconds: Option<u32>,
     /// Idle period after which the sandbox is paused, where the platform supports it.
@@ -316,8 +315,8 @@ impl SandboxCapabilities {
             Platform::Local => Ok(Self {
                 files: true,
                 reconnect: true,
-                // Nothing runs inside the sandbox: the manager drives Docker from outside it.
-                jobs: false,
+                // The manager owns Docker exec jobs and their bounded output between requests.
+                jobs: true,
                 preview: true,
                 pause_resume: false,
                 snapshot: false,
@@ -326,7 +325,8 @@ impl SandboxCapabilities {
                 enforced_limits: true,
                 // Docker's `--pids-limit`.
                 process_limit: true,
-                sandbox_lifetime: false,
+                // The host manager reaps deadlines stored on Docker labels.
+                sandbox_lifetime: true,
                 // Local has no in-sandbox agent: the manager drives Docker from outside, so
                 // there is no supervisor inside the sandbox to isolate from.
                 supervisor_pid_namespace: false,
@@ -2209,9 +2209,7 @@ mod tests {
         assert!(label.chars().all(|c| c.is_ascii_hexdigit()), "{label}");
     }
 
-    /// A deadline is accepted only where the platform itself terminates on it — the kubelet's
-    /// `activeDeadlineSeconds` and Lambda's `maximumDurationInSeconds`. Everywhere else it would
-    /// need a reaper that does not exist, so it is refused rather than accepted and dropped.
+    /// Deadlines require a provider primitive or a manager that reaps expired sandboxes.
     #[test]
     fn a_sandbox_deadline_is_accepted_only_where_the_platform_applies_it() {
         let mut sandbox = sandbox_with(SandboxEgress::Deny, vec![]);
@@ -2224,7 +2222,10 @@ mod tests {
             .validate_for_platform(Platform::Aws)
             .expect("Lambda terminates the MicroVM at maximumDurationInSeconds");
 
-        for platform in [Platform::Azure, Platform::Local] {
+        sandbox
+            .validate_for_platform(Platform::Local)
+            .expect("the manager reaps expired containers");
+        for platform in [Platform::Azure] {
             let error = sandbox
                 .validate_for_platform(platform)
                 .expect_err("a deadline nothing applies must be refused");

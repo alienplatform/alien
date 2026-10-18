@@ -239,18 +239,16 @@ async fn azure_declares_no_jobs_and_sends_nothing() {
     refuses_every_job_method(&sandbox).await;
 }
 
-/// Local declares no jobs, and its manager is a live route here rather than a dead address: a
-/// refusal that turned into a request would show up as a hit, and a dead address would not tell
-/// the two apart because an unreachable local route reports the same code as a refusal.
+/// Local starts jobs through the authenticated manager route.
 #[tokio::test]
-async fn local_declares_no_jobs_and_asks_its_manager_for_nothing() {
+async fn local_declares_jobs_and_reaches_its_manager() {
     let hits = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&hits);
     let manager = serve(Router::new().fallback(move || {
         let counted = Arc::clone(&counted);
         async move {
             counted.fetch_add(1, Ordering::SeqCst);
-            Json(json!({}))
+            Json(json!({ "jobId": "j1" }))
         }
     }))
     .await;
@@ -269,11 +267,14 @@ async fn local_declares_no_jobs_and_asks_its_manager_for_nothing() {
     .await
     .expect("the binding is complete");
 
-    refuses_every_job_method(&sandbox).await;
+    assert!(sandbox.capabilities().jobs);
     assert_eq!(
-        hits.load(Ordering::SeqCst),
-        0,
-        "a refusal must cost no request: the manager serves exec, files, preview and delete, and \
-         a job route would 404 into the same code the refusal already uses"
+        sandbox
+            .start_job("s1", command())
+            .await
+            .expect("start")
+            .job_id,
+        "j1"
     );
+    assert_eq!(hits.load(Ordering::SeqCst), 1);
 }

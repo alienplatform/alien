@@ -309,11 +309,9 @@ async fn kubernetes_narrows_the_platform_flag_and_claims_nothing() {
     );
 }
 
-/// Local declares none, and its manager is a live route here rather than a dead address: a
-/// refusal that turned into a request would show up as a hit, and a dead address would not tell
-/// the two apart because an unreachable local route reports the same code as a refusal.
+/// Local delegates the lifetime to its host manager.
 #[tokio::test]
-async fn local_declares_no_lifetime_and_asks_its_manager_for_nothing() {
+async fn local_declares_a_lifetime_and_reaches_its_manager() {
     let hits = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&hits);
     let manager = serve(Router::new().fallback(move || {
@@ -339,13 +337,12 @@ async fn local_declares_no_lifetime_and_asks_its_manager_for_nothing() {
     .await
     .expect("the binding is complete");
 
-    refuses_a_created_lifetime(&sandbox).await;
-    assert_eq!(
-        hits.load(Ordering::SeqCst),
-        0,
-        "a refusal must cost no request: a container started and then left unbounded is exactly \
-         what the refusal exists to prevent"
-    );
+    assert!(sandbox.capabilities().sandbox_lifetime);
+    sandbox
+        .create(with_lifetime())
+        .await
+        .expect("manager accepts lifetime");
+    assert_eq!(hits.load(Ordering::SeqCst), 1);
 }
 
 /// A lifetime the request names but no sandbox can be built to, through both doors a caller

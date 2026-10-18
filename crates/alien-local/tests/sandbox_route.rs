@@ -37,6 +37,7 @@ impl Harness {
 
         let template = SandboxSessionConfig {
             image: IMAGE.to_string(),
+            max_lifetime_ms: None,
             cpu_cores: 0.5,
             memory_bytes: 268_435_456,
             pids_limit: Some(64),
@@ -357,6 +358,7 @@ async fn a_create_in_flight_at_removal_is_visible_to_the_reap_that_follows() {
     manager.reap(SANDBOX_SLOW).await.expect("clean slate");
     let template = SandboxSessionConfig {
         image: SLOW_IMAGE.to_string(),
+        max_lifetime_ms: None,
         cpu_cores: 0.5,
         memory_bytes: 268_435_456,
         pids_limit: Some(64),

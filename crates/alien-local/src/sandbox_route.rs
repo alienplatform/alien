@@ -7,6 +7,7 @@
 //! transport rather than a shortcut.
 
 use std::collections::HashMap;
+use std::future::IntoFuture;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -43,6 +44,8 @@ fn token_file_name(sandbox: &str) -> String {
 pub struct CreateSessionBody {
     /// Session id within the sandbox
     pub session_id: String,
+    /// Optional narrowing of the declaration deadline.
+    pub timeout_ms: Option<u64>,
 }
 
 /// A request to run a command.
@@ -294,7 +297,7 @@ impl SandboxRoute {
                 get(read_file).put(write_file),
             )
             .route("/v1/sessions/{session_id}/preview", get(preview))
-            .with_state(state);
+            .with_state(state.clone());
 
         let listener = TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().expect("literal"))
             .await
@@ -315,12 +318,31 @@ impl SandboxRoute {
 
         let (shutdown, stop) = tokio::sync::oneshot::channel::<()>();
         let serving = tokio::spawn(async move {
-            let serve = axum::serve(listener, router).with_graceful_shutdown(async move {
-                // Either an explicit stop or the sender being dropped ends the wait.
-                let _ = stop.await;
-            });
-            if let Err(error) = serve.await {
-                tracing::error!("local sandbox route stopped: {error}");
+            let serve = axum::serve(listener, router)
+                .with_graceful_shutdown(async move {
+                    // Either an explicit stop or the sender being dropped ends the wait.
+                    let _ = stop.await;
+                })
+                .into_future();
+            tokio::pin!(serve);
+            let mut tick = tokio::time::interval(std::time::Duration::from_millis(250));
+            loop {
+                tokio::select! {
+                    result = &mut serve => {
+                        if let Err(error) = result { tracing::error!("local sandbox route stopped: {error}"); }
+                        break;
+                    },
+                    _ = tick.tick() => {
+                        // Finish an in-flight removal before acknowledging route shutdown.
+                        // Otherwise teardown can race Docker's asynchronous removal.
+                        match state.manager.reap_expired(&state.sandbox).await {
+                            Ok(containers) => {
+                                for container in containers { state.jobs.forget(&container); }
+                            }
+                            Err(error) => tracing::error!(sandbox = %state.sandbox, "sandbox lifetime reaper failed: {error}"),
+                        }
+                    }
+                }
             }
         });
 
@@ -415,11 +437,22 @@ async fn create_session(
     authorize(&state, &headers).map_err(|code| (code, "unauthorized".to_string()))?;
 
     // Cloned out of the lock: the session create is an await, and the guard is not Send.
-    let template = state
+    let mut template = state
         .template
         .lock()
         .expect("no panic holds this lock")
         .clone();
+
+    if body.timeout_ms == Some(0) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "timeoutMs must be positive".to_string(),
+        ));
+    }
+    template.max_lifetime_ms = match (template.max_lifetime_ms, body.timeout_ms) {
+        (Some(bound), Some(requested)) => Some(bound.min(requested)),
+        (bound, requested) => bound.or(requested),
+    };
 
     let handle = state
         .manager
