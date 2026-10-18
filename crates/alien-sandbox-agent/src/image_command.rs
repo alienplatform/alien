@@ -37,9 +37,14 @@ fn start_from(
         .args(&image.command[1..])
         .env_clear()
         .envs(image.env)
+        .env("ALIEN_SANDBOX_EXEC_UID", identity.uid.to_string())
+        .env("ALIEN_SANDBOX_EXEC_GID", identity.gid.to_string())
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
+    if let Some(root) = std::env::var_os("ALIEN_SANDBOX_ROOT") {
+        command.env("ALIEN_SANDBOX_ROOT", root);
+    }
     unsafe {
         command.pre_exec(move || {
             crate::privilege::drop_to(identity)?;

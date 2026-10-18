@@ -124,7 +124,9 @@ pub async fn handle_running(
 
         Ok(DeploymentStepResult {
             state: next,
-            suggested_delay_ms: None,
+            // Observation continues in RefreshFailed; retain the executor's backoff
+            // and polling delay instead of forcing the caller's default tick.
+            suggested_delay_ms: step_result.suggested_delay_ms,
             update_heartbeat: false,
             heartbeats: heartbeats.clone(),
             observed_inventory_batches: vec![],

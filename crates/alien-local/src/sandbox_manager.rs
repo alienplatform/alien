@@ -31,9 +31,6 @@ const LABEL_SANDBOX: &str = "dev.alien.sandbox";
 /// Label carrying the session id within that sandbox.
 const LABEL_SESSION: &str = "dev.alien.sandbox.session";
 
-/// Unprivileged uid/gid the workload runs as. `nobody` exists in every common base image.
-const SANDBOX_USER: &str = "65534:65534";
-
 /// Where a session's writable area is mounted, and what every caller-supplied path resolves
 /// against. The same root the in-sandbox agent uses on the cloud backends, so one path means
 /// the same file everywhere.
@@ -153,6 +150,7 @@ impl LocalSandboxManager {
         }
 
         self.ensure_image(&config.image).await?;
+        let image = crate::sandbox_identity::inspect(&self.docker, &config.image, sandbox).await?;
 
         let network_mode = match config.egress {
             // "none" gives no interface at all, which is a stronger and simpler guarantee than
@@ -165,11 +163,16 @@ impl LocalSandboxManager {
             }
         };
 
-        let env: Vec<String> = config
+        let mut env: Vec<String> = config
             .env
             .iter()
             .map(|(key, value)| format!("{key}={value}"))
             .collect();
+        env.extend([
+            format!("ALIEN_SANDBOX_EXEC_UID={}", image.identity.uid),
+            format!("ALIEN_SANDBOX_EXEC_GID={}", image.identity.gid),
+            format!("ALIEN_SANDBOX_ROOT={SESSION_ROOT}"),
+        ]);
 
         let labels = HashMap::from([
             (LABEL_SANDBOX.to_string(), sandbox.to_string()),
@@ -211,10 +214,10 @@ impl LocalSandboxManager {
             readonly_rootfs: Some(true),
             tmpfs: Some(HashMap::from([(
                 SESSION_ROOT.to_string(),
-                // 1777 because the workload runs as an unprivileged uid: a tmpfs mounted with
-                // the default mode is root-owned, and the session's only writable area would
-                // not be writable by the process using it.
-                format!("rw,noexec,nosuid,mode=1777,size={}", config.scratch_bytes),
+                format!(
+                    "rw,noexec,nosuid,mode=0700,uid={},gid={},size={}",
+                    image.identity.uid, image.identity.gid, config.scratch_bytes
+                ),
             )])),
             cap_drop: Some(vec!["ALL".to_string()]),
             security_opt: Some(vec!["no-new-privileges:true".to_string()]),
@@ -227,9 +230,11 @@ impl LocalSandboxManager {
         };
 
         let container_config = Config {
-            image: Some(config.image.clone()),
-            user: Some(SANDBOX_USER.to_string()),
-            working_dir: Some(SESSION_ROOT.to_string()),
+            image: Some(image.id),
+            user: Some(format!("{}:{}", image.identity.uid, image.identity.gid)),
+            // Docker can create/chmod WorkingDir after mounting tmpfs, resetting its owner.
+            // Enter the session root on exec, after the mount has its final ownership.
+            working_dir: Some("/".to_string()),
             env: Some(env),
             labels: Some(labels),
             exposed_ports: if exposed_ports.is_empty() {
@@ -343,7 +348,9 @@ impl LocalSandboxManager {
                     cmd: Some(command.to_vec()),
                     attach_stdout: Some(true),
                     attach_stderr: Some(true),
-                    user: Some(SANDBOX_USER.to_string()),
+                    // Docker inherits the container's resolved, non-root identity.
+                    user: None,
+                    working_dir: Some(SESSION_ROOT.to_string()),
                     ..Default::default()
                 },
             )
@@ -437,7 +444,8 @@ impl LocalSandboxManager {
                     attach_stdin: Some(true),
                     attach_stdout: Some(true),
                     attach_stderr: Some(true),
-                    user: Some(SANDBOX_USER.to_string()),
+                    user: None,
+                    working_dir: Some(SESSION_ROOT.to_string()),
                     ..Default::default()
                 },
             )
@@ -632,17 +640,23 @@ impl LocalSandboxManager {
         }
     }
 
-    /// Removes every session belonging to a sandbox.
+    /// Removes every session and temporary image inspection belonging to a sandbox.
     ///
     /// Run at manager startup so a CLI restart does not leave containers behind, and at
     /// teardown so the Frozen parent's children go first.
     pub async fn reap(&self, sandbox: &str) -> Result<usize> {
-        let sessions = self.list_sessions(sandbox).await?;
-        let count = sessions.len();
-
-        for session in sessions {
-            self.terminate(sandbox, &session.session_id).await?;
+        let terminated = async {
+            let sessions = self.list_sessions(sandbox).await?;
+            let count = sessions.len();
+            let mut first_error = None;
+            for session in sessions {
+                if let Err(error) = self.terminate(sandbox, &session.session_id).await {
+                    first_error.get_or_insert(error);
+                }
+            }
+            first_error.map_or(Ok(count), Err)
         }
+        .await;
 
         // Best effort: Docker refuses to remove a network with members, which is the correct
         // outcome rather than an error to propagate.
@@ -651,7 +665,10 @@ impl LocalSandboxManager {
             .remove_network(&Self::network_name(sandbox))
             .await;
 
-        Ok(count)
+        // Attempt every independent cleanup before reporting failure. Session errors take
+        // precedence because they can mean untrusted commands are still running.
+        let inspections = crate::sandbox_identity::reap(&self.docker, sandbox).await;
+        Ok(terminated? + inspections?)
     }
 }
 
@@ -693,6 +710,144 @@ fn resolve_in_root(path: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use httpmock::prelude::*;
+
+    #[tokio::test]
+    async fn a_failed_inspection_cleanup_does_not_keep_sessions_alive() {
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path_contains("/containers/json")
+                    .query_param("filters", r#"{"label":["dev.alien.sandbox=box"]}"#);
+                then.json_body(serde_json::json!([
+                    {"Id":"one", "Labels":{"dev.alien.sandbox.session":"s1"}},
+                    {"Id":"two", "Labels":{"dev.alien.sandbox.session":"s2"}}
+                ]));
+            })
+            .await;
+        let terminated = server
+            .mock_async(|when, then| {
+                when.method(DELETE)
+                    .path_contains("/containers/alien-sbx-box-")
+                    .query_param("force", "true");
+                then.status(204);
+            })
+            .await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path_contains("/containers/json")
+                    .query_param(
+                        "filters",
+                        r#"{"label":["dev.alien.sandbox.inspection=box"]}"#,
+                    );
+                then.json_body(serde_json::json!([{"Id":"inspection"}]));
+            })
+            .await;
+        server
+            .mock_async(|when, then| {
+                when.method(DELETE).path_contains("/containers/inspection");
+                then.status(500)
+                    .json_body(serde_json::json!({"message":"removal failed"}));
+            })
+            .await;
+        let manager = LocalSandboxManager {
+            docker: Docker::connect_with_http(&server.base_url(), 5, bollard::API_DEFAULT_VERSION)
+                .unwrap(),
+            state_dir: PathBuf::new(),
+        };
+
+        assert!(
+            manager.reap("box").await.is_err(),
+            "report the inspection cleanup failure"
+        );
+        terminated.assert_hits_async(2).await;
+    }
+
+    #[tokio::test]
+    async fn a_failed_session_removal_does_not_skip_other_cleanup() {
+        for inspection_status in [204, 500] {
+            let server = MockServer::start_async().await;
+            server
+                .mock_async(|when, then| {
+                    when.method(GET)
+                        .path_contains("/containers/json")
+                        .query_param("filters", r#"{"label":["dev.alien.sandbox=box"]}"#);
+                    then.json_body(serde_json::json!([
+                        {"Id":"one", "Labels":{"dev.alien.sandbox.session":"s1"}},
+                        {"Id":"two", "Labels":{"dev.alien.sandbox.session":"s2"}}
+                    ]));
+                })
+                .await;
+            let failed = server
+                .mock_async(|when, then| {
+                    when.method(DELETE)
+                        .path_contains("/containers/alien-sbx-box-s1")
+                        .query_param("force", "true");
+                    then.status(500)
+                        .json_body(serde_json::json!({"message":"session removal failed"}));
+                })
+                .await;
+            let terminated = server
+                .mock_async(|when, then| {
+                    when.method(DELETE)
+                        .path_contains("/containers/alien-sbx-box-s2")
+                        .query_param("force", "true");
+                    then.status(204);
+                })
+                .await;
+            let network = server
+                .mock_async(|when, then| {
+                    when.method(DELETE)
+                        .path_contains("/networks/alien-sbx-net-box");
+                    then.status(204);
+                })
+                .await;
+            server
+                .mock_async(|when, then| {
+                    when.method(GET)
+                        .path_contains("/containers/json")
+                        .query_param(
+                            "filters",
+                            r#"{"label":["dev.alien.sandbox.inspection=box"]}"#,
+                        );
+                    then.json_body(serde_json::json!([{"Id":"inspection"}]));
+                })
+                .await;
+            let inspection = server
+                .mock_async(|when, then| {
+                    when.method(DELETE)
+                        .path_contains("/containers/inspection")
+                        .query_param("v", "true");
+                    then.status(inspection_status)
+                        .json_body(serde_json::json!({"message":"inspection removal failed"}));
+                })
+                .await;
+            let manager = LocalSandboxManager {
+                docker: Docker::connect_with_http(
+                    &server.base_url(),
+                    5,
+                    bollard::API_DEFAULT_VERSION,
+                )
+                .unwrap(),
+                state_dir: PathBuf::new(),
+            };
+
+            let error = manager
+                .reap("box")
+                .await
+                .expect_err("session removal failed");
+            assert!(
+                error.to_string().contains("alien-sbx-box-s1"),
+                "preserve the session termination failure even if inspection cleanup fails: {error}"
+            );
+            failed.assert_async().await;
+            terminated.assert_async().await;
+            network.assert_async().await;
+            inspection.assert_async().await;
+        }
+    }
 
     #[test]
     fn container_and_network_names_are_session_scoped() {
