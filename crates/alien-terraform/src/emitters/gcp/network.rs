@@ -342,6 +342,10 @@ fn create_topology(
                 attr("project", expr::raw("var.gcp_project")),
                 attr("region", expr::raw("var.gcp_region")),
                 attr("address_type", Expression::String("EXTERNAL".to_string())),
+                nested(block(
+                    "lifecycle",
+                    [attr("prevent_destroy", Expression::Bool(true))],
+                )),
             ],
         ));
         let nat_ip = if counted {
