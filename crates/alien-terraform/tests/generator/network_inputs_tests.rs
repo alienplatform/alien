@@ -1,6 +1,9 @@
 //! Real Terraform plans with mocked providers exercise input evaluation without
 //! cloud credentials or creating infrastructure.
-use alien_core::{Network, NetworkSettings, ResourceLifecycle, Stack, StackSettings};
+use alien_core::{
+    Network, NetworkSettings, ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress,
+    SandboxLifecyclePolicy, Stack, StackSettings,
+};
 use alien_terraform::TerraformTarget;
 
 use super::helpers::{render, test_utils};
@@ -132,5 +135,88 @@ run "network_{index}" {{
         run.assert_ok(format!(
             "network ID normalization plans (static existing network: {is_static})"
         ));
+    }
+}
+
+/// Upgrading an existing network must not replace its automatically allocated NAT addresses.
+#[test]
+fn gcp_nat_address_reservation_requires_gateway_opt_in() {
+    for egress in [
+        None,
+        Some(SandboxEgress::None),
+        Some(SandboxEgress::Internet),
+    ] {
+        let reserved = egress == Some(SandboxEgress::Internet);
+        let mut stack = Stack::new("nat-compatibility".into()).add(
+            Network::new("default-network".into())
+                .settings(NetworkSettings::Create {
+                    cidr: None,
+                    availability_zones: 1,
+                })
+                .build(),
+            ResourceLifecycle::Frozen,
+        );
+        if let Some(egress) = egress {
+            stack = stack.add(
+                Sandbox::new("box".into())
+                    .code(SandboxCode::Image {
+                        image: "ubuntu".into(),
+                    })
+                    .egress(egress)
+                    .lifecycle(SandboxLifecyclePolicy {
+                        max_lifetime_seconds: None,
+                        idle_pause_seconds: None,
+                    })
+                    .build(),
+                ResourceLifecycle::Live,
+            );
+        }
+        let module = render(
+            &stack.build(),
+            TerraformTarget::Gcp,
+            StackSettings {
+                network: Some(NetworkSettings::Create {
+                    cidr: None,
+                    availability_zones: 1,
+                }),
+                ..StackSettings::default()
+            },
+        );
+        let mut files: test_utils::LinterFiles = module
+            .iter()
+            .filter(|(path, _)| path.ends_with(".tf"))
+            .map(|(path, content)| (path.to_string(), content.to_string()))
+            .collect();
+        let allocation = if reserved { "MANUAL_ONLY" } else { "AUTO_ONLY" };
+        let address_count = usize::from(reserved);
+        files.insert(
+            "nat.tftest.hcl".into(),
+            format!(
+                r#"
+mock_provider "google" {{}}
+mock_provider "random" {{}}
+variables {{
+  name = "nat-compatibility"
+  token = "test"
+  resource_prefix = "nat-compatibility"
+  gcp_project = "test-project"
+  gcp_region = "us-central1"
+  network_mode = "create-new"
+}}
+run "nat_allocation" {{
+  command = plan
+  assert {{
+    condition = google_compute_router_nat.default_network_nat[0].nat_ip_allocate_option == "{allocation}"
+    error_message = "NAT address allocation must change only for an explicit gateway opt-in."
+  }}
+  assert {{
+    condition = length(local.deployment_resources[0].importData.egressPublicIps) == {address_count}
+    error_message = "Only reserved NAT addresses may be advertised as fixed outbound addresses."
+  }}
+}}
+"#
+            ),
+        );
+        test_utils::terraform_test(&files).assert_ok("GCP NAT allocation compatibility plan");
     }
 }

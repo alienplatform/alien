@@ -7,7 +7,7 @@
 
 use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
-use alien_core::{Container, Platform, Sandbox, SandboxEgress, Stack};
+use alien_core::{Platform, Sandbox, SandboxEgress, Stack};
 
 /// Ensures every Sandbox can be delivered by the platform it targets.
 pub struct SandboxPlatformSupportCheck;
@@ -39,47 +39,22 @@ impl CompileTimeCheck for SandboxPlatformSupportCheck {
             })
             .collect();
 
-        let mut warnings = Vec::new();
         if platform == Platform::Gcp {
-            let gateway_present = stack.resources().any(|(id, entry)| {
-                id == "sandbox-egress-gateway" && entry.config.downcast_ref::<Container>().is_some()
-            });
             for (_, entry) in stack.resources() {
                 let Some(sandbox) = entry.config.downcast_ref::<Sandbox>() else {
                     continue;
                 };
-                if sandbox.egress != SandboxEgress::Internet {
-                    continue;
-                }
-                if gateway_present {
+                if sandbox.egress == SandboxEgress::Internet {
                     errors.push(format!(
                         "Sandbox '{}': GCP private gateway command transport is not available; \
-                         gateway-backed egress cannot be deployed",
-                        sandbox.id()
-                    ));
-                } else if sandbox.default_policy.is_some() {
-                    errors.push(format!(
-                        "Sandbox '{}': defaultPolicy requires an egress gateway; \
-                         GCP native internet cannot enforce per-sandbox policies",
-                        sandbox.id()
-                    ));
-                } else {
-                    warnings.push(format!(
-                        "Sandbox '{}': GCP native internet has no fixed outbound IP, per-sandbox \
-                         policy, or gateway connection logs. Link-local metadata, including \
-                         a provider-issued access token, is reachable. Use egress: none \
-                         when network isolation is required",
+                         egress \"internet\" requires a gateway and cannot use the native fallback",
                         sandbox.id()
                     ));
                 }
             }
         }
         if errors.is_empty() {
-            Ok(if warnings.is_empty() {
-                CheckResult::success()
-            } else {
-                CheckResult::with_warnings(warnings)
-            })
+            Ok(CheckResult::success())
         } else {
             Ok(CheckResult::failed(errors))
         }
@@ -90,8 +65,8 @@ impl CompileTimeCheck for SandboxPlatformSupportCheck {
 mod tests {
     use super::*;
     use alien_core::{
-        ResourceEntry, ResourceLifecycle, SandboxCode, SandboxEgress, SandboxLifecyclePolicy,
-        SandboxLimits,
+        Container, ResourceEntry, ResourceLifecycle, SandboxCode, SandboxEgress,
+        SandboxLifecyclePolicy, SandboxLimits,
     };
     use indexmap::IndexMap;
 
@@ -184,16 +159,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn gcp_native_fallback_warns_and_refuses_a_default_policy() {
+    async fn gcp_internet_never_falls_back_when_gateway_transport_is_unavailable() {
         let open = sandbox("agent", None, SandboxEgress::Internet);
         let result = SandboxPlatformSupportCheck
             .check(&stack_with(open.clone()), Platform::Gcp)
             .await
             .expect("check runs");
-        assert!(result.success);
-        assert_eq!(result.warnings.len(), 1);
-        assert!(result.warnings[0].contains("access token"));
-        assert!(result.warnings[0].contains("no fixed outbound IP"));
+        assert!(!result.success);
+        assert!(result.warnings.is_empty());
+        assert!(result.errors[0].contains("requires a gateway"));
         let mut restricted = open;
         restricted.default_policy = Some(alien_core::EgressPolicy::Allow {
             allow: vec!["example.com".into()],
@@ -203,7 +177,7 @@ mod tests {
             .await
             .expect("check runs");
         assert!(!result.success);
-        assert!(result.errors[0].contains("defaultPolicy requires"));
+        assert!(result.errors[0].contains("requires a gateway"));
         let result = SandboxPlatformSupportCheck
             .check(
                 &stack_with(sandbox("closed", None, SandboxEgress::None)),
