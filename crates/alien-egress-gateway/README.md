@@ -1,71 +1,75 @@
 # Sandbox egress gateway
 
-The gateway checks each connection against a deployment-owned bound and an Ed25519
-sandbox token. It resolves the destination itself and connects only to checked IPv4
-addresses. Private, link-local, metadata, multicast and configured deployment ranges
-are always denied. IPv6 is not a candidate for outbound connections.
+The gateway verifies an Ed25519 sandbox identity and reads that sandbox's current
+policy from the deployment KV. It resolves destinations itself and connects only
+to checked IPv4 addresses. Private, link-local, metadata, multicast and configured
+deployment/overlay ranges are always denied. IPv6 is not an outbound candidate.
 
 Run `alien-egress-gateway` with `ALIEN_EGRESS_GATEWAY_CONFIG` containing:
 
 ```json
 {
   "listen": "0.0.0.0:3128",
-  "adminListen": "0.0.0.0:3129",
-  "generationBinding": "egress-state",
-  "bounds": {"deployment/box": {"allow": ["api.example.com", "example.com:80"]}},
+  "admin": "0.0.0.0:3129",
+  "generationStore": {"binding": "egress-state"},
+  "audiences": ["deployment/box"],
+  "defaultPolicies": {},
   "keys": [{"kid": "current", "publicKey": "BASE64_RAW_ED25519_PUBLIC_KEY"}],
-  "deniedRanges": ["10.0.0.0/8"],
+  "deniedRanges": ["10.0.0.0/8", "10.244.0.0/16"],
   "credentials": []
 }
 ```
 
-A config-file path is also accepted as the first argument. `adminListen` defaults
-to port 3129 and `generationBinding` to `egress-state`. Supply the normal Alien KV
-binding environment for that name. Build features select providers: `aws`, `cloud`
-(AWS, GCP and Kubernetes base-cloud stores), and `local`.
+The image runs as UID/GID 65532, needs no capabilities, and supports a read-only
+root filesystem. Provide the existing KV binding environment. Local KV requires
+a writable data volume shared by replicas; cloud KV requires no writable files.
+A config-file path is also accepted as the first argument. `admin` defaults to
+3129. Features select providers: `aws`, `cloud` (AWS, GCP, Azure and Kubernetes
+base-cloud stores), and `local`. All replicas must use the same KV. SQLite Local
+replicas must share local disk, not a multi-host network filesystem. Redis is not
+implemented by Alien bindings.
 
-Tokens contain `{iss,aud,sub,gen,iat,exp,policy}`; `policy` is `sha256:<hex>` of
-the normalized, sorted, compact policy JSON. Tokens are limited to 4 KiB. The
-admin API installs the full policy before the agent receives its token. A missing
-record, a different generation (older or newer), or a different digest denies access.
+Tokens contain only `{iss,aud,sub,iat,exp}`, with `iss: "alien-sandbox"`, a maximum
+24-hour lifetime and a 4 KiB encoded size limit. Neither a policy nor a generation
+appears in a proxy token. Missing policy records deny access, even if the config
+contains a create default. The binding applies create defaults explicitly.
 
-The existing KV conditional-write API provides the durable generation and policy
-reference. Every authorization reads that record; store failures deny access. A
-bounded cache holds only verified immutable policy contents. Policies use 16 KiB
-content-addressed chunks so every KV backend supports the same size limit. Chunks
-are written before the atomic reference update. Records and chunks have no TTL;
-deployment teardown removes the store, and superseded policy content consumes
-storage until then. This avoids another state service and stale-generation windows
-at the cost of a KV read per connection and retained policy versions. All
-replicas must use the same binding. Local replicas must share a local disk; the
-local SQLite provider does not support multi-host network filesystems. Kubernetes
-uses its base-cloud KV; the Redis binding is not implemented by Alien bindings.
+Every new connection reads the policy reference from KV; only verified content
+is cached, in at most 128 entries. Updates and deletion therefore need no token
+replacement and do not wait for a cache TTL. Store failures deny access. Up to
+16 fixed 16 KiB chunk slots per sandbox support the 256 KiB / 4096-target limit
+on every KV provider. A digest detects torn reads while the binding serializes
+writes per sandbox. Interrupted writes may deny connections until retried.
+Replacement reuses slots; deletion removes the record first, then every slot.
+This keeps storage bounded without a second state service or retained versions.
 
-The proxy port accepts `Proxy-Authorization: Bearer <JWS>`. Port 443 requires a TLS
-ClientHello whose SNI equals the CONNECT destination. TLS on other explicit ports
-also checks its initial ClientHello. Port 80, including CONNECT
-on port 80, requires matching Host and request authority. Other explicit ports
-support opaque TCP protocols such as SSH, including server-first greetings. Upgrades
-inside an opaque protocol are not inspected. Spliced TLS does not inspect encrypted
-HTTP Host; use credential interception when HTTP authority inspection is required.
-Plain and intercepted HTTP handle one request per connection and advertise close.
-Interception offers HTTP/1.1 only. Headers and ClientHello have size and time limits;
-concurrent connections and total connection lifetime are bounded.
+The proxy accepts `Proxy-Authorization: Bearer <JWS>` and Basic credentials from
+`http://alien:<JWS>@gateway:3128`. DNS-name grants require TLS with matching SNI
+or HTTP with matching Host, on any port. A rule without a port matches every
+port; `*.example.com` includes `example.com` and all its subdomains. Other
+protocols, including server-first protocols, require explicit IP/CIDR grants.
+Internet policy does not grant raw IP literals. Spliced TLS cannot inspect the
+encrypted HTTP Host: domain fronting remains an accepted limit. Intercepted TLS
+checks HTTP Host. HTTP handles one request per connection and advertises close.
+Headers, ClientHello, connection concurrency and connection lifetime are bounded.
 
-The admin listener is plain HTTP inside the deployment network. Sandbox network
-rules must permit only port 3128 and must deny 3129. Admin calls carry an Ed25519
-JWS in `Authorization: Bearer`, using the deployment's signing keys and mandatory
-header `typ: "alien-egress-admin"`. Claims are
-`{iss:"alien-sandbox",aud,sub,gen,iat,exp,policy}`; the lifetime is at most 60 seconds.
-The `policy` claim is the policy digest; it may be omitted for CA/metrics grants.
-`POST /v1/generations {aud,sub,gen,policy:<full policy>}` must match the signed
-identity, generation and digest, and must be a subset of the configured bound.
-Successful updates return 204; a superseded update or a different policy for an
-already-installed generation returns 409. A concurrent conditional-write conflict
-returns 503 for the caller to retry. Captured updates are idempotent and cannot be
-retargeted. This
-listener returns no private key or injected secret. `/health` is unauthenticated;
-`/metrics` requires an admin JWS. Logs contain one JSON record per proxy connection.
+Admin port 3129 is plain HTTP restricted to management workloads. Requests carry
+an Ed25519 JWS in `Authorization: Bearer`, with header
+`typ: "alien-egress-admin"` and claims `{iss,aud,sub,iat,exp,method,policy?}`.
+The lifetime is at most 60 seconds. `method` binds the HTTP method; for PUT,
+`policy` is `sha256:<hex>` of the normalized, sorted, compact policy JSON.
+It is an admin-body authenticator, never a proxy-token claim.
+
+- `PUT /v1/policies {aud,sub,policy}` replaces the policy and returns 204.
+- `DELETE /v1/policies {aud,sub}` removes authorization and content; returns 204
+  even when already absent. Its grant must not contain `policy`.
+- `GET /health` is unauthenticated. `GET /metrics` requires an admin grant.
+
+Identity, method and policy must match the signed request. The binding serializes
+updates per sandbox; writes use last-write-wins semantics. A captured admin
+request remains replayable during its 60-second validity, so the admin network
+must be inaccessible to guests. Logs contain one JSON record per connection,
+without tokens, request headers or secret values.
 
 Optional credential rules contain `aud`, exact `host`, `port`, uppercase `method`,
 `path`, `header`, `vaultBinding`, `secret`, and optional `valuePrefix`. Paths match
@@ -92,12 +96,11 @@ succeed. On AWS the Run hook receives the AWS envelope
 The injected MicroVM ID is checked against the token subject. Elsewhere the backend
 sets `ALIEN_SANDBOX_SESSION_ID`, `ALIEN_SANDBOX_EGRESS_AUDIENCE`, and
 `ALIEN_SANDBOX_EGRESS_GATEWAY`. Tokens are never supplied through environment or
-image state. Updates are serialized, checked through the gateway, and affect new
-connections. Existing tunnels remain open until close or the connection deadline.
+image state. Policy updates go only to the gateway; token installation happens at create
+and renewal. Updates affect new connections. Existing tunnels remain open until close or the connection deadline.
 
 A resource declared `none` uses a loopback-only network and has no gateway or token.
-The agent verifies that direct internet fails before serving. Narrowing a resource
-declared `internet` or `allow` to `none` still requires the gateway and a token.
+The agent verifies that direct internet fails before serving. A closed runtime policy still requires the gateway and an identity token.
 
 Proxy-aware commands bypass the proxy for localhost and loopback; declared `none`
 does not advertise a proxy. Synthetic DNS answers expire after 60 seconds and

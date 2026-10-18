@@ -56,6 +56,10 @@ def dns():
         ips = ["93.184.216.2"]
         if name == "private.test":
             ips = ["10.77.91.2"]
+        elif name == "configured-range.test":
+            ips = ["93.184.217.2"]
+        elif name == "overlay.test":
+            ips = ["10.244.0.2"]
         elif name == "metadata.test":
             ips = ["169.254.169.254"]
         elif name == "mixed.test":

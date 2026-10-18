@@ -19,16 +19,18 @@ pub struct Config {
     pub listen: SocketAddr,
     /// Separate management listener; restrict network access to management workloads.
     #[serde(default = "admin_listen")]
-    pub admin_listen: SocketAddr,
-    /// Immutable declaration bounds keyed by audience.
-    pub bounds: HashMap<String, Policy>,
+    pub admin: SocketAddr,
+    /// Sandbox resource audiences accepted by this deployment.
+    pub audiences: Vec<String>,
+    /// Create defaults are applied by the binding, never when a policy record is missing.
+    #[serde(default)]
+    pub default_policies: HashMap<String, Policy>,
     /// Public verification keys. The gateway never receives the token signing key.
     pub keys: Vec<VerificationKey>,
     /// Additional deployment CIDRs. Built-in private ranges cannot be disabled.
     pub denied_ranges: Vec<Ipv4Net>,
     /// Name of the deployment KV binding shared by every replica.
-    #[serde(default = "generation_binding")]
-    pub generation_binding: String,
+    pub generation_store: PolicyStoreBinding,
     /// Additional deployment-owned trust roots, base64 DER, for upstream TLS.
     #[serde(default)]
     pub upstream_ca_certificates: Vec<String>,
@@ -75,11 +77,16 @@ pub struct CredentialRule {
 impl Config {
     /// Decode public keys and reject duplicate key IDs.
     pub fn verification_keys(&self) -> Result<HashMap<String, PublicKey>> {
-        if self.keys.is_empty() || self.bounds.is_empty() || self.generation_binding.is_empty() {
-            return Err(invalid("keys, bounds and generationBinding are required"));
+        if self.keys.is_empty()
+            || self.audiences.is_empty()
+            || self.generation_store.binding.is_empty()
+        {
+            return Err(invalid(
+                "keys, audiences and generationStore.binding are required",
+            ));
         }
-        for bound in self.bounds.values() {
-            crate::policy::canonical(bound)?;
+        for policy in self.default_policies.values() {
+            crate::policy::canonical(policy)?;
         }
         let mut keys = HashMap::new();
         for key in &self.keys {
@@ -101,6 +108,9 @@ impl Config {
 fn admin_listen() -> SocketAddr {
     SocketAddr::from(([0, 0, 0, 0], 3129))
 }
-fn generation_binding() -> String {
-    "egress-state".into()
+/// Existing deployment KV binding shared by all gateway replicas.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PolicyStoreBinding {
+    pub binding: String,
 }

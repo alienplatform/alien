@@ -6,6 +6,7 @@ use std::{
 };
 
 use alien_error::{Context, IntoAlienError};
+use base64::{engine::general_purpose::STANDARD, Engine};
 use ed25519_compact::PublicKey;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -18,10 +19,10 @@ use tokio::{
 use crate::{
     config::Config,
     error::{denied, invalid, unavailable, Result},
-    generation::GenerationFence,
     io::{Counters, Metered, Prefixed},
     policy::{check_addresses, PolicyExt, Target},
     protocol::{read_client_hello, request_target, MAX_HEADER_BYTES},
+    store::PolicyStore,
     token::{self, Claims},
 };
 
@@ -30,14 +31,14 @@ pub const HEADER_TIMEOUT: Duration = Duration::from_secs(5);
 /// Maximum connection lifetime; limits resource retention by idle peers.
 pub const CONNECTION_TIMEOUT: Duration = Duration::from_secs(3600);
 
-/// Shared immutable configuration and generation store.
+/// Shared configuration and policy store.
 pub struct Gateway {
     /// Deployment configuration.
     pub config: Config,
     /// Parsed public keys.
     pub keys: HashMap<String, PublicKey>,
-    /// Shared monotonic generation fence.
-    pub generations: GenerationFence,
+    /// Current policies shared by all replicas.
+    pub policies: PolicyStore,
     /// Gateway-only CA and vault access.
     pub credentials: crate::credentials::Credentials,
     /// Total accepted proxy connections.
@@ -47,18 +48,13 @@ pub struct Gateway {
 }
 
 impl Gateway {
-    /// Authorize against the independently configured bound and the signed grant.
+    /// Authorize the authenticated identity against its currently stored policy.
     pub async fn authorize(&self, claims: &Claims, target: &Target) -> Result<()> {
-        let bound = self
-            .config
-            .bounds
-            .get(&claims.aud)
-            .ok_or_else(|| denied("unknown audience"))?;
-        let policy = self
-            .generations
-            .resolve(&claims.aud, &claims.sub, claims.gen, &claims.policy)
-            .await?;
-        if !bound.intersection_permits(&policy, target) {
+        if !self.config.audiences.contains(&claims.aud) {
+            return Err(denied("unknown audience"));
+        }
+        let policy = self.policies.resolve(&claims.aud, &claims.sub).await?;
+        if !policy.permits(target) {
             return Err(alien_error::AlienError::new(
                 crate::error::ErrorData::PolicyDenied,
             ));
@@ -236,91 +232,53 @@ async fn proxy(
         })
         .cloned()
         .collect();
-    if target.port == 443 || !rules.is_empty() {
-        let hello = timeout(HEADER_TIMEOUT, read_client_hello(&mut guest, &target))
+    if target.host.parse::<std::net::Ipv4Addr>().is_ok() {
+        // Explicit IP/CIDR rules are the only grants for opaque, including server-first, protocols.
+        tokio::io::copy_bidirectional(&mut guest, &mut upstream)
             .await
             .into_alien_error()
-            .context(unavailable("ClientHello timeout"))??;
-        if !rules.is_empty() {
-            return gateway
-                .credentials
-                .forward(
-                    Prefixed::new(hello, guest),
-                    upstream,
-                    (&claims.aud, &claims.sub),
-                    target,
-                    &rules,
-                )
-                .await;
-        }
-        upstream
-            .write_all(&hello)
-            .await
-            .into_alien_error()
-            .context(unavailable("forward ClientHello"))?;
-    } else if target.port == 80 {
-        // CONNECT is not an escape hatch around plain-HTTP Host checks.
-        return crate::http_proxy::forward(guest, upstream, target, None).await;
-    } else {
-        return relay_explicit_port(guest, upstream, &target).await;
+            .context(unavailable("relay IP connection"))?;
+        return Ok(());
     }
+    let first = timeout(HEADER_TIMEOUT, guest.read_u8())
+        .await
+        .into_alien_error()
+        .context(unavailable("protocol timeout"))?
+        .into_alien_error()
+        .context(unavailable("read protocol"))?;
+    let mut guest = Prefixed::new(vec![first], guest);
+    if first != 22 {
+        // HTTP parsing enforces Host on every port; arbitrary protocols need an IP/CIDR rule.
+        if !rules.is_empty() {
+            return Err(denied("credential destination requires TLS"));
+        }
+        return crate::http_proxy::forward(guest, upstream, target, None).await;
+    }
+    let hello = timeout(HEADER_TIMEOUT, read_client_hello(&mut guest, &target))
+        .await
+        .into_alien_error()
+        .context(unavailable("ClientHello timeout"))??;
+    if !rules.is_empty() {
+        return gateway
+            .credentials
+            .forward(
+                Prefixed::new(hello, guest),
+                upstream,
+                (&claims.aud, &claims.sub),
+                target,
+                &rules,
+            )
+            .await;
+    }
+    upstream
+        .write_all(&hello)
+        .await
+        .into_alien_error()
+        .context(unavailable("forward ClientHello"))?;
     tokio::io::copy_bidirectional(&mut guest, &mut upstream)
         .await
         .into_alien_error()
         .context(unavailable("relay connection"))?;
-    Ok(())
-}
-
-/// Preserve server-first protocols such as SSH while checking TLS ClientHello on explicit ports.
-/// The upstream reader may deliver a protocol greeting, but no guest bytes reach upstream before
-/// the first payload is classified. Protocol upgrades inside an opaque stream are not inspected.
-async fn relay_explicit_port<G>(guest: G, upstream: TcpStream, target: &Target) -> Result<()>
-where
-    G: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
-{
-    let (mut guest_read, mut guest_write) = tokio::io::split(guest);
-    let (mut upstream_read, mut upstream_write) = upstream.into_split();
-    let send = async {
-        let mut first = [0u8; 4096];
-        let count = guest_read
-            .read(&mut first)
-            .await
-            .into_alien_error()
-            .context(unavailable("read explicit-port protocol"))?;
-        let mut input = Prefixed::new(first[..count].to_vec(), guest_read);
-        if count > 0 && first[0] == 22 {
-            let hello = timeout(HEADER_TIMEOUT, read_client_hello(&mut input, target))
-                .await
-                .into_alien_error()
-                .context(unavailable("ClientHello timeout"))??;
-            upstream_write
-                .write_all(&hello)
-                .await
-                .into_alien_error()
-                .context(unavailable("forward ClientHello"))?;
-        }
-        tokio::io::copy(&mut input, &mut upstream_write)
-            .await
-            .into_alien_error()
-            .context(unavailable("relay explicit-port request"))?;
-        upstream_write
-            .shutdown()
-            .await
-            .into_alien_error()
-            .context(unavailable("finish upstream request"))
-    };
-    let receive = async {
-        tokio::io::copy(&mut upstream_read, &mut guest_write)
-            .await
-            .into_alien_error()
-            .context(unavailable("relay explicit-port response"))?;
-        guest_write
-            .shutdown()
-            .await
-            .into_alien_error()
-            .context(unavailable("finish guest response"))
-    };
-    tokio::try_join!(send, receive)?;
     Ok(())
 }
 
@@ -376,13 +334,23 @@ fn inspect_head(input: &[u8]) -> Result<(Target, String, bool, usize)> {
             if bearer.is_some() {
                 return Err(denied("duplicate proxy authorization"));
             }
-            bearer = Some(
-                std::str::from_utf8(header.value)
-                    .map_err(|_| denied("invalid proxy authorization"))?
-                    .strip_prefix("Bearer ")
-                    .ok_or_else(|| denied("Bearer token required"))?
-                    .to_string(),
-            );
+            let authorization = std::str::from_utf8(header.value)
+                .map_err(|_| denied("invalid proxy authorization"))?;
+            bearer = Some(if let Some(token) = authorization.strip_prefix("Bearer ") {
+                token.to_string()
+            } else if let Some(encoded) = authorization.strip_prefix("Basic ") {
+                let bytes = STANDARD
+                    .decode(encoded)
+                    .map_err(|_| denied("invalid proxy credentials"))?;
+                let credentials =
+                    std::str::from_utf8(&bytes).map_err(|_| denied("invalid proxy credentials"))?;
+                credentials
+                    .strip_prefix("alien:")
+                    .ok_or_else(|| denied("invalid proxy username"))?
+                    .to_string()
+            } else {
+                return Err(denied("proxy token required"));
+            });
         }
         if connect
             && (header.name.eq_ignore_ascii_case("transfer-encoding")

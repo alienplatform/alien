@@ -78,20 +78,9 @@ pub fn normalize_host(host: &str) -> Result<String> {
 
 pub trait PolicyExt {
     fn permits(&self, target: &Target) -> bool;
-    fn intersection_permits(&self, other: &Self, target: &Target) -> bool;
 }
 
 impl PolicyExt for Policy {
-    /// Both policies must permit the target. A literal needs an explicit rule in at least one
-    /// policy; Internet is the upper bound for an explicitly narrowed literal grant.
-    fn intersection_permits(&self, other: &Self, target: &Target) -> bool {
-        let left = self.permits(target);
-        let right = other.permits(target);
-        (left && right)
-            || (left && matches!(other, Self::Internet))
-            || (right && matches!(self, Self::Internet))
-    }
-
     /// Check the policy against a destination. Internet never authorizes literal IPs.
     fn permits(&self, target: &Target) -> bool {
         match self {
@@ -104,7 +93,7 @@ impl PolicyExt for Policy {
     }
 }
 
-/// Canonical bytes used for the signed policy digest and immutable storage.
+/// Canonical bytes used to authenticate admin writes and verify stored content.
 pub fn canonical(policy: &Policy) -> Result<Vec<u8>> {
     policy.canonical_json().map_err(|error| {
         let data = if error.code == "SANDBOX_EGRESS_POLICY_TOO_LARGE" {
@@ -126,12 +115,12 @@ pub fn digest(bytes: &[u8]) -> String {
 fn rule_matches(rule: &str, target: &Target) -> bool {
     let (host, port) = match rule.rsplit_once(':') {
         Some((host, port)) => match port.parse::<u16>() {
-            Ok(port) => (host, port),
+            Ok(port) => (host, Some(port)),
             Err(_) => return false,
         },
-        None => (rule, 443),
+        None => (rule, None),
     };
-    if port != target.port {
+    if port.is_some_and(|port| port != target.port) {
         return false;
     }
     if let Ok(ip) = target.host.parse::<Ipv4Addr>() {
@@ -139,8 +128,9 @@ fn rule_matches(rule: &str, target: &Target) -> bool {
             || host.parse::<Ipv4Addr>() == Ok(ip);
     }
     if let Some(suffix) = host.strip_prefix("*.") {
-        return normalize_host(suffix)
-            .is_ok_and(|suffix| target.host.ends_with(&format!(".{suffix}")));
+        return normalize_host(suffix).is_ok_and(|suffix| {
+            target.host == suffix || target.host.ends_with(&format!(".{suffix}"))
+        });
     }
     normalize_host(host).is_ok_and(|host| host == target.host)
 }
@@ -182,24 +172,19 @@ mod tests {
         let policy = Policy::Allow {
             allow: vec!["*.example.com".into(), "8.8.8.0/24:53".into()],
         };
-        for name in ["a.example.com", "deep.a.example.com"] {
-            assert!(policy.permits(&Target::parse(name, Some(443)).unwrap()));
-        }
         for name in [
             "example.com",
-            "badexample.com",
+            "a.example.com",
+            "deep.a.example.com",
             "a.example.com:80",
-            "8.8.8.8:443",
         ] {
+            assert!(policy.permits(&Target::parse(name, Some(443)).unwrap()));
+        }
+        for name in ["badexample.com", "8.8.8.8:443"] {
             assert!(!policy.permits(&Target::parse(name, Some(443)).unwrap()));
         }
         assert!(policy.permits(&Target::parse("8.8.8.8:53", None).unwrap()));
         assert!(!Policy::Internet.permits(&Target::parse("8.8.8.8:443", None).unwrap()));
-        let literal = Target::parse("8.8.8.8:53", None).unwrap();
-        let internet = Policy::Internet;
-        assert!(internet.intersection_permits(&policy, &literal));
-        assert!(policy.intersection_permits(&internet, &literal));
-        assert!(!internet.intersection_permits(&internet, &literal));
     }
 
     #[test]

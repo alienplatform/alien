@@ -9,8 +9,8 @@ use alien_egress_gateway::{
     config::Config,
     credentials::{self, Credentials},
     error::{ErrorData, Result},
-    generation::GenerationFence,
     server::{self, Gateway},
+    store::PolicyStore,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use tokio::net::TcpListener;
@@ -51,14 +51,14 @@ async fn main() -> Result<()> {
     credentials::validate_rules(&config.credentials)?;
     let bindings = Bindings::from_env().context(failed("load deployment bindings"))?;
     let kv = bindings
-        .kv(&config.generation_binding)
+        .kv(&config.generation_store.binding)
         .await
-        .context(failed("load generation binding"))?;
+        .context(failed("load policy binding"))?;
     let proxy = TcpListener::bind(config.listen)
         .await
         .into_alien_error()
         .context(failed("bind proxy"))?;
-    let admin_listener = TcpListener::bind(config.admin_listen)
+    let admin_listener = TcpListener::bind(config.admin)
         .await
         .into_alien_error()
         .context(failed("bind admin"))?;
@@ -66,7 +66,7 @@ async fn main() -> Result<()> {
     let gateway = Arc::new(Gateway {
         config,
         keys,
-        generations: GenerationFence::new(kv.clone()),
+        policies: PolicyStore::new(kv.clone()),
         credentials,
         accepted: AtomicU64::new(0),
         denied: AtomicU64::new(0),
