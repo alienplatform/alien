@@ -227,6 +227,12 @@ pub struct DeploymentLoop {
     deferred: Mutex<HashMap<String, DeferredDeployment>>,
 }
 
+/// The backoff and retry flag left by this processing attempt.
+struct AcquisitionBackoff {
+    delay: chrono::Duration,
+    retry_requested: bool,
+}
+
 /// A deployment waiting for credentials or another driver.
 #[derive(Debug, Clone)]
 struct DeferredDeployment {
@@ -623,7 +629,7 @@ impl DeploymentLoop {
 
         // Capture the revision while we still own the lease.
         let caller = Subject::system();
-        let deferred = if let Ok(Some(delay)) = result {
+        let deferred = if let Ok(Some(backoff)) = result {
             // A checkpoint may have changed the status and timestamp. Remember
             // the persisted record so later user actions can end the backoff.
             match self
@@ -637,8 +643,10 @@ impl DeploymentLoop {
                         DeferredDeployment {
                             status: record.status,
                             updated_at: record.updated_at,
-                            retry_requested: record.retry_requested,
-                            recheck_after: chrono::Utc::now() + delay,
+                            // The reread can already contain a new user retry. Comparing
+                            // against our own checkpoint must let that request through.
+                            retry_requested: backoff.retry_requested,
+                            recheck_after: chrono::Utc::now() + backoff.delay,
                         },
                     );
                 }
@@ -672,7 +680,7 @@ impl DeploymentLoop {
         execution_claim: Option<crate::traits::deployment_store::ExecutionClaim>,
         session: &str,
         options: ProcessOptions,
-    ) -> Result<Option<chrono::Duration>, AlienError> {
+    ) -> Result<Option<AcquisitionBackoff>, AlienError> {
         let deployment_id = deployment.id.clone();
         let stack_settings = deployment
             .stack_settings
@@ -822,9 +830,9 @@ impl DeploymentLoop {
                         .and_then(|metadata| metadata.credential_retry.as_ref());
                     // One checkpoint starts the window; subsequent failures only release
                     // the lease. Expected setup-driver waits retain their existing semantics.
-                    if (!waiting_for_driver && retry.is_none())
-                        || (waiting_for_driver && had_credential_retry)
-                    {
+                    let checkpoint_retry_state = (!waiting_for_driver && retry.is_none())
+                        || (waiting_for_driver && had_credential_retry);
+                    if checkpoint_retry_state {
                         recorded_state
                             .runtime_metadata
                             .get_or_insert_default()
@@ -850,7 +858,10 @@ impl DeploymentLoop {
                         error = %e,
                         "Credentials unavailable for deployment phase; waiting to retry or for credential handoff"
                     );
-                    return Ok(Some(CREDENTIAL_RETRY_INTERVAL));
+                    return Ok(Some(AcquisitionBackoff {
+                        delay: CREDENTIAL_RETRY_INTERVAL,
+                        retry_requested: checkpoint_retry_state && deployment.retry_requested,
+                    }));
                 } else {
                     let failed_status = failed_status_for_deployment_error(status);
                     let unchanged = status == failed_status
@@ -865,7 +876,10 @@ impl DeploymentLoop {
                             error = %e,
                             "Credential resolution still failing; leaving unchanged failure checkpoint and backing off"
                         );
-                        return Ok(Some(CREDENTIAL_FAILURE_RECHECK_INTERVAL));
+                        return Ok(Some(AcquisitionBackoff {
+                            delay: CREDENTIAL_FAILURE_RECHECK_INTERVAL,
+                            retry_requested: false,
+                        }));
                     }
                     warn!(
                         deployment_id = %deployment_id,
@@ -893,7 +907,10 @@ impl DeploymentLoop {
                     )
                     .await?;
                 }
-                return Ok(Some(CREDENTIAL_FAILURE_RECHECK_INTERVAL));
+                return Ok(Some(AcquisitionBackoff {
+                    delay: CREDENTIAL_FAILURE_RECHECK_INTERVAL,
+                    retry_requested: false,
+                }));
             }
         };
 
@@ -937,7 +954,10 @@ impl DeploymentLoop {
                 )
                 .await?;
             }
-            return Ok(Some(UNPROVISIONABLE_RECHECK_INTERVAL));
+            return Ok(Some(AcquisitionBackoff {
+                delay: UNPROVISIONABLE_RECHECK_INTERVAL,
+                retry_requested: deployment.retry_requested,
+            }));
         }
         let client_config = resolved_credentials.client_config;
 
@@ -2826,6 +2846,29 @@ mod tests {
                 .unwrap();
             heartbeat.tick().await;
             assert_eq!(fixture.credentials.visits.load(Ordering::SeqCst), 3);
+        }
+
+        #[tokio::test]
+        async fn retry_requested_during_failure_checkpoint_bypasses_backoff() {
+            let error = AlienError::new(alien_gcp_clients::ErrorData::InvalidClientConfig {
+                message: "management credentials are missing".to_string(),
+                errors: None,
+            })
+            .into_generic();
+            let fixture = Fixture::new(DeploymentStatus::Running, error).await;
+            let runner = Arc::new(fixture.runner());
+            let heartbeat = crate::loops::heartbeat::HeartbeatLoop::new(
+                fixture.manager.config.clone(),
+                fixture.manager.deployment_store.clone(),
+                runner,
+            );
+            // Deterministically request a retry after the failure is persisted but
+            // before process_deployment rereads the record to cache its revision.
+            fixture.db.execute("CREATE TRIGGER retry_after_failure AFTER UPDATE OF status ON deployments WHEN OLD.status = 'running' AND NEW.status = 'refresh-failed' BEGIN UPDATE deployments SET retry_requested = 1 WHERE id = NEW.id; END").await.unwrap();
+            heartbeat.tick().await;
+            heartbeat.tick().await;
+            assert_eq!(fixture.credentials.visits.load(Ordering::SeqCst), 2);
+            assert!(!fixture.record().await.retry_requested);
         }
 
         #[tokio::test]
