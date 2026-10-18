@@ -5,8 +5,7 @@ use std::sync::Arc;
 use std::time::Duration as StdDuration;
 
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_platform_api::types;
-use alien_platform_api::SdkResultExt as _;
+use alien_platform_api::{types, ClientInfo as _, SdkResultExt as _};
 use chrono::{DateTime, Duration, Utc};
 use clap::{Parser, ValueEnum};
 use console::style;
@@ -154,8 +153,8 @@ impl LogSource {
         }
     }
 
-    /// These gateways run only beside the system manager, so their request logs land in its
-    /// logs database whichever manager runs the project's deployments.
+    /// Request logs for these sources live only on the system manager, regardless of which
+    /// manager runs the project's deployments.
     fn is_stored_on_system_manager(self) -> bool {
         matches!(self, Self::AiGateway | Self::RemoteSandbox)
     }
@@ -390,7 +389,7 @@ fn validate_args(args: &LogsArgs) -> Result<()> {
             return Err(AlienError::new(ErrorData::ValidationError {
                 field: "source".to_string(),
                 message: format!(
-                    "`--source {}` reads the system manager's logs; drop --manager and --cloud.",
+                    "`--source {}` reads the system manager's logs, so it does not take --manager or --cloud.",
                     source.flag()
                 ),
             }));
@@ -626,7 +625,8 @@ async fn select_logs_manager(
         .ok_or_else(|| {
             let message = if let Some(source) = system_source {
                 format!(
-                    "No system manager with a Deepstore logs database is listed, and --source {} request logs are stored only there.",
+                    "No system manager with a Deepstore logs database is listed at {}, and `--source {}` request logs are stored only on the system manager. Check that ALIEN_BASE_URL points at the Alien API you meant to use.",
+                    client.baseurl(),
                     source.flag()
                 )
             } else if let Some(cloud) = cloud {
@@ -1331,20 +1331,26 @@ mod tests {
 
     #[test]
     fn gateway_sources_refuse_a_manager_or_cloud_they_would_ignore() {
-        for extra in [["--manager", "mgr_own"], ["--cloud", "gcp"]] {
-            let args = LogsArgs::try_parse_from(
-                ["logs", "--source", "remote-sandbox"]
-                    .into_iter()
-                    .chain(extra),
-            )
-            .expect("flags parse before semantic validation");
-            let error = validate_args(&args).expect_err("the system manager holds these logs");
-            assert_eq!(error.code, "VALIDATION_ERROR");
+        for source in ["remote-sandbox", "ai-gateway"] {
+            for extra in [["--manager", "mgr_own"], ["--cloud", "gcp"]] {
+                let args =
+                    LogsArgs::try_parse_from(["logs", "--source", source].into_iter().chain(extra))
+                        .expect("flags parse before semantic validation");
+                let error = validate_args(&args).expect_err("the system manager holds these logs");
+                assert_eq!(error.code, "VALIDATION_ERROR");
+                for expected in [source, "--manager or --cloud"] {
+                    assert!(error.message.contains(expected), "{}", error.message);
+                }
+            }
         }
         let args =
             LogsArgs::try_parse_from(["logs", "--source", "encryption-gateway", "--cloud", "gcp"])
                 .expect("flags parse");
         validate_args(&args).expect("encryption gateway logs can live on any manager");
+        let args =
+            LogsArgs::try_parse_from(["logs", "--source", "application", "--manager", "mgr_own"])
+                .expect("flags parse");
+        validate_args(&args).expect("application logs can live on any manager");
     }
 
     #[tokio::test]
@@ -1367,11 +1373,9 @@ mod tests {
             .await
             .expect_err("only the system manager holds gateway request logs");
         assert_eq!(error.code, "CONFIGURATION_ERROR");
-        assert!(
-            error.message.contains("--source remote-sandbox"),
-            "{}",
-            error.message
-        );
+        for expected in ["--source remote-sandbox", &server.base_url()] {
+            assert!(error.message.contains(expected), "{}", error.message);
+        }
     }
 
     #[test]
