@@ -102,6 +102,9 @@ impl StackMutation for ComputeClusterMutation {
         // idle pool's declared machine/profile when no choice changed: filling
         // a missing profile alone can resize its disks during an unrelated release.
         if !has_containers && !has_daemon_cluster_ref {
+            if !matches!(stack_state.platform, Platform::Aws | Platform::Gcp | Platform::Azure) {
+                return false;
+            }
             return stack.resources.values().any(|entry| {
                 entry.config.downcast_ref::<ComputeCluster>().is_some_and(|cluster| {
                     cluster.capacity_groups.iter().any(|group| {
@@ -3945,16 +3948,19 @@ mod tests {
     }
 
     #[test]
-    fn idle_cluster_with_declared_machine_preserves_legacy_disk_inputs() {
+    fn idle_cluster_preserves_legacy_inputs_without_setup_selection() {
         for (platform, machine) in [
-            (Platform::Aws, "m7g.medium"),
-            (Platform::Gcp, "n2-standard-2"),
-            (Platform::Azure, "Standard_D2s_v5"),
+            (Platform::Aws, Some("m7g.medium")),
+            (Platform::Gcp, Some("n2-standard-2")),
+            (Platform::Azure, Some("Standard_D2s_v5")),
+            (Platform::Local, None),
+            (Platform::Machines, None),
+            (Platform::Test, None),
         ] {
             let cluster = ComputeCluster::new("compute".to_string())
                 .capacity_group(CapacityGroup {
                     group_id: "general".to_string(),
-                    instance_type: Some(machine.to_string()),
+                    instance_type: machine.map(str::to_string),
                     profile: None,
                     min_size: 1,
                     max_size: 1,
