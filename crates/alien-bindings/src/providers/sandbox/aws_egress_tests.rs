@@ -88,6 +88,23 @@ async fn exercise(delivery_status: StatusCode, delivery_body: &str) {
                             fences.policy(&claims.sub).is_some(),
                             "policy must precede identity delivery"
                         );
+                        let record = body["policy"]
+                            .as_str()
+                            .expect("agent must receive its recovery record");
+                        let record_claims: serde_json::Value = serde_json::from_slice(
+                            &URL_SAFE_NO_PAD
+                                .decode(record.split('.').nth(1).unwrap())
+                                .unwrap(),
+                        )
+                        .unwrap();
+                        assert_eq!(record_claims["sub"], claims.sub);
+                        let policy: EgressPolicy =
+                            serde_json::from_value(record_claims["policy"].clone()).unwrap();
+                        assert_eq!(
+                            Some(policy),
+                            fences.policy(&claims.sub),
+                            "resume must deliver the latest policy"
+                        );
                         seen.lock().unwrap().push(claims);
                         let body = response_body.replace("$TOKEN", token);
                         (delivery_status, body)
@@ -267,6 +284,19 @@ async fn exercise(delivery_status: StatusCode, delivery_body: &str) {
             policies.lock().unwrap().len(),
             delivered + 1,
             "resume may renew identity"
+        );
+        let found = provider
+            .get_or_create(CreateSandboxRequest {
+                sandbox_id: Some(created.sandbox_id.clone()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!(!found.created);
+        assert_eq!(
+            harness.policy(&created.sandbox_id),
+            Some(EgressPolicy::Allow { allow: vec![] }),
+            "reconnect without egress must preserve the narrowed policy"
         );
         let recovered = provider
             .get_or_create(CreateSandboxRequest {
