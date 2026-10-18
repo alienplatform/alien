@@ -39,6 +39,7 @@ async fn a_failed_build_is_rebuilt_on_retry() {
     let creates = Arc::new(AtomicUsize::new(0));
     let seen = creates.clone();
     let mut client = MockSandboxDataPlaneApi::new();
+    client.expect_list_sandboxes().returning(|_| Ok(Vec::new()));
     // Nothing deletes the Failed image between attempts, as on the live service while the
     // sandbox stays in EnsureDiskImage.
     client

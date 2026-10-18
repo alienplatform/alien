@@ -238,12 +238,41 @@ async fn a_sandbox_lifetime_and_a_command_timeout_never_reach_each_other() {
     );
 }
 
-/// Azure declares none, and the client double proves it: a call on it would panic, so a refusal
-/// that leaked through to the data plane fails this test rather than passing quietly.
+/// Azure writes a deadline outside the guest for its deployment controller to reap.
 #[tokio::test]
-async fn azure_declares_no_lifetime_and_sends_nothing() {
+async fn azure_declares_lifetime_and_sends_deadline_metadata() {
+    let mut client = alien_azure_clients::azure::sandbox_data_plane::MockSandboxDataPlaneApi::new();
+    client
+        .expect_create_sandbox()
+        .times(1)
+        .withf(|_, request| {
+            request
+                .labels
+                .get(alien_core::SANDBOX_EXPIRY_LABEL)
+                .and_then(|v| v.parse::<i64>().ok())
+                .is_some_and(|deadline| {
+                    let remaining = deadline - chrono::Utc::now().timestamp_millis();
+                    (590_000..=600_000).contains(&remaining)
+                })
+        })
+        .returning(|_, _| {
+            Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
+                vnet_connection_name: Some("default".into()),
+                id: "s1".to_string(),
+                state: Some("Running".to_string()),
+                egress_policy: None,
+            })
+        });
+    client.expect_get_sandbox().returning(|_, id| {
+        Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
+                vnet_connection_name: Some("default".into()),
+            id: id.to_string(),
+            state: Some("Running".to_string()),
+            egress_policy: None,
+        })
+    });
     let sandbox = AzureSandbox::new(
-        Arc::new(alien_azure_clients::azure::sandbox_data_plane::MockSandboxDataPlaneApi::new()),
+        Arc::new(client),
         "group".to_string(),
         "ubuntu".to_string(),
         SandboxEgress::Internet,
@@ -252,8 +281,11 @@ async fn azure_declares_no_lifetime_and_sends_nothing() {
         "2Gi".to_string(),
         None,
     );
-
-    refuses_a_created_lifetime(&sandbox).await;
+    assert!(sandbox.capabilities().sandbox_lifetime);
+    sandbox
+        .create(with_lifetime())
+        .await
+        .expect("deadline accepted");
 }
 
 /// Kubernetes has `activeDeadlineSeconds`, but the pool's pods are already running under the
@@ -315,11 +347,9 @@ async fn kubernetes_narrows_the_platform_flag_and_claims_nothing() {
     );
 }
 
-/// Local declares none, and its manager is a live route here rather than a dead address: a
-/// refusal that turned into a request would show up as a hit, and a dead address would not tell
-/// the two apart because an unreachable local route reports the same code as a refusal.
+/// Local delegates the lifetime to its host manager.
 #[tokio::test]
-async fn local_declares_no_lifetime_and_asks_its_manager_for_nothing() {
+async fn local_declares_a_lifetime_and_reaches_its_manager() {
     let hits = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&hits);
     let manager = serve(Router::new().fallback(move || {
@@ -347,13 +377,12 @@ async fn local_declares_no_lifetime_and_asks_its_manager_for_nothing() {
     .await
     .expect("the binding is complete");
 
-    refuses_a_created_lifetime(&sandbox).await;
-    assert_eq!(
-        hits.load(Ordering::SeqCst),
-        0,
-        "a refusal must cost no request: a container started and then left unbounded is exactly \
-         what the refusal exists to prevent"
-    );
+    assert!(sandbox.capabilities().sandbox_lifetime);
+    sandbox
+        .create(with_lifetime())
+        .await
+        .expect("manager accepts lifetime");
+    assert_eq!(hits.load(Ordering::SeqCst), 1);
 }
 
 /// A lifetime the request names but no sandbox can be built to, through both doors a caller

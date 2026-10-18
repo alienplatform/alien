@@ -7,6 +7,7 @@
 //! transport rather than a shortcut.
 
 use std::collections::HashMap;
+use std::future::IntoFuture;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -20,7 +21,9 @@ use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 
 use crate::error::{ErrorData, Result};
+use crate::sandbox_jobs::SandboxJobs;
 use crate::sandbox_manager::{LocalSandboxManager, SandboxOutput, SandboxSessionConfig};
+use alien_bindings::traits::{JobPoll, JobStart, RunCommandRequest};
 use alien_error::{AlienError, IntoAlienError};
 
 /// Bearer token file for one sandbox, inside the deployment state directory.
@@ -41,6 +44,8 @@ fn token_file_name(sandbox: &str) -> String {
 pub struct CreateSessionBody {
     /// Session id within the sandbox
     pub session_id: String,
+    /// Optional narrowing of the declaration deadline.
+    pub timeout_ms: Option<u64>,
 }
 
 /// A request to run a command.
@@ -126,6 +131,7 @@ pub struct ReadFileResponse {
 #[derive(Clone)]
 struct RouteState {
     manager: Arc<LocalSandboxManager>,
+    jobs: Arc<SandboxJobs>,
     sandbox: String,
     token: String,
     /// Replaced in place on update. Held behind a lock rather than moved into the router so an
@@ -268,6 +274,7 @@ impl SandboxRoute {
         let template = Arc::new(Mutex::new(template));
         let state = RouteState {
             manager,
+            jobs: Arc::new(SandboxJobs::default()),
             sandbox: sandbox.to_string(),
             token,
             template: Arc::clone(&template),
@@ -280,12 +287,17 @@ impl SandboxRoute {
                 axum::routing::delete(terminate),
             )
             .route("/v1/sessions/{session_id}/exec", post(exec))
+            .route("/v1/sessions/{session_id}/jobs", post(start_job))
+            .route(
+                "/v1/sessions/{session_id}/jobs/{job_id}",
+                get(poll_job).delete(cancel_job),
+            )
             .route(
                 "/v1/sessions/{session_id}/files",
                 get(read_file).put(write_file),
             )
             .route("/v1/sessions/{session_id}/preview", get(preview))
-            .with_state(state);
+            .with_state(state.clone());
 
         let listener = TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().expect("literal"))
             .await
@@ -306,12 +318,36 @@ impl SandboxRoute {
 
         let (shutdown, stop) = tokio::sync::oneshot::channel::<()>();
         let serving = tokio::spawn(async move {
-            let serve = axum::serve(listener, router).with_graceful_shutdown(async move {
-                // Either an explicit stop or the sender being dropped ends the wait.
-                let _ = stop.await;
-            });
-            if let Err(error) = serve.await {
-                tracing::error!("local sandbox route stopped: {error}");
+            let serve = axum::serve(listener, router)
+                .with_graceful_shutdown(async move {
+                    // Either an explicit stop or the sender being dropped ends the wait.
+                    let _ = stop.await;
+                })
+                .into_future();
+            // Docker cleanup may be slow; the listener must keep accepting requests.
+            let mut serve = tokio::spawn(serve);
+            let mut tick = tokio::time::interval(std::time::Duration::from_millis(250));
+            loop {
+                tokio::select! {
+                    result = &mut serve => {
+                        match result {
+                            Ok(Ok(())) => {}
+                            Ok(Err(error)) => tracing::error!("local sandbox route stopped: {error}"),
+                            Err(error) => tracing::error!("local sandbox route task failed: {error}"),
+                        }
+                        break;
+                    },
+                    _ = tick.tick() => {
+                        // Finish an in-flight removal before acknowledging route shutdown.
+                        // Otherwise teardown can race Docker's asynchronous removal.
+                        match state.manager.reap_expired(&state.sandbox).await {
+                            Ok(containers) => {
+                                for container in containers { state.jobs.forget(&container); }
+                            }
+                            Err(error) => tracing::error!(sandbox = %state.sandbox, "sandbox lifetime reaper failed: {error}"),
+                        }
+                    }
+                }
             }
         });
 
@@ -406,11 +442,22 @@ async fn create_session(
     authorize(&state, &headers).map_err(|code| (code, "unauthorized".to_string()))?;
 
     // Cloned out of the lock: the session create is an await, and the guard is not Send.
-    let template = state
+    let mut template = state
         .template
         .lock()
         .expect("no panic holds this lock")
         .clone();
+
+    if body.timeout_ms == Some(0) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "timeoutMs must be positive".to_string(),
+        ));
+    }
+    template.max_lifetime_ms = match (template.max_lifetime_ms, body.timeout_ms) {
+        (Some(bound), Some(requested)) => Some(bound.min(requested)),
+        (bound, requested) => bound.or(requested),
+    };
 
     let handle = state
         .manager
@@ -562,18 +609,149 @@ async fn terminate(
 ) -> std::result::Result<StatusCode, (StatusCode, String)> {
     authorize(&state, &headers).map_err(|code| (code, "unauthorized".to_string()))?;
 
+    let container = state
+        .manager
+        .list_sessions(&state.sandbox)
+        .await
+        .map_err(failed)?
+        .into_iter()
+        .find(|session| session.session_id == session_id)
+        .map(|session| session.container_id);
     state
         .manager
         .terminate(&state.sandbox, &session_id)
         .await
         .map_err(failed)?;
 
+    if let Some(container) = container {
+        state.jobs.forget(&container);
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JobQuery {
+    since_seq: Option<u64>,
+}
+
+async fn start_job(
+    State(state): State<RouteState>,
+    Path(session): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<RunCommandRequest>,
+) -> std::result::Result<Json<JobStart>, (StatusCode, String)> {
+    authorize(&state, &headers).map_err(|code| (code, "unauthorized".to_string()))?;
+    let container = container_for(&state, &session).await?;
+    let job_id = state
+        .jobs
+        .start(state.manager.docker.clone(), container, request)
+        .map_err(failed)?;
+    Ok(Json(JobStart { job_id }))
+}
+
+async fn poll_job(
+    State(state): State<RouteState>,
+    Path((session, job)): Path<(String, String)>,
+    Query(query): Query<JobQuery>,
+    headers: HeaderMap,
+) -> std::result::Result<Json<JobPoll>, (StatusCode, String)> {
+    authorize(&state, &headers).map_err(|code| (code, "unauthorized".to_string()))?;
+    let container = container_for(&state, &session).await?;
+    state
+        .jobs
+        .poll(&container, &job, query.since_seq)
+        .map(Json)
+        .map_err(failed)
+}
+
+async fn cancel_job(
+    State(state): State<RouteState>,
+    Path((session, job)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> std::result::Result<StatusCode, (StatusCode, String)> {
+    authorize(&state, &headers).map_err(|code| (code, "unauthorized".to_string()))?;
+    let container = container_for(&state, &session).await?;
+    state.jobs.cancel(&container, &job).map_err(failed)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn slow_cleanup_does_not_block_accepting_requests() {
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let observed = Arc::clone(&entered);
+        let gate = Arc::clone(&release);
+        let first = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let docker_api = Router::new().fallback(move || {
+            let entered = Arc::clone(&observed);
+            let release = Arc::clone(&gate);
+            let first = Arc::clone(&first);
+            async move {
+                if first.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                    entered.notify_one();
+                    release.notified().await;
+                }
+                Json(Vec::<serde_json::Value>::new())
+            }
+        });
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listen");
+        let address = listener.local_addr().expect("address");
+        let docker_server = tokio::spawn(async move {
+            axum::serve(listener, docker_api)
+                .await
+                .expect("serve Docker");
+        });
+        let dir = tempfile::tempdir().expect("temp directory");
+        let mut manager = LocalSandboxManager::new(dir.path().to_path_buf()).expect("manager");
+        manager.docker = bollard::Docker::connect_with_http(
+            &format!("http://{address}"),
+            120,
+            bollard::API_DEFAULT_VERSION,
+        )
+        .expect("Docker client");
+        let template = SandboxSessionConfig {
+            image: "unused".to_string(),
+            max_lifetime_ms: Some(1000),
+            cpu_cores: 0.5,
+            memory_bytes: 268_435_456,
+            pids_limit: Some(64),
+            scratch_bytes: 16_777_216,
+            egress: crate::sandbox_manager::SandboxEgressMode::Deny,
+            preview_ports: vec![],
+            env: Default::default(),
+        };
+        let (route, _, shutdown, serving) =
+            SandboxRoute::serve(Arc::new(manager), "slow-cleanup", template)
+                .await
+                .expect("route");
+        tokio::time::timeout(std::time::Duration::from_secs(2), entered.notified())
+            .await
+            .expect("cleanup entered Docker");
+        let response = reqwest::Client::new()
+            .get(format!("{}/v1/sessions", route.base_url))
+            .timeout(std::time::Duration::from_secs(1))
+            .send()
+            .await;
+        // Shutdown also waits for this in-flight cleanup rather than abandoning it.
+        drop(shutdown);
+        assert!(!serving.is_finished());
+        release.notify_one();
+        tokio::time::timeout(std::time::Duration::from_secs(2), serving)
+            .await
+            .expect("route shuts down")
+            .expect("serving task");
+        docker_server.abort();
+        assert_eq!(
+            response.expect("listener stays responsive").status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
 
     /// Two sandboxes in one deployment share a state directory. With a fixed file name whichever
     /// one started last owned the credential for both, and the other's binding then authenticated

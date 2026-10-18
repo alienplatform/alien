@@ -15,6 +15,7 @@ const IMAGE: &str = "alpine:3.20";
 fn config(egress: SandboxEgressMode) -> SandboxSessionConfig {
     SandboxSessionConfig {
         image: IMAGE.to_string(),
+        max_lifetime_ms: None,
         cpu_cores: 0.5,
         memory_bytes: 256 * 1024 * 1024,
         pids_limit: Some(64),
