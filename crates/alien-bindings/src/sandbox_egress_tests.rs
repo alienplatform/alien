@@ -308,7 +308,7 @@ async fn released_gateway_contract(long_policy: bool) {
         connect_status(proxy, &initial.token)
             .await
             .starts_with("HTTP/1.1 200"),
-        "the real gateway must accept the bounded token before revocation"
+        "the real gateway must accept the identity under its current policy"
     );
     manager
         .update("gateway-session", &EgressPolicy::Allow { allow: vec![] })
@@ -318,7 +318,7 @@ async fn released_gateway_contract(long_policy: bool) {
         connect_status(proxy, &initial.token)
             .await
             .starts_with("HTTP/1.1 403"),
-        "an older token must be fenced"
+        "the same identity token must be denied by the empty policy"
     );
     manager.update("gateway-session", &policy).await.unwrap();
     assert!(
