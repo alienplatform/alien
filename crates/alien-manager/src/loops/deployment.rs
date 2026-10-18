@@ -745,12 +745,47 @@ impl DeploymentLoop {
             target_release_stack(self.release_store.as_ref(), &deployment, target_release_id)
                 .await?;
 
+        // `current_release` is the release currently deployed, so its stack has
+        // to come from that release. During an update it differs from the
+        // target, and carrying the target's stack here would make anything
+        // that asks "what is deployed now?" compare the target against itself.
+        // The pull path hydrates it the same way.
+        // A supplied current stack can differ from the target even for the
+        // same release, when only the control plane's additions change.
+        let current_release = match (deployment.current_release_id.as_ref(), supplied_current) {
+            (None, _) => None,
+            (Some(id), Some(stack)) => Some(ReleaseInfo {
+                release_id: Some(id.clone()),
+                version: None,
+                description: None,
+                stack,
+            }),
+            (Some(id), None) if id == target_release_id => {
+                deployment_stack.as_ref().map(|stack| ReleaseInfo {
+                    release_id: Some(id.clone()),
+                    version: None,
+                    description: None,
+                    stack: stack.clone(),
+                })
+            }
+            (Some(id), None) => self
+                .settled_stack(&system, &deployment_id, id, deployment.platform)
+                .await?
+                .map(|stack| ReleaseInfo {
+                    release_id: Some(id.clone()),
+                    version: None,
+                    description: None,
+                    stack,
+                }),
+        };
+
         let mut recorded_state = state_from_record(
             &deployment,
             status,
             deployment_stack.as_ref(),
             target_release_id,
         );
+        recorded_state.current_release = current_release.clone();
         if let Some(next_status) = alien_deployment::destroy_without_runtime(&recorded_state) {
             info!(
                 deployment_id = %deployment_id,
@@ -910,13 +945,14 @@ impl DeploymentLoop {
                         "Credential resolution failed for manager-owned phase; checkpointing failed deployment state"
                     );
                     let credential_error = e.into_generic();
-                    let failed_state = failed_state_for_credential_error(
+                    let mut failed_state = failed_state_for_credential_error(
                         &deployment,
                         status,
                         deployment_stack.as_ref(),
                         target_release_id,
                         credential_error,
                     );
+                    failed_state.current_release = current_release;
                     self.checkpoint_without_step(
                         &deployment_id,
                         session,
@@ -997,38 +1033,6 @@ impl DeploymentLoop {
             version: None,
             description: None,
             stack: deployment_stack.clone(),
-        };
-
-        // `current_release` is the release currently deployed, so its stack has
-        // to come from that release. During an update it differs from the
-        // target, and carrying the target's stack here would make anything
-        // that asks "what is deployed now?" compare the target against itself.
-        // The pull path hydrates it the same way.
-        // A supplied current stack can differ from the target even for the
-        // same release, when only the control plane's additions change.
-        let current_release = match (deployment.current_release_id.as_ref(), supplied_current) {
-            (None, _) => None,
-            (Some(id), Some(stack)) => Some(ReleaseInfo {
-                release_id: Some(id.clone()),
-                version: None,
-                description: None,
-                stack,
-            }),
-            (Some(id), None) if id == target_release_id => Some(ReleaseInfo {
-                release_id: Some(id.clone()),
-                version: None,
-                description: None,
-                stack: deployment_stack.clone(),
-            }),
-            (Some(id), None) => self
-                .settled_stack(&system, &deployment_id, id, deployment.platform)
-                .await?
-                .map(|stack| ReleaseInfo {
-                    release_id: Some(id.clone()),
-                    version: None,
-                    description: None,
-                    stack,
-                }),
         };
 
         let mut state = DeploymentState {
@@ -2696,6 +2700,67 @@ mod tests {
                 http_response_text: None,
             })
             .into_generic()
+        }
+
+        #[tokio::test]
+        async fn credential_checkpoints_preserve_distinct_release_stacks() {
+            for retryable in [true, false] {
+                let error = if retryable {
+                    transient_error()
+                } else {
+                    AlienError::new(alien_error::GenericError {
+                        message: "missing credentials".to_string(),
+                    })
+                };
+                let fixture = Fixture::new(DeploymentStatus::UpdatePending, error).await;
+                let mut record = fixture.record().await;
+                let installed = stack_with_workers(&["installed"]);
+                let target = stack_with_workers(&["replacement"]);
+                record.supplied_stacks = Some(SuppliedStacks {
+                    current: Some(installed.clone()),
+                    desired: Some(target.clone()),
+                });
+                record.current_release_id = Some("old-release".to_string());
+                record.desired_release_id = Some("new-release".to_string());
+                let mut returned = record.clone();
+                let mut store = crate::traits::deployment_store::MockDeploymentStore::new();
+                store
+                    .expect_reconcile()
+                    .times(1)
+                    .return_once(move |_, data| {
+                        let current = data.state.current_release.as_ref().unwrap();
+                        let desired = data.state.target_release.as_ref().unwrap();
+                        assert_eq!(current.release_id.as_deref(), Some("old-release"));
+                        assert_eq!(desired.release_id.as_deref(), Some("new-release"));
+                        assert_eq!(current.stack, installed);
+                        assert_eq!(desired.stack, target);
+                        assert_eq!(
+                            data.state.status,
+                            if retryable {
+                                DeploymentStatus::UpdatePending
+                            } else {
+                                DeploymentStatus::UpdateFailed
+                            }
+                        );
+                        returned.runtime_metadata = data.state.runtime_metadata;
+                        Ok(crate::traits::deployment_store::ReconcileOutcome {
+                            record: returned,
+                            target_operations_bundle_set: None,
+                            target_dynamic_containers: None,
+                        })
+                    });
+                let mut runner = fixture.runner();
+                runner.deployment_store = Arc::new(store);
+                runner
+                    .process_deployment_inner(
+                        record,
+                        None,
+                        "test-session",
+                        ProcessOptions::deployment_tick(),
+                    )
+                    .await
+                    .unwrap();
+            }
         }
 
         async fn retries_then_recovers(status: DeploymentStatus) {
