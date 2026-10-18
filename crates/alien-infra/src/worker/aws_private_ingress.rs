@@ -784,6 +784,7 @@ pub(super) async fn validate_worker_setup(
     {
         return Ok(());
     }
+    super::aws_gateway_cleanup::installed_function(ctx)?;
     let network = ctx.require_dependency::<crate::network::AwsNetworkController>(
         &ResourceRef::new(Network::RESOURCE_TYPE, "default-network"),
     )?;

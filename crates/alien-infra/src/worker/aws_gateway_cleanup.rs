@@ -84,7 +84,7 @@ impl GatewayCleanup<'_> {
 pub(super) fn installed_function(ctx: &ResourceControllerContext<'_>) -> Result<String> {
     let mut management = ctx.state.resources.iter().filter(|(_, state)| {
         state.resource_type == RemoteStackManagement::RESOURCE_TYPE.as_ref()
-            && state.lifecycle == ResourceLifecycle::Frozen
+            && state.lifecycle == Some(ResourceLifecycle::Frozen)
     });
     let (id, _) = management.next().ok_or_else(setup_required)?;
     if management.next().is_some() {
@@ -114,6 +114,7 @@ pub(super) fn installed_function(ctx: &ResourceControllerContext<'_>) -> Result<
 
 fn setup_required() -> AlienError<ErrorData> {
     AlienError::new(ErrorData::SetupRequired {
+        resource_id: None,
         message: "Rerun setup to register gateway retirement for this deployment before changing private worker access".to_string(),
     })
 }
