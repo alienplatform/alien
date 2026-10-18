@@ -9209,6 +9209,87 @@ mod tests {
         );
     }
 
+    /// Heartbeats must not replay the last deployment's code/config/trigger diff.
+    #[rstest]
+    #[case::never_updated(false)]
+    #[case::previously_updated(true)]
+    #[tokio::test]
+    async fn certificate_renewal_returns_to_ready_without_updating_worker(
+        #[case] previously_updated: bool,
+    ) {
+        let mut lambda = MockLambdaApi::new();
+        lambda
+            .expect_get_function_configuration()
+            .returning(|name, _| Ok(create_successful_function_response(name)));
+        // Every mutation is deliberately left without an expectation.
+        let mut acm = MockAcmApi::new();
+        acm.expect_reimport_certificate()
+            .withf(|request| {
+                request.certificate_arn == imported_certificate_arn(1)
+                    && request.tags.is_none()
+                    && request.certificate.contains("MIIBtest")
+            })
+            .times(1)
+            .returning(|request| {
+                Ok(ImportCertificateResponse {
+                    certificate_arn: request.certificate_arn,
+                })
+            });
+        let provider = setup_mock_service_provider(Arc::new(lambda), Some(Arc::new(acm)), None);
+        let mut controller = AwsWorkerController {
+            state: AwsWorkerState::Ready,
+            certificate_arn: Some(imported_certificate_arn(1)),
+            certificate_issued_at: Some("2023-01-01T00:00:00Z".to_string()),
+            ..at_importing_certificate()
+        };
+        let mut completed = false;
+        for _ in 0..10 {
+            // Each step starts from the serialized checkpoint, as a fresh process would.
+            let restored =
+                crate::core::deserialize_controller(serialize_controller(&controller).unwrap())
+                    .unwrap();
+            let mut builder = SingleControllerExecutor::builder()
+                .resource(function_public_ingress())
+                .controller(
+                    restored
+                        .as_any()
+                        .downcast_ref::<AwsWorkerController>()
+                        .unwrap()
+                        .clone(),
+                )
+                .platform(Platform::Aws)
+                .service_provider(provider.clone())
+                .domain_metadata(create_test_domain_metadata("public-func"));
+            if previously_updated {
+                let mut previous = function_public_ingress();
+                previous.code = alien_core::WorkerCode::Image {
+                    image: "old-image:previous".to_string(),
+                };
+                builder = builder.previous_resource(previous);
+            }
+            let mut executor = builder.build().await.unwrap();
+            let result = executor
+                .step()
+                .await
+                .expect("certificate renewal must succeed");
+            controller = executor
+                .internal_state::<AwsWorkerController>()
+                .unwrap()
+                .clone();
+            assert!(!executor.status().is_failed());
+            if controller.state == AwsWorkerState::Ready {
+                assert_eq!(
+                    controller.certificate_issued_at.as_deref(),
+                    Some("2024-01-01T00:00:00Z")
+                );
+                assert!(result.suggested_delay.is_some_and(|delay| !delay.is_zero()));
+                completed = true;
+                break;
+            }
+        }
+        assert!(completed, "renewal must finish at Ready");
+    }
+
     // ─────────────── LOG GROUP ────────────────
 
     /// The delete step for the function's log group, against `logs`.
