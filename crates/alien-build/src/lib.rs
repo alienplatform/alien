@@ -42,7 +42,6 @@ use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::error::Error as StdError;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::fs;
 use tokio::process::Command;
@@ -3894,12 +3893,10 @@ async fn lock_image_export(image_key: &str, resource_name: &str) -> Result<std::
         build_output: None,
     };
     let cache = dirs::cache_dir().ok_or_else(|| AlienError::new(error()))?;
-    let lock_path = cache
-        .join("alien")
-        .join("image-export-locks")
-        .join(format!("{:x}.lock", Sha256::digest(image_key.as_bytes())));
+    let lock_dir = cache.join("alien").join("image-export-locks");
+    let lock_path = lock_dir.join(format!("{:x}.lock", Sha256::digest(image_key.as_bytes())));
     tokio::task::spawn_blocking(move || {
-        std::fs::create_dir_all(lock_path.parent().expect("lock has a parent"))?;
+        std::fs::create_dir_all(lock_dir)?;
         let file = std::fs::OpenOptions::new()
             .create(true)
             .truncate(false)
@@ -4132,6 +4129,7 @@ async fn compute_function_content_hash(dir: &Path) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     #[tokio::test]
     async fn materializing_same_artifact_preserves_its_contents() {
