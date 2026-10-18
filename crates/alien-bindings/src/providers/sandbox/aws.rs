@@ -1143,6 +1143,34 @@ mod tests {
         );
     }
 
+    /// `ResumeMicrovm` is accepted while the MicroVM is still SUSPENDED and stays so until its
+    /// `/resume` hook returns, so the acceptance is not a sandbox that can take a command. The
+    /// failure half only, for the TLS reason `a_booting_sandbox_is_never_answered_with_a_second_microvm`
+    /// gives. The caller holds this sandbox's id, so a wait that gives up must not terminate it.
+    #[tokio::test]
+    async fn resume_does_not_return_before_the_sandbox_can_serve() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        client
+            .expect_get_microvm()
+            .returning(|id| Ok(owned(id, "SUSPENDED")));
+        client
+            .expect_resume_microvm()
+            .times(1)
+            .returning(|_| Ok(()));
+        client.expect_terminate_microvm().never();
+
+        let error = sandbox(client)
+            .resume("asleep")
+            .await
+            .expect_err("a resumed sandbox that never publishes an endpoint cannot be served");
+
+        assert_eq!(error.code, "SANDBOX_UNREACHABLE");
+        assert!(
+            error.to_string().contains("sandbox.resume") && error.to_string().contains("asleep"),
+            "the failure names the verb the caller used and the sandbox it waited on: {error}"
+        );
+    }
+
     /// See `capabilities()` for why this tracks `preview_ports`.
     #[tokio::test]
     async fn capabilities_reflect_the_declared_preview_ports() {
