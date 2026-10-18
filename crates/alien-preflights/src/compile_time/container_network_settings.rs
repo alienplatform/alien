@@ -306,6 +306,37 @@ mod tests {
                 "{platform}: {result:?}"
             );
         }
+        // Four distinct targets plus the base network group fit Lambda's limit.
+        // Duplicate links and targets without listeners consume no extra slot.
+        let mut many = stack.clone();
+        for index in 1..=5 {
+            let mut entry = stack.resources["api"].clone();
+            let target = entry.config.downcast_mut::<Container>().unwrap();
+            target.id = format!("target-{index}");
+            if index == 5 {
+                target.ports.clear();
+            }
+            let link = alien_core::ResourceRef::new(Container::RESOURCE_TYPE, &target.id);
+            many.resources.insert(target.id.clone(), entry);
+            let caller = many
+                .resources
+                .get_mut("caller")
+                .unwrap()
+                .config
+                .downcast_mut::<Worker>()
+                .unwrap();
+            caller.links.extend([link.clone(), link]);
+            let result = check.check(&many, Platform::Aws).await.unwrap();
+            assert_eq!(result.success, index < 4, "{index}: {result:?}");
+            if index >= 4 {
+                assert!(
+                    result
+                        .errors
+                        .iter()
+                        .any(|error| error.contains("five security group slots"))
+                );
+            }
+        }
         stack
             .resources
             .get_mut("api")
