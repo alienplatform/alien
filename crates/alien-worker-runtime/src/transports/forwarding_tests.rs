@@ -87,7 +87,7 @@ async fn redirects_preserve_status_location_cookies_body_and_never_replay() {
                 let response = timeout(
                     Duration::from_secs(5),
                     forward_http_request(
-                        &create_forward_client().unwrap(),
+                        &create_forward_client(),
                         Request::builder()
                             .method(method)
                             .uri("/redirect?keep=query")
@@ -143,7 +143,7 @@ async fn normal_response_is_preserved() {
     })))
     .await;
     let response = forward_http_request(
-        &create_forward_client().unwrap(),
+        &create_forward_client(),
         Request::new(Body::empty()),
         app.port,
         CancellationToken::new(),
@@ -170,7 +170,7 @@ async fn streaming_is_progressive_and_disconnect_releases_upstream() {
     let mut response = timeout(
         Duration::from_secs(5),
         forward_http_request(
-            &create_forward_client().unwrap(),
+            &create_forward_client(),
             Request::new(Body::empty()),
             app.port,
             CancellationToken::new(),

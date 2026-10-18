@@ -150,7 +150,7 @@ impl LocalTransport {
             command_concurrency: Arc::new(Semaphore::new(1)),
             in_flight_commands: InFlightCommands::default(),
             command_tasks: command_tasks.clone(),
-            http_client: create_forward_client()?,
+            http_client: create_forward_client(),
             proxy_shutdown: proxy_shutdown.clone(),
         };
 

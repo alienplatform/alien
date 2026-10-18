@@ -87,7 +87,7 @@ impl ContainerAppTransport {
             control_server: self.control_server,
             app_http_port: self.app_http_port,
             command_timeout: self.command_timeout,
-            http_client: create_forward_client()?,
+            http_client: create_forward_client(),
             proxy_shutdown: proxy_shutdown.clone(),
         };
 

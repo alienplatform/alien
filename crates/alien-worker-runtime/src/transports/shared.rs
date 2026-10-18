@@ -8,7 +8,6 @@
 use std::{future::Future, sync::Arc, time::Duration};
 
 use alien_commands::Envelope;
-use alien_error::{Context, IntoAlienError};
 #[cfg(any(feature = "gcp", feature = "azure"))]
 use alien_worker_protocol::control::{
     CronEvent, QueueMessage as ProtoQueueMessage, StorageEvent as ProtoStorageEvent,
@@ -277,7 +276,11 @@ async fn process_command_with_budget(
 /// with no proxy, generous timeouts (the app may make slow cloud API calls),
 /// and disabled TCP user timeout (gVisor on Cloud Run Gen2 can prematurely
 /// close idle connections with the default settings).
-pub fn create_forward_client() -> crate::error::Result<reqwest::Client> {
+///
+/// # Panics
+///
+/// Panics if the forwarding client cannot be initialized, like [reqwest::Client::new].
+pub fn create_forward_client() -> reqwest::Client {
     reqwest::Client::builder()
         // Redirects belong to the caller; never replay its request elsewhere.
         .redirect(reqwest::redirect::Policy::none())
@@ -286,11 +289,7 @@ pub fn create_forward_client() -> crate::error::Result<reqwest::Client> {
         .no_proxy()
         .tcp_keepalive(None)
         .build()
-        .into_alien_error()
-        .context(crate::error::ErrorData::HandlerStartupFailed {
-            message: "Failed to configure application HTTP forwarding".to_string(),
-            handler_type: Some("http-forwarder".to_string()),
-        })
+        .expect("Failed to configure application HTTP forwarding")
 }
 
 /// Forward an HTTP request to the application.
