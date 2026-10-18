@@ -20,9 +20,7 @@ use alien_core::sandbox_egress::{
     NETWORK_CONNECTOR_TYPE_NAME, SANDBOX_EGRESS_POLICY_NAME,
 };
 use alien_core::sandbox_setup_inputs::aws_sandbox_egress_network_id;
-use alien_core::{
-    AwsSandboxEgressScaffolding, ResourceStatus, Sandbox, SandboxEgress, Stack, StackState,
-};
+use alien_core::{AwsSandboxEgressScaffolding, ResourceStatus, Sandbox, Stack, StackState};
 use alien_error::{AlienError, Context, IntoAlienError};
 use serde_json::Value;
 use tracing::info;
@@ -55,13 +53,13 @@ pub(super) fn egress_network<'a>(stack: &'a Stack, sandbox: &Sandbox) -> Result<
 pub(super) async fn reconcile(
     ctx: &SetupScaffoldingContext<'_>,
     aws: &AwsClientConfig,
-    sandbox: &Sandbox,
+    sandbox_id: &str,
     network_id: &str,
     stack_state: &StackState,
     record: &mut Option<AwsSandboxEgressScaffolding>,
 ) -> Result<ScaffoldingProgress> {
-    let sandbox_id = sandbox.id.as_str();
-    let Some(network) = network_ready(stack_state, network_id, sandbox)? else {
+    let Some((vpc_id, private_subnet_ids)) = network_ready(stack_state, network_id, sandbox_id)?
+    else {
         info!(
             sandbox_id,
             network_id, "Waiting for the network before sandbox egress"
@@ -88,7 +86,7 @@ pub(super) async fn reconcile(
 
     let ec2 = ctx.service_provider.get_aws_ec2_client(aws).await?;
     let Some(security_group_id) =
-        deny_security_group(ctx, ec2.as_ref(), sandbox_id, &name, &network, record).await?
+        deny_security_group(ctx, ec2.as_ref(), sandbox_id, &name, &vpc_id, record).await?
     else {
         return Ok(ScaffoldingProgress::InProgress);
     };
@@ -98,7 +96,7 @@ pub(super) async fn reconcile(
         .resource_prefix(ctx.resource_prefix)
         .sandbox_id(sandbox_id)
         .operator_role_arn(&operator_role_arn)
-        .private_subnet_ids(&network.subnet_ids)
+        .private_subnet_ids(&private_subnet_ids)
         .security_group_id(&security_group_id)
         .build()
         .desired_state();
@@ -111,18 +109,11 @@ pub(super) async fn reconcile(
 
 /// The VPC and private subnets of a network setup has finished creating, or `None` while it has
 /// not.
-struct ConnectorNetwork {
-    vpc_id: String,
-    subnet_ids: Vec<String>,
-    gateway_cidrs: Vec<String>,
-}
-
 fn network_ready(
     stack_state: &StackState,
     network_id: &str,
-    sandbox: &Sandbox,
-) -> Result<Option<ConnectorNetwork>> {
-    let sandbox_id = sandbox.id.as_str();
+    sandbox_id: &str,
+) -> Result<Option<(String, Vec<String>)>> {
     let Some(state) = stack_state.resources.get(network_id) else {
         return Ok(None);
     };
@@ -140,22 +131,7 @@ fn network_ready(
         })?;
     match network.vpc_id {
         Some(vpc_id) if !network.private_subnet_ids.is_empty() => {
-            let (subnet_ids, gateway_cidrs) = if matches!(sandbox.egress, SandboxEgress::Internet) {
-                let topology = network.sandbox_network.filter(|topology| {
-                    !topology.sandbox_subnet_ids.is_empty() && !topology.gateway_cidrs.is_empty()
-                }).ok_or_else(|| AlienError::new(ErrorData::ResourceConfigInvalid {
-                    message: format!("network '{network_id}' has no verified isolated sandbox and gateway subnets; run setup before enabling internet egress"),
-                    resource_id: Some(sandbox_id.to_string()),
-                }))?;
-                (topology.sandbox_subnet_ids, topology.gateway_cidrs)
-            } else {
-                (network.private_subnet_ids, Vec::new())
-            };
-            Ok(Some(ConnectorNetwork {
-                vpc_id,
-                subnet_ids,
-                gateway_cidrs,
-            }))
+            Ok(Some((vpc_id, network.private_subnet_ids)))
         }
         _ => Err(AlienError::new(ErrorData::ResourceConfigInvalid {
             message: format!(
@@ -258,10 +234,9 @@ async fn deny_security_group(
     ec2: &dyn Ec2Api,
     sandbox_id: &str,
     name: &str,
-    network: &ConnectorNetwork,
+    vpc_id: &str,
     record: &mut Option<AwsSandboxEgressScaffolding>,
 ) -> Result<Option<String>> {
-    let vpc_id = network.vpc_id.as_str();
     let described = ec2
         .describe_security_groups(
             DescribeSecurityGroupsRequest::builder()
@@ -385,7 +360,7 @@ async fn deny_security_group(
 
     let foreign: Vec<&IpPermissionResponse> = rules
         .iter()
-        .filter(|rule| !is_connector_rule(rule, &network.gateway_cidrs))
+        .filter(|rule| !is_loopback_rule(rule))
         .collect();
     if !foreign.is_empty() {
         let revoke = foreign
@@ -418,47 +393,21 @@ async fn deny_security_group(
         }
         return Ok(None);
     }
-    let wanted = if network.gateway_cidrs.is_empty() {
-        vec![IpPermission {
-            ip_protocol: "-1".to_string(),
-            from_port: None,
-            to_port: None,
-            ip_ranges: Some(vec![IpRange {
-                cidr_ip: LOOPBACK_ONLY_CIDR.to_string(),
-                description: None,
-            }]),
-            ipv6_ranges: None,
-            user_id_group_pairs: None,
-        }]
-    } else {
-        let present: Vec<&str> = rules
-            .iter()
-            .flat_map(|rule| rule.ip_ranges.iter())
-            .flat_map(|set| &set.items)
-            .filter_map(|range| range.cidr_ip.as_deref())
-            .collect();
-        network
-            .gateway_cidrs
-            .iter()
-            .filter(|cidr| !present.contains(&cidr.as_str()))
-            .map(|cidr| IpPermission {
-                ip_protocol: "tcp".to_string(),
-                from_port: Some(3128),
-                to_port: Some(3128),
-                ip_ranges: Some(vec![IpRange {
-                    cidr_ip: cidr.clone(),
-                    description: Some("Sandbox gateway CONNECT".into()),
-                }]),
-                ipv6_ranges: None,
-                user_id_group_pairs: None,
-            })
-            .collect()
-    };
-    if rules.is_empty() || (!network.gateway_cidrs.is_empty() && !wanted.is_empty()) {
+    if rules.is_empty() {
         let authorized = ec2
             .authorize_security_group_egress(AuthorizeSecurityGroupEgressRequest {
                 group_id: group_id.clone(),
-                ip_permissions: wanted,
+                ip_permissions: vec![IpPermission {
+                    ip_protocol: "-1".to_string(),
+                    from_port: None,
+                    to_port: None,
+                    ip_ranges: Some(vec![IpRange {
+                        cidr_ip: LOOPBACK_ONLY_CIDR.to_string(),
+                        description: Some("Sandbox sessions reach nothing outbound".to_string()),
+                    }]),
+                    ipv6_ranges: None,
+                    user_id_group_pairs: None,
+                }],
             })
             .await;
         match authorized {
@@ -565,33 +514,6 @@ fn record_group(record: &mut Option<AwsSandboxEgressScaffolding>, group_id: Stri
         unreachable!("the operator role step records the egress objects first")
     };
     egress.security_group_id = Some(group_id);
-}
-
-/// Only CONNECT to the dedicated gateway subnets. No DNS, admin port, IPv6 or SG references.
-fn is_connector_rule(rule: &IpPermissionResponse, gateway_cidrs: &[String]) -> bool {
-    if gateway_cidrs.is_empty() {
-        return is_loopback_rule(rule);
-    }
-    let cidrs: Vec<_> = rule.ip_ranges.iter().flat_map(|set| &set.items).collect();
-    matches!(rule.ip_protocol.as_deref(), Some("tcp" | "6"))
-        && rule.from_port == Some(3128)
-        && rule.to_port == Some(3128)
-        && !cidrs.is_empty()
-        && cidrs.iter().all(|range| {
-            range
-                .cidr_ip
-                .as_ref()
-                .is_some_and(|cidr| gateway_cidrs.contains(cidr))
-        })
-        && rule
-            .ipv6_ranges
-            .as_ref()
-            .is_none_or(|set| set.items.is_empty())
-        && rule.groups.as_ref().is_none_or(|set| set.items.is_empty())
-        && rule
-            .prefix_list_ids
-            .as_ref()
-            .is_none_or(|set| set.items.is_empty())
 }
 
 /// One all-protocol rule to `127.0.0.1/32` and nothing else on it.
@@ -1253,8 +1175,6 @@ mod tests {
     #[derive(Debug, Clone, PartialEq)]
     struct Rule {
         protocol: String,
-        from_port: Option<i32>,
-        to_port: Option<i32>,
         cidrs: Vec<String>,
         ipv6_cidrs: Vec<String>,
         groups: Vec<String>,
@@ -1264,8 +1184,6 @@ mod tests {
     fn rule(cidr: &str) -> Rule {
         Rule {
             protocol: "-1".to_string(),
-            from_port: None,
-            to_port: None,
             cidrs: vec![cidr.to_string()],
             ipv6_cidrs: vec![],
             groups: vec![],
@@ -1553,8 +1471,8 @@ mod tests {
                     .iter()
                     .map(|rule| IpPermissionResponse {
                         ip_protocol: Some(rule.protocol.clone()),
-                        from_port: rule.from_port,
-                        to_port: rule.to_port,
+                        from_port: None,
+                        to_port: None,
                         ip_ranges: Some(IpRangeSet {
                             items: rule
                                 .cidrs
@@ -1617,8 +1535,6 @@ mod tests {
             .iter()
             .map(|permission| Rule {
                 protocol: permission.ip_protocol.clone(),
-                from_port: permission.from_port,
-                to_port: permission.to_port,
                 cidrs: permission
                     .ip_ranges
                     .iter()
@@ -2160,134 +2076,6 @@ mod tests {
             }),
             image_arn: None,
         }
-    }
-
-    fn internet_state() -> StackState {
-        let mut state = stack_state(Some(ResourceStatus::Running));
-        state
-            .resources
-            .get_mut("default-network")
-            .unwrap()
-            .internal_state
-            .as_mut()
-            .unwrap()["sandboxNetwork"] = json!({
-            "sandboxSubnetIds": ["subnet-isolated-a", "subnet-isolated-b"],
-            "gatewaySubnetIds": ["subnet-gateway-a", "subnet-gateway-b"],
-            "sandboxCidrs": ["10.0.48.0/24", "10.0.49.0/24"],
-            "gatewayCidrs": ["10.0.50.0/24", "10.0.51.0/24"],
-            "workloadCidrs": ["10.0.128.0/20", "10.0.144.0/20"],
-            "vpcCidrs": ["10.0.0.0/16"]
-        });
-        state
-    }
-
-    fn internet_stack() -> Stack {
-        // The managed gateway makes Internet use a connector rather than legacy unrestricted egress.
-        let mut stack = stack(SandboxEgress::Internet, created_network());
-        stack.resources.insert(
-            alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.into(),
-            alien_core::ResourceEntry {
-                config: Resource::new(
-                    alien_core::Container::new(
-                        alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.into(),
-                    )
-                    .code(alien_core::ContainerCode::Image {
-                        image: "example.invalid/gateway".into(),
-                    })
-                    .permissions("gateway".into())
-                    .cpu(alien_core::ResourceSpec {
-                        min: "0.25".into(),
-                        desired: "0.25".into(),
-                    })
-                    .memory(alien_core::ResourceSpec {
-                        min: "512Mi".into(),
-                        desired: "512Mi".into(),
-                    })
-                    .build(),
-                ),
-                lifecycle: ResourceLifecycle::Live,
-                dependencies: vec![],
-                enabled_when: None,
-                remote_access: false,
-            },
-        );
-        stack
-    }
-
-    #[tokio::test]
-    async fn internet_connector_only_reaches_connect_in_dedicated_gateway_subnets() {
-        let cloud = Shared::default();
-        let stack = internet_stack();
-        let state = internet_state();
-        let mut records = BTreeMap::new();
-        converge(&cloud, &stack, &state, &mut records).await;
-        {
-            let account = cloud.lock().unwrap();
-            assert_eq!(account.groups.len(), 1);
-            assert_eq!(
-                account.groups[0].egress,
-                vec![
-                    Rule {
-                        protocol: "tcp".into(),
-                        from_port: Some(3128),
-                        to_port: Some(3128),
-                        ..rule("10.0.50.0/24")
-                    },
-                    Rule {
-                        protocol: "tcp".into(),
-                        from_port: Some(3128),
-                        to_port: Some(3128),
-                        ..rule("10.0.51.0/24")
-                    },
-                ]
-            );
-            // Build the expected provider request from the dedicated subnet IDs.
-            let dedicated = vec!["subnet-isolated-a".into(), "subnet-isolated-b".into()];
-            let expected = SandboxEgressConnector::builder()
-                .resource_prefix(PREFIX)
-                .sandbox_id("agents")
-                .operator_role_arn(OPERATOR_ARN)
-                .private_subnet_ids(&dedicated)
-                .security_group_id("sg-1")
-                .build()
-                .desired_state();
-            assert!(connector_mismatches(&account.connectors[0].1, &expected).is_empty());
-        }
-        // Repair an accidental admin-port grant and a missing CONNECT destination without opening anything else.
-        {
-            let mut account = cloud.lock().unwrap();
-            account.groups[0].egress[0].from_port = Some(3129);
-            account.groups[0].egress[0].to_port = Some(3129);
-        }
-        converge(&cloud, &stack, &state, &mut records).await;
-        assert!(cloud.lock().unwrap().groups[0]
-            .egress
-            .iter()
-            .all(|rule| rule.from_port == Some(3128) && rule.to_port == Some(3128)));
-        assert!(converge(&cloud, &stack, &state, &mut records)
-            .await
-            .is_empty());
-        destroy(&cloud, &stack, &mut records).await;
-        assert!(cloud.lock().unwrap().groups.is_empty());
-        assert!(cloud.lock().unwrap().connectors.is_empty());
-    }
-
-    #[tokio::test]
-    async fn internet_refuses_ordinary_private_subnets_before_creating_a_connector() {
-        let cloud = Shared::default();
-        let stack = internet_stack();
-        let state = stack_state(Some(ResourceStatus::Running));
-        let mut records = BTreeMap::new();
-        let error = loop {
-            match step(&cloud, &stack, &state, &mut records).await {
-                Err(error) => break error,
-                Ok((ScaffoldingProgress::InProgress, _)) => {}
-                other => panic!("internet setup unexpectedly completed: {other:?}"),
-            }
-        };
-        assert!(error.to_string().contains("no verified isolated sandbox"));
-        assert!(cloud.lock().unwrap().groups.is_empty());
-        assert!(cloud.lock().unwrap().connectors.is_empty());
     }
 
     #[tokio::test]
