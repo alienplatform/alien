@@ -62,6 +62,9 @@ pub struct AwsSandboxController {
     /// Public signing material; the private key remains only in the secrets vault.
     #[serde(default)]
     pub(crate) egress_public_key: Option<super::egress::GatewayPublicKey>,
+    /// Resource default retained independently of the gateway metadata.
+    #[serde(default)]
+    pub(crate) default_policy: Option<alien_core::EgressPolicy>,
     /// Startup security contract of the active version (empty for legacy images).
     #[serde(default)]
     pub(crate) supervisor_environment: BTreeMap<String, String>,
@@ -445,6 +448,8 @@ impl AwsSandboxController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<Sandbox>()?;
+        self.default_policy = config.default_policy.clone();
         let ids = super::egress::internet_sandbox_ids(ctx.desired_stack);
         if alien_core::sandbox_egress::has_sandbox_gateway(ctx.desired_stack)
             && ids.iter().any(|id| id == ctx.desired_config.id())
@@ -457,8 +462,25 @@ impl AwsSandboxController {
                     super::egress::read_signing_public_key(vault.as_ref()).await?
                 },
             );
+            let key = self
+                .egress_public_key
+                .as_ref()
+                .expect("key initialized above");
+            self.egress = Some(alien_core::bindings::SandboxEgressBinding::Gateway(
+                alien_core::bindings::SandboxEgressGateway {
+                    container: alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.into(),
+                    audience: format!("{}/{}", ctx.resource_prefix, config.id),
+                    signing_key: alien_core::bindings::SandboxEgressSigningKey {
+                        vault: alien_core::SECRETS_VAULT_ID.into(),
+                        key: super::egress::SIGNING_KEY.into(),
+                    },
+                    kid: key.kid.clone(),
+                    admin_ca_pem: None,
+                },
+            ));
         } else {
             self.egress_public_key = None;
+            self.egress = Some(config.into());
         }
         Ok(HandlerAction::Continue {
             state: PublishingEgressConfig,
@@ -564,14 +586,34 @@ impl AwsSandboxController {
         debug!(sandbox_id = %config.id, "Sandbox ready");
 
         Ok(HandlerAction::Continue {
-            state: Ready,
+            state: if self.egress_public_key.is_some() {
+                RefreshingEgressConfig
+            } else {
+                Ready
+            },
             suggested_delay: Some(Duration::from_secs(60)),
+        })
+    }
+
+    // Refresh the audience list when another Sandbox is added or removed, even
+    // when this owner's own resource configuration did not change.
+    #[handler(state = RefreshingEgressConfig, on_failure = RefreshFailed, status = ResourceStatus::Running)]
+    async fn refreshing_egress_config(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        if let Some(key) = &self.egress_public_key {
+            super::egress::publish_aws_config(ctx, key).await?;
+        }
+        Ok(HandlerAction::Continue {
+            state: Ready,
+            suggested_delay: None,
         })
     }
 
     // ─────────────── UPDATE FLOW ──────────────────────────────────────────
 
-    #[flow_entry(Update, from = [Ready, RefreshFailed])]
+    #[flow_entry(Update, from = [Ready, RefreshingEgressConfig, RefreshFailed])]
     #[handler(
         state = UpdatingSandbox,
         on_failure = UpdateFailed,
@@ -867,14 +909,15 @@ impl AwsSandboxController {
         // token can be minted for; neither can be inferred from the image, and a session
         // started without the connectors reaches the public internet.
         let binding = SandboxBinding::Aws(AwsSandboxBinding {
-            default_policy: self
-                .egress
-                .as_ref()
-                .and_then(|value| value.default_policy().cloned()),
-            egress: self
-                .egress
-                .as_ref()
-                .map(|value| (*value.declaration()).into()),
+            default_policy: self.default_policy.clone().or_else(|| {
+                self.egress
+                    .as_ref()
+                    .and_then(|value| value.default_policy().cloned())
+            }),
+            egress: self.egress.as_ref().map(|value| match value {
+                alien_core::bindings::SandboxEgressBinding::Gateway(_) => value.clone(),
+                _ => (*value.declaration()).into(),
+            }),
             image_arn: BindingValue::value(image_arn.clone()),
             image_version: BindingValue::value(image_version.clone()),
             region: BindingValue::value(region.clone()),

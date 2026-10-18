@@ -162,8 +162,39 @@ impl ResourceImporter for AwsSandboxImporter {
                 })
             })?;
 
+        let requires_gateway = !imported_controller.allow_egress
+            && imported_controller.egress.as_ref().is_some_and(|value| {
+                !matches!(value.declaration(), alien_core::SandboxEgress::None)
+            });
+        let gateway = existing_controller
+            .egress
+            .as_ref()
+            .and_then(|value| value.gateway())
+            .cloned();
+        let initialize_gateway = requires_gateway
+            && existing_controller.egress_public_key.is_none()
+            && existing_controller.get_status() == ResourceStatus::Running;
         let merged = AwsSandboxController {
-            egress: imported_controller.egress,
+            state: if initialize_gateway {
+                AwsSandboxState::InitializingEgressKey
+            } else {
+                existing_controller.state
+            },
+            default_policy: ctx
+                .resource
+                .config
+                .downcast_ref::<Sandbox>()
+                .and_then(|sandbox| sandbox.default_policy.clone()),
+            egress: if requires_gateway && gateway.is_some() {
+                gateway.map(alien_core::bindings::SandboxEgressBinding::Gateway)
+            } else {
+                imported_controller.egress
+            },
+            egress_public_key: if requires_gateway {
+                existing_controller.egress_public_key.clone()
+            } else {
+                None
+            },
             build_role_arn: imported_controller
                 .build_role_arn
                 .or(existing_controller.build_role_arn.clone()),
@@ -204,6 +235,7 @@ impl ResourceImporter for AwsSandboxImporter {
         })?;
 
         Ok(StackResourceState {
+            status: merged.get_status(),
             internal_state: Some(internal_state),
             outputs,
             remote_binding_params,
