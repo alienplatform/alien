@@ -5,7 +5,7 @@
 //! record, so a binding describes the parent only.
 
 use super::BindingValue;
-use crate::SandboxEgress;
+use crate::{EgressPolicy, SandboxEgress};
 use serde::{Deserialize, Serialize};
 
 /// Represents a sandbox binding for creating and reaching sandboxes.
@@ -35,28 +35,82 @@ pub enum SandboxBinding {
 
 /// Gateway handoff, or a policy-only binding from deployments without a gateway.
 /// Policy-only bindings remain readable but cannot enforce per-sandbox changes.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
 pub enum SandboxEgressBinding {
     /// Complete gateway configuration from the deployment controller.
     Gateway(SandboxEgressGateway),
     /// Legacy declaration; no runtime enforcement capability is implied.
     Policy(SandboxEgress),
+    /// Migrated legacy allowDomains policy, retained in durable controller state.
+    Defaults {
+        #[serde(rename = "defaultPolicy")]
+        default_policy: EgressPolicy,
+    },
 }
 
 impl SandboxEgressBinding {
     /// Declaration used for validation before any backend call.
-    pub fn bound(&self) -> &SandboxEgress {
+    pub fn declaration(&self) -> &SandboxEgress {
         match self {
-            Self::Gateway(value) => &value.bound,
+            Self::Gateway(_) => &SandboxEgress::Internet,
             Self::Policy(value) => value,
+            Self::Defaults { .. } => &SandboxEgress::Internet,
+        }
+    }
+    /// Default preserved from a released allowDomains binding or declaration.
+    pub fn default_policy(&self) -> Option<&EgressPolicy> {
+        match self {
+            Self::Defaults { default_policy } => Some(default_policy),
+            _ => None,
         }
     }
     /// Gateway configuration, absent on older deployments.
     pub fn gateway(&self) -> Option<&SandboxEgressGateway> {
         match self {
             Self::Gateway(value) => Some(value),
-            Self::Policy(_) => None,
+            Self::Policy(_) | Self::Defaults { .. } => None,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for SandboxEgressBinding {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Input {
+            Gateway(SandboxEgressGateway),
+            Policy(SandboxEgress),
+            Defaults {
+                #[serde(rename = "defaultPolicy")]
+                default_policy: EgressPolicy,
+            },
+            Legacy(Legacy),
+        }
+        #[derive(Deserialize)]
+        #[serde(tag = "mode", rename_all = "camelCase", deny_unknown_fields)]
+        enum Legacy {
+            AllowDomains { domains: Vec<String> },
+        }
+        Ok(match Input::deserialize(deserializer)? {
+            Input::Gateway(value) => Self::Gateway(value),
+            Input::Policy(value) => Self::Policy(value),
+            Input::Defaults { default_policy } => Self::Defaults { default_policy },
+            Input::Legacy(Legacy::AllowDomains { domains }) => Self::Defaults {
+                default_policy: EgressPolicy::Allow { allow: domains },
+            },
+        })
+    }
+}
+impl From<&crate::Sandbox> for SandboxEgressBinding {
+    fn from(value: &crate::Sandbox) -> Self {
+        match &value.default_policy {
+            Some(default_policy) => Self::Defaults {
+                default_policy: default_policy.clone(),
+            },
+            None => Self::Policy(value.egress),
         }
     }
 }
@@ -71,14 +125,10 @@ impl From<SandboxEgress> for SandboxEgressBinding {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SandboxEgressGateway {
-    /// Proxy address reachable from the sandbox, normally port 3128.
-    pub gateway: String,
-    /// Management endpoint, unreachable from sandbox workloads.
-    pub admin: String,
+    /// Linked gateway Container binding; its internal URL is resolved at runtime.
+    pub container: String,
     /// Deployment prefix and resource id.
     pub audience: String,
-    /// Declaration's maximum permitted policy.
-    pub bound: SandboxEgress,
     /// Vault locator for the deployment's signing key.
     pub signing_key: SandboxEgressSigningKey,
     /// Key id published in the gateway's rotation set.
@@ -102,7 +152,10 @@ pub struct SandboxEgressSigningKey {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AwsSandboxBinding {
-    /// Declared egress bound. Absent only in bindings created by older releases.
+    /// Default runtime policy when create omits one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_policy: Option<EgressPolicy>,
+    /// Declared internet access. Absent only in bindings created by older releases.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub egress: Option<SandboxEgressBinding>,
     /// MicroVM image ARN that scopes the sandboxes this binding creates
@@ -151,6 +204,9 @@ pub struct AwsSandboxBinding {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AzureSandboxBinding {
+    /// Default runtime policy when create omits one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_policy: Option<EgressPolicy>,
     /// Sandbox group that scopes every sandbox, image, snapshot and secret
     pub sandbox_group: BindingValue<String>,
     /// ADC data-plane endpoint, which is separate from the ARM control plane
@@ -194,7 +250,10 @@ pub struct AzureSandboxBinding {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GcpAgentPlatformSandboxBinding {
-    /// Declared egress bound. Absent only in bindings created by older releases.
+    /// Default runtime policy when create omits one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_policy: Option<EgressPolicy>,
+    /// Declared internet access. Absent only in bindings created by older releases.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub egress: Option<SandboxEgressBinding>,
     /// Agent Engine that parents every sandbox. Sandboxes are created and enumerated under it,
@@ -220,7 +279,10 @@ pub struct GcpAgentPlatformSandboxBinding {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct KubernetesSandboxBinding {
-    /// Declared egress bound. Absent only in bindings created by older releases.
+    /// Default runtime policy when create omits one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_policy: Option<EgressPolicy>,
+    /// Declared internet access. Absent only in bindings created by older releases.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub egress: Option<SandboxEgressBinding>,
     /// Namespace sandbox pods are created in
@@ -244,7 +306,10 @@ pub struct KubernetesSandboxBinding {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalSandboxBinding {
-    /// Declared egress bound. Absent only in bindings created by older releases.
+    /// Default runtime policy when create omits one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_policy: Option<EgressPolicy>,
+    /// Declared internet access. Absent only in bindings created by older releases.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub egress: Option<SandboxEgressBinding>,
     /// Loopback endpoint of the local sandbox manager
@@ -257,6 +322,28 @@ pub struct LocalSandboxBinding {
 }
 
 impl SandboxBinding {
+    /// Egress handoff, including declarations stored by earlier releases.
+    pub fn egress(&self) -> Option<&SandboxEgressBinding> {
+        match self {
+            Self::Aws(value) => value.egress.as_ref(),
+            Self::Azure(value) => Some(&value.egress),
+            Self::GcpAgentPlatform(value) => value.egress.as_ref(),
+            Self::Kubernetes(value) => value.egress.as_ref(),
+            Self::Local(value) => value.egress.as_ref(),
+        }
+    }
+    /// Default runtime policy, including the released allowDomains alias.
+    pub fn default_policy(&self) -> Option<&EgressPolicy> {
+        let explicit = match self {
+            Self::Aws(value) => value.default_policy.as_ref(),
+            Self::Azure(value) => value.default_policy.as_ref(),
+            Self::GcpAgentPlatform(value) => value.default_policy.as_ref(),
+            Self::Kubernetes(value) => value.default_policy.as_ref(),
+            Self::Local(value) => value.default_policy.as_ref(),
+        };
+        explicit.or_else(|| self.egress().and_then(SandboxEgressBinding::default_policy))
+    }
+
     /// Creates an AWS sandbox binding.
     pub fn aws(
         image_arn: impl Into<BindingValue<String>>,
@@ -264,6 +351,7 @@ impl SandboxBinding {
         region: impl Into<BindingValue<String>>,
     ) -> Self {
         Self::Aws(AwsSandboxBinding {
+            default_policy: None,
             egress: None,
             image_arn: image_arn.into(),
             image_version: image_version.into(),
@@ -288,6 +376,7 @@ impl SandboxBinding {
         idle_pause_seconds: Option<u32>,
     ) -> Self {
         Self::Azure(AzureSandboxBinding {
+            default_policy: None,
             sandbox_group: sandbox_group.into(),
             data_plane_endpoint: data_plane_endpoint.into(),
             region: region.into(),
@@ -312,6 +401,7 @@ impl SandboxBinding {
         allow_egress: bool,
     ) -> Self {
         Self::GcpAgentPlatform(GcpAgentPlatformSandboxBinding {
+            default_policy: None,
             egress: Some(
                 (if allow_egress {
                     SandboxEgress::Internet
@@ -339,6 +429,7 @@ impl SandboxBinding {
         egress: Option<SandboxEgress>,
     ) -> Self {
         Self::Kubernetes(KubernetesSandboxBinding {
+            default_policy: None,
             egress: egress.map(Into::into),
             namespace: namespace.into(),
             runtime_class: runtime_class.into(),
@@ -357,6 +448,7 @@ impl SandboxBinding {
         egress: Option<SandboxEgress>,
     ) -> Self {
         Self::Local(LocalSandboxBinding {
+            default_policy: None,
             egress: egress.map(Into::into),
             manager_url: manager_url.into(),
             sandbox_key: sandbox_key.into(),
@@ -465,7 +557,7 @@ mod tests {
         assert!(!restored.allow_egress, "legacy bindings default to deny");
         assert_eq!(
             restored.egress, None,
-            "legacy bindings carry no explicit bound"
+            "legacy bindings carry no explicit declaration"
         );
     }
 

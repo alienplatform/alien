@@ -575,7 +575,7 @@ impl Binding for GcpAgentPlatformSandbox {}
 
 #[async_trait]
 impl Sandbox for GcpAgentPlatformSandbox {
-    fn egress_bound(&self) -> Option<&alien_core::SandboxEgress> {
+    fn egress_declaration(&self) -> Option<&alien_core::SandboxEgress> {
         self.egress.as_ref()
     }
     fn as_any(&self) -> &dyn std::any::Any {
@@ -590,7 +590,7 @@ impl Sandbox for GcpAgentPlatformSandbox {
     }
 
     async fn create(&self, request: CreateSandboxRequest) -> Result<SandboxInstance> {
-        super::egress::require_default(request.egress.as_ref(), self.egress_bound())?;
+        super::egress::require_default(request.egress.as_ref(), self.egress_declaration())?;
         // A sandbox takes no environment of its own: `SandboxCreateRequest` has no env field,
         // so silently dropping one would run the caller's code without the variables it asked for.
         // They travel per command through `run_command` instead.
@@ -699,7 +699,7 @@ impl Sandbox for GcpAgentPlatformSandbox {
     }
 
     async fn get_or_create(&self, request: CreateSandboxRequest) -> Result<ResolvedSandbox> {
-        super::egress::require_default(request.egress.as_ref(), self.egress_bound())?;
+        super::egress::require_default(request.egress.as_ref(), self.egress_declaration())?;
         if let Some(id) = request.sandbox_id.as_deref() {
             // A running, reachable sandbox is handed back; anything else is served by a fresh
             // sandbox rather than by destroying one this call did not create, which may be

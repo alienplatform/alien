@@ -1,49 +1,36 @@
 use super::*;
 use proptest::prelude::*;
 use serde_json::json;
-
-fn allow(targets: &[&str]) -> SandboxEgress {
-    SandboxEgress::Allow {
+fn allow(targets: &[&str]) -> EgressPolicy {
+    EgressPolicy::Allow {
         allow: targets.iter().map(|s| s.to_string()).collect(),
     }
 }
-
 #[test]
-fn legacy_policies_write_only_the_current_format() {
-    for (input, output) in [
-        (json!({"mode":"deny"}), json!("none")),
-        (json!({"mode":"allow"}), json!("internet")),
-        (
-            json!({"mode":"allowDomains", "domains":["api.example.com"]}),
-            json!({"allow":["api.example.com"]}),
-        ),
+fn runtime_policy_is_separate_from_declaration_and_legacy_aliases() {
+    for value in [
+        json!("none"),
+        json!({"mode":"deny"}),
+        json!({"mode":"allowDomains","domains":["example.com"]}),
+        json!({"allow":[],"extra":true}),
     ] {
-        let policy: SandboxEgress = serde_json::from_value(input).unwrap();
-        assert_eq!(serde_json::to_value(&policy).unwrap(), output);
-        assert_eq!(
-            serde_json::from_value::<SandboxEgress>(output).unwrap(),
-            policy
-        );
+        assert!(serde_json::from_value::<EgressPolicy>(value).is_err());
     }
-    for invalid in [
-        json!({"allow":[],"mode":"allow"}),
-        json!({"mode":"deny","domains":[]}),
-        json!("allow"),
-    ] {
-        assert!(serde_json::from_value::<SandboxEgress>(invalid).is_err());
-    }
+    assert_eq!(
+        serde_json::from_value::<EgressPolicy>(json!({"allow":[]})).unwrap(),
+        allow(&[])
+    );
+    assert!(!allow(&[]).allows("example.com", 443).unwrap());
 }
-
 #[test]
 fn names_ports_and_networks_are_normalized() {
     assert_eq!(
         allow(&["API.Example.COM.:443", "*.BÜCHER.de", "8.8.8.7/24:80"])
             .normalized()
             .unwrap(),
-        allow(&["api.example.com", "*.xn--bcher-kva.de", "8.8.8.0/24:80"])
+        allow(&["api.example.com:443", "*.xn--bcher-kva.de", "8.8.8.0/24:80"])
     );
 }
-
 #[test]
 fn unsafe_or_ambiguous_targets_are_refused() {
     for target in [
@@ -74,149 +61,70 @@ fn unsafe_or_ambiguous_targets_are_refused() {
     ] {
         assert!(allow(&[target]).validate().is_err(), "accepted {target}");
     }
-    assert!(allow(&[]).validate().is_err());
-    assert!(SandboxEgress::Allow {
-        allow: vec!["example.com".to_string(); 4097]
-    }
-    .validate()
-    .is_err());
 }
-
 #[test]
-fn subset_rule_checks_ports_apex_wildcards_and_cidr_containment() {
-    for (child, parent, expected) in [
-        ("a.example.com", "*.example.com", true),
-        ("a.b.example.com", "*.example.com", true),
-        ("*.a.example.com", "*.example.com", true),
-        ("*.example.com", "*.example.com", true),
-        ("example.com", "*.example.com", false),
-        ("badexample.com", "*.example.com", false),
-        ("*.example.com", "a.example.com", false),
-        ("a.example.com:80", "*.example.com", false),
-        ("8.8.8.8", "8.8.8.0/24", true),
-        ("8.8.8.0/25", "8.8.8.0/24", true),
-        ("8.8.8.0/24", "8.8.8.8", false),
-        ("8.8.8.0/24:80", "8.8.8.0/24", false),
-    ] {
-        assert_eq!(
-            allow(&[child]).ensure_subset_of(&allow(&[parent])).is_ok(),
-            expected,
-            "{child} <= {parent}"
-        );
+fn wildcards_include_the_apex_and_unspecified_ports_match_all_ports() {
+    let policy = allow(&["*.example.com", "8.8.8.0/24:53"]);
+    for host in ["example.com", "a.example.com", "a.b.example.com"] {
+        for port in [22, 80, 443, 8443] {
+            assert!(policy.allows(host, port).unwrap());
+        }
     }
-    assert!(SandboxEgress::None
-        .ensure_subset_of(&allow(&["example.com"]))
-        .is_ok());
-    assert!(allow(&["example.com"])
-        .ensure_subset_of(&SandboxEgress::Internet)
-        .is_ok());
-    let error = allow(&["example.com", "other.com"])
-        .ensure_subset_of(&allow(&["example.com"]))
-        .unwrap_err();
-    assert_eq!(error.code, "SANDBOX_EGRESS_WIDENS");
-    assert!(!error.retryable);
-    assert!(error.message.contains("other.com"));
-    assert!(SandboxEgress::Internet
-        .ensure_subset_of(&allow(&["example.com"]))
+    assert!(!policy.allows("badexample.com", 443).unwrap());
+    assert!(!policy.allows("example.com.evil.org", 443).unwrap());
+    assert!(policy.allows("8.8.8.8", 53).unwrap());
+    assert!(!policy.allows("8.8.8.8", 443).unwrap());
+    assert!(!allow(&["example.com:443"])
+        .allows("example.com", 8443)
+        .unwrap());
+    assert!(EgressPolicy::Internet
+        .allows("169.254.169.254", 80)
         .is_err());
 }
-
-proptest! {
-    #[test]
-    fn subset_is_reflexive_and_transitive(label in "[a-z]{1,20}", sub in "[a-z]{1,20}", port in 1u16..=65535) {
-        let parent = allow(&[&format!("*.example.com:{port}")]);
-        let middle = allow(&[&format!("*.{label}.example.com:{port}")]);
-        let child = allow(&[&format!("{sub}.{label}.example.com:{port}")]);
-        prop_assert!(child.ensure_subset_of(&child).is_ok());
-        prop_assert!(middle.ensure_subset_of(&parent).is_ok());
-        prop_assert!(child.ensure_subset_of(&middle).is_ok());
-        prop_assert!(child.ensure_subset_of(&parent).is_ok());
-        prop_assert!(parent.ensure_subset_of(&child).is_err());
-    }
-
-    #[test]
-    fn cidr_narrowing_agrees_with_address_membership(a in any::<u8>(), b in any::<u8>(), prefix in 16u8..=32) {
-        let ip = Ipv4Addr::new(8, 8, a, b);
-        let network = Ipv4Net::new(ip, prefix).unwrap().trunc();
-        let child = allow(&[&ip.to_string()]);
-        let parent = allow(&[&network.to_string()]);
-        prop_assert!(child.ensure_subset_of(&parent).is_ok());
-        prop_assert_eq!(parent.ensure_subset_of(&child).is_ok(), prefix == 32);
-    }
-}
-
 #[test]
-fn canonical_policy_sorts_normalizes_and_hashes_the_exact_json() {
-    let policy = allow(&["Z.Example.COM.:443", "a.example.com"]);
-    let canonical = br#"{"allow":["a.example.com","z.example.com"]}"#;
-    assert_eq!(policy.canonical_json().unwrap(), canonical);
+fn canonical_encoding_and_limits_cover_the_full_policy() {
     assert_eq!(
-        policy.policy_digest().unwrap(),
-        allow(&["a.example.com", "z.example.com"])
-            .policy_digest()
-            .unwrap()
+        allow(&["B.example.com", "a.example.com."])
+            .canonical_json()
+            .unwrap(),
+        br#"{"allow":["a.example.com","b.example.com"]}"#
     );
-    assert_eq!(SandboxEgress::None.canonical_json().unwrap(), br#""none""#);
-}
-
-#[test]
-fn policy_limits_preserve_4096_targets_and_refuse_oversized_canonical_json() {
-    let accepted = SandboxEgress::Allow {
-        allow: (0..4096).map(|i| format!("api-{i}.example.com")).collect(),
+    let accepted = EgressPolicy::Allow {
+        allow: (0..4096).map(|i| format!("host{i}.example.com")).collect(),
     };
     accepted.validate().unwrap();
-    assert!(accepted.canonical_json().unwrap().len() < 256 * 1024);
-    let too_many = SandboxEgress::Allow {
-        allow: vec!["example.com".to_string(); 4097],
+    let too_many = EgressPolicy::Allow {
+        allow: vec!["example.com".into(); 4097],
     };
     assert_eq!(
         too_many.validate().unwrap_err().code,
         "SANDBOX_EGRESS_POLICY_TOO_LARGE"
     );
-    let too_large = SandboxEgress::Allow {
-        allow: (0..4096)
-            .map(|i| format!("{i}.{}.{}.example.com", "a".repeat(63), "b".repeat(63)))
-            .collect(),
-    };
+    let long = format!(
+        "{}.{}.{}.example.com",
+        "a".repeat(63),
+        "b".repeat(63),
+        "c".repeat(63)
+    );
     assert_eq!(
-        too_large.validate().unwrap_err().code,
+        EgressPolicy::Allow {
+            allow: vec![long; 4096]
+        }
+        .validate()
+        .unwrap_err()
+        .code,
         "SANDBOX_EGRESS_POLICY_TOO_LARGE"
     );
 }
-
-#[test]
-fn azure_limits_count_apex_guards_and_reject_unrepresentable_targets() {
-    for target in ["example.com:22", "8.8.8.0/24"] {
-        let policy = SandboxEgress::Allow {
-            allow: vec![target.to_string()],
-        };
-        assert!(policy.validate().is_ok());
-        assert_eq!(
-            policy.validate_for_azure().unwrap_err().code,
-            "SANDBOX_EGRESS_INVALID"
-        );
+proptest! {
+    #[test]
+    fn canonicalization_is_idempotent(label in "[a-z]{1,30}", port in 1u16..=65535) {
+        let policy=allow(&[&format!("{}.EXAMPLE.COM.:{port}",label.to_uppercase())]);
+        let normalized=policy.normalized().unwrap();
+        prop_assert_eq!(normalized.normalized().unwrap(),normalized.clone());
+        let host = format!("{label}.example.com");
+        prop_assert!(normalized.allows(&host,port).unwrap());
+        let other = format!("other{label}.example.com");
+        prop_assert!(!normalized.allows(&other,port).unwrap());
     }
-    for count in [250, 251] {
-        let policy = SandboxEgress::Allow {
-            allow: (0..count).map(|n| format!("*.h{n}.example.com")).collect(),
-        };
-        if count == 250 {
-            policy.validate_for_azure().unwrap();
-        } else {
-            assert_eq!(
-                policy.validate_for_azure().unwrap_err().code,
-                "SANDBOX_EGRESS_POLICY_TOO_LARGE"
-            );
-        }
-    }
-    let exact = SandboxEgress::Allow {
-        allow: (0..500).map(|n| format!("h{n}.example.com")).collect(),
-    };
-    exact.validate_for_azure().unwrap();
-    let overlap = SandboxEgress::Allow {
-        allow: (0..250)
-            .flat_map(|n| [format!("*.h{n}.example.com"), format!("h{n}.example.com")])
-            .collect(),
-    };
-    overlap.validate_for_azure().unwrap();
 }

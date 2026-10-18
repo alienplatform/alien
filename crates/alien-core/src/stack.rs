@@ -119,7 +119,11 @@ impl Stack {
                 let mut value =
                     serde_json::to_value(entry).expect("resource entries always serialize to JSON");
                 if let Some(sandbox) = entry.config.downcast_ref::<crate::Sandbox>() {
-                    value["config"]["egress"] = sandbox.egress.setup_digest_value();
+                    value["config"]["egress"] = sandbox.setup_digest_value();
+                    value["config"]
+                        .as_object_mut()
+                        .expect("resource config is an object")
+                        .remove("defaultPolicy");
                 }
                 canonicalize_json(&mut value);
                 (id, value)
@@ -140,7 +144,7 @@ impl Stack {
                 );
                 for (name, value) in &mut inputs {
                     if *name == "egress" {
-                        *value = sandbox.egress.setup_digest_value();
+                        *value = sandbox.setup_digest_value();
                     }
                     canonicalize_json(value);
                 }

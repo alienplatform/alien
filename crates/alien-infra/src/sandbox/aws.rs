@@ -58,7 +58,7 @@ pub(crate) struct RetiredVersion {
 pub struct AwsSandboxController {
     /// Bound installed with the parent and published to runtime bindings.
     #[serde(default)]
-    pub(crate) egress: Option<alien_core::SandboxEgress>,
+    pub(crate) egress: Option<alien_core::bindings::SandboxEgressBinding>,
     /// Startup security contract of the active version (empty for legacy images).
     #[serde(default)]
     pub(crate) supervisor_environment: BTreeMap<String, String>,
@@ -140,6 +140,7 @@ impl AwsSandboxController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
+        self.egress = Some(config.into());
 
         // Direct setup steps a Frozen sandbox before its build role exists; the registration lands
         // only once the role is ready, so until then the build waits rather than fails.
@@ -538,6 +539,7 @@ impl AwsSandboxController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
+        self.egress = Some(config.into());
 
         // The session-policy ceilings feed the binding and cost nothing to refresh.
         self.idle_pause_seconds = config.lifecycle.idle_pause_seconds;
@@ -822,7 +824,14 @@ impl AwsSandboxController {
         // token can be minted for; neither can be inferred from the image, and a session
         // started without the connectors reaches the public internet.
         let binding = SandboxBinding::Aws(AwsSandboxBinding {
-            egress: self.egress.clone().map(Into::into),
+            default_policy: self
+                .egress
+                .as_ref()
+                .and_then(|value| value.default_policy().cloned()),
+            egress: self
+                .egress
+                .as_ref()
+                .map(|value| (*value.declaration()).into()),
             image_arn: BindingValue::value(image_arn.clone()),
             image_version: BindingValue::value(image_version.clone()),
             region: BindingValue::value(region.clone()),

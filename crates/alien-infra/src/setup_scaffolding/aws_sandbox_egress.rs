@@ -2241,16 +2241,6 @@ mod tests {
         .await;
         assert_refused_before_any_call(stack(SandboxEgress::None, None), "declares no network")
             .await;
-        assert_refused_before_any_call(
-            stack(
-                SandboxEgress::Allow {
-                    allow: vec!["example.com".to_string()],
-                },
-                created_network(),
-            ),
-            "allowDomains",
-        )
-        .await;
     }
 
     async fn assert_not_adoptable(cloud: &Shared, expected: &str) {

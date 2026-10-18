@@ -618,14 +618,20 @@ mod tests {
     /// role carrying arbitrary code execution for a binding the manager will then refuse.
     #[tokio::test]
     async fn a_remote_sandbox_that_restricts_egress_is_refused() {
-        for egress in [
-            SandboxEgress::None,
-            SandboxEgress::Allow {
-                allow: vec!["registry.npmjs.org".to_string()],
-            },
+        for (egress, default_policy, reason) in [
+            (SandboxEgress::None, None, "must declare egress 'allow'"),
+            (
+                SandboxEgress::Internet,
+                Some(alien_core::EgressPolicy::Allow {
+                    allow: vec!["api.example.com".into()],
+                }),
+                "cannot carry defaultPolicy",
+            ),
         ] {
+            let mut resource = sandbox(egress);
+            resource.default_policy = default_policy;
             let stack = Stack::new("byo-sandbox".to_string())
-                .add_with_remote_access(sandbox(egress), ResourceLifecycle::Frozen)
+                .add_with_remote_access(resource, ResourceLifecycle::Frozen)
                 .build();
 
             let error = RemoteBindingsMutation
@@ -635,7 +641,7 @@ mod tests {
 
             assert_eq!(error.code, "STACK_MUTATION_FAILED");
             assert!(
-                error.to_string().contains("must declare egress 'allow'"),
+                error.to_string().contains(reason),
                 "the refusal must name the declaration to change, got: {error}"
             );
         }

@@ -410,6 +410,7 @@ impl ResolvedRemoteBinding {
                     .collect::<Result<Vec<u16>>>()?;
                 Self::SandboxAws {
                     binding: Box::new(alien_core::AwsSandboxBinding {
+                        default_policy: None,
                         egress: None,
                         image_arn: alien_core::BindingValue::Value(binding.image_arn),
                         image_version: alien_core::BindingValue::Value(binding.image_version),
@@ -468,6 +469,7 @@ impl ResolvedRemoteBinding {
                 }
                 Self::SandboxAzure {
                     binding: Box::new(alien_core::AzureSandboxBinding {
+                        default_policy: None,
                         sandbox_group: alien_core::BindingValue::Value(binding.sandbox_group),
                         data_plane_endpoint: alien_core::BindingValue::Value(
                             binding.data_plane_endpoint,
@@ -505,6 +507,7 @@ impl ResolvedRemoteBinding {
                     client_config.credentials;
                 Self::SandboxGcpAgentPlatform {
                     binding: Box::new(alien_core::GcpAgentPlatformSandboxBinding {
+                        default_policy: None,
                         egress: None,
                         engine: alien_core::BindingValue::Value(binding.engine),
                         template: alien_core::BindingValue::Value(binding.template),

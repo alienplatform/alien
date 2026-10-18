@@ -131,7 +131,51 @@ const MICROVM_TIERS: &[MicrovmTier] = &[
     },
 ];
 
-pub use super::sandbox_policy::SandboxEgress;
+pub use super::sandbox_policy::EgressPolicy;
+
+/// Whether sandboxes may use the public internet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum SandboxEgress {
+    None,
+    Internet,
+}
+
+impl<'de> Deserialize<'de> for SandboxEgress {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        enum Mode {
+            None,
+            Internet,
+        }
+        #[derive(Deserialize)]
+        #[serde(tag = "mode", rename_all = "camelCase", deny_unknown_fields)]
+        enum Legacy {
+            Deny {},
+            Allow {},
+        }
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Input {
+            Mode(Mode),
+            Legacy(Legacy),
+        }
+        Ok(match Input::deserialize(deserializer)? {
+            Input::Mode(Mode::None) | Input::Legacy(Legacy::Deny {}) => Self::None,
+            Input::Mode(Mode::Internet) | Input::Legacy(Legacy::Allow {}) => Self::Internet,
+        })
+    }
+}
+impl SandboxEgress {
+    /// Backend internet-access switch.
+    pub fn internet_access_switch(&self) -> Option<bool> {
+        Some(matches!(self, Self::Internet))
+    }
+}
 
 /// How long a sandbox may live and when it is paused.
 ///
@@ -466,6 +510,7 @@ pub struct SandboxPrivilegedSupervisor {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[builder(start_fn = new)]
+#[serde(try_from = "SandboxInput")]
 pub struct Sandbox {
     /// Identifier for the sandbox. Must contain only alphanumeric characters, hyphens, and
     /// underscores ([A-Za-z0-9-_]). Maximum 64 characters.
@@ -487,6 +532,9 @@ pub struct Sandbox {
     pub limits: Option<SandboxLimits>,
     /// Outbound network policy
     pub egress: SandboxEgress,
+    /// Default runtime policy for creates that omit one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_policy: Option<EgressPolicy>,
     /// Have Alien's agent install the declared egress policy before running any image code.
     /// Unsupported backends refuse this at plan time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -503,6 +551,61 @@ pub struct Sandbox {
     #[builder(default)]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub preview_ports: Vec<u16>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SandboxInput {
+    id: String,
+    code: SandboxCode,
+    private_base_image: Option<String>,
+    limits: Option<SandboxLimits>,
+    egress: SandboxDeclarationInput,
+    default_policy: Option<EgressPolicy>,
+    privileged_supervisor: Option<SandboxPrivilegedSupervisor>,
+    #[serde(alias = "session")]
+    lifecycle: SandboxLifecyclePolicy,
+    #[serde(default)]
+    preview_ports: Vec<u16>,
+}
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum SandboxDeclarationInput {
+    Mode(SandboxEgress),
+    Legacy(LegacyDomainPolicy),
+}
+#[derive(Deserialize)]
+#[serde(tag = "mode", rename_all = "camelCase", deny_unknown_fields)]
+enum LegacyDomainPolicy {
+    AllowDomains { domains: Vec<String> },
+}
+impl TryFrom<SandboxInput> for Sandbox {
+    type Error = String;
+    fn try_from(input: SandboxInput) -> std::result::Result<Self, String> {
+        let (egress, default_policy) = match input.egress {
+            SandboxDeclarationInput::Mode(mode) => (mode, input.default_policy),
+            SandboxDeclarationInput::Legacy(LegacyDomainPolicy::AllowDomains { domains }) => {
+                if input.default_policy.is_some() {
+                    return Err("legacy allowDomains and defaultPolicy cannot both be set".into());
+                }
+                (
+                    SandboxEgress::Internet,
+                    Some(EgressPolicy::Allow { allow: domains }),
+                )
+            }
+        };
+        Ok(Self {
+            id: input.id,
+            code: input.code,
+            private_base_image: input.private_base_image,
+            limits: input.limits,
+            egress,
+            default_policy,
+            privileged_supervisor: input.privileged_supervisor,
+            lifecycle: input.lifecycle,
+            preview_ports: input.preview_ports,
+        })
+    }
 }
 
 /// Whether the artifact being rendered restricts which network modes it accepts.
@@ -528,6 +631,16 @@ pub fn stack_needs_named_subnets_at_setup(stack: &crate::Stack) -> bool {
 }
 
 impl Sandbox {
+    pub(crate) fn setup_digest_value(&self) -> serde_json::Value {
+        match (&self.egress, &self.default_policy) {
+            (SandboxEgress::None, _) => serde_json::json!({"mode":"deny"}),
+            (SandboxEgress::Internet, Some(EgressPolicy::Allow { allow })) => {
+                serde_json::json!({"mode":"allowDomains","domains":allow})
+            }
+            _ => serde_json::json!({"mode":"allow"}),
+        }
+    }
+
     /// The resource type identifier for Sandbox
     pub const RESOURCE_TYPE: ResourceType = ResourceType::from_static("sandbox");
 
@@ -536,13 +649,9 @@ impl Sandbox {
         &self.id
     }
 
-    /// Cloud routing stays open when the agent owns enforcement.
+    /// Network declaration; legacy supervisor settings never loosen the network floor.
     pub fn cloud_egress(&self) -> &SandboxEgress {
-        if self.privileged_supervisor.is_some() {
-            &SandboxEgress::Internet
-        } else {
-            &self.egress
-        }
+        &self.egress
     }
 
     /// Startup contract for the privileged agent; never supplied by an exec caller.
@@ -559,7 +668,11 @@ impl Sandbox {
             );
             env.insert(
                 "ALIEN_SANDBOX_EGRESS".to_string(),
-                serde_json::to_string(&self.egress).expect("egress serializes"),
+                match (&self.egress, &self.default_policy) {
+                    (SandboxEgress::Internet, Some(policy)) => serde_json::to_string(policy),
+                    _ => serde_json::to_string(&self.egress),
+                }
+                .expect("egress serializes"),
             );
         }
         env
@@ -579,9 +692,14 @@ impl Sandbox {
     /// Runs at plan time so an unenforceable limit or an unsupported egress mode fails before
     /// anything is provisioned, rather than at the first exec.
     pub fn validate_for_platform(&self, platform: Platform) -> Result<()> {
-        self.egress.validate()?;
-        if platform == Platform::Azure {
-            self.egress.validate_for_azure()?;
+        if let Some(policy) = &self.default_policy {
+            if self.egress == SandboxEgress::None {
+                return Err(AlienError::new(ErrorData::SandboxEgressInvalid {
+                    target: "defaultPolicy".into(),
+                    reason: "a none resource cannot have a runtime policy".into(),
+                }));
+            }
+            policy.validate()?;
         }
         let mut capabilities = SandboxCapabilities::for_platform(platform)?;
         if let Some(supervisor) = &self.privileged_supervisor {
@@ -599,27 +717,6 @@ impl Sandbox {
                     reason: "must be a non-root Linux uid other than the invalid uid sentinel"
                         .to_string(),
                 }));
-            }
-            if let SandboxEgress::Allow { allow: domains } = &self.egress {
-                for domain in domains {
-                    let hostname = domain.strip_suffix('.').unwrap_or(domain);
-                    if hostname.len() > 253
-                        || !hostname.split('.').all(|label| {
-                            !label.is_empty()
-                                && label.len() <= 63
-                                && label
-                                    .bytes()
-                                    .all(|c| c.is_ascii_alphanumeric() || c == b'-')
-                                && !label.starts_with('-')
-                                && !label.ends_with('-')
-                        })
-                    {
-                        return Err(AlienError::new(ErrorData::SandboxLimitInvalid {
-                            resource_id: self.id.clone(), field: "egress.domains".to_string(), value: domain.clone(),
-                            reason: "privileged supervisor allowlists require exact DNS hostnames; wildcards are unsupported".to_string(),
-                        }));
-                    }
-                }
             }
             capabilities.domain_egress_rules = true;
         }
@@ -899,28 +996,6 @@ impl Sandbox {
         capabilities: &SandboxCapabilities,
         platform: Platform,
     ) -> Result<()> {
-        if matches!(self.egress, SandboxEgress::Allow { .. }) {
-            capabilities.require(SandboxCapability::DomainEgressRules, platform)?;
-        }
-
-        // `allow` asks for no restriction, so a backend that ignores it fails loudly on the first
-        // blocked connection. `deny` asks for one, and a backend that ignores it puts untrusted
-        // code on the internet with nothing to notice — so only this direction is gated.
-        // An empty list is not a restriction anyone wrote down: it renders as a deny-all wearing
-        // an allowlist's label, which reads at a glance as the opposite of what it does.
-        if let SandboxEgress::Allow { allow: domains } = &self.egress {
-            if domains.is_empty() {
-                return Err(AlienError::new(ErrorData::SandboxLimitInvalid {
-                    resource_id: self.id.clone(),
-                    field: "egress.domains".to_string(),
-                    value: "[]".to_string(),
-                    reason: "an allowlist naming no domain denies everything; declare \
-                             egress: deny if that is what was meant"
-                        .to_string(),
-                }));
-            }
-        }
-
         if matches!(self.egress, SandboxEgress::None) {
             capabilities.require(SandboxCapability::EgressDeny, platform)?;
         }
@@ -1760,41 +1835,6 @@ mod tests {
         assert!(rendered.contains("gcp"), "names the platform: {rendered}");
     }
 
-    /// Azure matches on hostname; AWS and Kubernetes match CIDRs, and Local and GCP have a
-    /// switch rather than a filter. Accepting a hostname list on those four would leave a stack
-    /// reading as restricted while the sandbox reaches the whole internet.
-    #[test]
-    fn a_hostname_allowlist_is_refused_everywhere_it_would_be_approximated() {
-        let sandbox = sandbox_with(
-            SandboxEgress::Allow {
-                allow: vec!["example.com".to_string()],
-            },
-            vec![],
-        );
-
-        for platform in [
-            Platform::Aws,
-            Platform::Gcp,
-            Platform::Kubernetes,
-            Platform::Local,
-        ] {
-            let error = sandbox
-                .validate_for_platform(platform)
-                .expect_err("only Azure expresses a hostname allowlist");
-            assert_eq!(
-                error.code, "SANDBOX_CAPABILITY_UNSUPPORTED",
-                "on {platform:?}"
-            );
-        }
-
-        assert!(
-            SandboxCapabilities::for_platform(Platform::Azure)
-                .expect("supported")
-                .domain_egress_rules,
-            "Azure's egress policy matches on host pattern"
-        );
-    }
-
     /// `deny` is the declaration that carries a security promise, so a backend that cannot keep
     /// it has to refuse rather than accept it and run the code with open egress.
     #[test]
@@ -2322,12 +2362,7 @@ mod tests {
 
     #[test]
     fn privileged_supervisor_fixes_identity_and_requires_an_enforceable_backend() {
-        let mut sandbox = sandbox_with(
-            SandboxEgress::Allow {
-                allow: vec!["example.com".to_string()],
-            },
-            vec![],
-        );
+        let mut sandbox = sandbox_with(SandboxEgress::Internet, vec![]);
         sandbox.privileged_supervisor = Some(SandboxPrivilegedSupervisor { command_uid: 60001 });
         sandbox
             .validate_for_platform(Platform::Aws)
@@ -2374,12 +2409,7 @@ mod tests {
 
     #[test]
     fn serialization_roundtrips() {
-        let sandbox = sandbox_with(
-            SandboxEgress::Allow {
-                allow: vec!["example.com".to_string()],
-            },
-            vec![8080, 9090],
-        );
+        let sandbox = sandbox_with(SandboxEgress::Internet, vec![8080, 9090]);
 
         let json = serde_json::to_string(&sandbox).expect("serializes");
         let restored: Sandbox = serde_json::from_str(&json).expect("deserializes");
@@ -2451,48 +2481,11 @@ mod tests {
         );
     }
 
-    /// An allowlist naming nothing is a deny-all wearing an allowlist's label.
-    ///
-    /// It renders as a `Deny` default with no rules — the shape the Azure provider adds a
-    /// catch-all to avoid — and a reader scanning the declaration sees "allowDomains" and reads
-    /// the opposite of what it does.
-    #[test]
-    fn an_allowlist_with_no_domains_is_refused() {
-        let declared = |domains: Vec<String>| {
-            Sandbox::new("sbx".to_string())
-                .code(SandboxCode::Image {
-                    image: "ubuntu".to_string(),
-                })
-                .egress(SandboxEgress::Allow { allow: domains })
-                .lifecycle(SandboxLifecyclePolicy {
-                    max_lifetime_seconds: None,
-                    idle_pause_seconds: None,
-                })
-                .build()
-                .validate_for_platform(Platform::Azure)
-        };
-
-        let error = declared(vec![]).expect_err("an empty allowlist must be refused");
-        assert_eq!(error.code, "SANDBOX_EGRESS_INVALID");
-
-        declared(vec!["api.example.com".to_string()])
-            .expect("a named domain is what an allowlist is for");
-    }
-
-    /// The two expressible modes map to the boolean; a host list maps to nothing so the caller has
-    /// to refuse rather than silently pick a side.
+    /// Both declaration modes map directly to the backend internet-access switch.
     #[test]
     fn internet_access_switch_maps_only_the_two_expressible_modes() {
         assert_eq!(SandboxEgress::Internet.internet_access_switch(), Some(true));
         assert_eq!(SandboxEgress::None.internet_access_switch(), Some(false));
-        assert_eq!(
-            SandboxEgress::Allow {
-                allow: vec!["api.example.com".to_string()]
-            }
-            .internet_access_switch(),
-            None,
-            "a host list has no boolean and must not be approximated"
-        );
     }
 
     /// A sandbox resource as a stack state recorded it before `session` became `lifecycle` and

@@ -103,9 +103,6 @@ pub struct EgressRuleMatch {
     /// Host pattern the rule applies to.
     #[serde(default)]
     pub host: String,
-    /// Protocol selected by the native HTTP proxy (`http` or `https`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub scheme: Option<String>,
     /// Path prefix the rule narrows to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
@@ -342,14 +339,6 @@ pub trait SandboxDataPlaneApi: Send + Sync + std::fmt::Debug {
 
     /// Reads a sandbox. A 404 is how deletion is confirmed.
     async fn get_sandbox(&self, group: &str, sandbox_id: &str) -> Result<Sandbox>;
-
-    /// Replaces the native policy for new connections. The caller verifies the readback.
-    async fn update_egress_policy(
-        &self,
-        group: &str,
-        sandbox_id: &str,
-        policy: EgressPolicy,
-    ) -> Result<EgressPolicy>;
 
     /// Deletes a sandbox. Returns before it is gone; confirm by polling `get_sandbox` to 404.
     async fn delete_sandbox(&self, group: &str, sandbox_id: &str) -> Result<()>;
@@ -623,40 +612,6 @@ impl SandboxDataPlaneApi for AzureSandboxDataPlaneClient {
                 .await,
         )?;
         Self::parse(response, "CreateSandbox").await
-    }
-
-    async fn update_egress_policy(
-        &self,
-        group: &str,
-        sandbox_id: &str,
-        policy: EgressPolicy,
-    ) -> Result<EgressPolicy> {
-        let token = self
-            .token_cache
-            .get_bearer_token_with_scope(ADC_SCOPE)
-            .await?;
-        let url = self.base.build_url(
-            &format!("{}/egresspolicy", self.sandbox_path(group, sandbox_id)),
-            Some(vec![("api-version", API_VERSION.into())]),
-        );
-        let body =
-            serde_json::to_string(&policy)
-                .into_alien_error()
-                .context(ErrorData::GenericError {
-                    message: "failed to serialize native egress policy".to_string(),
-                })?;
-        let request = AzureRequestBuilder::new(Method::POST, url)
-            .content_type_json()
-            .content_length(&body)
-            .body(body)
-            .build()?;
-        let signed = self.base.sign_request(request, &token).await?;
-        // A retry could overwrite a newer concurrent update. Send once and read the result.
-        let response = self
-            .base
-            .execute_request_once(signed, "UpdateEgressPolicy", sandbox_id)
-            .await?;
-        Self::parse(response, "UpdateEgressPolicy").await
     }
 
     async fn get_sandbox(&self, group: &str, sandbox_id: &str) -> Result<Sandbox> {

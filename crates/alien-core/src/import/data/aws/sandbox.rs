@@ -94,11 +94,6 @@ impl AwsSandboxImportData {
                     refuse("egress: deny has no egress connector recorded yet".to_string())
                 })?
                 .to_string()],
-            SandboxEgress::Allow { .. } => {
-                return Err(refuse(
-                    "AWS has no connector configuration for egress: allowDomains".to_string(),
-                ))
-            }
         };
 
         Ok(Self {

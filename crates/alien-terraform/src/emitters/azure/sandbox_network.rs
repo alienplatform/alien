@@ -73,24 +73,10 @@ fn emit_group(
 ) -> Result<()> {
     let label = subnet_label(network, sandbox_name);
     let nat = format!("{network}_nat");
-    let mut ports = BTreeSet::new();
-    match sandbox.egress.normalized()? {
-        SandboxEgress::None => {}
-        SandboxEgress::Internet => {
-            ports.insert("80".to_string());
-            ports.insert("443".to_string());
-        }
-        SandboxEgress::Allow { allow } => {
-            for target in allow {
-                ports.insert(
-                    target
-                        .rsplit_once(':')
-                        .map_or("443", |(_, port)| port)
-                        .to_string(),
-                );
-            }
-        }
-    }
+    let ports = match sandbox.egress {
+        SandboxEgress::None => BTreeSet::new(),
+        SandboxEgress::Internet => BTreeSet::from(["*".to_string()]),
+    };
     fragment.resource_blocks.push(resource_block(
         "azurerm_subnet",
         &label,

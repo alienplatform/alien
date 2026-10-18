@@ -41,7 +41,7 @@ impl ResourceImporter for AwsSandboxImporter {
             })?;
 
         let base = AwsSandboxController {
-            egress: Some(sandbox.egress.clone()),
+            egress: Some(sandbox.into()),
             egress_connector_arns: data.egress_connector_arns,
             allow_egress: data.allow_egress,
             preview_ports: data.preview_ports,

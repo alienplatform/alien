@@ -51,6 +51,10 @@ pub struct MicrovmImage {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Microvm {
+    /// First start time as Unix seconds, returned by GetMicrovm.
+    pub started_at: Option<serde_json::Number>,
+    /// Provider-enforced lifetime from first start, in seconds.
+    pub maximum_duration_in_seconds: Option<i64>,
     /// MicroVM identifier
     pub microvm_id: Option<String>,
     /// Per-MicroVM HTTPS endpoint the agent protocol travels over

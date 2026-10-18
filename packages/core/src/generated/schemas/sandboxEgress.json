@@ -1,1 +1,1 @@
-{"oneOf":[{"type":"string","enum":["none","internet"]},{"type":"object","required":["allow"],"properties":{"allow":{"type":"array","items":{"type":"string"},"maxItems":4096,"minItems":1}},"additionalProperties":false}],"x-readme-ref-name":"SandboxEgress"}
+{"type":"string","description":"Whether sandboxes may use the public internet.","enum":["none","internet"],"x-readme-ref-name":"SandboxEgress"}
