@@ -2992,6 +2992,10 @@ mod tests {
                 .start_container(
                     &id,
                     ContainerConfig {
+                        egress: None,
+                        security: None,
+                        egress_denied_ranges: Vec::new(),
+                        memory_bytes: None,
                         image: "busybox:1.37.0".to_string(),
                         command: Some(vec!["sleep".to_string(), "300".to_string()]),
                         ports: vec![],

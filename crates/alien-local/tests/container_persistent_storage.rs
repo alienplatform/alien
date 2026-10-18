@@ -33,6 +33,10 @@ fn assert_docker_success(output: Output, operation: &str) -> String {
 
 fn config(shared_dir: &Path) -> ContainerConfig {
     ContainerConfig {
+        egress: None,
+        security: None,
+        egress_denied_ranges: Vec::new(),
+        memory_bytes: None,
         image: IMAGE.to_string(),
         command: Some(vec!["sleep".to_string(), "300".to_string()]),
         ports: vec![],

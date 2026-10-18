@@ -56,6 +56,7 @@ mod container_manager;
 mod daemon_supervisor;
 mod docker_connection;
 mod docker_network;
+mod internet_floor;
 pub use docker_connection::connect_docker;
 mod error;
 mod kv_manager;

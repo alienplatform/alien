@@ -23,6 +23,10 @@ fn docker(args: &[&str]) -> String {
 
 fn config(image: String) -> ContainerConfig {
     ContainerConfig {
+        egress: None,
+        security: None,
+        egress_denied_ranges: Vec::new(),
+        memory_bytes: None,
         image,
         command: None,
         ports: vec![],

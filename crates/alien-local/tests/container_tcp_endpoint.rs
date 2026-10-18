@@ -57,6 +57,10 @@ async fn publishes_declared_tcp_backend_and_reports_tcp_binding() {
         .start_container(
             &container_id,
             ContainerConfig {
+                egress: None,
+                security: None,
+                egress_denied_ranges: Vec::new(),
+                memory_bytes: None,
                 image: IMAGE.to_string(),
                 command: Some(vec![
                     "sh".to_string(),

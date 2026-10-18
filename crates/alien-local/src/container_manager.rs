@@ -11,7 +11,8 @@
 //! - Streams container logs to dev command
 
 use crate::error::{ErrorData, Result};
-use alien_core::{ExposeProtocol, ENV_ALIEN_COMMANDS_URL};
+use crate::internet_floor::InternetFloor;
+use alien_core::{ContainerEgress, ContainerSecurity, ExposeProtocol, ENV_ALIEN_COMMANDS_URL};
 use alien_error::{AlienError, Context, IntoAlienError};
 use bollard::container::{
     Config, CreateContainerOptions, ListContainersOptions, LogOutput, LogsOptions,
@@ -241,6 +242,9 @@ fn allocate_distinct_host_port(
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContainerMetadata {
+    /// Host firewall ownership, retained across manager restarts until Docker is deleted.
+    #[serde(default)]
+    pub(crate) internet_floor: Option<InternetFloor>,
     /// Container resource ID
     pub container_id: String,
     /// Docker container ID (internal Docker ID)
@@ -281,6 +285,14 @@ pub struct LocalPublicEndpoint {
 /// Configuration for starting a container.
 #[derive(Debug, Clone)]
 pub struct ContainerConfig {
+    /// External address restriction; unavailable hosts fail before the container starts.
+    pub egress: Option<ContainerEgress>,
+    /// Runtime user, capabilities and filesystem protection.
+    pub security: Option<ContainerSecurity>,
+    /// Deployment and overlay addresses that remain private even if publicly routed.
+    pub egress_denied_ranges: Vec<String>,
+    /// Optional cgroup memory ceiling.
+    pub memory_bytes: Option<i64>,
     /// Container image reference
     pub image: String,
     /// Command override for the container image.
@@ -918,8 +930,46 @@ impl LocalContainerManager {
         container_id: &str,
         config: ContainerConfig,
     ) -> Result<ContainerInfo> {
-        // Ensure network exists
+        if config.egress.is_some()
+            && config
+                .security
+                .as_ref()
+                .is_none_or(|security| security.run_as_user <= 0 || security.run_as_group <= 0)
+        {
+            return Err(AlienError::new(ErrorData::LocalInternetEgressUnavailable {
+                message:
+                    "Internet egress requires restricted security with a non-root user and group"
+                        .into(),
+            }));
+        }
         self.ensure_network().await?;
+        let previous = self.containers.read().await.get(container_id).cloned();
+        let internet_floor = if config.egress.is_some() {
+            tokio::fs::create_dir_all(&self.state_dir)
+                .await
+                .into_alien_error()
+                .context(ErrorData::LocalInternetEgressUnavailable {
+                    message: "Cannot create the Local firewall ownership directory".into(),
+                })?;
+            let owner_dir = tokio::fs::canonicalize(&self.state_dir)
+                .await
+                .into_alien_error()
+                .context(ErrorData::LocalInternetEgressUnavailable {
+                    message: "Cannot resolve the Local firewall ownership directory".into(),
+                })?;
+            Some(
+                InternetFloor::prepare(
+                    &self.docker,
+                    &self.docker_host,
+                    NETWORK_NAME,
+                    &format!("{}:{container_id}", owner_dir.display()),
+                    &config.egress_denied_ranges,
+                )
+                .await?,
+            )
+        } else {
+            None
+        };
 
         // Load existing metadata to check for saved host_port (for transparent recovery)
         let (saved_host_port, saved_health_host_port) = {
@@ -1119,7 +1169,11 @@ impl LocalContainerManager {
         //
         // Containers without linked-resource bind mounts keep the image's
         // declared user unchanged.
-        let user = shared_bind_mount_user(&config.bind_mounts);
+        let user = config
+            .security
+            .as_ref()
+            .map(|security| format!("{}:{}", security.run_as_user, security.run_as_group))
+            .or_else(|| shared_bind_mount_user(&config.bind_mounts));
 
         // `ContainerConfig::command` has Kubernetes `command` semantics: it
         // replaces the image ENTRYPOINT rather than becoming its CMD.
@@ -1140,9 +1194,28 @@ impl LocalContainerManager {
             cmd: process_override.cmd,
             user,
             hostname: Some(container_id.to_string()),
+            mac_address: internet_floor
+                .as_ref()
+                .map(|floor| floor.source_mac.clone()),
             env: Some(env),
             exposed_ports,
             host_config: Some(HostConfig {
+                memory: config.memory_bytes,
+                readonly_rootfs: config
+                    .security
+                    .as_ref()
+                    .map(|security| security.read_only_root_filesystem),
+                cap_drop: config.security.as_ref().map(|_| vec!["ALL".into()]),
+                security_opt: config
+                    .security
+                    .as_ref()
+                    .map(|_| vec!["no-new-privileges:true".into()]),
+                sysctls: internet_floor.as_ref().map(|_| {
+                    HashMap::from([
+                        ("net.ipv6.conf.all.disable_ipv6".into(), "1".into()),
+                        ("net.ipv6.conf.default.disable_ipv6".into(), "1".into()),
+                    ])
+                }),
                 port_bindings,
                 binds: binds_option,
                 network_mode: Some(NETWORK_NAME.to_string()),
@@ -1153,7 +1226,13 @@ impl LocalContainerManager {
                 // Docker recovers crashes and keeps a stopped container stopped across daemon
                 // restarts; the container controller restarts it on its next reconciliation.
                 restart_policy: Some(bollard::models::RestartPolicy {
-                    name: Some(bollard::models::RestartPolicyNameEnum::UNLESS_STOPPED),
+                    // Host firewall state is lost at reboot. Restricted workloads are
+                    // restarted only after the manager installs their rules again.
+                    name: Some(if internet_floor.is_some() {
+                        bollard::models::RestartPolicyNameEnum::NO
+                    } else {
+                        bollard::models::RestartPolicyNameEnum::UNLESS_STOPPED
+                    }),
                     maximum_retry_count: None,
                 }),
                 ..Default::default()
@@ -1195,19 +1274,18 @@ impl LocalContainerManager {
                 reason: "Failed to create Docker container".to_string(),
             })?;
 
-        // Start container
-        self.docker
-            .start_container(&response.id, None::<StartContainerOptions<String>>)
-            .await
-            .into_alien_error()
-            .context(ErrorData::DockerContainerError {
-                container: container_id.to_string(),
-                operation: "start".to_string(),
-                reason: "Failed to start Docker container".to_string(),
-            })?;
-
+        // Keep the previous ownership record until its policy has been removed.
+        if internet_floor.is_none() {
+            if let Some(floor) = previous
+                .as_ref()
+                .and_then(|metadata| metadata.internet_floor.as_ref())
+            {
+                floor.remove().await?;
+            }
+        }
         // Save metadata
         let metadata = ContainerMetadata {
+            internet_floor: internet_floor.clone(),
             container_id: container_id.to_string(),
             docker_container_id: response.id.clone(),
             image,
@@ -1221,12 +1299,25 @@ impl LocalContainerManager {
         };
 
         self.save_metadata(&metadata).await?;
-
-        // Track in memory
+        // Track before the host mutation so a failed install/start remains deletable.
         self.containers
             .write()
             .await
             .insert(container_id.to_string(), metadata);
+        if let Some(floor) = &internet_floor {
+            floor.install().await?;
+        }
+
+        // Start container
+        self.docker
+            .start_container(&response.id, None::<StartContainerOptions<String>>)
+            .await
+            .into_alien_error()
+            .context(ErrorData::DockerContainerError {
+                container: container_id.to_string(),
+                operation: "start".to_string(),
+                reason: "Failed to start Docker container".to_string(),
+            })?;
 
         info!(
             container_id = %container_id,
@@ -1300,6 +1391,16 @@ impl LocalContainerManager {
             }
         }
 
+        // The container is gone before its external floor can be removed.
+        let floor = self
+            .containers
+            .read()
+            .await
+            .get(container_id)
+            .and_then(|metadata| metadata.internet_floor.clone());
+        if let Some(floor) = floor {
+            floor.remove().await?;
+        }
         // Remove from tracking
         self.containers.write().await.remove(container_id);
 
@@ -2058,6 +2159,7 @@ mod tests {
         let metadata_dir = state_dir.path().join("containers/api");
         std::fs::create_dir_all(&metadata_dir).unwrap();
         let metadata = ContainerMetadata {
+            internet_floor: None,
             container_id: "api".to_string(),
             docker_container_id: "docker-api".to_string(),
             image: "example.test/api:latest".to_string(),
