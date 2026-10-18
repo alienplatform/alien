@@ -58,8 +58,10 @@ def validate(ec2, properties):
         defaults = [r for r in selected_routes if r.get("DestinationCidrBlock") == "0.0.0.0/0"]
         if len(defaults) != 1 or not defaults[0].get("NatGatewayId") or defaults[0].get("State") != "active":
             raise ValueError("Gateway and workload subnets must use an active NAT gateway default route")
-        if subnet_id in gateway_ids and any(r.get("GatewayId") != "local" and r != defaults[0] for r in selected_routes):
-            raise ValueError("Gateway subnets must have only local VPC routes and the NAT default route")
+        # Gateway tasks run on compute nodes in workload subnets. A public service IP routed
+        # through a gateway endpoint would inherit that VPC endpoint's network identity.
+        if any(r.get("GatewayId") != "local" and r != defaults[0] for r in selected_routes):
+            raise ValueError("Gateway and workload subnets must have only local VPC routes and the NAT default route; VPC endpoint routes are not supported")
         nat_ids.add(defaults[0]["NatGatewayId"])
     if len(nat_ids) > 1:
         raise ValueError("Gateway and workloads must share the deployment NAT gateway")
