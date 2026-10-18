@@ -21,7 +21,7 @@ use alien_azure_clients::azure::sandbox_data_plane::{
 use alien_client_core::ErrorData as ClientErrorData;
 use alien_core::{
     azure_disk_image_label, classify_azure_sandbox_image, AzureSandboxImage, SandboxCapabilities,
-    SandboxCapability, SandboxEgress, AZURE_DISK_IMAGE_LABEL,
+    SandboxEgress, AZURE_DISK_IMAGE_LABEL, SANDBOX_EXPIRY_LABEL,
 };
 use alien_error::{AlienError, ContextError};
 use tracing::warn;
@@ -252,7 +252,7 @@ impl AzureSandbox {
             });
         }
 
-        if operation == RUN_COMMAND || operation == CREATE {
+        if operation == RUN_COMMAND || operation == CREATE || operation == "sandbox.jobStart" {
             return error.context(ErrorData::SandboxOutcomeUnknown {
                 operation: operation.to_string(),
                 reason: "the Azure sandbox data plane did not complete the call".to_string(),
@@ -279,22 +279,13 @@ fn disk_image_gone(error: &AlienError<ClientErrorData>) -> bool {
     }
 }
 
-/// Refused rather than dropped: the create body has nowhere to put a tenant key or a lifetime, so
-/// accepting either would report success while putting a caller's tenants in one shared sandbox,
-/// or leaving it running past the deadline it asked for. Azure does carry sandbox-level `env`.
+/// Tenant keys have no native equivalent. Lifetimes travel as control-plane deadline labels;
+/// environment variables travel in the native create request.
 fn refuse_unsupported_create_fields(request: &CreateSandboxRequest, operation: &str) -> Result<()> {
     if request.tenant_key.is_some() {
         return Err(AlienError::new(ErrorData::OperationNotSupported {
             operation: operation.to_string(),
             reason: "Azure sandboxes take no tenantKey; create one sandbox per tenant instead"
-                .to_string(),
-        }));
-    }
-    if request.timeout_ms.is_some() {
-        return Err(AlienError::new(ErrorData::OperationNotSupported {
-            operation: SandboxCapability::SandboxLifetime.as_str().to_string(),
-            reason: "Azure sandboxes have auto-suspend and auto-delete but no wall-clock \
-                     ceiling; terminate the sandbox when the caller is done with it"
                 .to_string(),
         }));
     }
@@ -314,6 +305,12 @@ impl Sandbox for AzureSandbox {
         checked_sandbox_env(CREATE, &request.env)?;
         refuse_unsupported_create_fields(&request, CREATE)?;
 
+        let mut labels = BTreeMap::new();
+        if let Some(timeout_ms) = request.timeout_ms {
+            let seconds = super::requested_lifetime_seconds(timeout_ms, None, CREATE)?;
+            let expires = chrono::Utc::now().timestamp_millis() + i64::from(seconds) * 1000;
+            labels.insert(SANDBOX_EXPIRY_LABEL.to_string(), expires.to_string());
+        }
         let asked = egress_policy(&self.egress);
         let disk_image_id = self.disk_image_id().await?;
         let sandbox = self
@@ -324,6 +321,7 @@ impl Sandbox for AzureSandbox {
                 memory: self.memory.clone(),
                 disk: self.disk.clone(),
                 environment: request.env,
+                labels,
                 egress: asked.clone(),
                 idle_pause_seconds: self.idle_pause_seconds,
             })
@@ -398,6 +396,9 @@ impl Sandbox for AzureSandbox {
     }
 
     async fn get_or_create(&self, request: CreateSandboxRequest) -> Result<ResolvedSandbox> {
+        if let Some(timeout_ms) = request.timeout_ms {
+            super::requested_lifetime_seconds(timeout_ms, None, "sandbox.getOrCreate")?;
+        }
         if let Some(id) = request.sandbox_id.as_deref() {
             // `create` returns a sandbox that can take work, and reaching one someone else
             // started has to mean the same thing — so the same gate every other verb uses: bring
@@ -430,8 +431,7 @@ impl Sandbox for AzureSandbox {
     async fn list(&self) -> Result<Vec<SandboxInstance>> {
         Err(self.unsupported(
             "sandbox.list",
-            "enumerating sandboxes is a control-plane read the data-plane role does not carry; \
-             reach a known sandbox with get",
+            "this binding does not expose group enumeration; reach a known sandbox with get",
         ))
     }
 
@@ -665,21 +665,25 @@ impl Sandbox for AzureSandbox {
         ))
     }
 
-    async fn start_job(&self, _sandbox_id: &str, _request: RunCommandRequest) -> Result<JobStart> {
-        Err(self.unsupported("sandbox.jobStart", NO_JOB_HOST))
+    async fn start_job(&self, sandbox_id: &str, request: RunCommandRequest) -> Result<JobStart> {
+        Self::checked_sandbox_id("sandbox.jobStart", sandbox_id)?;
+        self.judged_sandbox("sandbox.jobStart", sandbox_id).await?;
+        self.start_native_job(sandbox_id, request).await
     }
 
     async fn poll_job(
         &self,
-        _sandbox_id: &str,
-        _job_id: &str,
-        _since_seq: Option<u64>,
+        sandbox_id: &str,
+        job_id: &str,
+        since_seq: Option<u64>,
     ) -> Result<JobPoll> {
-        Err(self.unsupported("sandbox.jobPoll", NO_JOB_HOST))
+        Self::checked_sandbox_id("sandbox.jobPoll", sandbox_id)?;
+        self.poll_native_job(sandbox_id, job_id, since_seq).await
     }
 
-    async fn cancel_job(&self, _sandbox_id: &str, _job_id: &str) -> Result<()> {
-        Err(self.unsupported("sandbox.jobCancel", NO_JOB_HOST))
+    async fn cancel_job(&self, sandbox_id: &str, job_id: &str) -> Result<()> {
+        Self::checked_sandbox_id("sandbox.jobCancel", sandbox_id)?;
+        self.cancel_native_job(sandbox_id, job_id).await
     }
 
     async fn terminate(&self, sandbox_id: &str) -> Result<()> {
@@ -1091,6 +1095,52 @@ impl AzureSandbox {
         })
     }
 
+    pub(super) async fn native_job_exec(
+        &self,
+        sandbox: &str,
+        operation: &str,
+        command: String,
+    ) -> Result<String> {
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            self.client
+                .execute_shell_command(&self.sandbox_group, sandbox, &command, None),
+        )
+        .await
+        .map_err(|_| {
+            let reason = "native job exec did not acknowledge the request".to_string();
+            AlienError::new(if operation == "sandbox.jobStart" {
+                ErrorData::SandboxOutcomeUnknown {
+                    operation: operation.to_string(),
+                    reason,
+                }
+            } else {
+                ErrorData::SandboxUnreachable {
+                    operation: operation.to_string(),
+                    reason,
+                }
+            })
+        })?
+        .map_err(|error| Self::failed(operation, error))?;
+        if matches!(result.exit_code, Some(75 | 124)) {
+            return Err(AlienError::new(ErrorData::SandboxUnreachable {
+                operation: operation.to_string(),
+                reason: "the native job controller is busy or has not confirmed completion"
+                    .to_string(),
+            }));
+        }
+        if result.exit_code != Some(0) {
+            return Err(AlienError::new(ErrorData::SandboxCommandFailed {
+                failure: "jobControlFailed".to_string(),
+                reason: format!(
+                    "{operation}: native wrapper exited {:?}: {}",
+                    result.exit_code, result.stderr
+                ),
+            }));
+        }
+        Ok(result.stdout)
+    }
+
     /// Runs one shell string under the client-side guard, which is the timeout plus the grace
     /// the in-sandbox `timeout` needs to report back. See `run_command` for why the timeout is
     /// enforced inside the sandbox.
@@ -1432,8 +1482,6 @@ const MAX_SANDBOX_ID: usize = 63;
 const RUN_COMMAND: &str = "sandbox.runCommand";
 const CREATE: &str = "sandbox.create";
 const GET_OR_CREATE: &str = "sandbox.getOrCreate";
-
-const NO_JOB_HOST: &str = "Azure sandboxes run no in-guest agent to own a job between calls";
 
 /// How long a sandbox has to become able to take work, and how often that is checked.
 const SANDBOX_READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
@@ -2016,6 +2064,15 @@ mod tests {
         ) -> alien_client_core::Result<alien_azure_clients::azure::sandbox_data_plane::Sandbox>
         {
             unreachable!("the command paths never create")
+        }
+
+        async fn list_sandboxes(
+            &self,
+            _group: &str,
+        ) -> alien_client_core::Result<
+            Vec<alien_azure_clients::azure::sandbox_data_plane::ListedSandbox>,
+        > {
+            unreachable!("command tests do not enumerate sessions")
         }
 
         async fn get_sandbox(
