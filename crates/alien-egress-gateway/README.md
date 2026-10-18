@@ -138,8 +138,8 @@ the agent. No platform UID has a hardcoded bypass: a colliding command UID remai
 filtered. The external network boundary remains required against a guest-root
 compromise.
 Proxy-aware commands bypass the proxy for localhost and loopback; declared `none`
-does not advertise a proxy. Synthetic DNS answers expire after 60 seconds and
-renew on lookup. The agent retains at most 4096 names, reclaims expired entries
+does not advertise a proxy. Synthetic DNS replies advertise a 60-second TTL, but name mappings remain valid
+until evicted for capacity. The agent retains at most 4096 names, reclaims expired entries
 when full, and never reuses an
 issued synthetic address, so stale answers cannot connect to a different name.
 Clients must resolve again after expiry. After 131070 allocations in one agent
@@ -154,3 +154,11 @@ open-network negative control, benchmarks verified TLS transfers,
 and removes its containers/networks. Run each parser with `cargo +nightly fuzz run
 connect -- -max_total_time=60` and `cargo +nightly fuzz run client_hello --
 -max_total_time=60` from this crate directory. Keep output outside the repository.
+
+Outbound mail ports 25, 465 and 587 require an explicit destination and port in
+the sandbox allowlist, such as `smtp.example.com:587`. Both `internet` and a
+name-only allow entry deny those ports. All sandbox traffic shares the deployment's
+outbound IP; one tenant sending abusive mail could get it blocklisted for every
+tenant and customer. Explicit entries preserve legitimate mail use. Name-based
+grants still require TLS SNI or HTTP Host; server-first SMTP requires an explicit
+IP/CIDR and port grant. Denials include the mail-port reason in the connection log.

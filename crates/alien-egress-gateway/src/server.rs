@@ -55,6 +55,11 @@ impl Gateway {
         }
         let policy = self.policies.resolve(&claims.aud, &claims.sub).await?;
         if !policy.permits(target) {
+            if matches!(target.port, 25 | 465 | 587) {
+                return Err(denied(
+                    "mail port requires an explicit destination:port grant",
+                ));
+            }
             return Err(alien_error::AlienError::new(
                 crate::error::ErrorData::PolicyDenied,
             ));

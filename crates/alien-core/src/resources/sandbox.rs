@@ -131,7 +131,7 @@ const MICROVM_TIERS: &[MicrovmTier] = &[
     },
 ];
 
-pub use super::sandbox_policy::EgressPolicy;
+pub use super::sandbox_policy::{is_public_ipv4, EgressPolicy};
 
 /// Outbound policy. Only the new Internet value opts into gateway enforcement.
 #[derive(Debug, Clone, PartialEq, Eq)]

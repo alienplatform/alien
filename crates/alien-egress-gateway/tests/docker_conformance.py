@@ -231,6 +231,16 @@ class Suite:
         self.record("direct verified TLS control", lambda: equal(self.tls(direct=True), (200, BODY)))
         self.record("allowed name verified TLS", lambda: equal(self.tls(), (200, BODY)))
         self.record("plain HTTP allowed", lambda: equal(self.plain(), (200, BODY)))
+        for port in [25, 465, 587]:
+            def mail(port=port):
+                equal(self.tls(port=port, direct=True), (200, BODY))
+                for policy in ["internet", {"allow": ["allowed.test"]}]:
+                    equal(self.admin("/v1/policies", {"aud": AUD, "sub": SUB, "policy": policy})[0], 204)
+                    self.tunnel(port=port, expected=403)
+                equal(self.admin("/v1/policies", {"aud": AUD, "sub": SUB, "policy": {"allow": [f"allowed.test:{port}"]}})[0], 204)
+                equal(self.tls(port=port), (200, BODY))
+            self.record(f"mail port {port} requires explicit destination and port", mail)
+        equal(self.admin("/v1/policies", {"aud": AUD, "sub": SUB, "policy": self.policy})[0], 204)
         self.record("wildcard includes apex", lambda: equal(self.tls(host="example.test"), (200, BODY)))
         def proxy_url():
             result = subprocess.run(["curl", "--fail", "--silent", "--show-error", "--max-time", "8", "--noproxy", "",

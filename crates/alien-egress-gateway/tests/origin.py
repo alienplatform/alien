@@ -89,6 +89,6 @@ def echo():
                 pass
 
 threading.Thread(target=echo, daemon=True).start()
-for port, certificate in [(80, None), (443, "origin"), (9443, "origin"), (8443, "untrusted")]:
+for port, certificate in [(25, "origin"), (465, "origin"), (587, "origin"), (80, None), (443, "origin"), (9443, "origin"), (8443, "untrusted")]:
     threading.Thread(target=serve, args=(port, certificate), daemon=True).start()
 dns()
