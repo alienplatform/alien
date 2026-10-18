@@ -1056,7 +1056,7 @@ async fn failed_artifact_registry_and_sandbox_creates_are_created_again_not_repl
             .code(alien_core::SandboxCode::Image {
                 image: bundle.to_string(),
             })
-            .egress(alien_core::SandboxEgress::Deny)
+            .egress(alien_core::SandboxEgress::None)
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: Some(1800),
                 idle_pause_seconds: Some(600),

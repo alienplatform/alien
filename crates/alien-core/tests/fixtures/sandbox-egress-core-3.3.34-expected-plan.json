@@ -1,0 +1,106 @@
+{
+  "frozenDigest": "025af180b70120287846c100514227266a4c41f5f317a1fb9ee5fb14fb4bbdb5",
+  "liveDigest": "d7034b186402f9df7f1f92e7be90e93faca1ae8fc758a8e8abcdf1ffa949af40",
+  "plans": {
+    "denied": {
+      "cloudEgress": {
+        "mode": "allow"
+      },
+      "dependencies": [],
+      "environment": {
+        "ALIEN_SANDBOX_EGRESS": "{\"mode\":\"deny\"}",
+        "ALIEN_SANDBOX_EXPECTED_EXEC_UID": "60000"
+      },
+      "setupInputs": [
+        [
+          "egress",
+          {
+            "mode": "deny"
+          }
+        ],
+        ["egress network", null],
+        [
+          "build role policy",
+          {
+            "Statement": [
+              {
+                "Action": ["s3:GetObject"],
+                "Effect": "Allow",
+                "Resource": "arn:aws:s3:::compatibility-bundles/sandbox-bundle/*",
+                "Sid": "ReadSandboxBundlePrefix"
+              }
+            ],
+            "Version": "2012-10-17"
+          }
+        ],
+        ["remote grant", null]
+      ]
+    },
+    "direct": {
+      "cloudEgress": {
+        "mode": "allow"
+      },
+      "dependencies": [],
+      "environment": {},
+      "setupInputs": [
+        [
+          "egress",
+          {
+            "mode": "allow"
+          }
+        ],
+        ["egress network", null],
+        [
+          "build role policy",
+          {
+            "Statement": [
+              {
+                "Action": ["s3:GetObject"],
+                "Effect": "Allow",
+                "Resource": "arn:aws:s3:::compatibility-bundles/sandbox-bundle/*",
+                "Sid": "ReadSandboxBundlePrefix"
+              }
+            ],
+            "Version": "2012-10-17"
+          }
+        ],
+        ["remote grant", null]
+      ]
+    },
+    "domains": {
+      "cloudEgress": {
+        "mode": "allow"
+      },
+      "dependencies": [],
+      "environment": {
+        "ALIEN_SANDBOX_EGRESS": "{\"mode\":\"allowDomains\",\"domains\":[\"api.example.com\"]}",
+        "ALIEN_SANDBOX_EXPECTED_EXEC_UID": "60000"
+      },
+      "setupInputs": [
+        [
+          "egress",
+          {
+            "domains": ["api.example.com"],
+            "mode": "allowDomains"
+          }
+        ],
+        ["egress network", null],
+        [
+          "build role policy",
+          {
+            "Statement": [
+              {
+                "Action": ["s3:GetObject"],
+                "Effect": "Allow",
+                "Resource": "arn:aws:s3:::compatibility-bundles/sandbox-bundle/*",
+                "Sid": "ReadSandboxBundlePrefix"
+              }
+            ],
+            "Version": "2012-10-17"
+          }
+        ],
+        ["remote grant", null]
+      ]
+    }
+  }
+}

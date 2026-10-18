@@ -22,6 +22,7 @@ pub mod kubernetes;
 #[cfg(feature = "local")]
 pub mod local;
 
+pub(crate) mod egress;
 #[cfg(any(feature = "aws", feature = "gcp"))]
 mod refusal;
 
@@ -617,3 +618,13 @@ mod tests {
         );
     }
 }
+
+#[cfg(all(
+    test,
+    feature = "aws",
+    feature = "gcp",
+    feature = "azure",
+    feature = "kubernetes",
+    feature = "local"
+))]
+mod egress_tests;

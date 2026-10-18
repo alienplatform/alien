@@ -123,7 +123,7 @@ mod tests {
                 .code(SandboxCode::Image {
                     image: image.to_string(),
                 })
-                .egress(SandboxEgress::Deny)
+                .egress(SandboxEgress::None)
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
@@ -182,7 +182,7 @@ mod tests {
                                 build_args: None,
                             },
                         })
-                        .egress(SandboxEgress::Deny)
+                        .egress(SandboxEgress::None)
                         .lifecycle(SandboxLifecyclePolicy {
                             max_lifetime_seconds: None,
                             idle_pause_seconds: None,

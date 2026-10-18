@@ -62,7 +62,7 @@ impl HelmEmitter for SandboxEmitter {
         let mut fragment = HelmFragment::empty();
         fragment.extra_templates.insert(
             format!("sandbox-{}-networkpolicy.yaml", sandbox.id()),
-            network_policy(sandbox, ctx.resource_id)?,
+            network_policy(sandbox)?,
         );
         fragment
             .extra_templates
@@ -79,21 +79,16 @@ impl HelmEmitter for SandboxEmitter {
 /// because that needs a gateway validating a session-and-port capability and none exists. Under
 /// `deny`, `Egress` is listed with no rules — a listed policy type with no rule is how
 /// NetworkPolicy spells "none", where omitting the type would mean "unrestricted".
-fn network_policy(sandbox: &Sandbox, resource_id: &str) -> Result<String> {
+fn network_policy(sandbox: &Sandbox) -> Result<String> {
     let egress = match sandbox.egress {
-        SandboxEgress::Deny => String::new(),
-        // Refused here rather than upstream, so the function that would render the permissive
-        // rule is the one that declines: a hostname list rendered as `allow` opens every address
-        // it was written to exclude.
+        SandboxEgress::None => String::new(),
         SandboxEgress::AllowDomains { .. } => {
             return Err(AlienError::new(ErrorData::OperationNotSupported {
-                operation: format!("generate the Helm chart for sandbox '{resource_id}'"),
-                reason: "a Kubernetes NetworkPolicy matches addresses, not names, so a hostname \
-                         list has nothing to render into. Declare egress: deny or egress: allow"
-                    .to_string(),
+                operation: format!("generate the Helm chart for sandbox '{}'", sandbox.id),
+                reason: "a Kubernetes NetworkPolicy matches addresses, not hostnames".to_string(),
             }));
         }
-        SandboxEgress::Allow => {
+        SandboxEgress::Internet | SandboxEgress::Allow => {
             let excepts: String = ALWAYS_DENIED_CIDRS
                 .iter()
                 .map(|cidr| format!("            - {cidr}\n"))

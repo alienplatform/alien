@@ -27,9 +27,8 @@ use alien_azure_clients::azure::sandbox_data_plane::{
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    azure_disk_image_label, classify_azure_sandbox_image, AzureSandboxImage,
-    ResourceOutputs as CoreResourceOutputs, ResourceStatus, Sandbox, SandboxEgress, SandboxLimits,
-    SandboxOutputs, AZURE_DISK_IMAGE_LABEL,
+    azure_disk_image_label, AzureSandboxImage, ResourceOutputs as CoreResourceOutputs,
+    ResourceStatus, Sandbox, SandboxLimits, SandboxOutputs, AZURE_DISK_IMAGE_LABEL,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
@@ -96,7 +95,7 @@ pub struct AzureSandboxController {
     pub(crate) built_disk_images: bool,
     /// Outbound policy every sandbox is created with, from the declaration.
     #[serde(default)]
-    pub(crate) egress: Option<SandboxEgress>,
+    pub(crate) egress: Option<alien_core::bindings::SandboxEgressBinding>,
     /// Idle seconds after which a sandbox pauses, if the declaration asked for one.
     #[serde(default)]
     pub(crate) idle_pause_seconds: Option<u32>,
@@ -359,7 +358,7 @@ impl AzureSandboxController {
             BindingValue::value(region.clone()),
             BindingValue::value(resource_group.clone()),
             BindingValue::value(disk_image.clone()),
-            egress.clone(),
+            egress.declaration().clone(),
             self.idle_pause_seconds,
         );
 
@@ -368,6 +367,7 @@ impl AzureSandboxController {
         };
         // All three or none, as the declaration has them: the data plane reads a missing ceiling
         // as its own default, so filling one in alone would assert a size nobody declared.
+        azure.default_policy = egress.default_policy().cloned();
         if let Some(limits) = self.limits.as_ref() {
             azure.cpu = Some(BindingValue::value(limits.cpu.clone()));
             azure.memory = Some(BindingValue::value(limits.memory.clone()));
@@ -426,7 +426,7 @@ impl AzureSandboxController {
             // naming the image sessions can start from now.
             AzureSandboxImage::Registry(_) => {}
         }
-        self.egress = Some(config.egress.clone());
+        self.egress = Some(config.into());
         self.idle_pause_seconds = config.lifecycle.idle_pause_seconds;
         self.limits = config.limits.clone();
         Ok(())
@@ -889,6 +889,7 @@ mod tests {
         deserialize_controller, serialize_controller, MockPlatformServiceProvider,
         ResourceController, ResourceRegistry,
     };
+    use alien_core::SandboxEgress;
     use alien_core::{
         Platform, ResourceLifecycle, SandboxCode, SandboxLifecyclePolicy, ToolchainConfig,
     };
@@ -908,7 +909,7 @@ mod tests {
             retired_disk_images: Vec::new(),
             pending_disk_image: None,
             built_disk_images: false,
-            egress: Some(SandboxEgress::Deny),
+            egress: Some(SandboxEgress::None.into()),
             idle_pause_seconds: Some(300),
             limits: None,
             _internal_stay_count: None,
@@ -929,7 +930,7 @@ mod tests {
         // The service tag and egress shape are what the runtime provider dispatches and reads on,
         // so they are pinned here rather than trusted to round-trip silently.
         assert_eq!(params["service"], "sandbox-azure");
-        assert_eq!(params["egress"]["mode"], "deny");
+        assert_eq!(params["egress"], "none");
     }
 
     /// Teardown must not touch the group: the setup stack destroys it, and a delete here would
@@ -940,7 +941,7 @@ mod tests {
             .code(SandboxCode::Image {
                 image: "ubuntu".to_string(),
             })
-            .egress(SandboxEgress::Allow)
+            .egress(SandboxEgress::Internet)
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
@@ -956,7 +957,7 @@ mod tests {
             retired_disk_images: Vec::new(),
             pending_disk_image: None,
             built_disk_images: false,
-            egress: Some(SandboxEgress::Allow),
+            egress: Some(SandboxEgress::Internet.into()),
             idle_pause_seconds: None,
             limits: None,
             _internal_stay_count: None,
@@ -1028,11 +1029,12 @@ mod tests {
         assert_eq!(restored.resource_group.as_deref(), Some("rg"));
         assert_eq!(restored.disk_image.as_deref(), Some("ubuntu"));
         assert_eq!(
-            restored.egress,
-            Some(SandboxEgress::AllowDomains {
+            restored.egress.as_ref().unwrap().declaration(),
+            &SandboxEgress::AllowDomains {
                 domains: vec!["api.example.com".to_string()],
-            })
+            }
         );
+        assert!(restored.egress.as_ref().unwrap().default_policy().is_none());
         assert_eq!(restored.idle_pause_seconds, Some(300));
         assert_eq!(
             restored.limits,
@@ -1113,7 +1115,7 @@ mod tests {
             retired_disk_images: Vec::new(),
             pending_disk_image: None,
             built_disk_images: false,
-            egress: Some(SandboxEgress::Deny),
+            egress: Some(SandboxEgress::None.into()),
             idle_pause_seconds: None,
             limits: None,
             _internal_stay_count: None,
@@ -1127,7 +1129,7 @@ mod tests {
                     target: None,
                 },
             })
-            .egress(SandboxEgress::Allow)
+            .egress(SandboxEgress::Internet)
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: Some(300),
@@ -1138,7 +1140,7 @@ mod tests {
             .capture_session_inputs(&config)
             .expect_err("a source-built sandbox has no Azure catalog image");
 
-        assert_eq!(controller.egress, Some(SandboxEgress::Deny));
+        assert_eq!(controller.egress, Some(SandboxEgress::None.into()));
         assert_eq!(controller.idle_pause_seconds, None);
         assert_eq!(controller.disk_image.as_deref(), Some("ubuntu"));
     }
@@ -1158,7 +1160,7 @@ mod tests {
             retired_disk_images: Vec::new(),
             pending_disk_image: None,
             built_disk_images: false,
-            egress: Some(SandboxEgress::Allow),
+            egress: Some(SandboxEgress::Internet.into()),
             idle_pause_seconds: None,
             limits: None,
             _internal_stay_count: None,
@@ -1172,7 +1174,7 @@ mod tests {
                     target: None,
                 },
             })
-            .egress(SandboxEgress::Deny)
+            .egress(SandboxEgress::None)
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
@@ -1185,7 +1187,7 @@ mod tests {
 
         assert_eq!(
             controller.egress,
-            Some(SandboxEgress::Allow),
+            Some(SandboxEgress::Internet.into()),
             "the refused declaration leaves the served policy alone in both directions"
         );
         assert_eq!(controller.disk_image.as_deref(), Some("ubuntu"));
@@ -1206,7 +1208,7 @@ mod tests {
             retired_disk_images: Vec::new(),
             pending_disk_image: None,
             built_disk_images: false,
-            egress: Some(SandboxEgress::Deny),
+            egress: Some(SandboxEgress::None.into()),
             idle_pause_seconds: Some(300),
             limits: Some(SandboxLimits {
                 cpu: "4000m".to_string(),
@@ -1241,7 +1243,7 @@ mod tests {
             retired_disk_images: Vec::new(),
             pending_disk_image: None,
             built_disk_images: false,
-            egress: Some(SandboxEgress::Deny),
+            egress: Some(SandboxEgress::None.into()),
             idle_pause_seconds: None,
             limits: None,
             _internal_stay_count: None,
@@ -1257,10 +1259,9 @@ mod tests {
         assert!(params.get("disk").is_none());
     }
 
-    /// `AllowDomains` is the one egress variant carrying a payload, and Azure is the backend that
-    /// expresses it, so the tagged shape and the domain list are pinned rather than trusted.
+    /// The destination list must survive the controller-to-binding handoff.
     #[test]
-    fn the_binding_carries_the_allow_domains_egress_shape() {
+    fn the_binding_carries_the_allowlist() {
         let controller = AzureSandboxController {
             state: AzureSandboxState::Ready,
             sandbox_group: Some("sbg".to_string()),
@@ -1271,8 +1272,10 @@ mod tests {
             retired_disk_images: Vec::new(),
             pending_disk_image: None,
             built_disk_images: false,
-            egress: Some(SandboxEgress::AllowDomains {
-                domains: vec!["api.example.com".to_string()],
+            egress: Some(alien_core::bindings::SandboxEgressBinding::Defaults {
+                default_policy: alien_core::EgressPolicy::Allow {
+                    allow: vec!["api.example.com".into()],
+                },
             }),
             idle_pause_seconds: None,
             limits: None,
@@ -1284,8 +1287,18 @@ mod tests {
             .expect("binding params")
             .expect("a fully imported sandbox group publishes a binding");
 
-        assert_eq!(params["egress"]["mode"], "allowDomains");
-        assert_eq!(params["egress"]["domains"][0], "api.example.com");
+        let binding: alien_core::bindings::SandboxBinding =
+            serde_json::from_value(params).expect("controller output is a valid runtime binding");
+        let alien_core::bindings::SandboxBinding::Azure(binding) = binding else {
+            panic!("the service tag must select Azure");
+        };
+        assert_eq!(binding.egress, SandboxEgress::Internet.into());
+        assert_eq!(
+            binding.default_policy,
+            Some(alien_core::EgressPolicy::Allow {
+                allow: vec!["api.example.com".into()]
+            })
+        );
     }
 
     /// A row without the image, egress and idle fields loads, and publishes no binding until a
@@ -1336,7 +1349,7 @@ mod tests {
                 .code(SandboxCode::Image {
                     image: image.to_string(),
                 })
-                .egress(SandboxEgress::Allow)
+                .egress(SandboxEgress::Internet)
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
@@ -1358,7 +1371,7 @@ mod tests {
                 retired_disk_images: Vec::new(),
                 pending_disk_image: None,
                 built_disk_images: false,
-                egress: Some(SandboxEgress::Allow),
+                egress: Some(SandboxEgress::Internet.into()),
                 idle_pause_seconds: None,
                 limits: None,
                 _internal_stay_count: None,

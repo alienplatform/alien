@@ -33,15 +33,12 @@ pub fn stack_requires_network(stack: &Stack) -> bool {
 
 pub(crate) fn resource_requires_network(entry: &ResourceEntry) -> bool {
     RESOURCE_TYPES_REQUIRING_NETWORK.contains(&entry.config.resource_type().as_ref())
-        || sandbox_denies_egress(entry)
+        || sandbox_requires_connector(entry)
 }
 
-/// A sandbox needs a VPC only to deny with.
-///
-/// Denying runs sessions through a VPC egress connector, and that connector needs subnets. An
-/// open sandbox attaches no connector and so needs no network at all — listing the resource type
-/// outright would demand a VPC from a stack that never touches one.
-fn sandbox_denies_egress(entry: &ResourceEntry) -> bool {
+/// Gateway-backed and restricted sandboxes need connector subnets.
+/// Legacy Allow retains its direct route and does not require a network.
+fn sandbox_requires_connector(entry: &ResourceEntry) -> bool {
     entry
         .config
         .downcast_ref::<Sandbox>()
@@ -439,20 +436,18 @@ mod tests {
         }
     }
 
-    /// A sandbox's egress mode, not its presence, decides whether the stack needs a VPC: only a
-    /// restricted mode is enforced by a connector, and a connector needs one. Getting this
-    /// backwards is silent either way — a needless VPC, or a restriction with nothing to enforce it.
     #[test]
-    fn a_sandbox_requires_a_network_only_when_its_egress_is_restricted() {
+    fn a_sandbox_requires_a_network_when_its_egress_needs_a_connector() {
         for (egress, expected) in [
-            (SandboxEgress::Deny, true),
+            (SandboxEgress::None, true),
+            (SandboxEgress::Internet, true),
+            (SandboxEgress::Allow, false),
             (
                 SandboxEgress::AllowDomains {
-                    domains: vec!["example.com".to_string()],
+                    domains: vec!["api.example.com".into()],
                 },
                 true,
             ),
-            (SandboxEgress::Allow, false),
         ] {
             let mut resources = IndexMap::new();
             resources.insert("runner".to_string(), create_sandbox_entry(egress.clone()));

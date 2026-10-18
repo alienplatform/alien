@@ -144,13 +144,13 @@ pub fn install(policy: &SandboxEgress, command_uid: u32) -> Result<()> {
     let mut rules = format!("add table ip alien_egress\nflush table ip alien_egress\nadd chain ip alien_egress output {{ type filter hook output priority 0; policy accept; }}\nadd chain ip alien_egress commands\nadd rule ip alien_egress output meta skuid {command_uid} jump commands\n");
     let mut add =
         |rule: &str| rules.push_str(&format!("add rule ip alien_egress commands {rule}\n"));
-    if !matches!(policy, SandboxEgress::Allow) {
+    if !matches!(policy, SandboxEgress::Internet | SandboxEgress::Allow) {
         add("udp dport 53 drop");
         add("tcp dport 53 drop");
     }
     add("oifname \"lo\" accept");
     add("ct state established,related accept");
-    if matches!(policy, SandboxEgress::Allow) {
+    if matches!(policy, SandboxEgress::Internet | SandboxEgress::Allow) {
         let resolv = fs::read_to_string("/etc/resolv.conf")
             .into_alien_error()
             .context(failed("read resolver configuration"))?;
@@ -166,13 +166,13 @@ pub fn install(policy: &SandboxEgress, command_uid: u32) -> Result<()> {
         }
     }
     match policy {
-        SandboxEgress::Deny => {}
+        SandboxEgress::None => {}
         SandboxEgress::AllowDomains { .. } => {
             for ip in ips {
                 add(&format!("ip daddr {ip} accept"));
             }
         }
-        SandboxEgress::Allow => {
+        SandboxEgress::Internet | SandboxEgress::Allow => {
             for cidr in [
                 "0.0.0.0/8",
                 "10.0.0.0/8",
@@ -216,4 +216,82 @@ pub fn install(policy: &SandboxEgress, command_uid: u32) -> Result<()> {
         ))));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_core::{
+        EgressPolicy, Platform, Sandbox, SandboxCode, SandboxLifecyclePolicy,
+        SandboxPrivilegedSupervisor,
+    };
+
+    #[test]
+    fn released_supervisor_policies_keep_their_startup_meaning() {
+        for (encoded, expected) in [
+            (r#"{"mode":"deny"}"#, SandboxEgress::None),
+            (r#"{"mode":"allow"}"#, SandboxEgress::Allow),
+            (
+                r#"{"mode":"allowDomains","domains":["api.example.com"]}"#,
+                SandboxEgress::AllowDomains {
+                    domains: vec!["api.example.com".into()],
+                },
+            ),
+        ] {
+            let mut sandbox = Sandbox::new("legacy".into())
+                .code(SandboxCode::Image {
+                    image: "ubuntu".into(),
+                })
+                .egress(serde_json::from_str(encoded).unwrap())
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build();
+            sandbox.privileged_supervisor =
+                Some(SandboxPrivilegedSupervisor { command_uid: 60001 });
+            let env = sandbox.supervisor_environment();
+            let policy: SandboxEgress = serde_json::from_str(&env["ALIEN_SANDBOX_EGRESS"]).unwrap();
+            assert_eq!(policy, expected);
+        }
+    }
+
+    #[test]
+    fn runtime_defaults_do_not_become_the_startup_network_floor() {
+        let mut sandbox = Sandbox::new("box".into())
+            .code(SandboxCode::Image {
+                image: "ubuntu".into(),
+            })
+            .egress(SandboxEgress::Internet)
+            .lifecycle(SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build();
+        sandbox.privileged_supervisor = Some(SandboxPrivilegedSupervisor { command_uid: 60001 });
+        for target in [
+            "*.example.com",
+            "8.8.8.0/24",
+            "bücher.de",
+            "api.example.com:8443",
+        ] {
+            sandbox.default_policy = Some(EgressPolicy::Allow {
+                allow: vec![target.into()],
+            });
+            sandbox.validate_for_platform(Platform::Aws).unwrap();
+            let env = sandbox.supervisor_environment();
+            let policy: SandboxEgress = serde_json::from_str(&env["ALIEN_SANDBOX_EGRESS"]).unwrap();
+            destinations(&policy)
+                .expect("accepted runtime targets must not stop legacy agent startup");
+            assert!(
+                matches!(policy, SandboxEgress::Internet | SandboxEgress::Allow),
+                "a runtime default must not become a permanent startup allowlist"
+            );
+        }
+        sandbox.default_policy = None;
+        sandbox.egress = SandboxEgress::None;
+        let env = sandbox.supervisor_environment();
+        let policy: SandboxEgress = serde_json::from_str(&env["ALIEN_SANDBOX_EGRESS"]).unwrap();
+        assert!(matches!(policy, SandboxEgress::None));
+    }
 }

@@ -96,7 +96,7 @@ mod tests {
                 .code(SandboxCode::Image {
                     image: "us-central1-docker.pkg.dev/p/r/agent:1".to_string(),
                 })
-                .egress(SandboxEgress::Deny)
+                .egress(SandboxEgress::None)
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,

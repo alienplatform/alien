@@ -278,7 +278,7 @@ fn sandbox_only_stack() -> Stack {
         .code(alien_core::SandboxCode::Image {
             image: "ubuntu".to_string(),
         })
-        .egress(alien_core::SandboxEgress::Allow)
+        .egress(alien_core::SandboxEgress::Internet)
         .lifecycle(alien_core::SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,
@@ -404,7 +404,7 @@ async fn state_keeps_a_sandbox(fixture: &Fixture, binding: serde_json::Value) {
                     .code(alien_core::SandboxCode::Image {
                         image: "ubuntu".to_string(),
                     })
-                    .egress(alien_core::SandboxEgress::Allow)
+                    .egress(alien_core::SandboxEgress::Internet)
                     .lifecycle(alien_core::SandboxLifecyclePolicy {
                         max_lifetime_seconds: None,
                         idle_pause_seconds: None,
@@ -570,7 +570,7 @@ async fn a_sandbox_sharing_the_release_with_another_remote_resource_refuses_a_da
         .code(alien_core::SandboxCode::Image {
             image: "ubuntu".to_string(),
         })
-        .egress(alien_core::SandboxEgress::Allow)
+        .egress(alien_core::SandboxEgress::Internet)
         .lifecycle(alien_core::SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,

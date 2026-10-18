@@ -77,6 +77,10 @@ repository = "https://github.com/alienplatform/alien"
 license-file = "LICENSE.md"
 
 [workspace.dependencies]
+idna = "1.1"
+ipnet = "2.11"
+psl = "2.1"
+proptest = "1.9"
 strip-ansi-escapes = "0.2"
 lognorm = "0.2.0"
 alien-commands = { path = "crates/alien-commands", version = "3.3.34", default-features = false }
@@ -265,6 +269,7 @@ proc-macro2 = "1.0"
 quote = "1.0"
 syn = { version = "2.0", features = ["full", "extra-traits"] }
 hex = "0.4"
+pkcs8 = { version = "0.10", features = ["alloc"] }
 ed25519-compact = { version = "2.3", default-features = false, features = ["std"] }
 httpmock = { version = "0.7" }
 mockall = { version = "0.15.0" }

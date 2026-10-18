@@ -138,8 +138,6 @@ pub struct SandboxEgressNetwork<'a> {
 /// Why an AWS sandbox's egress cannot be built from this stack.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SandboxEgressRefusal {
-    /// AWS has no domain filter at the connector, so `allowDomains` has nothing to render into.
-    DomainAllowList,
     /// The stack declares no network for the connector to attach to.
     NoNetwork,
     /// The network is the account's default VPC, which has no private subnets.
@@ -152,10 +150,6 @@ impl fmt::Display for SandboxEgressRefusal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("an AWS sandbox routes session traffic through a VPC egress connector")?;
         f.write_str(match self {
-            Self::DomainAllowList => {
-                ", which has no configuration for egress 'allowDomains'. Declare egress: deny for \
-                 a connector that reaches nothing, or egress: allow for no connector at all"
-            }
             Self::NoNetwork => ", and this stack declares no network for it to attach to",
             Self::DefaultVpc => {
                 ", which needs private subnets, and the account's default VPC has only public \
@@ -178,8 +172,7 @@ pub fn sandbox_egress_network<'a>(
 ) -> Result<Option<SandboxEgressNetwork<'a>>, SandboxEgressRefusal> {
     match egress {
         SandboxEgress::Allow => return Ok(None),
-        SandboxEgress::AllowDomains { .. } => return Err(SandboxEgressRefusal::DomainAllowList),
-        SandboxEgress::Deny => {}
+        SandboxEgress::None | SandboxEgress::Internet | SandboxEgress::AllowDomains { .. } => {}
     }
     let (id, entry, network) = stack
         .resources()
@@ -200,7 +193,7 @@ pub fn sandbox_egress_network<'a>(
 mod tests {
     use super::*;
     use crate::{ResourceLifecycle, SandboxCode, SandboxLifecyclePolicy};
-    use SandboxEgressRefusal::{DefaultVpc, DomainAllowList, NoNetwork, OtherCloudNetwork};
+    use SandboxEgressRefusal::{DefaultVpc, NoNetwork, OtherCloudNetwork};
     use SandboxEgressVpc::{BroughtByCustomer, Created};
 
     fn outcome(
@@ -258,7 +251,7 @@ mod tests {
                     ResourceLifecycle::Frozen,
                 )
                 .build();
-            let found = sandbox_egress_network(&stack, &SandboxEgress::Deny)
+            let found = sandbox_egress_network(&stack, &SandboxEgress::None)
                 .expect("a created or brought VPC is attachable")
                 .expect("deny attaches to a network");
             assert_eq!((found.id, found.vpc), ("first", expected));
@@ -302,9 +295,6 @@ mod tests {
             subnet_name: "subnet".to_string(),
             region: "us-central1".to_string(),
         };
-        let domains = || SandboxEgress::AllowDomains {
-            domains: vec!["example.com".to_string()],
-        };
 
         let cases = [
             (SandboxEgress::Allow, None, Ok(None)),
@@ -314,21 +304,19 @@ mod tests {
                 Ok(None),
             ),
             (SandboxEgress::Allow, Some(byo_gcp()), Ok(None)),
-            (domains(), None, Err(DomainAllowList)),
-            (domains(), Some(create()), Err(DomainAllowList)),
-            (SandboxEgress::Deny, None, Err(NoNetwork)),
-            (SandboxEgress::Deny, Some(create()), Ok(Some(Created))),
+            (SandboxEgress::None, None, Err(NoNetwork)),
+            (SandboxEgress::None, Some(create()), Ok(Some(Created))),
             (
-                SandboxEgress::Deny,
+                SandboxEgress::None,
                 Some(byo_aws()),
                 Ok(Some(BroughtByCustomer)),
             ),
             (
-                SandboxEgress::Deny,
+                SandboxEgress::None,
                 Some(NetworkSettings::UseDefault),
                 Err(DefaultVpc),
             ),
-            (SandboxEgress::Deny, Some(byo_gcp()), Err(OtherCloudNetwork)),
+            (SandboxEgress::None, Some(byo_gcp()), Err(OtherCloudNetwork)),
         ];
         for (egress, network, expected) in cases {
             let label = format!("{egress:?} on {network:?}");

@@ -31,6 +31,9 @@ const DEFAULT_RUNTIME_CLASS: &str = "gvisor";
 /// Kubernetes Sandbox controller.
 #[controller]
 pub struct KubernetesSandboxController {
+    /// Bound installed with the parent and published to runtime bindings.
+    #[serde(default)]
+    pub(crate) egress: Option<alien_core::bindings::SandboxEgressBinding>,
     /// Sandbox this controller owns, and the enumeration scope for its pods.
     pub(crate) sandbox_id: Option<String>,
     /// Namespace the Helm chart created for this sandbox's pods.
@@ -93,6 +96,7 @@ impl KubernetesSandboxController {
 
         self.runtime_class = Some(runtime_class);
         self.sandbox_id = Some(config.id.clone());
+        self.egress = Some(config.into());
         self.broker_url = broker_url();
 
         // Recorded as soon as it is known, because the binding and the outputs both read it
@@ -190,6 +194,7 @@ impl KubernetesSandboxController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
+        self.egress = Some(config.into());
 
         // Config applies to pods created after it. Running sessions are not rolled: a session
         // is a unit of work someone is waiting on, not a replica.
@@ -338,7 +343,7 @@ impl KubernetesSandboxController {
             return Ok(None);
         };
 
-        let binding = SandboxBinding::kubernetes(
+        let mut binding = SandboxBinding::kubernetes(
             BindingValue::value(namespace),
             BindingValue::value(runtime_class),
             BindingValue::value(format!(
@@ -350,7 +355,17 @@ impl KubernetesSandboxController {
             BindingValue::value(broker_url),
             BindingValue::value(capability_secret_name(&sandbox_id)),
             BindingValue::value(SERVICE_ACCOUNT_TOKEN_PATH.to_string()),
+            self.egress
+                .as_ref()
+                .map(|value| value.declaration().clone()),
         );
+
+        if let SandboxBinding::Kubernetes(value) = &mut binding {
+            value.default_policy = self
+                .egress
+                .as_ref()
+                .and_then(|value| value.default_policy().cloned());
+        }
 
         Ok(Some(
             serde_json::to_value(binding).into_alien_error().context(
@@ -537,6 +552,7 @@ mod tests {
         use crate::core::ResourceController;
 
         let mut controller = KubernetesSandboxController {
+            egress: None,
             state: KubernetesSandboxState::Ready,
             sandbox_id: Some("sbx".to_string()),
             namespace: Some("alien-sandbox-sbx".to_string()),

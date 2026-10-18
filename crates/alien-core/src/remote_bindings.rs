@@ -138,6 +138,13 @@ pub fn remote_binding_undeliverable_reason(entry: &ResourceEntry) -> Option<&'st
         return Some("a remotely published sandbox cannot declare privilegedSupervisor; the raw grant can start retained image versions with a different command identity or egress policy; use an ordinary workload binding");
     }
 
+    if sandbox.default_policy.is_some() {
+        return Some("a remotely published sandbox cannot carry defaultPolicy; use an ordinary workload binding that supports gateway policies");
+    }
+
+    if matches!(sandbox.egress, SandboxEgress::Internet) {
+        return Some("internet sandboxes cannot publish remoteAccess because the gateway admin endpoint is internal; use an in-deployment workload binding or retain legacy egress {mode:allow}");
+    }
     if !matches!(sandbox.egress, SandboxEgress::Allow) {
         return Some(
             "a remotely published sandbox must declare egress 'allow'; the remote grant either \
@@ -220,13 +227,7 @@ mod tests {
 
     #[test]
     fn a_remote_grant_cannot_bypass_supervision_through_a_retained_version() {
-        for egress in [
-            SandboxEgress::Allow,
-            SandboxEgress::Deny,
-            SandboxEgress::AllowDomains {
-                domains: vec!["example.com".to_string()],
-            },
-        ] {
+        for egress in [SandboxEgress::Allow, SandboxEgress::None] {
             let mut entry = remote_sandbox(egress, vec![]);
             let mut sandbox = entry
                 .config
@@ -288,7 +289,7 @@ mod tests {
     #[test]
     fn each_undeliverable_declaration_answers_in_its_own_terms() {
         let egress =
-            remote_binding_undeliverable_reason(&remote_sandbox(SandboxEgress::Deny, Vec::new()))
+            remote_binding_undeliverable_reason(&remote_sandbox(SandboxEgress::None, Vec::new()))
                 .expect("a restricted egress is not deliverable");
         let ports =
             remote_binding_undeliverable_reason(&remote_sandbox(SandboxEgress::Allow, vec![8080]))

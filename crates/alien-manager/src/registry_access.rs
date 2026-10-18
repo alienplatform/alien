@@ -2011,7 +2011,7 @@ mod tests {
                         image: image.to_string(),
                     })
                     .maybe_private_base_image(private_base_image.map(str::to_string))
-                    .egress(SandboxEgress::Allow)
+                    .egress(SandboxEgress::Internet)
                     .lifecycle(SandboxLifecyclePolicy {
                         max_lifetime_seconds: None,
                         idle_pause_seconds: None,
@@ -2788,7 +2788,7 @@ mod tests {
                          alien-artifacts-prj_test:agents-abc123"
                             .to_string(),
                     )
-                    .egress(SandboxEgress::Allow)
+                    .egress(SandboxEgress::Internet)
                     .lifecycle(SandboxLifecyclePolicy {
                         max_lifetime_seconds: None,
                         idle_pause_seconds: None,
@@ -2833,7 +2833,7 @@ mod tests {
                          alien-artifacts-prj_other:agents-abc123"
                             .to_string(),
                     )
-                    .egress(SandboxEgress::Allow)
+                    .egress(SandboxEgress::Internet)
                     .lifecycle(SandboxLifecyclePolicy {
                         max_lifetime_seconds: None,
                         idle_pause_seconds: None,

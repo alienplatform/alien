@@ -422,6 +422,8 @@ async fn a_command_gets_the_env_and_cwd_it_was_given() {
     let sandbox = LocalSandbox::new(
         "agent",
         &LocalSandboxBinding {
+            default_policy: None,
+            egress: None,
             manager_url: BindingValue::Value(harness.route.base_url.clone()),
             sandbox_key: BindingValue::Value(SANDBOX.to_string()),
             token_path: BindingValue::Value(harness.route.token_path.display().to_string()),
@@ -559,4 +561,60 @@ async fn a_command_gets_the_env_and_cwd_it_was_given() {
         .terminate(&instance.sandbox_id)
         .await
         .expect("cleanup");
+}
+
+/// Runs both published language surfaces through their native extensions against this real daemon.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires Docker, built Node addon and Python wheel installed at ALIEN_TEST_PYTHON"]
+async fn language_bindings_preserve_egress_requests_against_local() {
+    let harness = Harness::start().await;
+    let binding = json!({
+        "service": "sandbox-local", "managerUrl": harness.route.base_url,
+        "sandboxKey": SANDBOX, "tokenPath": harness.route.token_path,
+        "egress": {"mode":"allow"},
+    })
+    .to_string();
+    let mut unsupported: serde_json::Value = serde_json::from_str(&binding).unwrap();
+    unsupported["egress"] = json!("internet");
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let python = std::env::var("ALIEN_TEST_PYTHON")
+        .expect("set ALIEN_TEST_PYTHON to the wheel's interpreter");
+    for (program, script) in [
+        (
+            "node".to_string(),
+            "crates/alien-local/tests/fixtures/egress-bindings.mjs",
+        ),
+        (
+            python,
+            "crates/alien-local/tests/fixtures/egress_bindings.py",
+        ),
+    ] {
+        let output = tokio::process::Command::new(&program)
+            .arg(root.join(script))
+            .env("ALIEN_DEPLOYMENT_TYPE", "local")
+            .env("ALIEN_EGRESS_TEST_BINDING", &binding)
+            .env("ALIEN_EGRESS_UNSUPPORTED_BINDING", unsupported.to_string())
+            .output()
+            .await
+            .expect("language process starts");
+        assert!(
+            output.status.success(),
+            "{program}: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let sessions: Vec<serde_json::Value> = harness
+        .authed(harness.client.get(harness.url("/v1/sessions")))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        sessions.is_empty(),
+        "language tests must terminate their real containers"
+    );
+    SandboxRoute::remove(SANDBOX).await;
 }

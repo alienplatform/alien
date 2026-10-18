@@ -4,6 +4,7 @@ use alien_bindings::traits::{
     CommandOutput, CreateSandboxRequest, JobPoll, PreviewCapability, RunCommandRequest, Sandbox,
     SandboxInstance, SandboxState,
 };
+use alien_error::{Context, IntoAlienError};
 use futures::lock::Mutex;
 use futures::stream::BoxStream;
 use futures::StreamExt;
@@ -196,13 +197,24 @@ pub(crate) struct SandboxHandle {
     pub(crate) inner: Arc<dyn Sandbox>,
 }
 
+fn parse_egress(value: &str) -> PyResult<alien_core::EgressPolicy> {
+    serde_json::from_str(value)
+        .into_alien_error()
+        .context(alien_bindings::error::ErrorData::SandboxEgressInvalid {
+            reason: "expected none, internet, or an object containing an allow list".to_string(),
+        })
+        .map_err(map_alien_error)
+}
+
 fn sandbox_request(
     sandbox_id: Option<String>,
     tenant_key: Option<String>,
     env: Option<HashMap<String, String>>,
     timeout_ms: Option<u64>,
+    egress: Option<alien_core::EgressPolicy>,
 ) -> CreateSandboxRequest {
     CreateSandboxRequest {
+        egress,
         sandbox_id,
         tenant_key,
         env: env
@@ -254,7 +266,7 @@ impl SandboxHandle {
         .collect()
     }
 
-    #[pyo3(signature = (sandbox_id=None, tenant_key=None, env=None, timeout_ms=None))]
+    #[pyo3(signature = (sandbox_id=None, tenant_key=None, env=None, timeout_ms=None, egress_json=None))]
     fn create<'py>(
         &self,
         py: Python<'py>,
@@ -262,13 +274,33 @@ impl SandboxHandle {
         tenant_key: Option<String>,
         env: Option<HashMap<String, String>>,
         timeout_ms: Option<u64>,
+        egress_json: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        let egress = egress_json.as_deref().map(parse_egress).transpose()?;
         let inner = self.inner.clone();
         future_into_py(py, async move {
             inner
-                .create(sandbox_request(sandbox_id, tenant_key, env, timeout_ms))
+                .create(sandbox_request(
+                    sandbox_id, tenant_key, env, timeout_ms, egress,
+                ))
                 .await
                 .map(sandbox_info)
+                .map_err(map_alien_error)
+        })
+    }
+
+    fn update_egress<'py>(
+        &self,
+        py: Python<'py>,
+        sandbox_id: String,
+        egress_json: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let egress = parse_egress(&egress_json)?;
+        let inner = self.inner.clone();
+        future_into_py(py, async move {
+            inner
+                .update_egress(&sandbox_id, egress)
+                .await
                 .map_err(map_alien_error)
         })
     }
@@ -284,7 +316,7 @@ impl SandboxHandle {
         })
     }
 
-    #[pyo3(signature = (sandbox_id=None, tenant_key=None, env=None, timeout_ms=None))]
+    #[pyo3(signature = (sandbox_id=None, tenant_key=None, env=None, timeout_ms=None, egress_json=None))]
     fn get_or_create<'py>(
         &self,
         py: Python<'py>,
@@ -292,11 +324,15 @@ impl SandboxHandle {
         tenant_key: Option<String>,
         env: Option<HashMap<String, String>>,
         timeout_ms: Option<u64>,
+        egress_json: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        let egress = egress_json.as_deref().map(parse_egress).transpose()?;
         let inner = self.inner.clone();
         future_into_py(py, async move {
             let value = inner
-                .get_or_create(sandbox_request(sandbox_id, tenant_key, env, timeout_ms))
+                .get_or_create(sandbox_request(
+                    sandbox_id, tenant_key, env, timeout_ms, egress,
+                ))
                 .await
                 .map_err(map_alien_error)?;
             Ok(ResolvedSandbox {

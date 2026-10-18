@@ -1074,7 +1074,7 @@ mod tests {
             .code(SandboxCode::Image {
                 image: image.to_string(),
             })
-            .egress(alien_core::SandboxEgress::Deny)
+            .egress(alien_core::SandboxEgress::None)
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds,

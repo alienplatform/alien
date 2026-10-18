@@ -62,6 +62,7 @@ struct PreviewResponse {
 /// A Sandbox backed by the local manager.
 #[derive(Debug)]
 pub struct LocalSandbox {
+    egress: Option<alien_core::SandboxEgress>,
     client: reqwest::Client,
     base_url: String,
     token: String,
@@ -73,6 +74,24 @@ impl LocalSandbox {
     /// The binding carries a path rather than the token itself: a binding is serialized into
     /// the workload's environment, and a secret there is a secret in state.
     pub async fn new(binding_name: &str, binding: &LocalSandboxBinding) -> Result<Self> {
+        if binding
+            .egress
+            .as_ref()
+            .and_then(|value| value.gateway())
+            .is_some()
+        {
+            return Err(super::egress::unsupported("gateway-backed sandbox"));
+        }
+        super::egress::require_default(
+            binding.default_policy.as_ref().or_else(|| {
+                binding
+                    .egress
+                    .as_ref()
+                    .and_then(|value| value.default_policy())
+            }),
+            binding.egress.as_ref().map(|value| value.declaration()),
+        )?;
+
         let base_url = binding
             .manager_url
             .clone()
@@ -107,6 +126,10 @@ impl LocalSandbox {
             })?;
 
         Ok(Self {
+            egress: binding
+                .egress
+                .as_ref()
+                .map(|egress| egress.declaration().clone()),
             client: reqwest::Client::new(),
             base_url: base_url.trim_end_matches('/').to_string(),
             token: token.trim().to_string(),
@@ -247,11 +270,15 @@ fn refuse_create_time_lifetime(request: &CreateSandboxRequest) -> Result<()> {
 
 #[async_trait]
 impl Sandbox for LocalSandbox {
+    fn egress_declaration(&self) -> Option<&alien_core::SandboxEgress> {
+        self.egress.as_ref()
+    }
     fn capabilities(&self) -> SandboxCapabilities {
         SandboxCapabilities::for_platform(Platform::Local).expect("Local has a sandbox backend")
     }
 
     async fn create(&self, request: CreateSandboxRequest) -> Result<SandboxInstance> {
+        super::egress::require_default(request.egress.as_ref(), self.egress_declaration())?;
         refuse_create_time_lifetime(&request)?;
         let sandbox_id = request
             .sandbox_id
@@ -284,6 +311,7 @@ impl Sandbox for LocalSandbox {
     }
 
     async fn get_or_create(&self, request: CreateSandboxRequest) -> Result<ResolvedSandbox> {
+        super::egress::require_default(request.egress.as_ref(), self.egress_declaration())?;
         // Refused on the reconnect path too: an existing sandbox honors a lifetime no more than a
         // fresh one would.
         refuse_create_time_lifetime(&request)?;
@@ -664,6 +692,7 @@ mod tests {
         });
 
         LocalSandbox {
+            egress: None,
             client: reqwest::Client::new(),
             base_url: format!("http://{address}"),
             token: "test-token".to_string(),
