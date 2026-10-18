@@ -1,8 +1,12 @@
-//! Native internet network lifecycle proof against a setup-owned Azure sandbox group with a VNet connection.
+//! Released native allow lifecycle proof against a dedicated Azure sandbox group.
 //! Set AZURE_TARGET_* credentials, AZURE_RESOURCE_GROUP, AZURE_SANDBOX_GROUP,
-//! AZURE_SANDBOX_REGION and AZURE_SANDBOX_NAT_IP, then run this ignored test explicitly.
+//! AZURE_SANDBOX_REGION, then run this ignored test explicitly.
 #![cfg(feature = "azure")]
 
+use alien_azure_clients::azure::{
+    sandbox_data_plane::{AzureSandboxDataPlaneClient, SandboxDataPlaneApi},
+    token_cache::AzureTokenCache,
+};
 use alien_bindings::traits::{CommandOutput, CreateSandboxRequest, RunCommandRequest, Sandbox};
 use alien_bindings::{BindingsProvider, BindingsProviderApi};
 use alien_core::{AzureClientConfig, AzureCredentials, ClientConfig, EgressPolicy, SandboxEgress};
@@ -52,8 +56,8 @@ async fn shell(boxes: &dyn Sandbox, id: &str, script: &str) -> ProbeResult<Strin
 }
 
 #[tokio::test]
-#[ignore = "requires a dedicated Azure sandbox group, VNet connection, NSG and NAT gateway"]
-async fn native_internet_uses_the_deployment_network_and_refuses_runtime_policies() {
+#[ignore = "requires a dedicated Azure sandbox group and target credentials"]
+async fn legacy_allow_keeps_native_networking_and_refuses_runtime_policies() {
     let _ = dotenvy::from_path(workspace_root::get_workspace_root().join(".env.test"));
     let region = env("AZURE_SANDBOX_REGION");
     let azure = AzureClientConfig {
@@ -67,12 +71,37 @@ async fn native_internet_uses_the_deployment_network_and_refuses_runtime_policie
         service_overrides: None,
     };
 
-    let provider = BindingsProvider::new(ClientConfig::Azure(Box::new(azure)), HashMap::from([("box".to_string(), serde_json::json!({
-        "service":"sandbox-azure", "sandboxGroup":env("AZURE_SANDBOX_GROUP"), "region":region,
-        "resourceGroup":env("AZURE_RESOURCE_GROUP"), "dataPlaneEndpoint":format!("https://management.{region}.azuredevcompute.io"),
-        "diskImage":"ubuntu", "egress":SandboxEgress::Internet,
-    }))])).expect("binding config");
-    let boxes = provider.load_sandbox("box").await.expect("binding loads");
+    let binding = |egress| {
+        serde_json::json!({
+            "service":"sandbox-azure", "sandboxGroup":env("AZURE_SANDBOX_GROUP"), "region":region,
+            "resourceGroup":env("AZURE_RESOURCE_GROUP"), "dataPlaneEndpoint":format!("https://management.{region}.azuredevcompute.io"),
+            "diskImage":"ubuntu", "egress":egress,
+        })
+    };
+    let provider = BindingsProvider::new(
+        ClientConfig::Azure(Box::new(azure.clone())),
+        HashMap::from([
+            ("legacy".to_string(), binding(SandboxEgress::Allow)),
+            ("new-internet".to_string(), binding(SandboxEgress::Internet)),
+        ]),
+    )
+    .expect("binding config");
+    let error = provider
+        .load_sandbox("new-internet")
+        .await
+        .err()
+        .expect("new internet requires a gateway");
+    assert_eq!(error.code, "SANDBOX_EGRESS_GATEWAY_UNAVAILABLE");
+    let client = AzureSandboxDataPlaneClient::new(
+        reqwest::Client::new(),
+        &region,
+        &env("AZURE_RESOURCE_GROUP"),
+        AzureTokenCache::new(azure),
+    );
+    let boxes = provider
+        .load_sandbox("legacy")
+        .await
+        .expect("legacy binding loads");
     let created = boxes
         .create(CreateSandboxRequest {
             ..Default::default()
@@ -82,6 +111,11 @@ async fn native_internet_uses_the_deployment_network_and_refuses_runtime_policie
     let id = &created.sandbox_id;
     eprintln!("live egress sandbox {id}");
     let proof: ProbeResult<()> = async {
+        let observed = client.get_sandbox(&env("AZURE_SANDBOX_GROUP"), id).await?;
+        ensure!(
+            observed.vnet_connection_name.is_none(),
+            "legacy allow acquired a new VNet attachment"
+        );
         let ip = shell(
             boxes.as_ref(),
             id,
@@ -89,15 +123,15 @@ async fn native_internet_uses_the_deployment_network_and_refuses_runtime_policie
         )
         .await?;
         ensure!(
-            ip.trim() == env("AZURE_SANDBOX_NAT_IP"),
-            "source differs from NAT: {ip}"
+            ip.trim().parse::<std::net::Ipv4Addr>().is_ok(),
+            "native internet did not return an IPv4 address: {ip}"
         );
         let error = boxes
             .update_egress(id, EgressPolicy::Allow { allow: vec![] })
             .await
             .expect_err("runtime policy requires a gateway");
         ensure!(
-            error.code == "SANDBOX_EGRESS_GATEWAY_UNAVAILABLE",
+            error.code == "SANDBOX_EGRESS_REQUIRES_INTERNET",
             "wrong policy error"
         );
         let reopened = boxes
@@ -110,7 +144,7 @@ async fn native_internet_uses_the_deployment_network_and_refuses_runtime_policie
             !reopened.created && reopened.sandbox.sandbox_id == *id,
             "reconnect replaced sandbox"
         );
-        eprintln!("native NAT/reconnect/policy-refusal PASS");
+        eprintln!("legacy native network/reconnect/policy-refusal and new internet refusal PASS");
         Ok(())
     }
     .await;

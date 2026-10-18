@@ -159,7 +159,7 @@ fn emit_group(
             destination: expr::raw(format!(
                 "azurerm_subnet.{network}_sandbox_gateway.address_prefixes[0]"
             )),
-            allowed_ports: Some(BTreeSet::from(["3128".to_string()])),
+            allowed_ports: Some(BTreeSet::from(["3128".to_string(), "3129".to_string()])),
         },
     );
     // Azure's platform metadata/DNS addresses need their service tags: ordinary range denies

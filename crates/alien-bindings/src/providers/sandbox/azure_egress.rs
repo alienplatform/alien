@@ -70,13 +70,18 @@ impl AzureSandbox {
         };
         // Full/default-Deny inspects the inner CONNECT destination and rejects the gateway.
         // Partial requires default-Allow. The ordered catch-all blocks other HTTP requests;
-        // setup's NSG allows only this proxy port and denies platform DNS/IMDS and other traffic.
+        // setup's NSG allows the linked gateway ports and denies platform DNS/IMDS and other
+        // traffic. The admin port is reachable through the link but requires an admin JWT.
         Some(EgressPolicy {
             default_action: "Allow".into(),
             traffic_inspection: Some("Partial".into()),
             host_rules: vec![
                 EgressHostRule {
                     pattern: manager.gateway_authority().into(),
+                    action: "Allow".into(),
+                },
+                EgressHostRule {
+                    pattern: manager.gateway_admin_authority().into(),
                     action: "Allow".into(),
                 },
                 EgressHostRule {

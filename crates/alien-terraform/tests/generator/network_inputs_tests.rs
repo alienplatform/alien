@@ -328,6 +328,10 @@ variables {
 run "source_ranges" {
   command = plan
   assert {
+    condition = toset(azurerm_network_security_rule.default_network_sandbox_alpha_gateway.destination_port_ranges) == toset(["3128", "3129"])
+    error_message = "The link opens both gateway Container ports while admin requests remain authenticated."
+  }
+  assert {
     condition = jsonencode(local.deployment_resources[0].importData.sandboxNetwork.sandboxCidrsByResource) == jsonencode({alpha = ["10.61.16.0/23"], beta = ["10.61.18.0/23"]})
     error_message = "Each new Internet Sandbox must keep its own exact source range; legacy sandboxes must not acquire one."
   }

@@ -1069,7 +1069,7 @@ expression: schemas
         "description": "Setup-owned subnet coordinates consumed by an internal sandbox gateway load balancer.",
         "properties": {
           "gatewayCidrs": {
-            "description": "Gateway ranges allowed by the sandbox subnet NSGs on TCP3128.",
+            "description": "Gateway ranges allowed by the sandbox subnet NSGs on TCP3128 and TCP3129.",
             "items": {
               "type": "string"
             },
