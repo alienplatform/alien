@@ -72,6 +72,7 @@ def main():
                                     "seccompProfile": {"type": "RuntimeDefault"}},
                 "containers": [{"name": "probe", "image": image,
                     "command": ["python3", "-B", "-c", code],
+                    "terminationMessagePolicy": "FallbackToLogsOnError",
                     "securityContext": {"allowPrivilegeEscalation": False,
                                         "readOnlyRootFilesystem": True,
                                         "capabilities": {"drop": ["ALL"]}},
@@ -85,8 +86,13 @@ def main():
             current = request("GET", pods + "/" + prefix + "-" + role)
             phase = current.get("status", {}).get("phase")
             if phase == "Failed":
-                raise RuntimeError(f"{role} probe failed: NetworkPolicy enforcement is unproven")
+                details = [status.get("state", {}).get("terminated", {}).get("message", "")
+                           for status in current.get("status", {}).get("containerStatuses", [])]
+                raise RuntimeError(f"{role} probe failed: NetworkPolicy enforcement is unproven; "
+                                   + " ".join(details)[:2048])
             if predicate(current):
+                print(f"{role}: {phase}; node={current['spec'].get('nodeName')}; "
+                      f"ip={current.get('status', {}).get('podIP')}", flush=True)
                 return current
             time.sleep(1)
         raise RuntimeError(f"{role} probe deadline: refusing unproven NetworkPolicy enforcement")
