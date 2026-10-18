@@ -585,6 +585,12 @@ pub struct Sandbox {
     /// underscores ([A-Za-z0-9-_]). Maximum 64 characters.
     #[builder(start_fn)]
     pub id: String,
+    /// Runtime network links authored by preflight, not parent lifecycle dependencies.
+    /// Sandbox has no public link builder; gateway reach is wired during planning.
+    #[builder(field)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(feature = "openapi", schema(ignore))]
+    pub links: Vec<ResourceRef>,
     /// Where the sandbox's root filesystem comes from
     pub code: SandboxCode,
     /// Private ECR base image an AWS build pulls; `code.image` names only the S3 bundle, so this is

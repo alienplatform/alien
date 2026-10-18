@@ -4,9 +4,9 @@ use std::collections::BTreeSet;
 
 use alien_core::{
     sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID, Build, Container, ContainerCode, ContainerEgress,
-    ContainerInternalEndpoint, ContainerSecurity, ContainerSecurityProfile, Daemon,
-    DeploymentConfig, HealthCheck, Kv, Platform, Resource, ResourceEntry, ResourceLifecycle,
-    ResourceRef, ResourceSpec, Sandbox, SandboxEgress, Stack, StackState, Worker,
+    ContainerSecurity, ContainerSecurityProfile, Daemon, DeploymentConfig, HealthCheck, Kv,
+    Platform, Resource, ResourceEntry, ResourceLifecycle, ResourceSpec, Sandbox, SandboxEgress,
+    Stack, StackState, Worker,
 };
 use alien_error::AlienError;
 use async_trait::async_trait;
@@ -63,7 +63,6 @@ impl StackMutation for SandboxGatewayMutation {
                     .map(|_| id.clone())
             })
             .collect();
-        let mut consumers = Vec::new();
         for (id, entry) in stack.resources() {
             if sandboxes.contains(id) && entry.remote_access {
                 return Err(invalid(format!("Sandbox '{id}': internet egress cannot be used with remoteAccess because policy administration is private to this deployment")));
@@ -77,12 +76,10 @@ impl StackMutation for SandboxGatewayMutation {
                 .or_else(|| entry.config.downcast_ref::<Build>().map(|r| &r.links));
             if links.is_some_and(|links| links.iter().any(|link| sandboxes.contains(link.id()))) {
                 if entry.config.downcast_ref::<Build>().is_some() {
-                    return Err(invalid(format!("Build '{id}' cannot manage an internet Sandbox: internalEndpoint access supports Worker, Container and Daemon consumers")));
+                    return Err(invalid(format!("Build '{id}' cannot manage an internet Sandbox: private gateway administration supports Worker, Container and Daemon consumers")));
                 }
-                consumers.push(ResourceRef::new(entry.config.resource_type(), id));
             }
         }
-        consumers.sort_by(|a, b| a.id().cmp(b.id()));
         let kv = Kv::new(POLICY_STORE_ID.into()).build();
         if let Some(existing) = stack.resources.get(POLICY_STORE_ID) {
             if existing.config.downcast_ref::<Kv>().is_none() || existing.enabled_when.is_some() {
@@ -121,14 +118,8 @@ impl StackMutation for SandboxGatewayMutation {
                 read_only_root_filesystem: true,
             })
             .egress(ContainerEgress::Internet)
-            .internal_endpoint(ContainerInternalEndpoint {
-                name: "proxy".into(),
-                port: 3128,
-                from: sandboxes
-                    .iter()
-                    .map(|id| ResourceRef::new(Sandbox::RESOURCE_TYPE, id))
-                    .collect(),
-            })
+            .port(3128)
+            .port(3129)
             .health_check(HealthCheck {
                 path: "/health".into(),
                 port: Some(3129),
@@ -137,17 +128,8 @@ impl StackMutation for SandboxGatewayMutation {
                 failure_threshold: 3,
             })
             .commands_enabled(false)
-            .link(&kv);
-        let gateway = if consumers.is_empty() {
-            gateway
-        } else {
-            gateway.internal_endpoint(ContainerInternalEndpoint {
-                name: "admin".into(),
-                port: 3129,
-                from: consumers,
-            })
-        }
-        .build();
+            .link(&kv)
+            .build();
         gateway
             .validate_network_settings()
             .map_err(|error| invalid(error.to_string()))?;
@@ -160,7 +142,6 @@ impl StackMutation for SandboxGatewayMutation {
             // Re-running preparation preserves computed placement and dependency links.
             if container.code != gateway.code
                 || container.security != gateway.security
-                || container.internal_endpoints != gateway.internal_endpoints
                 || container.egress != gateway.egress
                 || container.replicas != gateway.replicas
                 || container.permissions != gateway.permissions

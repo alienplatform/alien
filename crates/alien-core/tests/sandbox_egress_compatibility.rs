@@ -114,3 +114,49 @@ fn only_new_internet_accepts_runtime_defaults() {
         "SANDBOX_EGRESS_INVALID"
     );
 }
+
+#[test]
+fn runtime_container_links_are_reachability_without_a_parent_lifecycle_cycle() {
+    let mut stack: Stack = serde_json::from_str(include_str!(
+        "fixtures/sandbox-egress-core-3.3.34-plans.json"
+    ))
+    .unwrap();
+    let target = alien_core::ResourceRef::new(alien_core::Container::RESOURCE_TYPE, "gateway");
+    let sandbox = stack
+        .resources
+        .get_mut("direct")
+        .unwrap()
+        .config
+        .downcast_mut::<Sandbox>()
+        .unwrap();
+    sandbox.egress = SandboxEgress::Internet;
+    sandbox.links.push(target.clone());
+    let caller: alien_core::Container = serde_json::from_value(serde_json::json!({"id":"caller", "links":[target],
+        "code":{"type":"image","image":"example:latest"}, "permissions":"app", "ports":[], "environment":{}, "stateful":false,
+        "cpu":{"min":"1","desired":"1"}, "memory":{"min":"512Mi","desired":"512Mi"}})).unwrap();
+    stack.resources.insert(
+        "caller".into(),
+        alien_core::ResourceEntry {
+            config: alien_core::Resource::new(caller),
+            lifecycle: alien_core::ResourceLifecycle::Live,
+            dependencies: vec![],
+            remote_access: false,
+            enabled_when: None,
+        },
+    );
+    let linkers = stack.container_linkers("gateway");
+    assert_eq!(
+        linkers,
+        vec![
+            alien_core::ResourceRef::new(Sandbox::RESOURCE_TYPE, "direct"),
+            alien_core::ResourceRef::new(alien_core::Container::RESOURCE_TYPE, "caller")
+        ]
+    );
+    assert!(!stack.resources["direct"]
+        .combined_dependencies()
+        .contains(&target));
+    assert!(stack.resources["caller"]
+        .combined_dependencies()
+        .contains(&target));
+    assert!(stack.container_linkers("other").is_empty());
+}

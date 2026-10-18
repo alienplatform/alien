@@ -1,4 +1,4 @@
-"""Helm install gate: paired live traffic proves that egress NetworkPolicy works."""
+"""Helm install gate: paired live traffic proves that ingress and egress NetworkPolicy work."""
 
 import json
 import os
@@ -42,7 +42,7 @@ def main():
                   "uid": owner["metadata"]["uid"]}]
     prefix = "alien-cni-" + uuid.uuid4().hex[:12]
     created = []
-    deadline = time.monotonic() + 150
+    deadline = time.monotonic() + 210
     marker = uuid.uuid4().hex
     server = (
         "from http.server import BaseHTTPRequestHandler,HTTPServer\n"
@@ -67,7 +67,7 @@ def main():
                          "labels": {"alien.dev/cni-probe": prefix, "alien.dev/cni-role": role}},
             "spec": {
                 "automountServiceAccountToken": False, "restartPolicy": "Never",
-                "activeDeadlineSeconds": 180, "terminationGracePeriodSeconds": 1,
+                "activeDeadlineSeconds": 240, "terminationGracePeriodSeconds": 1,
                 "securityContext": {"runAsNonRoot": True, "runAsUser": 65534,
                                     "seccompProfile": {"type": "RuntimeDefault"}},
                 "containers": [{"name": "probe", "image": image,
@@ -137,7 +137,22 @@ def main():
         for role, denied in [("control", False), ("denied", True), ("control-after", False)]:
             create(pods, pod(role, f"DENIED={denied!r}\n" + probe))
             wait(role, lambda p: p.get("status", {}).get("phase") == "Succeeded")
-        print("NetworkPolicy enforced: both controls passed, all three denied requests blocked")
+        # An egress-only implementation must not pass the ingress endpoint gate.
+        ingress_name = prefix + "-ingress"
+        create(policies, {
+            "apiVersion": "networking.k8s.io/v1", "kind": "NetworkPolicy",
+            "metadata": {"name": ingress_name},
+            "spec": {"podSelector": {"matchLabels": {
+                "alien.dev/cni-probe": prefix, "alien.dev/cni-role": "listener"}},
+                "policyTypes": ["Ingress"], "ingress": []},
+        })
+        create(pods, pod("ingress-denied", "DENIED=True\n" + probe))
+        wait("ingress-denied", lambda p: p.get("status", {}).get("phase") == "Succeeded")
+        request("DELETE", policies + "/" + ingress_name, {"gracePeriodSeconds": 0})
+        time.sleep(2)
+        create(pods, pod("ingress-control-after", "DENIED=False\n" + probe))
+        wait("ingress-control-after", lambda p: p.get("status", {}).get("phase") == "Succeeded")
+        print("NetworkPolicy enforced: ingress and egress denied requests; all controls passed")
     finally:
         failures = []
         for path in reversed(created):

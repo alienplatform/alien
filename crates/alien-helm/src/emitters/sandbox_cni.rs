@@ -70,7 +70,7 @@ metadata:
     helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
 spec:
   backoffLimit: 0
-  activeDeadlineSeconds: 240
+  activeDeadlineSeconds: 300
   ttlSecondsAfterFinished: 600
   template:
     spec:

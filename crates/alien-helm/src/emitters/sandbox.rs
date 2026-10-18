@@ -58,10 +58,12 @@ impl HelmEmitter for SandboxEmitter {
         fragment
             .extra_templates
             .insert(BROKER_RBAC_TEMPLATE.to_string(), broker_rbac());
-        fragment.extra_templates.insert(
-            "sandbox-cni-probe.yaml".to_string(),
-            super::sandbox_cni::template(),
-        );
+        if matches!(sandbox.egress, SandboxEgress::Internet) {
+            fragment.extra_templates.insert(
+                "sandbox-cni-probe.yaml".to_string(),
+                super::sandbox_cni::template(),
+            );
+        }
         Ok(fragment)
     }
 }

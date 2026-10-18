@@ -1,8 +1,8 @@
 use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
-use alien_core::{Container, Platform, Stack};
+use alien_core::{Container, Platform, Sandbox, Stack};
 
-/// Validates endpoint source identities and refuses unenforced network settings.
+/// Refuses unenforced container egress and invalid internal sandbox links.
 pub struct ContainerNetworkSettingsCheck;
 
 #[async_trait::async_trait]
@@ -12,7 +12,7 @@ impl CompileTimeCheck for ContainerNetworkSettingsCheck {
     }
 
     fn description(&self) -> &'static str {
-        "Container endpoints and egress require valid sources and backend enforcement"
+        "Container internet egress requires backend enforcement and network links must resolve"
     }
 
     fn should_run(&self, stack: &Stack, _platform: Platform) -> bool {
@@ -20,36 +20,39 @@ impl CompileTimeCheck for ContainerNetworkSettingsCheck {
             entry
                 .config
                 .downcast_ref::<Container>()
-                .is_some_and(|container| {
-                    !container.internal_endpoints.is_empty() || container.egress.is_some()
-                })
+                .is_some_and(|container| container.egress.is_some())
+                || entry
+                    .config
+                    .downcast_ref::<Sandbox>()
+                    .is_some_and(|sandbox| !sandbox.links.is_empty())
         })
     }
 
     async fn check(&self, stack: &Stack, platform: Platform) -> Result<CheckResult> {
         let mut errors = Vec::new();
         for (id, entry) in stack.resources() {
+            if let Some(sandbox) = entry.config.downcast_ref::<Sandbox>() {
+                for link in &sandbox.links {
+                    if link.resource_type != Container::RESOURCE_TYPE
+                        || !stack.resources.get(link.id()).is_some_and(|target| {
+                            target.config.resource_type() == Container::RESOURCE_TYPE
+                        })
+                    {
+                        errors.push(format!("Sandbox '{id}' runtime network link must reference an existing Container: '{}'", link.id()));
+                    }
+                }
+            }
             let Some(container) = entry.config.downcast_ref::<Container>() else {
                 continue;
             };
             if let Err(error) = container.validate_network_settings() {
                 errors.push(format!("Container '{id}': {error}"));
             }
-            for endpoint in &container.internal_endpoints {
-                for source in &endpoint.from {
-                    if !stack
-                        .resources
-                        .get(source.id())
-                        .is_some_and(|entry| entry.config.resource_type() == source.resource_type)
-                    {
-                        errors.push(format!("Container '{id}' internal endpoint '{}' references missing or wrong-type source '{}:{}'", endpoint.name, source.resource_type, source.id()));
-                    }
-                }
-            }
-            // Backend implementations must remove their refusal only when source
-            // filtering and the outbound address floor are both enforced.
-            if (!container.internal_endpoints.is_empty() || container.egress.is_some()) && platform != Platform::Aws {
-                errors.push(format!("CONTAINER_NETWORK_SETTINGS_UNSUPPORTED: {platform} does not yet enforce Container '{id}' internalEndpoints/egress"));
+            // Each backend removes its refusal once the external address floor is enforced.
+            if container.egress.is_some()
+                && !matches!(platform, Platform::Aws | Platform::Kubernetes)
+            {
+                errors.push(format!("CONTAINER_NETWORK_SETTINGS_UNSUPPORTED: {platform} does not yet enforce Container '{id}' egress internet"));
             }
         }
         if errors.is_empty() {
@@ -65,31 +68,18 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn validates_source_identity_and_refuses_unenforced_settings() {
+    async fn internet_egress_is_refused_until_the_backend_enforces_it() {
         let mut stack: Stack = serde_json::from_value(serde_json::json!({"id":"test", "resources": {
             "api": {"lifecycle":"live", "dependencies":[], "config": {"type":"container", "id":"api",
                 "code":{"type":"image","image":"example:latest"}, "permissions":"app", "links":[], "ports":[], "environment":{}, "stateful":false,
-                "cpu":{"min":"1","desired":"1"}, "memory":{"min":"512Mi","desired":"512Mi"},
-                "internalEndpoints":[{"name":"admin","port":3129,"from":[{"type":"worker","id":"missing"}]}]}}
+                "cpu":{"min":"1","desired":"1"}, "memory":{"min":"512Mi","desired":"512Mi"}, "egress":"internet"}}
         }})).unwrap();
         let check = ContainerNetworkSettingsCheck;
         let invalid = check.check(&stack, Platform::Local).await.unwrap();
         assert!(invalid
             .errors
             .iter()
-            .any(|error| error.contains("missing or wrong-type")));
-        let container = stack
-            .resources
-            .get_mut("api")
-            .unwrap()
-            .config
-            .downcast_mut::<Container>()
-            .unwrap();
-        container.internal_endpoints[0].from[0] =
-            alien_core::ResourceRef::new(Container::RESOURCE_TYPE, "api");
-        let valid = check.check(&stack, Platform::Local).await.unwrap();
-        assert_eq!(valid.errors.len(), 1);
-        assert!(valid.errors[0].contains("CONTAINER_NETWORK_SETTINGS_UNSUPPORTED"));
+            .any(|error| error.contains("restricted")));
         stack
             .resources
             .get_mut("api")
@@ -97,8 +87,28 @@ mod tests {
             .config
             .downcast_mut::<Container>()
             .unwrap()
-            .internal_endpoints
-            .clear();
+            .security = Some(alien_core::ContainerSecurity {
+            profile: alien_core::ContainerSecurityProfile::Restricted,
+            run_as_user: 65532,
+            run_as_group: 65532,
+            read_only_root_filesystem: true,
+        });
+        assert!(
+            check
+                .check(&stack, Platform::Kubernetes)
+                .await
+                .unwrap()
+                .success
+        );
+        assert!(!check.check(&stack, Platform::Local).await.unwrap().success);
+        stack
+            .resources
+            .get_mut("api")
+            .unwrap()
+            .config
+            .downcast_mut::<Container>()
+            .unwrap()
+            .egress = None;
         assert!(check.check(&stack, Platform::Local).await.unwrap().success);
     }
 }

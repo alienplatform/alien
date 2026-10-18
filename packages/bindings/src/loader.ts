@@ -141,7 +141,7 @@ export interface RawQueueHandle {
 }
 
 export interface RawContainerHandle {
-  getInternalEndpoints(): Promise<Record<string, { url: string }>>
+  getInternalUrls(): Promise<Record<number, string>>
   getInternalUrl(): Promise<string>
   getPublicUrl(): Promise<string | null>
 }

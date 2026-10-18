@@ -36,7 +36,22 @@ fn source_stack(target: &Container) -> Stack {
         })
         .link(target)
         .build();
+    let mut sandbox = alien_core::Sandbox::new("session-source".into())
+        .egress(alien_core::SandboxEgress::Internet)
+        .lifecycle(alien_core::SandboxLifecyclePolicy {
+            max_lifetime_seconds: Some(300),
+            idle_pause_seconds: None,
+        })
+        .code(alien_core::SandboxCode::Image {
+            image: "python:3.13-slim".into(),
+        })
+        .build();
+    sandbox.links.push(ResourceRef::new(
+        Container::RESOURCE_TYPE,
+        target.id.clone(),
+    ));
     Stack::new("test".into())
+        .add(sandbox, ResourceLifecycle::Frozen)
         .add(target.clone(), ResourceLifecycle::Live)
         .add(
             container("cluster-member", "primary"),
@@ -54,10 +69,16 @@ fn cluster_members_and_linkers_gain_reach_and_unlink_revokes_it() {
     let mut stack = source_stack(&target);
     assert_eq!(
         allowed_sources(&target, &stack),
-        ["cluster-member", "linked", "target", "worker"]
-            .into_iter()
-            .map(str::to_string)
-            .collect()
+        [
+            "cluster-member",
+            "linked",
+            "session-source",
+            "target",
+            "worker"
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect()
     );
     stack
         .resources
@@ -78,14 +99,16 @@ fn missing_sources_deny_ingress_and_foreign_deployments_cannot_own_policy() {
     let harness = KubernetesManifestTestHarness::new(Resource::new(target.clone()), vec![]);
     let ctx = harness.ctx();
     let mut policy = build_policy(&target, "target", "test-ns", &ctx);
-    assert!(policy
-        .spec
-        .as_ref()
-        .unwrap()
-        .ingress
-        .as_ref()
-        .unwrap()
-        .is_empty());
+    assert!(
+        policy
+            .spec
+            .as_ref()
+            .unwrap()
+            .ingress
+            .as_ref()
+            .unwrap()
+            .is_empty()
+    );
     require_owner(&policy, &ctx, &target.id).unwrap();
     policy
         .metadata

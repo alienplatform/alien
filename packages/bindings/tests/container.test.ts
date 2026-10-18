@@ -13,6 +13,12 @@ describe("linked container", () => {
     const database = container(name)
 
     await expect(database.getInternalUrl()).resolves.toBe("http://database.internal:5432")
+    if (!isBun) {
+      await expect(database.getInternalUrls()).resolves.toEqual({
+        5432: "http://database.internal:5432",
+        3129: "http://admin.internal:3129",
+      })
+    }
     await expect(database.getPublicUrl()).resolves.toBe("http://localhost:15432")
   })
 })

@@ -181,6 +181,9 @@ pub struct KubernetesContainerController {
     pub(crate) service_port: Option<u16>,
     #[serde(default)]
     pub(crate) network_policy_name: Option<String>,
+    /// All declared ports, retained for per-port internal binding URLs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) service_ports: Vec<u16>,
     /// The container ID (for binding construction)
     pub(crate) container_id: Option<String>,
     /// Public endpoint route/certificate state.
@@ -329,6 +332,7 @@ impl KubernetesContainerController {
         self.container_id = Some(config.id.clone());
         self.service_name = Some(container_name.clone());
         self.service_port = first_declared_container_port(config);
+        self.service_ports = config.ports.iter().map(|port| port.port).collect();
         self.namespace = Some(namespace.clone());
         // Generate ServiceAccount name following Helm naming convention
         let service_account_name =
@@ -1145,6 +1149,7 @@ impl KubernetesContainerController {
         self.service_port = first_declared_container_port(config);
         self.reconcile_network_policy(config, workload_name, namespace, ctx)
             .await?;
+        self.service_ports = config.ports.iter().map(|port| port.port).collect();
         self.reconcile_internal_service(config, workload_name, namespace, ctx)
             .await?;
         if self.is_stateful {
@@ -1824,7 +1829,7 @@ impl KubernetesContainerController {
                     Some(namespace) => format!("{workload_name}.{namespace}.svc.cluster.local"),
                     None => format!("{workload_name}.svc.cluster.local"),
                 },
-                internal_endpoints: HashMap::new(),
+                internal_urls: self.internal_urls(),
                 replicas: Vec::new(), // Replica details tracked separately
                 // Kubernetes leaves volume snapshots to the cluster's own tooling. With no
                 // volumes reported, there is nothing to restore.
@@ -1883,7 +1888,11 @@ impl KubernetesContainerController {
             (&self.container_id, &self.service_name, &self.namespace)
         {
             let binding = KubernetesContainerBinding {
-                internal_endpoints: HashMap::new(),
+                internal_urls: self
+                    .internal_urls()
+                    .into_iter()
+                    .map(|(port, url)| (port, BindingValue::value(url)))
+                    .collect(),
                 name: BindingValue::Value(container_id.clone()),
                 namespace: BindingValue::Value(namespace.clone()),
                 service_name: BindingValue::Value(service_name.clone()),
@@ -1930,6 +1939,7 @@ mod output_tests {
             is_stateful: false,
             namespace: Some("test-namespace".to_string()),
             service_name: Some("test-container".to_string()),
+            service_ports: vec![3000, 3129],
             service_port: Some(3000),
             network_policy_name: None,
             container_id: Some("container".to_string()),
@@ -1943,6 +1953,14 @@ mod output_tests {
         let container_outputs = outputs
             .downcast_ref::<ContainerOutputs>()
             .expect("container outputs");
+
+        assert_eq!(
+            container_outputs
+                .internal_urls
+                .get(&3129)
+                .map(String::as_str),
+            Some("http://test-container.test-namespace.svc.cluster.local:3129")
+        );
 
         assert_eq!(
             container_outputs
@@ -1968,6 +1986,7 @@ mod output_tests {
             is_stateful: false,
             namespace: Some("test-namespace".to_string()),
             service_name: Some("test-container".to_string()),
+            service_ports: Vec::new(),
             service_port: Some(3000),
             network_policy_name: None,
             container_id: Some("container".to_string()),
@@ -1984,6 +2003,14 @@ mod output_tests {
 
         assert_eq!(
             container_outputs
+                .internal_urls
+                .get(&3000)
+                .map(String::as_str),
+            Some("http://test-container.test-namespace.svc.cluster.local:3000")
+        );
+
+        assert_eq!(
+            container_outputs
                 .public_endpoints
                 .get("default")
                 .map(|endpoint| endpoint.url.as_str()),
@@ -1993,6 +2020,26 @@ mod output_tests {
 }
 
 impl KubernetesContainerController {
+    fn internal_urls(&self) -> HashMap<u16, String> {
+        let (Some(service), Some(namespace)) = (&self.service_name, &self.namespace) else {
+            return HashMap::new();
+        };
+        let ports: Vec<_> = if self.service_ports.is_empty() {
+            self.service_port.into_iter().collect()
+        } else {
+            self.service_ports.clone()
+        };
+        ports
+            .into_iter()
+            .map(|port| {
+                (
+                    port,
+                    format!("http://{service}.{namespace}.svc.cluster.local:{port}"),
+                )
+            })
+            .collect()
+    }
+
     /// Creates a controller in a ready state with mock values for testing purposes.
     #[cfg(feature = "test-utils")]
     pub fn mock_ready(container_name: &str, namespace: &str, is_stateful: bool) -> Self {
@@ -2002,6 +2049,7 @@ impl KubernetesContainerController {
             is_stateful,
             namespace: Some(namespace.to_string()),
             service_name: Some(container_name.to_string()),
+            service_ports: Vec::new(),
             service_port: Some(80),
             network_policy_name: None,
             container_id: Some("test-container".to_string()),
@@ -2399,7 +2447,7 @@ impl KubernetesContainerController {
             .add_current_resource_public_endpoint(ctx, &config.id)?
             .add_linked_resources(&config.links, ctx, &config.id)
             .await?
-            .add_self_container_binding(config, self.get_binding_params()?.as_ref())?;
+            .add_self_container_binding(&config.id, self.get_binding_params()?.as_ref())?;
 
         let (mut env_map, bindings) = env_builder.build_with_bindings();
         env_map.remove(ENV_ALIEN_RUNTIME_SECRETS);
@@ -2948,6 +2996,7 @@ mod tests {
             is_stateful: false,
             namespace: Some("test-ns".to_string()),
             service_name: Some("api".to_string()),
+            service_ports: Vec::new(),
             service_port: Some(3000),
             network_policy_name: None,
             container_id: Some("api".to_string()),

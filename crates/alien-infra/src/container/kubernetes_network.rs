@@ -6,7 +6,7 @@ use crate::core::{
 };
 use crate::error::{ErrorData, Result};
 use alien_client_core::ErrorData as ClientError;
-use alien_core::{links_of, Container, Daemon, Stack};
+use alien_core::{Container, Daemon, Stack};
 use alien_error::{AlienError, Context, ContextError};
 use k8s_openapi::api::networking::v1::{
     IPBlock, NetworkPolicy, NetworkPolicyEgressRule, NetworkPolicyIngressRule, NetworkPolicyPeer,
@@ -18,23 +18,22 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// Cluster members retain private reach; each explicit linker gains the same ports.
 pub(super) fn allowed_sources(config: &Container, stack: &Stack) -> BTreeSet<String> {
-    stack
-        .resources()
-        .filter_map(|(id, entry)| {
-            let cluster_member = entry
+    let linked = stack
+        .container_linkers(&config.id)
+        .into_iter()
+        .map(|source| source.id().to_string());
+    let cluster_members = stack.resources().filter_map(|(id, entry)| {
+        let member = entry
+            .config
+            .downcast_ref::<Container>()
+            .is_some_and(|other| other.cluster == config.cluster)
+            || entry
                 .config
-                .downcast_ref::<Container>()
-                .is_some_and(|other| other.cluster == config.cluster)
-                || entry
-                    .config
-                    .downcast_ref::<Daemon>()
-                    .is_some_and(|other| other.cluster == config.cluster);
-            let linked = links_of(&entry.config).iter().any(|link| {
-                link.resource_type == Container::RESOURCE_TYPE && link.id() == config.id
-            });
-            (cluster_member || linked).then(|| id.clone())
-        })
-        .collect()
+                .downcast_ref::<Daemon>()
+                .is_some_and(|other| other.cluster == config.cluster);
+        member.then(|| id.clone())
+    });
+    linked.chain(cluster_members).collect()
 }
 
 fn port(number: u16, protocol: &str) -> NetworkPolicyPort {
