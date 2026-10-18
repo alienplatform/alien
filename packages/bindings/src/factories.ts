@@ -451,6 +451,7 @@ function makeQueue(handle: () => Promise<RawQueueHandle>): Queue {
 
 function makeContainer(handle: () => Promise<RawContainerHandle>): Container {
   return {
+    getInternalEndpoints: () => guard(handle, raw => raw.getInternalEndpoints()),
     getInternalUrl: () => guard(handle, raw => raw.getInternalUrl()),
     getPublicUrl: () => guard(handle, raw => raw.getPublicUrl()),
   }

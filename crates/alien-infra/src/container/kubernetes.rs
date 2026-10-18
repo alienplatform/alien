@@ -1749,6 +1749,7 @@ impl KubernetesContainerController {
                     Some(namespace) => format!("{workload_name}.{namespace}.svc.cluster.local"),
                     None => format!("{workload_name}.svc.cluster.local"),
                 },
+                internal_endpoints: HashMap::new(),
                 replicas: Vec::new(), // Replica details tracked separately
                 // Kubernetes leaves volume snapshots to the cluster's own tooling. With no
                 // volumes reported, there is nothing to restore.
@@ -1807,6 +1808,7 @@ impl KubernetesContainerController {
             (&self.container_id, &self.service_name, &self.namespace)
         {
             let binding = KubernetesContainerBinding {
+                internal_endpoints: HashMap::new(),
                 name: BindingValue::Value(container_id.clone()),
                 namespace: BindingValue::Value(namespace.clone()),
                 service_name: BindingValue::Value(service_name.clone()),
@@ -2319,7 +2321,7 @@ impl KubernetesContainerController {
             .add_current_resource_public_endpoint(ctx, &config.id)?
             .add_linked_resources(&config.links, ctx, &config.id)
             .await?
-            .add_self_container_binding(&config.id, self.get_binding_params()?.as_ref())?;
+            .add_self_container_binding(config, self.get_binding_params()?.as_ref())?;
 
         let (mut env_map, bindings) = env_builder.build_with_bindings();
         env_map.remove(ENV_ALIEN_RUNTIME_SECRETS);

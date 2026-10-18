@@ -18,15 +18,25 @@ use std::sync::{
 
 #[tokio::test]
 async fn aws_egress_updates_paused_policy_without_redelivering_identity() {
-    exercise(false).await;
+    exercise(StatusCode::NO_CONTENT, "").await;
 }
 
 #[tokio::test]
 async fn aws_egress_failed_initial_delivery_terminates_the_unreturned_microvm() {
-    exercise(true).await;
+    exercise(StatusCode::BAD_REQUEST, "refused").await;
 }
 
-async fn exercise(refuse_delivery: bool) {
+#[tokio::test]
+async fn aws_egress_self_check_refusal_is_typed_and_never_retried() {
+    exercise(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "EGRESS_PATH_UNEXPECTED: EGRESS_PATH_UNEXPECTED: sandbox egress path is not verified",
+    )
+    .await;
+}
+
+async fn exercise(delivery_status: StatusCode, delivery_body: &'static str) {
+    let refuse_delivery = !delivery_status.is_success();
     let harness = Arc::new(Harness::new().await);
     let policies = Arc::new(Mutex::new(Vec::<EgressTokenClaims>::new()));
     let seen = policies.clone();
@@ -55,11 +65,7 @@ async fn exercise(refuse_delivery: bool) {
                             "policy must precede identity delivery"
                         );
                         seen.lock().unwrap().push(claims);
-                        if refuse_delivery {
-                            StatusCode::BAD_REQUEST
-                        } else {
-                            StatusCode::NO_CONTENT
-                        }
+                        (delivery_status, delivery_body)
                     }
                 },
             ),
@@ -177,7 +183,16 @@ async fn exercise(refuse_delivery: bool) {
     provider = provider.with_default_policy(Some(policy.clone()));
     let created = provider.create(CreateSandboxRequest::default()).await;
     if refuse_delivery {
-        assert!(created.is_err());
+        let error = created.unwrap_err();
+        if delivery_status == StatusCode::SERVICE_UNAVAILABLE {
+            assert_eq!(error.code, "EGRESS_PATH_UNEXPECTED");
+            assert!(!error.retryable);
+            assert_eq!(
+                policies.lock().unwrap().len(),
+                1,
+                "self-check refusal must not redeliver identity"
+            );
+        }
         assert_eq!(terminated.load(Ordering::SeqCst), 1);
         assert_eq!(harness.policy("mvm-policy"), None);
     } else {
@@ -256,7 +271,7 @@ async fn aws_egress_declared_none_refuses_every_explicit_policy_before_io() {
                 .await
                 .unwrap_err()
                 .code,
-            "SANDBOX_EGRESS_NONE"
+            "SANDBOX_EGRESS_REQUIRES_INTERNET"
         );
         assert_eq!(
             provider
@@ -267,7 +282,45 @@ async fn aws_egress_declared_none_refuses_every_explicit_policy_before_io() {
                 .await
                 .unwrap_err()
                 .code,
-            "SANDBOX_EGRESS_NONE"
+            "SANDBOX_EGRESS_REQUIRES_INTERNET"
         );
     }
+}
+
+#[tokio::test]
+async fn aws_egress_health_self_check_refusal_is_not_a_restore_response() {
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let seen = attempts.clone();
+    let router = Router::new().route(
+        HEALTH_PATH,
+        get(move || {
+            seen.fetch_add(1, Ordering::SeqCst);
+            async {
+                let chunks = futures::stream::iter([
+                    Ok::<_, std::io::Error>("EGRESS_PATH_"),
+                    Ok("UNEXPECTED: sandbox egress path is not verified"),
+                ]);
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    axum::body::Body::from_stream(chunks),
+                )
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    let response = AwsSandbox::poll_until_healthy(
+        reqwest::Client::new().get(format!("http://{address}{HEALTH_PATH}")),
+        std::time::Instant::now() + std::time::Duration::from_secs(5),
+        "mvm-self-check",
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(response.code, "EGRESS_PATH_UNEXPECTED");
+    assert!(!response.retryable);
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    server.abort();
 }

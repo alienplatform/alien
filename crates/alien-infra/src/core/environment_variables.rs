@@ -20,6 +20,25 @@ use alien_error::{AlienError, Context, IntoAlienError};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
 
+/// Remove endpoint addresses that the receiving workload is not authorized to use.
+fn filter_internal_endpoints(
+    params: &mut serde_json::Value,
+    container: &Container,
+    source: &ResourceRef,
+) {
+    if let Some(endpoints) = params
+        .get_mut("internalEndpoints")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        endpoints.retain(|name, _| {
+            container
+                .internal_endpoints
+                .iter()
+                .any(|endpoint| endpoint.name == *name && endpoint.from.contains(source))
+        });
+    }
+}
+
 pub const OTEL_EXPORTER_OTLP_HEADERS: &str = "OTEL_EXPORTER_OTLP_HEADERS";
 pub const OTEL_EXPORTER_OTLP_METRICS_HEADERS: &str = "OTEL_EXPORTER_OTLP_METRICS_HEADERS";
 
@@ -642,7 +661,20 @@ impl EnvironmentVariableBuilder {
             };
 
             // Add binding environment variables if we have params
-            if let Some(params) = binding_params {
+            if let Some(mut params) = binding_params {
+                if let Some(container) = ctx
+                    .desired_stack
+                    .resources
+                    .get(binding_name)
+                    .and_then(|entry| entry.config.downcast_ref::<Container>())
+                {
+                    let source = ResourceRef::new(
+                        ctx.desired_config.resource_type(),
+                        resource_id_for_errors.to_owned(),
+                    );
+                    filter_internal_endpoints(&mut params, container, &source);
+                }
+
                 // Store binding metadata for platform-specific processing (e.g., Kubernetes SecretRefs)
                 self.bindings
                     .push((binding_name.to_string(), params.clone()));
@@ -705,16 +737,23 @@ impl EnvironmentVariableBuilder {
     /// Add the container's own binding to its environment variables for self-introspection.
     pub fn add_self_container_binding(
         mut self,
-        container_id: &str,
+        container: &Container,
         binding_params: Option<&serde_json::Value>,
     ) -> Result<Self> {
+        let container_id = &container.id;
         self.env_vars.insert(
             ENV_ALIEN_CURRENT_CONTAINER_BINDING_NAME.to_string(),
             container_id.to_string(),
         );
 
         if let Some(params) = binding_params {
-            let binding_env_vars = serialize_binding_as_env_var(container_id, params).context(
+            let mut params = params.clone();
+            filter_internal_endpoints(
+                &mut params,
+                container,
+                &ResourceRef::new(Container::RESOURCE_TYPE, container_id.clone()),
+            );
+            let binding_env_vars = serialize_binding_as_env_var(container_id, &params).context(
                 ErrorData::ResourceConfigInvalid {
                     message: "Failed to serialize self container binding parameters".to_string(),
                     resource_id: Some(container_id.to_string()),
@@ -1071,5 +1110,42 @@ mod tests {
             }
             previous_environment = Some(environment);
         }
+    }
+}
+
+#[cfg(test)]
+mod internal_endpoint_tests {
+    use super::*;
+
+    #[test]
+    fn only_authorized_named_urls_reach_the_receiving_binding() {
+        let container: Container = serde_json::from_value(serde_json::json!({"id":"api",
+            "code":{"type":"image","image":"example:latest"}, "permissions":"app", "links":[], "ports":[], "environment":{}, "stateful":false,
+            "cpu":{"min":"1","desired":"1"}, "memory":{"min":"512Mi","desired":"512Mi"},
+            "internalEndpoints":[
+                {"name":"admin","port":3129,"from":[{"type":"worker","id":"caller"}]},
+                {"name":"proxy","port":3128,"from":[{"type":"sandbox","id":"subject"}]}]}))
+        .unwrap();
+        let original = serde_json::json!({"internalUrl":"http://api.svc:8080", "internalEndpoints":{
+            "admin":{"url":"http://admin:3129"}, "proxy":{"url":"http://proxy:3128"},
+            "stale":{"url":"http://removed:9999"}}});
+        let mut params = original.clone();
+        filter_internal_endpoints(
+            &mut params,
+            &container,
+            &ResourceRef::new(Worker::RESOURCE_TYPE, "caller"),
+        );
+        assert_eq!(
+            params["internalEndpoints"],
+            serde_json::json!({"admin":{"url":"http://admin:3129"}})
+        );
+        assert_eq!(params["internalUrl"], original["internalUrl"]);
+        let mut unauthorized = original;
+        filter_internal_endpoints(
+            &mut unauthorized,
+            &container,
+            &ResourceRef::new(Container::RESOURCE_TYPE, "caller"),
+        );
+        assert_eq!(unauthorized["internalEndpoints"], serde_json::json!({}));
     }
 }

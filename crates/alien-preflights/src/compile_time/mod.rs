@@ -4,6 +4,7 @@
 pub mod allowed_user_resources;
 pub mod capacity_group_profile;
 pub mod container_lifecycle;
+pub mod container_network_settings;
 pub mod external_bindings_required;
 pub mod frozen_resource_lifecycle;
 pub mod iam_inline_policy_size;
@@ -39,6 +40,7 @@ pub mod worker_memory;
 pub use allowed_user_resources::AllowedUserResourcesCheck;
 pub use capacity_group_profile::CapacityGroupProfileCheck;
 pub use container_lifecycle::ContainerLifecycleCheck;
+pub use container_network_settings::ContainerNetworkSettingsCheck;
 pub use external_bindings_required::ExternalBindingsRequiredCheck;
 pub use frozen_resource_lifecycle::FrozenResourceLifecycleCheck;
 pub use iam_inline_policy_size::IamInlinePolicySizeCheck;

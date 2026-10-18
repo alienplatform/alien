@@ -358,7 +358,7 @@ impl AzureSandboxController {
             BindingValue::value(region.clone()),
             BindingValue::value(resource_group.clone()),
             BindingValue::value(disk_image.clone()),
-            *egress.declaration(),
+            egress.declaration().clone(),
             self.idle_pause_seconds,
         );
 
