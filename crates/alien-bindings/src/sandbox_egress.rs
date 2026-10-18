@@ -3,7 +3,7 @@
 use std::{
     fmt,
     sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use alien_core::{bindings::SandboxEgressGateway, SandboxEgress};
@@ -127,7 +127,7 @@ impl SandboxEgressManager {
         if expires_at <= now_unix()? {
             return Err(unavailable("sandbox lifetime has expired"));
         }
-        let (policy_hash, policy_chunks) = self.store_policy(egress).await?;
+        let (policy_hash, policy_chunks) = self.store_policy(egress, expires_at).await?;
         let record = PolicyRecord {
             generation: 0,
             policy_hash,
@@ -147,7 +147,8 @@ impl SandboxEgressManager {
             .generation
             .checked_add(1)
             .ok_or_else(|| unavailable("egress generation is exhausted"))?;
-        (record.policy_hash, record.policy_chunks) = self.store_policy(egress).await?;
+        (record.policy_hash, record.policy_chunks) =
+            self.store_policy(egress, record.expires_at).await?;
         self.write(sandbox_id, &record, PutCondition::Version(version))
             .await?;
         self.deliver(sandbox_id, &record).await
@@ -254,8 +255,13 @@ impl SandboxEgressManager {
 
     // A policy may contain up to 256 KiB of canonical JSON, exceeding KV's 24 KiB
     // value ceiling. Immutable content-addressed chunks keep the generation CAS in one row.
-    // Losing writers can only leave reusable policy content, never a partially visible policy.
-    async fn store_policy(&self, policy: &SandboxEgress) -> Result<(String, usize)> {
+    // Expiry is part of the key so a shorter-lived sandbox cannot expire another's content.
+    // Replaced policies and losing writes expire with their sandbox; metadata stays permanent.
+    async fn store_policy(
+        &self,
+        policy: &SandboxEgress,
+        expires_at: i64,
+    ) -> Result<(String, usize)> {
         let bytes = policy
             .canonical_json()
             .map_err(crate::providers::sandbox::egress::policy_error)?;
@@ -263,12 +269,16 @@ impl SandboxEgressManager {
         let chunks = bytes.chunks(16 * 1024);
         let count = chunks.len();
         for (index, chunk) in chunks.enumerate() {
+            let remaining = expires_at - now_unix()?;
+            if remaining <= 0 {
+                return Err(unavailable("sandbox lifetime has expired"));
+            }
             self.kv
                 .put(
-                    &format!("sandbox-policy-content:{hash}:{index}"),
+                    &policy_chunk_key(&hash, expires_at, index),
                     chunk.to_vec(),
                     Some(PutOptions {
-                        ttl: None,
+                        ttl: Some(Duration::from_secs(remaining as u64)),
                         condition: PutCondition::Absent,
                     }),
                 )
@@ -286,9 +296,10 @@ impl SandboxEgressManager {
         for index in 0..record.policy_chunks {
             let entry = self
                 .kv
-                .get(&format!(
-                    "sandbox-policy-content:{}:{index}",
-                    record.policy_hash
+                .get(&policy_chunk_key(
+                    &record.policy_hash,
+                    record.expires_at,
+                    index,
                 ))
                 .await?
                 .ok_or_else(|| unavailable("stored policy content is missing"))?;
@@ -312,6 +323,10 @@ impl SandboxEgressManager {
         hash.update(sandbox_id.as_bytes());
         format!("sandbox-policy:{}", URL_SAFE_NO_PAD.encode(hash.finalize()))
     }
+}
+
+fn policy_chunk_key(hash: &str, expires_at: i64, index: usize) -> String {
+    format!("sandbox-policy-content:{expires_at}:{hash}:{index}")
 }
 
 pub(crate) fn now_unix() -> Result<i64> {

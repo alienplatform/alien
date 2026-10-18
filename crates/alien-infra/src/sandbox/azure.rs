@@ -929,7 +929,7 @@ mod tests {
         // The service tag and egress shape are what the runtime provider dispatches and reads on,
         // so they are pinned here rather than trusted to round-trip silently.
         assert_eq!(params["service"], "sandbox-azure");
-        assert_eq!(params["egress"]["mode"], "deny");
+        assert_eq!(params["egress"], "none");
     }
 
     /// Teardown must not touch the group: the setup stack destroys it, and a delete here would
@@ -1257,10 +1257,9 @@ mod tests {
         assert!(params.get("disk").is_none());
     }
 
-    /// `AllowDomains` is the one egress variant carrying a payload, and Azure is the backend that
-    /// expresses it, so the tagged shape and the domain list are pinned rather than trusted.
+    /// The destination list must survive the controller-to-binding handoff.
     #[test]
-    fn the_binding_carries_the_allow_domains_egress_shape() {
+    fn the_binding_carries_the_allowlist() {
         let controller = AzureSandboxController {
             state: AzureSandboxState::Ready,
             sandbox_group: Some("sbg".to_string()),
@@ -1284,8 +1283,18 @@ mod tests {
             .expect("binding params")
             .expect("a fully imported sandbox group publishes a binding");
 
-        assert_eq!(params["egress"]["mode"], "allowDomains");
-        assert_eq!(params["egress"]["domains"][0], "api.example.com");
+        let binding: alien_core::bindings::SandboxBinding =
+            serde_json::from_value(params).expect("controller output is a valid runtime binding");
+        let alien_core::bindings::SandboxBinding::Azure(binding) = binding else {
+            panic!("the service tag must select Azure");
+        };
+        assert_eq!(
+            binding.egress,
+            SandboxEgress::Allow {
+                allow: vec!["api.example.com".to_string()],
+            }
+            .into()
+        );
     }
 
     /// A row without the image, egress and idle fields loads, and publishes no binding until a
