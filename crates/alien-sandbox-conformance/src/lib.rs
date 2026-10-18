@@ -36,6 +36,15 @@ pub enum Probe {
         /// Unique label under a controlled, query-logged zone.
         host: String,
     },
+    /// Direct UDP DNS, bypassing the guest resolver and proxy settings.
+    DnsQuery {
+        /// Numeric address of the controlled authoritative DNS server.
+        server: String,
+        /// DNS listener port, normally 53.
+        port: u16,
+        /// Unique label under its query-logged zone.
+        host: String,
+    },
 }
 
 /// What actually happened, without response bodies or proxy credentials.

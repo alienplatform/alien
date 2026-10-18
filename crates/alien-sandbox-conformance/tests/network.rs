@@ -1,10 +1,52 @@
 use std::io::{Read, Write};
-use std::net::TcpListener;
+use std::net::{TcpListener, UdpSocket};
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
 use alien_sandbox_conformance::{evaluate, Expectation, Observation, Probe, Verdict, GUEST_PROBE};
+
+#[test]
+fn direct_dns_checks_the_reply_and_treats_nxdomain_as_reachability() {
+    for wrong_transaction in [false, true] {
+        let server = UdpSocket::bind("127.0.0.1:0").unwrap();
+        server
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        let port = server.local_addr().unwrap().port();
+        let task = thread::spawn(move || {
+            let mut packet = [0; 512];
+            let (length, peer) = server.recv_from(&mut packet).unwrap();
+            assert_eq!(
+                &packet[12..length],
+                b"\x05nonce\x07example\x07invalid\0\0\x01\0\x01"
+            );
+            packet[2] = 0x84; // Response, authoritative, NXDOMAIN.
+            packet[3] = 3;
+            if wrong_transaction {
+                packet[0] ^= 1;
+            }
+            server.send_to(&packet[..length], peer).unwrap();
+        });
+        let result = observe(
+            &Probe::DnsQuery {
+                server: "127.0.0.1".into(),
+                port,
+                host: "nonce.example.invalid".into(),
+            },
+            Some("http://127.0.0.1:1"),
+        );
+        task.join().unwrap();
+        assert_eq!(
+            result,
+            if wrong_transaction {
+                Observation::ProtocolFailed
+            } else {
+                Observation::Connected
+            }
+        );
+    }
+}
 
 #[test]
 fn tls_sni_is_independent_of_connect_authority_and_certificate_validation_still_succeeds() {

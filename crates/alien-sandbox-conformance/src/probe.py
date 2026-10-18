@@ -4,11 +4,13 @@ import base64
 import errno
 import hashlib
 import http.client
+import ipaddress
 import json
 import os
 import signal
 import socket
 import ssl
+import struct
 import sys
 import urllib.parse
 
@@ -18,6 +20,35 @@ MAX_BODY = 1024 * 1024
 
 def deadline(_signum, _frame):
     raise TimeoutError()
+
+
+def dns_query(probe):
+    server = ipaddress.ip_address(probe["server"])
+    labels = probe["host"].rstrip(".").encode("idna").split(b".")
+    if any(not label or len(label) > 63 for label in labels):
+        raise ValueError("invalid DNS label")
+    name = b"".join(bytes([len(label)]) + label for label in labels) + b"\0"
+    if len(name) > 255 or not 1 <= probe["port"] <= 65535:
+        raise ValueError("invalid DNS name or port")
+    question = name + struct.pack("!HH", 1, 1)
+    transaction = os.urandom(2)
+    request = transaction + struct.pack("!HHHHH", 0, 1, 0, 0, 0) + question
+    family = socket.AF_INET6 if server.version == 6 else socket.AF_INET
+    with socket.socket(family, socket.SOCK_DGRAM) as connection:
+        connection.settimeout(TIMEOUT)
+        # Connected UDP accepts replies only from the selected server and port.
+        connection.connect((str(server), probe["port"]))
+        connection.send(request)
+        response = connection.recv(4096)
+    if len(response) < 12:
+        return {"outcome": "protocolFailed"}
+    flags, questions = struct.unpack("!HH", response[2:6])
+    if (response[:2] != transaction or not flags & 0x8000 or flags & 0x7800
+            or questions != 1 or response[12:12 + len(question)] != question):
+        return {"outcome": "protocolFailed"}
+    # Even NXDOMAIN proves that the query reached a DNS server. Authoritative
+    # query logs, including a positive control, establish exfiltration evidence.
+    return {"outcome": "connected"}
 
 
 def http_probe(probe):
@@ -82,6 +113,8 @@ def observe(probe):
         if probe["kind"] == "dns":
             socket.getaddrinfo(probe["host"], 443, type=socket.SOCK_STREAM)
             return {"outcome": "connected"}
+        if probe["kind"] == "dnsQuery":
+            return dns_query(probe)
         if probe["kind"] == "http":
             return http_probe(probe)
         raise ValueError("unknown probe kind")
