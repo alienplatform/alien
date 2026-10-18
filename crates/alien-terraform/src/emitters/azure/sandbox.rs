@@ -800,7 +800,7 @@ mod tests {
             data_plane_endpoint: BindingValue::Value("https://example.invalid".to_string()),
             region: BindingValue::Value("eastus".to_string()),
             resource_group: BindingValue::Value("rg".to_string()),
-            egress: SandboxEgress::Internet,
+            egress: SandboxEgress::Internet.into(),
             idle_pause_seconds: Some(900),
             disk_image: BindingValue::Value("ubuntu".to_string()),
             cpu: Some(BindingValue::Value("1000m".to_string())),

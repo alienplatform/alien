@@ -69,6 +69,7 @@ fn preview_lifetime_seconds() -> u64 {
 #[derive(Debug)]
 pub struct AwsSandbox {
     egress: Option<alien_core::SandboxEgress>,
+    egress_manager: Option<Arc<crate::sandbox_egress::SandboxEgressManager>>,
     microvms: Arc<dyn LambdaMicrovmsApi>,
     image_identifier: String,
     image_version: String,
@@ -94,6 +95,97 @@ impl AwsSandbox {
         self
     }
 
+    /// Enables gateway enforcement once deployment setup has provided its vault and durable KV.
+    pub fn with_egress_manager(
+        mut self,
+        manager: Arc<crate::sandbox_egress::SandboxEgressManager>,
+    ) -> Self {
+        self.egress_manager = Some(manager);
+        self
+    }
+
+    fn validate_egress(&self, requested: Option<&alien_core::SandboxEgress>) -> Result<()> {
+        if let Some(manager) = &self.egress_manager {
+            super::egress::check_bound(requested.unwrap_or(manager.bound()), Some(manager.bound()))
+        } else {
+            super::egress::require_default(requested, self.egress.as_ref())
+        }
+    }
+
+    /// Deliver only after the shared gateway fence has accepted this generation.
+    async fn install_egress(
+        &self,
+        sandbox_id: &str,
+        delivery: crate::sandbox_egress::EgressDelivery,
+    ) -> Result<()> {
+        let deadline = std::time::Instant::now() + SANDBOX_READY_TIMEOUT;
+        loop {
+            if self
+                .owned_microvm("sandbox.egress", sandbox_id)
+                .await?
+                .is_some_and(|vm| vm.endpoint.is_some())
+            {
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(AlienError::new(ErrorData::SandboxUnreachable {
+                    operation: "sandbox.egress".to_string(),
+                    reason: "sandbox published no agent endpoint".to_string(),
+                }));
+            }
+            tokio::time::sleep(SANDBOX_READY_POLL).await;
+        }
+        let request = self
+            .authorized_request(sandbox_id, reqwest::Method::PUT, "/v1/egress")
+            .await?
+            .json(&serde_json::json!({"token": delivery.token}))
+            .timeout(SANDBOX_READY_TIMEOUT);
+        loop {
+            let response = request
+                .try_clone()
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::SandboxUnreachable {
+                        operation: "sandbox.egress".to_string(),
+                        reason: "could not repeat policy delivery".to_string(),
+                    })
+                })?
+                .send()
+                .await
+                .map_err(|_| {
+                    AlienError::new(ErrorData::SandboxUnreachable {
+                        operation: "sandbox.egress".to_string(),
+                        reason: "policy delivery failed".to_string(),
+                    })
+                })?;
+            if response.status().is_success() {
+                break;
+            }
+            // AWS restores asynchronously. Retry only the proxy's documented startup responses.
+            if !matches!(response.status().as_u16(), 502 | 503)
+                || std::time::Instant::now() >= deadline
+            {
+                return Err(AlienError::new(ErrorData::SandboxUnreachable {
+                    operation: "sandbox.egress".to_string(),
+                    reason: format!("agent refused egress policy: HTTP {}", response.status()),
+                }));
+            }
+            tokio::time::sleep(SANDBOX_READY_POLL).await;
+        }
+        if let Some(manager) = &self.egress_manager {
+            manager.confirm(sandbox_id, delivery.generation).await?;
+        }
+        Ok(())
+    }
+
+    async fn renew_egress(&self, sandbox_id: &str) -> Result<()> {
+        if let Some(manager) = &self.egress_manager {
+            self.ensure_owned("sandbox.egress", sandbox_id).await?;
+            self.install_egress(sandbox_id, manager.renew(sandbox_id).await?)
+                .await?;
+        }
+        Ok(())
+    }
+
     /// Builds a provider over the MicroVMs API.
     pub fn new(
         microvms: Arc<dyn LambdaMicrovmsApi>,
@@ -106,6 +198,7 @@ impl AwsSandbox {
     ) -> Self {
         Self {
             egress: None,
+            egress_manager: None,
             microvms,
             image_identifier: image_identifier.into(),
             image_version: image_version.into(),
@@ -372,6 +465,7 @@ impl AgentTransport for AwsSandbox {
         method: reqwest::Method,
         path: &str,
     ) -> Result<reqwest::RequestBuilder> {
+        self.renew_egress(sandbox_id).await?;
         self.authorized_request(sandbox_id, method, path).await
     }
 
@@ -406,7 +500,10 @@ fn refuse_unsupported_create_fields(request: &CreateSandboxRequest, operation: &
 #[async_trait]
 impl Sandbox for AwsSandbox {
     fn egress_bound(&self) -> Option<&alien_core::SandboxEgress> {
-        self.egress.as_ref()
+        self.egress_manager
+            .as_ref()
+            .map(|manager| manager.bound())
+            .or(self.egress.as_ref())
     }
     /// Narrows the platform ceiling to this instance: `preview` is false with no declared
     /// `preview_ports`, since `preview()` would refuse every port anyway and callers are meant
@@ -426,10 +523,14 @@ impl Sandbox for AwsSandbox {
     /// start — observed against the live API. Reconnecting to an existing sandbox is
     /// [`Sandbox::get`]'s job, not an idempotency key's.
     async fn create(&self, request: CreateSandboxRequest) -> Result<SandboxInstance> {
-        super::egress::require_default(request.egress.as_ref(), self.egress_bound())?;
+        self.validate_egress(request.egress.as_ref())?;
         let _ = request.sandbox_id;
         refuse_unsupported_create_fields(&request, "sandbox.create")?;
         let max_lifetime_seconds = self.lifetime_seconds(request.timeout_ms, "sandbox.create")?;
+        // AWS has an eight-hour hard lifetime ceiling, including when no smaller limit is set.
+        let expires_at = crate::sandbox_egress::now_unix()?.saturating_add(i64::from(
+            max_lifetime_seconds.unwrap_or(28_800).min(28_800),
+        ));
         let client_token = uuid::Uuid::new_v4().simple().to_string();
 
         let microvm = self
@@ -444,6 +545,9 @@ impl Sandbox for AwsSandbox {
                 self.egress_connector_arns.clone(),
                 self.idle_pause_seconds,
                 max_lifetime_seconds,
+                self.egress_manager
+                    .as_ref()
+                    .map(|manager| manager.bootstrap_payload()),
             )
             .await
             .unreachable(
@@ -465,7 +569,16 @@ impl Sandbox for AwsSandbox {
         // back a sandbox whose first command races that window, which is invisible to a caller and
         // fails a fraction of the time. Local, Azure and Kubernetes all return a sandbox that can
         // already serve, so this is what makes AWS mean the same thing.
-        if let Err(error) = self.wait_until_servable(&microvm_id).await {
+        let ready = async {
+            if let Some(manager) = &self.egress_manager {
+                let policy = request.egress.as_ref().unwrap_or(manager.bound());
+                let delivery = manager.create(&microvm_id, policy, expires_at).await?;
+                self.install_egress(&microvm_id, delivery).await?;
+            }
+            self.wait_until_servable(&microvm_id).await
+        }
+        .await;
+        if let Err(error) = ready {
             return Err(match self.microvms.terminate_microvm(&microvm_id).await {
                 Ok(()) => error,
                 Err(cleanup) => {
@@ -490,17 +603,74 @@ impl Sandbox for AwsSandbox {
         Ok(self.instance(microvm_id, Some("RUNNING".to_string())))
     }
 
+    async fn update_egress(
+        &self,
+        sandbox_id: &str,
+        egress: alien_core::SandboxEgress,
+    ) -> Result<()> {
+        super::egress::check_bound(&egress, self.egress_bound())?;
+        // A declared-none resource has a loopback-only floor and no token to replace.
+        if self.egress_manager.is_none()
+            && matches!(self.egress_bound(), Some(alien_core::SandboxEgress::None))
+        {
+            return self.ensure_owned("sandbox.updateEgress", sandbox_id).await;
+        }
+        let manager = self
+            .egress_manager
+            .as_ref()
+            .ok_or_else(|| super::egress::unsupported("update_egress"))?;
+        let vm = self
+            .owned_microvm("sandbox.updateEgress", sandbox_id)
+            .await?
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::SandboxUnreachable {
+                    operation: "sandbox.updateEgress".to_string(),
+                    reason: "sandbox does not belong to this resource".to_string(),
+                })
+            })?;
+        let delivery = manager.update(sandbox_id, &egress).await?;
+        let paused = vm.state.as_deref() == Some("SUSPENDED");
+        if paused {
+            self.microvms.resume_microvm(sandbox_id).await.unreachable(
+                "sandbox.updateEgress",
+                "could not resume sandbox for policy delivery",
+            )?;
+        }
+        let result = self.install_egress(sandbox_id, delivery).await;
+        if paused {
+            // Restore the caller's lifecycle state even when delivery fails.
+            self.microvms
+                .suspend_microvm(sandbox_id)
+                .await
+                .unreachable(
+                    "sandbox.updateEgress",
+                    "could not restore paused state after policy delivery",
+                )?;
+        }
+        result
+    }
+
     async fn get(&self, sandbox_id: &str) -> Result<Option<SandboxInstance>> {
         self.fetch(sandbox_id, "sandbox.get").await
     }
 
     async fn get_or_create(&self, request: CreateSandboxRequest) -> Result<ResolvedSandbox> {
-        super::egress::require_default(request.egress.as_ref(), self.egress_bound())?;
+        self.validate_egress(request.egress.as_ref())?;
         // Refused on the reconnect path too: an existing sandbox honors these fields no more
         // than a fresh one would.
         refuse_unsupported_create_fields(&request, "sandbox.getOrCreate")?;
         if let Some(id) = request.sandbox_id.as_deref() {
             if let Some(existing) = self.fetch(id, "sandbox.getOrCreate").await? {
+                if let Some(manager) = &self.egress_manager {
+                    self.update_egress(
+                        id,
+                        request
+                            .egress
+                            .clone()
+                            .unwrap_or_else(|| manager.bound().clone()),
+                    )
+                    .await?;
+                }
                 // Reaching a sandbox someone else started still has to mean what `create` means,
                 // or the guarantee holds only for whoever won the race. Waited for here rather
                 // than in `get`, which reports a sandbox's state and does not promise one.
@@ -644,7 +814,8 @@ impl Sandbox for AwsSandbox {
         self.microvms.resume_microvm(sandbox_id).await.unreachable(
             "sandbox.resume",
             &format!("could not resume MicroVM '{sandbox_id}'"),
-        )
+        )?;
+        self.renew_egress(sandbox_id).await
     }
 
     async fn snapshot(&self, _sandbox_id: &str) -> Result<String> {
@@ -1218,8 +1389,8 @@ mod tests {
         let mut client = MockLambdaMicrovmsApi::new();
         client
             .expect_run_microvm()
-            .withf(|_, _, _, _, _, _, max_lifetime| *max_lifetime == Some(1800))
-            .returning(|_, _, _, _, _, _, _| Ok(owned("mvm-1", "PENDING")));
+            .withf(|_, _, _, _, _, _, max_lifetime, _| *max_lifetime == Some(1800))
+            .returning(|_, _, _, _, _, _, _, _| Ok(owned("mvm-1", "PENDING")));
         // The wait reads the sandbox back; with no endpoint published it stays unreachable,
         // which is all a unit test can offer. Create then terminates what it started.
         client
@@ -1265,8 +1436,8 @@ mod tests {
         let mut client = MockLambdaMicrovmsApi::new();
         client
             .expect_run_microvm()
-            .withf(|_, _, _, _, _, _, max_lifetime| *max_lifetime == Some(90))
-            .returning(|_, _, _, _, _, _, _| Ok(owned("mvm-1", "PENDING")));
+            .withf(|_, _, _, _, _, _, max_lifetime, _| *max_lifetime == Some(90))
+            .returning(|_, _, _, _, _, _, _, _| Ok(owned("mvm-1", "PENDING")));
         client
             .expect_get_microvm()
             .returning(|id| Ok(owned(id, "RUNNING")));
@@ -1296,8 +1467,8 @@ mod tests {
         let mut client = MockLambdaMicrovmsApi::new();
         client
             .expect_run_microvm()
-            .withf(|_, _, _, _, _, _, max_lifetime| *max_lifetime == Some(1800))
-            .returning(|_, _, _, _, _, _, _| Ok(owned("mvm-1", "PENDING")));
+            .withf(|_, _, _, _, _, _, max_lifetime, _| *max_lifetime == Some(1800))
+            .returning(|_, _, _, _, _, _, _, _| Ok(owned("mvm-1", "PENDING")));
         client
             .expect_get_microvm()
             .returning(|id| Ok(owned(id, "RUNNING")));
@@ -1333,7 +1504,7 @@ mod tests {
         let mut client = MockLambdaMicrovmsApi::new();
         client
             .expect_run_microvm()
-            .returning(|_, _, _, _, _, _, _| Ok(owned("mvm-orphan", "PENDING")));
+            .returning(|_, _, _, _, _, _, _, _| Ok(owned("mvm-orphan", "PENDING")));
         // Published no endpoint, so the readiness wait gives up, and the cleanup it then tries
         // is refused — one missing grant refuses both verbs in practice.
         client
@@ -1377,10 +1548,10 @@ mod tests {
         let mut client = MockLambdaMicrovmsApi::new();
         client
             .expect_run_microvm()
-            .withf(|image, version, token, _, _, _, _| {
+            .withf(|image, version, token, _, _, _, _, _| {
                 image == "sbx-image" && version == "3" && token != "caller-chosen"
             })
-            .returning(|_, _, _, _, _, _, _| {
+            .returning(|_, _, _, _, _, _, _, _| {
                 Ok(Microvm {
                     microvm_id: Some("mvm-9".to_string()),
                     endpoint: None,
@@ -1520,7 +1691,7 @@ mod tests {
         let mut client = MockLambdaMicrovmsApi::new();
         client
             .expect_run_microvm()
-            .returning(|_, _, _, _, _, _, _| refused_run());
+            .returning(|_, _, _, _, _, _, _, _| refused_run());
         // Nothing was started, so nothing is cleaned up.
         client.expect_terminate_microvm().never();
 
@@ -1560,3 +1731,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(all(test, feature = "local"))]
+#[path = "aws_egress_tests.rs"]
+mod egress_tests;
