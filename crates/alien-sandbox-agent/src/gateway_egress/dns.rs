@@ -47,6 +47,21 @@ impl Names {
     }
 
     fn answer_at(&self, packet: &[u8], now: Instant) -> Option<Vec<u8>> {
+        // Ignore responses and packets without a usable DNS header. Malformed queries get
+        // FORMERR instead of consuming a client's full resolver timeout.
+        if packet.len() < 12 || packet.len() > 4096 || packet[2] & 0x80 != 0 {
+            return None;
+        }
+        Some(self.answer_question(packet, now).unwrap_or_else(|| {
+            let mut reply = packet[..12].to_vec();
+            reply[2] = 0x80 | (packet[2] & 1);
+            reply[3] = 0x81;
+            reply[4..12].fill(0);
+            reply
+        }))
+    }
+
+    fn answer_question(&self, packet: &[u8], now: Instant) -> Option<Vec<u8>> {
         if packet.len() < 12
             || packet.len() > 4096
             || packet[2] & 0xf8 != 0
@@ -58,6 +73,7 @@ impl Names {
         }
         let mut offset = 12;
         let mut labels = Vec::new();
+        let mut valid_name = true;
         loop {
             let len = usize::from(*packet.get(offset)?);
             offset += 1;
@@ -68,19 +84,20 @@ impl Names {
                 return None;
             }
             let label = std::str::from_utf8(packet.get(offset..offset + len)?).ok()?;
-            if !label
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+            if label.starts_with('-')
+                || label.ends_with('-')
+                || !label
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-')
             {
-                return None;
+                valid_name = false;
             }
             labels.push(label.to_ascii_lowercase());
             offset += len;
         }
         let name = labels.join(".");
-        if name.is_empty() || name.len() > 253 || packet.get(offset + 2..offset + 4)? != [0, 1] {
-            return None;
-        }
+        valid_name &= !name.is_empty() && name.len() <= 253;
+        let class = packet.get(offset + 2..offset + 4)?;
         let question_end = offset + 4;
         if packet[11] == 1 {
             // Accept one EDNS OPT pseudo-record, but do not copy arbitrary options into replies.
@@ -99,6 +116,14 @@ impl Names {
         reply[11] = 0;
         reply[2] = 0x81;
         reply[3] = 0x80;
+        if class != [0, 1] {
+            reply[3] |= 5; // REFUSED: this synthetic resolver serves only Internet questions.
+            return Some(reply);
+        }
+        if !valid_name {
+            reply[3] |= 3; // NXDOMAIN: no synthetic address exists for an invalid hostname.
+            return Some(reply);
+        }
         if qtype != 1 {
             return Some(reply);
         } // AAAA and non-address questions have no answer.
@@ -240,6 +265,31 @@ pub(super) async fn resolve_gateway(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn invalid_names_and_classes_receive_explicit_dns_errors() {
+        let names = Names::default();
+        for name in [
+            "_service.example.com",
+            "-bad.example.com",
+            "bad-.example.com",
+        ] {
+            let query = question(name);
+            let reply = names
+                .answer(&query)
+                .expect("a malformed label must not time out");
+            assert_eq!(reply[3] & 15, 3, "{name}");
+            assert_eq!(&reply[6..12], &[0; 6]);
+            assert_eq!(&reply[12..], &query[12..]);
+        }
+        let mut query = question("example.com");
+        *query.last_mut().unwrap() = 3;
+        let reply = names
+            .answer(&query)
+            .expect("unsupported class must be refused");
+        assert_eq!(reply[3] & 15, 5);
+        assert!(names.state.lock().unwrap().entries.is_empty());
+    }
+
     fn question(name: &str) -> Vec<u8> {
         let mut q = vec![0, 7, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0];
         for label in name.split('.') {
@@ -260,7 +310,7 @@ mod tests {
             names.name(Ipv4Addr::new(198, 18, 0, 1)).as_deref(),
             Some("a.example.com")
         );
-        assert!(names.answer(&[0; 512]).is_none());
+        assert_eq!(names.answer(&[0; 512]).unwrap()[3] & 15, 1);
     }
 
     #[test]
@@ -272,7 +322,7 @@ mod tests {
         edns.extend_from_slice(&[0, 0, 41, 4, 208, 0, 0, 0, 0, 0, 0]);
         assert_eq!(names.answer(&plain), names.answer(&edns));
         edns.pop();
-        assert!(names.answer(&edns).is_none());
+        assert_eq!(names.answer(&edns).unwrap()[3] & 15, 1);
     }
 
     #[test]

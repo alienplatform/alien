@@ -22,7 +22,7 @@ use crate::{
     error::{denied, invalid, unavailable, Result},
     io::{Counters, Metered, Prefixed},
     policy::{check_addresses, PolicyExt, Target},
-    protocol::{read_client_hello, request_target, MAX_HEADER_BYTES},
+    protocol::{read_client_hello, request_target, MAX_HEADERS, MAX_HEADER_BYTES},
     store::PolicyStore,
     token::{self, Claims},
 };
@@ -462,7 +462,7 @@ async fn read_head(stream: &mut (impl tokio::io::AsyncRead + Unpin)) -> Result<V
 }
 
 fn inspect_head(input: &[u8]) -> Result<(Option<Target>, String, bool, usize)> {
-    let mut headers = [httparse::EMPTY_HEADER; 64];
+    let mut headers = [httparse::EMPTY_HEADER; MAX_HEADERS];
     let mut request = httparse::Request::new(&mut headers);
     let head_len = request
         .parse(input)

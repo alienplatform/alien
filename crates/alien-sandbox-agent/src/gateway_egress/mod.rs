@@ -681,7 +681,8 @@ impl GatewayEgress {
                 .await
                 .into_alien_error()
                 .context(failed("proxy header timeout"))??;
-            let mut headers = [httparse::EMPTY_HEADER; 64];
+            // Reserve one gateway field for the identity header inserted below.
+            let mut headers = [httparse::EMPTY_HEADER; 127];
             let mut parsed = httparse::Request::new(&mut headers);
             let httparse::Status::Complete(end) = parsed
                 .parse(&request)
