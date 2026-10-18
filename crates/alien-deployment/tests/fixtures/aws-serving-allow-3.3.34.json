@@ -3,9 +3,7 @@
     "allowEgress": true,
     "imageArn": "arn:aws:lambda:us-east-1:123456789012:microvm-image:test-agents",
     "imageVersion": "1.0",
-    "previewPorts": [
-      8080
-    ],
+    "previewPorts": [8080],
     "region": "us-east-1",
     "service": "sandbox-aws"
   },
@@ -28,9 +26,7 @@
       "pendingBundleUri": null,
       "pendingSupervisorEnvironment": {},
       "pendingVersion": null,
-      "previewPorts": [
-        8080
-      ],
+      "previewPorts": [8080],
       "region": "us-east-1",
       "retiredVersions": [],
       "state": "ready",
@@ -47,9 +43,7 @@
       },
       "id": "agents",
       "lifecycle": {},
-      "previewPorts": [
-        8080
-      ],
+      "previewPorts": [8080],
       "type": "sandbox"
     },
     "controllerPlatform": "aws",
