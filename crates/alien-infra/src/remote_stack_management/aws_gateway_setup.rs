@@ -526,3 +526,87 @@ pub(super) fn ensure_setup_authority(ctx: &ResourceControllerContext<'_>) -> Res
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::{AwsRemoteStackManagementController, AwsRemoteStackManagementState};
+    use super::*;
+    use crate::{core::controller_test::SingleControllerExecutor, MockPlatformServiceProvider};
+    use alien_core::Platform;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn setup_capability_refuses_imported_or_live_owners_before_provider_access() {
+        for (authority, lifecycle) in [
+            (
+                InitialSetupAuthority::ImportedHandoff,
+                ResourceLifecycle::Frozen,
+            ),
+            (
+                InitialSetupAuthority::ImportedHandoff,
+                ResourceLifecycle::Live,
+            ),
+            (InitialSetupAuthority::DirectSetup, ResourceLifecycle::Live),
+        ] {
+            let mut controller =
+                AwsRemoteStackManagementController::mock_ready("example-management");
+            controller.state = AwsRemoteStackManagementState::CreatingGatewaySetup;
+            controller.gateway_setup = Some(GatewaySetup::new());
+            let mut executor = SingleControllerExecutor::builder()
+                .resource(RemoteStackManagement::new("management".into()).build())
+                .controller(controller)
+                .platform(Platform::Aws)
+                .resource_prefix("example")
+                .resource_lifecycle(lifecycle)
+                .initial_setup_authority(authority)
+                .service_provider(Arc::new(MockPlatformServiceProvider::new()))
+                .build()
+                .await
+                .unwrap();
+            assert_eq!(
+                executor.step().await.unwrap_err().code,
+                "DEPLOYMENT_SETUP_REQUIRED"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn native_generation_and_role_id_survive_checkpoint_and_reject_replacements() {
+        let mut setup = GatewaySetup::new();
+        setup.role_id = Some("owned-role-id".into());
+        let checkpoint = serde_json::to_vec(&setup).unwrap();
+        let restored: GatewaySetup = serde_json::from_slice(&checkpoint).unwrap();
+        assert_eq!(restored.generation, setup.generation);
+        let executor = SingleControllerExecutor::builder()
+            .resource(RemoteStackManagement::new("management".into()).build())
+            .controller(AwsRemoteStackManagementController::mock_ready(
+                "example-management",
+            ))
+            .platform(Platform::Aws)
+            .resource_prefix("example")
+            .resource_lifecycle(ResourceLifecycle::Frozen)
+            .initial_setup_authority(InitialSetupAuthority::DirectSetup)
+            .service_provider(Arc::new(MockPlatformServiceProvider::new()))
+            .build()
+            .await
+            .unwrap();
+        executor.with_context(|ctx| {
+            let boundary = Boundary::new(ctx, &restored.generation).unwrap();
+            for case in ["owned", "foreign-generation", "replacement-id", "runtime-path", "duplicate-tag"] {
+                let mut tags: Vec<_> = boundary.tags.iter().map(|(key,value)| serde_json::json!({"Key":key,"Value":value})).collect();
+                if case == "foreign-generation" {
+                    tags.iter_mut().find(|tag| tag["Key"] == "CreateAttempt").unwrap()["Value"] = serde_json::json!(uuid::Uuid::new_v4().to_string());
+                }
+                if case == "duplicate-tag" { tags.push(tags[0].clone()); }
+                let role: Role = serde_json::from_value(serde_json::json!({
+                    "Path":if case == "runtime-path" { "/" } else { "/setup/" },
+                    "RoleName":boundary.name, "RoleId":if case == "replacement-id" { "other" } else { "owned-role-id" },
+                    "Arn":"arn:aws:iam::123456789012:role/setup/_gateway-cleanup-example",
+                    "CreateDate":"2026-01-01T00:00:00Z", "Tags":{"member":tags}
+                })).unwrap();
+                assert_eq!(boundary.verify_role(&role, restored.role_id.as_deref()).is_ok(), case == "owned", "{case}");
+            }
+            assert!(boundary.verify_tags(None).is_err());
+        });
+    }
+}
