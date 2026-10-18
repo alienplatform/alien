@@ -222,6 +222,9 @@ pub struct GcpAgentPlatformTemplateController {
     pub(crate) region: Option<String>,
     /// Session lifetime from the declaration, carried into the binding.
     pub(crate) max_lifetime_seconds: Option<u32>,
+    /// Original declaration: the cloud's boolean cannot distinguish Internet from legacy Allow.
+    #[serde(default)]
+    pub(crate) egress: Option<alien_core::SandboxEgress>,
     #[serde(default)]
     pub(crate) default_policy: Option<alien_core::EgressPolicy>,
     /// Egress switch the serving template reports, carried into the binding and re-read on every
@@ -264,6 +267,7 @@ impl GcpAgentPlatformTemplateController {
         self.project_id = Some(gcp_config.project_id.clone());
         self.region = Some(gcp_config.region.clone());
         self.max_lifetime_seconds = config.lifecycle.max_lifetime_seconds;
+        self.egress = Some(config.egress.clone());
         self.default_policy = config.default_policy.clone();
 
         info!(id=%config.id, engine=%engine, "Creating sandbox environment template");
@@ -494,6 +498,7 @@ impl GcpAgentPlatformTemplateController {
             }));
         }
         self.allow_egress = Some(served_internet_access(&template));
+        self.egress = Some(config.egress.clone());
 
         ctx.emit_heartbeat(alien_core::ResourceHeartbeat {
             deployment_id: None,
@@ -530,6 +535,7 @@ impl GcpAgentPlatformTemplateController {
     )]
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
+        self.egress = Some(config.egress.clone());
         self.default_policy = config.default_policy.clone();
         let previous = ctx.previous_resource_config::<Sandbox>()?;
 
@@ -661,6 +667,10 @@ impl GcpAgentPlatformTemplateController {
             self.allow_egress.unwrap_or(false),
         );
         if let SandboxBinding::GcpAgentPlatform(value) = &mut binding {
+            // Old saved rows predate the declaration and keep the legacy boolean interpretation.
+            if let Some(egress) = &self.egress {
+                value.egress = Some(egress.clone().into());
+            }
             value.default_policy = self.default_policy.clone();
         }
 
@@ -695,6 +705,7 @@ impl GcpAgentPlatformTemplateController {
         self.region = None;
         self.max_lifetime_seconds = None;
         self.allow_egress = None;
+        self.egress = None;
         self.default_policy = None;
     }
 
@@ -735,6 +746,7 @@ impl GcpAgentPlatformTemplateController {
             region: Some("us-central1".to_string()),
             max_lifetime_seconds: None,
             default_policy: None,
+            egress: None,
             allow_egress: None,
             _internal_stay_count: None,
         }
@@ -1102,6 +1114,64 @@ mod tests {
                 );
             }
             other => panic!("expected a GCP Agent Platform binding, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn old_saved_open_template_still_publishes_a_legacy_binding() {
+        use crate::core::{deserialize_controller, serialize_controller, ResourceController};
+        let mut controller = GcpAgentPlatformTemplateController::mock_ready("eng", "tpl1");
+        controller.allow_egress = Some(true);
+        let mut saved = serialize_controller(&controller).unwrap();
+        saved.as_object_mut().unwrap().remove("egress").unwrap();
+        let restored = deserialize_controller(saved).unwrap();
+        let binding: alien_core::SandboxBinding =
+            serde_json::from_value(restored.get_binding_params().unwrap().unwrap()).unwrap();
+        assert_eq!(
+            binding.egress().unwrap().declaration(),
+            &SandboxEgress::Allow
+        );
+    }
+
+    #[tokio::test]
+    async fn binding_preserves_the_declaration_across_create_and_same_switch_updates() {
+        use crate::core::ResourceController;
+        for initial in [SandboxEgress::Internet, SandboxEgress::Allow] {
+            let mut executor = build_executor(
+                sandbox_with(initial.clone(), "ubuntu:24.04", None, None),
+                provider_with(happy_client()),
+            )
+            .await;
+            executor.run_until_terminal().await.unwrap();
+            let declaration = |executor: &SingleControllerExecutor| {
+                let params = executor
+                    .internal_state::<GcpAgentPlatformTemplateController>()
+                    .unwrap()
+                    .get_binding_params()
+                    .unwrap()
+                    .unwrap();
+                let binding: alien_core::SandboxBinding = serde_json::from_value(params).unwrap();
+                binding.egress().unwrap().declaration().clone()
+            };
+            assert_eq!(declaration(&executor), initial);
+            let updated = if initial == SandboxEgress::Internet {
+                SandboxEgress::Allow
+            } else {
+                SandboxEgress::Internet
+            };
+            executor
+                .update(sandbox_with(updated.clone(), "ubuntu:24.04", None, None))
+                .unwrap();
+            executor.run_until_terminal().await.unwrap();
+            assert_eq!(declaration(&executor), updated);
+            assert_eq!(
+                executor
+                    .internal_state::<GcpAgentPlatformTemplateController>()
+                    .unwrap()
+                    .template_id
+                    .as_deref(),
+                Some("tpl1")
+            );
         }
     }
 
