@@ -6,6 +6,14 @@
 
 use super::BindingValue;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+/// Address of one source-restricted container endpoint.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContainerInternalEndpointBinding {
+    pub url: BindingValue<String>,
+}
 
 /// Represents a container binding for container-to-container or external communication
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -30,6 +38,9 @@ pub struct HorizonContainerBinding {
     /// Optional public URL (if exposed publicly via load balancer)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub public_url: Option<BindingValue<String>>,
+    /// Named internal endpoints authorized for the receiving resource.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub internal_endpoints: HashMap<String, ContainerInternalEndpointBinding>,
 }
 
 /// Kubernetes container binding configuration
@@ -47,6 +58,9 @@ pub struct KubernetesContainerBinding {
     /// Optional public URL if container is exposed publicly
     #[serde(skip_serializing_if = "Option::is_none")]
     pub public_url: Option<BindingValue<String>>,
+    /// Named internal endpoints authorized for the receiving resource.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub internal_endpoints: HashMap<String, ContainerInternalEndpointBinding>,
 }
 
 /// Local Docker container binding configuration
@@ -60,6 +74,9 @@ pub struct LocalContainerBinding {
     /// Optional public URL (localhost with mapped port, e.g., "http://localhost:62844")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub public_url: Option<BindingValue<String>>,
+    /// Named internal endpoints authorized for the receiving resource.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub internal_endpoints: HashMap<String, ContainerInternalEndpointBinding>,
 }
 
 impl ContainerBinding {
@@ -72,6 +89,7 @@ impl ContainerBinding {
             container_name: container_name.into(),
             internal_url: internal_url.into(),
             public_url: None,
+            internal_endpoints: HashMap::new(),
         })
     }
 
@@ -85,6 +103,7 @@ impl ContainerBinding {
             container_name: container_name.into(),
             internal_url: internal_url.into(),
             public_url: Some(public_url.into()),
+            internal_endpoints: HashMap::new(),
         })
     }
 
@@ -97,6 +116,7 @@ impl ContainerBinding {
             container_name: container_name.into(),
             internal_url: internal_url.into(),
             public_url: None,
+            internal_endpoints: HashMap::new(),
         })
     }
 
@@ -110,6 +130,7 @@ impl ContainerBinding {
             container_name: container_name.into(),
             internal_url: internal_url.into(),
             public_url: Some(public_url.into()),
+            internal_endpoints: HashMap::new(),
         })
     }
 
@@ -126,6 +147,7 @@ impl ContainerBinding {
             service_name: service_name.into(),
             service_port: service_port.into(),
             public_url: None,
+            internal_endpoints: HashMap::new(),
         })
     }
 
@@ -143,7 +165,30 @@ impl ContainerBinding {
             service_name: service_name.into(),
             service_port: service_port.into(),
             public_url: Some(public_url.into()),
+            internal_endpoints: HashMap::new(),
         })
+    }
+
+    /// Named endpoints authorized for the receiving resource.
+    pub fn internal_endpoints(&self) -> &HashMap<String, ContainerInternalEndpointBinding> {
+        match self {
+            Self::Horizon(binding) => &binding.internal_endpoints,
+            Self::Kubernetes(binding) => &binding.internal_endpoints,
+            Self::Local(binding) => &binding.internal_endpoints,
+        }
+    }
+
+    /// Sets the named endpoint addresses supplied by the backend.
+    pub fn with_internal_endpoints(
+        mut self,
+        endpoints: HashMap<String, ContainerInternalEndpointBinding>,
+    ) -> Self {
+        match &mut self {
+            Self::Horizon(binding) => binding.internal_endpoints = endpoints,
+            Self::Kubernetes(binding) => binding.internal_endpoints = endpoints,
+            Self::Local(binding) => binding.internal_endpoints = endpoints,
+        }
+        self
     }
 
     /// Gets the internal URL for any platform

@@ -328,6 +328,11 @@ class Container:
         self._handle = _LazyHandle[Any]("container", name)
 
     @translate_errors
+    async def internal_endpoints(self) -> dict[str, dict[str, str]]:
+        """Named endpoint URLs authorized for this workload."""
+        return (await self._handle.get()).internal_endpoints()
+
+    @translate_errors
     async def internal_url(self) -> str:
         return (await self._handle.get()).internal_url()
 
