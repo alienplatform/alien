@@ -12,7 +12,10 @@
 //! with its own credential (which lacks Data Owner by design); the execute grant that opens the
 //! data plane is authored on that resource's permission set by a preflight, not verified here.
 //!
-//! It owns one data-plane object: the disk image built from a registry image, deleted once a
+//! Internet-mode groups also use the management role's metadata list/delete verbs to reap
+//! sessions at the gateway identity's 24-hour ceiling, without reading guest contents.
+//!
+//! It owns the disk image built from a registry image, deleted once a
 //! changed reference replaces it; `sandbox/images` grants exactly those verbs. One build per
 //! reference string, so a tag pushed again is not rebuilt: a changed image needs a new tag or digest.
 
@@ -28,7 +31,8 @@ use alien_azure_clients::azure::sandbox_data_plane::{
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     azure_disk_image_label, AzureSandboxImage, ResourceOutputs as CoreResourceOutputs,
-    ResourceStatus, Sandbox, SandboxLimits, SandboxOutputs, AZURE_DISK_IMAGE_LABEL,
+    ResourceStatus, Sandbox, SandboxEgress, SandboxLimits, SandboxOutputs, AZURE_DISK_IMAGE_LABEL,
+    AZURE_GATEWAY_MAX_LIFETIME_SECONDS,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
@@ -163,6 +167,7 @@ impl AzureSandboxController {
     )]
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
+        let lifetime_issue = self.reap_gateway_sessions(ctx, config).await;
         // Refresh the binding inputs against the declaration, but do not gate the heartbeat on
         // them: a bad `code.image` is a declaration error the create and update paths already
         // fail on, and must not flip a serving sandbox to a terminal RefreshFailed here. A
@@ -196,12 +201,14 @@ impl AzureSandboxController {
         self.sweep_disk_images(ctx, &config.id).await;
         self.reap_retired_disk_images(ctx, &config.id).await;
 
-        // The data plane has no sandbox list operation, so the heartbeat carries the group's ARM
-        // provisioning state rather than a sandbox count. A read failure here leaves the sandbox
+        // The heartbeat carries the group's ARM provisioning state. A read failure leaves the sandbox
         // serving: the heartbeat is an observation, not a health gate.
         if let Ok((group, _region, resource_group)) = self.identity(&config.id) {
             let mut provisioning_state = None;
             let mut status = alien_core::SandboxHeartbeatStatus::default();
+            if let Some(issue) = lifetime_issue {
+                record_collection_issue(&mut status, issue);
+            }
 
             // sandboxGroups/read is granted, so a failure here is transient rather than a
             // permission gap. Report it as a partial collection instead of a default-Healthy
@@ -257,7 +264,13 @@ impl AzureSandboxController {
 
         Ok(HandlerAction::Continue {
             state: Ready,
-            suggested_delay: Some(Duration::from_secs(60)),
+            suggested_delay: Some(Duration::from_secs(
+                if config.egress == SandboxEgress::Internet {
+                    5
+                } else {
+                    60
+                },
+            )),
         })
     }
 
@@ -398,6 +411,34 @@ impl AzureSandboxController {
 }
 
 impl AzureSandboxController {
+    /// Azure has no identity renewal agent. Reconcile only new gateway-mode groups;
+    /// legacy deployments retain their existing lifetime behavior. A stopped controller
+    /// or terminal failure suspends deletion, while the identity still expires at 24 hours.
+    async fn reap_gateway_sessions(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        config: &Sandbox,
+    ) -> Option<String> {
+        if config.egress != SandboxEgress::Internet {
+            return None;
+        }
+        let result = async {
+            let (group, client) = self.data_plane(ctx, &config.id)?;
+            super::azure_lifetime::reap_expired_azure_sandboxes(
+                client.as_ref(),
+                &group,
+                AZURE_GATEWAY_MAX_LIFETIME_SECONDS,
+            )
+            .await
+        }
+        .await;
+        if let Err(error) = result {
+            warn!(sandbox_id = %config.id, %error, "Azure gateway session cleanup failed; reconciliation will retry");
+            return Some(format!("gateway session cleanup failed: {error}"));
+        }
+        None
+    }
+
     /// Captures the image, egress, idle-pause and ceilings the binding carries from the
     /// declaration.
     ///
@@ -449,6 +490,7 @@ impl AzureSandboxController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<AzureSandboxHandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
+        let _ = self.reap_gateway_sessions(ctx, config).await;
         // Nothing to build: `Ready` abandons any build left in flight.
         let Some(reference) = self.pending_image(config) else {
             return Ok(AzureSandboxHandlerAction::Continue {
@@ -1334,7 +1376,7 @@ mod tests {
         use super::*;
         use crate::core::{StackExecutor, StackResourceStateExt};
         use alien_azure_clients::azure::sandbox_data_plane::{
-            DiskImageStatus, MockSandboxDataPlaneApi,
+            DiskImageStatus, ListedSandbox, MockSandboxDataPlaneApi,
         };
         use alien_azure_clients::azure::sandbox_groups::MockSandboxGroupsApi;
         use alien_azure_clients::AzureClientConfigExt as _;
@@ -1421,8 +1463,9 @@ mod tests {
         async fn executor(
             declared: Sandbox,
             controller: AzureSandboxController,
-            client: MockSandboxDataPlaneApi,
+            mut client: MockSandboxDataPlaneApi,
         ) -> SingleControllerExecutor {
+            client.expect_list_sandboxes().returning(|_| Ok(Vec::new()));
             SingleControllerExecutor::builder()
                 .resource(declared)
                 .controller(controller)
@@ -1432,6 +1475,47 @@ mod tests {
                 .build()
                 .await
                 .expect("executor should build")
+        }
+
+        #[tokio::test]
+        async fn only_gateway_groups_reap_sessions_on_ready_ticks() {
+            for egress in [
+                SandboxEgress::Internet,
+                SandboxEgress::Allow,
+                SandboxEgress::None,
+            ] {
+                let gateway = egress == SandboxEgress::Internet;
+                let mut client = MockSandboxDataPlaneApi::new();
+                client
+                    .expect_list_sandboxes()
+                    .times(usize::from(gateway))
+                    .returning(|_| {
+                        Ok(vec![ListedSandbox {
+                            id: "expired".into(),
+                            created_at: chrono::Utc::now() - chrono::Duration::hours(25),
+                            labels: Default::default(),
+                            state: "Suspended".into(),
+                        }])
+                    });
+                client
+                    .expect_delete_sandbox()
+                    .times(usize::from(gateway))
+                    .withf(|group, id| group == "sbg" && id == "expired")
+                    .returning(|_, _| Ok(()));
+                let mut config = sandbox("ubuntu");
+                config.egress = egress;
+                let mut run = SingleControllerExecutor::builder()
+                    .resource(config)
+                    .controller(adopted(Some("ubuntu"), None))
+                    .platform(Platform::Azure)
+                    .resource_lifecycle(ResourceLifecycle::Frozen)
+                    .service_provider(provider_with(client))
+                    .build()
+                    .await
+                    .unwrap();
+                run.step().await.expect("ready tick");
+                assert!(matches!(state_of(&run).state, AzureSandboxState::Ready));
+            }
         }
 
         fn retired_ids(controller: &AzureSandboxController) -> Vec<&str> {
@@ -2077,6 +2161,7 @@ mod tests {
             state.resources.insert("agents".to_string(), failed);
 
             let mut client = MockSandboxDataPlaneApi::new();
+            client.expect_list_sandboxes().returning(|_| Ok(Vec::new()));
             client
                 .expect_list_disk_images()
                 .returning(|_| Ok(Vec::new()));

@@ -1877,7 +1877,9 @@ impl BindingsProviderApi for BindingsProvider {
         }
         // Do not silently treat a gateway binding as a legacy policy-only binding on backends
         // whose authenticated token-delivery path has not landed yet.
-        if gateway.is_some() && !matches!(&binding, SandboxBinding::Aws(_)) {
+        if gateway.is_some()
+            && !matches!(&binding, SandboxBinding::Aws(_) | SandboxBinding::Azure(_))
+        {
             return Err(crate::providers::sandbox::egress::unsupported(
                 "gateway-backed sandbox",
             ));
@@ -2050,7 +2052,7 @@ impl BindingsProviderApi for BindingsProvider {
                 let memory = declared(azure_binding.memory, "memory")?;
                 let disk = declared(azure_binding.disk, "disk")?;
 
-                let sandbox: Arc<dyn crate::traits::Sandbox> = Arc::new(AzureSandbox::new(
+                let mut sandbox = AzureSandbox::new(
                     Arc::new(client),
                     group,
                     disk_image,
@@ -2059,8 +2061,17 @@ impl BindingsProviderApi for BindingsProvider {
                     cpu.unwrap_or_else(|| DEFAULT_AZURE_CPU.to_string()),
                     memory.unwrap_or_else(|| DEFAULT_AZURE_MEMORY.to_string()),
                     disk,
-                ));
-                Ok(sandbox)
+                );
+                if let Some(manager) = egress_manager {
+                    sandbox = sandbox.with_egress_manager(
+                        manager,
+                        azure_binding
+                            .default_policy
+                            .or_else(|| azure_binding.egress.default_policy().cloned()),
+                    );
+                }
+
+                Ok(Arc::new(sandbox))
             }
             #[cfg(feature = "aws")]
             SandboxBinding::Aws(aws_binding) => {
@@ -2522,6 +2533,47 @@ mod tests {
             "my-toolchain",
             "the declared image must reach the provider, not a literal chosen at construction"
         );
+    }
+
+    #[cfg(all(feature = "azure", feature = "local"))]
+    #[tokio::test]
+    async fn azure_gateway_binding_resolves_linked_ports_and_vault() {
+        let directory = tempfile::tempdir().unwrap();
+        let provider = BindingsProvider::new(
+            ClientConfig::Azure(Box::new(alien_core::AzureClientConfig {
+                subscription_id: "sub".into(),
+                tenant_id: "tenant".into(),
+                region: Some("eastus".into()),
+                credentials: alien_core::AzureCredentials::AccessToken { token: "test-token".into() },
+                service_overrides: None,
+            })),
+            HashMap::from([
+                ("box".into(), serde_json::json!({
+                    "service":"sandbox-azure", "sandboxGroup":"grp",
+                    "dataPlaneEndpoint":"https://management.eastus.azuredevcompute.io",
+                    "region":"eastus", "resourceGroup":"rg", "diskImage":"ubuntu",
+                    "egress":{
+                        "container":"gateway", "audience":"test/box", "kid":"key-1",
+                        "signingKey":{"vault":"secrets", "key":"signing-key"}
+                    }
+                })),
+                ("gateway".into(), serde_json::json!({
+                    "service":"horizon", "containerName":"gateway",
+                    "internalUrl":"http://10.0.6.10:3128",
+                    "internalUrls":{"3128":"http://10.0.6.10:3128", "3129":"http://10.0.6.10:3129"}
+                })),
+                ("secrets".into(), serde_json::json!({
+                    "service":"local-vault", "vaultName":"secrets", "dataDir":directory.path()
+                })),
+            ]),
+        ).unwrap();
+        let sandbox = provider
+            .load_sandbox("box")
+            .await
+            .expect("Azure gateway binding loads");
+        assert!(sandbox
+            .as_any()
+            .is::<crate::providers::sandbox::azure::AzureSandbox>());
     }
 
     #[cfg(feature = "gcp")]
