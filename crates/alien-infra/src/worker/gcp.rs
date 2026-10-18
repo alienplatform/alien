@@ -4775,6 +4775,10 @@ impl GcpWorkerController {
     /// the network name and subnetwork name from the Network controller to configure
     /// the Cloud Run service with Direct VPC Egress.
     ///
+    /// With `UseDefault`, public traffic uses Cloud Run's dynamic outbound IPs even
+    /// if the customer added NAT to the default network. A fixed outbound IP needs
+    /// `Create` or `ByoVpcGcp` with the appropriate NAT configuration.
+    ///
     /// Returns `None` if no Network resource exists in the stack.
     fn get_vpc_access(&self, ctx: &ResourceControllerContext<'_>) -> Result<Option<VpcAccess>> {
         // Check if the stack has a Network resource
@@ -4791,6 +4795,19 @@ impl GcpWorkerController {
                     message: "Expected a Network resource for Direct VPC egress".to_string(),
                 })
             })?;
+
+        let egress = match network_config.settings {
+            NetworkSettings::UseDefault => VpcEgress::PrivateRangesOnly,
+            NetworkSettings::Create { .. } | NetworkSettings::ByoVpcGcp { .. } => {
+                VpcEgress::AllTraffic
+            }
+            NetworkSettings::ByoVpcAws { .. } | NetworkSettings::ByoVnetAzure { .. } => {
+                return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
+                    resource_id: network_id.to_string(),
+                    message: "Direct VPC egress requires GCP network settings".to_string(),
+                }));
+            }
+        };
 
         // Get the Network controller state via require_dependency
         let network_ref = ResourceRef::new(Network::RESOURCE_TYPE, network_id.to_string());
@@ -4813,13 +4830,6 @@ impl GcpWorkerController {
             .network(network_name)
             .subnetwork(subnetwork_name)
             .build();
-
-        // The default network has no Alien-provisioned NAT. Keep public traffic on
-        // Cloud Run's normal egress; preserve NAT IPs and routing policy for Create/BYO.
-        let egress = match network_config.settings {
-            NetworkSettings::UseDefault => VpcEgress::PrivateRangesOnly,
-            _ => VpcEgress::AllTraffic,
-        };
 
         Ok(Some(
             VpcAccess::builder()
@@ -5812,7 +5822,7 @@ mod tests {
     //! See `crate::core::controller_test` for a comprehensive guide on testing infrastructure controllers.
 
     use super::{CertificateRenewalPhase, PendingSslCertificate};
-    use crate::core::ResourceController;
+    use crate::core::{ResourceController, StackExecutor, StackResourceStateExt};
     use alien_gcp_clients::compute::{OperationError, OperationErrorItem, SslCertificate};
     use std::collections::HashMap;
     use std::sync::Mutex;
@@ -5824,7 +5834,7 @@ mod tests {
     use alien_client_core::ErrorData as CloudClientErrorData;
     use alien_core::{
         CertificateStatus, DnsRecordStatus, DomainMetadata, Network, NetworkSettings, Platform,
-        ResourceDomainInfo, ResourceStatus, Worker, WorkerOutputs,
+        Resource, ResourceDomainInfo, ResourceStatus, Worker, WorkerOutputs,
     };
     use alien_error::AlienError;
     use alien_gcp_clients::cloudrun::{
@@ -7021,6 +7031,187 @@ mod tests {
         } else {
             assert!(vpc_access.is_none());
         }
+    }
+
+    #[tokio::test]
+    async fn changed_worker_config_replaces_failed_default_network_service() {
+        let worker = basic_function();
+        let worker_id = worker.id.clone();
+        let service_name = format!("test-{worker_id}");
+        let mut cloudrun = MockCloudRunApi::new();
+        cloudrun
+            .expect_get_operation()
+            .withf(|_, name| name == "failed-create")
+            .times(1)
+            .returning(|_, _| {
+                Ok(LongRunningOperation::builder()
+                    .name("failed-create".to_string())
+                    .done(true)
+                    .result(OperationResult::Error {
+                        error: Status::builder()
+                            .code(9)
+                            .message("Container failed to start and listen".to_string())
+                            .build(),
+                    })
+                    .build())
+            });
+        let mut replacements = mockall::Sequence::new();
+        let deleted_name = service_name.clone();
+        cloudrun
+            .expect_delete_service()
+            .times(1)
+            .in_sequence(&mut replacements)
+            .returning(move |_, name, _, _| {
+                assert_eq!(name, deleted_name);
+                Ok(create_successful_operation_response("delete-worker"))
+            });
+        let created_name = service_name.clone();
+        cloudrun
+            .expect_create_service()
+            .times(1)
+            .in_sequence(&mut replacements)
+            .returning(move |_, name, service, _| {
+                assert_eq!(name, created_name);
+                let template = service.template.unwrap();
+                let vpc = template.vpc_access.unwrap();
+                assert_eq!(vpc.egress, Some(VpcEgress::PrivateRangesOnly));
+                let interfaces = vpc.network_interfaces.unwrap();
+                assert_eq!(interfaces.len(), 1);
+                assert_eq!(interfaces[0].network.as_deref(), Some("default"));
+                assert_eq!(interfaces[0].subnetwork.as_deref(), Some("default"));
+                let containers = template.containers;
+                assert!(containers[0]
+                    .env
+                    .iter()
+                    .any(|var| { var.name == "RELEASE" && var.value.as_deref() == Some("next") }));
+                Ok(create_successful_operation_response("create-worker"))
+            });
+        cloudrun.expect_patch_service().never();
+        cloudrun
+            .expect_get_operation()
+            .withf(|_, name| matches!(name.as_str(), "delete-worker" | "create-worker"))
+            .times(2)
+            .returning(|_, name| Ok(create_completed_operation_response(&name)));
+        cloudrun.expect_get_service().times(1).returning(|_, name| {
+            Err(AlienError::new(
+                CloudClientErrorData::RemoteResourceNotFound {
+                    resource_type: "Service".to_string(),
+                    resource_name: name,
+                },
+            ))
+        });
+        cloudrun
+            .expect_get_service()
+            .times(1)
+            .returning(|_, name| Ok(create_successful_service_response(&name)));
+        cloudrun
+            .expect_get_service_iam_policy()
+            .returning(|_, _| Ok(create_empty_iam_policy()));
+        cloudrun
+            .expect_set_service_iam_policy()
+            .returning(|_, _, _| Ok(create_empty_iam_policy()));
+        let provider = setup_mock_service_provider(Arc::new(cloudrun), None);
+        let checkpoint = GcpWorkerController {
+            state: GcpWorkerState::CreatingService,
+            service_name: Some(service_name),
+            operation_name: Some("failed-create".to_string()),
+            project_id: Some("test-project".to_string()),
+            region: Some("us-central1".to_string()),
+            ..Default::default()
+        };
+        let mut failed = checkpoint.clone();
+        failed.state = GcpWorkerState::CreateFailed;
+        let mut network = crate::network::GcpNetworkController::mock_ready("default-network");
+        network.network_name = Some("default".to_string());
+        network.subnetwork_name = Some("default".to_string());
+        network.cloud_nat_name = None;
+        network.is_byo_vpc = true;
+        let fixture = SingleControllerExecutor::builder()
+            .resource(worker.clone())
+            .controller(failed)
+            .platform(Platform::Gcp)
+            .service_provider(provider.clone())
+            .with_dependency(
+                Network::new("default-network".to_string())
+                    .settings(NetworkSettings::UseDefault)
+                    .build(),
+                network,
+            )
+            .build()
+            .await
+            .unwrap();
+        let mut state = fixture.stack_state().clone();
+        assert_eq!(
+            state.resources[&worker_id].status,
+            ResourceStatus::ProvisionFailed
+        );
+        state
+            .resources
+            .get_mut(&worker_id)
+            .unwrap()
+            .set_last_failed_controller(Some(Box::new(checkpoint)))
+            .unwrap();
+        // A plain Retry restores the old operation checkpoint; it cannot change egress.
+        let mut retry_state = state.clone();
+        assert!(retry_state
+            .resources
+            .get_mut(&worker_id)
+            .unwrap()
+            .retry_failed()
+            .unwrap());
+        let old_executor = fixture.with_context(|ctx| {
+            StackExecutor::builder(ctx.desired_stack, ctx.client_config.clone())
+                .deployment_config(ctx.deployment_config)
+                .service_provider(provider.clone())
+                .step_running_resources(false)
+                .build()
+                .unwrap()
+        });
+        let retried = old_executor.step(retry_state).await.unwrap().next_state;
+        assert_eq!(
+            retried.resources[&worker_id].status,
+            ResourceStatus::ProvisionFailed
+        );
+        let resumed = retried.resources[&worker_id]
+            .get_last_failed_controller()
+            .unwrap()
+            .unwrap();
+        let resumed = resumed
+            .as_any()
+            .downcast_ref::<GcpWorkerController>()
+            .unwrap();
+        assert_eq!(resumed.state, GcpWorkerState::CreatingService);
+        assert_eq!(resumed.operation_name.as_deref(), Some("failed-create"));
+
+        let mut updated_worker = worker;
+        updated_worker
+            .environment
+            .insert("RELEASE".to_string(), "next".to_string());
+        let updated_resource = Resource::new(updated_worker);
+        let executor = fixture.with_context(|ctx| {
+            let mut desired = ctx.desired_stack.clone();
+            desired.resources.get_mut(&worker_id).unwrap().config = updated_resource.clone();
+            StackExecutor::builder(&desired, ctx.client_config.clone())
+                .deployment_config(ctx.deployment_config)
+                .service_provider(provider)
+                .step_running_resources(false)
+                .build()
+                .unwrap()
+        });
+        let plan = executor.plan(&state).unwrap();
+        assert_eq!(plan.replaces, vec![worker_id.clone()]);
+        assert!(plan.creates.is_empty());
+        assert!(!plan.updates.contains_key(&worker_id));
+        for _ in 0..40 {
+            state = executor.step(state).await.unwrap().next_state;
+            if state.resources[&worker_id].status == ResourceStatus::Running {
+                break;
+            }
+        }
+        let recovered = &state.resources[&worker_id];
+        assert_eq!(recovered.status, ResourceStatus::Running);
+        assert_eq!(recovered.config, updated_resource);
+        assert!(recovered.last_failed_state.is_none());
     }
 
     // ─────────────── CREATE AND DELETE FLOW TESTS ────────────────────
