@@ -179,6 +179,8 @@ impl TfEmitter for AwsSandboxEmitter {
                     Expression::from(vec![
                         Expression::String("ecr:BatchGetImage".to_string()),
                         Expression::String("ecr:GetDownloadUrlForLayer".to_string()),
+                        Expression::String("ecr:BatchImportUpstreamImage".to_string()),
+                        Expression::String("ecr:GetImageCopyStatus".to_string()),
                     ]),
                 ),
                 (

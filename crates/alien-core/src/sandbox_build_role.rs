@@ -162,7 +162,12 @@ impl SandboxBuildRole<'_> {
             ));
             statement.push(allow(
                 "PullSandboxBaseImage",
-                &["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"],
+                &[
+                    "ecr:BatchGetImage",
+                    "ecr:GetDownloadUrlForLayer",
+                    "ecr:BatchImportUpstreamImage",
+                    "ecr:GetImageCopyStatus",
+                ],
                 repository.arn(partition, self.region),
             ));
             // A private base comes from another account's registry; one in this account would let the
@@ -347,7 +352,7 @@ mod tests {
                     {
                         "Sid": "PullSandboxBaseImage",
                         "Effect": "Allow",
-                        "Action": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"],
+                        "Action": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer", "ecr:BatchImportUpstreamImage", "ecr:GetImageCopyStatus"],
                         "Resource": "arn:aws-us-gov:ecr:us-gov-west-1:123456789012:repository/acme/agents-base"
                     },
                     {

@@ -10,10 +10,10 @@ pub mod kubernetes_cluster;
 pub use aws::{
     AwsAiImportData, AwsArtifactRegistryImportData, AwsBuildImportData,
     AwsComputeClusterImportData, AwsEmailDkimTokenImportData, AwsEmailDomainImportData,
-    AwsEmailImportData, AwsKeyImportData, AwsKvImportData, AwsNetworkImportData, AwsSandboxNetwork,
+    AwsEmailImportData, AwsKeyImportData, AwsKvImportData, AwsNetworkImportData,
     AwsOpenSearchImportData, AwsPostgresImportData, AwsQueueImportData,
     AwsRemoteBindingsImportData, AwsRemoteStackManagementImportData, AwsSandboxImportData,
-    AwsServiceAccountImportData, AwsStorageImportData, AwsVaultImportData,
+    AwsSandboxNetwork, AwsServiceAccountImportData, AwsStorageImportData, AwsVaultImportData,
     AwsWorkerImportData,
 };
 pub use azure::{

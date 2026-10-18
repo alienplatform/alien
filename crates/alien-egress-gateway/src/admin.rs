@@ -217,7 +217,10 @@ async fn exchange(
             let Ok(known) = serde_json::from_slice::<Vec<Summary>>(&body) else {
                 return StatusCode::BAD_REQUEST.into_response();
             };
-            match gateway.policies.newer_than(&known) {
+            match gateway
+                .policies
+                .newer_than(&known, &gateway.config.audiences)
+            {
                 Ok(records) => stream_snapshot(records),
                 Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
             }

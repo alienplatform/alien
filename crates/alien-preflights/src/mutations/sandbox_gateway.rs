@@ -16,7 +16,7 @@ use crate::{
     StackMutation,
 };
 
-const GATEWAY_IMAGE: &str = "ghcr.io/alienplatform/alien-egress-gateway@sha256:f2411b7c837435db4584bbec4e29e6481f0dd3726d33fb46f567e8f25ec28309";
+const GATEWAY_IMAGE: &str = "ghcr.io/alienplatform/alien-egress-gateway@sha256:dbac794afe2185a8ce025d92ec05a5878d6367ae9380eccc2c3dfc4d55f1c59c";
 
 /// Managed AWS deployments use the same compute and service-account machinery
 /// as application containers. Unsupported deployments are refused before execution.
@@ -258,7 +258,9 @@ mod tests {
             .mutate(prepared, &state, &config)
             .await
             .unwrap_err();
-        assert!(matches!(error.error, Some(ErrorData::StackMutationFailed { resource_id: Some(id), .. }) if id == SANDBOX_EGRESS_GATEWAY_ID));
+        assert!(
+            matches!(error.error, Some(ErrorData::StackMutationFailed { resource_id: Some(id), .. }) if id == SANDBOX_EGRESS_GATEWAY_ID)
+        );
     }
 
     #[tokio::test]

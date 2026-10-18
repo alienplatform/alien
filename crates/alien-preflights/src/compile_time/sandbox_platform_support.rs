@@ -7,7 +7,7 @@
 
 use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
-use alien_core::{Platform, Sandbox, Stack};
+use alien_core::{Platform, Sandbox, SandboxEgress, Stack};
 
 /// Ensures every Sandbox can be delivered by the platform it targets.
 pub struct SandboxPlatformSupportCheck;
@@ -29,6 +29,15 @@ impl CompileTimeCheck for SandboxPlatformSupportCheck {
             .resources()
             .filter_map(|(_, entry)| entry.config.downcast_ref::<Sandbox>())
             .filter_map(|sandbox| {
+                // Runtime bindings may carry an explicitly configured gateway, but these
+                // deployment backends cannot yet create and publish one.
+                if sandbox.egress == SandboxEgress::Internet && platform != Platform::Aws {
+                    return Some(format!(
+                        "Sandbox '{}': SANDBOX_EGRESS_GATEWAY_UNAVAILABLE: {platform} does not yet \
+                         provide gateway hosting for egress internet",
+                        sandbox.id()
+                    ));
+                }
                 sandbox
                     .validate_for_platform(platform)
                     .err()

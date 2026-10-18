@@ -26,12 +26,12 @@ use alien_aws_clients::ec2::{
     AuthorizeSecurityGroupEgressRequest, AuthorizeSecurityGroupIngressRequest,
     CreateInternetGatewayRequest, CreateNatGatewayRequest, CreateRouteRequest,
     CreateRouteTableRequest, CreateSecurityGroupRequest, CreateSubnetRequest, CreateVpcRequest,
-    DescribeAvailabilityZonesRequest, DescribeInternetGatewaysRequest,
-    DescribeNatGatewaysRequest, DescribeNetworkInterfacesRequest, DescribeRouteTablesRequest,
-    DescribeSecurityGroupsRequest, DescribeSubnetsRequest, DescribeVpcsRequest,
-    DetachInternetGatewayRequest, Filter, IpPermission, IpPermissionResponse, IpRange,
-    ModifyVpcAttributeRequest, NatGateway, NetworkInterface, RouteTable, RouteTableAssociation,
-    SecurityGroup, Subnet, Tag, TagSet, TagSpecification,
+    DescribeAvailabilityZonesRequest, DescribeInternetGatewaysRequest, DescribeNatGatewaysRequest,
+    DescribeNetworkInterfacesRequest, DescribeRouteTablesRequest, DescribeSecurityGroupsRequest,
+    DescribeSubnetsRequest, DescribeVpcsRequest, DetachInternetGatewayRequest, Filter,
+    IpPermission, IpPermissionResponse, IpRange, ModifyVpcAttributeRequest, NatGateway,
+    NetworkInterface, RouteTable, RouteTableAssociation, SecurityGroup, Subnet, Tag, TagSet,
+    TagSpecification,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::aws::AwsFailureDomainSubnets;
@@ -1051,7 +1051,10 @@ mod tests {
                     .message
                     .contains("used 1, applied limit 1, additional demand 1"));
                 assert_eq!(
-                    executor.internal_state::<AwsNetworkController>().expect("network controller state").state,
+                    executor
+                        .internal_state::<AwsNetworkController>()
+                        .expect("network controller state")
+                        .state,
                     AwsNetworkState::CreateStart,
                 );
             } else {
@@ -1115,7 +1118,10 @@ pub struct AwsNetworkController {
     // security group (which admits 5432 only from this stack SG — see
     // permission-sets/postgres/provision.jsonc) can reference it without
     // re-discovering it by tag (mirrors the already-public GCP `subnetwork_self_link`).
-    #[serde(default, deserialize_with = "alien_core::network_ids::deserialize_optional_id")]
+    #[serde(
+        default,
+        deserialize_with = "alien_core::network_ids::deserialize_optional_id"
+    )]
     pub security_group_id: Option<String>,
 
     // Metadata
@@ -6394,10 +6400,9 @@ mod controller_state_tests {
         );
         let cause = error.source.as_ref().expect("quota cause");
         assert_eq!(cause.code, "CLOUD_QUOTA_EXCEEDED");
-        let quota: alien_preflights::quotas::QuotaIdentity = serde_json::from_value(
-            cause.context.as_ref().expect("quota context")["quota"].clone(),
-        )
-        .expect("typed quota identity");
+        let quota: alien_preflights::quotas::QuotaIdentity =
+            serde_json::from_value(cause.context.as_ref().expect("quota context")["quota"].clone())
+                .expect("typed quota identity");
         assert_eq!(
             quota,
             aws_network_quota_identity(&quota.scope, "L-A4707A72", "Internet gateways per Region")
@@ -8428,7 +8433,8 @@ mod controller_state_tests {
         let calls = Arc::new(AtomicUsize::new(0));
         let seen = calls.clone();
         let mut ec2 = MockEc2Api::new();
-        ec2.expect_describe_route_tables().returning(|_| Ok(parse(json!({}))));
+        ec2.expect_describe_route_tables()
+            .returning(|_| Ok(parse(json!({}))));
         ec2.expect_delete_security_group()
             .times(2)
             .returning(move |_| {
@@ -8487,7 +8493,9 @@ mod controller_state_tests {
     #[tokio::test]
     async fn teardown_with_a_denied_subnet_fails_after_one_revisit() {
         let mut ec2 = MockEc2Api::new();
-        ec2.expect_delete_security_group().times(1).returning(|_| Ok(()));
+        ec2.expect_delete_security_group()
+            .times(1)
+            .returning(|_| Ok(()));
         // The first pass and the one revisit, for each of the two subnets.
         ec2.expect_delete_subnet()
             .times(4)
@@ -8585,17 +8593,39 @@ mod controller_state_tests {
     #[tokio::test]
     async fn old_parent_delete_checkpoint_resumes_retained_child_cleanup() {
         let mut ec2 = MockEc2Api::new();
-        ec2.expect_delete_security_group().times(1).returning(|_| Ok(()));
+        ec2.expect_delete_security_group()
+            .times(1)
+            .returning(|_| Ok(()));
         ec2.expect_delete_vpc().times(1).returning(|_| Ok(()));
         let mut saved = serde_json::to_value(AwsNetworkController {
-            state: AwsNetworkState::DeletingVpc, vpc_id: Some("vpc-1".into()),
-            security_group_id: Some("sg-retained".into()), ..Default::default()
-        }).unwrap();
-        saved.as_object_mut().unwrap().remove("waitForRetainedDeleteIterations");
-        let mut executor = executor(ec2, serde_json::from_value(saved).unwrap(), Some("10.0.0.0/16")).await;
-        executor.step().await.expect("old failed parent resumes cleanup");
-        assert_eq!(controller(&executor).state, AwsNetworkState::DeletingNatGateway);
-        executor.run_until_terminal().await.expect("retained child and parent deleted");
+            state: AwsNetworkState::DeletingVpc,
+            vpc_id: Some("vpc-1".into()),
+            security_group_id: Some("sg-retained".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        saved
+            .as_object_mut()
+            .unwrap()
+            .remove("waitForRetainedDeleteIterations");
+        let mut executor = executor(
+            ec2,
+            serde_json::from_value(saved).unwrap(),
+            Some("10.0.0.0/16"),
+        )
+        .await;
+        executor
+            .step()
+            .await
+            .expect("old failed parent resumes cleanup");
+        assert_eq!(
+            controller(&executor).state,
+            AwsNetworkState::DeletingNatGateway
+        );
+        executor
+            .run_until_terminal()
+            .await
+            .expect("retained child and parent deleted");
         assert_eq!(executor.status(), ResourceStatus::Deleted);
         assert!(controller(&executor).security_group_id.is_none());
         assert!(controller(&executor).vpc_id.is_none());
