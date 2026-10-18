@@ -423,6 +423,7 @@ pub trait LambdaMicrovmsApi: Send + Sync + std::fmt::Debug {
         network_connectors: Vec<String>,
         idle_pause_seconds: Option<u32>,
         max_lifetime_seconds: Option<u32>,
+        run_hook_payload: Option<String>,
     ) -> Result<Microvm>;
 
     /// Reads one MicroVM.
@@ -479,6 +480,7 @@ fn run_microvm_body(
     egress_network_connectors: Vec<String>,
     idle_pause_seconds: Option<u32>,
     max_lifetime_seconds: Option<u32>,
+    run_hook_payload: Option<String>,
 ) -> serde_json::Value {
     let mut body = serde_json::json!({
         "imageIdentifier": image_identifier,
@@ -487,6 +489,9 @@ fn run_microvm_body(
         "clientToken": client_token,
     });
 
+    if let Some(payload) = run_hook_payload {
+        body["runHookPayload"] = serde_json::Value::String(payload);
+    }
     if let Some(role) = execution_role_arn {
         body["executionRoleArn"] = serde_json::Value::String(role);
     }
@@ -820,6 +825,7 @@ impl LambdaMicrovmsApi for LambdaMicrovmsClient {
         network_connectors: Vec<String>,
         idle_pause_seconds: Option<u32>,
         max_lifetime_seconds: Option<u32>,
+        run_hook_payload: Option<String>,
     ) -> Result<Microvm> {
         let body = run_microvm_body(
             image_identifier,
@@ -829,6 +835,7 @@ impl LambdaMicrovmsApi for LambdaMicrovmsClient {
             network_connectors,
             idle_pause_seconds,
             max_lifetime_seconds,
+            run_hook_payload,
         );
 
         self.send(
@@ -1027,10 +1034,10 @@ mod tests {
     /// stack declared — the shape of claim this resource exists to keep.
     #[test]
     fn a_declared_lifetime_reaches_the_run_request() {
-        let body = run_microvm_body("img", "1", "token", None, vec![], None, Some(3600));
+        let body = run_microvm_body("img", "1", "token", None, vec![], None, Some(3600), None);
         assert_eq!(body["maximumDurationInSeconds"], serde_json::json!(3600));
 
-        let unbounded = run_microvm_body("img", "1", "token", None, vec![], None, None);
+        let unbounded = run_microvm_body("img", "1", "token", None, vec![], None, None, None);
         assert!(
             unbounded.get("maximumDurationInSeconds").is_none(),
             "an undeclared ceiling stays absent rather than becoming a made-up one"
@@ -1334,6 +1341,7 @@ mod tests {
             vec!["arn:aws:lambda:us-west-2:123456789012:network-connector:sbx".to_string()],
             None,
             None,
+            None,
         );
 
         assert_eq!(
@@ -1626,6 +1634,7 @@ mod live_image_create {
                 .collect(),
             None,
             None,
+            None,
         );
         println!("request: {}", serde_json::to_string_pretty(&body).unwrap());
 
@@ -1775,7 +1784,7 @@ mod live_deny {
             .ok()
             .filter(|arn| !arn.is_empty());
         let microvm = client
-            .run_microvm(image, version, &token, role, connectors, None, None)
+            .run_microvm(image, version, &token, role, connectors, None, None, None)
             .await
             .expect("RunMicrovm");
         let id = microvm.microvm_id.expect("a MicroVM id");
@@ -1809,7 +1818,16 @@ mod live_deny {
 
             let token = uuid::Uuid::new_v4().simple().to_string();
             let ran = client
-                .run_microvm(identifier, "1.0", &token, None, Vec::new(), None, None)
+                .run_microvm(
+                    identifier,
+                    "1.0",
+                    &token,
+                    None,
+                    Vec::new(),
+                    None,
+                    None,
+                    None,
+                )
                 .await;
             match ran {
                 Ok(microvm) => {

@@ -33,13 +33,78 @@ pub enum SandboxBinding {
     Local(LocalSandboxBinding),
 }
 
+/// Gateway handoff, or a policy-only binding from deployments without a gateway.
+/// Policy-only bindings remain readable but cannot enforce per-sandbox changes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum SandboxEgressBinding {
+    /// Complete gateway configuration from the deployment controller.
+    Gateway(SandboxEgressGateway),
+    /// Legacy declaration; no runtime enforcement capability is implied.
+    Policy(SandboxEgress),
+}
+
+impl SandboxEgressBinding {
+    /// Declaration used for validation before any backend call.
+    pub fn bound(&self) -> &SandboxEgress {
+        match self {
+            Self::Gateway(value) => &value.bound,
+            Self::Policy(value) => value,
+        }
+    }
+    /// Gateway configuration, absent on older deployments.
+    pub fn gateway(&self) -> Option<&SandboxEgressGateway> {
+        match self {
+            Self::Gateway(value) => Some(value),
+            Self::Policy(_) => None,
+        }
+    }
+}
+
+impl From<SandboxEgress> for SandboxEgressBinding {
+    fn from(value: SandboxEgress) -> Self {
+        Self::Policy(value)
+    }
+}
+
+/// Public binding metadata. Private key material never belongs in a binding.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SandboxEgressGateway {
+    /// Proxy address reachable from the sandbox, normally port 3128.
+    pub gateway: String,
+    /// Management endpoint, unreachable from sandbox workloads.
+    pub admin: String,
+    /// Deployment prefix and resource id.
+    pub audience: String,
+    /// Declaration's maximum permitted policy.
+    pub bound: SandboxEgress,
+    /// Vault locator for the deployment's signing key.
+    pub signing_key: SandboxEgressSigningKey,
+    /// Key id published in the gateway's rotation set.
+    pub kid: String,
+    /// Trust root for an admin listener using a deployment-issued TLS certificate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admin_ca_pem: Option<String>,
+}
+
+/// Management-only vault reference for an Ed25519 PKCS#8 key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SandboxEgressSigningKey {
+    /// Name of the vault binding, normally `secrets`.
+    pub vault: String,
+    /// Secret name, normally `sandbox-egress-signing-key`.
+    pub key: String,
+}
+
 /// AWS sandbox binding configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AwsSandboxBinding {
     /// Declared egress bound. Absent only in bindings created by older releases.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub egress: Option<SandboxEgress>,
+    pub egress: Option<SandboxEgressBinding>,
     /// MicroVM image ARN that scopes the sandboxes this binding creates
     pub image_arn: BindingValue<String>,
     /// Image version. Sandboxes are enumerated by image and version together, so a rolled
@@ -100,7 +165,7 @@ pub struct AzureSandboxBinding {
     /// Carried whole rather than as a flag: the data plane's default action is `Allow`, so a
     /// sandbox created without a policy is an open one, and a hostname list has no boolean to
     /// travel in.
-    pub egress: SandboxEgress,
+    pub egress: SandboxEgressBinding,
     /// Idle seconds after which a sandbox pauses, if the declaration asked for one.
     ///
     /// Carried because the data plane takes it at create and nowhere else: a policy that does not
@@ -131,7 +196,7 @@ pub struct AzureSandboxBinding {
 pub struct GcpAgentPlatformSandboxBinding {
     /// Declared egress bound. Absent only in bindings created by older releases.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub egress: Option<SandboxEgress>,
+    pub egress: Option<SandboxEgressBinding>,
     /// Agent Engine that parents every sandbox. Sandboxes are created and enumerated under it,
     /// so a binding without it can neither reach nor reap them.
     pub engine: BindingValue<String>,
@@ -157,7 +222,7 @@ pub struct GcpAgentPlatformSandboxBinding {
 pub struct KubernetesSandboxBinding {
     /// Declared egress bound. Absent only in bindings created by older releases.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub egress: Option<SandboxEgress>,
+    pub egress: Option<SandboxEgressBinding>,
     /// Namespace sandbox pods are created in
     pub namespace: BindingValue<String>,
     /// Runtime class every sandbox pod must carry, such as `gvisor` or `kata`
@@ -181,7 +246,7 @@ pub struct KubernetesSandboxBinding {
 pub struct LocalSandboxBinding {
     /// Declared egress bound. Absent only in bindings created by older releases.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub egress: Option<SandboxEgress>,
+    pub egress: Option<SandboxEgressBinding>,
     /// Loopback endpoint of the local sandbox manager
     pub manager_url: BindingValue<String>,
     /// Key scoping this binding's sandboxes within the manager
@@ -227,7 +292,7 @@ impl SandboxBinding {
             data_plane_endpoint: data_plane_endpoint.into(),
             region: region.into(),
             resource_group: resource_group.into(),
-            egress,
+            egress: egress.into(),
             idle_pause_seconds,
             disk_image: disk_image.into(),
             // Ceilings are set on the struct where a caller has them; a positional argument each
@@ -247,11 +312,14 @@ impl SandboxBinding {
         allow_egress: bool,
     ) -> Self {
         Self::GcpAgentPlatform(GcpAgentPlatformSandboxBinding {
-            egress: Some(if allow_egress {
-                SandboxEgress::Internet
-            } else {
-                SandboxEgress::None
-            }),
+            egress: Some(
+                (if allow_egress {
+                    SandboxEgress::Internet
+                } else {
+                    SandboxEgress::None
+                })
+                .into(),
+            ),
             engine: engine.into(),
             template: template.into(),
             region: region.into(),
@@ -271,7 +339,7 @@ impl SandboxBinding {
         egress: Option<SandboxEgress>,
     ) -> Self {
         Self::Kubernetes(KubernetesSandboxBinding {
-            egress,
+            egress: egress.map(Into::into),
             namespace: namespace.into(),
             runtime_class: runtime_class.into(),
             selector: selector.into(),
@@ -289,7 +357,7 @@ impl SandboxBinding {
         egress: Option<SandboxEgress>,
     ) -> Self {
         Self::Local(LocalSandboxBinding {
-            egress,
+            egress: egress.map(Into::into),
             manager_url: manager_url.into(),
             sandbox_key: sandbox_key.into(),
             token_path: token_path.into(),
