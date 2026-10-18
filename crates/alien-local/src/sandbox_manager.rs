@@ -646,7 +646,7 @@ impl LocalSandboxManager {
     /// teardown so the Frozen parent's children go first.
     pub async fn reap(&self, sandbox: &str) -> Result<usize> {
         let sessions = self.list_sessions(sandbox).await?;
-        let count = sessions.len() + crate::sandbox_identity::reap(&self.docker, sandbox).await?;
+        let count = sessions.len();
 
         for session in sessions {
             self.terminate(sandbox, &session.session_id).await?;
@@ -659,7 +659,8 @@ impl LocalSandboxManager {
             .remove_network(&Self::network_name(sandbox))
             .await;
 
-        Ok(count)
+        // A failed inspection removal must never prevent termination of running commands.
+        Ok(count + crate::sandbox_identity::reap(&self.docker, sandbox).await?)
     }
 }
 
@@ -701,6 +702,61 @@ fn resolve_in_root(path: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_failed_inspection_cleanup_does_not_keep_sessions_alive() {
+        use httpmock::prelude::*;
+
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path_contains("/containers/json")
+                    .query_param("filters", r#"{"label":["dev.alien.sandbox=box"]}"#);
+                then.json_body(serde_json::json!([
+                    {"Id":"one", "Labels":{"dev.alien.sandbox.session":"s1"}},
+                    {"Id":"two", "Labels":{"dev.alien.sandbox.session":"s2"}}
+                ]));
+            })
+            .await;
+        let terminated = server
+            .mock_async(|when, then| {
+                when.method(DELETE)
+                    .path_contains("/containers/alien-sbx-box-")
+                    .query_param("force", "true");
+                then.status(204);
+            })
+            .await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path_contains("/containers/json")
+                    .query_param(
+                        "filters",
+                        r#"{"label":["dev.alien.sandbox.inspection=box"]}"#,
+                    );
+                then.json_body(serde_json::json!([{"Id":"inspection"}]));
+            })
+            .await;
+        server
+            .mock_async(|when, then| {
+                when.method(DELETE).path_contains("/containers/inspection");
+                then.status(500)
+                    .json_body(serde_json::json!({"message":"removal failed"}));
+            })
+            .await;
+        let manager = LocalSandboxManager {
+            docker: Docker::connect_with_http(&server.base_url(), 5, bollard::API_DEFAULT_VERSION)
+                .unwrap(),
+            state_dir: PathBuf::new(),
+        };
+
+        assert!(
+            manager.reap("box").await.is_err(),
+            "report the inspection cleanup failure"
+        );
+        terminated.assert_hits_async(2).await;
+    }
 
     #[test]
     fn container_and_network_names_are_session_scoped() {
