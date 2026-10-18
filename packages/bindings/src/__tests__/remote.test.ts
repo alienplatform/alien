@@ -328,7 +328,7 @@ describe("Bindings.forRemoteDeployment", () => {
     expect(bindings.sandbox("agent")).toBe(agent)
 
     await expect(agent.capabilities()).resolves.toEqual(["files", "reconnect"])
-    await agent.updateEgress("session_1", "none")
+    await agent.updateEgress("session_1", { allow: [] })
     await agent.terminate("session_1")
     await build.capabilities()
 
