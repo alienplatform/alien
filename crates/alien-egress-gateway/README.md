@@ -38,7 +38,7 @@ periodic refresh. The config is:
 The image runs as UID/GID 65532, needs no capabilities, and supports a read-only
 root filesystem. No policy KV, writable volume or policy-store permission is
 required. Policy storage uses half the finite cgroup v2 `memory.max` limit; a
-1 GiB container therefore has a 512 MiB record budget. Set `policyMemoryBytes`
+512 MiB container therefore has a 256 MiB record budget. Set `policyMemoryBytes`
 explicitly when no finite cgroup limit is available; otherwise startup fails.
 Snapshots stream signed records in bounded pages without duplicating the store.
 A config-file path is also accepted as a static override in the first
@@ -56,7 +56,7 @@ Every new connection reads the current in-memory policy. Policies support at mos
 256 KiB and 4096 targets. Each signed record has a format version and a version pair
 of Unix milliseconds and a process-specific writer ID. Higher pairs replace older
 records; equal and older pairs are no-ops. Records over sixty seconds in the future
-are refused. DELETE retains a denial tombstone for at least 25 hours; an explicit
+are refused. DELETE retains a denial tombstone for until its signed timestamp plus 25 hours and 60 seconds; an explicit
 higher-version policy can recreate an identity. Memory exhaustion refuses writes
 without evicting live policies.
 
@@ -77,7 +77,8 @@ A stalled sweep has a 20-second deadline and closes the affected tunnels. Token
 expiry and 120-second idle limits are swept every second. Activity resets the idle
 clock; a one-hour absolute connection limit also applies. Admission permits at
 most 32 unauthenticated connections per source IP, 128 authenticated connections
-per sandbox identity and 1024 total connections. Per-identity DNS concurrency is
+per sandbox identity and 2048 total connections by default (`maxConnections`
+overrides the global limit). Per-identity DNS concurrency is
 eight. DNS uses an async resolver, absolute names without search suffixes, and
 fresh address validation before dialing. SIGTERM and SIGINT stop admission and
 allow existing proxy connections up to fifteen seconds to drain.

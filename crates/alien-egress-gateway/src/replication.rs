@@ -195,7 +195,7 @@ impl Replication {
         peer: SocketAddr,
         body: Vec<u8>,
         gateway: Arc<crate::server::Gateway>,
-    ) -> Result<usize> {
+    ) -> Result<(usize, Vec<Summary>)> {
         let response = self.send(peer, "/v1/replicas/pull", body).await?;
         if response.status().as_u16() != 200 {
             return Err(AlienError::new(unavailable("replica snapshot unavailable")));
@@ -224,6 +224,9 @@ impl Replication {
     }
     /// A successful mutation has reached every discovered healthy replica.
     pub async fn fanout(&self, record: &Record, recovery: bool) -> Result<()> {
+        if record.expired(chrono::Utc::now().timestamp_millis().max(0) as u64) {
+            return Ok(());
+        }
         let body = serde_json::to_vec(&Mutation {
             record: record.signed.clone(),
         })
@@ -250,11 +253,16 @@ impl Replication {
             .ok_or_else(|| denied("config unavailable"))?;
         gateway.policies.expire_tombstones()?;
         for peer in self.peers().await? {
+            let mut ignored_expired = Vec::new();
             loop {
-                let request = serde_json::to_vec(&gateway.policies.summary()?)
+                let mut known = gateway.policies.summary()?;
+                known.extend(ignored_expired.iter().cloned());
+                let request = serde_json::to_vec(&known)
                     .into_alien_error()
                     .context(unavailable("encode replica summary"))?;
-                if self.pull(peer, request, gateway.clone()).await? == 0 {
+                let (received, expired) = self.pull(peer, request, gateway.clone()).await?;
+                ignored_expired.extend(expired);
+                if received == 0 {
                     break;
                 }
             }
@@ -292,12 +300,16 @@ impl Replication {
 
 struct RecordVisitor(Arc<crate::server::Gateway>);
 impl<'de> Visitor<'de> for RecordVisitor {
-    type Value = usize;
+    type Value = (usize, Vec<Summary>);
     fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
         formatter.write_str("an array of compact signed records")
     }
-    fn visit_seq<A: SeqAccess<'de>>(self, mut sequence: A) -> std::result::Result<usize, A::Error> {
+    fn visit_seq<A: SeqAccess<'de>>(
+        self,
+        mut sequence: A,
+    ) -> std::result::Result<Self::Value, A::Error> {
         let mut count = 0;
+        let mut expired = Vec::new();
         while let Some(signed) = sequence.next_element::<String>()? {
             let record = Record::verify(
                 signed,
@@ -306,13 +318,21 @@ impl<'de> Visitor<'de> for RecordVisitor {
                 chrono::Utc::now().timestamp_millis().max(0) as u64,
             )
             .map_err(serde::de::Error::custom)?;
-            self.0
-                .policies
-                .apply(record, false)
-                .map_err(serde::de::Error::custom)?;
+            if record.expired(chrono::Utc::now().timestamp_millis().max(0) as u64) {
+                expired.push(Summary {
+                    aud: record.claims.aud,
+                    sub: record.claims.sub,
+                    ver: record.claims.ver,
+                });
+            } else {
+                self.0
+                    .policies
+                    .apply(record, false)
+                    .map_err(serde::de::Error::custom)?;
+            }
             count += 1;
         }
-        Ok(count)
+        Ok((count, expired))
     }
 }
 
@@ -396,7 +416,7 @@ mod tests {
             writer.write_all(chunk).await.unwrap();
         }
         drop(writer);
-        assert_eq!(decoder.await.unwrap(), 3);
+        assert_eq!(decoder.await.unwrap().0, 3);
         for index in 0..3 {
             assert!(gateway
                 .policies

@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::{cmp::Ordering, collections::HashMap};
 
 pub const MAX_RECORD_BYTES: usize = 384 * 1024;
-pub const TOMBSTONE_RETENTION_MS: u64 = 25 * 60 * 60 * 1000;
+pub const TOMBSTONE_RETENTION_MS: u64 = (25 * 60 * 60 + 60) * 1000;
 pub type Version = (u64, String);
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -54,6 +54,9 @@ pub fn should_replace(current: Option<&Version>, incoming: &Version) -> bool {
     current.is_none_or(|version| compare_versions(incoming, version).is_gt())
 }
 impl Record {
+    pub fn expired(&self, now_ms: u64) -> bool {
+        self.claims.deleted && now_ms > self.claims.ver.0.saturating_add(TOMBSTONE_RETENTION_MS)
+    }
     pub fn verify(
         signed: String,
         keys: &HashMap<String, PublicKey>,

@@ -18,7 +18,7 @@ use tokio::{
 
 use crate::{
     config::Config,
-    connections::{Connections, IdentityPermit, SourcePermit, MAX_CONNECTIONS},
+    connections::{Connections, IdentityPermit, SourcePermit},
     error::{denied, invalid, unavailable, Result},
     io::{Counters, Metered, Prefixed},
     policy::{check_addresses, PolicyExt, Target},
@@ -124,7 +124,12 @@ pub async fn serve(
     live: Arc<crate::runtime::LiveGateway>,
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<()> {
-    let limit = Arc::new(Semaphore::new(MAX_CONNECTIONS));
+    let max_connections = live
+        .snapshot()
+        .ok_or_else(|| denied("config unavailable"))?
+        .config
+        .max_connections;
+    let limit = Arc::new(Semaphore::new(max_connections));
     let registry = live
         .snapshot()
         .ok_or_else(|| denied("config unavailable"))?
@@ -160,7 +165,7 @@ pub async fn serve(
                     Ok(permits) => permits,
                     Err(_) => {
                         gateway.denied.fetch_add(1, Ordering::Relaxed);
-                        if registry.record_denial(0) { tracing::info!(event = "close", decision = "deny", reason = "connection capacity", "egress connection"); }
+                        if registry.record_denial(0) { tracing::info!(event = "close", decision = "deny", reason = if limit.available_permits() == 0 { "global connection capacity" } else { "source connection capacity" }, max_connections, "egress connection"); }
                         continue;
                     }
                 };
