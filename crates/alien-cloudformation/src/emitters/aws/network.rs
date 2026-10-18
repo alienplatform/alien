@@ -649,32 +649,10 @@ pub(crate) fn gateway_egress_rules(ctx: &EmitContext<'_>) -> Result<CfExpression
             message: format!("network '{}' has no generated name", network.id),
         })
     })?;
-    let rule = |index| {
-        CfExpression::object([
-            ("IpProtocol", CfExpression::from("tcp")),
-            ("FromPort", CfExpression::Integer(3128)),
-            ("ToPort", CfExpression::Integer(3128)),
-            (
-                "CidrIp",
-                CfExpression::get_att(
-                    format!("{prefix}SandboxNetworkValidation"),
-                    format!("GatewayCidr{index}"),
-                ),
-            ),
-        ])
-    };
-    let mut rules = vec![rule(1), rule(2)];
-    if matches!(
-        network.vpc,
-        alien_core::sandbox_egress::SandboxEgressVpc::Created
-    ) {
-        rules.push(CfExpression::if_(
-            az_condition(2).expect("third zone is conditional"),
-            rule(3),
-            CfExpression::no_value(),
-        ));
-    }
-    Ok(CfExpression::list(rules))
+    Ok(CfExpression::get_att(
+        format!("{prefix}SandboxNetworkValidation"),
+        "ConnectorEgress",
+    ))
 }
 
 pub(crate) fn needs_gateway(ctx: &EmitContext<'_>) -> bool {

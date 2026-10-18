@@ -67,7 +67,8 @@ def validate(ec2, properties):
         raise ValueError("Gateway and workloads must share the deployment NAT gateway")
     if gateway_ids and len(gateway_ids) not in (2, 3):
         raise ValueError("Provide two or three dedicated gateway subnets")
-    data = {f"GatewayCidr{i + 1}": subnets[s]["CidrBlock"] for i, s in enumerate(gateway_ids)}
+    data = {}
+    data["ConnectorEgress"] = [{"IpProtocol": "tcp", "FromPort": 3128, "ToPort": 3128, "CidrIp": subnets[s]["CidrBlock"]} for s in gateway_ids]
     data["NlbIngress"] = [{"IpProtocol": "tcp", "FromPort": port, "ToPort": port, "CidrIp": subnets[s]["CidrBlock"]} for port, selected in ((3128, sandbox_ids), (3129, workload_ids)) for s in selected]
     data["NlbEgress"] = [{"IpProtocol": "tcp", "FromPort": 3128, "ToPort": 3129, "CidrIp": subnets[s]["CidrBlock"]} for s in gateway_ids]
     return data

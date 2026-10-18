@@ -1486,7 +1486,7 @@ fn add_network_parameters(
     if !target.is_kubernetes() && stack.resources().any(|(_, entry)| entry.config.downcast_ref::<Sandbox>().is_some()) {
         for (name, description) in [
             ("SandboxSubnetIds", "Only used with use-existing. Dedicated sandbox connector subnets with no default route; at least two availability zones."),
-            ("SandboxGatewaySubnetIds", "Only used with use-existing. Exactly two dedicated gateway subnets, routed through the deployment NAT."),
+            ("SandboxGatewaySubnetIds", "Only used with use-existing. Two or three dedicated gateway subnets, routed through the deployment NAT."),
         ] {
             template.parameters.insert(name.to_string(), comma_list_parameter(description, vec![]));
         }
