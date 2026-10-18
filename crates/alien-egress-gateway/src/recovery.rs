@@ -75,8 +75,12 @@ pub async fn handle(
         return Err(denied("recovery identity mismatch"));
     }
     // Applying locally never overwrites a policy or a tombstone, even after a racing update.
-    gateway.policies.apply(record.clone(), true)?;
-    if gateway.replication.fanout(&record, true).await.is_err() {
+    if !gateway.policies.apply(record.clone(), true)? {
+        // Catch-up distributes the retained policy or tombstone. Never seed an empty
+        // peer with a submission that this replica refused to apply.
+        return reply(stream, 409).await;
+    }
+    if gateway.replication.fanout(&record).await.is_err() {
         return reply(stream, 503).await;
     }
     let status = match gateway.policies.record(&claims.aud, &claims.sub)? {

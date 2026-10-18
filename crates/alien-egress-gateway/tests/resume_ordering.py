@@ -57,6 +57,10 @@ def check_resume_ordering(suite, name, call, docker, networks, prefix):
     finally:
         docker("network", "disconnect", network, name)
         docker("network", "disconnect", network, prefix + "-origin")
+        # Docker keeps the host route until the network is removed. Leaving this
+        # subnet behind would hide the real internet canary from later fixtures.
+        docker("network", "rm", network)
+        networks.remove(network)
     assert call("POST", RESUME, {})[0] == 200
     exec_ok()
 

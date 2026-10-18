@@ -1,4 +1,5 @@
 """System restore traffic stays outside command-UID routing and filtering."""
+import json
 
 
 def check_system_egress(suite, name, call, docker, uid, prefix):
@@ -31,7 +32,10 @@ except (OSError,http.client.HTTPException): pass
     for hook in ["suspend", "resume"]:
         suite.record(f"agent {hook} hook remains reachable with routing installed", lambda hook=hook:
                      _hook(call, hook))
-    assert call("POST","/v1/exec",{"command":["true"],"timeoutMs":1000})[0]==503
+    status, body = call("POST", "/v1/exec", {"command": ["true"], "timeoutMs": 1000})
+    assert status == 200, (status, body)
+    frames = [json.loads(line) for line in body.splitlines()]
+    assert frames[-1]["t"] == "exit" and frames[-1]["code"] == 0, frames
     assert call("PUT","/v1/egress",{"token":suite.token()})[0]==204
 
 

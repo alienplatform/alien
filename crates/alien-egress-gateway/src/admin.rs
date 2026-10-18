@@ -150,7 +150,7 @@ async fn publish(gateway: &Gateway, record: Record) -> Response {
     if let Err(error) = gateway.policies.apply(record.clone(), false) {
         return failure(error);
     }
-    match gateway.replication.fanout(&record, false).await {
+    match gateway.replication.fanout(&record).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(_) => failure(alien_error::AlienError::new(
             crate::error::ErrorData::GatewayUnavailable,

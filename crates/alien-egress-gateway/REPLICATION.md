@@ -59,9 +59,11 @@ The proxy listener accepts `GET /health` with a live `Proxy-Authorization: Beare
 sandbox token: 200 means an existing policy (including deny-all), 403 means a
 tombstone, and 404 means no entry. `PUT /v1/policies/register` on that listener
 accepts `{"record":"<compact JWS>"}` with the same token and bounded
-`Content-Length`. It only fills absence, including on peers: 204 means the saved
-record is current; 409 means an existing entry prevented replacement; 503 means
-replication failed. The agent never registers after a 403.
+`Content-Length`. It only fills absence at the contacted replica: 204 means the
+saved record is current; 409 means an existing entry prevented replacement; 503
+means replication failed. Rejected submissions are never forwarded. Applied
+records replicate through normal version ordering; catch-up distributes any
+retained restriction to peers missing it. The agent never registers after a 403.
 
 Agent delivery is `PUT /v1/egress` with `{token,policy:"<compact JWS>",caCert?}`;
 the `updateEgress` envelope carries the same fields. Resume checks the physical

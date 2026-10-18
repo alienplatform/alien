@@ -531,3 +531,59 @@ async fn tombstones_expire_at_the_signed_timestamp_despite_staggered_snapshots()
         cluster.stop(index).await;
     }
 }
+
+async fn rejected_recovery_keeps_missing_peers_restricted(policy: Option<Value>) {
+    let mut cluster = Cluster::new().await;
+    let token = identity();
+    let base = millis();
+    let old_allow = record(base, 1, Some(json!("internet")));
+    let deleted = policy.is_none();
+    let restriction = record(base + 1, 1, policy);
+    // The write is retained at one replica while both reachable peers lack the entry.
+    // Recovery must not forward the rejected old allow; catch-up distributes the restriction.
+    cluster.isolate(0, Fault::Drop);
+    assert_eq!(cluster.write(0, &restriction, deleted).await, 503);
+    cluster.assert_all(&token, 403).await;
+    cluster.isolate(0, Fault::Heal);
+    assert_eq!(cluster.register(0, &token, &old_allow).await, 409);
+    cluster.assert_all(&token, 403).await;
+    let health = |index| {
+        cluster
+            .client
+            .get(format!("http://{}/health", cluster.proxy[index]))
+            .header("Proxy-Authorization", format!("Bearer {token}"))
+    };
+    assert_eq!(
+        health(1).send().await.unwrap().status(),
+        404,
+        "rejected recovery must not write peers"
+    );
+    let deadline = Instant::now() + Duration::from_secs(35);
+    loop {
+        let expected = if deleted { 403 } else { 200 };
+        if health(1).send().await.unwrap().status().as_u16() == expected
+            && health(2).send().await.unwrap().status().as_u16() == expected
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "catch-up did not restore the retained restriction"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    cluster.assert_all(&token, 403).await;
+    for index in 0..3 {
+        cluster.stop(index).await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn rejected_recovery_cannot_forward_an_old_allow_past_a_retained_narrowing() {
+    rejected_recovery_keeps_missing_peers_restricted(Some(json!({"allow":[]}))).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn rejected_recovery_cannot_forward_an_old_allow_past_a_retained_tombstone() {
+    rejected_recovery_keeps_missing_peers_restricted(None).await;
+}

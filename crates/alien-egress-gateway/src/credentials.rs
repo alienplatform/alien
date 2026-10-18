@@ -4,7 +4,7 @@ use alien_bindings::Bindings;
 use alien_error::{Context, IntoAlienError};
 use base64::Engine;
 use hmac::{Hmac, Mac};
-use http::{HeaderName, HeaderValue};
+use http::{HeaderName, HeaderValue, Request};
 use rcgen::{
     BasicConstraints, CertificateParams, CidrSubnet, DnType, ExtendedKeyUsagePurpose,
     GeneralSubtree, IsCa, Issuer, KeyPair, KeyUsagePurpose, NameConstraints,
@@ -26,7 +26,7 @@ use crate::{
     config::CredentialRule,
     credential_cache::Cache,
     error::{invalid, unavailable, Result},
-    http_proxy::{self, Injection},
+    http_proxy,
     policy::{normalize_host, Target},
     server::HEADER_TIMEOUT,
 };
@@ -255,20 +255,31 @@ impl Credentials {
             .context(unavailable("guest TLS timeout"))?
             .into_alien_error()
             .context(unavailable("accept guest TLS"))?;
-        let mut headers = Vec::new();
+        http_proxy::forward(guest, upstream, target, Some((self, rules))).await
+    }
+
+    /// Resolve only the secrets whose rules match this validated HTTP request.
+    pub(crate) async fn inject<B>(
+        &self,
+        request: &mut Request<B>,
+        rules: &[CredentialRule],
+    ) -> Result<()> {
         for rule in rules {
+            let path = request.uri().path();
+            if request.method().as_str() != rule.method
+                || !(path == rule.path
+                    || (rule.path.ends_with('/') && path.starts_with(&rule.path)))
+            {
+                continue;
+            }
             let secret = self.secret(&rule.vault_binding, &rule.secret).await?;
             let value = HeaderValue::from_str(&format!("{}{}", rule.value_prefix, secret))
                 .map_err(|_| invalid("credential is not a valid HTTP header value"))?;
-            headers.push(Injection {
-                method: rule.method.clone(),
-                path: rule.path.clone(),
-                name: HeaderName::from_bytes(rule.header.as_bytes())
-                    .map_err(|_| invalid("invalid injection header"))?,
-                value,
-            });
+            let name = HeaderName::from_bytes(rule.header.as_bytes())
+                .map_err(|_| invalid("invalid injection header"))?;
+            request.headers_mut().insert(name, value);
         }
-        http_proxy::forward(guest, upstream, target, Some(Arc::new(headers))).await
+        Ok(())
     }
 }
 
