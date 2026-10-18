@@ -1808,6 +1808,7 @@ impl KubernetesContainerController {
             (&self.container_id, &self.service_name, &self.namespace)
         {
             let binding = KubernetesContainerBinding {
+                internal_endpoints: HashMap::new(),
                 name: BindingValue::Value(container_id.clone()),
                 namespace: BindingValue::Value(namespace.clone()),
                 service_name: BindingValue::Value(service_name.clone()),

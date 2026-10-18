@@ -13,6 +13,8 @@ pub struct LocalContainer {
     container_name: String,
     internal_url: String,
     public_url: Option<String>,
+    internal_endpoints:
+        std::collections::HashMap<String, alien_core::ContainerInternalEndpointOutput>,
 }
 
 impl LocalContainer {
@@ -51,7 +53,9 @@ impl LocalContainer {
             })
             .transpose()?;
 
+        let internal_endpoints = super::resolve_internal_endpoints(binding.internal_endpoints)?;
         Ok(Self {
+            internal_endpoints,
             container_name,
             internal_url,
             public_url,
@@ -63,6 +67,12 @@ impl Binding for LocalContainer {}
 
 #[async_trait]
 impl Container for LocalContainer {
+    fn get_internal_endpoints(
+        &self,
+    ) -> std::collections::HashMap<String, alien_core::ContainerInternalEndpointOutput> {
+        self.internal_endpoints.clone()
+    }
+
     fn get_internal_url(&self) -> &str {
         &self.internal_url
     }

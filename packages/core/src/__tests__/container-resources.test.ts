@@ -16,3 +16,42 @@ it("clears deployment choices when both resources become fixed", () => {
   })
   expect(resource.config).not.toHaveProperty("resourceChoices", expect.anything())
 })
+
+it("keeps source-restricted endpoints separate from ordinary and public ports", () => {
+  const caller = new Container("caller")
+    .code({ type: "image", image: "example:latest" })
+    .cpu(1)
+    .memory("512Mi")
+    .permissions("app")
+    .build()
+  const endpoint = new Container("api")
+    .code({ type: "image", image: "example:latest" })
+    .cpu(1)
+    .memory("512Mi")
+    .permissions("app")
+    .internalEndpoint("admin", 3129, { from: [caller] })
+    .security({
+      profile: "restricted",
+      runAsUser: 65532,
+      runAsGroup: 65532,
+      readOnlyRootFilesystem: true,
+    })
+    .egress("internet")
+    .build()
+  expect(endpoint.config).toMatchObject({
+    ports: [],
+    publicEndpoints: [],
+    links: [],
+    egress: "internet",
+    internalEndpoints: [{ name: "admin", port: 3129, from: [{ type: "container", id: "caller" }] }],
+  })
+  expect(() =>
+    new Container("invalid")
+      .code({ type: "image", image: "example:latest" })
+      .cpu(1)
+      .memory("512Mi")
+      .permissions("app")
+      .internalEndpoint("admin", 3129, { from: [] })
+      .build(),
+  ).toThrow()
+})

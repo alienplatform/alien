@@ -506,6 +506,7 @@ impl PreflightRegistry {
 
         // Phase 4: Dependency wiring (must be last, after all resources exist)
         registry.add_mutation(Box::new(mutations::SandboxGatewayLinksMutation));
+        registry.add_mutation(Box::new(mutations::ContainerEndpointLinksMutation));
         registry.add_mutation(Box::new(mutations::ServiceAccountDependenciesMutation));
         registry.add_mutation(Box::new(mutations::InfrastructureDependenciesMutation));
 
