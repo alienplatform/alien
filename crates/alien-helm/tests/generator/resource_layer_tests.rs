@@ -2,7 +2,7 @@
 //! artifact-registry contributions land under
 //! `infrastructure.<resource_id>` in the chart's `values.yaml`.
 
-use super::helpers::{assert_helm_valid, render, snapshot_chart, try_render};
+use super::helpers::{assert_helm_valid, render, snapshot_chart};
 use alien_core::{
     ArtifactRegistry, Kv, Queue, ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress,
     SandboxLifecyclePolicy, Stack, StackSettings, Storage, Vault,
@@ -162,39 +162,4 @@ fn a_sandbox_allowing_egress_still_denies_the_metadata_endpoint() {
     );
 
     assert_helm_valid(&chart, "sandbox_layer_allow");
-}
-
-/// NetworkPolicy matches addresses, not names, so a hostname allowlist has nothing to render
-/// into. It is refused: rendering it as `allow` would open every address the list excluded, and
-/// the chart would look like the policy applied.
-///
-/// The second gate, not the first — a customer meets `domainEgressRules` at plan time. This one
-/// covers the paths that render without planning.
-#[test]
-fn a_hostname_allowlist_is_refused_rather_than_widened() {
-    let stack = Stack::new("sandbox-domains-chart".to_string())
-        .add(
-            Sandbox::new("agent".to_string())
-                .code(SandboxCode::Image {
-                    image: "ubuntu:24.04".to_string(),
-                })
-                .egress(SandboxEgress::Allow {
-                    allow: vec!["example.com".to_string()],
-                })
-                .lifecycle(SandboxLifecyclePolicy {
-                    max_lifetime_seconds: None,
-                    idle_pause_seconds: None,
-                })
-                .build(),
-            ResourceLifecycle::Frozen,
-        )
-        .build();
-    let error = try_render(&stack, StackSettings::default())
-        .expect_err("a hostname list must be refused rather than approximated");
-
-    assert_eq!(error.code, "OPERATION_NOT_SUPPORTED", "{error}");
-    assert!(
-        error.to_string().contains("agent"),
-        "the refusal must name the sandbox it is about: {error}"
-    );
 }

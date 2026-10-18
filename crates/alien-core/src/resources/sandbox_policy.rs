@@ -1,4 +1,4 @@
-//! Sandbox egress declarations and the shared runtime narrowing rule.
+//! Runtime sandbox destination policies and public-address validation.
 
 use sha2::{Digest, Sha256};
 use std::net::Ipv4Addr;
@@ -11,15 +11,13 @@ use utoipa::openapi::schema::{ArrayBuilder, ObjectBuilder, OneOfBuilder, Type};
 
 use crate::error::{ErrorData, Result};
 
-/// Outbound network policy, bounded by the deployment's declaration.
+/// Per-sandbox outbound policy enforced by the gateway.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub enum SandboxEgress {
-    /// No outbound network access.
-    None,
+pub enum EgressPolicy {
     /// Public internet access. Private and link-local destinations remain forbidden.
     Internet,
-    /// Explicit destinations; ports default to 443 and wildcards exclude the apex.
+    /// Explicit destinations; unspecified ports match any port and wildcards include the apex.
     #[serde(untagged)]
     Allow {
         /// Hostnames, wildcard hostnames, IPv4 literals or IPv4 CIDRs, optionally with a port.
@@ -29,13 +27,13 @@ pub enum SandboxEgress {
 
 // Utoipa does not support serde's per-variant `untagged`, so describe the wire union explicitly.
 #[cfg(feature = "openapi")]
-impl utoipa::PartialSchema for SandboxEgress {
+impl utoipa::PartialSchema for EgressPolicy {
     fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
         OneOfBuilder::new()
             .item(
                 ObjectBuilder::new()
                     .schema_type(Type::String)
-                    .enum_values(Some(["none", "internet"])),
+                    .enum_values(Some(["internet"])),
             )
             .item(
                 ObjectBuilder::new()
@@ -43,7 +41,7 @@ impl utoipa::PartialSchema for SandboxEgress {
                         "allow",
                         ArrayBuilder::new()
                             .items(ObjectBuilder::new().schema_type(Type::String))
-                            .min_items(Some(1))
+                            .min_items(Some(0))
                             .max_items(Some(4096)),
                     )
                     .required("allow")
@@ -56,21 +54,13 @@ impl utoipa::PartialSchema for SandboxEgress {
 }
 
 #[cfg(feature = "openapi")]
-impl utoipa::ToSchema for SandboxEgress {}
+impl utoipa::ToSchema for EgressPolicy {}
 
-impl<'de> Deserialize<'de> for SandboxEgress {
+impl<'de> Deserialize<'de> for EgressPolicy {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", tag = "mode", deny_unknown_fields)]
-        enum Legacy {
-            Deny {},
-            Allow {},
-            AllowDomains { domains: Vec<String> },
-        }
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
         enum Mode {
-            None,
             Internet,
         }
         #[derive(Deserialize)]
@@ -83,18 +73,15 @@ impl<'de> Deserialize<'de> for SandboxEgress {
         enum Input {
             Mode(Mode),
             Allow(Allow),
-            Legacy(Legacy),
         }
         Ok(match Input::deserialize(deserializer)? {
-            Input::Mode(Mode::None) | Input::Legacy(Legacy::Deny {}) => Self::None,
-            Input::Mode(Mode::Internet) | Input::Legacy(Legacy::Allow {}) => Self::Internet,
+            Input::Mode(Mode::Internet) => Self::Internet,
             Input::Allow(Allow { allow }) => Self::Allow { allow },
-            Input::Legacy(Legacy::AllowDomains { domains }) => Self::Allow { allow: domains },
         })
     }
 }
 
-impl SandboxEgress {
+impl EgressPolicy {
     /// Validates every target before a deployment or runtime request can take effect.
     pub fn validate(&self) -> Result<()> {
         self.targets().map(|_| ())
@@ -110,7 +97,7 @@ impl SandboxEgress {
         }
     }
 
-    /// Canonical JSON used by the gateway policy reference: normalized, sorted, no whitespace.
+    /// Canonical JSON used to authenticate gateway policy writes: normalized, sorted, no whitespace.
     /// Duplicate entries remain present; sorting makes input order irrelevant to the digest.
     pub fn canonical_json(&self) -> Result<Vec<u8>> {
         let mut policy = self.normalized()?;
@@ -125,7 +112,7 @@ impl SandboxEgress {
             })
     }
 
-    /// SHA-256 reference carried in proxy and admin JWS claims.
+    /// SHA-256 digest authenticating the policy body in an admin JWS.
     pub fn policy_digest(&self) -> Result<String> {
         Ok(format!(
             "sha256:{:x}",
@@ -133,56 +120,17 @@ impl SandboxEgress {
         ))
     }
 
-    /// Checks the declaration bound, naming the first target that would widen it.
-    /// Invalid targets are refused even when the bound permits internet access.
-    pub fn ensure_subset_of(&self, bound: &Self) -> Result<()> {
-        let requested = self.targets()?;
-        let declared = bound.targets()?;
-        let offending = match (self, bound) {
-            (Self::None, _) | (_, Self::Internet) => None,
-            (Self::Internet, _) => Some("internet".to_string()),
-            (Self::Allow { allow }, Self::None) => allow.first().cloned(),
-            (Self::Allow { allow }, Self::Allow { .. }) => requested
-                .iter()
-                .zip(allow)
-                .find(|(target, _)| !declared.iter().any(|parent| parent.contains(target)))
-                .map(|(_, original)| original.clone()),
-        };
-        match offending {
-            Some(target) => Err(AlienError::new(ErrorData::SandboxEgressWidens { target })),
-            None => Ok(()),
-        }
-    }
-
-    // Setup authorizations predate the JSON rename. Keep only their hash projection stable;
-    // declarations and stored state use the current format but retain the original spelling.
-    // Normalizing at storage time would invalidate approvals after saving and reloading a stack.
-    pub(crate) fn setup_digest_value(&self) -> serde_json::Value {
-        match self {
-            Self::None => serde_json::json!({ "mode": "deny" }),
-            Self::Internet => serde_json::json!({ "mode": "allow" }),
-            Self::Allow { allow } => {
-                serde_json::json!({ "mode": "allowDomains", "domains": allow })
-            }
-        }
-    }
-
-    /// Boolean backend switch, or `None` when the backend needs a destination matcher.
-    pub fn internet_access_switch(&self) -> Option<bool> {
-        match self {
-            Self::None => Some(false),
-            Self::Internet => Some(true),
-            Self::Allow { .. } => None,
-        }
+    /// Whether a concrete public destination and port match this policy.
+    pub fn allows(&self, host: &str, port: u16) -> Result<bool> {
+        let target = Target::parse(&format!("{host}:{port}"))?;
+        Ok(matches!(self, Self::Internet)
+            || self.targets()?.iter().any(|entry| entry.contains(&target)))
     }
 
     fn targets(&self) -> Result<Vec<Target>> {
         let Self::Allow { allow } = self else {
             return Ok(Vec::new());
         };
-        if allow.is_empty() {
-            return Err(invalid("allow", "must contain at least one target"));
-        }
         if allow.len() > 4096 {
             return Err(AlienError::new(ErrorData::SandboxEgressPolicyTooLarge {
                 limit: "4096 targets".to_string(),
@@ -194,7 +142,7 @@ impl SandboxEgress {
             .collect::<Result<Vec<_>>>()?;
         // Valid targets are ASCII without JSON escape characters. Include object/array syntax,
         // two quotes per target and commas to measure the exact canonical JSON byte length.
-        let canonical_bytes = 11
+        let canonical_bytes = 12 - usize::from(!targets.is_empty())
             + targets
                 .iter()
                 .map(|target| target.canonical().len() + 3)
@@ -211,7 +159,7 @@ impl SandboxEgress {
 #[derive(Debug)]
 struct Target {
     host: Host,
-    port: u16,
+    port: Option<u16>,
 }
 
 #[derive(Debug)]
@@ -247,9 +195,9 @@ impl Target {
                 if port == 0 {
                     return Err(invalid(target, "port must be between 1 and 65535"));
                 }
-                (host, port)
+                (host, Some(port))
             }
-            None => (target, 443),
+            None => (target, None),
         };
         let host = host.strip_suffix('.').unwrap_or(host);
         let network = if host.contains('/') {
@@ -331,15 +279,14 @@ impl Target {
             Host::Network(network) if network.prefix_len() == 32 => network.addr().to_string(),
             Host::Network(network) => network.to_string(),
         };
-        if self.port == 443 {
-            host
-        } else {
-            format!("{host}:{}", self.port)
+        match self.port {
+            Some(port) => format!("{host}:{port}"),
+            None => host,
         }
     }
 
     fn contains(&self, target: &Self) -> bool {
-        if self.port != target.port {
+        if self.port.is_some() && self.port != target.port {
             return false;
         }
         match (&self.host, &target.host) {
@@ -355,7 +302,7 @@ impl Target {
                 },
             ) => {
                 if *parent_wildcard {
-                    (*child_wildcard && child == parent)
+                    child == parent
                         || child
                             .strip_suffix(parent)
                             .is_some_and(|prefix| prefix.ends_with('.') && prefix.len() > 1)

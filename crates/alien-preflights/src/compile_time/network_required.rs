@@ -446,12 +446,6 @@ mod tests {
     fn a_sandbox_requires_a_network_only_when_its_egress_is_restricted() {
         for (egress, expected) in [
             (SandboxEgress::None, true),
-            (
-                SandboxEgress::Allow {
-                    allow: vec!["example.com".to_string()],
-                },
-                true,
-            ),
             (SandboxEgress::Internet, false),
         ] {
             let mut resources = IndexMap::new();

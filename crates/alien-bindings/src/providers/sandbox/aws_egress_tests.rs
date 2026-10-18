@@ -1,10 +1,10 @@
-//! AWS lifecycle ordering with real TLS agent delivery and durable KV policy records.
+//! AWS lifecycle ordering with real TLS agent delivery and gateway policy writes.
 
 use super::*;
 use crate::sandbox_egress::tests::Harness;
 use crate::sandbox_egress_token::EgressTokenClaims;
 use alien_aws_clients::aws::lambda_microvms::{MicrovmAuthToken, MockLambdaMicrovmsApi};
-use alien_core::SandboxEgress;
+use alien_core::{EgressPolicy, SandboxEgress};
 use axum::{
     http::{HeaderMap, StatusCode},
     routing::{get, put},
@@ -17,7 +17,7 @@ use std::sync::{
 };
 
 #[tokio::test]
-async fn aws_egress_create_update_paused_reconnect_and_renew_deliver_fenced_tokens() {
+async fn aws_egress_updates_paused_policy_without_redelivering_identity() {
     exercise(false).await;
 }
 
@@ -50,10 +50,9 @@ async fn exercise(refuse_delivery: bool) {
                         .unwrap();
                         assert_eq!(claims.sub, "mvm-policy");
                         assert_eq!(claims.aud, "prefix/box");
-                        assert_eq!(
-                            fences.highest(&claims.sub),
-                            Some(claims.generation),
-                            "fence must precede agent delivery"
+                        assert!(
+                            fences.policy(&claims.sub).is_some(),
+                            "policy must precede identity delivery"
                         );
                         seen.lock().unwrap().push(claims);
                         if refuse_delivery {
@@ -102,6 +101,8 @@ async fn exercise(refuse_delivery: bool) {
         })
         .returning(|_, _, _, _, _, _, _, _| {
             Ok(Microvm {
+                started_at: Some(crate::sandbox_egress::now_unix().unwrap().into()),
+                maximum_duration_in_seconds: Some(3600),
                 microvm_id: Some("mvm-policy".to_string()),
                 endpoint: None,
                 state: Some("PENDING".to_string()),
@@ -112,6 +113,8 @@ async fn exercise(refuse_delivery: bool) {
     let pause_state = paused.clone();
     api.expect_get_microvm().returning(move |id| {
         Ok(Microvm {
+            started_at: Some(crate::sandbox_egress::now_unix().unwrap().into()),
+            maximum_duration_in_seconds: Some(3600),
             microvm_id: Some(id.to_string()),
             endpoint: Some(endpoint.clone()),
             image_arn: Some("image".to_string()),
@@ -168,91 +171,103 @@ async fn exercise(refuse_delivery: bool) {
         )
         .build()
         .unwrap();
-    let policy = SandboxEgress::Allow {
+    let policy = EgressPolicy::Allow {
         allow: vec!["api.example.com".to_string()],
     };
-    let created = provider
-        .create(CreateSandboxRequest {
-            egress: Some(policy.clone()),
-            ..Default::default()
-        })
-        .await;
+    provider = provider.with_default_policy(Some(policy.clone()));
+    let created = provider.create(CreateSandboxRequest::default()).await;
     if refuse_delivery {
         assert!(created.is_err());
         assert_eq!(terminated.load(Ordering::SeqCst), 1);
+        assert_eq!(harness.policy("mvm-policy"), None);
     } else {
         let created = created.unwrap();
+        assert_eq!(harness.policy(&created.sandbox_id), Some(policy.clone()));
+        let delivered = policies.lock().unwrap().len();
+        provider
+            .request(&created.sandbox_id, reqwest::Method::GET, "/health")
+            .await
+            .unwrap();
         assert_eq!(
-            policies.lock().unwrap()[0].policy,
-            policy.policy_digest().unwrap()
+            policies.lock().unwrap().len(),
+            delivered,
+            "ordinary operations reuse the identity token"
         );
         paused.store(true, Ordering::SeqCst);
         provider
-            .update_egress(&created.sandbox_id, SandboxEgress::None)
+            .update_egress(&created.sandbox_id, EgressPolicy::Allow { allow: vec![] })
             .await
             .unwrap();
-        assert!(
-            paused.load(Ordering::SeqCst),
-            "update must restore paused state"
+        assert!(paused.load(Ordering::SeqCst));
+        assert_eq!(
+            policies.lock().unwrap().len(),
+            delivered,
+            "update must not PUT the agent"
         );
         assert_eq!(
-            policies.lock().unwrap().last().unwrap().policy,
-            SandboxEgress::None.policy_digest().unwrap()
+            harness.policy(&created.sandbox_id),
+            Some(EgressPolicy::Allow { allow: vec![] })
         );
         provider.resume(&created.sandbox_id).await.unwrap();
         assert_eq!(
-            policies.lock().unwrap().last().unwrap().generation,
-            1,
-            "renewal must retain generation"
+            policies.lock().unwrap().len(),
+            delivered + 1,
+            "resume may renew identity"
         );
         let recovered = provider
             .get_or_create(CreateSandboxRequest {
                 sandbox_id: Some(created.sandbox_id.clone()),
-                egress: Some(policy),
+                egress: Some(EgressPolicy::Internet),
                 ..Default::default()
             })
             .await
             .unwrap();
         assert!(!recovered.created);
-        assert_eq!(policies.lock().unwrap().last().unwrap().generation, 2);
+        assert_eq!(
+            harness.policy(&created.sandbox_id),
+            Some(EgressPolicy::Internet)
+        );
         provider.terminate(&created.sandbox_id).await.unwrap();
         assert_eq!(terminated.load(Ordering::SeqCst), 1);
+        assert_eq!(harness.policy("mvm-policy"), None);
     }
     server.abort();
 }
 
 #[tokio::test]
-async fn aws_egress_declared_none_needs_no_gateway_for_a_same_policy_update() {
-    let mut api = MockLambdaMicrovmsApi::new();
-    api.expect_get_microvm().times(1).returning(|id| {
-        Ok(Microvm {
-            microvm_id: Some(id.to_string()),
-            endpoint: None,
-            state: Some("SUSPENDED".to_string()),
-            image_arn: Some("image".to_string()),
-            image_version: Some("1".to_string()),
-        })
-    });
+async fn aws_egress_declared_none_refuses_every_explicit_policy_before_io() {
     let provider = AwsSandbox::new(
-        Arc::new(api),
+        Arc::new(MockLambdaMicrovmsApi::new()),
         "image",
         "1",
-        vec!["loopback-only".to_string()],
+        vec!["loopback-only".into()],
         vec![],
         None,
         None,
     )
     .with_egress(Some(SandboxEgress::None));
-    assert_eq!(
-        provider
-            .update_egress("mvm-policy", SandboxEgress::Internet)
-            .await
-            .unwrap_err()
-            .code,
-        "SANDBOX_EGRESS_WIDENS"
-    );
-    provider
-        .update_egress("mvm-policy", SandboxEgress::None)
-        .await
-        .unwrap();
+    for policy in [
+        EgressPolicy::Internet,
+        EgressPolicy::Allow { allow: vec![] },
+    ] {
+        assert_eq!(
+            provider
+                .update_egress("mvm-policy", policy.clone())
+                .await
+                .unwrap_err()
+                .code,
+            "SANDBOX_EGRESS_NONE"
+        );
+        assert_eq!(
+            provider
+                .create(CreateSandboxRequest {
+                    egress: Some(EgressPolicy::Internet),
+                    ..Default::default()
+                })
+                .await
+                .unwrap_err()
+                .code,
+            "SANDBOX_EGRESS_NONE"
+        );
+    }
 }

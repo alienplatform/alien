@@ -69,7 +69,7 @@ impl ResourceImporter for AzureSandboxImporter {
             retired_disk_images: Vec::new(),
             pending_disk_image: None,
             built_disk_images: false,
-            egress: Some(sandbox.egress.clone()),
+            egress: Some(sandbox.into()),
             idle_pause_seconds: sandbox.lifecycle.idle_pause_seconds,
             limits: sandbox.limits.clone(),
             _internal_stay_count: None,

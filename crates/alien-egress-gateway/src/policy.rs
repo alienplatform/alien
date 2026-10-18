@@ -1,4 +1,4 @@
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::IpAddr;
 
 use alien_error::ContextError;
 use ipnet::Ipv4Net;
@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 
 use crate::error::{denied, invalid, Result};
 
-pub use alien_core::SandboxEgress as Policy;
+pub use alien_core::EgressPolicy as Policy;
 
 /// Maximum canonical policy payload shared by all providers.
 pub const MAX_POLICY_BYTES: usize = 256 * 1024;
@@ -84,11 +84,8 @@ impl PolicyExt for Policy {
     /// Check the policy against a destination. Internet never authorizes literal IPs.
     fn permits(&self, target: &Target) -> bool {
         match self {
-            Self::None => false,
             Self::Internet => target.host.parse::<IpAddr>().is_err(),
-            Self::Allow { allow } => {
-                allow.len() <= 4096 && allow.iter().any(|rule| rule_matches(rule, target))
-            }
+            Self::Allow { .. } => self.allows(&target.host, target.port).unwrap_or(false),
         }
     }
 }
@@ -110,29 +107,6 @@ pub fn canonical(policy: &Policy) -> Result<Vec<u8>> {
 /// Digest includes its algorithm name to prevent format ambiguity.
 pub fn digest(bytes: &[u8]) -> String {
     format!("sha256:{:x}", Sha256::digest(bytes))
-}
-
-fn rule_matches(rule: &str, target: &Target) -> bool {
-    let (host, port) = match rule.rsplit_once(':') {
-        Some((host, port)) => match port.parse::<u16>() {
-            Ok(port) => (host, Some(port)),
-            Err(_) => return false,
-        },
-        None => (rule, None),
-    };
-    if port.is_some_and(|port| port != target.port) {
-        return false;
-    }
-    if let Ok(ip) = target.host.parse::<Ipv4Addr>() {
-        return host.parse::<Ipv4Net>().is_ok_and(|net| net.contains(&ip))
-            || host.parse::<Ipv4Addr>() == Ok(ip);
-    }
-    if let Some(suffix) = host.strip_prefix("*.") {
-        return normalize_host(suffix).is_ok_and(|suffix| {
-            target.host == suffix || target.host.ends_with(&format!(".{suffix}"))
-        });
-    }
-    normalize_host(host).is_ok_and(|host| host == target.host)
 }
 
 /// Check every answer before connecting to any answer, including mixed public/private replies.

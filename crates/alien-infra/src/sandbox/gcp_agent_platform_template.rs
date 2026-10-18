@@ -222,6 +222,8 @@ pub struct GcpAgentPlatformTemplateController {
     pub(crate) region: Option<String>,
     /// Session lifetime from the declaration, carried into the binding.
     pub(crate) max_lifetime_seconds: Option<u32>,
+    #[serde(default)]
+    pub(crate) default_policy: Option<alien_core::EgressPolicy>,
     /// Egress switch the serving template reports, carried into the binding and re-read on every
     /// Ready. `None` is state saved before the field existed; the binding reads it as deny.
     #[serde(default)]
@@ -262,6 +264,7 @@ impl GcpAgentPlatformTemplateController {
         self.project_id = Some(gcp_config.project_id.clone());
         self.region = Some(gcp_config.region.clone());
         self.max_lifetime_seconds = config.lifecycle.max_lifetime_seconds;
+        self.default_policy = config.default_policy.clone();
 
         info!(id=%config.id, engine=%engine, "Creating sandbox environment template");
         let operation =
@@ -527,6 +530,7 @@ impl GcpAgentPlatformTemplateController {
     )]
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
+        self.default_policy = config.default_policy.clone();
         let previous = ctx.previous_resource_config::<Sandbox>()?;
 
         // The template is immutable, so an unchanged body needs no work and a changed one is a
@@ -649,13 +653,17 @@ impl GcpAgentPlatformTemplateController {
         let engine_name =
             format!("projects/{project}/locations/{region}/reasoningEngines/{engine}");
         let template_name = format!("{engine_name}/sandboxEnvironmentTemplates/{template_id}");
-        let binding = SandboxBinding::gcp_agent_platform(
+        let mut binding = SandboxBinding::gcp_agent_platform(
             BindingValue::value(engine_name),
             BindingValue::value(template_name),
             BindingValue::value(region.clone()),
             self.max_lifetime_seconds,
             self.allow_egress.unwrap_or(false),
         );
+        if let SandboxBinding::GcpAgentPlatform(value) = &mut binding {
+            value.default_policy = self.default_policy.clone();
+        }
+
         Ok(Some(
             serde_json::to_value(binding).into_alien_error().context(
                 ErrorData::ResourceStateSerializationFailed {
@@ -687,6 +695,7 @@ impl GcpAgentPlatformTemplateController {
         self.region = None;
         self.max_lifetime_seconds = None;
         self.allow_egress = None;
+        self.default_policy = None;
     }
 
     fn engine_and_template(&self, resource_id: &str) -> Result<(String, String)> {
@@ -725,6 +734,7 @@ impl GcpAgentPlatformTemplateController {
             project_id: Some("test-project-123".to_string()),
             region: Some("us-central1".to_string()),
             max_lifetime_seconds: None,
+            default_policy: None,
             allow_egress: None,
             _internal_stay_count: None,
         }
@@ -1447,32 +1457,6 @@ mod tests {
             wire["customContainerEnvironment"]["ports"],
             serde_json::json!([{ "port": GCP_AGENT_PLATFORM.port, "protocol": "TCP" }]),
             "the create body must carry the port and protocol the API has accepted"
-        );
-    }
-
-    /// Domain-scoped egress has no representation in the single switch, so the template body build
-    /// refuses it naming the sandbox and both accepted modes — it is never approximated.
-    #[test]
-    fn build_template_body_refuses_domain_egress_naming_the_sandbox_and_modes() {
-        let sandbox = sandbox_with(
-            SandboxEgress::Allow {
-                allow: vec!["api.example.com".to_string()],
-            },
-            "ubuntu:24.04",
-            None,
-            None,
-        );
-        let error = build_template_body(&sandbox, "agent-sbx", &deployment_config(None, None))
-            .expect_err("a hostname list has no representation on Agent Platform");
-        assert_eq!(error.code, "RESOURCE_CONFIG_INVALID", "{error}");
-        let rendered = error.to_string();
-        assert!(
-            rendered.contains("agent-sbx"),
-            "names the sandbox: {rendered}"
-        );
-        assert!(
-            rendered.contains("allow") && rendered.contains("deny"),
-            "names both accepted modes: {rendered}"
         );
     }
 

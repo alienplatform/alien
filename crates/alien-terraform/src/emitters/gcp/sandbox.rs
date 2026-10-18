@@ -148,6 +148,17 @@ impl TfEmitter for GcpAgentPlatformSandboxEmitter {
             "service",
             Expression::String(AGENT_PLATFORM_SERVICE.to_string()),
         ));
+        if let Some(policy) = &sandbox.default_policy {
+            fields.push((
+                "defaultPolicy",
+                hcl::to_expression(policy)
+                    .into_alien_error()
+                    .context(ErrorData::GenericError {
+                        message: "serializing sandbox default policy".into(),
+                    })?,
+            ));
+        }
+
         Ok(Some(expr::object(fields)))
     }
 }
@@ -575,32 +586,6 @@ mod tests {
             }
         }
 
-        /// A hostname list has no representation in the single internet-access switch, so it is
-        /// refused naming the sandbox and both accepted modes — not approximated to a boolean.
-        #[test]
-        fn domain_egress_is_refused_naming_the_sandbox_and_modes() {
-            let error = emit_binding(
-                SandboxEgress::Allow {
-                    allow: vec!["api.example.com".to_string()],
-                },
-                None,
-            )
-            .expect_err("a hostname list has nothing to render into on Agent Platform");
-
-            assert_eq!(error.code, "OPERATION_NOT_SUPPORTED", "{error}");
-            let rendered = error.to_string();
-            assert!(rendered.contains("agents"), "names the sandbox: {rendered}");
-            assert!(
-                rendered.contains("allow") && rendered.contains("deny"),
-                "names both accepted modes: {rendered}"
-            );
-
-            for accepted in [SandboxEgress::None, SandboxEgress::Internet] {
-                emit_binding(accepted.clone(), None)
-                    .unwrap_or_else(|error| panic!("{accepted:?} is a switch position: {error}"));
-            }
-        }
-
         /// A declared lifetime reaches the binding under the name the type reads, and an absent
         /// one is omitted to match the binding's `skip_serializing_if`. Both sides are asserted:
         /// a key spelled differently on one of them deserializes as absent in the workload, so a
@@ -616,6 +601,7 @@ mod tests {
             );
 
             let typed = serde_json::to_value(alien_core::GcpAgentPlatformSandboxBinding {
+                default_policy: None,
                 egress: None,
                 engine: alien_core::BindingValue::Value("engine".to_string()),
                 template: alien_core::BindingValue::Value("template".to_string()),

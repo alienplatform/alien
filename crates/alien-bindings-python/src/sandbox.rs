@@ -197,7 +197,7 @@ pub(crate) struct SandboxHandle {
     pub(crate) inner: Arc<dyn Sandbox>,
 }
 
-fn parse_egress(value: &str) -> PyResult<alien_core::SandboxEgress> {
+fn parse_egress(value: &str) -> PyResult<alien_core::EgressPolicy> {
     serde_json::from_str(value)
         .into_alien_error()
         .context(alien_bindings::error::ErrorData::SandboxEgressInvalid {
@@ -211,7 +211,7 @@ fn sandbox_request(
     tenant_key: Option<String>,
     env: Option<HashMap<String, String>>,
     timeout_ms: Option<u64>,
-    egress: Option<alien_core::SandboxEgress>,
+    egress: Option<alien_core::EgressPolicy>,
 ) -> CreateSandboxRequest {
     CreateSandboxRequest {
         egress,

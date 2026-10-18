@@ -21,7 +21,7 @@ use alien_macros::controller;
 pub struct LocalSandboxController {
     /// Bound installed with the parent and published to runtime bindings.
     #[serde(default)]
-    pub(crate) egress: Option<alien_core::SandboxEgress>,
+    pub(crate) egress: Option<alien_core::bindings::SandboxEgressBinding>,
     /// Sandbox this controller owns sessions for, and the enumeration scope for reaping.
     pub(crate) sandbox_name: Option<String>,
     /// Loopback route the workload's binding talks to.
@@ -78,7 +78,7 @@ impl LocalSandboxController {
 
         self.route_url = Some(route.base_url.clone());
         self.token_path = Some(route.token_path.display().to_string());
-        self.egress = Some(config.egress.clone());
+        self.egress = Some(config.into());
 
         info!(sandbox_id = %config.id, route = %route.base_url, "Local sandbox ready");
 
@@ -112,7 +112,7 @@ impl LocalSandboxController {
         })?;
         self.route_url = Some(route.base_url);
         self.token_path = Some(route.token_path.display().to_string());
-        self.egress = Some(config.egress.clone());
+        self.egress = Some(config.into());
 
         // "Healthy" on a platform with nothing durable means the runtime is still there to
         // create sessions in; the session count itself is not a health signal.
@@ -262,12 +262,19 @@ impl LocalSandboxController {
             return Ok(None);
         };
 
-        let binding = SandboxBinding::local(
+        let mut binding = SandboxBinding::local(
             BindingValue::value(route_url.clone()),
             BindingValue::value(sandbox_name.clone()),
             BindingValue::value(token_path.clone()),
-            self.egress.clone(),
+            self.egress.as_ref().map(|value| *value.declaration()),
         );
+
+        if let SandboxBinding::Local(value) = &mut binding {
+            value.default_policy = self
+                .egress
+                .as_ref()
+                .and_then(|value| value.default_policy().cloned());
+        }
 
         Ok(Some(
             serde_json::to_value(binding).into_alien_error().context(
@@ -300,14 +307,6 @@ fn session_template(sandbox: &Sandbox) -> Result<alien_local::SandboxSessionConf
     let egress = match &sandbox.egress {
         SandboxEgress::None => alien_local::SandboxEgressMode::Deny,
         SandboxEgress::Internet => alien_local::SandboxEgressMode::Allow,
-        SandboxEgress::Allow { .. } => {
-            return Err(AlienError::new(ErrorData::CloudPlatformError {
-                message: "a local sandbox has one network switch and no filter, so a hostname \
-                          list has nothing to render into; Azure matches on host pattern"
-                    .to_string(),
-                resource_id: Some(sandbox.id.clone()),
-            }))
-        }
     };
 
     let limits = sandbox.resolved_limits();
@@ -403,34 +402,6 @@ mod tests {
         assert_eq!(bytes("1M", "sbx").expect("megabytes"), 1_000_000);
         assert_eq!(bytes("4096", "sbx").expect("plain bytes"), 4096);
         bytes("plenty", "sbx").expect_err("an unparseable size is an error");
-    }
-
-    /// Local has no hostname allowlist, and accepting one would run untrusted code with wider
-    /// egress than the declaration asked for.
-    #[test]
-    fn a_hostname_allowlist_is_refused_rather_than_widened() {
-        use alien_core::{SandboxCode, SandboxEgress, SandboxLifecyclePolicy, SandboxLimits};
-
-        let sandbox = Sandbox::new("sbx".to_string())
-            .code(SandboxCode::Image {
-                image: "alpine:3.20".to_string(),
-            })
-            .limits(SandboxLimits {
-                cpu: "500m".to_string(),
-                memory: "512Mi".to_string(),
-                disk: "1Gi".to_string(),
-                max_processes: Some(64),
-            })
-            .egress(SandboxEgress::Allow {
-                allow: vec!["example.com".to_string()],
-            })
-            .lifecycle(SandboxLifecyclePolicy {
-                max_lifetime_seconds: None,
-                idle_pause_seconds: None,
-            })
-            .build();
-
-        session_template(&sandbox).expect_err("Local cannot honour a hostname allowlist");
     }
 
     use super::*;
