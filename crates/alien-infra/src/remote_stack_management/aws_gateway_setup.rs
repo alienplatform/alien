@@ -532,8 +532,183 @@ mod tests {
     use super::super::{AwsRemoteStackManagementController, AwsRemoteStackManagementState};
     use super::*;
     use crate::{core::controller_test::SingleControllerExecutor, MockPlatformServiceProvider};
+    use alien_aws_clients::{
+        iam::{GetRoleResponse, GetRoleResult, MockIamApi},
+        lambda::{GetFunctionResponse, ListVersionsByFunctionResponse, MockLambdaApi},
+    };
     use alien_core::Platform;
-    use std::sync::Arc;
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+
+    async fn executor(
+        controller: AwsRemoteStackManagementController,
+        provider: Arc<MockPlatformServiceProvider>,
+    ) -> SingleControllerExecutor {
+        SingleControllerExecutor::builder()
+            .resource(RemoteStackManagement::new("management".into()).build())
+            .controller(controller)
+            .platform(Platform::Aws)
+            .resource_prefix("example")
+            .resource_lifecycle(ResourceLifecycle::Frozen)
+            .initial_setup_authority(InitialSetupAuthority::DirectSetup)
+            .service_provider(provider)
+            .build()
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn lost_publication_reply_recovers_native_version_after_controller_reload() {
+        let mut setup = GatewaySetup::new();
+        setup.phase = Phase::Version;
+        setup.role_id = Some("owned-role-id".into());
+        let role_arn = "arn:aws:iam::123456789012:role/setup/_gateway-cleanup-example";
+        let version_arn =
+            "arn:aws:lambda:us-east-1:123456789012:function:_gateway-cleanup-example:7";
+        setup.role_arn = Some(role_arn.into());
+        let mut tags: HashMap<_, _> =
+            setup_resource_tags("example", "management", "remote-stack-management")
+                .into_iter()
+                .collect();
+        tags.insert("CreateAttempt".into(), setup.generation.clone());
+        let role_tags: Vec<_> = tags
+            .iter()
+            .map(|(key, value)| serde_json::json!({"Key":key,"Value":value}))
+            .collect();
+        let mut iam = MockIamApi::new();
+        iam.expect_get_role()
+            .withf(|name| name == "_gateway-cleanup-example")
+            .times(4)
+            .returning(move |_| {
+                Ok(GetRoleResponse {
+                    get_role_result: GetRoleResult {
+                        role: serde_json::from_value(serde_json::json!({"Path":"/setup/",
+                    "RoleName":"_gateway-cleanup-example", "RoleId":"owned-role-id", "Arn":role_arn,
+                    "CreateDate":"2026-01-01T00:00:00Z", "Tags":{"member":role_tags}}))
+                        .unwrap(),
+                    },
+                })
+            });
+        iam.expect_put_role_policy()
+            .times(1)
+            .withf(move |role, policy, body| {
+                role == "example-management"
+                    && policy == INVOKE_POLICY
+                    && serde_json::from_str::<serde_json::Value>(body).unwrap()["Statement"][0]
+                        ["Resource"]
+                        == version_arn
+            })
+            .returning(|_, _, _| Ok(()));
+        let current = FunctionConfiguration {
+            function_name: Some("_gateway-cleanup-example".into()),
+            function_arn: Some(
+                "arn:aws:lambda:us-east-1:123456789012:function:_gateway-cleanup-example".into(),
+            ),
+            version: Some("$LATEST".into()),
+            revision_id: Some("native-revision".into()),
+            state: Some("Active".into()),
+            last_update_status: Some("Successful".into()),
+            role: Some(role_arn.into()),
+            runtime: Some(CLEANUP_RUNTIME.into()),
+            handler: Some("index.handler".into()),
+            timeout: Some(60),
+            code_sha256: Some(STANDARD.encode(Sha256::digest(CLEANUP_HANDLER_ARCHIVE))),
+            environment: Some(
+                Environment::builder()
+                    .variables(HashMap::from([(
+                        "ALIEN_STACK_PREFIX".into(),
+                        "example".into(),
+                    )]))
+                    .build(),
+            ),
+            ..Default::default()
+        };
+        let mut published = current.clone();
+        published.version = Some("7".into());
+        published.function_arn = Some(version_arn.into());
+        let mut lambda = MockLambdaApi::new();
+        lambda.expect_get_function().times(4).returning(move |_| {
+            Ok(GetFunctionResponse {
+                configuration: current.clone(),
+                tags: Some(tags.clone()),
+            })
+        });
+        let publication_exists = Arc::new(AtomicBool::new(false));
+        let exists = publication_exists.clone();
+        lambda
+            .expect_list_versions_by_function()
+            .times(2)
+            .returning(move |_, marker| {
+                assert!(marker.is_none());
+                Ok(ListVersionsByFunctionResponse {
+                    versions: if exists.load(Ordering::SeqCst) {
+                        vec![published.clone()]
+                    } else {
+                        vec![]
+                    },
+                    next_marker: None,
+                })
+            });
+        let exists = publication_exists.clone();
+        lambda
+            .expect_publish_version()
+            .times(1)
+            .return_once(move |_, request| {
+                assert_eq!(request.revision_id, "native-revision");
+                assert_eq!(
+                    request.code_sha256,
+                    STANDARD.encode(Sha256::digest(CLEANUP_HANDLER_ARCHIVE))
+                );
+                exists.store(true, Ordering::SeqCst);
+                Err(AlienError::new(alien_client_core::ErrorData::Timeout {
+                    message: "publication response lost".into(),
+                }))
+            });
+        let iam = Arc::new(iam);
+        let lambda = Arc::new(lambda);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        provider
+            .expect_get_aws_lambda_client()
+            .returning(move |_| Ok(lambda.clone()));
+        let provider = Arc::new(provider);
+        let mut controller = AwsRemoteStackManagementController::mock_ready("example-management");
+        controller.state = AwsRemoteStackManagementState::CreatingGatewaySetup;
+        controller.gateway_setup = Some(setup);
+        let mut first = executor(controller, provider.clone()).await;
+        first
+            .step()
+            .await
+            .expect_err("lost publication reply must fail the step");
+        let restored: AwsRemoteStackManagementController = serde_json::from_value(
+            serde_json::to_value(
+                first
+                    .internal_state::<AwsRemoteStackManagementController>()
+                    .unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(restored.worker_gateway_cleanup_function_arn.is_none());
+        drop(first);
+        let mut resumed = executor(restored, provider).await;
+        for _ in 0..3 {
+            resumed.step().await.unwrap();
+        }
+        let controller = resumed
+            .internal_state::<AwsRemoteStackManagementController>()
+            .unwrap();
+        assert_eq!(controller.state, AwsRemoteStackManagementState::Ready);
+        assert_eq!(
+            controller.worker_gateway_cleanup_function_arn.as_deref(),
+            Some(version_arn)
+        );
+        assert!(controller.gateway_setup.as_ref().unwrap().is_current());
+    }
 
     #[tokio::test]
     async fn setup_capability_refuses_imported_or_live_owners_before_provider_access() {
