@@ -2297,6 +2297,328 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "sqlite")]
+    mod credential_retry_tests {
+        use super::*;
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+        struct Credentials {
+            unavailable: AtomicBool,
+            visits: AtomicUsize,
+            error: AlienError,
+            state_directory: String,
+        }
+
+        #[async_trait]
+        impl CredentialResolver for Credentials {
+            async fn resolve(
+                &self,
+                _: &DeploymentRecord,
+            ) -> Result<alien_core::ClientConfig, AlienError> {
+                self.visits.fetch_add(1, Ordering::SeqCst);
+                if self.unavailable.load(Ordering::SeqCst) {
+                    Err(self.error.clone())
+                } else {
+                    Ok(alien_core::ClientConfig::Local {
+                        state_directory: self.state_directory.clone(),
+                    })
+                }
+            }
+        }
+
+        struct Fixture {
+            manager: crate::server::AlienManager,
+            db: Arc<SqliteDatabase>,
+            credentials: Arc<Credentials>,
+            id: String,
+            _directory: TempDir,
+        }
+
+        impl Fixture {
+            async fn new(status: DeploymentStatus, error: AlienError) -> Self {
+                let directory = TempDir::new().unwrap();
+                let db_path = directory.path().join("manager.db");
+                let credentials = Arc::new(Credentials {
+                    unavailable: AtomicBool::new(true),
+                    visits: AtomicUsize::new(0),
+                    error,
+                    state_directory: directory.path().to_string_lossy().to_string(),
+                });
+                let manager = crate::server::AlienManager::builder(crate::config::ManagerConfig {
+                    db_path: Some(db_path.clone()),
+                    state_dir: Some(directory.path().to_path_buf()),
+                    ..Default::default()
+                })
+                .credential_resolver(credentials.clone())
+                .with_standalone_defaults(&crate::standalone_config::ManagerTomlConfig::default())
+                .await
+                .unwrap()
+                .build()
+                .await
+                .unwrap();
+                let db = Arc::new(
+                    SqliteDatabase::new(db_path.to_str().unwrap())
+                        .await
+                        .unwrap(),
+                );
+                let caller = Subject::system();
+                let release = manager
+                    .release_store
+                    .create_release(
+                        &caller,
+                        crate::traits::release_store::CreateReleaseParams {
+                            project_id: "default".to_string(),
+                            stacks: HashMap::from([(
+                                Platform::Local,
+                                Stack::new("test".to_string()).build(),
+                            )]),
+                            git_commit_sha: None,
+                            git_commit_ref: None,
+                            git_commit_message: None,
+                        },
+                    )
+                    .await
+                    .unwrap();
+                let deployment = manager
+                    .deployment_store
+                    .create_deployment(
+                        &caller,
+                        CreateDeploymentParams {
+                            name: "credential-retry".to_string(),
+                            deployment_group_id: "dg_test".to_string(),
+                            platform: Platform::Local,
+                            deployment_protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+                            base_platform: None,
+                            stack_settings: StackSettings {
+                                deployment_model: alien_core::DeploymentModel::Push,
+                                ..Default::default()
+                            },
+                            stack_state: Some(StackState::new(Platform::Local)),
+                            environment_variables: None,
+                            public_subdomain: None,
+                            input_values: Default::default(),
+                            setup_item: None,
+                            deployment_token: None,
+                        },
+                    )
+                    .await
+                    .unwrap();
+                db.execute(&format!(
+                    "UPDATE deployments SET status = '{}', current_release_id = '{}', desired_release_id = '{}' WHERE id = '{}'",
+                    deployment_status_str(status), release.id, release.id, deployment.id,
+                )).await.unwrap();
+                db.execute("CREATE TABLE row_writes (n INTEGER)")
+                    .await
+                    .unwrap();
+                db.execute("CREATE TRIGGER count_row_writes AFTER UPDATE ON deployments BEGIN INSERT INTO row_writes VALUES (1); END").await.unwrap();
+                Self {
+                    manager,
+                    db,
+                    credentials,
+                    id: deployment.id,
+                    _directory: directory,
+                }
+            }
+
+            fn runner(&self) -> DeploymentLoop {
+                DeploymentLoop::new(
+                    self.manager.config.clone(),
+                    self.manager.deployment_store.clone(),
+                    self.manager.release_store.clone(),
+                    self.credentials.clone(),
+                    self.manager.server_bindings.clone(),
+                    None,
+                )
+            }
+
+            async fn record(&self) -> DeploymentRecord {
+                self.manager
+                    .deployment_store
+                    .get_deployment(&Subject::system(), &self.id)
+                    .await
+                    .unwrap()
+                    .unwrap()
+            }
+
+            async fn process(&self, runner: &DeploymentLoop) {
+                let acquired = self
+                    .manager
+                    .deployment_store
+                    .acquire(
+                        &Subject::system(),
+                        "test-session",
+                        &DeploymentFilter {
+                            deployment_ids: Some(vec![self.id.clone()]),
+                            statuses: Some(vec![self.record().await.status, "running".to_string()]),
+                            ..Default::default()
+                        },
+                        1,
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(acquired.len(), 1);
+                let item = acquired.into_iter().next().unwrap();
+                runner
+                    .process_deployment(
+                        item.deployment,
+                        item.execution_claim,
+                        "test-session",
+                        ProcessOptions {
+                            max_steps: 1,
+                            require_heartbeats_enabled: false,
+                        },
+                    )
+                    .await;
+            }
+
+            async fn writes(&self) -> i64 {
+                let conn = self.db.conn().lock().await;
+                let mut rows = conn
+                    .query("SELECT count(*) FROM row_writes", ())
+                    .await
+                    .unwrap();
+                rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap()
+            }
+        }
+
+        fn transient_error() -> AlienError {
+            AlienError::new(alien_gcp_clients::ErrorData::HttpResponseError {
+                message: "External account token exchange failed with status 503".to_string(),
+                url: "http://localhost/token".to_string(),
+                http_status: 503,
+                http_request_text: None,
+                http_response_text: None,
+            })
+            .into_generic()
+        }
+
+        async fn retries_then_recovers(status: DeploymentStatus) {
+            let fixture = Fixture::new(status, transient_error()).await;
+            let before = fixture.record().await;
+            fixture.process(&fixture.runner()).await;
+            let waiting = fixture.record().await;
+            assert_eq!(
+                waiting.status, before.status,
+                "transient errors must retain the operation"
+            );
+            assert!(waiting.error.is_none());
+            assert_eq!(
+                waiting.updated_at, before.updated_at,
+                "waiting must not extend the durable deadline"
+            );
+            assert!(waiting.locked_by.is_none());
+            fixture
+                .credentials
+                .unavailable
+                .store(false, Ordering::SeqCst);
+            // A new loop instance models a manager restart or another replica.
+            fixture.process(&fixture.runner()).await;
+            let recovered = fixture.record().await;
+            assert!(
+                recovered.error.is_none(),
+                "recovery error: {:?}",
+                recovered.error
+            );
+            assert!(!parse_status(&recovered.status).is_failed());
+            assert_ne!(
+                recovered.updated_at, before.updated_at,
+                "resolved credentials must reach the runner checkpoint"
+            );
+            assert_eq!(fixture.credentials.visits.load(Ordering::SeqCst), 2);
+        }
+
+        #[tokio::test]
+        async fn update_pending_retries_then_recovers() {
+            retries_then_recovers(DeploymentStatus::UpdatePending).await;
+        }
+        #[tokio::test]
+        async fn delete_pending_retries_then_recovers() {
+            retries_then_recovers(DeploymentStatus::DeletePending).await;
+        }
+        #[tokio::test]
+        async fn provisioning_retries_then_recovers() {
+            retries_then_recovers(DeploymentStatus::Provisioning).await;
+        }
+        #[tokio::test]
+        async fn running_retries_then_recovers() {
+            retries_then_recovers(DeploymentStatus::Running).await;
+        }
+
+        #[tokio::test]
+        async fn permanent_error_fails_immediately_with_real_error() {
+            let error = AlienError::new(alien_gcp_clients::ErrorData::InvalidClientConfig {
+                message: "management credentials are missing".to_string(),
+                errors: None,
+            })
+            .into_generic();
+            assert!(!error.retryable);
+            for status in [
+                DeploymentStatus::UpdatePending,
+                DeploymentStatus::DeletePending,
+                DeploymentStatus::Provisioning,
+                DeploymentStatus::Running,
+            ] {
+                let fixture = Fixture::new(status, error.clone()).await;
+                fixture.process(&fixture.runner()).await;
+                let record = fixture.record().await;
+                assert_eq!(
+                    parse_status(&record.status),
+                    alien_deployment::runner::failed_status_for_deployment_error(status)
+                );
+                assert_eq!(record.error.unwrap(), serde_json::to_value(&error).unwrap());
+            }
+        }
+
+        #[tokio::test]
+        async fn expired_transient_error_fails_with_real_error_after_restart() {
+            let error = transient_error();
+            let fixture = Fixture::new(DeploymentStatus::UpdatePending, error.clone()).await;
+            let old = (Utc::now() - chrono::Duration::minutes(11)).to_rfc3339();
+            fixture
+                .db
+                .execute(&format!("UPDATE deployments SET updated_at = '{old}'"))
+                .await
+                .unwrap();
+            fixture.process(&fixture.runner()).await;
+            let record = fixture.record().await;
+            assert_eq!(record.status, "update-failed");
+            assert_eq!(record.error.unwrap(), serde_json::to_value(error).unwrap());
+        }
+
+        #[tokio::test]
+        async fn identical_refresh_failure_does_not_checkpoint_again() {
+            let error = transient_error();
+            let fixture = Fixture::new(DeploymentStatus::RefreshFailed, error.clone()).await;
+            let serialized = serde_json::to_string(&error).unwrap().replace('\'', "''");
+            let old = (Utc::now() - chrono::Duration::minutes(11)).to_rfc3339();
+            fixture
+                .db
+                .execute(&format!(
+                    "UPDATE deployments SET error = '{serialized}', updated_at = '{old}'"
+                ))
+                .await
+                .unwrap();
+            let before = fixture.record().await;
+            let writes_before = fixture.writes().await;
+            fixture
+                .runner()
+                .process_deployment_inner(
+                    before.clone(),
+                    None,
+                    "test-session",
+                    ProcessOptions::heartbeat_tick(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                fixture.writes().await,
+                writes_before,
+                "an unchanged failure must not be checkpointed"
+            );
+            assert_eq!(fixture.record().await.updated_at, before.updated_at);
+        }
+    }
+
     #[test]
     fn credential_failure_waits_during_expected_handoff_windows() {
         let pending = deployment_record(DeploymentStatus::Pending, None);
