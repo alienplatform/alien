@@ -156,6 +156,13 @@ struct AwsProviderArtifactRegistryTestContext {
 #[cfg(feature = "aws")]
 impl AsyncTestContext for AwsProviderArtifactRegistryTestContext {
     async fn setup() -> Self {
+        Self::setup_with_configured_roles(true).await
+    }
+}
+
+#[cfg(feature = "aws")]
+impl AwsProviderArtifactRegistryTestContext {
+    async fn setup_with_configured_roles(use_configured_roles: bool) -> Self {
         load_test_env();
         let binding_name = "test-aws-artifact-registry";
 
@@ -168,8 +175,12 @@ impl AsyncTestContext for AwsProviderArtifactRegistryTestContext {
         let account_id = std::env::var("AWS_MANAGEMENT_ACCOUNT_ID")
             .expect("AWS_MANAGEMENT_ACCOUNT_ID must be set in .env.test");
 
-        let pull_role_arn = std::env::var("ALIEN_TEST_AWS_ECR_PULL_ROLE_ARN").ok();
-        let push_role_arn = std::env::var("ALIEN_TEST_AWS_ECR_PUSH_ROLE_ARN").ok();
+        let pull_role_arn = use_configured_roles
+            .then(|| env::var("ALIEN_TEST_AWS_ECR_PULL_ROLE_ARN").ok())
+            .flatten();
+        let push_role_arn = use_configured_roles
+            .then(|| env::var("ALIEN_TEST_AWS_ECR_PUSH_ROLE_ARN").ok())
+            .flatten();
 
         let binding = alien_core::bindings::ArtifactRegistryBinding::ecr(
             "test".to_string(),
@@ -182,6 +193,9 @@ impl AsyncTestContext for AwsProviderArtifactRegistryTestContext {
         env_map.insert("AWS_REGION".to_string(), region);
         env_map.insert("AWS_ACCESS_KEY_ID".to_string(), access_key);
         env_map.insert("AWS_SECRET_ACCESS_KEY".to_string(), secret_key);
+        if let Ok(token) = env::var("AWS_MANAGEMENT_SESSION_TOKEN") {
+            env_map.insert("AWS_SESSION_TOKEN".to_string(), token);
+        }
         env_map.insert("AWS_ACCOUNT_ID".to_string(), account_id);
         env_map.insert("ALIEN_DEPLOYMENT_TYPE".to_string(), "aws".to_string());
         let binding_json = serde_json::to_string(&binding).expect("Failed to serialize binding");
@@ -1229,6 +1243,10 @@ async fn test_delete_repository(#[case] ctx: impl ArtifactRegistryTestContext) {
 }
 
 #[rstest]
+#[cfg_attr(
+    feature = "aws",
+    case::aws_direct(AwsProviderArtifactRegistryTestContext::setup_with_configured_roles(false).await)
+)]
 #[cfg_attr(feature = "local", case::local(LocalProviderArtifactRegistryTestContext::setup().await))]
 #[cfg_attr(feature = "aws", case::aws(AwsProviderArtifactRegistryTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderArtifactRegistryTestContext::setup().await))]
@@ -1403,6 +1421,10 @@ async fn test_full_repository_lifecycle(#[case] ctx: impl ArtifactRegistryTestCo
 }
 
 #[rstest]
+#[cfg_attr(
+    feature = "aws",
+    case::aws_direct(AwsProviderArtifactRegistryTestContext::setup_with_configured_roles(false).await)
+)]
 #[cfg_attr(feature = "local", case::local(LocalProviderArtifactRegistryTestContext::setup().await))]
 #[cfg_attr(feature = "aws", case::aws(AwsProviderArtifactRegistryTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderArtifactRegistryTestContext::setup().await))]
