@@ -3934,6 +3934,38 @@ mod tests {
         );
     }
 
+    #[test]
+    fn idle_cluster_with_declared_machine_preserves_legacy_disk_inputs() {
+        for (platform, machine) in [
+            (Platform::Aws, "m7g.medium"),
+            (Platform::Gcp, "n2-standard-2"),
+            (Platform::Azure, "Standard_D2s_v5"),
+        ] {
+            let cluster = ComputeCluster::new("compute".to_string())
+                .capacity_group(CapacityGroup {
+                    group_id: "general".to_string(),
+                    instance_type: Some(machine.to_string()),
+                    profile: None,
+                    min_size: 1,
+                    max_size: 1,
+                    scale_policy: None,
+                    nested_virtualization: None,
+                })
+                .build();
+            let before_root = cluster.capacity_groups[0].aws_root_volume_size_gib();
+            let stack = Stack::new("legacy-idle".to_string())
+                .add(cluster, ResourceLifecycle::Frozen)
+                .build();
+            let state = StackState::new(platform);
+            let config = DeploymentConfig::builder().build();
+            assert!(
+                !ComputeClusterMutation.should_run(&stack, &state, &config),
+                "{platform:?}: no workload or setup selection requests changing the installed machine profile"
+            );
+            assert_eq!(before_root, 20);
+        }
+    }
+
     #[tokio::test]
     async fn standalone_cluster_materializes_selected_machine_without_workloads() {
         for (platform, machine) in [
