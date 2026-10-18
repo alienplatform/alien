@@ -11,6 +11,7 @@ import * as z from "zod";
 export const AzureNetworkImportDataSchema = z.object({
     "applicationGatewaySubnetId": z.string().describe("Dedicated subnet for classic Azure Application Gateway ingress.").nullish(),
 "applicationGatewaySubnetName": z.string().describe("Dedicated subnet name for classic Azure Application Gateway ingress.").nullish(),
+"egressPublicIps": z.optional(z.array(z.string()).describe("NAT public addresses owned by setup; empty for an unknown external egress path.")),
 "isByoVnet": z.boolean().describe("True when the VNet is owned outside this stack."),
 "natGatewayId": z.string().describe("NAT gateway resource id when one was created.").nullish(),
 "networkSecurityGroupId": z.string().describe("Network Security Group resource id attached to workload subnets.").nullish(),

@@ -1080,6 +1080,14 @@ expression: schemas
           "null"
         ]
       },
+      "egressPublicIps": {
+        "default": [],
+        "description": "NAT public addresses owned by setup; empty for an unknown external egress path.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
       "isByoVnet": {
         "description": "True when the VNet is owned outside this stack.",
         "type": "boolean"

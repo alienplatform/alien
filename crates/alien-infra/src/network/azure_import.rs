@@ -51,6 +51,7 @@ impl ResourceImporter for AzureNetworkImporter {
             private_endpoint_subnet_name: data.private_endpoint_subnet_name,
             nat_gateway_name: None,
             nat_gateway_id: data.nat_gateway_id,
+            egress_public_ips: data.egress_public_ips,
             public_ip_name: None,
             public_ip_id: None,
             nsg_name: None,
@@ -68,4 +69,59 @@ impl ResourceImporter for AzureNetworkImporter {
 
 fn subnet_name_from_id(id: &str) -> Option<&str> {
     id.rsplit('/').next().filter(|name| !name.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_core::{
+        Network, NetworkOutputs, Platform, Resource, ResourceEntry, ResourceLifecycle,
+        StackSettings,
+    };
+
+    #[test]
+    fn setup_nat_addresses_survive_import_and_old_imports_remain_readable() {
+        let entry = ResourceEntry {
+            config: Resource::new(
+                Network::new("network".to_string())
+                    .settings(alien_core::NetworkSettings::UseDefault)
+                    .build(),
+            ),
+            lifecycle: ResourceLifecycle::Frozen,
+            dependencies: Vec::new(),
+            remote_access: false,
+            enabled_when: None,
+        };
+        let settings = StackSettings::default();
+        let ctx = ImportContext {
+            resource_id: "network",
+            platform: Platform::Azure,
+            region: "eastus",
+            stack_settings: &settings,
+            management_config: None,
+            resource: &entry,
+        };
+        let mut json = serde_json::json!({
+            "subscriptionId":"sub", "resourceGroup":"group", "vnetId":"/vnet/network", "vnetName":"network",
+            "subnetIds":["/vnet/network/subnets/public", "/vnet/network/subnets/private"],
+            "natGatewayId":"/nat/gateway", "isByoVnet":false,
+            "egressPublicIps":["203.0.113.8"],
+        });
+        for expected in [vec!["203.0.113.8".to_string()], Vec::new()] {
+            let data = serde_json::from_value(json.clone()).expect("typed import");
+            let state = AzureNetworkImporter.import(data, &ctx).expect("import");
+            let outputs = state
+                .outputs
+                .as_ref()
+                .unwrap()
+                .downcast_ref::<NetworkOutputs>()
+                .unwrap();
+            assert_eq!(outputs.egress_public_ips, expected);
+            assert!(outputs.has_nat_gateway);
+            let restored: AzureNetworkController =
+                serde_json::from_value(state.internal_state.unwrap()).expect("controller state");
+            assert_eq!(restored.egress_public_ips, expected);
+            json.as_object_mut().unwrap().remove("egressPublicIps");
+        }
+    }
 }

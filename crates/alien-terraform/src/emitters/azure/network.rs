@@ -125,6 +125,14 @@ impl TfEmitter for AzureNetworkEmitter {
                     "networkSecurityGroupId",
                     expr::traversal(["azurerm_network_security_group", &nsg_label, "id"]),
                 ),
+                (
+                    "egressPublicIps",
+                    Expression::Array(vec![expr::traversal([
+                        "azurerm_public_ip",
+                        &format!("{label}_nat_pip"),
+                        "ip_address",
+                    ])]),
+                ),
                 ("isByoVnet", Expression::Bool(false)),
             ]),
             NetworkSettings::ByoVnetAzure { .. } => expr::object([

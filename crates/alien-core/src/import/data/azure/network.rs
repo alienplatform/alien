@@ -29,6 +29,9 @@ pub struct AzureNetworkImportData {
     pub private_endpoint_subnet_name: Option<String>,
     /// NAT gateway resource id when one was created.
     pub nat_gateway_id: Option<String>,
+    /// NAT public addresses owned by setup; empty for an unknown external egress path.
+    #[serde(default)]
+    pub egress_public_ips: Vec<String>,
     /// Network Security Group resource id attached to workload subnets.
     pub network_security_group_id: Option<String>,
     /// True when the VNet is owned outside this stack.
