@@ -76,7 +76,7 @@ fn unsafe_or_ambiguous_targets_are_refused() {
     }
     assert!(allow(&[]).validate().is_err());
     assert!(SandboxEgress::Allow {
-        allow: vec!["example.com".to_string(); 257]
+        allow: vec!["example.com".to_string(); 4097]
     }
     .validate()
     .is_err());
@@ -143,4 +143,43 @@ proptest! {
         prop_assert!(child.ensure_subset_of(&parent).is_ok());
         prop_assert_eq!(parent.ensure_subset_of(&child).is_ok(), prefix == 32);
     }
+}
+
+#[test]
+fn canonical_policy_sorts_normalizes_and_hashes_the_exact_json() {
+    let policy = allow(&["Z.Example.COM.:443", "a.example.com"]);
+    let canonical = br#"{"allow":["a.example.com","z.example.com"]}"#;
+    assert_eq!(policy.canonical_json().unwrap(), canonical);
+    assert_eq!(
+        policy.policy_digest().unwrap(),
+        allow(&["a.example.com", "z.example.com"])
+            .policy_digest()
+            .unwrap()
+    );
+    assert_eq!(SandboxEgress::None.canonical_json().unwrap(), br#""none""#);
+}
+
+#[test]
+fn policy_limits_preserve_4096_targets_and_refuse_oversized_canonical_json() {
+    let accepted = SandboxEgress::Allow {
+        allow: (0..4096).map(|i| format!("api-{i}.example.com")).collect(),
+    };
+    accepted.validate().unwrap();
+    assert!(accepted.canonical_json().unwrap().len() < 256 * 1024);
+    let too_many = SandboxEgress::Allow {
+        allow: vec!["example.com".to_string(); 4097],
+    };
+    assert_eq!(
+        too_many.validate().unwrap_err().code,
+        "SANDBOX_EGRESS_POLICY_TOO_LARGE"
+    );
+    let too_large = SandboxEgress::Allow {
+        allow: (0..4096)
+            .map(|i| format!("{i}.{}.{}.example.com", "a".repeat(63), "b".repeat(63)))
+            .collect(),
+    };
+    assert_eq!(
+        too_large.validate().unwrap_err().code,
+        "SANDBOX_EGRESS_POLICY_TOO_LARGE"
+    );
 }

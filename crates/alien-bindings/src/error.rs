@@ -13,6 +13,26 @@ pub fn binding_env_var(binding_name: &str) -> String {
 #[derive(Debug, Clone, AlienErrorData, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ErrorData {
+    /// Policy exceeds the portable target-count or canonical JSON size limit.
+    #[error(
+        code = "SANDBOX_EGRESS_POLICY_TOO_LARGE",
+        message = "Sandbox egress policy exceeds {limit}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    SandboxEgressPolicyTooLarge { limit: String },
+
+    /// Another caller advanced the sandbox policy during this operation.
+    #[error(
+        code = "SANDBOX_EGRESS_CONFLICT",
+        message = "Sandbox egress changed concurrently; retry with the current policy",
+        retryable = "true",
+        internal = "false",
+        http_status_code = 409
+    )]
+    SandboxEgressConflict,
+
     /// The runtime policy exceeds the declared bound.
     #[error(
         code = "SANDBOX_EGRESS_WIDENS",

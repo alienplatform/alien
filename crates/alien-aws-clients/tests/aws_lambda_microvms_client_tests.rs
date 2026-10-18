@@ -101,6 +101,7 @@ async fn a_microvm_runs_serves_the_agent_and_terminates() {
             // A live MicroVM that outlives a failed test run still bills, so the live suite caps
             // it even though the unit paths leave it undeclared.
             Some(600),
+            None,
         )
         .await
         .expect("RunMicrovm should start a MicroVM");

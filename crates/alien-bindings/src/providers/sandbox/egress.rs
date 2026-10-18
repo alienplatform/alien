@@ -13,8 +13,13 @@ pub(crate) fn unsupported(operation: &str) -> AlienError<ErrorData> {
     })
 }
 
-fn policy_error(error: AlienError<alien_core::ErrorData>) -> AlienError<ErrorData> {
+pub(crate) fn policy_error(error: AlienError<alien_core::ErrorData>) -> AlienError<ErrorData> {
     let context = match &error.error {
+        Some(alien_core::ErrorData::SandboxEgressPolicyTooLarge { limit }) => {
+            ErrorData::SandboxEgressPolicyTooLarge {
+                limit: limit.clone(),
+            }
+        }
         Some(alien_core::ErrorData::SandboxEgressWidens { target }) => {
             ErrorData::SandboxEgressWidens {
                 target: target.clone(),

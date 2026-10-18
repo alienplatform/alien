@@ -1,5 +1,6 @@
 //! Sandbox egress declarations and the shared runtime narrowing rule.
 
+use sha2::{Digest, Sha256};
 use std::net::Ipv4Addr;
 
 use alien_error::{AlienError, Context, IntoAlienError};
@@ -44,7 +45,7 @@ impl utoipa::PartialSchema for SandboxEgress {
                         ArrayBuilder::new()
                             .items(ObjectBuilder::new().schema_type(Type::String))
                             .min_items(Some(1))
-                            .max_items(Some(256)),
+                            .max_items(Some(4096)),
                     )
                     .required("allow")
                     .additional_properties(Some(
@@ -122,6 +123,29 @@ impl SandboxEgress {
         }
     }
 
+    /// Canonical JSON used by the gateway policy reference: normalized, sorted, no whitespace.
+    /// Duplicate entries remain present; sorting makes input order irrelevant to the digest.
+    pub fn canonical_json(&self) -> Result<Vec<u8>> {
+        let mut policy = self.normalized()?;
+        if let Self::Allow { allow } = &mut policy {
+            allow.sort_unstable();
+        }
+        serde_json::to_vec(&policy)
+            .into_alien_error()
+            .context(ErrorData::SandboxEgressInvalid {
+                target: "policy".to_string(),
+                reason: "could not encode canonical policy".to_string(),
+            })
+    }
+
+    /// SHA-256 reference carried in proxy and admin JWS claims.
+    pub fn policy_digest(&self) -> Result<String> {
+        Ok(format!(
+            "sha256:{:x}",
+            Sha256::digest(self.canonical_json()?)
+        ))
+    }
+
     /// Checks the declaration bound, naming the first target that would widen it.
     /// Invalid targets are refused even when the bound permits internet access.
     pub fn ensure_subset_of(&self, bound: &Self) -> Result<()> {
@@ -168,10 +192,31 @@ impl SandboxEgress {
         let Self::Allow { allow } = self else {
             return Ok(Vec::new());
         };
-        if allow.is_empty() || allow.len() > 256 {
-            return Err(invalid("allow", "must contain between 1 and 256 targets"));
+        if allow.is_empty() {
+            return Err(invalid("allow", "must contain at least one target"));
         }
-        allow.iter().map(|target| Target::parse(target)).collect()
+        if allow.len() > 4096 {
+            return Err(AlienError::new(ErrorData::SandboxEgressPolicyTooLarge {
+                limit: "4096 targets".to_string(),
+            }));
+        }
+        let targets = allow
+            .iter()
+            .map(|target| Target::parse(target))
+            .collect::<Result<Vec<_>>>()?;
+        // Valid targets are ASCII without JSON escape characters. Include object/array syntax,
+        // two quotes per target and commas to measure the exact canonical JSON byte length.
+        let canonical_bytes = 11
+            + targets
+                .iter()
+                .map(|target| target.canonical().len() + 3)
+                .sum::<usize>();
+        if canonical_bytes > 256 * 1024 {
+            return Err(AlienError::new(ErrorData::SandboxEgressPolicyTooLarge {
+                limit: "256 KiB of canonical JSON".to_string(),
+            }));
+        }
+        Ok(targets)
     }
 }
 
