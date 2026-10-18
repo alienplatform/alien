@@ -68,7 +68,7 @@ mod tests {
     async fn validates_source_identity_and_refuses_unenforced_settings() {
         let mut stack: Stack = serde_json::from_value(serde_json::json!({"id":"test", "resources": {
             "api": {"lifecycle":"live", "dependencies":[], "config": {"type":"container", "id":"api",
-                "code":{"type":"image","image":"example:latest"}, "permissions":"app",
+                "code":{"type":"image","image":"example:latest"}, "permissions":"app", "links":[], "ports":[], "environment":{}, "stateful":false,
                 "cpu":{"min":"1","desired":"1"}, "memory":{"min":"512Mi","desired":"512Mi"},
                 "internalEndpoints":[{"name":"admin","port":3129,"from":[{"type":"worker","id":"missing"}]}]}}
         }})).unwrap();

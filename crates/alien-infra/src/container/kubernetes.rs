@@ -2399,7 +2399,7 @@ impl KubernetesContainerController {
             .add_current_resource_public_endpoint(ctx, &config.id)?
             .add_linked_resources(&config.links, ctx, &config.id)
             .await?
-            .add_self_container_binding(&config.id, self.get_binding_params()?.as_ref())?;
+            .add_self_container_binding(config, self.get_binding_params()?.as_ref())?;
 
         let (mut env_map, bindings) = env_builder.build_with_bindings();
         env_map.remove(ENV_ALIEN_RUNTIME_SECRETS);

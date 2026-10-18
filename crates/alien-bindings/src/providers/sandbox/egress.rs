@@ -25,8 +25,8 @@ pub(crate) fn validate(
     requested: &EgressPolicy,
     declaration: Option<&SandboxEgress>,
 ) -> Result<()> {
-    if matches!(declaration, Some(SandboxEgress::None)) {
-        return Err(AlienError::new(ErrorData::SandboxEgressNone));
+    if !matches!(declaration, Some(SandboxEgress::Internet)) {
+        return Err(AlienError::new(ErrorData::SandboxEgressRequiresInternet));
     }
     requested.validate().map_err(policy_error)
 }

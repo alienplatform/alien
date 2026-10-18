@@ -108,10 +108,7 @@ pub fn aws_sandbox_setup_inputs(
     let grant =
         aws_sandbox_remote_grant(stack, sandbox).map(|definition| definition.permission_set);
     Ok(vec![
-        (
-            "egress",
-            serde_json::to_value(&sandbox.egress).expect("sandbox egress serializes to JSON"),
-        ),
+        ("egress", sandbox.setup_digest_value()),
         ("egress network", serde_json::json!(network)),
         (
             "build role policy",
@@ -130,9 +127,15 @@ pub fn comparable_aws_sandbox_setup_inputs(
 ) -> Vec<(&'static str, Value)> {
     aws_sandbox_setup_inputs(stack, sandbox, lifecycle, SETUP_INPUTS_COMPARISON_ACCOUNT)
         .unwrap_or_else(|_| {
-            vec![(
-                "configuration",
-                serde_json::to_value(sandbox).expect("a sandbox serializes to JSON"),
-            )]
+            vec![("configuration", {
+                let mut value =
+                    serde_json::to_value(sandbox).expect("a sandbox serializes to JSON");
+                value["egress"] = sandbox.setup_digest_value();
+                value
+                    .as_object_mut()
+                    .expect("sandbox config is an object")
+                    .remove("defaultPolicy");
+                value
+            })]
         })
 }

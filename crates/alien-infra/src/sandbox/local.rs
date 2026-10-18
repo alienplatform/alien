@@ -266,7 +266,9 @@ impl LocalSandboxController {
             BindingValue::value(route_url.clone()),
             BindingValue::value(sandbox_name.clone()),
             BindingValue::value(token_path.clone()),
-            self.egress.as_ref().map(|value| *value.declaration()),
+            self.egress
+                .as_ref()
+                .map(|value| value.declaration().clone()),
         );
 
         if let SandboxBinding::Local(value) = &mut binding {
@@ -306,7 +308,15 @@ fn session_template(sandbox: &Sandbox) -> Result<alien_local::SandboxSessionConf
 
     let egress = match &sandbox.egress {
         SandboxEgress::None => alien_local::SandboxEgressMode::Deny,
-        SandboxEgress::Internet => alien_local::SandboxEgressMode::Allow,
+        SandboxEgress::Allow | SandboxEgress::Internet => alien_local::SandboxEgressMode::Allow,
+        SandboxEgress::AllowDomains { .. } => {
+            return Err(AlienError::new(ErrorData::CloudPlatformError {
+                message: "a local sandbox has one network switch and no filter, so a hostname \
+                          list has nothing to render into; Azure matches on host pattern"
+                    .to_string(),
+                resource_id: Some(sandbox.id.clone()),
+            }))
+        }
     };
 
     let limits = sandbox.resolved_limits();

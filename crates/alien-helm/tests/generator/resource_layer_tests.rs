@@ -115,7 +115,7 @@ fn a_sandbox_allowing_egress_only_reaches_its_gateway() {
         .files
         .get("templates/sandbox-agent-networkpolicy.yaml")
         .expect("the sandbox NetworkPolicy must render");
-    assert!(policy.contains("alien.dev/sandbox-egress-gateway: \"true\""));
+    assert!(policy.contains("sandbox-egress-gateway"));
     assert!(policy.contains("port: 3128"));
     assert!(!policy.contains("ipBlock:"));
     assert!(!policy.contains("port: 53"));

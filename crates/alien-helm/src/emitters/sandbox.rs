@@ -19,6 +19,14 @@ use alien_error::AlienError;
 /// Label the operator puts on every pod backing a session, and what the policy selects on.
 const LABEL_SANDBOX: &str = "alien.dev/sandbox";
 
+// Released allow-mode address exclusions. New internet uses the gateway.
+const ALWAYS_DENIED_CIDRS: &[&str] = &[
+    "169.254.169.254/32",
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+];
+
 /// Path the broker's RBAC lands at. Fixed rather than per-sandbox: the ClusterRole is one per
 /// deployment, so a second sandbox rewrites the same file instead of colliding on the name.
 const BROKER_RBAC_TEMPLATE: &str = "sandbox-broker-rbac.yaml";
@@ -77,17 +85,41 @@ fn network_policy(sandbox: &Sandbox) -> Result<String> {
     - to:
         - podSelector:
             matchLabels:
-              alien.dev/sandbox-egress-gateway: "true"
-              app.kubernetes.io/instance: {{ .Release.Name }}
+              {{ $scopeKey }}: {{ $scopeValue | quote }}
+              {{ printf "%s/resource" (trimSuffix "/deployment" $scopeKey) }}: sandbox-egress-gateway
+              component: container
+              managed-by: runtime
       ports:
         - protocol: TCP
           port: 3128
 "#
         .to_string(),
+        SandboxEgress::AllowDomains { .. } => {
+            return Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: format!("generate the Helm chart for sandbox '{}'", sandbox.id),
+                reason: "a Kubernetes NetworkPolicy matches addresses, not hostnames".to_string(),
+            }));
+        }
+        SandboxEgress::Allow => {
+            let excepts: String = ALWAYS_DENIED_CIDRS
+                .iter()
+                .map(|cidr| format!("            - {cidr}\n"))
+                .collect();
+            // DNS first, by selector rather than address. The excepts below cover the private
+            // ranges a cluster's DNS service lives in — 172.20/16 on EKS, 10.0/16 on AKS,
+            // 10.96/12 on kubeadm — so an address-based rule alone resolves no names anywhere
+            // except a cluster whose resolver sits on a link-local address.
+            let dns = "    - to:\n        - namespaceSelector:\n            matchLabels:\n              kubernetes.io/metadata.name: kube-system\n          podSelector:\n            matchLabels:\n              k8s-app: kube-dns\n      ports:\n        - protocol: UDP\n          port: 53\n        - protocol: TCP\n          port: 53\n";
+            format!(
+                "  egress:\n{dns}    - to:\n        - ipBlock:\n            cidr: 0.0.0.0/0\n            except:\n{excepts}"
+            )
+        }
     };
 
     Ok(format!(
-        r#"apiVersion: networking.k8s.io/v1
+        r#"{{{{- $scopeKey := default "alien.dev/deployment" .Values.logCollector.scope.deploymentLabelKey -}}}}
+{{{{- $scopeValue := default (include "deployment.fullname" .) .Values.logCollector.scope.deploymentLabelValue -}}}}
+apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: alien-sbx-{id}

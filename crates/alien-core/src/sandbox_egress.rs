@@ -27,7 +27,7 @@ pub fn has_sandbox_gateway(stack: &Stack) -> bool {
 /// Closed sandboxes retain their denying connector. Only the new internet
 /// declaration opts into the gateway, including in stacks with legacy sandboxes.
 pub fn sandbox_needs_connector(stack: &Stack, sandbox: &Sandbox) -> bool {
-    matches!(sandbox.egress, SandboxEgress::None)
+    matches!(sandbox.cloud_egress(), SandboxEgress::None | SandboxEgress::AllowDomains { .. })
         || (matches!(sandbox.egress, SandboxEgress::Internet) && has_sandbox_gateway(stack))
 }
 

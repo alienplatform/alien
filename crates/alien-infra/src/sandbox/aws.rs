@@ -928,7 +928,7 @@ impl AwsSandboxController {
             }),
             egress: self.egress.as_ref().map(|value| match value {
                 alien_core::bindings::SandboxEgressBinding::Gateway(_) => value.clone(),
-                _ => (*value.declaration()).into(),
+                _ => value.declaration().clone().into(),
             }),
             image_arn: BindingValue::value(image_arn.clone()),
             image_version: BindingValue::value(image_version.clone()),

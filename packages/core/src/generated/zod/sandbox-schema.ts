@@ -22,7 +22,7 @@ get "defaultPolicy"(){
                 return z.union([EgressPolicySchema, z.null()]).optional()
               },
 get "egress"(){
-                return SandboxEgressSchema.describe("Whether sandboxes may use the public internet.")
+                return SandboxEgressSchema.describe("Outbound network policy")
               },
 "id": z.string().describe("Identifier for the sandbox. Must contain only alphanumeric characters, hyphens, and\nunderscores ([A-Za-z0-9-_]). Maximum 64 characters."),
 get "lifecycle"(){
