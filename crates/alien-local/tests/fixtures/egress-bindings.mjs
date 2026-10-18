@@ -21,6 +21,10 @@ try {
     () => box.create({ egress: { allow: [] } }),
     error => error.code === "SANDBOX_EGRESS_INVALID",
   )
+  await assert.rejects(
+    () => box.create({ egress: { allow: Array(4097).fill("example.com") } }),
+    error => error.code === "SANDBOX_EGRESS_POLICY_TOO_LARGE" && error.retryable === false,
+  )
 } finally {
   await box.terminate(created.sandboxId)
 }

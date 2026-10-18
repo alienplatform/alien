@@ -27,6 +27,12 @@ async def main():
             assert error.code == "SANDBOX_EGRESS_INVALID"
         else:
             raise AssertionError("empty target lists must be refused")
+        try:
+            await box.create(egress={"allow": ["example.com"] * 4097})
+        except AlienError as error:
+            assert error.code == "SANDBOX_EGRESS_POLICY_TOO_LARGE" and not error.retryable
+        else:
+            raise AssertionError("oversized policies must be refused")
     finally:
         await box.terminate(created.sandbox_id)
 
