@@ -59,7 +59,16 @@ impl GatewayEgress {
         *current = Some(record);
         Ok(())
     }
+    /// Every gateway request goes through here. A status below 500 is an answer from a gateway,
+    /// so it ends any run of unanswered checks.
     pub(super) async fn policy_request(&self, record: Option<String>) -> Result<u16> {
+        let status = self.send_policy_request(record).await?;
+        if status < 500 {
+            *self.unanswered_since() = None;
+        }
+        Ok(status)
+    }
+    async fn send_policy_request(&self, record: Option<String>) -> Result<u16> {
         let address = self.gateway_address()?;
         let token = self.current_token()?;
         let mut gateway = BufReader::new(self.connect(address).await?);
@@ -94,21 +103,13 @@ impl GatewayEgress {
             PolicyCheck::Rejected(error) | PolicyCheck::Unanswered(error) => Err(error),
         }
     }
-    /// Start of the current run of checks that no gateway answered, shared by the monitor and
-    /// lifecycle checks. Callers hold `update_lock`.
+    /// Start of the current run of checks that no gateway answered. Callers hold `update_lock`.
     fn unanswered_since(&self) -> std::sync::MutexGuard<'_, Option<Instant>> {
         self.unanswered_since
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
     async fn policy_check(&self) -> PolicyCheck {
-        let check = self.policy_check_once().await;
-        if !matches!(check, PolicyCheck::Unanswered(_)) {
-            *self.unanswered_since() = None;
-        }
-        check
-    }
-    async fn policy_check_once(&self) -> PolicyCheck {
         match self.policy_request(None).await {
             Ok(200) => PolicyCheck::Accepted,
             Ok(403) => {
@@ -498,6 +499,64 @@ mod tests {
         assert!(
             answered.elapsed() >= grace,
             "closed {:?} after an answered check, before a new grace",
+            answered.elapsed()
+        );
+        monitor.abort();
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn answered_record_refresh_restarts_the_grace() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let agent = Arc::new(agent(listener.local_addr().unwrap()));
+        *agent.token.write().unwrap() = format!(
+            "e30.{}.eA",
+            URL_SAFE_NO_PAD.encode(br#"{"aud":"p/r","sub":"box"}"#)
+        );
+        agent.ready.store(true, Ordering::Release);
+        let answer_next = Arc::new(AtomicBool::new(false));
+        let server = tokio::spawn({
+            let answer_next = answer_next.clone();
+            async move {
+                loop {
+                    let (socket, _) = listener.accept().await.unwrap();
+                    if answer_next.swap(false, Ordering::AcqRel) {
+                        answer(socket, 200).await;
+                    }
+                }
+            }
+        });
+        let grace = Duration::from_millis(600);
+        let started = Instant::now();
+        // Unanswered checks run at 0, 200 and 400 ms.
+        let monitor = tokio::spawn(agent.clone().monitor_policy_with(MonitorTiming {
+            period: Duration::from_millis(100),
+            retry: Duration::from_millis(200),
+            grace,
+        }));
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        // Between monitor checks, a record-only refresh reaches a live gateway first.
+        let guard = agent.update_lock.lock().await;
+        answer_next.store(true, Ordering::Release);
+        let refresh = tokio::spawn({
+            let agent = agent.clone();
+            async move { agent.update(None, record(3)).await }
+        });
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        drop(guard);
+        refresh.await.unwrap().unwrap();
+        let answered = Instant::now();
+        assert!(!answer_next.load(Ordering::Acquire));
+        while agent.ready.load(Ordering::Acquire) {
+            assert!(
+                started.elapsed() < Duration::from_secs(3),
+                "egress never closed"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(
+            answered.elapsed() >= grace - Duration::from_millis(50),
+            "closed {:?} after an answered refresh, before a new grace",
             answered.elapsed()
         );
         monitor.abort();
