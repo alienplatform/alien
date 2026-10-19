@@ -459,6 +459,16 @@ async fn kubernetes_internet_sandbox_installs_a_hosted_gateway() {
     assert!(condition.contains(&format!(":{probe_name}'")), "{condition}");
     let rules = serde_yaml::to_string(&admission["spec"]["validations"]).unwrap();
     assert!(rules.contains("automountServiceAccountToken == false") && rules.contains(image));
+    // Created pods cannot ask for host powers the probe itself does not have.
+    for required in [
+        "'ALL' in c.securityContext.capabilities.drop",
+        "!has(c.securityContext.capabilities.add)",
+        "allowPrivilegeEscalation == false",
+        "seccompProfile.type == 'RuntimeDefault'",
+        "runAsUser == 65534",
+    ] {
+        assert!(rules.contains(required), "{required}: {rules}");
+    }
     assert!(documents
         .iter()
         .any(|doc| doc["kind"] == "ValidatingAdmissionPolicyBinding"

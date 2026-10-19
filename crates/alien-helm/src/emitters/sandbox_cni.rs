@@ -73,6 +73,10 @@ spec:
       message: probe pods run the pinned probe image unprivileged
     - expression: "(!has(object.spec.hostNetwork) || !object.spec.hostNetwork) && (!has(object.spec.hostPID) || !object.spec.hostPID) && (!has(object.spec.hostIPC) || !object.spec.hostIPC)"
       message: probe pods use no host namespaces
+    - expression: "has(object.spec.securityContext) && has(object.spec.securityContext.runAsNonRoot) && object.spec.securityContext.runAsNonRoot == true && has(object.spec.securityContext.runAsUser) && object.spec.securityContext.runAsUser == 65534 && has(object.spec.securityContext.seccompProfile) && object.spec.securityContext.seccompProfile.type == 'RuntimeDefault'"
+      message: probe pods run as the unprivileged probe user with the default seccomp profile
+    - expression: "object.spec.containers.all(c, has(c.securityContext) && has(c.securityContext.allowPrivilegeEscalation) && c.securityContext.allowPrivilegeEscalation == false && has(c.securityContext.capabilities) && has(c.securityContext.capabilities.drop) && 'ALL' in c.securityContext.capabilities.drop && !has(c.securityContext.capabilities.add) && (!has(c.securityContext.runAsUser) || c.securityContext.runAsUser == 65534) && (!has(c.securityContext.runAsNonRoot) || c.securityContext.runAsNonRoot == true) && (!has(c.securityContext.seccompProfile) || c.securityContext.seccompProfile.type == 'RuntimeDefault') && (!has(c.securityContext.procMount) || c.securityContext.procMount == 'Default'))"
+      message: probe containers drop every capability and cannot escalate
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding
