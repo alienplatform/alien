@@ -323,7 +323,8 @@ async fn kubernetes_internet_sandbox_installs_a_hosted_gateway() {
     // set independently of the release name.
     let rendered = super::test_utils::helm_template(
         &chart.files,
-        Some("serviceAccountPrefix: custom-prefix\n"),
+        // Node heartbeats off: the operator still lists nodes to exclude their addresses.
+        Some("serviceAccountPrefix: custom-prefix\nheartbeat:\n  collection:\n    nodes:\n      enabled: false\n"),
     );
     rendered.assert_ok("kubernetes internet sandbox");
     let documents: Vec<serde_yaml::Value> = serde_yaml::Deserializer::from_str(&rendered.stdout)
@@ -341,6 +342,36 @@ async fn kubernetes_internet_sandbox_installs_a_hosted_gateway() {
             .iter()
             .any(|name| name.ends_with(&format!("{SANDBOX_EGRESS_GATEWAY_ID}-sa"))),
         "the gateway Deployment needs its service account: {accounts:?}"
+    );
+
+    let manager = documents
+        .iter()
+        .find(|doc| doc["kind"] == "Deployment")
+        .and_then(|doc| doc["spec"]["template"]["spec"]["serviceAccountName"].as_str())
+        .expect("operator service account");
+    let node_readers: Vec<_> = documents
+        .iter()
+        .filter(|doc| doc["kind"] == "ClusterRole")
+        .filter(|role| {
+            role["rules"].as_sequence().is_some_and(|rules| {
+                rules.iter().any(|rule| {
+                    rule["resources"] == serde_yaml::Value::from(vec!["nodes"])
+                        && rule["apiGroups"] == serde_yaml::Value::from(vec![""])
+                        && rule["verbs"]
+                            .as_sequence()
+                            .is_some_and(|verbs| verbs.contains(&"list".into()))
+                })
+            })
+        })
+        .filter_map(|role| role["metadata"]["name"].as_str())
+        .collect();
+    assert!(
+        documents.iter().any(|doc| doc["kind"] == "ClusterRoleBinding"
+            && doc["roleRef"]["name"]
+                .as_str()
+                .is_some_and(|name| node_readers.contains(&name))
+            && doc["subjects"][0]["name"] == manager),
+        "the operator must list nodes to exclude node and pod ranges: {node_readers:?}"
     );
 
     let probe = documents

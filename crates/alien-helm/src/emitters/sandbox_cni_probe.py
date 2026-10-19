@@ -121,17 +121,24 @@ def main():
             "def require(condition,message):\n"
             " if not condition: raise RuntimeError(message)\n"
             "opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))\n"
-            "for attempt in range(3):\n"
+            # A recovering control waits, within the pod deadline, for a CNI that removes a
+            # deleted policy slowly; it must still be reached once.
+            "RECOVER=globals().get('RECOVER',False)\n"
+            "reached=False\n"
+            "for attempt in range(30 if RECOVER else 3):\n"
             " try:\n"
             f"  body=opener.open({url!r},timeout=3).read()\n"
             f"  require(body=={marker.encode()!r}, 'wrong positive control body')\n"
             "  require(not DENIED, 'NetworkPolicy did not block traffic')\n"
+            "  reached=True\n"
+            "  if RECOVER: break\n"
             " except (urllib.error.URLError,TimeoutError,OSError) as error:\n"
             "  reason=getattr(error,'reason',error)\n"
-            "  require(DENIED and (isinstance(reason,TimeoutError) or "
+            "  require((DENIED or RECOVER) and (isinstance(reason,TimeoutError) or "
             "getattr(reason,'errno',None) in (errno.ECONNREFUSED,errno.ENETUNREACH,"
             "errno.EHOSTUNREACH,errno.ETIMEDOUT)), repr(error))\n"
             " time.sleep(1)\n"
+            "require(DENIED or reached, 'traffic did not resume after removing the policy')\n"
         )
         # A successful negative result is only meaningful bracketed by working controls.
         for role, denied in [("control", False), ("denied", True), ("control-after", False)]:
@@ -150,7 +157,7 @@ def main():
         wait("ingress-denied", lambda p: p.get("status", {}).get("phase") == "Succeeded")
         request("DELETE", policies + "/" + ingress_name, {"gracePeriodSeconds": 0})
         time.sleep(2)
-        create(pods, pod("ingress-control-after", "DENIED=False\n" + probe))
+        create(pods, pod("ingress-control-after", "DENIED=False\nRECOVER=True\n" + probe))
         wait("ingress-control-after", lambda p: p.get("status", {}).get("phase") == "Succeeded")
         print("NetworkPolicy enforced: ingress and egress denied requests; all controls passed")
     finally:

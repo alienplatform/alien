@@ -1,5 +1,6 @@
-//! Exact signing-key reads for sandbox-management workloads. Replica configuration
-//! stays readable only by the controller and by its projected gateway workload.
+//! Exact signing-key reads for sandbox-management workloads, and the operator's node list
+//! for gateway address exclusions. Replica configuration stays readable only by the
+//! controller and by its projected gateway workload.
 
 use std::collections::BTreeSet;
 
@@ -20,7 +21,34 @@ pub(crate) fn template(stack: &Stack) -> Result<Option<String>> {
     if internet.is_empty() {
         return Ok(None);
     }
-    let mut template = String::new();
+    // The operator excludes node and pod ranges from gateway egress, which needs the node
+    // list even when node heartbeat collection (and its ClusterRole) is turned off.
+    let mut template = String::from(
+        r#"{{- $nodes := printf "%s-egress-nodes-%s" (include "deployment.fullname" . | trunc 40 | trimSuffix "-") (sha256sum .Release.Namespace | trunc 8) -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $nodes }}
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $nodes }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "deployment.managerServiceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $nodes }}
+---
+"#,
+    );
     for (name, profile) in stack.permission_profiles() {
         // Kubernetes RBAC cannot subtract one Secret from an existing namespace-wide
         // grant. Refuse this combination rather than expose the gateway's replica key.
@@ -72,5 +100,5 @@ roleRef:
 ---
 "#));
     }
-    Ok((!template.is_empty()).then_some(template))
+    Ok(Some(template))
 }
