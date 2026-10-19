@@ -165,12 +165,7 @@ async fn source_reaches_azure_and_gcp_frozen_through_the_runner() {
 
 #[tokio::test]
 async fn unsupported_internet_sandboxes_fail_planning_without_optional_limits() {
-    for platform in [
-        Platform::Gcp,
-        Platform::Azure,
-        Platform::Kubernetes,
-        Platform::Local,
-    ] {
+    for platform in [Platform::Gcp, Platform::Azure, Platform::Local] {
         let mut declared = sandbox(None);
         declared.egress = SandboxEgress::Internet;
         let result = PreflightRunner::new()

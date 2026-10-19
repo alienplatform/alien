@@ -261,3 +261,129 @@ fn sandbox_management_gets_only_its_signing_secret() {
         .egress = SandboxEgress::Allow;
     super::helpers::try_render(&stack, StackSettings::default()).unwrap();
 }
+
+/// Kubernetes hosts the sandbox gateway itself. The same preparation `alien render` runs adds a
+/// replicated gateway Container with its own service account, sessions can reach only that
+/// gateway's pods, and installation first proves that the cluster enforces NetworkPolicy.
+#[tokio::test]
+async fn kubernetes_internet_sandbox_installs_a_hosted_gateway() {
+    use alien_core::{
+        sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID, Container, ContainerEgress, DeploymentConfig,
+        EnvironmentVariablesSnapshot, ExternalBindings, Platform, StackState,
+    };
+    use serde::Deserialize;
+
+    let stack = Stack::new("kubernetes-internet".to_string())
+        .add(
+            Sandbox::new("agent".to_string())
+                .code(SandboxCode::Image {
+                    image: "example.invalid/agent:1".to_string(),
+                })
+                .egress(SandboxEgress::Internet)
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: Some(300),
+                    idle_pause_seconds: None,
+                })
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let runner = alien_preflights::runner::PreflightRunner::new();
+    runner
+        .run_template_preflights(&stack, Platform::Kubernetes)
+        .await
+        .expect("Kubernetes hosts the gateway for internet sandboxes");
+    let config = DeploymentConfig::builder()
+        .stack_settings(StackSettings::default())
+        .environment_variables(EnvironmentVariablesSnapshot {
+            variables: vec![],
+            hash: String::new(),
+            created_at: String::new(),
+        })
+        .allow_frozen_changes(false)
+        .external_bindings(ExternalBindings::default())
+        .build();
+    let prepared = runner
+        .apply_mutations(stack, &StackState::new(Platform::Kubernetes), &config)
+        .await
+        .expect("preparation adds the gateway");
+
+    let gateway = prepared.resources[SANDBOX_EGRESS_GATEWAY_ID]
+        .config
+        .downcast_ref::<Container>()
+        .expect("the gateway is a Container");
+    assert!(gateway.replicas.is_some_and(|replicas| replicas >= 2));
+    assert_eq!(gateway.egress, Some(ContainerEgress::Internet));
+    // The controller injects the gateway's configuration; the pod never reads the vault.
+    assert!(gateway.links.is_empty(), "{:?}", gateway.links);
+
+    let chart = render(&prepared, StackSettings::default());
+    assert_helm_valid(&chart, "kubernetes internet sandbox");
+    // The operator labels runtime pods with its resource prefix, which an installer may
+    // set independently of the release name.
+    let rendered = super::test_utils::helm_template(
+        &chart.files,
+        Some("serviceAccountPrefix: custom-prefix\n"),
+    );
+    rendered.assert_ok("kubernetes internet sandbox");
+    let documents: Vec<serde_yaml::Value> = serde_yaml::Deserializer::from_str(&rendered.stdout)
+        .map(|document| serde_yaml::Value::deserialize(document).unwrap())
+        .filter(|document| !document.is_null())
+        .collect();
+
+    let accounts: Vec<_> = documents
+        .iter()
+        .filter(|doc| doc["kind"] == "ServiceAccount")
+        .filter_map(|doc| doc["metadata"]["name"].as_str())
+        .collect();
+    assert!(
+        accounts
+            .iter()
+            .any(|name| name.ends_with(&format!("{SANDBOX_EGRESS_GATEWAY_ID}-sa"))),
+        "the gateway Deployment needs its service account: {accounts:?}"
+    );
+
+    let probe = documents
+        .iter()
+        .find(|doc| {
+            doc["kind"] == "Job"
+                && doc["metadata"]["name"]
+                    .as_str()
+                    .is_some_and(|name| name.ends_with("-sandbox-cni"))
+        })
+        .expect("installation verifies NetworkPolicy enforcement");
+    assert_eq!(
+        probe["metadata"]["annotations"]["helm.sh/hook"],
+        "pre-install,pre-upgrade"
+    );
+
+    let policy = documents
+        .iter()
+        .find(|doc| doc["kind"] == "NetworkPolicy" && doc["metadata"]["name"] == "alien-sbx-agent")
+        .expect("the session NetworkPolicy");
+    let egress = policy["spec"]["egress"]
+        .as_sequence()
+        .expect("egress rules");
+    assert_eq!(egress.len(), 1, "{egress:?}");
+    let peers = egress[0]["to"].as_sequence().unwrap();
+    assert_eq!(peers.len(), 1);
+    assert!(peers[0]["ipBlock"].is_null() && peers[0]["namespaceSelector"].is_null());
+    let labels = peers[0]["podSelector"]["matchLabels"].as_mapping().unwrap();
+    assert_eq!(
+        labels
+            .get("alien.dev/resource")
+            .and_then(serde_yaml::Value::as_str),
+        Some(SANDBOX_EGRESS_GATEWAY_ID)
+    );
+    assert_eq!(
+        labels
+            .get("alien.dev/deployment")
+            .and_then(serde_yaml::Value::as_str),
+        Some("custom-prefix"),
+        "the session policy must select the pods the operator labels"
+    );
+    assert_eq!(
+        egress[0]["ports"],
+        serde_yaml::from_str::<serde_yaml::Value>("[{protocol: TCP, port: 3128}]").unwrap()
+    );
+}

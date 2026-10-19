@@ -874,6 +874,7 @@ dependencies = [
  "alien-error",
  "alien-operations-sdk",
  "alien-permissions",
+ "alien-preflights",
  "alien-terraform",
  "flate2",
  "indexmap 2.14.1",
@@ -884,6 +885,7 @@ dependencies = [
  "sha2 0.10.9",
  "tar",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]

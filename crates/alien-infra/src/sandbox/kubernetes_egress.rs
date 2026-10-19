@@ -12,6 +12,9 @@ use k8s_openapi::api::core::v1::EnvVar;
 
 use super::egress;
 
+/// Kubernetes' default cluster DNS domain.
+const CLUSTER_DOMAIN: &str = "cluster.local";
+
 pub(super) async fn configure(
     ctx: &ResourceControllerContext<'_>,
     sandbox: &Sandbox,
@@ -43,7 +46,8 @@ pub(super) async fn configure(
                 "listen": "0.0.0.0:3128", "admin": "0.0.0.0:3129",
                 "audiences": audiences, "defaultPolicies": {}, "keys": [&key],
                 "deniedRanges": denied,
-                "peers": {"dns": format!("{peer}.{namespace}.svc"), "port": 3129},
+                // The gateway resolves this as an absolute name, without search domains.
+                "peers": {"dns": format!("{peer}.{namespace}.svc.{CLUSTER_DOMAIN}"), "port": 3129},
                 "credentials": []
             }),
         )
@@ -222,7 +226,7 @@ mod tests {
         assert_eq!(config["audiences"], json!(["test/subject"]));
         assert_eq!(
             config["peers"]["dns"],
-            "sandbox-egress-gateway-peers.test-ns.svc"
+            "sandbox-egress-gateway-peers.test-ns.svc.cluster.local"
         );
         assert_eq!(
             config["deniedRanges"],

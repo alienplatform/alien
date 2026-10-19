@@ -17,16 +17,14 @@ fn invalid(message: impl Into<String>) -> ErrorData {
     }
 }
 
-/// AWS setup can install exact SSM parameter grants before the values exist.
-/// Explicit profile entries prevent resource-link defaults from granting access
-/// to the whole vault. The gateway's profile is dedicated to that container.
-pub(crate) fn configure_aws_gateway_permissions(stack: &mut Stack) -> Result<()> {
+/// The gateway's profile name, after refusing any other workload that shares it.
+fn dedicated_gateway_profile(stack: &Stack) -> Result<Option<String>> {
     let Some(gateway) = stack
         .resources
         .get(SANDBOX_EGRESS_GATEWAY_ID)
         .and_then(|entry| entry.config.downcast_ref::<Container>())
     else {
-        return Ok(());
+        return Ok(None);
     };
     let profile_name = gateway.permissions.clone();
     if stack.resources().any(|(id, entry)| {
@@ -58,6 +56,50 @@ pub(crate) fn configure_aws_gateway_permissions(stack: &mut Stack) -> Result<()>
             "The sandbox gateway requires a dedicated permission profile",
         )));
     }
+    Ok(Some(profile_name))
+}
+
+/// On Kubernetes the controller projects the gateway configuration into the workload's
+/// own Secret, so the gateway pod gets a service account with no data permissions.
+pub(crate) fn configure_kubernetes_gateway_permissions(stack: &mut Stack) -> Result<()> {
+    let Some(profile_name) = dedicated_gateway_profile(stack)? else {
+        return Ok(());
+    };
+    let gateway = stack.resources[SANDBOX_EGRESS_GATEWAY_ID]
+        .config
+        .downcast_ref::<Container>()
+        .expect("checked above");
+    if !gateway.links.is_empty() {
+        return Err(AlienError::new(invalid(
+            "The Kubernetes sandbox gateway must not link other resources",
+        )));
+    }
+    match stack.permissions.profiles.get(&profile_name) {
+        Some(profile) if !profile.0.is_empty() => Err(AlienError::new(invalid(
+            "The Kubernetes sandbox gateway profile must not grant permissions",
+        ))),
+        Some(_) => Ok(()),
+        None => {
+            stack
+                .permissions
+                .profiles
+                .insert(profile_name, PermissionProfile::new());
+            Ok(())
+        }
+    }
+}
+
+/// AWS setup can install exact SSM parameter grants before the values exist.
+/// Explicit profile entries prevent resource-link defaults from granting access
+/// to the whole vault. The gateway's profile is dedicated to that container.
+pub(crate) fn configure_aws_gateway_permissions(stack: &mut Stack) -> Result<()> {
+    let Some(profile_name) = dedicated_gateway_profile(stack)? else {
+        return Ok(());
+    };
+    let gateway = stack.resources[SANDBOX_EGRESS_GATEWAY_ID]
+        .config
+        .downcast_ref::<Container>()
+        .expect("checked above");
     let mut gateway_profile = PermissionProfile::new();
     for link in &gateway.links {
         if *link.resource_type() != Vault::RESOURCE_TYPE || link.id() != SECRETS_VAULT_ID {

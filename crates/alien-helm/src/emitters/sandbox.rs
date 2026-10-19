@@ -83,6 +83,7 @@ fn network_policy(sandbox: &Sandbox) -> Result<String> {
         // NetworkPolicy selects pods, not Service names; an ipBlock for the Service IP
         // would depend on whether the CNI applies policy before or after DNAT.
         // The operator supplies the gateway IP, so sessions need no DNS exception.
+        // Runtime pods carry the operator's resource prefix as their deployment label.
         SandboxEgress::Internet => r#"  egress:
     - to:
         - podSelector:
@@ -120,7 +121,7 @@ fn network_policy(sandbox: &Sandbox) -> Result<String> {
 
     Ok(format!(
         r#"{{{{- $scopeKey := default "alien.dev/deployment" .Values.logCollector.scope.deploymentLabelKey -}}}}
-{{{{- $scopeValue := default (include "deployment.fullname" .) .Values.logCollector.scope.deploymentLabelValue -}}}}
+{{{{- $scopeValue := include "deployment.serviceAccountPrefix" . -}}}}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

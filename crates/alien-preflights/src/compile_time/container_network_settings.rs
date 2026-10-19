@@ -70,7 +70,12 @@ impl CompileTimeCheck for ContainerNetworkSettingsCheck {
             if let Err(error) = container.validate_network_settings() {
                 errors.push(format!("Container '{id}': {error}"));
             }
+            // Kubernetes enforces the managed sandbox gateway with NetworkPolicy, which its
+            // installation verifies. Application Containers there stay refused for now.
+            let kubernetes_gateway = platform == Platform::Kubernetes
+                && id == alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID;
             if container.egress.is_some()
+                && !kubernetes_gateway
                 && !matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure)
             {
                 errors.push(format!("CONTAINER_NETWORK_SETTINGS_UNSUPPORTED: {platform} does not yet enforce Container '{id}' egress internet"));

@@ -143,8 +143,16 @@ impl StackMutation for SecretsVaultMutation {
             )?;
         }
 
-        if stack_state.platform == Platform::Aws {
-            super::sandbox_gateway_permissions::configure_aws_gateway_permissions(&mut stack)?;
+        match stack_state.platform {
+            Platform::Aws => {
+                super::sandbox_gateway_permissions::configure_aws_gateway_permissions(&mut stack)?
+            }
+            Platform::Kubernetes => {
+                super::sandbox_gateway_permissions::configure_kubernetes_gateway_permissions(
+                    &mut stack,
+                )?
+            }
+            _ => {}
         }
 
         Ok(stack)
