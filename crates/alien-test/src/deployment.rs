@@ -543,21 +543,27 @@ mod tests {
     async fn foreground_agent_teardown_signals_the_process_group() {
         let temp = tempfile::tempdir().expect("create test directory");
         let marker = temp.path().join("terminated");
+        let child_ready = temp.path().join("child-ready");
         let ready = temp.path().join("ready");
 
+        // The wrapper reports ready only once it has recorded the child's pid and the child has
+        // installed its trap. A SIGTERM before `child_pid=$!` would make the trap run `wait ""`,
+        // which fails at once, so the wrapper would exit without waiting for the child.
         let mut child = tokio::process::Command::new("/bin/sh")
             .arg("-c")
             .arg(
                 r#"
 child_pid=
 trap 'echo wrapper >> "$MARKER"; wait "$child_pid"; exit 0' TERM
-/bin/sh -c 'trap '\''echo child >> "$MARKER"; exit 0'\'' TERM; echo ready > "$READY"; while :; do sleep 1; done' &
+/bin/sh -c 'trap '\''echo child >> "$MARKER"; exit 0'\'' TERM; echo ready > "$CHILD_READY"; while :; do sleep 1; done' &
 child_pid=$!
-while [ ! -f "$READY" ]; do sleep 0.01; done
+while [ ! -f "$CHILD_READY" ]; do sleep 0.01; done
+echo ready > "$READY"
 wait "$child_pid"
 "#,
             )
             .env("MARKER", &marker)
+            .env("CHILD_READY", &child_ready)
             .env("READY", &ready)
             .process_group(0)
             .kill_on_drop(true)
