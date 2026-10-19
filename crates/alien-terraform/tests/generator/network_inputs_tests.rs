@@ -17,6 +17,9 @@ fn mocked_network_plans_normalize_empty_ids_in_registration() {
             public_subnet_ids: vec![],
             private_subnet_ids: vec![],
             security_group_ids: vec![],
+            sandbox_subnet_ids: vec![],
+            sandbox_gateway_subnet_ids: vec![],
+            sandbox_gateway_subnet_cidrs: vec![],
         },
     ] {
         let is_static = matches!(authored, NetworkSettings::ByoVpcAws { .. });

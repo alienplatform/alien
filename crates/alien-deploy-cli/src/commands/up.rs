@@ -303,6 +303,9 @@ impl From<DeployConfigNetwork> for NetworkSettings {
                 public_subnet_ids,
                 private_subnet_ids,
                 security_group_ids,
+                sandbox_subnet_ids: vec![],
+                sandbox_gateway_subnet_ids: vec![],
+                sandbox_gateway_subnet_cidrs: vec![],
             },
             DeployConfigNetwork::ByoVpcGcp {
                 network_name,

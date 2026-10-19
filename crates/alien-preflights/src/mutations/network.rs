@@ -304,6 +304,9 @@ mod tests {
             public_subnet_ids: vec!["subnet-1".to_string()],
             private_subnet_ids: vec!["subnet-2".to_string()],
             security_group_ids: vec![],
+            sandbox_subnet_ids: vec![],
+            sandbox_gateway_subnet_ids: vec![],
+            sandbox_gateway_subnet_cidrs: vec![],
         }));
 
         let mutation = NetworkMutation;
@@ -345,6 +348,9 @@ mod tests {
             public_subnet_ids: vec![],
             private_subnet_ids: vec![],
             security_group_ids: vec![],
+            sandbox_subnet_ids: vec![],
+            sandbox_gateway_subnet_ids: vec![],
+            sandbox_gateway_subnet_cidrs: vec![],
         }));
 
         let mutation = NetworkMutation;
@@ -637,6 +643,9 @@ mod tests {
                 public_subnet_ids: vec![],
                 private_subnet_ids: vec![],
                 security_group_ids: vec![],
+                sandbox_subnet_ids: vec![],
+                sandbox_gateway_subnet_ids: vec![],
+                sandbox_gateway_subnet_cidrs: vec![],
             }),
             Platform::Gcp,
         );

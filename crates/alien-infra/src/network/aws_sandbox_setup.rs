@@ -219,6 +219,37 @@ pub(super) fn required(ctx: &ResourceControllerContext<'_>) -> Result<bool> {
 }
 
 impl AwsNetworkController {
+    /// Records the sandbox subnets a customer named in an existing VPC's settings, when the
+    /// stack needs them. Setup creates nothing for them and never deletes them; the network
+    /// verifies them read-only before it is ready.
+    pub(super) fn take_customer_sandbox_subnets(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<()> {
+        let config = ctx.desired_resource_config::<Network>()?;
+        let NetworkSettings::ByoVpcAws {
+            sandbox_subnet_ids,
+            sandbox_gateway_subnet_ids,
+            sandbox_gateway_subnet_cidrs,
+            ..
+        } = &config.settings
+        else {
+            return Ok(());
+        };
+        if !required(ctx)? || sandbox_subnet_ids.is_empty() {
+            return Ok(());
+        }
+        self.sandbox_network = Some(AwsSandboxNetwork {
+            sandbox_subnet_ids: sandbox_subnet_ids.clone(),
+            gateway_subnet_ids: sandbox_gateway_subnet_ids.clone(),
+            sandbox_cidrs: vec![],
+            gateway_cidrs: sandbox_gateway_subnet_cidrs.clone(),
+            workload_cidrs: vec![],
+            vpc_cidrs: vec![],
+        });
+        Ok(())
+    }
+
     pub(super) async fn reconcile_sandbox_network(
         &mut self,
         ctx: &ResourceControllerContext<'_>,

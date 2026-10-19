@@ -139,6 +139,7 @@ fn network_extra_variables(stack: &Stack, labels: &IndexMap<String, String>) -> 
             public_subnet_ids,
             private_subnet_ids,
             security_group_ids,
+            ..
         } = &network.settings
         {
             extra_string_vars.push((

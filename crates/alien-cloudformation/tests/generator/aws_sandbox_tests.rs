@@ -583,6 +583,9 @@ fn a_deny_sandbox_attaches_to_the_first_of_two_networks() {
         public_subnet_ids: vec!["subnet-public-a".to_string()],
         private_subnet_ids: existing_subnets(),
         security_group_ids: vec!["sg-0network".to_string()],
+        sandbox_subnet_ids: vec![],
+        sandbox_gateway_subnet_ids: vec![],
+        sandbox_gateway_subnet_cidrs: vec![],
     };
     for (first, second) in [(created(), brought()), (brought(), created())] {
         let stack = Stack::new("acme-sandbox-two-networks".to_string())
@@ -1499,6 +1502,9 @@ fn egress_parity_cases() -> [EgressParityCase; 3] {
                 public_subnet_ids: vec!["subnet-public-a".to_string()],
                 private_subnet_ids: existing_subnets(),
                 security_group_ids: vec!["sg-0network".to_string()],
+                sandbox_subnet_ids: vec![],
+                sandbox_gateway_subnet_ids: vec![],
+                sandbox_gateway_subnet_cidrs: vec![],
             },
             network_mode_create: false,
             subnets: existing_subnets(),

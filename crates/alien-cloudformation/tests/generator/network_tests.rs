@@ -49,6 +49,9 @@ fn byo_vpc_aws_uses_parameter_driven_subnet_ids() {
                 "subnet-private-b".to_string(),
             ],
             security_group_ids: vec!["sg-0123456789abcdef0".to_string()],
+            sandbox_subnet_ids: vec![],
+            sandbox_gateway_subnet_ids: vec![],
+            sandbox_gateway_subnet_cidrs: vec![],
         }),
         ..StackSettings::default()
     };

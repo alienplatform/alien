@@ -3222,6 +3222,7 @@ impl NetworkParameterDefaults {
                 public_subnet_ids,
                 private_subnet_ids,
                 security_group_ids,
+                ..
             }) => Self {
                 vpc_id: Some(vpc_id.clone()),
                 public_subnet_ids: public_subnet_ids.clone(),

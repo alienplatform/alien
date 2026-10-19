@@ -336,6 +336,9 @@ fn network() -> Network {
             public_subnet_ids: vec![],
             private_subnet_ids: vec!["subnet-work-a".into(), "subnet-work-b".into()],
             security_group_ids: vec![],
+            sandbox_subnet_ids: vec![],
+            sandbox_gateway_subnet_ids: vec![],
+            sandbox_gateway_subnet_cidrs: vec![],
         })
         .build()
 }
@@ -727,6 +730,9 @@ async fn denied_replace_after_a_dedicated_subnet_was_deleted_keeps_no_deleted_su
             public_subnet_ids: vec![],
             private_subnet_ids: vec!["subnet-work-a".into(), "subnet-work-b".into()],
             security_group_ids: vec!["sg-changed".into()],
+            sandbox_subnet_ids: vec![],
+            sandbox_gateway_subnet_ids: vec![],
+            sandbox_gateway_subnet_cidrs: vec![],
         })
         .build();
     let stack = Stack::new("test".into())
@@ -1580,4 +1586,138 @@ async fn setup_stops_repairing_a_route_that_keeps_coming_back() {
         cloud.lock().unwrap().mutations - mutations,
         MAX_TABLE_CHANGES as usize
     );
+}
+
+/// An existing VPC whose settings name the customer's sandbox subnets.
+fn network_with_customer_sandbox_subnets(gateway_cidrs: &[&str]) -> Network {
+    Network::new("network".into())
+        .settings(NetworkSettings::ByoVpcAws {
+            vpc_id: "vpc-existing".into(),
+            public_subnet_ids: vec![],
+            private_subnet_ids: vec!["subnet-work-a".into(), "subnet-work-b".into()],
+            security_group_ids: vec![],
+            sandbox_subnet_ids: vec!["subnet-sandbox-a".into(), "subnet-sandbox-b".into()],
+            sandbox_gateway_subnet_ids: vec!["subnet-gateway-a".into(), "subnet-gateway-b".into()],
+            sandbox_gateway_subnet_cidrs: gateway_cidrs.iter().map(|cidr| cidr.to_string()).collect(),
+        })
+        .build()
+}
+
+async fn customer_subnets_executor(
+    cloud: &Arc<Mutex<Cloud>>,
+    network: Network,
+    controller: AwsNetworkController,
+) -> SingleControllerExecutor {
+    SingleControllerExecutor::builder()
+        .resource(network)
+        .controller(controller)
+        .platform(Platform::Aws)
+        .initial_setup_authority(InitialSetupAuthority::DirectSetup)
+        .with_stack_resource(gateway(), alien_core::ResourceLifecycle::Live)
+        .resource_prefix("test")
+        .resource_lifecycle(alien_core::ResourceLifecycle::Frozen)
+        .service_provider(provider(cloud))
+        .with_test_dependencies()
+        .build()
+        .await
+        .unwrap()
+}
+
+/// Direct deploy into an existing VPC with the customer's sandbox and gateway subnets creates
+/// nothing, verifies them before the network is ready, and its teardown leaves them alone.
+#[tokio::test]
+async fn direct_deploy_runs_on_customer_sandbox_subnets_and_never_touches_them() {
+    let cloud = workload_cloud();
+    customer_sandbox_subnets(&mut cloud.lock().unwrap());
+    let before = {
+        let c = cloud.lock().unwrap();
+        (c.subnets.clone(), c.tables.clone())
+    };
+    let network = network_with_customer_sandbox_subnets(&["10.54.210.0/24", "10.54.211.0/24"]);
+    let mut execution =
+        customer_subnets_executor(&cloud, network, AwsNetworkController::default()).await;
+    execution
+        .run_until_status(ResourceStatus::Running)
+        .await
+        .unwrap();
+    let ready = execution
+        .internal_state::<AwsNetworkController>()
+        .unwrap()
+        .clone();
+    assert!(ready.sandbox_setup.is_none(), "setup owns nothing here");
+    let topology = ready.sandbox_network.as_ref().unwrap();
+    assert_eq!(
+        topology.sandbox_subnet_ids,
+        ["subnet-sandbox-a", "subnet-sandbox-b"]
+    );
+    assert_eq!(topology.sandbox_cidrs, ["10.54.200.0/24", "10.54.201.0/24"]);
+    assert_eq!(topology.gateway_cidrs, ["10.54.210.0/24", "10.54.211.0/24"]);
+    assert_eq!(topology.workload_cidrs, ["10.54.0.0/20", "10.54.16.0/20"]);
+    // A setup run has nothing to schedule for subnets it does not own.
+    assert!(!execution.needs_update().unwrap());
+
+    execution.delete().unwrap();
+    execution.run_until_terminal().await.unwrap();
+    assert_eq!(
+        execution
+            .internal_state::<AwsNetworkController>()
+            .unwrap()
+            .state,
+        AwsNetworkState::Deleted
+    );
+    let c = cloud.lock().unwrap();
+    assert_eq!(c.mutations, 0);
+    assert_eq!((c.subnets.clone(), c.tables.clone()), before);
+}
+
+/// Customer subnets that do not fit are refused before the network is ready, and nothing is
+/// changed to make them fit: gateway CIDRs that are not the gateway subnets' CIDRs, and a
+/// sandbox subnet that routes to the NAT.
+#[tokio::test]
+async fn direct_deploy_refuses_customer_sandbox_subnets_that_do_not_fit() {
+    let cloud = workload_cloud();
+    customer_sandbox_subnets(&mut cloud.lock().unwrap());
+    let network = network_with_customer_sandbox_subnets(&["10.54.0.0/16"]);
+    let mut execution =
+        customer_subnets_executor(&cloud, network, AwsNetworkController::default()).await;
+    let error = execution
+        .run_until_status(ResourceStatus::Running)
+        .await
+        .expect_err("broad gateway CIDRs are refused");
+    assert!(
+        format!("{error:?}").contains("do not match setup's connector security-group destinations"),
+        "{error:?}"
+    );
+
+    {
+        let mut c = cloud.lock().unwrap();
+        let association = {
+            let isolated = c
+                .tables
+                .iter_mut()
+                .find(|table| table["routeTableId"] == "rtb-customer-isolated")
+                .unwrap();
+            let associations = isolated["associationSet"]["item"].as_array_mut().unwrap();
+            associations.remove(0)
+        };
+        c.tables
+            .iter_mut()
+            .find(|table| table["routeTableId"] == "rtb-customer-gateway")
+            .unwrap()["associationSet"]["item"]
+            .as_array_mut()
+            .unwrap()
+            .push(association);
+    }
+    let network = network_with_customer_sandbox_subnets(&["10.54.210.0/24", "10.54.211.0/24"]);
+    let mut execution =
+        customer_subnets_executor(&cloud, network, AwsNetworkController::default()).await;
+    let error = execution
+        .run_until_status(ResourceStatus::Running)
+        .await
+        .expect_err("a sandbox subnet with a NAT route is refused");
+    assert!(
+        format!("{error:?}").contains("connector subnets require only local VPC routes"),
+        "{error:?}"
+    );
+    assert_eq!(cloud.lock().unwrap().mutations, 0);
 }

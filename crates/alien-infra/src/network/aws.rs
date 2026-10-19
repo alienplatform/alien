@@ -3123,6 +3123,7 @@ impl AwsNetworkController {
                 public_subnet_ids,
                 private_subnet_ids,
                 security_group_ids,
+                ..
             } => {
                 let aws_config = ctx.get_aws_config()?;
                 let ec2_client = ctx.service_provider.get_aws_ec2_client(aws_config).await?;
@@ -3166,6 +3167,7 @@ impl AwsNetworkController {
 
                 self.availability_zones = subnets_by_failure_domain.keys().cloned().collect();
                 self.subnets_by_failure_domain = subnets_by_failure_domain;
+                self.take_customer_sandbox_subnets(ctx)?;
 
                 Ok(HandlerAction::Continue {
                     state: if sandbox_setup::required(ctx)? {
@@ -4748,6 +4750,7 @@ impl AwsNetworkController {
             public_subnet_ids,
             private_subnet_ids,
             security_group_ids,
+            ..
         } = &config.settings
         {
             let aws_config = ctx.get_aws_config()?;
@@ -4782,6 +4785,7 @@ impl AwsNetworkController {
             self.security_group_id = security_group_ids.first().cloned();
             self.availability_zones = subnets_by_failure_domain.keys().cloned().collect();
             self.subnets_by_failure_domain = subnets_by_failure_domain;
+            self.take_customer_sandbox_subnets(ctx)?;
 
             info!(
                 network_id = %config.id,
