@@ -87,14 +87,30 @@ pub struct ComputeMachineOption {
     pub recommended: bool,
 }
 
-/// Failure-domain policy for a pool that hosts persistent stateful workloads when the
-/// deployment does not choose one: one provider-selected domain, so the pool's machines
-/// and their volumes land in the same zone.
-pub fn default_persistent_failure_domains() -> FailureDomainSelection {
-    FailureDomainSelection {
-        spread: 1,
+/// Failure-domain policy for a pool when the deployment does not choose one.
+///
+/// The release's declared spread (`failureDomainSpread` on the compute pool) wins. A pool
+/// that hosts persistent stateful workloads and declares nothing gets one provider-selected
+/// domain, so its machines and their volumes land in the same zone. Any other pool keeps
+/// the aggregate layout (`None`).
+pub fn default_failure_domains(
+    declared_spread: Option<u8>,
+    hosts_persistent_workloads: bool,
+) -> Option<FailureDomainSelection> {
+    let spread = declared_spread.or(hosts_persistent_workloads.then_some(1))?;
+    Some(FailureDomainSelection {
+        spread,
         selected_failure_domains: Vec::new(),
-    }
+    })
+}
+
+/// Failure-domain spread the release declares for a pool, if any.
+pub fn declared_failure_domain_spread(stack: &Stack, pool_id: &str) -> Option<u8> {
+    stack
+        .resources
+        .values()
+        .filter_map(|entry| entry.config.downcast_ref::<crate::ComputeCluster>())
+        .find_map(|cluster| cluster.failure_domain_spread.get(pool_id).copied())
 }
 
 /// Compute a deterministic deployment-time plan.
@@ -262,7 +278,10 @@ pub fn plan_compute_with_state(
             platform,
             &sizing,
             &group.scale,
-            group.requires_failure_domain,
+            default_failure_domains(
+                declared_failure_domain_spread(stack, &pool_id),
+                group.requires_failure_domain,
+            ),
             group.generated,
             machine_override,
         )?;
@@ -580,7 +599,7 @@ fn recommended_selection(
     platform: Platform,
     requirements: &WorkloadRequirements,
     scale: &CapacityGroupScalePolicy,
-    requires_failure_domain: bool,
+    failure_domains: Option<FailureDomainSelection>,
     generated: bool,
     machine_override: Option<&str>,
 ) -> Result<ComputePoolSelection, ErrorData> {
@@ -612,9 +631,8 @@ fn recommended_selection(
         Platform::Local | Platform::Kubernetes | Platform::Machines | Platform::Test => None,
     };
 
-    let failure_domains = (requires_failure_domain
-        && matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure))
-    .then(default_persistent_failure_domains);
+    let failure_domains = failure_domains
+        .filter(|_| matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure));
 
     match scale {
         CapacityGroupScalePolicy::Fixed { machines } => Ok(ComputePoolSelection::Fixed {
@@ -2412,5 +2430,103 @@ mod tests {
         assert_eq!(pool.selected.machine(), None);
         assert!(pool.machines.is_empty());
         assert!(pool.errors.is_empty());
+    }
+
+    /// A release that asks for its pool to span two zones must not be installed into one.
+    /// The plan's default selection is what setup templates and the dashboard offer.
+    #[test]
+    fn default_failure_domains_follow_the_release_declared_spread() {
+        let persistent_stack = |declared_spread: Option<u8>| {
+            let mut stack = stack_with_container();
+            let container = stack.resources.get_mut("api").unwrap();
+            let container = container.config.downcast_mut::<Container>().unwrap();
+            container.stateful = true;
+            container.replicas = Some(2);
+            container.cluster = Some("compute".to_string());
+            container.pool = Some("stateful".to_string());
+            container.persistent_storage = Some(crate::PersistentStorage {
+                encryption_key: None,
+                size: "20Gi".to_string(),
+                mount_path: "/data".to_string(),
+                backups: Default::default(),
+            });
+            let mut cluster = ComputeCluster::new("compute".to_string())
+                .capacity_group(CapacityGroup {
+                    group_id: "stateful".to_string(),
+                    instance_type: None,
+                    profile: None,
+                    min_size: 2,
+                    max_size: 4,
+                    scale_policy: Some(CapacityGroupScalePolicy::Fixed {
+                        machines: ComputeChoiceRange {
+                            min: 2,
+                            max: 4,
+                            default: 2,
+                        },
+                    }),
+                    nested_virtualization: None,
+                })
+                .build();
+            if let Some(spread) = declared_spread {
+                cluster
+                    .failure_domain_spread
+                    .insert("stateful".to_string(), spread);
+            }
+            stack.resources.insert(
+                "compute".to_string(),
+                ResourceEntry {
+                    config: Resource::new(cluster),
+                    lifecycle: ResourceLifecycle::Frozen,
+                    dependencies: Vec::new(),
+                    remote_access: false,
+                    enabled_when: None,
+                },
+            );
+            stack
+        };
+        let spread = |stack: &Stack, platform: Platform| {
+            let plan = plan_compute(stack, platform, None).expect("plan should build");
+            let pool = plan
+                .pools
+                .iter()
+                .find(|pool| pool.pool_id == "stateful")
+                .expect("stateful pool should be planned");
+            assert!(pool.errors.is_empty(), "{platform}: {:?}", pool.errors);
+            assert_eq!(
+                pool.selected.failure_domains(),
+                pool.recommended.failure_domains()
+            );
+            pool.selected
+                .failure_domains()
+                .map(|selection| (selection.spread, selection.selected_failure_domains.len()))
+        };
+
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            assert_eq!(spread(&persistent_stack(Some(2)), platform), Some((2, 0)));
+            assert_eq!(spread(&persistent_stack(None), platform), Some((1, 0)));
+        }
+        assert_eq!(spread(&persistent_stack(Some(2)), Platform::Local), None);
+
+        // A declared spread applies to a pool without persistent volumes too.
+        let mut stateless = persistent_stack(Some(2));
+        stateless
+            .resources
+            .get_mut("api")
+            .unwrap()
+            .config
+            .downcast_mut::<Container>()
+            .unwrap()
+            .persistent_storage = None;
+        assert_eq!(spread(&stateless, Platform::Aws), Some((2, 0)));
+        let mut undeclared_stateless = persistent_stack(None);
+        undeclared_stateless
+            .resources
+            .get_mut("api")
+            .unwrap()
+            .config
+            .downcast_mut::<Container>()
+            .unwrap()
+            .persistent_storage = None;
+        assert_eq!(spread(&undeclared_stateless, Platform::Aws), None);
     }
 }
