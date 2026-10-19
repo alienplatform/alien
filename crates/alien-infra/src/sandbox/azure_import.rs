@@ -1,13 +1,13 @@
 //! Importer for the Azure Sandbox.
 
 use alien_core::{
-    import::{data::AzureSandboxImportData, ImportContext},
     AzureSandboxImage, ErrorData as CoreErrorData, Platform, ResourceStatus, Result, Sandbox,
     StackResourceState,
+    import::{ImportContext, data::AzureSandboxImportData},
 };
 use alien_error::AlienError;
 
-use crate::core::{serialize_controller, ResourceController};
+use crate::core::{ResourceController, serialize_controller};
 use crate::import::ResourceImporter;
 use crate::import_helpers::make_imported_state_with_status;
 use crate::sandbox::{AzureSandboxController, AzureSandboxState};
@@ -59,6 +59,14 @@ impl ResourceImporter for AzureSandboxImporter {
                 None,
             ),
         };
+        let (state, status) = if matches!(sandbox.egress, alien_core::SandboxEgress::Internet) {
+            (
+                AzureSandboxState::InitializingEgressKey,
+                ResourceStatus::Provisioning,
+            )
+        } else {
+            (state, status)
+        };
         let controller = AzureSandboxController {
             state,
             sandbox_group: Some(data.sandbox_group),
@@ -72,6 +80,8 @@ impl ResourceImporter for AzureSandboxImporter {
             egress: Some(sandbox.into()),
             idle_pause_seconds: sandbox.lifecycle.idle_pause_seconds,
             limits: sandbox.limits.clone(),
+            egress_network_verified: false,
+            default_policy: sandbox.default_policy.clone(),
             _internal_stay_count: None,
         };
         make_imported_state_with_status(controller, ctx, status)

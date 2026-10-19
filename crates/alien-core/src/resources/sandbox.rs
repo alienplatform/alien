@@ -245,6 +245,12 @@ impl SandboxEgress {
     }
 }
 
+/// Per-session deadline metadata read by the external lifecycle reaper.
+pub const SANDBOX_EXPIRY_LABEL: &str = "alienExpiresAtMs";
+
+/// Azure gateway identities cannot renew without an in-guest agent.
+pub const AZURE_GATEWAY_MAX_LIFETIME_SECONDS: u32 = 24 * 60 * 60;
+
 /// How long a sandbox may live and when it is paused.
 ///
 /// Declaration-time ceilings, not per-request values: every sandbox created through this

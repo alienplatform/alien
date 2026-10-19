@@ -51,6 +51,40 @@ This replaces the former unscoped `/v1/resolve-credentials` flow. The dedicated
 `RemoteBindings` type exposes only Storage; its handles refresh credentials and
 rediscover manager assignment without exposing a non-refreshing provider.
 
+## Azure sandbox gateway recovery
+
+Gateway-backed Azure `internet` plans remain unavailable until automatic hosting
+is complete. Azure runs no Alien agent and cannot restore a policy after all
+gateway replicas lose their in-memory state. Proxy requests then receive HTTP
+403 with reason `no policy` until the application reapplies its current policy
+with `updateEgress`, or `getOrCreate` with an explicit `egress` argument.
+
+For an existing sandbox, `getOrCreate` without `egress` must preserve the stored
+policy, including its absence after total state loss. Defaults apply only when
+creating a sandbox. Reconnecting never restores an older create-time policy
+after the application has narrowed access.
+
+Azure's create-time proxy token proves identity only. Issuing it before provider
+creation does not register a policy or grant access. The binding publishes the
+initial policy only after verifying the provider's network, native policy and
+identity label. Applications must retain the policy they intend to reapply;
+there is no automatic recovery from the token or sandbox environment.
+
+Gateway identities expire after 24 hours and are never renewed on reconnect.
+The deployment controller reaps sessions in Internet-mode groups at that ceiling,
+using creation timestamps and the earlier identity deadline label. Cleanup runs
+on reconciliation; a stopped controller, terminal failure, or unavailable Azure
+API delays deletion, but does not extend the signed identity. Existing native
+modes retain their lifetime behavior, and per-create timeout requests remain
+unsupported.
+
+The native transport uses Partial inspection, exact gateway proxy/admin host
+rules, and an ordered catch-all deny, together with setup-owned subnet rules.
+The binding requires the `default` VNet connection and checks the effective
+policy and identity label before granting access. A trusted holder of Azure's
+raw Data Owner credential can create a sandbox outside this binding and omit
+that connection; this is not enforcement against that management caller.
+
 ## Adding New Providers
 
 1. Create a new module under `src/providers/` implementing `BindingsProvider`
