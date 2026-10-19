@@ -26,7 +26,7 @@ use alien_core::{
 };
 use alien_deployment::loop_contract::LoopOperation;
 use alien_deployment::runner::{failed_status_for_deployment_error, RunnerPolicy, RunnerResult};
-use alien_error::{AlienError, Context, GenericError};
+use alien_error::{AlienError, Context, GenericError, IntoAlienError};
 use alien_infra::DefaultPlatformServiceProvider;
 use alien_local::{LocalBindingsProvider, LocalContainerManager};
 
@@ -58,6 +58,30 @@ const UNPROVISIONABLE_RECHECK_INTERVAL: chrono::Duration = chrono::Duration::min
 const CREDENTIAL_ERROR_GRACE_PERIOD: Duration = Duration::from_secs(10 * 60);
 const CREDENTIAL_RETRY_INTERVAL: chrono::Duration = chrono::Duration::seconds(5);
 const CREDENTIAL_FAILURE_RECHECK_INTERVAL: chrono::Duration = chrono::Duration::minutes(5);
+
+/// The BYO Horizon machine image: a published machine-image manifest in
+/// `ALIEN_BYO_HORIZON_MACHINE_IMAGE` covers every cloud; without it, AWS AMIs
+/// come from the AMI env vars. An invalid manifest fails instead of deploying
+/// without images.
+fn byo_horizon_machine_image() -> Result<Option<alien_core::HorizonMachineImage>, AlienError> {
+    match std::env::var("ALIEN_BYO_HORIZON_MACHINE_IMAGE") {
+        Ok(manifest) if !manifest.trim().is_empty() => {
+            parse_byo_horizon_machine_image(&manifest).map(Some)
+        }
+        _ => Ok(synthesize_byo_horizon_machine_image()),
+    }
+}
+
+fn parse_byo_horizon_machine_image(
+    manifest: &str,
+) -> Result<alien_core::HorizonMachineImage, AlienError> {
+    serde_json::from_str(manifest)
+        .into_alien_error()
+        .context(GenericError {
+            message: "ALIEN_BYO_HORIZON_MACHINE_IMAGE is not a Horizon machine image manifest"
+                .to_string(),
+        })
+}
 
 /// Build a `HorizonMachineImage` from `ALIEN_BYO_HORIZON_AMI_AMD64`/`_ARM64`
 /// + `AWS_REGION` env vars. Returns `None` when no AMI env vars are set so
@@ -1106,7 +1130,7 @@ impl DeploymentLoop {
                     config.compute_backend = Some(alien_core::ComputeBackend::Horizon(
                         alien_core::HorizonConfig {
                             url,
-                            horizon_machine_image: synthesize_byo_horizon_machine_image(),
+                            horizon_machine_image: byo_horizon_machine_image()?,
                             clusters,
                         },
                     ));
@@ -1792,6 +1816,29 @@ fn supplied_release_stacks(deployment: &DeploymentRecord) -> (Option<Stack>, Opt
 
 #[cfg(test)]
 mod tests {
+    /// The published channel manifest carries Azure and GCP images that the AMI env vars
+    /// cannot express, so standalone BYO Horizon can run containers on those clouds.
+    #[test]
+    fn byo_machine_image_manifest_carries_every_cloud() {
+        let image = super::parse_byo_horizon_machine_image(
+            r#"{"channel":"dev","environment":"dev","machineImageVersion":"1.1.7","horizondVersion":"1.1.7",
+            "gitSha":"b532a7e","createdAt":"2026-09-27T08:08:30Z","baseImage":{"name":"flatcar","version":"stable-current"},
+            "horizondArtifacts":{"linux-amd64":{"url":"https://example.invalid/horizond","sha256":"00"}},
+            "azure":{"images":{"amd64":{"imageVersionId":"/CommunityGalleries/example/Images/horizon/Versions/1.0.0"}}}}"#,
+        )
+        .expect("published manifest");
+        let azure = image.azure.expect("Azure images");
+        assert_eq!(
+            azure.images[&alien_core::HorizonMachineArchitecture::Amd64].image_version_id,
+            "/CommunityGalleries/example/Images/horizon/Versions/1.0.0"
+        );
+        assert_eq!(
+            image.horizond_artifacts["linux-amd64"].url,
+            "https://example.invalid/horizond"
+        );
+        assert!(super::parse_byo_horizon_machine_image(r#"{"channel":"dev"}"#).is_err());
+    }
+
     use super::{
         active_work_statuses, build_monitoring_config, commands_receiver_env_vars,
         credential_error_retry_remaining, get_or_create_local_bindings_provider,
