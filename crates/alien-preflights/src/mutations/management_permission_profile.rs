@@ -125,6 +125,7 @@ impl StackMutation for ManagementPermissionProfileMutation {
                 stack.permissions.management = ManagementPermissions::Override(override_profile);
             }
         }
+        add_batch_queue_metadata_permissions(&mut stack, stack_state.platform);
         protect_deployer_secrets(&mut stack, stack_state.platform, config)?;
         add_role_guards(
             &mut stack,
@@ -133,6 +134,62 @@ impl StackMutation for ManagementPermissionProfileMutation {
         );
 
         Ok(stack)
+    }
+}
+
+/// Batch reconciliation reads setup-owned SQS visibility even when periodic
+/// heartbeats are disabled. Author that prerequisite in the setup contract so
+/// existing installations require setup before runtime attempts the new read.
+fn add_batch_queue_metadata_permissions(stack: &mut Stack, platform: Platform) {
+    if platform != Platform::Aws {
+        return;
+    }
+    let queues: BTreeSet<String> = stack
+        .resources()
+        .filter_map(|(_, entry)| entry.config.downcast_ref::<Worker>())
+        .flat_map(|worker| &worker.triggers)
+        .filter_map(|trigger| match trigger {
+            WorkerTrigger::Queue {
+                queue,
+                batch: Some(_),
+            } if stack
+                .resources
+                .get(&queue.id)
+                .is_some_and(|entry| entry.lifecycle == ResourceLifecycle::Frozen) =>
+            {
+                Some(queue.id.clone())
+            }
+            _ => None,
+        })
+        .collect();
+    if queues.is_empty() {
+        return;
+    }
+    if matches!(stack.permissions.management, ManagementPermissions::Auto) {
+        stack.permissions.management = ManagementPermissions::Extend(PermissionProfile::new());
+    }
+    let profile = match &mut stack.permissions.management {
+        ManagementPermissions::Auto => unreachable!(),
+        ManagementPermissions::Extend(profile) | ManagementPermissions::Override(profile) => {
+            profile
+        }
+    };
+    for queue in queues {
+        let already_readable = ["*", queue.as_str()].iter().any(|scope| {
+            profile.0.get(*scope).is_some_and(|grants| {
+                grants.iter().any(|grant| matches!(grant,
+                    PermissionSetReference::Name(name)
+                    if matches!(name.as_str(), "queue/heartbeat" | "queue/management" | "queue/provision")
+                ))
+            })
+        });
+        if !already_readable {
+            profile
+                .0
+                .entry(queue)
+                .or_default()
+                .push(PermissionSetReference::from_name("queue/heartbeat"));
+        }
     }
 }
 
