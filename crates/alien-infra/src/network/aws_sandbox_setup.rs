@@ -15,6 +15,19 @@ pub(crate) struct SandboxNetworkSetup {
     /// Teardown lookups for a subnet whose create response was lost.
     #[serde(default)]
     lost_create_lookups: u32,
+    /// A refresh could not verify the topology; the next setup run reconciles it.
+    #[serde(default)]
+    unverified: bool,
+}
+
+impl SandboxNetworkSetup {
+    pub(super) fn set_unverified(&mut self, unverified: bool) {
+        self.unverified = unverified;
+    }
+
+    pub(super) fn is_unverified(&self) -> bool {
+        self.unverified
+    }
 }
 
 /// How many teardown lookups a lost subnet create gets before it is taken as never created.
@@ -222,6 +235,7 @@ impl AwsNetworkController {
                 nat_id: nat_id.ok_or_else(|| invalid(id, "Workload network has no NAT"))?,
                 tables: [None, None],
                 lost_create_lookups: 0,
+                unverified: false,
                 subnets: blocks
                     .into_iter()
                     .enumerate()
@@ -405,6 +419,9 @@ impl AwsNetworkController {
             )
             .await?,
         );
+        if let Some(setup) = self.sandbox_setup.as_mut() {
+            setup.unverified = false;
+        }
         Ok(true)
     }
 

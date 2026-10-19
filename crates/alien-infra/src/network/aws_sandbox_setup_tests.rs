@@ -278,10 +278,20 @@ async fn direct_setup_recovers_lost_checkpoints_and_deletes_only_its_byo_childre
                 .truncate(1);
         }
     }
-    // A runtime refresh does not schedule changes to setup-owned subnets.
+    // A verified network schedules nothing, so a setup run can finish.
+    let healthy = executor(&cloud, controller.clone(), true).await;
+    assert!(!healthy.needs_update().unwrap());
+    let mut execution = executor(&cloud, controller, true).await;
+    assert!(execution.step().await.is_err());
+    // The failed check is recorded: the next setup run schedules a repair, a runtime one does not.
+    assert!(execution.needs_update().unwrap());
+    let unverified = execution
+        .internal_state::<AwsNetworkController>()
+        .unwrap()
+        .clone();
     let runtime = SingleControllerExecutor::builder()
         .resource(network())
-        .controller(controller.clone())
+        .controller(unverified)
         .platform(Platform::Aws)
         .initial_setup_authority(InitialSetupAuthority::DirectSetup)
         .with_stack_resource(gateway(), alien_core::ResourceLifecycle::Live)
@@ -294,10 +304,6 @@ async fn direct_setup_recovers_lost_checkpoints_and_deletes_only_its_byo_childre
         .await
         .unwrap();
     assert!(!runtime.needs_update().unwrap());
-    let mut execution = executor(&cloud, controller, true).await;
-    // Every setup run schedules a reconcile of the recorded subnets.
-    assert!(execution.needs_update().unwrap());
-    assert!(execution.step().await.is_err());
 
     // Running setup again repairs the missing NAT route and associations, one call per step.
     let mutations = cloud.lock().unwrap().mutations;
@@ -307,6 +313,8 @@ async fn direct_setup_recovers_lost_checkpoints_and_deletes_only_its_byo_childre
         .await
         .unwrap();
     assert_eq!(cloud.lock().unwrap().mutations - mutations, 3);
+    // Once repaired, setup has nothing left to schedule.
+    assert!(!execution.needs_update().unwrap());
     let mut repaired = cloud.lock().unwrap().tables.clone();
     let mut expected = created.clone();
     for tables in [&mut repaired, &mut expected] {

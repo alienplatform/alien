@@ -4513,6 +4513,10 @@ impl AwsNetworkController {
                 .service_provider
                 .get_aws_ec2_client(ctx.get_aws_config()?)
                 .await?;
+            // A failed check stays recorded so the next direct setup run repairs it.
+            if let Some(setup) = self.sandbox_setup.as_mut() {
+                setup.set_unverified(true);
+            }
             self.sandbox_network = Some(
                 super::validate_aws_sandbox_network(
                     client.as_ref(),
@@ -4523,6 +4527,9 @@ impl AwsNetworkController {
                 )
                 .await?,
             );
+            if let Some(setup) = self.sandbox_setup.as_mut() {
+                setup.set_unverified(false);
+            }
         }
 
         // For BYO-VPC, we don't need to verify - preflights already validated
@@ -5555,12 +5562,17 @@ impl AwsNetworkController {
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
 
     fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
-        // Direct setup creates the dedicated subnets when they are first needed, and every later
-        // setup run reconciles them, repairing a removed route or association.
+        // Direct setup creates the dedicated subnets when they are first needed. A setup run
+        // after a refresh failed to verify them reconciles them, repairing a removed route or
+        // association; a verified network schedules nothing, so setup can finish.
         Ok(
             ctx.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
                 && (self.sandbox_network.is_none()
-                    || (self.sandbox_setup.is_some() && ctx.deployment_config.setup_run))
+                    || (ctx.deployment_config.setup_run
+                        && self
+                            .sandbox_setup
+                            .as_ref()
+                            .is_some_and(|setup| setup.is_unverified())))
                 && sandbox_setup::required(ctx)?,
         )
     }
