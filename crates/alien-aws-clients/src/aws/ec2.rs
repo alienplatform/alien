@@ -1339,6 +1339,9 @@ impl Ec2Api for Ec2Client {
         if let Some(tag_specs) = &request.tag_specifications {
             Self::add_tag_specifications(&mut form_data, tag_specs);
         }
+        if let Some(client_token) = &request.client_token {
+            form_data.insert("ClientToken".to_string(), client_token.clone());
+        }
 
         self.send_create_once(form_data, "CreateRouteTable", &request.vpc_id)
             .await
@@ -3055,6 +3058,10 @@ pub struct CreateRouteTableRequest {
     pub vpc_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tag_specifications: Option<Vec<TagSpecification>>,
+    /// Idempotency token. Repeating a request with the same token returns the route table the
+    /// first request created instead of a new one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_token: Option<String>,
 }
 
 /// Response from creating a route table.
