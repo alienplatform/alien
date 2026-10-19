@@ -373,7 +373,7 @@ impl AwsSandbox {
     }
 
     /// The sandbox's record if it exists *and* is this binding's own; absent and someone else's
-    /// collapse to `None`, which is what every operation except `terminate` wants.
+    /// collapse to `None`, which is what every operation except `terminate` and `resume` wants.
     async fn owned_microvm(&self, operation: &str, sandbox_id: &str) -> Result<Option<Microvm>> {
         Ok(self
             .fetched_microvm(operation, sandbox_id)
@@ -968,14 +968,33 @@ impl Sandbox for AwsSandbox {
     }
 
     async fn resume(&self, sandbox_id: &str) -> Result<()> {
-        let microvm = self.ensure_owned("sandbox.resume", sandbox_id).await?;
         // An ended MicroVM never serves again, so resuming it cannot succeed and a retryable
-        // answer would invite a retry.
-        if let Some(state @ ("TERMINATING" | "TERMINATED")) = microvm.state.as_deref() {
-            return Err(AlienError::new(ErrorData::SandboxCommandFailed {
+        // answer would invite a retry. AWS drops a terminated MicroVM's record, so absence ends
+        // it too.
+        let ended = |what: &str| {
+            AlienError::new(ErrorData::SandboxCommandFailed {
                 failure: "sandboxTerminated".to_string(),
-                reason: format!("sandbox.resume: MicroVM '{sandbox_id}' is {state}"),
-            }));
+                reason: format!("sandbox.resume: MicroVM '{sandbox_id}' {what}"),
+            })
+        };
+        let microvm = match self.fetched_microvm("sandbox.resume", sandbox_id).await? {
+            None => {
+                return Err(ended(
+                    "does not exist: it was terminated and reaped, or never created",
+                ))
+            }
+            Some(microvm) if !self.owns(&microvm) => {
+                return Err(AlienError::new(ErrorData::SandboxUnreachable {
+                    operation: "sandbox.resume".to_string(),
+                    reason: format!(
+                        "sandbox '{sandbox_id}' does not belong to this sandbox resource"
+                    ),
+                }))
+            }
+            Some(microvm) => microvm,
+        };
+        if let Some(state @ ("TERMINATING" | "TERMINATED")) = microvm.state.as_deref() {
+            return Err(ended(&format!("is {state}")));
         }
 
         // A retry after a resume whose wait gave up finds the MicroVM already running. Asking
@@ -1002,8 +1021,8 @@ impl Sandbox for AwsSandbox {
     }
 
     /// Idempotent per the trait: a sandbox AWS has already reaped is terminated, not an error.
-    /// Absence and "someone else's" part ways here alone — every other operation needs the
-    /// sandbox to exist, so for them the two are the same refusal.
+    /// Absence and "someone else's" part ways here and in `resume`; every other operation needs
+    /// the sandbox to exist, so for them the two are the same refusal.
     async fn terminate(&self, sandbox_id: &str) -> Result<()> {
         let state = match self
             .fetched_microvm("sandbox.terminate", sandbox_id)
@@ -1392,6 +1411,28 @@ mod tests {
         assert!(!error.retryable, "a retry cannot bring it back: {error}");
     }
 
+    /// AWS drops a terminated MicroVM's record, so absence is how an ended sandbox usually looks.
+    #[tokio::test]
+    async fn resume_of_a_sandbox_aws_no_longer_knows_is_refused_without_asking_aws() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        client.expect_get_microvm().returning(|id| {
+            Err(alien_error::AlienError::new(
+                alien_client_core::ErrorData::RemoteResourceNotFound {
+                    resource_type: "Microvm".to_string(),
+                    resource_name: id.to_string(),
+                },
+            ))
+        });
+        client.expect_resume_microvm().never();
+
+        let error = sandbox(client)
+            .resume("long-gone")
+            .await
+            .expect_err("a sandbox with no record cannot be resumed");
+        assert_eq!(error.code, "SANDBOX_COMMAND_FAILED", "{error}");
+        assert!(!error.retryable, "a retry cannot bring it back: {error}");
+    }
+
     /// A retry after a resume whose wait gave up finds the MicroVM running; it is waited on, not
     /// resumed again.
     #[tokio::test]
@@ -1587,6 +1628,7 @@ mod tests {
         client.expect_create_microvm_auth_token().never();
         client.expect_terminate_microvm().never();
         client.expect_suspend_microvm().never();
+        client.expect_resume_microvm().never();
 
         let sandbox = sandbox_previewing(client, vec![8080]);
 
@@ -1594,6 +1636,7 @@ mod tests {
             sandbox.preview("a-siblings-sandbox", 8080).await.err(),
             sandbox.terminate("a-siblings-sandbox").await.err(),
             sandbox.pause("a-siblings-sandbox").await.err(),
+            sandbox.resume("a-siblings-sandbox").await.err(),
         ] {
             let error = outcome.expect("a sandbox this sandbox does not own is refused");
             assert!(
