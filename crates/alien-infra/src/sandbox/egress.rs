@@ -1,8 +1,8 @@
 //! Signing material stays in the deployment vault; controllers retain only public data.
 
-#[cfg(any(feature = "aws", feature = "azure"))]
+#[cfg(any(feature = "aws", feature = "azure", feature = "kubernetes"))]
 use crate::core::state_utils::StackResourceStateExt;
-#[cfg(any(feature = "aws", feature = "azure"))]
+#[cfg(any(feature = "aws", feature = "azure", feature = "kubernetes"))]
 use alien_bindings::BindingsProviderApi;
 use alien_bindings::Vault;
 use alien_error::{AlienError, Context};
@@ -193,7 +193,7 @@ mod tests {
     }
 }
 
-#[cfg(any(feature = "aws", feature = "azure"))]
+#[cfg(any(feature = "aws", feature = "azure", feature = "kubernetes"))]
 pub(crate) async fn deployment_vault(
     ctx: &crate::core::ResourceControllerContext<'_>,
 ) -> Result<std::sync::Arc<dyn Vault>> {
@@ -210,8 +210,23 @@ pub(crate) async fn deployment_vault(
         .ok_or_else(missing)?;
     let controller = state.get_internal_controller()?.ok_or_else(missing)?;
     let params = controller.get_binding_params()?.ok_or_else(missing)?;
+    // Binding providers take resolved connection settings; a kubeconfig is read here.
+    let client_config = match &ctx.client_config {
+        #[cfg(feature = "kubernetes")]
+        alien_core::ClientConfig::Kubernetes(config) => alien_core::ClientConfig::Kubernetes(
+            Box::new(
+                crate::kubeconfig::resolve_kubeconfig(config)
+                    .await
+                    .context(ErrorData::ResourceConfigInvalid {
+                        message: "Failed to resolve the Kubernetes connection for the deployment secrets vault".into(),
+                        resource_id: Some(alien_core::SECRETS_VAULT_ID.into()),
+                    })?,
+            ),
+        ),
+        other => other.clone(),
+    };
     let provider = alien_bindings::BindingsProvider::new(
-        ctx.client_config.clone(),
+        client_config,
         [(alien_core::SECRETS_VAULT_ID.into(), params)]
             .into_iter()
             .collect(),
@@ -441,8 +456,11 @@ pub(crate) async fn publish_config(
 
 /// Only the shared-key owner publishes this entry. The replica secret stays in the
 /// vault and never enters controller state, bindings, logs or generated packages.
-#[cfg(any(feature = "aws", feature = "azure", test))]
-async fn publish_gateway_config(vault: &dyn Vault, mut value: serde_json::Value) -> Result<()> {
+#[cfg(any(feature = "aws", feature = "azure", feature = "kubernetes", test))]
+pub(crate) async fn publish_gateway_config(
+    vault: &dyn Vault,
+    mut value: serde_json::Value,
+) -> Result<()> {
     let invalid = || {
         AlienError::new(ErrorData::ResourceConfigInvalid {
             message: "The sandbox gateway configuration must be an object with a valid 32-byte base64 replicaSecret".into(),

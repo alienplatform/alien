@@ -10,7 +10,10 @@
 //! its pod. Nothing of Alien's is created, rotated or torn down for this.
 
 use std::collections::BTreeMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+
+#[path = "kubernetes_egress.rs"]
+mod egress;
 
 use async_trait::async_trait;
 use futures::stream::BoxStream;
@@ -30,6 +33,8 @@ use alien_error::{AlienError, Context, IntoAlienError};
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ClaimResponse {
+    #[serde(default)]
+    agent_session_id: Option<String>,
     session_id: String,
     endpoint: String,
     capability: String,
@@ -46,6 +51,9 @@ struct ClaimRequest<'a> {
 /// A Sandbox backed by pods under a sandboxed runtime class.
 #[derive(Debug)]
 pub struct KubernetesSandbox {
+    egress_manager: Option<Arc<crate::sandbox_egress::SandboxEgressManager>>,
+    default_policy: Option<alien_core::EgressPolicy>,
+    policy_write: tokio::sync::Mutex<()>,
     egress: Option<alien_core::SandboxEgress>,
     resource_id: String,
     broker_url: String,
@@ -67,23 +75,31 @@ impl KubernetesSandbox {
         binding: &KubernetesSandboxBinding,
         resource_id: &str,
     ) -> Result<Self> {
-        if binding
-            .egress
-            .as_ref()
-            .and_then(|value| value.gateway())
-            .is_some()
-        {
+        Self::new_with_egress_manager(binding_name, binding, resource_id, None)
+    }
+
+    pub(crate) fn new_with_egress_manager(
+        binding_name: &str,
+        binding: &KubernetesSandboxBinding,
+        resource_id: &str,
+        egress_manager: Option<Arc<crate::sandbox_egress::SandboxEgressManager>>,
+    ) -> Result<Self> {
+        let gateway = binding.egress.as_ref().and_then(|value| value.gateway());
+        if gateway.is_some() != egress_manager.is_some() {
             return Err(super::egress::unsupported("gateway-backed sandbox"));
         }
-        super::egress::require_default(
-            binding.default_policy.as_ref().or_else(|| {
-                binding
-                    .egress
-                    .as_ref()
-                    .and_then(|value| value.default_policy())
-            }),
-            binding.egress.as_ref().map(|value| value.declaration()),
-        )?;
+        let default_policy = binding.default_policy.clone().or_else(|| {
+            binding
+                .egress
+                .as_ref()
+                .and_then(|value| value.default_policy().cloned())
+        });
+        if egress_manager.is_none() {
+            super::egress::require_default(
+                default_policy.as_ref(),
+                binding.egress.as_ref().map(|value| value.declaration()),
+            )?;
+        }
 
         let value = |field: &'static str, value: alien_core::bindings::BindingValue<String>| {
             value.into_value(binding_name, field).map_err(|error| {
@@ -96,6 +112,9 @@ impl KubernetesSandbox {
         };
 
         Ok(Self {
+            egress_manager,
+            default_policy,
+            policy_write: tokio::sync::Mutex::new(()),
             egress: binding
                 .egress
                 .as_ref()
@@ -220,8 +239,14 @@ impl Sandbox for KubernetesSandbox {
 
     /// Claims a warm pod through the broker.
     async fn create(&self, request: CreateSandboxRequest) -> Result<SandboxInstance> {
-        super::egress::require_default(request.egress.as_ref(), self.egress_declaration())?;
+        self.validate_egress(request.egress.as_ref())?;
         self.refuse_create_time_lifetime(&request)?;
+        let _policy_write = self.policy_write.lock().await;
+        let policy = request
+            .egress
+            .clone()
+            .or_else(|| self.default_policy.clone())
+            .unwrap_or(alien_core::EgressPolicy::Internet);
         let sandbox_id = request
             .sandbox_id
             .unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
@@ -267,6 +292,27 @@ impl Sandbox for KubernetesSandbox {
             .expect("no panic holds this lock")
             .insert(claim.session_id.clone(), claim.clone());
 
+        if let Some(manager) = &self.egress_manager {
+            let installation = async {
+                let identity = Self::egress_identity(&claim)?;
+                let delivery = manager.create(identity, &policy, claim.expires_at).await?;
+                self.deliver_egress(&claim.session_id, Some(&delivery.token), &delivery.policy)
+                    .await
+            }
+            .await;
+            if let Err(error) = installation {
+                // Release the claimed pod even if publishing its initial policy failed.
+                self.terminate(&claim.session_id)
+                    .await
+                    .context(ErrorData::SandboxEgressGatewayUnavailable {
+                    reason:
+                        "initial policy delivery failed and the claimed pod could not be cleaned up"
+                            .into(),
+                })?;
+                return Err(error);
+            }
+        }
+
         Ok(SandboxInstance {
             sandbox_id: claim.session_id,
             state: SandboxState::Running,
@@ -290,17 +336,43 @@ impl Sandbox for KubernetesSandbox {
     }
 
     async fn get_or_create(&self, request: CreateSandboxRequest) -> Result<ResolvedSandbox> {
-        super::egress::require_default(request.egress.as_ref(), self.egress_declaration())?;
+        self.validate_egress(request.egress.as_ref())?;
         // Refused on the reconnect path too: a claimed pod honors a lifetime no more than a
         // freshly claimed one would.
         self.refuse_create_time_lifetime(&request)?;
         if let Some(id) = request.sandbox_id.as_deref() {
             if let Some(existing) = self.get(id).await? {
+                if let Some(policy) = request.egress.clone() {
+                    self.update_egress(id, policy).await?;
+                }
                 return Ok(ResolvedSandbox::found(existing));
             }
         }
 
         self.create(request).await.map(ResolvedSandbox::created)
+    }
+
+    async fn update_egress(
+        &self,
+        sandbox_id: &str,
+        policy: alien_core::EgressPolicy,
+    ) -> Result<()> {
+        self.validate_egress(Some(&policy))?;
+        let _policy_write = self.policy_write.lock().await;
+        let manager = self
+            .egress_manager
+            .as_ref()
+            .ok_or_else(|| super::egress::unsupported("runtime policy"))?;
+        let claim = self.claimed(sandbox_id).ok_or_else(|| {
+            self.failed(
+                "sandbox.updateEgress",
+                "sandbox was not claimed by this process",
+            )
+        })?;
+        let identity = Self::egress_identity(&claim)?;
+        manager.update(identity, &policy).await?;
+        let record = manager.policy_record(identity).await?;
+        self.deliver_egress(sandbox_id, None, &record).await
     }
 
     async fn list(&self) -> Result<Vec<SandboxInstance>> {
@@ -402,6 +474,11 @@ impl Sandbox for KubernetesSandbox {
             ));
         }
 
+        if let Some(manager) = &self.egress_manager {
+            if let Some(identity) = claim.agent_session_id.as_deref() {
+                manager.delete(identity).await?;
+            }
+        }
         self.claims
             .lock()
             .expect("no panic holds this lock")

@@ -11,6 +11,7 @@ pub use kubernetes::jobs::JobApi;
 pub use kubernetes::kubernetes_client::KubernetesClient;
 pub use kubernetes::metrics::MetricsApi;
 pub use kubernetes::nodes::NodeApi;
+pub use kubernetes::network_policies::NetworkPolicyApi;
 pub use kubernetes::optional::{
     optional_events_read, optional_kubernetes_read, optional_metrics_read, optional_nodes_read,
     OptionalKubernetesRead, OptionalKubernetesReadContext, OptionalKubernetesReadSource,

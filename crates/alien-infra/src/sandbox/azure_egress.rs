@@ -40,6 +40,7 @@ pub(super) async fn initialize_key(
         },
         kid: key.kid,
         admin_ca_pem: None,
+        replicas: None,
     }))
 }
 

@@ -126,6 +126,8 @@ pub struct ClaimRequest {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClaimResponse {
+    /// Immutable pod identity used for signed egress policies.
+    pub agent_session_id: String,
     /// Session id, which every later call addresses
     pub session_id: String,
     /// `http://<pod ip>:<agent port>`
@@ -270,6 +272,7 @@ async fn claim(
     .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
 
     Ok(Json(ClaimResponse {
+        agent_session_id: claimed.agent_session_id,
         session_id: claimed.session_id,
         endpoint: claimed.endpoint,
         capability: claimed.capability,

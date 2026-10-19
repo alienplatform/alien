@@ -19,16 +19,7 @@ use alien_error::AlienError;
 /// Label the operator puts on every pod backing a session, and what the policy selects on.
 const LABEL_SANDBOX: &str = "alien.dev/sandbox";
 
-/// Addresses no sandbox may reach, in **either** egress mode.
-///
-/// The metadata server is the one that matters. gVisor is a kernel boundary, not a network
-/// boundary, so it does nothing about routing and link-local has to be denied explicitly rather
-/// than assumed unreachable. The managed sandbox runtimes block it at the platform; Kubernetes,
-/// this emitter's target, does not.
-///
-/// **The metadata entry is a `/32`, not the `169.254.0.0/16` it sits in.** GKE puts NodeLocal
-/// DNSCache at `169.254.20.10`, so denying the whole range takes DNS out and with it every
-/// outbound connection, which makes `allow` indistinguishable from `deny`.
+// Released allow-mode address exclusions. New internet uses the gateway.
 const ALWAYS_DENIED_CIDRS: &[&str] = &[
     "169.254.169.254/32",
     "10.0.0.0/8",
@@ -67,6 +58,12 @@ impl HelmEmitter for SandboxEmitter {
         fragment
             .extra_templates
             .insert(BROKER_RBAC_TEMPLATE.to_string(), broker_rbac());
+        if matches!(sandbox.egress, SandboxEgress::Internet) {
+            fragment.extra_templates.insert(
+                "sandbox-cni-probe.yaml".to_string(),
+                super::sandbox_cni::template(),
+            );
+        }
         Ok(fragment)
     }
 }
@@ -82,13 +79,31 @@ impl HelmEmitter for SandboxEmitter {
 fn network_policy(sandbox: &Sandbox) -> Result<String> {
     let egress = match sandbox.egress {
         SandboxEgress::None => String::new(),
+        // Select the Service's backing pods in this namespace and release. Kubernetes
+        // NetworkPolicy selects pods, not Service names; an ipBlock for the Service IP
+        // would depend on whether the CNI applies policy before or after DNAT.
+        // The operator supplies the gateway IP, so sessions need no DNS exception.
+        // Runtime pods carry the operator's resource prefix as their deployment label.
+        SandboxEgress::Internet => r#"  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              {{ $scopeKey }}: {{ $scopeValue | quote }}
+              {{ printf "%s/resource" (trimSuffix "/deployment" $scopeKey) }}: sandbox-egress-gateway
+              component: container
+              managed-by: runtime
+      ports:
+        - protocol: TCP
+          port: 3128
+"#
+        .to_string(),
         SandboxEgress::AllowDomains { .. } => {
             return Err(AlienError::new(ErrorData::OperationNotSupported {
                 operation: format!("generate the Helm chart for sandbox '{}'", sandbox.id),
                 reason: "a Kubernetes NetworkPolicy matches addresses, not hostnames".to_string(),
             }));
         }
-        SandboxEgress::Internet | SandboxEgress::Allow => {
+        SandboxEgress::Allow => {
             let excepts: String = ALWAYS_DENIED_CIDRS
                 .iter()
                 .map(|cidr| format!("            - {cidr}\n"))
@@ -105,7 +120,9 @@ fn network_policy(sandbox: &Sandbox) -> Result<String> {
     };
 
     Ok(format!(
-        r#"apiVersion: networking.k8s.io/v1
+        r#"{{{{- $scopeKey := default "alien.dev/deployment" .Values.logCollector.scope.deploymentLabelKey -}}}}
+{{{{- $scopeValue := include "deployment.serviceAccountPrefix" . -}}}}
+apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: alien-sbx-{id}
