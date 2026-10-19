@@ -52,7 +52,7 @@ variable "allowed_cidr_blocks" {
 variable "image" {
   description = "Manager image"
   type        = string
-  default     = "ghcr.io/alienplatform/alien-manager:v3.3.35"
+  default     = "ghcr.io/alienplatform/alien-manager:v3.3.36"
 }
 
 variable "cpu" {
