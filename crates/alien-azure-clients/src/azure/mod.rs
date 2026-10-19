@@ -48,6 +48,40 @@ fn scope_to_resource(scope: &str) -> String {
     scope.trim_end_matches("/.default").to_string()
 }
 
+/// Preserve token endpoint status and transport causes beneath the authentication context.
+async fn read_token_response(response: reqwest::Response, message: String) -> Result<String> {
+    let status = response.status();
+    let url = response.url().to_string();
+    let body = response
+        .text()
+        .await
+        .into_alien_error()
+        .context(ErrorData::HttpRequestFailed {
+            message: "Failed to read Azure token response".to_string(),
+        })
+        .context(ErrorData::AuthenticationError {
+            message: message.clone(),
+        })?;
+    if !status.is_success() {
+        return Err(AlienError::new(ErrorData::HttpResponseError {
+            message: message.clone(),
+            url,
+            http_status: status.as_u16(),
+            http_request_text: None,
+            http_response_text: Some(body),
+        }))
+        .context(ErrorData::AuthenticationError { message });
+    }
+    #[derive(Deserialize)]
+    struct TokenResponse {
+        access_token: String,
+    }
+    let token: TokenResponse = serde_json::from_str(&body)
+        .into_alien_error()
+        .context(ErrorData::AuthenticationError { message })?;
+    Ok(token.access_token)
+}
+
 /// Get a bearer token using Azure AD Workload Identity (federated identity)
 async fn get_workload_identity_token(
     client_id: &str,
@@ -107,34 +141,11 @@ async fn get_workload_identity_token(
             message: "Failed to request Azure access token using workload identity".to_string(),
         })?;
 
-    if !response.status().is_success() {
-        let error_text = response
-            .text()
-            .await
-            .unwrap_or_else(|_| "Unknown error".to_string());
-        return Err(AlienError::new(ErrorData::AuthenticationError {
-            message: format!(
-                "Failed to get workload identity access token: {}",
-                error_text
-            ),
-        }));
-    }
-
-    #[derive(Deserialize)]
-    struct TokenResponse {
-        access_token: String,
-    }
-
-    let token_response: TokenResponse =
-        response
-            .json()
-            .await
-            .into_alien_error()
-            .context(ErrorData::HttpRequestFailed {
-                message: "Failed to parse Azure workload identity token response".to_string(),
-            })?;
-
-    Ok(token_response.access_token)
+    read_token_response(
+        response,
+        "Failed to get workload identity access token".to_string(),
+    )
+    .await
 }
 
 /// Get an access token for impersonating the specified client ID
@@ -208,34 +219,7 @@ async fn get_impersonated_token(
                     message: "Failed to exchange OIDC token for impersonation".to_string(),
                 })?;
 
-            if !response.status().is_success() {
-                let error_text = response
-                    .text()
-                    .await
-                    .unwrap_or_else(|_| "Unknown error".to_string());
-                return Err(AlienError::new(ErrorData::AuthenticationError {
-                    message: format!(
-                        "OIDC token exchange for impersonation failed: {}",
-                        error_text
-                    ),
-                }));
-            }
-
-            #[derive(Deserialize)]
-            struct TokenResponse {
-                access_token: String,
-            }
-
-            let token_response: TokenResponse =
-                response
-                    .json()
-                    .await
-                    .into_alien_error()
-                    .context(ErrorData::HttpRequestFailed {
-                        message: "Failed to parse OIDC impersonation token response".to_string(),
-                    })?;
-
-            Ok(token_response.access_token)
+            read_token_response(response, "OIDC token exchange for impersonation failed".to_string()).await
         }
         AzureCredentials::ManagedIdentity { .. } => {
             // Managed identity already represents the target identity
@@ -283,31 +267,7 @@ async fn get_impersonated_token(
                     message: "Failed to request Azure access token for impersonation".to_string(),
                 })?;
 
-            if !response.status().is_success() {
-                let error_text = response
-                    .text()
-                    .await
-                    .unwrap_or_else(|_| "Unknown error".to_string());
-                return Err(AlienError::new(ErrorData::AuthenticationError {
-                    message: format!("Failed to get impersonated access token: {}", error_text),
-                }));
-            }
-
-            #[derive(Deserialize)]
-            struct TokenResponse {
-                access_token: String,
-            }
-
-            let token_response: TokenResponse =
-                response
-                    .json()
-                    .await
-                    .into_alien_error()
-                    .context(ErrorData::HttpRequestFailed {
-                        message: "Failed to parse Azure token response".to_string(),
-                    })?;
-
-            Ok(token_response.access_token)
+            read_token_response(response, "Failed to get impersonated access token".to_string()).await
         }
     }
 }
@@ -601,11 +561,6 @@ impl AzureClientConfigExt for AzureClientConfig {
                 client_id,
                 client_secret,
             } => {
-                #[derive(Deserialize)]
-                struct TokenResponse {
-                    access_token: String,
-                }
-
                 let token_url = format!(
                     "https://login.microsoftonline.com/{}/oauth2/v2.0/token",
                     self.tenant_id
@@ -626,6 +581,9 @@ impl AzureClientConfigExt for AzureClientConfig {
                     .send()
                     .await
                     .into_alien_error()
+                    .context(ErrorData::HttpRequestFailed {
+                        message: "Failed to request Azure token".to_string(),
+                    })
                     .context(ErrorData::AuthenticationError {
                         message: format!(
                             "Failed to get Azure service principal token for scope '{}'",
@@ -633,45 +591,13 @@ impl AzureClientConfigExt for AzureClientConfig {
                         ),
                     })?;
 
-                let status = response.status();
-                let response_text = response.text().await.into_alien_error().context(
-                    ErrorData::AuthenticationError {
-                        message: format!(
-                            "Failed to read Azure service principal token response for scope '{}'",
-                            scope
-                        ),
-                    },
-                )?;
-                if !status.is_success() {
-                    return Err(AlienError::new(ErrorData::AuthenticationError {
-                        message: format!(
-                            "Failed to get Azure service principal token for scope '{}': HTTP {}: {}",
-                            scope, status, response_text
-                        ),
-                    }));
-                }
-
-                let token_response: TokenResponse = serde_json::from_str(&response_text)
-                    .into_alien_error()
-                    .context(ErrorData::AuthenticationError {
-                        message: format!(
-                            "Failed to parse Azure service principal token response for scope '{}': {}",
-                            scope, response_text
-                        ),
-                    })?;
-
-                Ok(token_response.access_token)
+                read_token_response(response, "Failed to get Azure service principal token".to_string()).await
             }
             AzureCredentials::ManagedIdentity {
                 client_id,
                 identity_endpoint,
                 identity_header,
             } => {
-                #[derive(Deserialize)]
-                struct TokenResponse {
-                    access_token: String,
-                }
-
                 // Managed identity uses "resource" (not "scope"), strip ".default" suffix
                 let resource = scope_to_resource(scope);
 
@@ -687,6 +613,9 @@ impl AzureClientConfigExt for AzureClientConfig {
                     .send()
                     .await
                     .into_alien_error()
+                    .context(ErrorData::HttpRequestFailed {
+                        message: "Failed to request Azure token".to_string(),
+                    })
                     .context(ErrorData::AuthenticationError {
                         message: format!(
                             "Failed to get Azure managed identity token for resource '{}'",
@@ -694,27 +623,12 @@ impl AzureClientConfigExt for AzureClientConfig {
                         ),
                     })?;
 
-                let token_response: TokenResponse =
-                    response.json().await.into_alien_error().context(
-                        ErrorData::AuthenticationError {
-                            message: format!(
-                        "Failed to parse Azure managed identity token response for resource '{}'",
-                        resource
-                    ),
-                        },
-                    )?;
-
-                Ok(token_response.access_token)
+                read_token_response(response, "Failed to get Azure managed identity token".to_string()).await
             }
             AzureCredentials::VmManagedIdentity {
                 client_id,
                 identity_endpoint,
             } => {
-                #[derive(Deserialize)]
-                struct TokenResponse {
-                    access_token: String,
-                }
-
                 let endpoint = identity_endpoint.as_deref().unwrap_or(AZURE_IMDS_ENDPOINT);
                 let resource = scope_to_resource(scope);
 
@@ -730,6 +644,9 @@ impl AzureClientConfigExt for AzureClientConfig {
                     .send()
                     .await
                     .into_alien_error()
+                    .context(ErrorData::HttpRequestFailed {
+                        message: "Failed to request Azure token".to_string(),
+                    })
                     .context(ErrorData::AuthenticationError {
                         message: format!(
                             "Failed to get Azure VM managed identity token for resource '{}'",
@@ -737,34 +654,7 @@ impl AzureClientConfigExt for AzureClientConfig {
                         ),
                     })?;
 
-                let status = response.status();
-                let response_text = response.text().await.into_alien_error().context(
-                    ErrorData::AuthenticationError {
-                        message: format!(
-                        "Failed to read Azure VM managed identity token response for resource '{}'",
-                        resource
-                    ),
-                    },
-                )?;
-                if !status.is_success() {
-                    return Err(AlienError::new(ErrorData::AuthenticationError {
-                        message: format!(
-                            "Failed to get Azure VM managed identity token for resource '{}': HTTP {}: {}",
-                            resource, status, response_text
-                        ),
-                    }));
-                }
-
-                let token_response: TokenResponse = serde_json::from_str(&response_text)
-                    .into_alien_error()
-                    .context(ErrorData::AuthenticationError {
-                        message: format!(
-                            "Failed to parse Azure VM managed identity token response for resource '{}': {}",
-                            resource, response_text
-                        ),
-                    })?;
-
-                Ok(token_response.access_token)
+                read_token_response(response, "Failed to get Azure VM managed identity token".to_string()).await
             }
         }
     }

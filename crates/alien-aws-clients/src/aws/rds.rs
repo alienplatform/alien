@@ -24,6 +24,16 @@ pub const SERVERLESS_INSTANCE_CLASS: &str = "db.serverless";
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 pub trait RdsApi: Send + Sync + std::fmt::Debug {
+    async fn create_db_cluster_parameter_group(
+        &self,
+        request: CreateDbClusterParameterGroupRequest,
+    ) -> Result<()>;
+    async fn describe_db_cluster_parameter_groups(
+        &self,
+        name: &str,
+    ) -> Result<Vec<DbClusterParameterGroup>>;
+    async fn require_tls(&self, parameter_group_name: &str) -> Result<()>;
+    async fn delete_db_cluster_parameter_group(&self, name: &str) -> Result<()>;
     async fn create_db_subnet_group(&self, request: CreateDbSubnetGroupRequest) -> Result<()>;
     async fn delete_db_subnet_group(&self, name: &str) -> Result<()>;
     async fn create_db_cluster(&self, request: CreateDbClusterRequest) -> Result<DbCluster>;
@@ -37,6 +47,14 @@ pub trait RdsApi: Send + Sync + std::fmt::Debug {
 }
 
 // ─────────────────────────── request types ───────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct CreateDbClusterParameterGroupRequest {
+    pub name: String,
+    pub family: String,
+    pub description: String,
+    pub tags: HashMap<String, String>,
+}
 
 #[derive(Debug, Clone)]
 pub struct CreateDbSubnetGroupRequest {
@@ -56,6 +74,7 @@ pub struct CreateDbClusterRequest {
     pub master_user_password: String,
     pub database_name: String,
     pub db_subnet_group_name: String,
+    pub db_cluster_parameter_group_name: String,
     pub vpc_security_group_ids: Vec<String>,
     /// Aurora Serverless v2 max ACU ceiling (1 ACU ≈ 2 GiB).
     pub max_capacity: f64,
@@ -95,6 +114,32 @@ pub struct DeleteDbInstanceRequest {
 }
 
 // ─────────────────────────── response types (XML) ───────────────────────────
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(rename_all = "PascalCase")]
+pub struct DbClusterParameterGroup {
+    #[serde(rename = "DBClusterParameterGroupName")]
+    pub name: String,
+    #[serde(rename = "DBParameterGroupFamily")]
+    pub family: String,
+    pub description: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct DescribeDbClusterParameterGroupsEnvelope {
+    #[serde(rename = "DescribeDBClusterParameterGroupsResult")]
+    result: DescribeDbClusterParameterGroupsResult,
+}
+#[derive(Debug, Deserialize)]
+struct DescribeDbClusterParameterGroupsResult {
+    #[serde(rename = "DBClusterParameterGroups", default)]
+    groups: DbClusterParameterGroupList,
+}
+#[derive(Debug, Default, Deserialize)]
+struct DbClusterParameterGroupList {
+    #[serde(rename = "DBClusterParameterGroup", default)]
+    members: Vec<DbClusterParameterGroup>,
+}
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(rename_all = "PascalCase")]
@@ -242,6 +287,10 @@ fn create_db_cluster_form(r: &CreateDbClusterRequest) -> HashMap<String, String>
     form.insert("MasterUserPassword".into(), r.master_user_password.clone());
     form.insert("DatabaseName".into(), r.database_name.clone());
     form.insert("DBSubnetGroupName".into(), r.db_subnet_group_name.clone());
+    form.insert(
+        "DBClusterParameterGroupName".into(),
+        r.db_cluster_parameter_group_name.clone(),
+    );
     indexed_members(
         &mut form,
         "VpcSecurityGroupIds",
@@ -462,6 +511,8 @@ impl RdsClient {
             if code.ends_with("StateFault")
                 || code.ends_with("InUseFault")
                 || code.ends_with("AlreadyExistsFault")
+                || code == "DBParameterGroupAlreadyExists"
+                || code == "InvalidDBParameterGroupState"
             {
                 return Some(ErrorData::RemoteResourceConflict {
                     resource_type: "RDS Resource".into(),
@@ -536,6 +587,57 @@ impl RdsClient {
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 impl RdsApi for RdsClient {
+    async fn create_db_cluster_parameter_group(
+        &self,
+        request: CreateDbClusterParameterGroupRequest,
+    ) -> Result<()> {
+        let mut form = base_form("CreateDBClusterParameterGroup");
+        form.insert("DBClusterParameterGroupName".into(), request.name.clone());
+        form.insert("DBParameterGroupFamily".into(), request.family);
+        form.insert("Description".into(), request.description);
+        tag_members(&mut form, &request.tags);
+        self.send_form_no_body(form, "CreateDBClusterParameterGroup", &request.name)
+            .await
+    }
+
+    async fn describe_db_cluster_parameter_groups(
+        &self,
+        name: &str,
+    ) -> Result<Vec<DbClusterParameterGroup>> {
+        let mut form = base_form("DescribeDBClusterParameterGroups");
+        form.insert("DBClusterParameterGroupName".into(), name.to_string());
+        let envelope: DescribeDbClusterParameterGroupsEnvelope = self
+            .send_form(form, "DescribeDBClusterParameterGroups", name)
+            .await?;
+        Ok(envelope.result.groups.members)
+    }
+
+    async fn require_tls(&self, parameter_group_name: &str) -> Result<()> {
+        let mut form = base_form("ModifyDBClusterParameterGroup");
+        form.insert(
+            "DBClusterParameterGroupName".into(),
+            parameter_group_name.to_string(),
+        );
+        form.insert(
+            "Parameters.Parameter.1.ParameterName".into(),
+            "rds.force_ssl".into(),
+        );
+        form.insert("Parameters.Parameter.1.ParameterValue".into(), "1".into());
+        form.insert(
+            "Parameters.Parameter.1.ApplyMethod".into(),
+            "immediate".into(),
+        );
+        self.send_form_no_body(form, "ModifyDBClusterParameterGroup", parameter_group_name)
+            .await
+    }
+
+    async fn delete_db_cluster_parameter_group(&self, name: &str) -> Result<()> {
+        let mut form = base_form("DeleteDBClusterParameterGroup");
+        form.insert("DBClusterParameterGroupName".into(), name.to_string());
+        self.send_form_no_body(form, "DeleteDBClusterParameterGroup", name)
+            .await
+    }
+
     async fn create_db_subnet_group(&self, request: CreateDbSubnetGroupRequest) -> Result<()> {
         let name = request.name.clone();
         self.send_form_no_body(
@@ -631,6 +733,7 @@ mod tests {
             master_user_password: "secret".into(),
             database_name: "db".into(),
             db_subnet_group_name: "stack-subnets".into(),
+            db_cluster_parameter_group_name: "stack-db-tls".into(),
             vpc_security_group_ids: vec!["sg-1".into(), "sg-2".into()],
             max_capacity: 4.0,
             backup_retention_days: 7,

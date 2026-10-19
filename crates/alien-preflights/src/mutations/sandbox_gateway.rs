@@ -16,10 +16,12 @@ use crate::{
     StackMutation,
 };
 
-const GATEWAY_IMAGE: &str = "ghcr.io/alienplatform/alien-egress-gateway@sha256:dbac794afe2185a8ce025d92ec05a5878d6367ae9380eccc2c3dfc4d55f1c59c";
+const GATEWAY_IMAGE: &str = "ghcr.io/alienplatform/alien-egress-gateway@sha256:b252a1b423b95385e5df0c57a37daae6937daa274e3c7783c71704584b18483d";
 
 /// Managed AWS deployments use the same compute and service-account machinery
-/// as application containers. Unsupported deployments are refused before execution.
+/// as application containers. Setup templates are prepared before any compute backend
+/// exists, so the gateway is installed regardless; `SandboxEgressGatewayCheck` refuses a
+/// deployment that has no backend to run it.
 pub struct SandboxGatewayMutation;
 
 #[async_trait]
@@ -28,9 +30,8 @@ impl StackMutation for SandboxGatewayMutation {
         "Add the replicated sandbox egress gateway"
     }
 
-    fn should_run(&self, stack: &Stack, state: &StackState, config: &DeploymentConfig) -> bool {
+    fn should_run(&self, stack: &Stack, state: &StackState, _config: &DeploymentConfig) -> bool {
         state.platform == Platform::Aws
-            && config.compute_backend.is_some()
             && stack.resources().any(|(_, entry)| {
                 entry
                     .config

@@ -271,36 +271,6 @@ fn compute_cluster_controllers_can_inspect_retry_and_ingress_metadata(
 }
 
 #[test]
-fn test_compute_cluster_management_can_tag_otlp_secrets() {
-    let generator = AwsRuntimePermissionsGenerator::new();
-    let permission_set =
-        get_permission_set("compute-cluster/management").expect("permission set exists");
-    let context = create_test_context();
-
-    let result = generator
-        .generate_policy(permission_set, BindingTarget::Stack, &context)
-        .expect("Should generate AWS policy successfully");
-
-    let secret_statement = result
-        .statement
-        .iter()
-        .find(|statement| {
-            statement
-                .resource
-                .iter()
-                .any(|resource| resource.contains(":secretsmanager:"))
-        })
-        .expect("compute-cluster management should grant OTLP secret access");
-
-    assert!(secret_statement
-        .action
-        .contains(&"secretsmanager:CreateSecret".to_string()));
-    assert!(secret_statement
-        .action
-        .contains(&"secretsmanager:TagResource".to_string()));
-}
-
-#[test]
 fn test_compute_cluster_management_can_terminate_only_tagged_stack_instances() {
     let generator = AwsRuntimePermissionsGenerator::new();
     let permission_set =

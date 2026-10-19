@@ -11,6 +11,7 @@ use utoipa::OpenApi;
 
 #[derive(OpenApi)]
 #[openapi(components(schemas(
+    CredentialRetry,
     Worker,
     WorkerCode,
     WorkerOutputs,

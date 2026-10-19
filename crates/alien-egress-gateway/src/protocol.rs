@@ -11,6 +11,8 @@ use crate::{
 
 /// Limit for the entire CONNECT/request header block.
 pub const MAX_HEADER_BYTES: usize = 32 * 1024;
+/// Maximum number of HTTP fields, including routing and authentication headers.
+pub const MAX_HEADERS: usize = 128;
 /// Limit for a fragmented TLS ClientHello, including TLS record framing.
 pub const MAX_HELLO_BYTES: usize = 64 * 1024;
 
@@ -19,7 +21,7 @@ pub fn request_target(input: &[u8]) -> Result<Option<Target>> {
     if input.len() > MAX_HEADER_BYTES {
         return Err(invalid("request headers too large"));
     }
-    let mut headers = [httparse::EMPTY_HEADER; 64];
+    let mut headers = [httparse::EMPTY_HEADER; MAX_HEADERS];
     let mut request = httparse::Request::new(&mut headers);
     if request
         .parse(input)
@@ -143,6 +145,22 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use tokio::io::AsyncWriteExt;
+
+    #[test]
+    fn accepts_128_headers_but_refuses_129_and_duplicate_host() {
+        let mut request =
+            String::from("CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n");
+        for _ in 1..128 {
+            request.push_str("X-Test: value\r\n");
+        }
+        assert!(request_target(format!("{request}\r\n").as_bytes())
+            .unwrap()
+            .is_some());
+        assert!(request_target(format!("{request}X-Extra: value\r\n\r\n").as_bytes()).is_err());
+        assert!(
+            request_target(format!("{request}Host: other.example\r\n\r\n").as_bytes()).is_err()
+        );
+    }
 
     #[tokio::test]
     async fn client_hello_can_arrive_one_byte_at_a_time() {

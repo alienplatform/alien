@@ -691,21 +691,24 @@ async fn test_mutation_ordering() {
     }
 }
 
-/// Named and inline management grants may read the signing key; execute-only grants may not.
+/// Named and exact inline management grants may read the signing key; execute-only grants,
+/// including an inline set that reuses the management ID, may not.
 #[tokio::test]
 async fn sandbox_consumers_get_signing_access_only_with_management_permissions() {
-    for (permission, inline) in [
-        ("sandbox/execute", false),
-        ("sandbox/execute", true),
-        ("sandbox/management", false),
-        ("sandbox/management", true),
+    // The last case keeps the management ID but carries only execute permissions.
+    for (permission, inline, contents, signs) in [
+        ("sandbox/execute", false, "sandbox/execute", false),
+        ("sandbox/execute", true, "sandbox/execute", false),
+        ("sandbox/management", false, "sandbox/management", true),
+        ("sandbox/management", true, "sandbox/management", true),
+        ("sandbox/management", true, "sandbox/execute", false),
     ] {
         let reference = if inline {
-            alien_core::permissions::PermissionSetReference::from_inline(
-                alien_permissions::get_permission_set(permission)
-                    .unwrap()
-                    .clone(),
-            )
+            let mut set = alien_permissions::get_permission_set(contents)
+                .unwrap()
+                .clone();
+            set.id = permission.into();
+            alien_core::permissions::PermissionSetReference::from_inline(set)
         } else {
             alien_core::permissions::PermissionSetReference::from_name(permission)
         };
@@ -792,7 +795,7 @@ async fn sandbox_consumers_get_signing_access_only_with_management_permissions()
                     .iter()
                     .map(|set| set.id())
                     .collect::<Vec<_>>(),
-                if permission == "sandbox/management" {
+                if signs {
                     vec![
                         "vault/sandbox-egress-signing-key-read",
                         "vault/protect-sandbox-gateway-config",
@@ -800,7 +803,7 @@ async fn sandbox_consumers_get_signing_access_only_with_management_permissions()
                 } else {
                     vec!["vault/protect-sandbox-gateway-config"]
                 },
-                "permission={permission}, inline={inline}"
+                "permission={permission}, inline={inline}, contents={contents}"
             );
         }
     }

@@ -22,4 +22,6 @@ tempfile = { workspace = true }
 
 [dev-dependencies]
 alien-permissions = { workspace = true }
+alien-preflights = { workspace = true }
 insta = { workspace = true, features = ["yaml"] }
+tokio = { workspace = true, features = ["macros", "rt"] }

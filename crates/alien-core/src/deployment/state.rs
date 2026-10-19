@@ -45,6 +45,17 @@ pub struct SetupUpdateAuthorization {
     pub setup_fingerprint_version: u32,
 }
 
+/// A credential outage's durable retry window, scoped to its deployment phase.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct CredentialRetry {
+    /// First credential failure in this phase; subsequent attempts keep this timestamp.
+    pub started_at: chrono::DateTime<chrono::Utc>,
+    /// Changing phase starts a new window instead of carrying a previous outage forward.
+    pub status: DeploymentStatus,
+}
+
 /// Runtime metadata for deployment
 ///
 /// Stores deployment state that needs to persist across step calls.
@@ -52,6 +63,10 @@ pub struct SetupUpdateAuthorization {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeMetadata {
+    /// Bounded credential retry state shared by all deployment drivers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_retry: Option<CredentialRetry>,
+
     /// Actor authorized to perform structural Frozen-resource work during
     /// InitialSetup. Missing legacy values fail closed as ImportedHandoff.
     #[serde(default)]

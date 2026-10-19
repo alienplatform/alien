@@ -24,7 +24,7 @@ get "defaultPolicy"(){
 get "egress"(){
                 return SandboxEgressSchema.describe("Outbound network policy")
               },
-"id": z.string().describe("Identifier for the sandbox. Must contain only alphanumeric characters, hyphens, and\nunderscores ([A-Za-z0-9-_]). Maximum 64 characters."),
+"id": z.string().describe("Identifier for the sandbox. Must be DNS-compatible: lowercase letters, digits and hyphens,\nstarting and ending with a letter or digit, with no consecutive hyphens."),
 get "lifecycle"(){
                 return SandboxLifecyclePolicySchema.describe("How long a sandbox may live and when it is paused.\n\nDeclaration-time ceilings, not per-request values: every sandbox created through this\ndeclaration's binding is held to them, whatever a caller asks for at runtime.")
               },

@@ -1,8 +1,8 @@
 //! Signing material stays in the deployment vault; controllers retain only public data.
 
-#[cfg(any(feature = "aws", feature = "azure"))]
+#[cfg(feature = "aws")]
 use crate::core::state_utils::StackResourceStateExt;
-#[cfg(any(feature = "aws", feature = "azure"))]
+#[cfg(feature = "aws")]
 use alien_bindings::BindingsProviderApi;
 use alien_bindings::Vault;
 use alien_error::{AlienError, Context};
@@ -193,7 +193,7 @@ mod tests {
     }
 }
 
-#[cfg(any(feature = "aws", feature = "azure"))]
+#[cfg(feature = "aws")]
 pub(crate) async fn deployment_vault(
     ctx: &crate::core::ResourceControllerContext<'_>,
 ) -> Result<std::sync::Arc<dyn Vault>> {
@@ -299,15 +299,6 @@ pub(crate) async fn publish_aws_config(
     key: &GatewayPublicKey,
 ) -> Result<()> {
     let facts = validate_aws_network(ctx).await?;
-    publish_config(ctx, key, &facts.vpc_cidrs).await
-}
-
-#[cfg(any(feature = "aws", feature = "azure"))]
-pub(crate) async fn publish_config(
-    ctx: &crate::core::ResourceControllerContext<'_>,
-    key: &GatewayPublicKey,
-    vpc_cidrs: &[String],
-) -> Result<()> {
     let ids = internet_sandbox_ids(ctx.desired_stack);
     if alien_core::sandbox_egress::sandbox_egress_key_owner(ctx.desired_stack)
         != Some(ctx.desired_config.id())
@@ -328,7 +319,7 @@ pub(crate) async fn publish_config(
     .into_iter()
     .map(str::to_string)
     .collect();
-    denied.extend(vpc_cidrs.iter().cloned());
+    denied.extend(facts.vpc_cidrs.iter().cloned());
     for (_, entry) in ctx.desired_stack.resources() {
         if let Some(cluster) = entry.config.downcast_ref::<alien_core::ComputeCluster>() {
             denied.push(cluster.container_cidr().to_string());
@@ -353,7 +344,7 @@ pub(crate) async fn publish_config(
 
 /// Only the shared-key owner publishes this entry. The replica secret stays in the
 /// vault and never enters controller state, bindings, logs or generated packages.
-#[cfg(any(feature = "aws", feature = "azure", test))]
+#[cfg(any(feature = "aws", test))]
 async fn publish_gateway_config(vault: &dyn Vault, mut value: serde_json::Value) -> Result<()> {
     let invalid = || {
         AlienError::new(ErrorData::ResourceConfigInvalid {

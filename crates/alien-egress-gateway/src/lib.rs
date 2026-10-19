@@ -8,9 +8,11 @@ pub mod config;
 pub mod connections;
 mod credential_cache;
 pub mod credentials;
+mod dial;
 pub mod error;
 pub mod http_proxy;
 pub mod io;
+pub mod metrics;
 pub mod policy;
 pub mod protocol;
 pub mod record;
@@ -19,6 +21,7 @@ pub mod runtime;
 pub mod server;
 pub mod store;
 pub mod token;
+mod tunnel;
 
 pub mod recovery;
 

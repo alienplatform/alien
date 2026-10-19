@@ -1,6 +1,6 @@
 //! Sandbox resource controllers.
 
-#[cfg(any(feature = "aws", feature = "azure", feature = "local"))]
+#[cfg(any(feature = "aws", feature = "local"))]
 mod egress;
 
 #[cfg(feature = "aws")]
@@ -15,10 +15,6 @@ pub use aws_import::*;
 
 #[cfg(feature = "azure")]
 mod azure;
-#[cfg(feature = "azure")]
-mod azure_lifetime;
-#[cfg(feature = "azure")]
-mod azure_egress;
 #[cfg(feature = "azure")]
 pub use azure::*;
 

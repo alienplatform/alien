@@ -28,7 +28,7 @@ impl Default for Counters {
     }
 }
 impl Counters {
-    fn touch(&self) {
+    pub(crate) fn touch(&self) {
         if let Ok(mut last) = self.last_activity.lock() {
             *last = tokio::time::Instant::now();
         }
@@ -97,6 +97,18 @@ impl<S> Prefixed<S> {
             prefix: Cursor::new(prefix),
             inner,
         }
+    }
+
+    /// Forward any unread inspection bytes before handing the socket to an opaque relay.
+    pub(crate) async fn flush_prefix(
+        self,
+        destination: &mut (impl AsyncWrite + Unpin),
+    ) -> io::Result<S> {
+        use tokio::io::AsyncWriteExt;
+        destination
+            .write_all(&self.prefix.get_ref()[self.prefix.position() as usize..])
+            .await?;
+        Ok(self.inner)
     }
 }
 impl<S: AsyncRead + Unpin> AsyncRead for Prefixed<S> {

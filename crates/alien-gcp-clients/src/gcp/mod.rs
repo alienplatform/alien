@@ -819,7 +819,7 @@ impl GcpClientConfigExt for GcpClientConfig {
                 .text()
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(AlienError::new(ErrorData::HttpResponseError {
+            let mut error = AlienError::new(ErrorData::HttpResponseError {
                 message: format!(
                     "External account token exchange failed with status {}: {}",
                     status, error_text
@@ -828,7 +828,9 @@ impl GcpClientConfigExt for GcpClientConfig {
                 http_status: status.as_u16(),
                 http_request_text: None,
                 http_response_text: Some(error_text),
-            }));
+            });
+            error.retryable = status.is_server_error() || matches!(status.as_u16(), 408 | 429);
+            return Err(error);
         }
 
         let sts_token: StsTokenResponse =
@@ -864,7 +866,7 @@ impl GcpClientConfigExt for GcpClientConfig {
                 .text()
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(AlienError::new(ErrorData::HttpResponseError {
+            let mut error = AlienError::new(ErrorData::HttpResponseError {
                 message: format!(
                     "External account service account impersonation failed with status {}: {}",
                     status, error_text
@@ -873,7 +875,9 @@ impl GcpClientConfigExt for GcpClientConfig {
                 http_status: status.as_u16(),
                 http_request_text: None,
                 http_response_text: Some(error_text),
-            }));
+            });
+            error.retryable = status.is_server_error() || matches!(status.as_u16(), 408 | 429);
+            return Err(error);
         }
 
         let token_response: ImpersonationTokenResponse =
