@@ -1458,12 +1458,16 @@ pub trait Sandbox: Binding {
     async fn pause(&self, sandbox_id: &str) -> Result<()>;
 
     /// Resumes a paused sandbox. Requires `pauseResume`.
+    ///
+    /// Returns once the sandbox can take a command, so the next call does not race its wake-up.
+    /// A sandbox that has ended cannot be resumed and fails without a retry being worth making.
     async fn resume(&self, sandbox_id: &str) -> Result<()>;
 
     /// Captures full sandbox state and returns its identifier. Requires `snapshot`.
     async fn snapshot(&self, sandbox_id: &str) -> Result<String>;
 
-    /// Terminates a sandbox. Idempotent: terminating an absent sandbox succeeds.
+    /// Terminates a sandbox. Idempotent: terminating an absent sandbox succeeds, so a terminate
+    /// that could not confirm the sandbox is gone fails with a retryable error and can be repeated.
     async fn terminate(&self, sandbox_id: &str) -> Result<()>;
 
     /// Get a reference to this object as `Any` for dynamic casting

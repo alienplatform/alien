@@ -65,6 +65,7 @@ impl ResourceImporter for AwsNetworkImporter {
             eip_allocation_id: data.eip_allocation_id,
             egress_public_ips: data.egress_public_ips,
             sandbox_network: data.sandbox_network,
+            sandbox_setup: None,
             public_subnet_ids: data.public_subnet_ids,
             private_subnet_ids: data.private_subnet_ids,
             public_route_table_id: data.public_route_table_id,
@@ -90,6 +91,7 @@ impl ResourceImporter for AwsNetworkImporter {
             extra_eip_allocation_ids: Vec::new(),
             wait_for_delete_dependencies_iterations: 0,
             wait_for_retained_delete_iterations: 0,
+            delete_removed_something: false,
             _internal_stay_count: None,
         };
         if needs_default_vpc_discovery || needs_subnet_domain_discovery {

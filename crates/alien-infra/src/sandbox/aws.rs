@@ -10,8 +10,8 @@
 //!
 //! Sessions are MicroVMs started from the image at runtime. `RunMicrovm` has no `tags`, so
 //! image plus version *is* the session identity; `lambda:ListMicrovms` is account-wide and
-//! granted to no sandbox set, so sessions cannot be enumerated here and self-reap at their
-//! declared lifetime ceiling.
+//! granted to no sandbox set, so sessions cannot be enumerated here. Each lasts until its caller
+//! terminates it or AWS ends it, after eight hours at the latest.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -531,8 +531,12 @@ impl AwsSandboxController {
 
         if matches!(config.egress, alien_core::SandboxEgress::Internet) {
             self.egress_network_verified = false;
-            super::egress::validate_aws_network(ctx).await?;
-            self.egress_network_verified = true;
+            // A deployment being deleted no longer declares this sandbox or its network. Its
+            // binding stays withdrawn, and the refresh must not block the deletion.
+            if ctx.desired_stack.resources.contains_key(&config.id) {
+                super::egress::validate_aws_network(ctx).await?;
+                self.egress_network_verified = true;
+            }
         }
 
         if let Some(image_identifier) = self.image_identifier.clone() {
@@ -834,8 +838,8 @@ impl AwsSandboxController {
 
     // ─────────────── DELETE FLOW ──────────────────────────────────────────
 
-    // Sessions cannot be enumerated (see the module doc) and self-reap; a delete refused while
-    // they run fails loudly here and the executor retries — nothing is fired and forgotten.
+    // Sessions cannot be enumerated and are not stopped here (see the module doc). A failed image
+    // delete fails loudly here and the executor retries it; nothing is fired and forgotten.
 
     #[flow_entry(Delete)]
     #[handler(
@@ -1294,6 +1298,10 @@ impl ImageBuildInputs {
         self
     }
 
+    /// The receipt hashes the whole request, so a release that changes any field of it (hooks,
+    /// environment, base image) does not recognise a build an earlier release started and lost
+    /// the response to: recovery misses it and builds again, leaving that version untracked.
+    /// Accepted for the narrow window it needs, a lost response retried across an upgrade.
     fn with_receipt(mut self) -> Result<Self> {
         let encoded = serde_json::to_vec(&self.clone().update_request())
             .into_alien_error()
@@ -1420,14 +1428,19 @@ pub(crate) fn aws_partition(region: &str) -> &'static str {
 /// into a Frozen image.
 ///
 /// `Ready` is not optional — AWS rejects an image enabling any MicroVM hook without it, and it
-/// is what defers the snapshot until the agent is serving. `Run` and `Resume` reseed the
-/// CSPRNG after each start, because every MicroVM shares the state resident at capture.
+/// is what defers the snapshot until the agent is serving. `Validate` runs on a MicroVM restored
+/// from the snapshot and fails the build when a command or a file write cannot work on it; 30s
+/// is AWS's default and far above the probe's sub-second work, where `Ready`'s 120s covers a
+/// boot. `Run` and `Resume` are acknowledged by the agent and nothing more: entropy separation
+/// between MicroVMs comes from the MicroVM service.
 fn agent_hooks() -> MicrovmImageHooks {
     MicrovmImageHooks::builder()
         .port(AWS_MICROVM.port)
         .microvm_image_hooks(MicrovmImageBuildHooks {
             ready: "ENABLED".to_string(),
             ready_timeout_in_seconds: 120,
+            validate: "ENABLED".to_string(),
+            validate_timeout_in_seconds: 30,
         })
         .microvm_hooks(MicrovmLifecycleHooks {
             run: "ENABLED".to_string(),
@@ -2492,7 +2505,15 @@ mod tests {
                     && request
                         .hooks
                         .as_ref()
-                        .is_some_and(|hooks| hooks.port == AWS_MICROVM.port)
+                        .is_some_and(|hooks| {
+                            hooks.port == AWS_MICROVM.port
+                                // The image build fails a broken agent here rather than at the
+                                // first session, and a roll that dropped it would say nothing.
+                                && hooks.microvm_image_hooks.as_ref().is_some_and(|build| {
+                                    build.validate == "ENABLED"
+                                        && build.validate_timeout_in_seconds == 30
+                                })
+                        })
                     && request
                         .environment_variables
                         .get("ALIEN_SANDBOX_PORT")

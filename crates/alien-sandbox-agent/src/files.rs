@@ -28,7 +28,14 @@ pub async fn read(root: &Path, requested: &str) -> Result<Vec<u8>> {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 return Err(AlienError::new(ErrorData::PathNotFound { path: requested }))
             }
-            Err(error) => return Err(refused_or_failed(error, &requested, "opening the file")),
+            Err(error) => {
+                return Err(refused_or_failed(
+                    error,
+                    "open",
+                    &requested,
+                    "opening the file",
+                ))
+            }
         };
 
         // Refused rather than read: a directory yields a confusing OS error, and a FIFO or device
@@ -86,12 +93,17 @@ pub async fn write(root: &Path, requested: &str, contents: &[u8]) -> Result<()> 
     tokio::task::spawn_blocking(move || {
         if let Some(parent) = parent_of(&requested) {
             confine::create_dir_all(&root, &parent).map_err(|error| {
-                refused_or_failed(error, &requested, "making room for the file being written")
+                refused_or_failed(
+                    error,
+                    "open",
+                    &requested,
+                    "making room for the file being written",
+                )
             })?;
         }
 
         let mut file = confine::open_write(&root, &requested).map_err(|error| {
-            refused_or_failed(error, &requested, "opening the file for writing")
+            refused_or_failed(error, "open", &requested, "opening the file for writing")
         })?;
 
         // A path the command replaced with a FIFO opens and accepts the bytes, so without this the
@@ -118,6 +130,20 @@ pub async fn write(root: &Path, requested: &str, contents: &[u8]) -> Result<()> 
     .context(failed("write", "", "waiting for the filesystem"))?
 }
 
+/// Removes a file from the sandbox.
+pub async fn remove(root: &Path, requested: &str) -> Result<()> {
+    let root = root.to_path_buf();
+    let requested = requested.to_string();
+
+    tokio::task::spawn_blocking(move || {
+        confine::remove_beneath(&root, &requested, 0)
+            .map_err(|error| refused_or_failed(error, "remove", &requested, "removing the file"))
+    })
+    .await
+    .into_alien_error()
+    .context(failed("remove", "", "waiting for the filesystem"))?
+}
+
 /// The directory part of a caller's path, if it names one.
 fn parent_of(requested: &str) -> Option<String> {
     let trimmed = requested.trim_end_matches('/');
@@ -130,6 +156,7 @@ fn parent_of(requested: &str) -> Option<String> {
 /// `EXDEV` depending on which rule caught it. Those are the caller's mistake, not ours.
 fn refused_or_failed(
     error: std::io::Error,
+    operation: &str,
     requested: &str,
     purpose: &str,
 ) -> AlienError<ErrorData> {
@@ -143,7 +170,7 @@ fn refused_or_failed(
 
     Err::<(), std::io::Error>(error)
         .into_alien_error()
-        .context(failed("open", requested, purpose))
+        .context(failed(operation, requested, purpose))
         .expect_err("constructed from an error")
 }
 

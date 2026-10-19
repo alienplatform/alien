@@ -267,7 +267,7 @@ fn subnet_cidr(resource_id: &str, id: &str, subnet: &Subnet) -> Result<String> {
         })
 }
 
-fn effective_table<'a>(
+pub(super) fn effective_table<'a>(
     resource_id: &str,
     subnet_id: &str,
     tables: &'a [RouteTable],
@@ -447,6 +447,73 @@ mod tests {
             "{error}"
         );
     }
+    #[tokio::test]
+    async fn deleting_deployment_withdraws_the_binding_without_reading_the_network() {
+        use crate::controller_test::SingleControllerExecutor;
+        use crate::{
+            AwsNetworkController, AwsSandboxController, AwsSandboxState,
+            MockPlatformServiceProvider, ResourceController,
+        };
+        use alien_core::{Network, NetworkSettings, Platform, Sandbox, SandboxCode, SandboxEgress};
+        use std::sync::Arc;
+
+        // No EC2 expectations: the refresh of a sandbox being deleted reads nothing.
+        let client = Arc::new(MockEc2Api::new());
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_ec2_client()
+            .returning(move |_| Ok(client.clone()));
+        let controller = AwsSandboxController {
+            state: AwsSandboxState::Ready,
+            egress: Some(SandboxEgress::Internet.into()),
+            egress_network_verified: true,
+            image_arn: Some("image-test".into()),
+            active_version: Some("1.0".into()),
+            region: Some("us-east-1".into()),
+            ..Default::default()
+        };
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(
+                Sandbox::new("subject".into())
+                    .code(SandboxCode::Image {
+                        image: "s3://test/bundle.zip".into(),
+                    })
+                    .egress(SandboxEgress::Internet)
+                    .lifecycle(alien_core::SandboxLifecyclePolicy {
+                        max_lifetime_seconds: None,
+                        idle_pause_seconds: None,
+                    })
+                    .build(),
+            )
+            .controller(controller)
+            .platform(Platform::Aws)
+            .service_provider(Arc::new(provider))
+            .with_dependency(
+                Network::new("network".into())
+                    .settings(NetworkSettings::Create {
+                        cidr: Some("10.0.0.0/16".into()),
+                        availability_zones: 2,
+                    })
+                    .build(),
+                AwsNetworkController {
+                    vpc_id: Some("vpc-test".into()),
+                    private_subnet_ids: vec!["workload".into()],
+                    ..Default::default()
+                },
+            )
+            .build()
+            .await
+            .unwrap();
+        // Deleting the deployment steps this Running setup resource with an empty target stack.
+        executor.remove_desired_resource("subject");
+        executor.remove_desired_resource("network");
+        executor.step().await.unwrap();
+        let controller = executor.internal_state::<AwsSandboxController>().unwrap();
+        assert_eq!(controller.state, AwsSandboxState::Ready);
+        assert!(!controller.egress_network_verified);
+        assert!(controller.get_binding_params().unwrap().is_none());
+    }
+
     #[tokio::test]
     async fn failed_route_refresh_withdraws_a_previously_verified_binding() {
         use crate::controller_test::SingleControllerExecutor;

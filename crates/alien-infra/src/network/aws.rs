@@ -60,6 +60,9 @@ use std::fmt::Debug;
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
+#[path = "aws_sandbox_setup.rs"]
+mod sandbox_setup;
+
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 
@@ -1102,6 +1105,9 @@ pub struct AwsNetworkController {
     /// Setup coordinates; actual CIDRs and routes are verified during refresh.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sandbox_network: Option<alien_core::import::data::AwsSandboxNetwork>,
+    /// Only direct setup owns these additional objects. Template imports leave this absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) sandbox_setup: Option<sandbox_setup::SandboxNetworkSetup>,
 
     // Subnets
     #[serde(deserialize_with = "alien_core::network_ids::deserialize_ids")]
@@ -1175,6 +1181,10 @@ pub struct AwsNetworkController {
     /// resets this separately from the per-child dependency waits.
     #[serde(default)]
     pub(crate) wait_for_retained_delete_iterations: u32,
+    /// Set by the delete flow once it removed (or found gone) a recorded dedicated sandbox
+    /// subnet or route table, so a delete denied after that does not put the failed create back.
+    #[serde(default)]
+    pub(crate) delete_removed_something: bool,
 }
 
 /// Where creating one subnet got to.
@@ -2814,12 +2824,13 @@ mod failure_domain_compatibility_tests {
 
 #[controller]
 impl AwsNetworkController {
-    // DeleteStart only looks up lost creates; the NAT gateway step has not run yet.
+    // DeleteStart looks up lost creates and deletes direct setup's dedicated sandbox subnets
+    // and route tables, recording each removal; the NAT gateway step has not run yet.
     fn nothing_deleted_yet(&self) -> bool {
         matches!(
             self.state,
             AwsNetworkState::DeleteStart | AwsNetworkState::DeletingNatGateway
-        )
+        ) && !self.delete_removed_something
     }
 
     // ─────────────── CREATE FLOW ──────────────────────────────
@@ -2928,7 +2939,11 @@ impl AwsNetworkController {
                 self.subnets_by_failure_domain = subnets_by_failure_domain;
 
                 Ok(HandlerAction::Continue {
-                    state: Ready,
+                    state: if sandbox_setup::required(ctx)? {
+                        CreatingSandboxNetwork
+                    } else {
+                        Ready
+                    },
                     suggested_delay: None,
                 })
             }
@@ -2991,7 +3006,11 @@ impl AwsNetworkController {
                 self.subnets_by_failure_domain = subnets_by_failure_domain;
 
                 Ok(HandlerAction::Continue {
-                    state: Ready,
+                    state: if sandbox_setup::required(ctx)? {
+                        CreatingSandboxNetwork
+                    } else {
+                        Ready
+                    },
                     suggested_delay: None,
                 })
             }
@@ -3041,7 +3060,11 @@ impl AwsNetworkController {
         )?;
         self.availability_zones = self.subnets_by_failure_domain.keys().cloned().collect();
         Ok(HandlerAction::Continue {
-            state: Ready,
+            state: if sandbox_setup::required(ctx)? {
+                CreatingSandboxNetwork
+            } else {
+                Ready
+            },
             suggested_delay: None,
         })
     }
@@ -4388,7 +4411,11 @@ impl AwsNetworkController {
         ) {
             debug!(sg_id = %sg_id, "Security group egress rule already exists");
             return Ok(HandlerAction::Continue {
-                state: Ready,
+                state: if sandbox_setup::required(ctx)? {
+                    CreatingSandboxNetwork
+                } else {
+                    Ready
+                },
                 suggested_delay: None,
             });
         }
@@ -4425,9 +4452,49 @@ impl AwsNetworkController {
         info!("Security group configured, network provisioning complete");
 
         Ok(HandlerAction::Continue {
-            state: Ready,
+            state: if sandbox_setup::required(ctx)? {
+                CreatingSandboxNetwork
+            } else {
+                Ready
+            },
             suggested_delay: None,
         })
+    }
+
+    #[handler(state = CreatingSandboxNetwork, on_failure = CreateFailed, status = ResourceStatus::Provisioning)]
+    async fn creating_sandbox_network(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        if self.reconcile_sandbox_network(ctx).await? {
+            Ok(HandlerAction::Continue {
+                state: Ready,
+                suggested_delay: None,
+            })
+        } else {
+            Ok(HandlerAction::Stay {
+                max_times: None,
+                suggested_delay: Some(Duration::from_secs(1)),
+            })
+        }
+    }
+
+    #[handler(state = UpdatingSandboxNetwork, on_failure = UpdateFailed, status = ResourceStatus::Updating)]
+    async fn updating_sandbox_network(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        if self.reconcile_sandbox_network(ctx).await? {
+            Ok(HandlerAction::Continue {
+                state: Ready,
+                suggested_delay: None,
+            })
+        } else {
+            Ok(HandlerAction::Stay {
+                max_times: None,
+                suggested_delay: Some(Duration::from_secs(1)),
+            })
+        }
     }
 
     // ─────────────── READY STATE ────────────────────────────────
@@ -4451,6 +4518,10 @@ impl AwsNetworkController {
                 .service_provider
                 .get_aws_ec2_client(ctx.get_aws_config()?)
                 .await?;
+            // A failed check stays recorded so the next direct setup run repairs it.
+            if let Some(setup) = self.sandbox_setup.as_mut() {
+                setup.set_unverified(true);
+            }
             self.sandbox_network = Some(
                 super::validate_aws_sandbox_network(
                     client.as_ref(),
@@ -4461,6 +4532,9 @@ impl AwsNetworkController {
                 )
                 .await?,
             );
+            if let Some(setup) = self.sandbox_setup.as_mut() {
+                setup.set_unverified(false);
+            }
         }
 
         // For BYO-VPC, we don't need to verify - preflights already validated
@@ -4579,7 +4653,11 @@ impl AwsNetworkController {
         }
 
         Ok(HandlerAction::Continue {
-            state: Ready,
+            state: if sandbox_setup::required(ctx)? {
+                UpdatingSandboxNetwork
+            } else {
+                Ready
+            },
             suggested_delay: None,
         })
     }
@@ -4594,6 +4672,15 @@ impl AwsNetworkController {
     )]
     async fn delete_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Network>()?;
+
+        // Remove only direct setup's dedicated children, including those inside a BYO VPC.
+        // Imported template objects have no direct setup record and are never touched here.
+        if !self.delete_sandbox_network(ctx).await? {
+            return Ok(HandlerAction::Stay {
+                max_times: None,
+                suggested_delay: Some(Duration::from_secs(5)),
+            });
+        }
 
         let settings_is_setup_owned_vpc = matches!(
             &config.settings,
@@ -5479,6 +5566,22 @@ impl AwsNetworkController {
 
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
 
+    fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        // Direct setup creates the dedicated subnets when they are first needed. A setup run
+        // after a refresh failed to verify them reconciles them, repairing a removed route or
+        // association; a verified network schedules nothing, so setup can finish.
+        Ok(
+            ctx.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
+                && (self.sandbox_network.is_none()
+                    || (ctx.deployment_config.setup_run
+                        && self
+                            .sandbox_setup
+                            .as_ref()
+                            .is_some_and(|setup| setup.is_unverified())))
+                && sandbox_setup::required(ctx)?,
+        )
+    }
+
     fn build_outputs(&self) -> Option<ResourceOutputs> {
         // Only return outputs when VPC has been created or BYO-VPC is configured
         self.vpc_id.as_ref().map(|vpc_id| {
@@ -5512,6 +5615,7 @@ impl AwsNetworkController {
             eip_allocation_id: Some(format!("eipalloc-{}", vpc_id)),
             egress_public_ips: vec!["203.0.113.10".to_string()],
             sandbox_network: None,
+            sandbox_setup: None,
             public_subnet_ids: (0..az_count)
                 .map(|i| format!("subnet-pub-{}-{}", vpc_id, i))
                 .collect(),
@@ -5540,6 +5644,7 @@ impl AwsNetworkController {
             extra_eip_allocation_ids: Vec::new(),
             wait_for_delete_dependencies_iterations: 0,
             wait_for_retained_delete_iterations: 0,
+            delete_removed_something: false,
             _internal_stay_count: None,
         }
     }
@@ -5569,6 +5674,7 @@ impl AwsNetworkController {
             eip_allocation_id: None,
             egress_public_ips: Vec::new(),
             sandbox_network: None,
+            sandbox_setup: None,
             public_subnet_ids,
             private_subnet_ids: private_subnet_ids.clone(),
             public_route_table_id: None,
@@ -5593,6 +5699,7 @@ impl AwsNetworkController {
             extra_eip_allocation_ids: Vec::new(),
             wait_for_delete_dependencies_iterations: 0,
             wait_for_retained_delete_iterations: 0,
+            delete_removed_something: false,
             _internal_stay_count: None,
         }
     }
