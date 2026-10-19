@@ -1,4 +1,5 @@
 use crate::{
+    dependencies::validate_acyclic,
     emitters::{aws::helpers::list_parameter_value, enabled},
     inline_policy::{
         consolidate_role_inline_policies, expression_references, validate_role_policy_limits,
@@ -599,6 +600,7 @@ pub fn generate_cloudformation_template_with_profile(
 
     lower_json_strings(&mut template)?;
     validate_role_policy_limits(&template)?;
+    validate_acyclic(&template)?;
     Ok(template)
 }
 

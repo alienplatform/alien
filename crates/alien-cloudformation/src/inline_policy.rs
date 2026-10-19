@@ -1,4 +1,5 @@
 use crate::{
+    dependencies::{find_cycle, resource_dependencies, DependencyGraph},
     emitters::aws::helpers::{chunk_managed_policy_statements, uniquify_iam_statement_sids},
     template::{CfExpression, CfResource, CfTemplate},
 };
@@ -57,17 +58,22 @@ pub(crate) fn consolidate_role_inline_policies(template: &mut CfTemplate) -> Res
         }
     }
 
+    let bins = acyclic_bins(template, &groups);
+
     let mut replacements = IndexMap::new();
     let mut consolidated_resources = Vec::new();
     let mut consolidated_ids = Vec::new();
-    for (group_index, group) in groups.into_iter().enumerate() {
-        if group.policy_ids.len() < 2 {
+    let mut policies_per_group = vec![0; groups.len()];
+    for bin in bins {
+        if bin.policy_ids.len() < 2 {
             continue;
         }
+        let group_index = bin.group_index;
+        let group = &groups[group_index];
 
         let mut statements = Vec::new();
         let mut dependencies = Vec::new();
-        for policy_id in &group.policy_ids {
+        for policy_id in &bin.policy_ids {
             let policy = template
                 .resources
                 .get(policy_id)
@@ -81,7 +87,15 @@ pub(crate) fn consolidate_role_inline_policies(template: &mut CfTemplate) -> Res
             };
 
             statements.extend(policy_statements.iter().cloned());
-            dependencies.extend(policy.depends_on.iter().cloned());
+            // A grant ordered after another grant folded into the same policy needs no edge:
+            // kept, it would make the consolidated policy depend on itself.
+            dependencies.extend(
+                policy
+                    .depends_on
+                    .iter()
+                    .filter(|dependency| !bin.policy_ids.contains(dependency))
+                    .cloned(),
+            );
         }
 
         let policy_documents = chunk_managed_policy_statements(compact_statements(statements))?;
@@ -102,7 +116,9 @@ pub(crate) fn consolidate_role_inline_policies(template: &mut CfTemplate) -> Res
         }
 
         let mut replacement_ids = Vec::new();
-        for (statement_index, policy_document) in policy_documents.into_iter().enumerate() {
+        for policy_document in policy_documents {
+            let statement_index = policies_per_group[group_index];
+            policies_per_group[group_index] += 1;
             let logical_id = consolidated_policy_logical_id(
                 template,
                 &consolidated_ids,
@@ -115,7 +131,7 @@ pub(crate) fn consolidate_role_inline_policies(template: &mut CfTemplate) -> Res
 
             let mut consolidated = template
                 .resources
-                .get(&group.policy_ids[0])
+                .get(&bin.policy_ids[0])
                 .expect("grouped IAM policy should exist")
                 .clone();
             consolidated.logical_id = logical_id;
@@ -128,7 +144,7 @@ pub(crate) fn consolidate_role_inline_policies(template: &mut CfTemplate) -> Res
             consolidated_resources.push(consolidated);
         }
 
-        for removed_id in &group.policy_ids {
+        for removed_id in &bin.policy_ids {
             replacements.insert(removed_id.clone(), replacement_ids.clone());
         }
     }
@@ -156,6 +172,76 @@ pub(crate) fn consolidate_role_inline_policies(template: &mut CfTemplate) -> Res
     }
 
     Ok(())
+}
+
+/// Grants of one group that fold into the same managed policies.
+struct PolicyBin {
+    group_index: usize,
+    policy_ids: Vec<String>,
+}
+
+/// Splits each group's grants into bins that can each become one consolidated policy without a
+/// dependency cycle.
+///
+/// The grants come from different stack resources, each ordered after the resources it depends
+/// on. Folding two of them into one policy makes it wait for everything either waited for, and
+/// makes everything that waited for either wait for it. That closes a cycle when one grant
+/// reaches the other through a third resource, such as a grant ordered after a resource that
+/// itself waits for the other grant, or when two groups each hold a grant ordered after a grant
+/// in the other. A grant joins the first bin of its group that keeps the template acyclic, so a
+/// group whose grants never reach each other still becomes a single policy.
+fn acyclic_bins(template: &CfTemplate, groups: &[PolicyGroup]) -> Vec<PolicyBin> {
+    let graph = resource_dependencies(template);
+    let mut bins: Vec<PolicyBin> = Vec::new();
+    let mut bin_of: IndexMap<String, usize> = IndexMap::new();
+    for (group_index, group) in groups.iter().enumerate() {
+        if group.policy_ids.len() < 2 {
+            continue;
+        }
+        for policy_id in &group.policy_ids {
+            let fitting_bin = (0..bins.len())
+                .filter(|bin| bins[*bin].group_index == group_index)
+                .find(|bin| {
+                    bin_of.insert(policy_id.clone(), *bin);
+                    let acyclic = find_cycle(&contract(&graph, &bin_of)).is_none();
+                    bin_of.shift_remove(policy_id);
+                    acyclic
+                });
+            let bin = fitting_bin.unwrap_or_else(|| {
+                bins.push(PolicyBin {
+                    group_index,
+                    policy_ids: Vec::new(),
+                });
+                bins.len() - 1
+            });
+            bin_of.insert(policy_id.clone(), bin);
+            bins[bin].policy_ids.push(policy_id.clone());
+        }
+    }
+    bins
+}
+
+/// The dependency graph with each bin's grants replaced by one resource standing for the
+/// policy they fold into. Edges between grants of the same bin disappear with the fold.
+fn contract(graph: &DependencyGraph, bin_of: &IndexMap<String, usize>) -> DependencyGraph {
+    // Logical ids are alphanumeric, so this cannot collide with a real resource.
+    let node = |logical_id: &String| {
+        bin_of
+            .get(logical_id)
+            .map_or_else(|| logical_id.clone(), |bin| format!("#bin{bin}"))
+    };
+    let mut contracted = DependencyGraph::new();
+    for (logical_id, dependencies) in graph {
+        let from = node(logical_id);
+        let edges = contracted.entry(from.clone()).or_default();
+        edges.extend(
+            dependencies
+                .iter()
+                .map(node)
+                .filter(|dependency| *dependency != from),
+        );
+    }
+    contracted
 }
 
 /// Rejects definite IAM role quota overflows in the final emitted template.
@@ -556,6 +642,7 @@ mod tests {
         validate_role_policy_limits,
     };
     use crate::{
+        dependencies::{find_cycle, resource_dependencies},
         generate_cloudformation_template,
         template::{CfExpression, CfResource, CfTemplate},
         CfRegistry, CloudFormationOptions, CloudFormationTarget, RegistrationMode,
@@ -842,6 +929,117 @@ mod tests {
             .to_string();
         assert!(error.contains("FirstRole"));
         assert!(error.contains("SecondRole"));
+    }
+
+    fn managed_policies(template: &CfTemplate) -> Vec<&CfResource> {
+        template
+            .resources
+            .values()
+            .filter(|resource| resource.resource_type == "AWS::IAM::ManagedPolicy")
+            .collect()
+    }
+
+    /// A grant ordered after the other grant on its role, the way a resource's grant is ordered
+    /// after everything a resource it depends on emits. Both fold into one policy, which must
+    /// not depend on itself.
+    #[test]
+    fn a_grant_ordered_after_its_neighbour_folds_without_depending_on_itself() {
+        let mut template = template_with_inline_grants();
+        template
+            .resources
+            .get_mut("GrantTwo")
+            .unwrap()
+            .depends_on
+            .push("GrantOne".into());
+
+        consolidate_role_inline_policies(&mut template).unwrap();
+
+        let policies = managed_policies(&template);
+        assert_eq!(policies.len(), 1, "both grants fold into one policy");
+        assert!(!policies[0].depends_on.contains(&policies[0].logical_id));
+        assert_eq!(find_cycle(&resource_dependencies(&template)), None);
+    }
+
+    /// A grant ordered after a resource that waits for the other grant cannot share its policy:
+    /// the policy would wait for that resource, which waits for the policy.
+    #[test]
+    fn grants_that_reach_each_other_through_another_resource_stay_apart() {
+        let mut template = template_with_inline_grants();
+        let mut function = CfResource::new("Function".into(), "AWS::Lambda::Function".into());
+        function.depends_on.push("GrantOne".into());
+        template.resources.insert("Function".into(), function);
+        template
+            .resources
+            .get_mut("GrantTwo")
+            .unwrap()
+            .depends_on
+            .push("Function".into());
+
+        consolidate_role_inline_policies(&mut template).unwrap();
+
+        assert_eq!(find_cycle(&resource_dependencies(&template)), None);
+        assert!(managed_policies(&template).is_empty());
+        assert!(template.resources.contains_key("GrantOne"));
+        assert!(template.resources.contains_key("GrantTwo"));
+    }
+
+    /// Two resources, the second depending on the first, each granting two roles: every grant
+    /// of the second is ordered after every grant of the first. Folding both roles' grants
+    /// would order each role's policy after the other's.
+    #[test]
+    fn crossed_grants_on_two_roles_fold_only_where_the_order_allows() {
+        let mut template = template_with_inline_grants();
+        template.resources.shift_remove("GrantOne");
+        template.resources.shift_remove("GrantTwo");
+        let grant = |role: &str, depends_on: &[&str]| {
+            let mut policy = CfResource::new(String::new(), "AWS::IAM::Policy".into());
+            policy.properties.insert(
+                "PolicyName".into(),
+                CfExpression::from(format!("{role}-grant")),
+            );
+            policy.properties.insert(
+                "Roles".into(),
+                CfExpression::list([CfExpression::ref_(role)]),
+            );
+            policy.properties.insert(
+                "PolicyDocument".into(),
+                CfExpression::object([(
+                    "Statement",
+                    CfExpression::list([statement("Read", "s3:GetObject", role)]),
+                )]),
+            );
+            policy.depends_on = depends_on.iter().map(|id| id.to_string()).collect();
+            policy
+        };
+        template.resources.insert(
+            "SecondRole".into(),
+            CfResource::new("SecondRole".into(), "AWS::IAM::Role".into()),
+        );
+        for (logical_id, role, depends_on) in [
+            ("FirstOnExecution", "ExecutionRole", &[][..]),
+            ("FirstOnSecond", "SecondRole", &[][..]),
+            (
+                "SecondOnExecution",
+                "ExecutionRole",
+                &["FirstOnExecution", "FirstOnSecond"][..],
+            ),
+            (
+                "SecondOnSecond",
+                "SecondRole",
+                &["FirstOnExecution", "FirstOnSecond"][..],
+            ),
+        ] {
+            let mut policy = grant(role, depends_on);
+            policy.logical_id = logical_id.into();
+            template.resources.insert(logical_id.into(), policy);
+        }
+
+        consolidate_role_inline_policies(&mut template).unwrap();
+
+        assert_eq!(find_cycle(&resource_dependencies(&template)), None);
+        assert_eq!(managed_policies(&template).len(), 1);
+        assert!(template.resources.contains_key("FirstOnSecond"));
+        assert!(template.resources.contains_key("SecondOnSecond"));
     }
 
     fn template_with_inline_grants() -> CfTemplate {

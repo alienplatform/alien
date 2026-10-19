@@ -16,7 +16,7 @@ use alien_core::{
     Container, ContainerCode, DeploymentConfig, EnvironmentVariablesSnapshot, ExternalBindings,
     ManagementConfig, Network, NetworkSettings, PermissionProfile, Platform, ResourceLifecycle,
     ResourceSpec, Result, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy, Stack,
-    StackSettings, StackState,
+    StackSettings, StackState, Worker, WorkerCode,
 };
 use alien_preflights::runner::PreflightRunner;
 
@@ -247,6 +247,70 @@ async fn a_legacy_sandbox_setup_template_has_no_gateway() {
                 "{shape:?} {egress:?}: legacy egress must not install the gateway"
             );
         }
+    }
+}
+
+/// A profile granted on an internet sandbox, by a Worker's link or directly. Setup preparation
+/// adds the gateway Container and makes the sandbox depend on the deployment secrets Vault, whose
+/// grants it adds to the same profile. The generator folds the sandbox's and the Vault's grants on
+/// that role into one managed policy, which must not inherit the sandbox's ordering after the
+/// Vault's grant as a dependency on itself: CloudFormation refuses a template with a cycle.
+#[tokio::test]
+async fn a_profile_granted_an_internet_sandbox_renders_without_a_dependency_cycle() {
+    let sandbox = || {
+        Sandbox::new("agents".to_string())
+            .code(SandboxCode::Image {
+                image: "s3://acme-artifacts/sandbox-bundle/f00dcafe/bundle.zip".to_string(),
+            })
+            .egress(SandboxEgress::Internet)
+            .lifecycle(SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build()
+    };
+    let linking_worker = Stack::new("acme".to_string())
+        .permission("execution", PermissionProfile::new())
+        .add(sandbox(), ResourceLifecycle::Live)
+        .add(
+            Worker::new("api".to_string())
+                .code(WorkerCode::Image {
+                    image: "123456789012.dkr.ecr.us-east-1.amazonaws.com/api:1".to_string(),
+                })
+                .permissions("execution".to_string())
+                .link(&sandbox())
+                .build(),
+            ResourceLifecycle::Live,
+        )
+        .build();
+    let granted_profile = Stack::new("acme".to_string())
+        .permission(
+            "execution",
+            PermissionProfile::new().resource("agents", ["sandbox/execute"]),
+        )
+        .add(sandbox(), ResourceLifecycle::Live)
+        .build();
+
+    for (description, stack) in [
+        ("a worker linking an internet sandbox", linking_worker),
+        ("a profile granted an internet sandbox", granted_profile),
+    ] {
+        let settings = settings();
+        let prepared = prepare_for_setup_template(stack, &settings).await;
+        assert!(
+            has_sandbox_gateway(&prepared),
+            "{description}: gateway installed"
+        );
+
+        let template = render(&prepared, settings, description)
+            .unwrap_or_else(|error| panic!("{description}: {error}"));
+        for (logical_id, resource) in &template.resources {
+            assert!(
+                !resource.depends_on.contains(logical_id),
+                "{description}: {logical_id} depends on itself"
+            );
+        }
+        cfn_lint(&to_yaml(&template).expect("template serializes")).assert_ok(description);
     }
 }
 
