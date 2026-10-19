@@ -91,6 +91,10 @@ pub struct MicrovmTier {
 /// Longest life AWS will run a MicroVM for, from `RunMicrovm`'s `maximumDurationInSeconds`.
 const AWS_MAX_LIFETIME_SECONDS: u32 = 28_800;
 
+/// Longest `activeDeadlineSeconds` the Kubernetes API server accepts on a pod. The field is an
+/// int64, but pod validation caps it at the largest i32.
+const KUBERNETES_MAX_LIFETIME_SECONDS: u32 = i32::MAX as u32;
+
 /// Azure's sandbox sizing rule, quoted from the data plane's own refusal of an oversized request:
 /// *CPU must be n×250m for n=1..64 (0.25–16 cores); Memory ≤ cores × 2Gi; Disk ≤ cores × 20Gi*.
 const AZURE_CPU_STEP_MILLICORES: i64 = 250;
@@ -789,21 +793,43 @@ impl Sandbox {
         }
 
         // Read before the limits, like the image, because a lifetime is declared whether or not
-        // any limits are. The ceiling is Lambda's, and it rejects the run rather than clamping, so
-        // a value outside it would pass planning, render into the package, and fail at the first
-        // sandbox. Kubernetes takes the same field with no such bound, which is why this sits
-        // under the AWS gate rather than on the type.
-        if platform == Platform::Aws {
-            if let Some(seconds) = self.lifecycle.max_lifetime_seconds {
-                if !(1..=AWS_MAX_LIFETIME_SECONDS).contains(&seconds) {
+        // any limits are.
+        if let Some(seconds) = self.lifecycle.max_lifetime_seconds {
+            // First, so a platform with no deadline says so before any complaint about the value.
+            capabilities.require(SandboxCapability::SandboxLifetime, platform)?;
+
+            if seconds == 0 {
+                return Err(AlienError::new(ErrorData::SandboxLimitInvalid {
+                    resource_id: self.id.clone(),
+                    field: "maxLifetimeSeconds".to_string(),
+                    value: "0".to_string(),
+                    reason: "a sandbox must be allowed to run for at least 1 second".to_string(),
+                }));
+            }
+
+            // Each ceiling is the platform's own, and the platform rejects a value above it
+            // rather than clamping, so it would pass planning, render into the package, and fail
+            // at the first sandbox. The ceilings differ, which is why they sit under a platform
+            // match rather than on the type.
+            let ceiling = match platform {
+                Platform::Aws => Some((AWS_MAX_LIFETIME_SECONDS, "AWS runs a MicroVM for")),
+                Platform::Kubernetes => {
+                    Some((KUBERNETES_MAX_LIFETIME_SECONDS, "Kubernetes runs a pod for"))
+                }
+                // The Agent Platform documents `ttl` without a valid range, so a value it refuses
+                // still fails at the first sandbox rather than here.
+                Platform::Gcp => None,
+                // Never reached: the capability check above refuses Azure and Local, and
+                // `for_platform` refuses Machines and Test at the top of this function.
+                Platform::Azure | Platform::Local | Platform::Machines | Platform::Test => None,
+            };
+            if let Some((max, runs_for)) = ceiling {
+                if seconds > max {
                     return Err(AlienError::new(ErrorData::SandboxLimitInvalid {
                         resource_id: self.id.clone(),
                         field: "maxLifetimeSeconds".to_string(),
                         value: seconds.to_string(),
-                        reason: format!(
-                            "AWS runs a MicroVM for between 1 and \
-                             {AWS_MAX_LIFETIME_SECONDS} seconds"
-                        ),
+                        reason: format!("{runs_for} between 1 and {max} seconds"),
                     }));
                 }
             }
@@ -2156,9 +2182,9 @@ mod tests {
         }
     }
 
-    /// Lambda rejects a run outside 1–28,800 rather than clamping it, so a value beyond that
+    /// Lambda rejects a run above 28,800 seconds rather than clamping it, so a value beyond that
     /// would pass planning, render into the package, and fail at the first sandbox. Kubernetes
-    /// takes the same field with no such bound, so the check is AWS's alone. The lifetime is a
+    /// takes the same field with a far higher ceiling, so 28,800 is AWS's alone. The lifetime is a
     /// lifecycle field, so a sandbox that declares no limits is held to it too.
     #[test]
     fn a_lifetime_aws_would_reject_is_refused_while_planning() {
@@ -2167,25 +2193,100 @@ mod tests {
         without_limits.limits = None;
 
         for (declared, mut sandbox) in [("with", with_limits), ("without", without_limits)] {
-            for seconds in [0, 28_801, 30_000, 100_000] {
+            for seconds in [28_801, 30_000, 100_000] {
                 sandbox.lifecycle.max_lifetime_seconds = Some(seconds);
                 let error = sandbox
                     .validate_for_platform(Platform::Aws)
-                    .expect_err("a lifetime outside what AWS runs is refused");
+                    .expect_err("a lifetime above what AWS runs is refused");
                 assert_eq!(
                     error.code, "SANDBOX_LIMIT_INVALID",
                     "{seconds}s {declared} limits"
                 );
 
-                // Kubernetes has no such ceiling, so the same declaration is fine there.
+                // Kubernetes' ceiling is far higher, so the same declaration is fine there.
                 sandbox
                     .validate_for_platform(Platform::Kubernetes)
-                    .expect("the kubelet takes any activeDeadlineSeconds");
+                    .expect("Kubernetes takes an activeDeadlineSeconds above 28,800");
             }
 
             sandbox.lifecycle.max_lifetime_seconds = Some(28_800);
             sandbox
                 .validate_for_platform(Platform::Aws)
+                .expect("the ceiling itself is allowed");
+        }
+    }
+
+    /// A zero lifetime is a sandbox that may not run at all. The Kubernetes API server refuses an
+    /// `activeDeadlineSeconds` below 1 when the pod is created, so planning refuses it on every
+    /// platform, with or without limits declared.
+    #[test]
+    fn a_zero_lifetime_is_refused_while_planning() {
+        let with_limits = sandbox_with(SandboxEgress::None, vec![]);
+        let mut without_limits = with_limits.clone();
+        without_limits.limits = None;
+
+        for (declared, mut sandbox) in [("with", with_limits), ("without", without_limits)] {
+            sandbox.lifecycle.max_lifetime_seconds = Some(0);
+            for platform in [Platform::Aws, Platform::Kubernetes, Platform::Gcp] {
+                let error = sandbox
+                    .validate_for_platform(platform)
+                    .expect_err("a zero lifetime is refused");
+                assert_eq!(
+                    error.code, "SANDBOX_LIMIT_INVALID",
+                    "{platform} {declared} limits"
+                );
+                assert!(
+                    error.to_string().contains("maxLifetimeSeconds"),
+                    "{platform} {declared} limits"
+                );
+            }
+
+            // Where the field is unsupported, that is the answer, not the value.
+            for platform in [Platform::Azure, Platform::Local] {
+                let error = sandbox
+                    .validate_for_platform(platform)
+                    .expect_err("a lifetime is refused where nothing applies it");
+                assert_eq!(
+                    error.code, "SANDBOX_CAPABILITY_UNSUPPORTED",
+                    "{platform} {declared} limits"
+                );
+            }
+
+            sandbox.lifecycle.max_lifetime_seconds = Some(1);
+            sandbox
+                .validate_for_platform(Platform::Kubernetes)
+                .expect("one second is the API server's floor");
+        }
+    }
+
+    /// The API server caps `activeDeadlineSeconds` at the largest i32 although the field is an
+    /// int64, and `maxLifetimeSeconds` is a u32, so without this check the top half of its
+    /// range would plan fine and be refused when the pod is created.
+    #[test]
+    fn a_lifetime_kubernetes_would_reject_is_refused_while_planning() {
+        let with_limits = sandbox_with(SandboxEgress::None, vec![]);
+        let mut without_limits = with_limits.clone();
+        without_limits.limits = None;
+
+        for (declared, mut sandbox) in [("with", with_limits), ("without", without_limits)] {
+            for seconds in [2_147_483_648, u32::MAX] {
+                sandbox.lifecycle.max_lifetime_seconds = Some(seconds);
+                let error = sandbox
+                    .validate_for_platform(Platform::Kubernetes)
+                    .expect_err("a lifetime above what the API server takes is refused");
+                assert_eq!(
+                    error.code, "SANDBOX_LIMIT_INVALID",
+                    "{seconds}s {declared} limits"
+                );
+                assert!(
+                    error.to_string().contains("maxLifetimeSeconds"),
+                    "{seconds}s {declared} limits"
+                );
+            }
+
+            sandbox.lifecycle.max_lifetime_seconds = Some(2_147_483_647);
+            sandbox
+                .validate_for_platform(Platform::Kubernetes)
                 .expect("the ceiling itself is allowed");
         }
     }
