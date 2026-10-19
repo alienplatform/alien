@@ -2243,6 +2243,38 @@ mod tests {
         }
     }
 
+    /// The API server caps `activeDeadlineSeconds` at the largest i32 although the field is an
+    /// int64, and `maxLifetimeSeconds` is a u32, so without this check the top half of its
+    /// range would plan fine and be refused when the pod is created.
+    #[test]
+    fn a_lifetime_kubernetes_would_reject_is_refused_while_planning() {
+        let with_limits = sandbox_with(SandboxEgress::None, vec![]);
+        let mut without_limits = with_limits.clone();
+        without_limits.limits = None;
+
+        for (declared, mut sandbox) in [("with", with_limits), ("without", without_limits)] {
+            for seconds in [2_147_483_648, u32::MAX] {
+                sandbox.lifecycle.max_lifetime_seconds = Some(seconds);
+                let error = sandbox
+                    .validate_for_platform(Platform::Kubernetes)
+                    .expect_err("a lifetime above what the API server takes is refused");
+                assert_eq!(
+                    error.code, "SANDBOX_LIMIT_INVALID",
+                    "{seconds}s {declared} limits"
+                );
+                assert!(
+                    error.to_string().contains("maxLifetimeSeconds"),
+                    "{seconds}s {declared} limits"
+                );
+            }
+
+            sandbox.lifecycle.max_lifetime_seconds = Some(2_147_483_647);
+            sandbox
+                .validate_for_platform(Platform::Kubernetes)
+                .expect("the ceiling itself is allowed");
+        }
+    }
+
     /// An image Azure can take neither as a catalog name nor as a registry image is refused while
     /// planning, not at the first sandbox.
     #[test]
