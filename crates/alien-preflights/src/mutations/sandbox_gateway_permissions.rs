@@ -17,10 +17,11 @@ fn invalid(message: impl Into<String>) -> ErrorData {
     }
 }
 
-/// AWS setup can install exact SSM parameter grants before the values exist.
-/// Explicit profile entries prevent resource-link defaults from granting access
-/// to the whole vault. The gateway's profile is dedicated to that container.
-pub(crate) fn configure_aws_gateway_permissions(stack: &mut Stack) -> Result<()> {
+/// AWS SSM parameter grants and Azure Key Vault secret-scope role assignments can both be
+/// installed before the values exist. Explicit profile entries prevent resource-link defaults
+/// from granting access to the whole vault. The gateway's profile is dedicated to that
+/// container.
+pub(crate) fn configure_gateway_permissions(stack: &mut Stack) -> Result<()> {
     let Some(gateway) = stack
         .resources
         .get(SANDBOX_EGRESS_GATEWAY_ID)
@@ -136,16 +137,25 @@ fn grants_sandbox_management(set: &PermissionSetReference) -> bool {
     }
 }
 
+/// One vault entry: its SSM parameter on AWS, and its Key Vault secret on Azure. Azure
+/// accepts a role assignment scoped to a secret that does not exist yet.
 fn exact_read(key: &str) -> Result<PermissionSet> {
     let parameter =
         alien_core::vault_naming::parameter_store_parameter_name("${resourceName}", key);
+    let secret = alien_core::vault_naming::key_vault_secret_name(key);
     serde_json::from_value(serde_json::json!({
         "id": format!("vault/{key}-read"),
         "description": format!("Read only the {key} vault entry"),
-        "platforms": {"aws": [{
-            "grant": {"actions": ["ssm:GetParameter"]},
-            "binding": {"resource": {"resources": [format!("arn:aws:ssm:${{awsRegion}}:${{awsAccountId}}:parameter/{parameter}")]}}
-        }]}
+        "platforms": {
+            "aws": [{
+                "grant": {"actions": ["ssm:GetParameter"]},
+                "binding": {"resource": {"resources": [format!("arn:aws:ssm:${{awsRegion}}:${{awsAccountId}}:parameter/{parameter}")]}}
+            }],
+            "azure": [{
+                "grant": {"predefinedRoles": ["Key Vault Secrets User"]},
+                "binding": {"resource": {"scope": format!("/subscriptions/${{subscriptionId}}/resourceGroups/${{resourceGroup}}/providers/Microsoft.KeyVault/vaults/${{resourceName}}/secrets/{secret}")}}
+            }]
+        }
     })).into_alien_error().context(invalid("Failed to construct exact sandbox vault-entry permissions"))
 }
 

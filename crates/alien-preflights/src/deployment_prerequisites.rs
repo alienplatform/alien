@@ -44,13 +44,13 @@ impl DeploymentPrerequisiteCheck for SandboxEgressGatewayCheck {
     async fn check(
         &self,
         stack: &Stack,
-        state: &StackState,
+        _state: &StackState,
         config: &DeploymentConfig,
     ) -> Result<CheckResult> {
-        // On AWS the gateway is a managed Container, which only the managed backend runs.
+        // The gateway is a managed Container, which only the managed backend runs. Preparation
+        // installs it only where the setup network and the private load balancer exist.
         if alien_core::sandbox_egress::has_sandbox_gateway(stack)
-            && (state.platform != Platform::Aws
-                || matches!(config.compute_backend, Some(ComputeBackend::Horizon(_))))
+            && matches!(config.compute_backend, Some(ComputeBackend::Horizon(_)))
         {
             return Ok(CheckResult::success());
         }

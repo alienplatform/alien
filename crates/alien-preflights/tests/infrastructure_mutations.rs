@@ -892,3 +892,126 @@ async fn internet_sandbox_key_dependencies_respect_setup_ownership() {
         }
     }
 }
+
+/// Azure runs the same managed gateway as AWS: preparation installs it, the plan-time gate
+/// passes only with the managed backend, and every vault grant is a single Key Vault secret.
+#[tokio::test]
+async fn azure_internet_sandbox_prepares_the_gateway_with_exact_secret_grants() {
+    use alien_permissions::{
+        generators::AzureRuntimePermissionsGenerator, BindingTarget, PermissionContext,
+    };
+
+    let sandbox = Sandbox::new("box".into())
+        .code(SandboxCode::Image {
+            image: "example.invalid/sandbox:1".into(),
+        })
+        .egress(SandboxEgress::Internet)
+        .lifecycle(SandboxLifecyclePolicy {
+            max_lifetime_seconds: None,
+            idle_pause_seconds: None,
+        })
+        .build();
+    let manager = Worker::new("manager".into())
+        .code(WorkerCode::Image {
+            image: "example.invalid/manager:1".into(),
+        })
+        .permissions("execution".into())
+        .link(&sandbox)
+        .build();
+    let stack = Stack::new("sandbox-manager".into())
+        .add(sandbox, ResourceLifecycle::Frozen)
+        .add(manager, ResourceLifecycle::Live)
+        .permission(
+            "execution",
+            PermissionProfile::new().resource(
+                "box",
+                [alien_core::permissions::PermissionSetReference::from_name(
+                    "sandbox/management",
+                )],
+            ),
+        )
+        .build();
+    let config = |backend: Option<ComputeBackend>| {
+        DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .maybe_compute_backend(backend)
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build()
+    };
+    let managed = config(Some(ComputeBackend::Horizon(HorizonConfig {
+        url: "https://example.invalid".into(),
+        horizon_machine_image: None,
+        clusters: Default::default(),
+    })));
+    let state = StackState::new(Platform::Azure);
+    let prepared = PreflightRunner::new()
+        .apply_mutations(stack, &state, &managed)
+        .await
+        .expect("prepare an Azure internet sandbox and its Worker consumer");
+
+    let gateway = prepared.resources[SANDBOX_EGRESS_GATEWAY_ID]
+        .config
+        .downcast_ref::<Container>()
+        .expect("Azure preparation installs the gateway Container");
+    let manager = prepared.resources["manager"]
+        .config
+        .downcast_ref::<Worker>()
+        .unwrap();
+    assert!(manager
+        .links
+        .iter()
+        .any(|link| link.id() == SANDBOX_EGRESS_GATEWAY_ID));
+
+    let checks = PreflightRunner::new()
+        .run_deployment_prerequisite_checks(&prepared, &state, &managed)
+        .await
+        .unwrap();
+    assert!(checks.success, "{checks:?}");
+    let unmanaged = PreflightRunner::new()
+        .run_deployment_prerequisite_checks(&prepared, &state, &config(None))
+        .await
+        .unwrap();
+    assert!(!unmanaged.success, "the gateway needs the managed backend");
+
+    // Grants resolve to exactly one secret in the deployment's Key Vault.
+    let context = PermissionContext::new()
+        .with_stack_prefix("alien-test")
+        .with_resource_name("alien-test-vault")
+        .with_subscription_id("00000000-0000-0000-0000-000000000000")
+        .with_resource_group("alien-test-rg");
+    let vault_scope = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/alien-test-rg/providers/Microsoft.KeyVault/vaults/alien-test-vault";
+    let scopes = |profile: &str| -> Vec<(String, String)> {
+        prepared.permissions.profiles[profile].0[SECRETS_VAULT_ID]
+            .iter()
+            .flat_map(|reference| {
+                let set = match reference {
+                    alien_core::permissions::PermissionSetReference::Inline(set) => set.clone(),
+                    alien_core::permissions::PermissionSetReference::Name(name) => {
+                        alien_permissions::get_permission_set(name).unwrap().clone()
+                    }
+                };
+                AzureRuntimePermissionsGenerator::new()
+                    .generate_grant_plan(&set, BindingTarget::Resource, &context)
+                    .expect("an Azure grant for every gateway vault entry")
+                    .bindings
+            })
+            .map(|binding| (binding.role_name, binding.scope))
+            .collect()
+    };
+    assert_eq!(
+        scopes(&gateway.permissions),
+        vec![(
+            "Key Vault Secrets User".to_string(),
+            format!("{vault_scope}/secrets/sandbox-egress-gateway-config")
+        )]
+    );
+    assert_eq!(
+        scopes("execution"),
+        vec![(
+            "Key Vault Secrets User".to_string(),
+            format!("{vault_scope}/secrets/sandbox-egress-signing-key")
+        )]
+    );
+}

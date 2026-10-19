@@ -1,6 +1,8 @@
 use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
-use alien_core::{Container, Daemon, Platform, Sandbox, Stack, Worker};
+use alien_core::{
+    sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID, Container, Daemon, Platform, Sandbox, Stack, Worker,
+};
 
 /// Refuses unenforced container egress and invalid internal sandbox links.
 pub struct ContainerNetworkSettingsCheck;
@@ -97,12 +99,24 @@ impl CompileTimeCheck for ContainerNetworkSettingsCheck {
                     {
                         errors.push(format!("CONTAINER_NETWORK_SETTINGS_UNSUPPORTED: Daemon '{}' links to '{id}' in a different compute cluster", linker.id()));
                     }
-                } else if platform != Platform::Aws {
-                    errors.push(format!("CONTAINER_NETWORK_SETTINGS_UNSUPPORTED: {platform} has no exact private network source enforcement for {} '{}' linking to Container '{id}'", linker.resource_type, linker.id()));
-                } else if let Some(sandbox) = source.downcast_ref::<Sandbox>() {
+                } else if let Some(sandbox) = source
+                    .downcast_ref::<Sandbox>()
+                    .filter(|_| matches!(platform, Platform::Aws | Platform::Azure))
+                {
+                    // The source is the Sandbox's own connector security group on AWS and its
+                    // dedicated subnet on Azure, both created by setup for internet egress only.
                     if !matches!(sandbox.egress, alien_core::SandboxEgress::Internet) {
                         errors.push(format!("CONTAINER_NETWORK_SETTINGS_UNSUPPORTED: Sandbox '{}' requires the dedicated internet connector to link to Container '{id}'", linker.id()));
                     }
+                } else if platform == Platform::Azure
+                    && id == SANDBOX_EGRESS_GATEWAY_ID
+                    && source.downcast_ref::<Worker>().is_some()
+                {
+                    // Azure has no per-Worker network identity. Workers reach the gateway's
+                    // admin listener from the deployment workload subnets, and that listener
+                    // authenticates every request with the deployment signing key.
+                } else if platform != Platform::Aws {
+                    errors.push(format!("CONTAINER_NETWORK_SETTINGS_UNSUPPORTED: {platform} has no exact private network source enforcement for {} '{}' linking to Container '{id}'", linker.resource_type, linker.id()));
                 } else if source.downcast_ref::<Worker>().is_none() {
                     errors.push(format!("CONTAINER_NETWORK_SETTINGS_UNSUPPORTED: AWS {} '{}' has no supported private source identity for Container '{id}'", linker.resource_type, linker.id()));
                 }
