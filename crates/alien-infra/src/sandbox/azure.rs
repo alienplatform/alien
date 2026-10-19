@@ -1648,6 +1648,136 @@ mod tests {
             })
         }
 
+        fn access_denied(
+            resource_type: &str,
+            name: &str,
+        ) -> AlienError<alien_client_core::ErrorData> {
+            AlienError::new(alien_client_core::ErrorData::RemoteAccessDenied {
+                resource_type: resource_type.to_string(),
+                resource_name: name.to_string(),
+            })
+        }
+
+        /// A released deployment upgraded to this runtime before its setup grants the new
+        /// NAT Gateway and VNet-connection reads: both answer 403. Its network and legacy
+        /// sandboxes keep serving on their heartbeat ticks, publish the same binding and the
+        /// NAT IP simply stays unreported.
+        #[tokio::test]
+        async fn released_setup_without_new_reads_stays_healthy() {
+            use crate::network::AzureNetworkController;
+            use alien_azure_clients::azure::models::virtual_network::VirtualNetwork;
+            use alien_azure_clients::azure::network::{MockNetworkApi, NetworkApi};
+            use alien_core::{Network, NetworkSettings};
+
+            let denied_nat = Arc::new(AtomicUsize::new(0));
+            let denied_connection = Arc::new(AtomicUsize::new(0));
+            let mut network = MockNetworkApi::new();
+            network
+                .expect_get_virtual_network()
+                .returning(|_, _| Ok(VirtualNetwork::default()));
+            let counted = denied_nat.clone();
+            network.expect_get_nat_gateway().returning(move |_, name| {
+                counted.fetch_add(1, Ordering::SeqCst);
+                Err(access_denied("NatGateway", name))
+            });
+            let network: Arc<dyn NetworkApi> = Arc::new(network);
+
+            let mut client = MockSandboxDataPlaneApi::new();
+            client
+                .expect_list_disk_images()
+                .returning(|_| Ok(vec![image("img-1", PYTHON, "Ready")]));
+            client.expect_list_sandboxes().returning(|_| Ok(Vec::new()));
+            let client: Arc<dyn SandboxDataPlaneApi> = Arc::new(client);
+
+            let mut provider = MockPlatformServiceProvider::new();
+            let network_client = network.clone();
+            provider
+                .expect_get_azure_network_client()
+                .returning(move |_| Ok(network_client.clone()));
+            provider
+                .expect_get_azure_sandbox_data_plane_client()
+                .returning(move |_, _, _| Ok(client.clone()));
+            let counted = denied_connection.clone();
+            provider
+                .expect_get_azure_sandbox_groups_client()
+                .returning(move |_| {
+                    let mut arm = MockSandboxGroupsApi::new();
+                    arm.expect_get_sandbox_group().returning(|_, name| {
+                        Err(AlienError::new(
+                            alien_client_core::ErrorData::RemoteResourceNotFound {
+                                resource_type: "SandboxGroup".to_string(),
+                                resource_name: name.to_string(),
+                            },
+                        ))
+                    });
+                    let counted = counted.clone();
+                    arm.expect_get_default_vnet_connection()
+                        .returning(move |_, name| {
+                            counted.fetch_add(1, Ordering::SeqCst);
+                            Err(access_denied("SandboxGroupVnetConnection", name))
+                        });
+                    Ok(Arc::new(arm))
+                });
+            let provider = Arc::new(provider);
+
+            let declared_network = Network::new("default-network".to_string())
+                .settings(NetworkSettings::Create {
+                    cidr: Some("10.0.0.0/16".to_string()),
+                    availability_zones: 2,
+                })
+                .build();
+            for egress in [
+                SandboxEgress::Allow,
+                SandboxEgress::AllowDomains {
+                    domains: vec!["api.example.com".into()],
+                },
+                SandboxEgress::None,
+            ] {
+                let mut declared = sandbox(PYTHON);
+                declared.egress = egress.clone();
+                let mut controller = adopted(Some(PYTHON), Some("img-1"));
+                controller.egress = Some(egress.into());
+                let mut run = SingleControllerExecutor::builder()
+                    .resource(declared)
+                    .controller(controller)
+                    .platform(Platform::Azure)
+                    .resource_lifecycle(ResourceLifecycle::Frozen)
+                    .service_provider(provider.clone())
+                    .with_dependency(
+                        declared_network.clone(),
+                        AzureNetworkController::mock_ready("default-network"),
+                    )
+                    .build()
+                    .await
+                    .unwrap();
+                let before = state_of(&run).get_binding_params().unwrap();
+                assert!(before.is_some());
+                for _ in 0..3 {
+                    run.step().await.expect("heartbeat tick stays healthy");
+                    assert_eq!(state_of(&run).state, AzureSandboxState::Ready);
+                    assert_eq!(state_of(&run).get_binding_params().unwrap(), before);
+                }
+            }
+
+            let mut run = SingleControllerExecutor::builder()
+                .resource(declared_network)
+                .controller(AzureNetworkController::mock_ready("default-network"))
+                .platform(Platform::Azure)
+                .service_provider(provider)
+                .build()
+                .await
+                .unwrap();
+            for _ in 0..3 {
+                run.step().await.expect("network heartbeat stays healthy");
+            }
+            assert_eq!(run.status(), alien_core::ResourceStatus::Running);
+            let network = run.internal_state::<AzureNetworkController>().unwrap();
+            assert!(network.egress_public_ips.is_empty());
+            // Neither released resource kind needs the new reads: nothing was attempted.
+            assert_eq!(denied_nat.load(Ordering::SeqCst), 0);
+            assert_eq!(denied_connection.load(Ordering::SeqCst), 0);
+        }
+
         fn state_of(executor: &SingleControllerExecutor) -> &AzureSandboxController {
             executor
                 .internal_state::<AzureSandboxController>()
