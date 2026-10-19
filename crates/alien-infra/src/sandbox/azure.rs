@@ -214,7 +214,7 @@ impl AzureSandboxController {
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
         let lifetime_issue = self.reap_gateway_sessions(ctx, config).await;
-        if matches!(config.egress, SandboxEgress::Internet) {
+        if uses_gateway(ctx, config) {
             if !matches!(
                 self.egress,
                 Some(alien_core::bindings::SandboxEgressBinding::Gateway(_))
@@ -489,6 +489,13 @@ impl AzureSandboxController {
     }
 }
 
+/// Gateway identity, session reaping and network verification apply only when the stack
+/// hosts the gateway; without it an Internet group keeps the native Ready path.
+fn uses_gateway(ctx: &ResourceControllerContext<'_>, config: &Sandbox) -> bool {
+    config.egress == SandboxEgress::Internet
+        && alien_core::sandbox_egress::has_sandbox_gateway(ctx.desired_stack)
+}
+
 impl AzureSandboxController {
     /// Azure has no identity renewal agent. Reconcile only new gateway-mode groups;
     /// legacy deployments retain their existing lifetime behavior. A stopped controller
@@ -498,7 +505,7 @@ impl AzureSandboxController {
         ctx: &ResourceControllerContext<'_>,
         config: &Sandbox,
     ) -> Option<String> {
-        if config.egress != SandboxEgress::Internet {
+        if !uses_gateway(ctx, config) {
             return None;
         }
         let result = async {
@@ -1556,12 +1563,15 @@ mod tests {
 
         #[tokio::test]
         async fn only_gateway_groups_reap_sessions_on_ready_ticks() {
-            for egress in [
-                SandboxEgress::Internet,
-                SandboxEgress::Allow,
-                SandboxEgress::None,
+            // Without a gateway in the stack nothing issues 24-hour identities, so an
+            // Internet group must not have its sessions reaped.
+            for (egress, with_gateway) in [
+                (SandboxEgress::Internet, true),
+                (SandboxEgress::Internet, false),
+                (SandboxEgress::Allow, false),
+                (SandboxEgress::None, false),
             ] {
-                let gateway = egress == SandboxEgress::Internet;
+                let gateway = egress == SandboxEgress::Internet && with_gateway;
                 let mut client = MockSandboxDataPlaneApi::new();
                 client
                     .expect_list_sandboxes()
@@ -1580,27 +1590,44 @@ mod tests {
                     .withf(|group, id| group == "sbg" && id == "expired")
                     .returning(|_, _| Ok(()));
                 let mut config = sandbox("ubuntu");
-                config.egress = egress;
-                let mut run = SingleControllerExecutor::builder()
+                config.egress = egress.clone();
+                let mut builder = SingleControllerExecutor::builder()
                     .resource(config)
                     .controller(adopted(Some("ubuntu"), None))
                     .platform(Platform::Azure)
                     .resource_lifecycle(ResourceLifecycle::Frozen)
-                    .service_provider(provider_with(client))
-                    .build()
-                    .await
-                    .unwrap();
+                    .service_provider(provider_with(client));
+                if with_gateway {
+                    builder = builder.with_stack_resource(
+                        alien_core::Container::new(
+                            alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.into(),
+                        )
+                        .permissions("default".into())
+                        .code(alien_core::ContainerCode::Image {
+                            image: "example.invalid/gateway:1".into(),
+                        })
+                        .cpu(alien_core::ResourceSpec {
+                            min: "0.25".into(),
+                            desired: "0.25".into(),
+                        })
+                        .memory(alien_core::ResourceSpec {
+                            min: "512Mi".into(),
+                            desired: "512Mi".into(),
+                        })
+                        .build(),
+                        ResourceLifecycle::Live,
+                    );
+                }
+                let mut run = builder.build().await.unwrap();
                 run.step().await.expect("ready tick");
-                assert_eq!(
-                    state_of(&run).state,
-                    if gateway {
-                        AzureSandboxState::InitializingEgressKey
-                    } else {
-                        AzureSandboxState::Ready
-                    }
-                );
                 if gateway {
+                    assert_eq!(
+                        state_of(&run).state,
+                        AzureSandboxState::InitializingEgressKey
+                    );
                     assert!(state_of(&run).get_binding_params().unwrap().is_none());
+                } else if egress != SandboxEgress::Internet {
+                    assert_eq!(state_of(&run).state, AzureSandboxState::Ready);
                 }
             }
         }
