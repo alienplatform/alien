@@ -291,8 +291,8 @@ impl SandboxHandle {
     ///
     /// The point of publishing capabilities is that a caller branches on them instead of
     /// discovering a gap through an error, so a capability with no method to call is worse than
-    /// one that is absent. `snapshot` is true on some platforms but has no method here yet, so it
-    /// is not advertised until it does.
+    /// one that is absent. `snapshot` has no method here, so it is not advertised even if a
+    /// platform reports it (none does today).
     ///
     /// Destructured rather than read field by field: a capability added to the set then fails to
     /// compile here instead of being silently dropped, which is how `egressDeny` went missing.

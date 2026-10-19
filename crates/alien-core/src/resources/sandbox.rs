@@ -575,8 +575,8 @@ pub struct SandboxPrivilegedSupervisor {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[builder(start_fn = new)]
 pub struct Sandbox {
-    /// Identifier for the sandbox. Must contain only alphanumeric characters, hyphens, and
-    /// underscores ([A-Za-z0-9-_]). Maximum 64 characters.
+    /// Identifier for the sandbox. Must be DNS-compatible: lowercase letters, digits and hyphens,
+    /// starting and ending with a letter or digit, with no consecutive hyphens.
     #[builder(start_fn)]
     pub id: String,
     /// Runtime network links authored by preflight, not parent lifecycle dependencies.

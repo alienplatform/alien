@@ -40,7 +40,7 @@ export class Sandbox extends ResourceBuilder {
 
   /**
    * Creates a new Sandbox builder.
-   * @param id Identifier for the sandbox. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]). Maximum 64 characters.
+   * @param id Identifier for the sandbox. Must be DNS-compatible: lowercase letters, digits and hyphens, starting and ending with a letter or digit, with no consecutive hyphens.
    */
   constructor(id: string) {
     super()
