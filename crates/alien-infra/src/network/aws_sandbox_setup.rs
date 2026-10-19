@@ -448,14 +448,10 @@ impl AwsNetworkController {
         let Some(setup) = self.sandbox_setup.clone() else {
             return Ok(true);
         };
+        // Only direct setup records these children, so the record alone proves ownership. Setup
+        // teardown runs with setup's credentials but without the direct-setup authority marker.
         let config = ctx.desired_resource_config::<Network>()?;
         let id = config.id.as_str();
-        if ctx.initial_setup_authority != InitialSetupAuthority::DirectSetup {
-            return Err(invalid(
-                id,
-                "Only direct setup may delete its dedicated sandbox network",
-            ));
-        }
         let client = ctx
             .service_provider
             .get_aws_ec2_client(ctx.get_aws_config()?)

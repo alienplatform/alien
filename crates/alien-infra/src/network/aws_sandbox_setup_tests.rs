@@ -158,11 +158,26 @@ async fn executor(
     controller: AwsNetworkController,
     with_gateway: bool,
 ) -> SingleControllerExecutor {
+    executor_with_authority(
+        cloud,
+        controller,
+        with_gateway,
+        InitialSetupAuthority::DirectSetup,
+    )
+    .await
+}
+
+async fn executor_with_authority(
+    cloud: &Arc<Mutex<Cloud>>,
+    controller: AwsNetworkController,
+    with_gateway: bool,
+    authority: InitialSetupAuthority,
+) -> SingleControllerExecutor {
     let mut builder = SingleControllerExecutor::builder()
         .resource(network())
         .controller(controller)
         .platform(Platform::Aws)
-        .initial_setup_authority(InitialSetupAuthority::DirectSetup);
+        .initial_setup_authority(authority);
     if with_gateway {
         builder = builder.with_stack_resource(gateway(), alien_core::ResourceLifecycle::Live);
     }
@@ -297,7 +312,14 @@ async fn direct_setup_recovers_lost_checkpoints_and_deletes_only_its_byo_childre
         .internal_state::<AwsNetworkController>()
         .unwrap()
         .clone();
-    let mut execution = executor(&cloud, controller, true).await;
+    // Setup teardown deletes with setup's credentials but the default authority marker.
+    let mut execution = executor_with_authority(
+        &cloud,
+        controller,
+        true,
+        InitialSetupAuthority::ImportedHandoff,
+    )
+    .await;
     execution.delete().unwrap();
     execution.run_until_terminal().await.unwrap();
     assert_eq!(
