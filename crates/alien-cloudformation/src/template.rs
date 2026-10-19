@@ -67,6 +67,10 @@ pub struct CfParameter {
     pub allowed_values: Option<Vec<CfExpression>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub allowed_pattern: Option<String>,
+    /// Message CloudFormation shows when a value violates `AllowedPattern` or
+    /// `AllowedValues`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub constraint_description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub min_length: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]

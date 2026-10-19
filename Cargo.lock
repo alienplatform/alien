@@ -588,6 +588,7 @@ dependencies = [
  "alien-preflights",
  "indexmap 2.14.1",
  "insta",
+ "regex",
  "serde",
  "serde_json",
  "serde_yaml",

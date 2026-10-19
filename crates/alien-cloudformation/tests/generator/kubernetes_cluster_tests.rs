@@ -286,12 +286,25 @@ fn eks_custom_domain_requires_acm_certificate_arn() {
     let template: serde_json::Value =
         serde_yaml::from_str(&yaml).expect("template YAML should parse");
 
-    assert_eq!(
-        template["Parameters"]["CertificateArn"]["AllowedPattern"],
-        serde_json::Value::String(
-            "^$|^arn:aws(-[a-z]+)?:acm:[a-z0-9-]+:[0-9]{12}:certificate/.+$".to_string()
-        )
-    );
+    let pattern = regex::Regex::new(
+        template["Parameters"]["CertificateArn"]["AllowedPattern"]
+            .as_str()
+            .expect("CertificateArn has an AllowedPattern"),
+    )
+    .expect("CertificateArn pattern compiles");
+    for accepted in [
+        "",
+        "arn:aws:acm:us-east-1:123456789012:certificate/0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+        "arn:aws-us-gov:acm:us-gov-west-1:123456789012:certificate/0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+    ] {
+        assert!(pattern.is_match(accepted), "must accept {accepted:?}");
+    }
+    for rejected in [
+        "arn:aws:iam::123456789012:role/not-a-certificate",
+        "arn:aws:acm:us-east-1:123456789012:certificate/a\"b",
+    ] {
+        assert!(!pattern.is_match(rejected), "must reject {rejected:?}");
+    }
 
     let rule = &template["Rules"]["CustomDomainCertificate"]["Assertions"][0];
     assert_eq!(

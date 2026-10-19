@@ -24,4 +24,5 @@ tempfile = { workspace = true }
 alien-permissions = { workspace = true }
 alien-preflights = { workspace = true }
 insta = { workspace = true, features = ["yaml"] }
+regex = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt"] }

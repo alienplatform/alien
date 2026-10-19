@@ -22,16 +22,51 @@
 //! - `Fn::If` picks between the two branches' JSON text.
 //!
 //! Resolved strings are inserted between quotes without escaping, which
-//! CloudFormation cannot express. Every value these payloads reference is an
-//! identifier, ARN, name, CIDR or enum choice; none contains a quote or a
-//! backslash.
+//! CloudFormation cannot express. A parameter inserted this way must therefore
+//! be unable to hold a character JSON would need escaped: it is a `Number`, it
+//! has `AllowedValues` that need no escaping, or its `AllowedPattern` is one of
+//! [`JSON_SAFE_PATTERNS`]. The pass refuses any other parameter, so a value
+//! with a quote is rejected when the stack is created or updated instead of
+//! producing JSON that registration cannot parse.
 
-use crate::template::{CfExpression, CfParameter, CfTemplate};
+use crate::{
+    inline_policy::expression_references,
+    template::{CfExpression, CfParameter, CfTemplate},
+};
 use alien_core::{ErrorData, Result};
 use alien_error::AlienError;
 use indexmap::IndexMap;
 
 const TO_JSON_STRING: &str = "Fn::ToJsonString";
+
+/// Characters a value can hold and still sit between JSON quotes unescaped:
+/// anything but a double quote, a backslash or a control character. In a
+/// `CommaDelimitedList`, CloudFormation applies the pattern to each entry.
+macro_rules! json_safe_characters {
+    () => {
+        r#"[^"\\\x00-\x1F]"#
+    };
+}
+
+/// `AllowedPattern` for a free-text parameter that is inserted into JSON text.
+/// It accepts the empty string, so optional parameters keep their empty default.
+pub(crate) const JSON_SAFE_TEXT_PATTERN: &str = concat!("^", json_safe_characters!(), "*$");
+
+/// `ConstraintDescription` for [`JSON_SAFE_TEXT_PATTERN`].
+pub(crate) const JSON_SAFE_TEXT_CONSTRAINT: &str =
+    "must not contain double quotes, backslashes or control characters";
+
+/// `AllowedPattern` for an optional ACM certificate ARN, in any partition
+/// (`aws`, `aws-cn`, `aws-us-gov`, ...). The certificate ID excludes the same
+/// characters as [`JSON_SAFE_TEXT_PATTERN`].
+pub(crate) const CERTIFICATE_ARN_PATTERN: &str = concat!(
+    "^$|^arn:aws[a-z-]*:acm:[a-z0-9-]+:[0-9]{12}:certificate/",
+    json_safe_characters!(),
+    "+$"
+);
+
+/// Patterns that admit no character JSON text would need escaped.
+const JSON_SAFE_PATTERNS: [&str; 2] = [JSON_SAFE_TEXT_PATTERN, CERTIFICATE_ARN_PATTERN];
 
 /// Intrinsic functions only the `AWS::LanguageExtensions` transform provides.
 const TRANSFORM_ONLY_FUNCTIONS: [&str; 2] = ["Fn::Length", "Fn::ForEach"];
@@ -186,12 +221,19 @@ impl Lowering<'_> {
                 parts.push(Part::Text("null".to_string()));
             }
             "Ref" if self.is_list_parameter(arguments) => {
+                self.require_json_safe(&intrinsic)?;
                 parts.push(Part::Text("[\"".to_string()));
                 parts.push(Part::Value(CfExpression::join("\",\"", intrinsic)));
                 parts.push(Part::Text("\"]".to_string()));
             }
-            "Ref" => string_value(intrinsic, parts),
-            function if STRING_FUNCTIONS.contains(&function) => string_value(intrinsic, parts),
+            "Ref" => {
+                self.require_json_safe(&intrinsic)?;
+                string_value(intrinsic, parts)
+            }
+            function if STRING_FUNCTIONS.contains(&function) => {
+                self.require_json_safe(&intrinsic)?;
+                string_value(intrinsic, parts)
+            }
             "Fn::If" => {
                 let CfExpression::List(branches) = arguments else {
                     return Err(format!("malformed Fn::If: {arguments:?}"));
@@ -217,6 +259,19 @@ impl Lowering<'_> {
         Ok(())
     }
 
+    /// Refuses a value that reads a parameter able to hold a character JSON text
+    /// would need escaped.
+    fn require_json_safe(&self, value: &CfExpression) -> std::result::Result<(), String> {
+        match self.parameters.iter().find(|(name, parameter)| {
+            expression_references(value, name) && !is_json_safe(parameter)
+        }) {
+            Some((name, _)) => Err(format!(
+                "parameter '{name}' is inserted into JSON text without escaping, so it needs AllowedValues, a Number type, or an AllowedPattern that excludes double quotes, backslashes and control characters"
+            )),
+            None => Ok(()),
+        }
+    }
+
     fn is_list_parameter(&self, name: &CfExpression) -> bool {
         let CfExpression::String(name) = name else {
             return false;
@@ -226,6 +281,22 @@ impl Lowering<'_> {
                 || parameter.parameter_type.starts_with("List<")
         })
     }
+}
+
+fn is_json_safe(parameter: &CfParameter) -> bool {
+    let number = matches!(parameter.parameter_type.as_str(), "Number" | "List<Number>");
+    let safe_values = parameter.allowed_values.as_ref().is_some_and(|values| {
+        values.iter().all(|value| match value {
+            CfExpression::String(text) => quoted(text) == format!("\"{text}\""),
+            CfExpression::Bool(_) | CfExpression::Integer(_) | CfExpression::Number(_) => true,
+            CfExpression::Null | CfExpression::List(_) | CfExpression::Object(_) => false,
+        })
+    });
+    let safe_pattern = parameter
+        .allowed_pattern
+        .as_deref()
+        .is_some_and(|pattern| JSON_SAFE_PATTERNS.contains(&pattern));
+    number || safe_values || safe_pattern
 }
 
 fn is_intrinsic(fields: &IndexMap<String, CfExpression>) -> bool {
@@ -334,13 +405,14 @@ mod tests {
         })
     }
 
-    fn parameter(parameter_type: &str) -> CfParameter {
+    fn parameter(parameter_type: &str, allowed_pattern: Option<&str>) -> CfParameter {
         CfParameter {
             parameter_type: parameter_type.to_string(),
             description: None,
             default: None,
             allowed_values: None,
-            allowed_pattern: None,
+            allowed_pattern: allowed_pattern.map(str::to_string),
+            constraint_description: None,
             min_length: None,
             max_length: None,
             min_value: None,
@@ -353,13 +425,13 @@ mod tests {
         let mut template = CfTemplate::default();
         template
             .parameters
-            .insert("Machines".to_string(), parameter("Number"));
-        template
-            .parameters
-            .insert("Ids".to_string(), parameter("CommaDelimitedList"));
-        template
-            .parameters
-            .insert("Ids2".to_string(), parameter("CommaDelimitedList"));
+            .insert("Machines".to_string(), parameter("Number", None));
+        for name in ["Ids", "Ids2"] {
+            template.parameters.insert(
+                name.to_string(),
+                parameter("CommaDelimitedList", Some(JSON_SAFE_TEXT_PATTERN)),
+            );
+        }
         template.outputs.insert(
             "Json".to_string(),
             CfOutput {
@@ -459,5 +531,102 @@ mod tests {
         );
         let error = lower_json_strings(&mut template).expect_err("a list function has no text");
         assert!(error.to_string().contains("Fn::GetAZs"), "{error}");
+    }
+
+    /// A parameter that could hold a quote must not reach JSON text: the payload
+    /// would stop parsing at registration instead of the value being refused when
+    /// the stack is created or updated.
+    #[test]
+    fn unconstrained_parameters_are_refused_in_json_text() {
+        for (parameter_type, value) in [
+            ("String", CfExpression::ref_("Free")),
+            ("CommaDelimitedList", CfExpression::ref_("Free")),
+            (
+                "String",
+                CfExpression::sub("arn:aws:iam::${AWS::AccountId}:role/${Free}"),
+            ),
+        ] {
+            let mut template = CfTemplate::default();
+            template
+                .parameters
+                .insert("Free".to_string(), parameter(parameter_type, None));
+            template.outputs.insert(
+                "Json".to_string(),
+                CfOutput {
+                    value: CfExpression::to_json_string(CfExpression::object([("v", value)])),
+                    description: None,
+                    export: None,
+                },
+            );
+            let error = lower_json_strings(&mut template)
+                .expect_err("an unconstrained parameter must not be inserted unescaped");
+            assert!(error.to_string().contains("'Free'"), "{error}");
+        }
+
+        let mut template = CfTemplate::default();
+        let mut choice = parameter("String", None);
+        choice.allowed_values = Some(vec![CfExpression::from("a\"b")]);
+        template.parameters.insert("Choice".to_string(), choice);
+        template.outputs.insert(
+            "Json".to_string(),
+            CfOutput {
+                value: CfExpression::to_json_string(CfExpression::ref_("Choice")),
+                description: None,
+                export: None,
+            },
+        );
+        lower_json_strings(&mut template)
+            .expect_err("an allowed value that needs escaping is not safe");
+    }
+
+    /// The patterns accept every legitimate value of the parameters they guard,
+    /// and nothing JSON text would need escaped. CloudFormation evaluates
+    /// `AllowedPattern` as a Java regular expression; these patterns use only
+    /// anchors, alternation and character classes, which Rust's `regex` reads
+    /// the same way. The live proof also checked them against CloudFormation.
+    #[test]
+    fn json_safe_patterns_accept_real_values_and_reject_escapes() {
+        let text = regex::Regex::new(JSON_SAFE_TEXT_PATTERN).expect("text pattern compiles");
+        let certificate =
+            regex::Regex::new(CERTIFICATE_ARN_PATTERN).expect("certificate pattern compiles");
+        let long_domain = format!("{}.Example.COM", vec!["a".repeat(63); 3].join("."));
+        for value in [
+            "",
+            "vpc-0123456789abcdef0",
+            "subnet-0123456789abcdef0",
+            "sg-0123456789abcdef0",
+            "10.0.0.0/16",
+            "127.0.0.1/32",
+            "512Mi",
+            "123456789012",
+            "arn:aws:iam::123456789012:role/Alien-Management",
+            "arn:aws-cn:iam::123456789012:role/path/to/role",
+            "arn:aws-us-gov:iam::123456789012:role/role+name=,.@_-",
+            "API.Example.COM",
+            "*.example.com",
+            long_domain.as_str(),
+        ] {
+            assert!(text.is_match(value), "text pattern must accept {value:?}");
+        }
+        for value in [
+            "",
+            "arn:aws:acm:us-east-1:123456789012:certificate/0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+            "arn:aws-cn:acm:cn-north-1:123456789012:certificate/0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+            "arn:aws-us-gov:acm:us-gov-west-1:123456789012:certificate/0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+        ] {
+            assert!(
+                certificate.is_match(value),
+                "certificate pattern must accept {value:?}"
+            );
+        }
+        for value in ["a\"b", "a\\b", "a\nb", "a\tb", "\u{0}"] {
+            assert!(!text.is_match(value), "text pattern must reject {value:?}");
+            let arn = format!("arn:aws:acm:us-east-1:123456789012:certificate/{value}");
+            assert!(
+                !certificate.is_match(&arn),
+                "certificate pattern must reject {arn:?}"
+            );
+        }
+        assert!(!certificate.is_match("arn:aws:iam::123456789012:role/not-a-certificate"));
     }
 }

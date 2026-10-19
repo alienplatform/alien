@@ -18,6 +18,8 @@ Parameters:
   ManagingRoleArn:
     Type: String
     Description: ARN of the management identity allowed to assume setup-created roles.
+    AllowedPattern: ^[^"\\\x00-\x1F]*$
+    ConstraintDescription: must not contain double quotes, backslashes or control characters
 Resources:
   Exports:
     Type: AWS::S3::Bucket

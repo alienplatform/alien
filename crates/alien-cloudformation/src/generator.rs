@@ -3,7 +3,10 @@ use crate::{
     inline_policy::{
         consolidate_role_inline_policies, expression_references, validate_role_policy_limits,
     },
-    json_text::lower_json_strings,
+    json_text::{
+        lower_json_strings, CERTIFICATE_ARN_PATTERN, JSON_SAFE_TEXT_CONSTRAINT,
+        JSON_SAFE_TEXT_PATTERN,
+    },
     registry::CfRegistry,
     template::{
         CfExpression, CfMapping, CfOutput, CfParameter, CfResource, CfRule, CfRuleAssertion,
@@ -812,6 +815,7 @@ fn stack_input_parameter(input: &StackInputDefinition) -> CfParameter {
             .or_else(|| {
                 matches!(input.kind, StackInputKind::Integer).then(|| "^-?[0-9]+$".to_string())
             }),
+        constraint_description: None,
         min_length: validation.and_then(|validation| validation.min_length),
         max_length: validation.and_then(|validation| validation.max_length),
         min_value: validation
@@ -1386,11 +1390,9 @@ fn add_standard_parameters(
     }
     template.parameters.insert(
         PARAM_MANAGING_ROLE_ARN.to_string(),
-        string_parameter(
+        text_parameter(
             "ARN of the management identity allowed to assume setup-created roles.",
             (!bindings_only).then(String::new),
-            None,
-            false,
         ),
     );
     if bindings_only {
@@ -1433,11 +1435,9 @@ fn add_standard_parameters(
         }
         template.parameters.insert(
             PARAM_DOMAIN_NAME.to_string(),
-            string_parameter(
+            text_parameter(
                 "Optional custom domain. Leave unset to use the deployment-managed endpoint.",
                 Some(domain_defaults.domain_name.unwrap_or_default()),
-                None,
-                false,
             ),
         );
         template.parameters.insert(
@@ -1451,13 +1451,16 @@ fn add_standard_parameters(
         );
         template.parameters.insert(
             PARAM_CERTIFICATE_ARN.to_string(),
-            string_parameter_with_allowed_pattern(
-                "ACM certificate ARN for the custom domain. Required when DomainName is set.",
-                Some(domain_defaults.certificate_arn.unwrap_or_default()),
-                None,
-                Some("^$|^arn:aws(-[a-z]+)?:acm:[a-z0-9-]+:[0-9]{12}:certificate/.+$".to_string()),
-                false,
-            ),
+            CfParameter {
+                allowed_pattern: Some(CERTIFICATE_ARN_PATTERN.to_string()),
+                constraint_description: Some("must be empty or an ACM certificate ARN".to_string()),
+                ..string_parameter(
+                    "ACM certificate ARN for the custom domain. Required when DomainName is set.",
+                    Some(domain_defaults.certificate_arn.unwrap_or_default()),
+                    None,
+                    false,
+                )
+            },
         );
     }
 
@@ -1570,11 +1573,9 @@ fn add_network_parameters(
         ) => {
             template.parameters.insert(
                 PARAM_VPC_CIDR.to_string(),
-                string_parameter(
+                text_parameter(
                     "Only used with create-new. CIDR for the new VPC; leave unset for the generated default.",
                     Some(defaults.cidr.unwrap_or_default()),
-                    None,
-                    false,
                 ),
             );
             template.parameters.insert(
@@ -1599,11 +1600,9 @@ fn add_network_parameters(
             );
             template.parameters.insert(
                 PARAM_VPC_ID.to_string(),
-                string_parameter(
+                text_parameter(
                     "Only used with use-existing. Existing VPC ID.",
                     Some(defaults.vpc_id.unwrap_or_default()),
-                    None,
-                    false,
                 ),
             );
             template.parameters.insert(
@@ -1821,11 +1820,9 @@ fn add_container_resource_parameters(
         if choices.memory.is_some() {
             template.parameters.insert(
                 format!("{prefix}Memory"),
-                string_parameter(
+                text_parameter(
                     "Memory allocation per container replica, using Ki, Mi, Gi, or Ti.",
                     Some(container.memory.desired.clone()),
-                    None,
-                    false,
                 ),
             );
         }
@@ -1899,21 +1896,38 @@ fn add_standard_conditions(
     }
     let has_created_network = stack_has_created_network(stack, settings.setup_management);
     if !target.is_kubernetes() && alien_core::sandbox_egress::has_sandbox_gateway(stack) {
-        // The list has at least two entries (setup rules require both). It has a third
-        // when it differs from its first two.
-        let cidrs = || CfExpression::ref_("SandboxGatewaySubnetCidrs");
-        let select = |index: i64| {
+        // True when the list has exactly three entries. Conditions are evaluated on
+        // every create and update, including create-new installs that leave the list
+        // empty, and `Fn::Select` past the end fails the operation. Padding the list
+        // with three empty entries first makes indexes 2 and 3 always selectable: the
+        // third entry is set and the fourth is the first pad.
+        let padded = CfExpression::object([(
+            "Fn::Split",
+            CfExpression::list([
+                CfExpression::from(","),
+                CfExpression::join(
+                    ",",
+                    CfExpression::list([
+                        CfExpression::join(",", CfExpression::ref_("SandboxGatewaySubnetCidrs")),
+                        CfExpression::from(""),
+                        CfExpression::from(""),
+                        CfExpression::from(""),
+                    ]),
+                ),
+            ]),
+        )]);
+        let entry = |index: i64| {
             CfExpression::object([(
                 "Fn::Select",
-                CfExpression::list([CfExpression::Integer(index), cidrs()]),
+                CfExpression::list([CfExpression::Integer(index), padded.clone()]),
             )])
         };
         template.conditions.insert(
             "SandboxGatewayHasThirdSubnet".into(),
-            CfExpression::not(CfExpression::equals(
-                CfExpression::join(",", cidrs()),
-                CfExpression::join(",", CfExpression::list([select(0), select(1)])),
-            )),
+            CfExpression::and([
+                CfExpression::not(CfExpression::equals(entry(2), CfExpression::from(""))),
+                CfExpression::equals(entry(3), CfExpression::from("")),
+            ]),
         );
     }
     if has_dynamic_aws_network_settings(settings.network.as_ref()) || has_created_network {
@@ -3085,27 +3099,28 @@ fn string_parameter(
     allowed_values: Option<Vec<CfExpression>>,
     no_echo: bool,
 ) -> CfParameter {
-    string_parameter_with_allowed_pattern(description, default, allowed_values, None, no_echo)
-}
-
-fn string_parameter_with_allowed_pattern(
-    description: &str,
-    default: Option<String>,
-    allowed_values: Option<Vec<CfExpression>>,
-    allowed_pattern: Option<String>,
-    no_echo: bool,
-) -> CfParameter {
     CfParameter {
         parameter_type: "String".to_string(),
         description: Some(description.to_string()),
         default: default.map(CfExpression::from),
         allowed_values,
-        allowed_pattern,
+        allowed_pattern: None,
+        constraint_description: None,
         min_length: None,
         max_length: None,
         min_value: None,
         max_value: None,
         no_echo: no_echo.then_some(true),
+    }
+}
+
+/// A free-text `String` parameter whose value is inserted into JSON text (the
+/// registration payload), so it must not hold a character JSON would escape.
+fn text_parameter(description: &str, default: Option<String>) -> CfParameter {
+    CfParameter {
+        allowed_pattern: Some(JSON_SAFE_TEXT_PATTERN.to_string()),
+        constraint_description: Some(JSON_SAFE_TEXT_CONSTRAINT.to_string()),
+        ..string_parameter(description, default, None, false)
     }
 }
 
@@ -3120,6 +3135,7 @@ fn number_parameter(
         default: Some(CfExpression::from(default)),
         allowed_values,
         allowed_pattern: None,
+        constraint_description: None,
         min_length: None,
         max_length: None,
         min_value: None,
@@ -3128,13 +3144,16 @@ fn number_parameter(
     }
 }
 
+/// A list of IDs or CIDRs. Every list is inserted into the registration
+/// payload's JSON text; CloudFormation applies the pattern to each entry.
 fn comma_list_parameter(description: &str, default: Vec<String>) -> CfParameter {
     CfParameter {
         parameter_type: "CommaDelimitedList".to_string(),
         description: Some(description.to_string()),
         default: Some(CfExpression::from(default.join(","))),
         allowed_values: None,
-        allowed_pattern: None,
+        allowed_pattern: Some(JSON_SAFE_TEXT_PATTERN.to_string()),
+        constraint_description: Some(format!("each entry {JSON_SAFE_TEXT_CONSTRAINT}")),
         min_length: None,
         max_length: None,
         min_value: None,
