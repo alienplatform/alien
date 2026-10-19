@@ -147,7 +147,10 @@ mod tests {
 
     /// A ready agent forwarding one explicit-proxy guest connection to a fake gateway.
     async fn fixture() -> Fixture {
-        let gateway = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        fixture_with(TcpListener::bind("127.0.0.1:0").await.unwrap()).await
+    }
+
+    async fn fixture_with(gateway: TcpListener) -> Fixture {
         let agent = GatewayEgress::for_test(gateway.local_addr().unwrap());
         agent.ready.store(true, Ordering::Release);
         let guests = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -194,6 +197,57 @@ mod tests {
             .await
             .expect("the forwarder kept the client connection open");
         received
+    }
+
+    #[tokio::test]
+    async fn connect_that_never_completes_is_reopened_on_a_new_connection() {
+        // A listener whose accept queue is full drops new SYNs, like a dead target behind a
+        // pass-through balancer. The kernel would retransmit the SYN only after 1 s.
+        let socket = tokio::net::TcpSocket::new_v4().unwrap();
+        socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let gateway = socket.listen(0).unwrap();
+        let _queued = TcpStream::connect(gateway.local_addr().unwrap())
+            .await
+            .unwrap();
+        let Fixture {
+            gateway,
+            mut client,
+            forwarder,
+        } = fixture_with(gateway).await;
+        let started = std::time::Instant::now();
+        client
+            .write_all(b"POST http://allowed.test/orders HTTP/1.1\r\nHost: allowed.test\r\nContent-Length: 4\r\n\r\nbody")
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        // The replica recovers: the queue drains, so only a new SYN can complete now.
+        drop(gateway.accept().await.unwrap());
+
+        let mut live = next_gateway_connection(&gateway).await;
+        assert!(
+            started.elapsed() < Duration::from_millis(800),
+            "the forwarder waited {:?} for a connect that never completed",
+            started.elapsed()
+        );
+        assert_eq!(
+            read_header(&mut live).await.unwrap(),
+            b"POST http://allowed.test/orders HTTP/1.1\r\nHost: allowed.test\r\nContent-Length: 4\r\nProxy-Authorization: Bearer token\r\n\r\n"
+        );
+        let mut body = [0; 4];
+        live.read_exact(&mut body).await.unwrap();
+        assert_eq!(&body, b"body");
+        live.write_all(b"HTTP/1.1 201 Created\r\nContent-Length: 0\r\n\r\n")
+            .await
+            .unwrap();
+        drop(live);
+
+        assert_eq!(
+            read_until_closed(&mut client).await,
+            b"HTTP/1.1 201 Created\r\nContent-Length: 0\r\n\r\n"
+        );
+        drop(client);
+        forwarder.await.unwrap().unwrap();
+        assert_no_more_connections(&gateway).await;
     }
 
     #[tokio::test]
