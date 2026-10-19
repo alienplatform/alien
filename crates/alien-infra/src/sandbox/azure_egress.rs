@@ -63,9 +63,26 @@ pub(super) async fn publish_config(
 pub(super) async fn validate_network(
     ctx: &ResourceControllerContext<'_>,
 ) -> Result<AzureSandboxNetwork> {
-    let network_id = sandbox_egress::sandbox_egress_network(ctx.desired_stack)
-        .map_err(|error| invalid(ctx, error.to_string()))?
-        .id;
+    // Azure has no default VNet: UseDefault and Create both build the managed VNet, subnets
+    // and NAT this verifies. Setup refuses BYO VNets for Internet sandboxes.
+    let network_id = ctx
+        .desired_stack
+        .resources()
+        .find_map(|(id, entry)| {
+            entry
+                .config
+                .downcast_ref::<alien_core::Network>()
+                .map(|network| (id, network))
+        })
+        .ok_or_else(|| invalid(ctx, "Internet sandboxes require the deployment Network"))
+        .and_then(|(id, network)| match network.settings {
+            alien_core::NetworkSettings::UseDefault
+            | alien_core::NetworkSettings::Create { .. } => Ok(id.as_str()),
+            _ => Err(invalid(
+                ctx,
+                "Internet sandboxes require a network created by setup",
+            )),
+        })?;
     let state = ctx.state.resources.get(network_id).ok_or_else(|| {
         AlienError::new(ErrorData::DependencyNotReady {
             resource_id: ctx.desired_config.id().into(),

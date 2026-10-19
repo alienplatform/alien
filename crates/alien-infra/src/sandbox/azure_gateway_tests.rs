@@ -17,6 +17,7 @@ async fn executor(
     directory: &std::path::Path,
     wrong_source: bool,
     earlier_live: bool,
+    settings: NetworkSettings,
 ) -> SingleControllerExecutor {
     let (network, vnet, nsg, nat, public) = fixture();
     let subnet = vnet["properties"]["subnets"][0].clone();
@@ -73,12 +74,7 @@ async fn executor(
         .resource_lifecycle(ResourceLifecycle::Frozen)
         .service_provider(Arc::new(provider))
         .with_dependency(
-            Network::new("network".into())
-                .settings(NetworkSettings::Create {
-                    cidr: Some("10.0.0.0/16".into()),
-                    availability_zones: 2,
-                })
-                .build(),
+            Network::new("network".into()).settings(settings).build(),
             network,
         )
         .with_dependency(
@@ -123,11 +119,18 @@ async fn executor(
     builder.build().await.unwrap()
 }
 
+fn created() -> NetworkSettings {
+    NetworkSettings::Create {
+        cidr: Some("10.0.0.0/16".into()),
+        availability_zones: 2,
+    }
+}
+
 #[tokio::test]
 async fn actual_controller_initializes_shared_key_and_publishes_only_after_network_checks() {
     let dir = tempfile::tempdir().unwrap();
     let vault = LocalVault::new("secrets".into(), dir.path().into());
-    let mut run = executor(dir.path(), false, false).await;
+    let mut run = executor(dir.path(), false, false, created()).await;
     run.step().await.unwrap();
     let controller = run.internal_state::<AzureSandboxController>().unwrap();
     assert_eq!(controller.state, AzureSandboxState::PublishingEgressConfig);
@@ -189,7 +192,7 @@ async fn actual_controller_initializes_shared_key_and_publishes_only_after_netwo
 async fn actual_connection_mismatch_prevents_config_and_binding_publication() {
     let dir = tempfile::tempdir().unwrap();
     let vault = LocalVault::new("secrets".into(), dir.path().into());
-    let mut run = executor(dir.path(), true, false).await;
+    let mut run = executor(dir.path(), true, false, created()).await;
     run.step().await.unwrap();
     let error = run
         .step()
@@ -214,7 +217,7 @@ async fn actual_connection_mismatch_prevents_config_and_binding_publication() {
 async fn frozen_controller_initializes_key_before_earlier_live_sandbox() {
     let dir = tempfile::tempdir().unwrap();
     let vault = LocalVault::new("secrets".into(), dir.path().into());
-    let mut run = executor(dir.path(), false, true).await;
+    let mut run = executor(dir.path(), false, true, created()).await;
     run.step().await.unwrap();
     assert_eq!(
         run.internal_state::<AzureSandboxController>()
@@ -229,4 +232,17 @@ async fn frozen_controller_initializes_key_before_earlier_live_sandbox() {
             .unwrap()
             .is_empty()
     );
+}
+
+// Azure has no default VNet: UseDefault creates the same managed VNet, subnets and NAT
+// as Create, so publication must not apply AWS's default-VPC refusal.
+#[tokio::test]
+async fn default_network_settings_publish_like_a_created_network() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut run = executor(dir.path(), false, false, NetworkSettings::UseDefault).await;
+    run.step().await.unwrap();
+    run.step().await.unwrap();
+    let controller = run.internal_state::<AzureSandboxController>().unwrap();
+    assert_eq!(controller.state, AzureSandboxState::Ready);
+    assert!(controller.get_binding_params().unwrap().is_some());
 }
