@@ -32,6 +32,22 @@ use tokio::{net::TcpListener, sync::broadcast, sync::Semaphore, time::Instant};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, warn};
 
+/// Preserve existing physical registrations and wildcard payloads for single delivery.
+pub(super) async fn single_queue_source(
+    control: &ControlGrpcServer,
+    original: &str,
+    logical: &str,
+) -> String {
+    if original != logical
+        && !control.has_handler("queue", original).await
+        && control.has_handler("queue", logical).await
+    {
+        logical.to_owned()
+    } else {
+        original.to_owned()
+    }
+}
+
 fn http_server_join_result(
     joined: std::result::Result<std::io::Result<()>, tokio::task::JoinError>,
 ) -> std::io::Result<()> {

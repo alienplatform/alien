@@ -1187,13 +1187,19 @@ async fn handle_native_sqs_request(
             let Some(Payload::QueueMessage(mut message)) = task.payload else {
                 return Err(invocation_failure("Invalid queue task conversion"));
             };
-            message.source = logical_source.clone();
             if batch_configured {
+                message.source = logical_source.clone();
                 deliveries.push(alien_worker_protocol::control::QueueDelivery {
                     delivery_id: task.task_id,
                     message: Some(message),
                 });
             } else {
+                message.source = super::shared::single_queue_source(
+                    &state.control_server,
+                    &message.source,
+                    &logical_source,
+                )
+                .await;
                 let task = Task {
                     task_id: task.task_id,
                     payload: Some(Payload::QueueMessage(message)),
@@ -1769,7 +1775,10 @@ async fn forward_http_request_buffered(
 
 #[cfg(test)]
 mod tests {
-    use alien_worker_protocol::control::control_service_server::ControlService;
+    use alien_worker_protocol::control::{
+        control_service_server::ControlService, send_task_result_request, SendTaskResultRequest,
+        TaskError, TaskSuccess,
+    };
 
     use super::*;
 
@@ -2012,6 +2021,101 @@ mod tests {
                 );
             }
             application.await.expect("application");
+        }
+    }
+
+    #[tokio::test]
+    async fn single_sqs_routing_preserves_registered_names_and_wildcards() {
+        for streaming in [false, true] {
+            for (registrations, expected_source) in [
+                (vec!["my-queue", "jobs"], "my-queue"),
+                (vec!["jobs"], "jobs"),
+                (vec!["*"], "my-queue"),
+            ] {
+                for success in [false, true] {
+                    let control = Arc::new(ControlGrpcServer::new());
+                    for &registration in &registrations {
+                        control
+                            .register_event_handler(tonic::Request::new(
+                                alien_worker_protocol::control::RegisterEventHandlerRequest {
+                                    handler_type: "queue".into(),
+                                    resource_name: registration.into(),
+                                },
+                            ))
+                            .await
+                            .expect("register");
+                    }
+                    let mut tasks = control
+                        .wait_for_tasks(tonic::Request::new(
+                            alien_worker_protocol::control::WaitForTasksRequest {
+                                application_id: "test".into(),
+                            },
+                        ))
+                        .await
+                        .expect("subscribe")
+                        .into_inner();
+                    let app_control = control.clone();
+                    let application = tokio::spawn(async move {
+                        let task = tokio_stream::StreamExt::next(&mut tasks)
+                            .await
+                            .expect("task")
+                            .expect("delivery");
+                        let Some(Payload::QueueMessage(message)) = task.payload else {
+                            panic!("single delivery expected");
+                        };
+                        assert_eq!(message.source, expected_source);
+                        assert_eq!(message.id, "msg-1");
+                        assert_eq!(message.receipt_handle, "rh-1");
+                        let result = if success {
+                            send_task_result_request::Result::Success(TaskSuccess {
+                                response_data: Vec::new(),
+                            })
+                        } else {
+                            send_task_result_request::Result::Error(TaskError {
+                                code: "RETRY".into(),
+                                message: "Processing failed".into(),
+                            })
+                        };
+                        app_control
+                            .send_task_result(tonic::Request::new(SendTaskResultRequest {
+                                task_id: task.task_id,
+                                result: Some(result),
+                            }))
+                            .await
+                            .expect("result");
+                    });
+                    let state = Arc::new(LambdaState {
+                        queue_bindings: None,
+                        queue_sources: [("my-queue".into(), "jobs".into())].into(),
+                        queue_batches: Default::default(),
+                        command_timeout: Duration::from_secs(30),
+                        control_server: control,
+                        http_client: forward_client_builder().build().expect("client"),
+                    });
+                    let (sender, _receiver) = unbounded_channel();
+                    let mut context = lambda_runtime::Context::default();
+                    context.deadline = (SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .expect("clock")
+                        .as_millis()
+                        + 30_000) as u64;
+                    let request = event_to_request(LambdaEvent::new(sqs_event_json(), context));
+                    if streaming {
+                        let mut adapter = StreamingAdapter {
+                            state,
+                            request_done_sender: sender,
+                        };
+                        assert_eq!(adapter.call(request).await.is_ok(), success);
+                    } else {
+                        let mut adapter = BufferedAdapter {
+                            state,
+                            request_done_sender: sender,
+                        };
+                        assert_eq!(adapter.call(request).await.is_ok(), success);
+                    }
+                    application.await.expect("application");
+                }
+            }
         }
     }
 

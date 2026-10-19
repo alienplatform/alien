@@ -348,14 +348,29 @@ async fn handle_pubsub_cloudevent(
     logical_source: Option<&str>,
 ) -> Response<Body> {
     match pubsub_cloudevent_to_queue_messages_with_source(cloud_event, |subscription| {
-        logical_source.map(str::to_owned).or_else(|| {
-            state
-                .collector
-                .contains_key(subscription)
-                .then(|| subscription.to_owned())
-        })
+        logical_source
+            .filter(|source| state.collector.contains_key(*source))
+            .map(str::to_owned)
+            .or_else(|| {
+                state
+                    .collector
+                    .contains_key(subscription)
+                    .then(|| subscription.to_owned())
+            })
     }) {
-        Ok(queue_messages) => {
+        Ok(mut queue_messages) => {
+            if let Some(logical) = logical_source {
+                if !state.collector.contains_key(logical) {
+                    for message in &mut queue_messages {
+                        message.source = super::shared::single_queue_source(
+                            &state.control_server,
+                            &message.source,
+                            logical,
+                        )
+                        .await;
+                    }
+                }
+            }
             dispatch_queue_messages(
                 queue_messages,
                 &state.control_server,
@@ -440,10 +455,15 @@ async fn handle_pubsub_push_message(
         Err(_) => alien_core::MessagePayload::Text(String::from_utf8_lossy(&data).to_string()),
     };
 
-    let source = logical_source
-        .map(str::to_string)
-        .or(push_msg.subscription)
-        .unwrap_or_default();
+    let original_source = push_msg.subscription.unwrap_or_default();
+    let source = match logical_source {
+        Some(logical) if state.collector.contains_key(logical) => logical.to_owned(),
+        Some(logical) => {
+            super::shared::single_queue_source(&state.control_server, &original_source, logical)
+                .await
+        }
+        None => original_source,
+    };
 
     let qm = alien_core::QueueMessage {
         id: message_id,
@@ -474,6 +494,96 @@ mod queue_routing_tests {
     };
     use std::collections::HashMap;
     use tokio_stream::StreamExt;
+
+    #[tokio::test]
+    async fn single_pubsub_routes_preserve_existing_sources() {
+        for cloud_event in [false, true] {
+            let subscription = "projects/example/subscriptions/imported-a7d9-sub";
+            let original = if cloud_event {
+                "imported-a7d9"
+            } else {
+                subscription
+            };
+            for registration in [original, "jobs", "*"] {
+                let control = Arc::new(ControlGrpcServer::new());
+                control
+                    .register_event_handler(tonic::Request::new(
+                        alien_worker_protocol::control::RegisterEventHandlerRequest {
+                            handler_type: "queue".into(),
+                            resource_name: registration.into(),
+                        },
+                    ))
+                    .await
+                    .expect("register");
+                let mut tasks = control
+                    .wait_for_tasks(tonic::Request::new(WaitForTasksRequest {
+                        application_id: "worker".into(),
+                    }))
+                    .await
+                    .expect("subscribe")
+                    .into_inner();
+                let state = TransportState {
+                    received_at: tokio::time::Instant::now(),
+                    collector: HashMap::new(),
+                    control_server: control.clone(),
+                    app_http_port: None,
+                    command_timeout: Duration::from_secs(30),
+                    http_client: create_forward_client(),
+                    proxy_shutdown: CancellationToken::new(),
+                };
+                let body = serde_json::json!({"message": {"data": "e30=", "messageId": "provider-id"}, "subscription": subscription});
+                let mut request = Request::builder()
+                    .method("POST")
+                    .uri("/__alien/queue/jobs")
+                    .header("content-type", "application/json");
+                if cloud_event {
+                    request = request
+                        .header("ce-specversion", "1.0")
+                        .header("ce-id", "event-id")
+                        .header("ce-time", "2026-01-01T00:00:00Z")
+                        .header("ce-type", "google.cloud.pubsub.topic.v1.messagePublished")
+                        .header(
+                            "ce-source",
+                            "//pubsub.googleapis.com/projects/example/topics/generated-jobs",
+                        );
+                }
+                let request = request.body(Body::from(body.to_string())).expect("request");
+                let response = tokio::spawn(async move {
+                    handle_request(State(state), request).await.into_response()
+                });
+                let task = tokio::time::timeout(Duration::from_secs(2), tasks.next())
+                    .await
+                    .expect("dispatch")
+                    .expect("stream")
+                    .expect("task");
+                let Some(Payload::QueueMessage(message)) = task.payload else {
+                    panic!("single expected")
+                };
+                assert_eq!(
+                    message.source,
+                    if registration == "jobs" {
+                        "jobs"
+                    } else {
+                        original
+                    }
+                );
+                assert_eq!(message.id, "provider-id");
+                assert!(!response.is_finished());
+                control
+                    .send_task_result(tonic::Request::new(SendTaskResultRequest {
+                        task_id: task.task_id,
+                        result: Some(send_task_result_request::Result::Success(
+                            alien_worker_protocol::control::TaskSuccess {
+                                response_data: Vec::new(),
+                            },
+                        )),
+                    }))
+                    .await
+                    .expect("result");
+                assert!(response.await.expect("response").status().is_success());
+            }
+        }
+    }
 
     #[tokio::test]
     async fn physical_pubsub_names_dispatch_logical_batches_and_wait_for_outcomes() {

@@ -438,15 +438,19 @@ async fn handle_raw_dapr_message(
         .map(str::to_string)
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-    let source = logical_source
-        .or_else(|| {
-            json_value
-                .get("topic")
-                .or_else(|| json_value.get("pubsubname"))
-                .and_then(|v| v.as_str())
-        })
-        .unwrap_or("unknown")
-        .to_string();
+    let original_source = json_value
+        .get("topic")
+        .or_else(|| json_value.get("pubsubname"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    let source = match logical_source {
+        Some(logical) if state.collector.contains_key(logical) => logical.to_owned(),
+        Some(logical) => {
+            super::shared::single_queue_source(&state.control_server, original_source, logical)
+                .await
+        }
+        None => original_source.to_owned(),
+    };
 
     let qm = alien_core::QueueMessage {
         id: message_id,
@@ -552,6 +556,80 @@ mod tests {
     use alien_worker_protocol::control::{
         control_service_server::ControlService, WaitForTasksRequest,
     };
+
+    #[tokio::test]
+    async fn single_dapr_routes_preserve_existing_sources() {
+        for registration in ["physical-jobs", "jobs", "*"] {
+            let control = Arc::new(ControlGrpcServer::new());
+            control
+                .register_event_handler(tonic::Request::new(
+                    alien_worker_protocol::control::RegisterEventHandlerRequest {
+                        handler_type: "queue".into(),
+                        resource_name: registration.into(),
+                    },
+                ))
+                .await
+                .expect("register");
+            let mut tasks = control
+                .wait_for_tasks(tonic::Request::new(WaitForTasksRequest {
+                    application_id: "worker".into(),
+                }))
+                .await
+                .expect("subscribe")
+                .into_inner();
+            let state = TransportState {
+                received_at: tokio::time::Instant::now(),
+                collector: Default::default(),
+                control_server: control.clone(),
+                app_http_port: None,
+                command_timeout: Duration::from_secs(30),
+                http_client: create_forward_client(),
+                proxy_shutdown: CancellationToken::new(),
+            };
+            let request = Request::builder()
+                .method("POST")
+                .uri("/__alien/queue/jobs")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"id":"provider-id","topic":"physical-jobs"}"#,
+                ))
+                .expect("request");
+            let response =
+                tokio::spawn(
+                    async move { handle_request(State(state), request).await.into_response() },
+                );
+            let task = tokio::time::timeout(
+                Duration::from_secs(2),
+                tokio_stream::StreamExt::next(&mut tasks),
+            )
+            .await
+            .expect("dispatch")
+            .expect("stream")
+            .expect("task");
+            let Some(alien_worker_protocol::control::task::Payload::QueueMessage(message)) =
+                task.payload
+            else {
+                panic!("single expected")
+            };
+            assert_eq!(
+                message.source,
+                if registration == "jobs" {
+                    "jobs"
+                } else {
+                    "physical-jobs"
+                }
+            );
+            assert_eq!(message.id, "provider-id");
+            assert!(!response.is_finished());
+            control.send_task_result(tonic::Request::new(alien_worker_protocol::control::SendTaskResultRequest {
+                task_id: task.task_id,
+                result: Some(alien_worker_protocol::control::send_task_result_request::Result::Success(
+                    alien_worker_protocol::control::TaskSuccess { response_data: Vec::new() },
+                )),
+            })).await.expect("result");
+            assert!(response.await.expect("response").status().is_success());
+        }
+    }
 
     async fn health(state: &TransportState) -> StatusCode {
         handle_request(
