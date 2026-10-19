@@ -26,6 +26,7 @@ mod generator {
     pub mod network_tests;
     pub mod network_inputs_tests;
     pub mod output_chunking_tests;
+    pub mod parameter_update_tests;
     pub mod plugin_tests;
     pub mod registration_tests;
     pub mod stack_input_tests;

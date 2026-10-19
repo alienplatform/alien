@@ -229,6 +229,41 @@ mod tests {
         assert_eq!(find_cycle(&resource_dependencies(&template)), None);
     }
 
+    /// JSON text is lowered to `Fn::Join` before the cycle check. Its literal pieces are plain
+    /// strings, so a resource name written there, even as `${Fake}`, is not a reference; the
+    /// intrinsics it carries still are.
+    #[test]
+    fn lowered_json_text_references_only_its_intrinsics() {
+        let mut template = template(&[
+            ("Role", &[], CfExpression::Null),
+            ("Bucket", &[], CfExpression::Null),
+            ("Api", &[], CfExpression::Null),
+            ("Fake", &[], CfExpression::Null),
+            (
+                "Registration",
+                &[],
+                CfExpression::to_json_string(CfExpression::object([
+                    ("role", CfExpression::ref_("Role")),
+                    ("bucket", CfExpression::get_att("Bucket", "Arn")),
+                    ("url", CfExpression::sub("https://${Api}/${!Fake}")),
+                    ("literal", CfExpression::from("${Fake} Ref Fake")),
+                ])),
+            ),
+        ]);
+        crate::json_text::lower_json_strings(&mut template).unwrap();
+        let value = &template.resources["Registration"].properties["Value"];
+        assert!(
+            matches!(value, CfExpression::Object(fields) if fields.contains_key("Fn::Join")),
+            "lowered to Fn::Join: {value:?}"
+        );
+        assert_eq!(
+            resource_dependencies(&template)["Registration"]
+                .iter()
+                .collect::<Vec<_>>(),
+            ["Role", "Bucket", "Api"]
+        );
+    }
+
     #[test]
     fn finds_self_and_longer_cycles_and_accepts_a_diamond() {
         let self_cycle = template(&[("Policy", &["Policy"], CfExpression::Null)]);

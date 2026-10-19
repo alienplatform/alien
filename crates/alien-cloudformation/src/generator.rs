@@ -4,6 +4,10 @@ use crate::{
     inline_policy::{
         consolidate_role_inline_policies, expression_references, validate_role_policy_limits,
     },
+    json_text::{
+        lower_json_strings, CERTIFICATE_ARN_PATTERN, JSON_SAFE_TEXT_CONSTRAINT,
+        JSON_SAFE_TEXT_PATTERN,
+    },
     registry::CfRegistry,
     template::{
         CfExpression, CfMapping, CfOutput, CfParameter, CfResource, CfRule, CfRuleAssertion,
@@ -25,7 +29,6 @@ use serde_json::{json, Value};
 use std::collections::HashSet;
 
 const TEMPLATE_VERSION: &str = "2010-09-09";
-const LANGUAGE_EXTENSIONS_TRANSFORM: &str = "AWS::LanguageExtensions";
 
 const PARAM_TOKEN: &str = "Token";
 const PARAM_MANAGING_ROLE_ARN: &str = "ManagingRoleArn";
@@ -72,7 +75,6 @@ const OUTPUT_RESOURCES_CHUNK_BYTES: usize = 3_500;
 const STANDARD_OUTPUT_COUNT: usize = 12;
 const CLOUDFORMATION_MAX_OUTPUTS: usize = 200;
 /// `Fn::Sub` variable carrying one registration entry's JSON text.
-const ENTRY_JSON_SUB_VARIABLE: &str = "entry";
 const MAPPING_REGIONAL_CUSTOM_RESOURCE_SERVICE_TOKENS: &str = "RegionalCustomResourceServiceTokens";
 const MAPPING_SERVICE_TOKEN_KEY: &str = "ServiceToken";
 const RULE_SUPPORTED_AWS_REGION: &str = "SupportedAwsRegion";
@@ -341,7 +343,7 @@ pub fn generate_cloudformation_template_with_profile(
                 base
             }
         }),
-        transform: vec![LANGUAGE_EXTENSIONS_TRANSFORM.to_string()],
+        transform: Vec::new(),
         metadata: IndexMap::new(),
         parameters: IndexMap::new(),
         mappings: IndexMap::new(),
@@ -596,6 +598,7 @@ pub fn generate_cloudformation_template_with_profile(
         )?;
     }
 
+    lower_json_strings(&mut template)?;
     validate_role_policy_limits(&template)?;
     validate_acyclic(&template)?;
     Ok(template)
@@ -814,6 +817,7 @@ fn stack_input_parameter(input: &StackInputDefinition) -> CfParameter {
             .or_else(|| {
                 matches!(input.kind, StackInputKind::Integer).then(|| "^-?[0-9]+$".to_string())
             }),
+        constraint_description: None,
         min_length: validation.and_then(|validation| validation.min_length),
         max_length: validation.and_then(|validation| validation.max_length),
         min_value: validation
@@ -1388,11 +1392,9 @@ fn add_standard_parameters(
     }
     template.parameters.insert(
         PARAM_MANAGING_ROLE_ARN.to_string(),
-        string_parameter(
+        text_parameter(
             "ARN of the management identity allowed to assume setup-created roles.",
             (!bindings_only).then(String::new),
-            None,
-            false,
         ),
     );
     if bindings_only {
@@ -1435,11 +1437,9 @@ fn add_standard_parameters(
         }
         template.parameters.insert(
             PARAM_DOMAIN_NAME.to_string(),
-            string_parameter(
+            text_parameter(
                 "Optional custom domain. Leave unset to use the deployment-managed endpoint.",
                 Some(domain_defaults.domain_name.unwrap_or_default()),
-                None,
-                false,
             ),
         );
         template.parameters.insert(
@@ -1453,13 +1453,16 @@ fn add_standard_parameters(
         );
         template.parameters.insert(
             PARAM_CERTIFICATE_ARN.to_string(),
-            string_parameter_with_allowed_pattern(
-                "ACM certificate ARN for the custom domain. Required when DomainName is set.",
-                Some(domain_defaults.certificate_arn.unwrap_or_default()),
-                None,
-                Some("^$|^arn:aws(-[a-z]+)?:acm:[a-z0-9-]+:[0-9]{12}:certificate/.+$".to_string()),
-                false,
-            ),
+            CfParameter {
+                allowed_pattern: Some(CERTIFICATE_ARN_PATTERN.to_string()),
+                constraint_description: Some("must be empty or an ACM certificate ARN".to_string()),
+                ..string_parameter(
+                    "ACM certificate ARN for the custom domain. Required when DomainName is set.",
+                    Some(domain_defaults.certificate_arn.unwrap_or_default()),
+                    None,
+                    false,
+                )
+            },
         );
     }
 
@@ -1572,11 +1575,9 @@ fn add_network_parameters(
         ) => {
             template.parameters.insert(
                 PARAM_VPC_CIDR.to_string(),
-                string_parameter(
+                text_parameter(
                     "Only used with create-new. CIDR for the new VPC; leave unset for the generated default.",
                     Some(defaults.cidr.unwrap_or_default()),
-                    None,
-                    false,
                 ),
             );
             template.parameters.insert(
@@ -1601,11 +1602,9 @@ fn add_network_parameters(
             );
             template.parameters.insert(
                 PARAM_VPC_ID.to_string(),
-                string_parameter(
+                text_parameter(
                     "Only used with use-existing. Existing VPC ID.",
                     Some(defaults.vpc_id.unwrap_or_default()),
-                    None,
-                    false,
                 ),
             );
             template.parameters.insert(
@@ -1823,11 +1822,9 @@ fn add_container_resource_parameters(
         if choices.memory.is_some() {
             template.parameters.insert(
                 format!("{prefix}Memory"),
-                string_parameter(
+                text_parameter(
                     "Memory allocation per container replica, using Ki, Mi, Gi, or Ti.",
                     Some(container.memory.desired.clone()),
-                    None,
-                    false,
                 ),
             );
         }
@@ -1901,10 +1898,39 @@ fn add_standard_conditions(
     }
     let has_created_network = stack_has_created_network(stack, settings.setup_management);
     if !target.is_kubernetes() && alien_core::sandbox_egress::has_sandbox_gateway(stack) {
-        template.conditions.insert("SandboxGatewayHasThirdSubnet".into(), CfExpression::equals(
-            CfExpression::object([("Fn::Length", CfExpression::ref_("SandboxGatewaySubnetCidrs"))]),
-            CfExpression::Integer(3),
-        ));
+        // True when the list has exactly three entries. Conditions are evaluated on
+        // every create and update, including create-new installs that leave the list
+        // empty, and `Fn::Select` past the end fails the operation. Padding the list
+        // with three empty entries first makes indexes 2 and 3 always selectable: the
+        // third entry is set and the fourth is the first pad.
+        let padded = CfExpression::object([(
+            "Fn::Split",
+            CfExpression::list([
+                CfExpression::from(","),
+                CfExpression::join(
+                    ",",
+                    CfExpression::list([
+                        CfExpression::join(",", CfExpression::ref_("SandboxGatewaySubnetCidrs")),
+                        CfExpression::from(""),
+                        CfExpression::from(""),
+                        CfExpression::from(""),
+                    ]),
+                ),
+            ]),
+        )]);
+        let entry = |index: i64| {
+            CfExpression::object([(
+                "Fn::Select",
+                CfExpression::list([CfExpression::Integer(index), padded.clone()]),
+            )])
+        };
+        template.conditions.insert(
+            "SandboxGatewayHasThirdSubnet".into(),
+            CfExpression::and([
+                CfExpression::not(CfExpression::equals(entry(2), CfExpression::from(""))),
+                CfExpression::equals(entry(3), CfExpression::from("")),
+            ]),
+        );
     }
     if has_dynamic_aws_network_settings(settings.network.as_ref()) || has_created_network {
         template.conditions.insert(
@@ -2603,25 +2629,11 @@ impl RegistrationEntry {
     /// The entry's JSON text for the Outputs fallback, gated so a declined entry
     /// resolves to `AWS::NoValue`.
     ///
-    /// `Fn::ToJsonString` sits *inside* the gate on purpose. Wrapping the gate
-    /// instead — `ToJsonString(Fn::If(..))` — serializes a declined entry as the
-    /// literal `null`, which is the bug this construction exists to avoid.
-    ///
-    /// The `Fn::Sub` around it only launders the type. CloudFormation resolves a
-    /// bare `Fn::ToJsonString` inside `Fn::Join` correctly, but cfn-lint does not
-    /// infer that it returns a string and fails the template with E6101, and the
-    /// only way to silence that is a template-wide suppression that would also
-    /// mask real E6101s. Substitution is a single pass, so JSON containing a
-    /// literal `${...}` passes through untouched.
+    /// The JSON text sits *inside* the gate on purpose. Gating the value before
+    /// rendering it serializes a declined entry as the literal `null`, which is the
+    /// bug this construction exists to avoid.
     fn outputs_element(&self) -> CfExpression {
-        let json_text = CfExpression::sub_with(
-            format!("${{{ENTRY_JSON_SUB_VARIABLE}}}"),
-            [(
-                ENTRY_JSON_SUB_VARIABLE,
-                CfExpression::to_json_string(self.entry.clone()),
-            )],
-        );
-        self.gated(json_text)
+        self.gated(CfExpression::to_json_string(self.entry.clone()))
     }
 }
 
@@ -3089,27 +3101,28 @@ fn string_parameter(
     allowed_values: Option<Vec<CfExpression>>,
     no_echo: bool,
 ) -> CfParameter {
-    string_parameter_with_allowed_pattern(description, default, allowed_values, None, no_echo)
-}
-
-fn string_parameter_with_allowed_pattern(
-    description: &str,
-    default: Option<String>,
-    allowed_values: Option<Vec<CfExpression>>,
-    allowed_pattern: Option<String>,
-    no_echo: bool,
-) -> CfParameter {
     CfParameter {
         parameter_type: "String".to_string(),
         description: Some(description.to_string()),
         default: default.map(CfExpression::from),
         allowed_values,
-        allowed_pattern,
+        allowed_pattern: None,
+        constraint_description: None,
         min_length: None,
         max_length: None,
         min_value: None,
         max_value: None,
         no_echo: no_echo.then_some(true),
+    }
+}
+
+/// A free-text `String` parameter whose value is inserted into JSON text (the
+/// registration payload), so it must not hold a character JSON would escape.
+fn text_parameter(description: &str, default: Option<String>) -> CfParameter {
+    CfParameter {
+        allowed_pattern: Some(JSON_SAFE_TEXT_PATTERN.to_string()),
+        constraint_description: Some(JSON_SAFE_TEXT_CONSTRAINT.to_string()),
+        ..string_parameter(description, default, None, false)
     }
 }
 
@@ -3124,6 +3137,7 @@ fn number_parameter(
         default: Some(CfExpression::from(default)),
         allowed_values,
         allowed_pattern: None,
+        constraint_description: None,
         min_length: None,
         max_length: None,
         min_value: None,
@@ -3132,13 +3146,16 @@ fn number_parameter(
     }
 }
 
+/// A list of IDs or CIDRs. Every list is inserted into the registration
+/// payload's JSON text; CloudFormation applies the pattern to each entry.
 fn comma_list_parameter(description: &str, default: Vec<String>) -> CfParameter {
     CfParameter {
         parameter_type: "CommaDelimitedList".to_string(),
         description: Some(description.to_string()),
         default: Some(CfExpression::from(default.join(","))),
         allowed_values: None,
-        allowed_pattern: None,
+        allowed_pattern: Some(JSON_SAFE_TEXT_PATTERN.to_string()),
+        constraint_description: Some(format!("each entry {JSON_SAFE_TEXT_CONSTRAINT}")),
         min_length: None,
         max_length: None,
         min_value: None,

@@ -1,8 +1,8 @@
 //! Signing material stays in the deployment vault; controllers retain only public data.
 
-#[cfg(feature = "aws")]
+#[cfg(any(feature = "aws", feature = "azure"))]
 use crate::core::state_utils::StackResourceStateExt;
-#[cfg(feature = "aws")]
+#[cfg(any(feature = "aws", feature = "azure"))]
 use alien_bindings::BindingsProviderApi;
 use alien_bindings::Vault;
 use alien_error::{AlienError, Context};
@@ -193,7 +193,7 @@ mod tests {
     }
 }
 
-#[cfg(feature = "aws")]
+#[cfg(any(feature = "aws", feature = "azure"))]
 pub(crate) async fn deployment_vault(
     ctx: &crate::core::ResourceControllerContext<'_>,
 ) -> Result<std::sync::Arc<dyn Vault>> {
@@ -242,6 +242,83 @@ pub(crate) fn internet_sandbox_ids(stack: &alien_core::Stack) -> Vec<String> {
         .collect();
     ids.sort();
     ids
+}
+
+/// Whether an internet sandbox other than `sandbox_id` is still declared or not yet deleted.
+/// Those keep using the shared signing key and gateway configuration.
+#[cfg(feature = "aws")]
+pub(crate) fn other_internet_sandbox_remains(
+    ctx: &crate::core::ResourceControllerContext<'_>,
+    sandbox_id: &str,
+) -> bool {
+    internet_sandbox_ids(ctx.desired_stack)
+        .iter()
+        .any(|id| id != sandbox_id)
+        || ctx.state.resources.iter().any(|(id, resource)| {
+            id != sandbox_id
+                && resource.status != alien_core::ResourceStatus::Deleted
+                && resource
+                    .config
+                    .downcast_ref::<alien_core::Sandbox>()
+                    .is_some_and(|sandbox| {
+                        matches!(sandbox.egress, alien_core::SandboxEgress::Internet)
+                    })
+        })
+}
+
+/// Removes the shared egress signing key and gateway configuration from the deployment's own
+/// vault, named `{vault_name}-{entry}`. Only the sandbox controllers write these entries; an
+/// absent entry is already done.
+///
+/// A denied delete fails the step with what to grant, never as the denial itself: the executor
+/// ends a delete step that answers access denied as if the resource were gone, which would
+/// report the deployment deleted while its signing key stays behind.
+#[cfg(feature = "aws")]
+pub(crate) async fn delete_shared_secrets(vault: &dyn Vault, vault_name: &str) -> Result<()> {
+    for name in [GATEWAY_CONFIG, SIGNING_KEY] {
+        let Err(error) = vault.delete_secret(name).await else {
+            continue;
+        };
+        if is_access_denied(&error) {
+            let parameters = [GATEWAY_CONFIG, SIGNING_KEY]
+                .map(|entry| {
+                    format!(
+                        "'{}'",
+                        alien_core::vault_naming::parameter_store_parameter_name(vault_name, entry)
+                    )
+                })
+                .join(" and ");
+            return Err(AlienError::new(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Cannot delete the sandbox egress vault entries '{SIGNING_KEY}' and \
+                     '{GATEWAY_CONFIG}' (SSM parameters {parameters}): the deleting identity \
+                     is not allowed ssm:DeleteParameter on them. Grant ssm:DeleteParameter on \
+                     both parameters, or delete them yourself, then retry the delete. Denied: {}",
+                    error.message
+                ),
+                resource_id: Some(alien_core::SECRETS_VAULT_ID.into()),
+            }));
+        }
+        return Err(error).context(ErrorData::CloudPlatformError {
+            message: format!("Failed to delete the sandbox egress vault entry '{name}'"),
+            resource_id: Some(alien_core::SECRETS_VAULT_ID.into()),
+        });
+    }
+    Ok(())
+}
+
+#[cfg(feature = "aws")]
+fn is_access_denied(error: &AlienError<alien_bindings::ErrorData>) -> bool {
+    let denied = |code: &str, status: Option<u16>| {
+        code == "REMOTE_ACCESS_DENIED" || matches!(status, Some(401 | 403))
+    };
+    let mut source = error.source.as_deref();
+    let mut found = denied(&error.code, error.http_status_code);
+    while let (false, Some(inner)) = (found, source) {
+        found = denied(&inner.code, inner.http_status_code);
+        source = inner.source.as_deref();
+    }
+    found
 }
 
 /// Whether the target stack still declares this sandbox. One it does not is being deleted,
@@ -310,6 +387,15 @@ pub(crate) async fn publish_aws_config(
     key: &GatewayPublicKey,
 ) -> Result<()> {
     let facts = validate_aws_network(ctx).await?;
+    publish_config(ctx, key, &facts.vpc_cidrs).await
+}
+
+#[cfg(any(feature = "aws", feature = "azure"))]
+pub(crate) async fn publish_config(
+    ctx: &crate::core::ResourceControllerContext<'_>,
+    key: &GatewayPublicKey,
+    vpc_cidrs: &[String],
+) -> Result<()> {
     let ids = internet_sandbox_ids(ctx.desired_stack);
     if alien_core::sandbox_egress::sandbox_egress_key_owner(ctx.desired_stack)
         != Some(ctx.desired_config.id())
@@ -330,7 +416,7 @@ pub(crate) async fn publish_aws_config(
     .into_iter()
     .map(str::to_string)
     .collect();
-    denied.extend(facts.vpc_cidrs.iter().cloned());
+    denied.extend(vpc_cidrs.iter().cloned());
     for (_, entry) in ctx.desired_stack.resources() {
         if let Some(cluster) = entry.config.downcast_ref::<alien_core::ComputeCluster>() {
             denied.push(cluster.container_cidr().to_string());
@@ -355,7 +441,7 @@ pub(crate) async fn publish_aws_config(
 
 /// Only the shared-key owner publishes this entry. The replica secret stays in the
 /// vault and never enters controller state, bindings, logs or generated packages.
-#[cfg(any(feature = "aws", test))]
+#[cfg(any(feature = "aws", feature = "azure", test))]
 async fn publish_gateway_config(vault: &dyn Vault, mut value: serde_json::Value) -> Result<()> {
     let invalid = || {
         AlienError::new(ErrorData::ResourceConfigInvalid {
@@ -414,4 +500,74 @@ async fn publish_gateway_config(vault: &dyn Vault, mut value: serde_json::Value)
             message: "Failed to publish the sandbox gateway configuration".into(),
             resource_id: Some(alien_core::SECRETS_VAULT_ID.into()),
         })
+}
+
+#[cfg(all(test, feature = "aws"))]
+mod aws_tests {
+    use super::*;
+    use alien_aws_clients::{ssm::SsmClient, AwsCredentialProvider, ServiceOverrides};
+    use alien_bindings::providers::vault::AwsParameterStoreVault;
+    use alien_core::{AwsClientConfig, AwsCredentials};
+    use httpmock::{Method::POST, MockServer};
+    use std::{collections::HashMap, sync::Arc};
+
+    /// The real SSM answer to a delete the identity may not make, through the real client and
+    /// parameter-store vault. The step must fail with what to grant and which parameters are
+    /// left, and nothing in the error may read as access denied: the executor would take that
+    /// as "already gone" and finish the delete with the signing key still stored.
+    #[tokio::test]
+    async fn a_denied_delete_names_the_permission_and_both_parameters() {
+        let server = MockServer::start_async().await;
+        let denied = server
+            .mock_async(|when, then| {
+                when.method(POST);
+                then.status(400).json_body(serde_json::json!({
+                    "__type": "AccessDeniedException",
+                    "message": "User: arn:aws:sts::111122223333:assumed-role/test-management/session is not authorized to perform: ssm:DeleteParameter"
+                }));
+            })
+            .await;
+        let client = SsmClient::new(
+            reqwest::Client::new(),
+            AwsCredentialProvider::from_config_sync(AwsClientConfig {
+                account_id: "111122223333".to_string(),
+                region: "us-east-1".to_string(),
+                credentials: AwsCredentials::AccessKeys {
+                    access_key_id: "test".to_string(),
+                    secret_access_key: "test".to_string(),
+                    session_token: None,
+                },
+                service_overrides: Some(ServiceOverrides {
+                    endpoints: HashMap::from([("ssm".to_string(), server.base_url())]),
+                }),
+            }),
+        );
+        let vault = AwsParameterStoreVault::new(Arc::new(client), "test-secrets".to_string());
+
+        let error = delete_shared_secrets(&vault, "test-secrets")
+            .await
+            .expect_err("a denied delete must fail the step");
+
+        assert_eq!(error.code, "CLOUD_PLATFORM_ERROR");
+        for expected in [
+            "ssm:DeleteParameter",
+            "'sandbox-egress-signing-key'",
+            "'sandbox-egress-gateway-config'",
+            "'test-secrets-sandbox-egress-signing-key'",
+            "'test-secrets-sandbox-egress-gateway-config'",
+            "then retry the delete",
+        ] {
+            assert!(
+                error.message.contains(expected),
+                "missing {expected}: {}",
+                error.message
+            );
+        }
+        assert!(error.source.is_none());
+        assert!(
+            !matches!(error.http_status_code, Some(401 | 403 | 404)),
+            "{error:?}"
+        );
+        assert!(denied.hits_async().await >= 1);
+    }
 }

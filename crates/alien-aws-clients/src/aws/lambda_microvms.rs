@@ -626,11 +626,31 @@ fn classify(error: &AlienError<ErrorData>, operation: &str) -> ErrorData {
     // tell "no such MicroVM" from "the call failed", and `GenericError` carries no status to
     // recover it from. Matching the body text would classify a 500 whose message happens to
     // mention 404 as an absent session.
-    if let Some(ErrorData::HttpResponseError { http_status, .. }) = &error.error {
+    if let Some(ErrorData::HttpResponseError {
+        http_status,
+        http_response_text,
+        ..
+    }) = &error.error
+    {
         if *http_status == 404 {
             return ErrorData::RemoteResourceNotFound {
                 resource_type: "Microvm".to_string(),
                 resource_name: operation.to_string(),
+            };
+        }
+        // The service refuses a change to an image that is still settling with a 400
+        // ValidationException, "Cannot delete MicroVM image in its current state". It clears
+        // without any change on the caller's side, so it is a conflict to wait out, not an
+        // invalid request.
+        if matches!(*http_status, 400 | 409)
+            && http_response_text
+                .as_deref()
+                .is_some_and(|text| text.contains("in its current state"))
+        {
+            return ErrorData::RemoteResourceConflict {
+                resource_type: "Microvm".to_string(),
+                resource_name: operation.to_string(),
+                message: format!("Lambda MicroVMs {operation}: the resource is still settling"),
             };
         }
     }
@@ -1035,6 +1055,68 @@ mod tests {
             .await
             .expect_err("a failed later page must not return partial inventory");
         assert!(unavailable.hits_async().await > 0);
+    }
+
+    /// The refusal AWS returned live when teardown deleted an image that was still settling.
+    /// It has to reach callers as a conflict they can wait out; as a generic failure it ended
+    /// teardown even though the same delete succeeded moments later.
+    #[tokio::test]
+    async fn an_image_delete_refused_in_its_current_state_is_a_conflict() {
+        let server = MockServer::start_async().await;
+        let refused = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::DELETE)
+                    .path(format!("/{API_VERSION}/microvm-images/test-image"));
+                then.status(400)
+                    .header("x-amzn-ErrorType", "ValidationException")
+                    .json_body(serde_json::json!({
+                        "message": "Cannot delete MicroVM image in its current state: arn:aws:lambda:us-east-1:111122223333:microvm-image:test-image"
+                    }));
+            })
+            .await;
+        let client = LambdaMicrovmsClient::new(
+            Client::new(),
+            AwsCredentialProvider::from_config_sync(AwsClientConfig {
+                account_id: "111122223333".to_string(),
+                region: "us-east-1".to_string(),
+                credentials: AwsCredentials::AccessKeys {
+                    access_key_id: "test".to_string(),
+                    secret_access_key: "test".to_string(),
+                    session_token: None,
+                },
+                service_overrides: Some(ServiceOverrides {
+                    endpoints: HashMap::from([("lambda".to_string(), server.base_url())]),
+                }),
+            }),
+        );
+
+        let error = client
+            .delete_microvm_image("test-image")
+            .await
+            .expect_err("the service refused the delete");
+
+        assert!(
+            matches!(error.error, Some(ErrorData::RemoteResourceConflict { .. })),
+            "expected a conflict, got {error:?}"
+        );
+        assert!(refused.hits_async().await >= 1);
+    }
+
+    /// Only the settling refusal is a conflict; any other validation failure stays generic.
+    #[test]
+    fn another_validation_failure_is_not_a_conflict() {
+        let error = AlienError::new(ErrorData::HttpResponseError {
+            message: "DeleteMicrovmImage failed".to_string(),
+            url: "https://lambda.example.invalid/microvm-images/test-image".to_string(),
+            http_status: 400,
+            http_request_text: None,
+            http_response_text: Some("{\"message\":\"Invalid image identifier\"}".to_string()),
+        });
+
+        assert_eq!(
+            AlienError::new(classify(&error, "DeleteMicrovmImage")).code,
+            "GENERIC_ERROR"
+        );
     }
 
     /// The declared ceiling has to reach the wire: Lambda is what terminates the MicroVM when it

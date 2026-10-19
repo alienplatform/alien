@@ -42,7 +42,7 @@ pub struct SandboxEgressManager {
     config: SandboxEgressGateway,
     vault: Arc<dyn Vault>,
     gateway: String,
-    admin_url: String,
+    admin_url: reqwest::Url,
     admin: reqwest::Client,
 }
 impl fmt::Debug for SandboxEgressManager {
@@ -89,6 +89,8 @@ impl SandboxEgressManager {
         gateway: String,
         admin_url: String,
     ) -> Result<Self> {
+        let admin_url = reqwest::Url::parse(&admin_url)
+            .map_err(|_| unavailable("invalid gateway admin URL"))?;
         let mut client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .timeout(std::time::Duration::from_secs(10));
@@ -107,6 +109,14 @@ impl SandboxEgressManager {
             admin_url,
             admin,
         })
+    }
+    /// Proxy authority, without credentials, for native proxy environments and network rules.
+    pub(crate) fn gateway_authority(&self) -> &str {
+        &self.gateway
+    }
+    /// Admin authority exposed by the same Container link; requests still require admin tokens.
+    pub(crate) fn gateway_admin_authority(&self) -> &str {
+        &self.admin_url[url::Position::BeforeHost..url::Position::AfterPort]
     }
     /// Nonsecret launch metadata. AWS injects its own sandbox id alongside this payload.
     pub fn bootstrap_payload(&self) -> String {
@@ -193,7 +203,10 @@ impl SandboxEgressManager {
                 .admin
                 .request(
                     method,
-                    format!("{}/v1/policies", self.admin_url.trim_end_matches('/')),
+                    format!(
+                        "{}/v1/policies",
+                        self.admin_url.as_str().trim_end_matches('/')
+                    ),
                 )
                 .bearer_auth(authorization)
                 .json(&body)
@@ -242,7 +255,7 @@ impl SandboxEgressManager {
             .admin
             .get(format!(
                 "{}/v1/policies/record",
-                self.admin_url.trim_end_matches('/')
+                self.admin_url.as_str().trim_end_matches('/')
             ))
             .query(&[("aud", self.config.audience.as_str()), ("sub", id)])
             .bearer_auth(authorization)

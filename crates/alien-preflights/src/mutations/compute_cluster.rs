@@ -107,6 +107,10 @@ impl StackMutation for ComputeClusterMutation {
             return true;
         }
 
+        if has_unplaced_cloud_container(stack, stack_state.platform) {
+            return true;
+        }
+
         if matches!(
             stack_state.platform,
             Platform::Aws | Platform::Gcp | Platform::Azure
@@ -188,6 +192,7 @@ impl StackMutation for ComputeClusterMutation {
         stack_state: &StackState,
         config: &DeploymentConfig,
     ) -> Result<Stack> {
+        let stack = place_unplaced_cloud_containers(stack, stack_state.platform)?;
         let mut resolved_config = config.clone();
         if matches!(
             stack_state.platform,
@@ -827,6 +832,77 @@ impl ComputeClusterMutation {
         info!(cluster_id = %cluster_id, new_groups = new_group_ids.len(), "Added capacity groups");
         Ok(stack)
     }
+}
+
+fn has_unplaced_cloud_container(stack: &Stack, platform: Platform) -> bool {
+    matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure)
+        && stack.resources.values().any(|entry| {
+            entry
+                .config
+                .downcast_ref::<Container>()
+                .is_some_and(|container| container.cluster.is_none())
+        })
+}
+
+/// Places every cloud Container without a cluster on the stack's declared cluster.
+///
+/// Cloud container controllers refuse a Container without a cluster, and preparation adds
+/// Containers the developer cannot annotate, such as the sandbox egress gateway. With one
+/// declared cluster that is the only place they can run; with several the choice is the
+/// developer's, so preparation refuses instead of leaving the Container unschedulable.
+/// A stack without a cluster is handled by `create_cluster`.
+fn place_unplaced_cloud_containers(mut stack: Stack, platform: Platform) -> Result<Stack> {
+    if !has_unplaced_cloud_container(&stack, platform) {
+        return Ok(stack);
+    }
+    let clusters: Vec<String> = stack
+        .resources
+        .iter()
+        .filter(|(_, entry)| entry.config.downcast_ref::<ComputeCluster>().is_some())
+        .map(|(id, _)| id.clone())
+        .collect();
+    let cluster_id = match clusters.as_slice() {
+        [] => return Ok(stack),
+        [only] => only.clone(),
+        _ => {
+            let unplaced: Vec<&str> = stack
+                .resources
+                .iter()
+                .filter(|(_, entry)| {
+                    entry
+                        .config
+                        .downcast_ref::<Container>()
+                        .is_some_and(|container| container.cluster.is_none())
+                })
+                .map(|(id, _)| id.as_str())
+                .collect();
+            return Err(AlienError::new(
+                crate::error::ErrorData::StackMutationFailed {
+                    mutation_name: "ComputeClusterMutation".to_string(),
+                    message: format!(
+                        "Container(s) {} name no compute cluster and the stack declares {} \
+                         ({}); set the cluster on each container, or declare a single compute \
+                         cluster when the stack includes Alien-managed containers such as the \
+                         sandbox egress gateway",
+                        unplaced.join(", "),
+                        clusters.len(),
+                        clusters.join(", "),
+                    ),
+                    resource_id: unplaced.first().map(|id| id.to_string()),
+                },
+            ));
+        }
+    };
+    for (id, entry) in stack.resources.iter_mut() {
+        let Some(container) = entry.config.downcast_mut::<Container>() else {
+            continue;
+        };
+        if container.cluster.is_none() {
+            container.cluster = Some(cluster_id.clone());
+            debug!(container_id = %id, cluster_id = %cluster_id, "Placed container on the declared cluster");
+        }
+    }
+    Ok(stack)
 }
 
 /// Collect cluster names referenced by daemons in the stack via `.cluster(...)`.
@@ -4024,5 +4100,195 @@ mod tests {
         assert!(group.profile.is_some());
         assert_eq!(group.min_size, 2);
         assert_eq!(group.max_size, 2);
+    }
+
+    fn declared_cluster(id: &str) -> ComputeCluster {
+        declared_cluster_with_group(id, "general")
+    }
+
+    fn declared_cluster_with_group(id: &str, group_id: &str) -> ComputeCluster {
+        ComputeCluster::new(id.to_string())
+            .capacity_group(CapacityGroup {
+                group_id: group_id.to_string(),
+                instance_type: Some("m8i.xlarge".to_string()),
+                profile: Some(MachineProfile {
+                    cpu: "4.0".to_string(),
+                    memory_bytes: 16 * 1024 * 1024 * 1024,
+                    ephemeral_storage_bytes: 20 * 1024 * 1024 * 1024,
+                    architecture: None,
+                    gpu: None,
+                }),
+                min_size: 1,
+                max_size: 1,
+                scale_policy: None,
+                nested_virtualization: None,
+            })
+            .build()
+    }
+
+    /// Prepares an AWS stack with an internet sandbox and the given declared clusters through the
+    /// gateway and compute mutations, in the order the preflight registry runs them.
+    async fn prepare_internet_sandbox_with_clusters(clusters: &[&str]) -> Result<Stack> {
+        let clusters: Vec<ComputeCluster> =
+            clusters.iter().map(|id| declared_cluster(id)).collect();
+        prepare_internet_sandbox(
+            clusters,
+            deployment_config_with_compute_pool("m8i.xlarge", 1, 1),
+        )
+        .await
+    }
+
+    async fn prepare_internet_sandbox(
+        clusters: Vec<ComputeCluster>,
+        config: DeploymentConfig,
+    ) -> Result<Stack> {
+        let sandbox = alien_core::Sandbox::new("agents".to_string())
+            .code(alien_core::SandboxCode::Image {
+                image: "example.invalid/base:1".to_string(),
+            })
+            .egress(alien_core::SandboxEgress::Internet)
+            .lifecycle(alien_core::SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build();
+        let mut builder = Stack::new("example".to_string()).add(sandbox, ResourceLifecycle::Frozen);
+        for cluster in clusters {
+            builder = builder.add(cluster, ResourceLifecycle::Frozen);
+        }
+        let stack = builder.build();
+        let stack_state = StackState::new(Platform::Aws);
+
+        let gateway = crate::mutations::SandboxGatewayMutation;
+        assert!(gateway.should_run(&stack, &stack_state, &config));
+        let stack = gateway.mutate(stack, &stack_state, &config).await?;
+        assert!(
+            ComputeClusterMutation.should_run(&stack, &stack_state, &config),
+            "an unplaced gateway container must trigger compute preparation"
+        );
+        ComputeClusterMutation
+            .mutate(stack, &stack_state, &config)
+            .await
+    }
+
+    #[tokio::test]
+    async fn generated_gateway_lands_on_the_single_declared_cluster() {
+        let prepared = prepare_internet_sandbox_with_clusters(&["workers"])
+            .await
+            .expect("preparation succeeds with one declared cluster");
+        let gateway = prepared.resources[alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID]
+            .config
+            .downcast_ref::<Container>()
+            .expect("gateway container is prepared");
+        assert_eq!(gateway.cluster.as_deref(), Some("workers"));
+        assert_eq!(
+            prepared
+                .resources
+                .values()
+                .filter(|entry| entry.config.downcast_ref::<ComputeCluster>().is_some())
+                .count(),
+            1,
+            "the declared cluster is used, no default cluster is generated"
+        );
+        let cluster = prepared.resources["workers"]
+            .config
+            .downcast_ref::<ComputeCluster>()
+            .unwrap();
+        assert!(
+            cluster
+                .capacity_groups
+                .iter()
+                .any(|group| group.group_id == "general"),
+            "the gateway's capacity group exists on the cluster it was placed on"
+        );
+    }
+
+    /// A declared cluster without the group the gateway needs gets that group, on the same
+    /// cluster the gateway is placed on.
+    #[tokio::test]
+    async fn generated_gateway_adds_its_missing_group_to_the_declared_cluster() {
+        let prepared = prepare_internet_sandbox(
+            vec![declared_cluster_with_group("workers", "batch")],
+            deployment_config_with_compute_pools(&[
+                ("batch", "m8i.xlarge", 1, 1),
+                ("general", "m8i.xlarge", 1, 1),
+            ]),
+        )
+        .await
+        .expect("preparation adds the missing group");
+        let gateway = prepared.resources[alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID]
+            .config
+            .downcast_ref::<Container>()
+            .expect("gateway container is prepared");
+        assert_eq!(gateway.cluster.as_deref(), Some("workers"));
+        assert_eq!(gateway.pool.as_deref(), Some("general"));
+        let cluster = prepared.resources["workers"]
+            .config
+            .downcast_ref::<ComputeCluster>()
+            .unwrap();
+        let mut groups: Vec<&str> = cluster
+            .capacity_groups
+            .iter()
+            .map(|group| group.group_id.as_str())
+            .collect();
+        groups.sort();
+        assert_eq!(groups, vec!["batch", "general"]);
+        let general = cluster
+            .capacity_groups
+            .iter()
+            .find(|group| group.group_id == "general")
+            .unwrap();
+        assert_eq!(general.instance_type.as_deref(), Some("m8i.xlarge"));
+        assert_eq!(
+            prepared
+                .resources
+                .values()
+                .filter(|entry| entry.config.downcast_ref::<ComputeCluster>().is_some())
+                .count(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn generated_gateway_with_several_declared_clusters_is_refused_at_plan_time() {
+        let error = prepare_internet_sandbox_with_clusters(&["workers", "batch"])
+            .await
+            .expect_err("several clusters leave no single place for the gateway");
+        let Some(crate::error::ErrorData::StackMutationFailed {
+            message,
+            resource_id,
+            ..
+        }) = error.error
+        else {
+            panic!("expected a stack mutation failure, got {error:?}");
+        };
+        assert_eq!(
+            resource_id.as_deref(),
+            Some(alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID)
+        );
+        assert!(
+            message.contains("workers") && message.contains("batch"),
+            "{message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn unplaced_application_container_lands_on_the_single_declared_cluster() {
+        let stack = Stack::new("example".to_string())
+            .add(test_container("api", "0.5", "1Gi"), ResourceLifecycle::Live)
+            .add(declared_cluster("workers"), ResourceLifecycle::Frozen)
+            .build();
+        let stack_state = StackState::new(Platform::Aws);
+        let config = deployment_config_with_compute_pool("m8i.xlarge", 1, 1);
+        assert!(ComputeClusterMutation.should_run(&stack, &stack_state, &config));
+        let prepared = ComputeClusterMutation
+            .mutate(stack, &stack_state, &config)
+            .await
+            .unwrap();
+        let api = prepared.resources["api"]
+            .config
+            .downcast_ref::<Container>()
+            .unwrap();
+        assert_eq!(api.cluster.as_deref(), Some("workers"));
     }
 }

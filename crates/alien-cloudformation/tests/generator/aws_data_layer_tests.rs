@@ -404,7 +404,7 @@ fn storage_only_template_omits_custom_domain_inputs() {
     let yaml = render_built_ins(
         &stack,
         StackSettings::default(),
-        RegistrationMode::OutputsFallback,
+        super::helpers::custom_resource_registration(),
         "aws storage custom-domain inputs",
     );
     let template: serde_json::Value =
@@ -417,7 +417,7 @@ fn storage_only_template_omits_custom_domain_inputs() {
     assert!(template["Rules"].get("CustomDomainCertificate").is_none());
 
     let stack_settings =
-        &template["Outputs"]["DeploymentStackSettings"]["Value"]["Fn::ToJsonString"];
+        &template["Resources"]["DeploymentRegistration"]["Properties"]["StackSettings"];
     assert!(stack_settings.get("domains").is_none());
 }
 

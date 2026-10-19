@@ -4,6 +4,9 @@
 //! files and lifecycle natively, so this provider is a translation layer rather than a transport
 //! for a protocol. Verified against a stock `ubuntu` catalog disk containing no Alien code.
 
+#[path = "azure_egress.rs"]
+mod gateway;
+
 use std::collections::BTreeMap;
 
 use async_trait::async_trait;
@@ -21,7 +24,7 @@ use alien_azure_clients::azure::sandbox_data_plane::{
 use alien_client_core::ErrorData as ClientErrorData;
 use alien_core::{
     azure_disk_image_label, classify_azure_sandbox_image, AzureSandboxImage, SandboxCapabilities,
-    SandboxCapability, SandboxEgress, AZURE_DISK_IMAGE_LABEL,
+    SandboxCapability, SandboxEgress, AZURE_DISK_IMAGE_LABEL, SANDBOX_EXPIRY_LABEL,
 };
 use alien_error::{AlienError, ContextError};
 use tracing::warn;
@@ -39,6 +42,8 @@ pub struct AzureSandbox {
     disk_image_id: std::sync::Mutex<Option<String>>,
     /// Outbound policy every sandbox is created with, from the declaration.
     egress: SandboxEgress,
+    egress_manager: Option<std::sync::Arc<crate::sandbox_egress::SandboxEgressManager>>,
+    default_policy: Option<alien_core::EgressPolicy>,
     /// Idle seconds after which a sandbox suspends itself, if the declaration asked for one.
     idle_pause_seconds: Option<u32>,
     /// Sandbox ceilings, in the data plane's own units. Disk is optional because the data plane
@@ -66,6 +71,8 @@ impl AzureSandbox {
             disk_image,
             disk_image_id: std::sync::Mutex::new(None),
             egress,
+            egress_manager: None,
+            default_policy: None,
             idle_pause_seconds,
             cpu,
             memory,
@@ -313,13 +320,18 @@ impl Sandbox for AzureSandbox {
         SandboxCapabilities::azure()
     }
 
-    async fn create(&self, request: CreateSandboxRequest) -> Result<SandboxInstance> {
-        super::egress::require_default(request.egress.as_ref(), self.egress_declaration())?;
+    async fn create(&self, mut request: CreateSandboxRequest) -> Result<SandboxInstance> {
+        let policy = self.requested_policy(request.egress.as_ref())?;
         checked_sandbox_env(CREATE, &request.env)?;
         refuse_unsupported_create_fields(&request, CREATE)?;
 
-        let asked = egress_policy(&self.egress);
+        let mut labels = BTreeMap::new();
+        if let Some(expires) = self.creation_deadline() {
+            labels.insert(SANDBOX_EXPIRY_LABEL.to_string(), expires.to_string());
+        }
+        let asked = self.native_policy();
         let disk_image_id = self.disk_image_id().await?;
+        let identity = self.prepare_identity(&mut request.env, &mut labels).await?;
         let sandbox = self
             .create_from_image(CreateSandbox {
                 disk_image: self.disk_image.clone(),
@@ -328,7 +340,10 @@ impl Sandbox for AzureSandbox {
                 memory: self.memory.clone(),
                 disk: self.disk.clone(),
                 environment: request.env,
+                labels,
                 egress: asked.clone(),
+                customer_vnet_connection_name: (self.egress == SandboxEgress::Internet)
+                    .then(|| "default".to_string()),
                 idle_pause_seconds: self.idle_pause_seconds,
             })
             .await?;
@@ -372,9 +387,21 @@ impl Sandbox for AzureSandbox {
 
         // Everything past this point owns a sandbox the caller has no id for, so every failure
         // deletes it. Azure allocates the id, so the one in this response was minted by this call.
-        match self.settle(&sandbox).await {
+        let ready = async {
+            let instance = self.settle(&sandbox, identity.as_deref()).await?;
+            if let (Some(manager), Some(identity), Some(policy)) =
+                (&self.egress_manager, &identity, &policy)
+            {
+                manager.update(identity, policy).await?;
+            }
+            Ok(instance)
+        }
+        .await;
+        match ready {
             Ok(sandbox) => Ok(sandbox),
-            Err(error) => Err(self.discard(&sandbox.id, error).await),
+            Err(error) => Err(self
+                .discard_with_policy(&sandbox.id, identity.as_deref(), error)
+                .await),
         }
     }
 
@@ -402,13 +429,21 @@ impl Sandbox for AzureSandbox {
     }
 
     async fn get_or_create(&self, request: CreateSandboxRequest) -> Result<ResolvedSandbox> {
-        super::egress::require_default(request.egress.as_ref(), self.egress_declaration())?;
+        if let Some(policy) = request.egress.as_ref() {
+            self.requested_policy(Some(policy))?;
+        }
         if let Some(id) = request.sandbox_id.as_deref() {
             // `create` returns a sandbox that can take work, and reaching one someone else
             // started has to mean the same thing — so the same gate every other verb uses: bring
             // it up, judge it there, and refuse it if it does not match.
             match self.reconnect(id).await {
-                Ok(sandbox) => return Ok(ResolvedSandbox::found(sandbox)),
+                Ok(sandbox) => {
+                    if let (Some(_), Some(policy)) = (&self.egress_manager, request.egress.clone())
+                    {
+                        self.update_egress(id, policy).await?;
+                    }
+                    return Ok(ResolvedSandbox::found(sandbox));
+                }
                 // The two ways an id can fail to serve — gone, or running a policy the
                 // declaration no longer matches — mean the same thing to a caller asking for a
                 // sandbox, and are answered the same way: a fresh one. A sandbox refused for its
@@ -435,8 +470,7 @@ impl Sandbox for AzureSandbox {
     async fn list(&self) -> Result<Vec<SandboxInstance>> {
         Err(self.unsupported(
             "sandbox.list",
-            "enumerating sandboxes is a control-plane read the data-plane role does not carry; \
-             reach a known sandbox with get",
+            "this binding does not expose group enumeration; reach a known sandbox with get",
         ))
     }
 
@@ -687,8 +721,34 @@ impl Sandbox for AzureSandbox {
         Err(self.unsupported("sandbox.jobCancel", NO_JOB_HOST))
     }
 
+    async fn update_egress(
+        &self,
+        sandbox_id: &str,
+        policy: alien_core::EgressPolicy,
+    ) -> Result<()> {
+        super::egress::validate(&policy, self.egress_declaration())?;
+        Self::checked_sandbox_id("sandbox.updateEgress", sandbox_id)?;
+        let manager = self
+            .egress_manager
+            .as_ref()
+            .ok_or_else(|| super::egress::unsupported("update_egress"))?;
+        let sandbox = self
+            .read_sandbox("sandbox.updateEgress", sandbox_id)
+            .await?
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::SandboxCommandFailed {
+                    failure: "sandboxGone".into(),
+                    reason: "sandbox no longer exists".into(),
+                })
+            })?;
+        self.policy_must_hold(&sandbox)?;
+        manager.update(gateway::identity(&sandbox)?, &policy).await
+    }
+
     async fn terminate(&self, sandbox_id: &str) -> Result<()> {
         Self::checked_sandbox_id("sandbox.terminate", sandbox_id)?;
+        // Continue deletion even when revocation fails, then report that failure.
+        let revocation = self.revoke_identity(sandbox_id).await;
         self.accept_delete(sandbox_id).await?;
 
         // The delete is accepted, not completed: the client's own contract is "returns before it
@@ -708,7 +768,7 @@ impl Sandbox for AzureSandbox {
                 .await
             {
                 if is_not_found(&error) {
-                    return Ok(());
+                    return revocation;
                 }
                 warn!(sandbox = %sandbox_id, %error, "could not confirm a sandbox is gone");
             }
@@ -859,6 +919,18 @@ impl AzureSandbox {
         &self,
         sandbox: &alien_azure_clients::azure::sandbox_data_plane::Sandbox,
     ) -> Result<()> {
+        if self.egress == SandboxEgress::Internet
+            && sandbox.vnet_connection_name.as_deref() != Some("default")
+        {
+            return Err(AlienError::new(ErrorData::SandboxNotAsDeclared {
+                sandbox_id: sandbox.id.clone(),
+                restriction: "deployment network".to_string(),
+                reason: "the sandbox is not attached to the setup-owned default VNet connection; rerun setup and create a new sandbox".to_string(),
+            }));
+        }
+        if self.egress_manager.is_some() {
+            return self.check_gateway_floor(sandbox);
+        }
         let Some(asked) = egress_policy(&self.egress) else {
             return Ok(());
         };
@@ -884,6 +956,7 @@ impl AzureSandbox {
     async fn settle(
         &self,
         sandbox: &alien_azure_clients::azure::sandbox_data_plane::Sandbox,
+        expected_identity: Option<&str>,
     ) -> Result<SandboxInstance> {
         // The running sandbox is what gets judged, not the accept: a create response sent while
         // the sandbox is still coming up need not carry the policy yet, and reading its absence
@@ -896,6 +969,14 @@ impl AzureSandbox {
         // A restriction that did not take effect is worse than one that was never asked for: the
         // caller believes the sandbox is contained.
         self.policy_must_hold(&running)?;
+        if let Some(expected) = expected_identity {
+            if gateway::identity(&running)? != expected {
+                return Err(gateway::not_as_declared(
+                    &running.id,
+                    "identity label was not preserved",
+                ));
+            }
+        }
 
         Ok(SandboxInstance {
             sandbox_id: running.id,
@@ -1524,6 +1605,77 @@ mod tests {
         )
     }
 
+    #[tokio::test]
+    async fn a_sandbox_outside_the_deployment_network_is_refused() {
+        let mut client = MockSandboxDataPlaneApi::new();
+        client.expect_get_sandbox().returning(|_, id| {
+            let mut sandbox = running(id, None);
+            sandbox.vnet_connection_name = None;
+            Ok(sandbox)
+        });
+        let error = sandbox_with(client)
+            .get("s1")
+            .await
+            .expect_err("network mismatch");
+        assert_eq!(error.code, "SANDBOX_NOT_AS_DECLARED");
+    }
+
+    #[tokio::test]
+    async fn released_native_sandboxes_need_no_new_vnet_attachment() {
+        for declaration in [
+            SandboxEgress::None,
+            SandboxEgress::Allow,
+            SandboxEgress::AllowDomains {
+                domains: vec!["api.example.com".into()],
+            },
+        ] {
+            let mut client = MockSandboxDataPlaneApi::new();
+            let policy = egress_policy(&declaration);
+            client
+                .expect_get_sandbox()
+                .times(1)
+                .returning(move |_, id| {
+                    let mut sandbox = running(id, policy.clone());
+                    sandbox.vnet_connection_name = None;
+                    Ok(sandbox)
+                });
+            let sandbox = sandbox_denying(client, declaration)
+                .get("existing-native")
+                .await
+                .expect("released native policy remains usable")
+                .expect("sandbox exists");
+            assert_eq!(sandbox.sandbox_id, "existing-native");
+            assert_eq!(sandbox.state, SandboxState::Running);
+        }
+    }
+
+    #[tokio::test]
+    async fn legacy_reconnect_preserves_native_policy_and_refuses_runtime_policy() {
+        let mut client = MockSandboxDataPlaneApi::new();
+        client
+            .expect_get_sandbox()
+            .times(2)
+            .returning(|_, id| Ok(running(id, None)));
+        let sandbox = sandbox_denying(client, SandboxEgress::Allow);
+        let error = sandbox
+            .get_or_create(CreateSandboxRequest {
+                sandbox_id: Some("existing".into()),
+                egress: Some(alien_core::EgressPolicy::Internet),
+                ..Default::default()
+            })
+            .await
+            .expect_err("legacy declarations refuse runtime policies");
+        assert_eq!(error.code, "SANDBOX_EGRESS_REQUIRES_INTERNET");
+        let found = sandbox
+            .get_or_create(CreateSandboxRequest {
+                sandbox_id: Some("existing".into()),
+                ..Default::default()
+            })
+            .await
+            .expect("ordinary legacy reconnect remains usable");
+        assert_eq!(found.sandbox.sandbox_id, "existing");
+    }
+
     /// The declared image has to reach the create call, not a default chosen here.
     ///
     /// Asserted on the argument the client receives, because the failure this pins is silent:
@@ -1534,10 +1686,15 @@ mod tests {
         let mut client = MockSandboxDataPlaneApi::new();
         client
             .expect_create_sandbox()
-            .withf(|_, request| request.disk_image == "my-toolchain")
+            .withf(|_, request| {
+                request.disk_image == "my-toolchain"
+                    && request.customer_vnet_connection_name.as_deref() == Some("default")
+            })
             .times(1)
             .returning(|_, _| {
                 Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
+                    labels: Default::default(),
+                    vnet_connection_name: Some("default".to_string()),
                     id: "s1".to_string(),
                     egress_policy: None,
                     state: Some("Running".to_string()),
@@ -1614,6 +1771,8 @@ mod tests {
             .times(2)
             .returning(|_, _| {
                 Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
+                    labels: Default::default(),
+                    vnet_connection_name: Some("default".to_string()),
                     id: "s1".to_string(),
                     egress_policy: None,
                     state: Some("Running".to_string()),
@@ -1666,6 +1825,8 @@ mod tests {
             .times(1)
             .returning(|_, _| {
                 Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
+                    labels: Default::default(),
+                    vnet_connection_name: Some("default".to_string()),
                     id: "s1".to_string(),
                     egress_policy: None,
                     state: Some("Running".to_string()),
@@ -1834,6 +1995,8 @@ mod tests {
             .times(1)
             .returning(|_, _| {
                 Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
+                    labels: Default::default(),
+                    vnet_connection_name: Some("default".to_string()),
                     id: "s1".to_string(),
                     egress_policy: None,
                     state: Some("Running".to_string()),
@@ -1864,6 +2027,8 @@ mod tests {
         client.expect_delete_sandbox().returning(|_, _| Ok(()));
         client.expect_get_sandbox().returning(|_, id| {
             Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
+                labels: Default::default(),
+                vnet_connection_name: Some("default".to_string()),
                 id: id.to_string(),
                 egress_policy: None,
                 state: Some("Running".to_string()),
@@ -2020,6 +2185,15 @@ mod tests {
             unreachable!("the command paths never create")
         }
 
+        async fn list_sandboxes(
+            &self,
+            _group: &str,
+        ) -> alien_client_core::Result<
+            Vec<alien_azure_clients::azure::sandbox_data_plane::ListedSandbox>,
+        > {
+            unreachable!("command tests do not enumerate sessions")
+        }
+
         async fn get_sandbox(
             &self,
             _group: &str,
@@ -2030,6 +2204,8 @@ mod tests {
                 return Err(http_error(404, "SandboxNotFound"));
             }
             Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
+                labels: Default::default(),
+                vnet_connection_name: Some("default".to_string()),
                 id: sandbox_id.to_string(),
                 egress_policy: None,
                 state: Some("Running".to_string()),
@@ -2744,6 +2920,8 @@ mod tests {
             let state = reported.to_string();
             client.expect_get_sandbox().times(1).returning(move |_, _| {
                 Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
+                    labels: Default::default(),
+                    vnet_connection_name: Some("default".to_string()),
                     id: "s1".to_string(),
                     egress_policy: None,
                     state: Some(state.clone()),
@@ -2769,6 +2947,8 @@ mod tests {
             let state = reported.map(str::to_string);
             client.expect_get_sandbox().times(1).returning(move |_, _| {
                 Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
+                    labels: Default::default(),
+                    vnet_connection_name: Some("default".to_string()),
                     id: "s1".to_string(),
                     egress_policy: None,
                     state: state.clone(),
@@ -2795,6 +2975,8 @@ mod tests {
             .times(1)
             .returning(|_, _| {
                 Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
+                    labels: Default::default(),
+                    vnet_connection_name: Some("default".to_string()),
                     id: "s1".to_string(),
                     egress_policy: None,
                     state: Some("Creating".to_string()),
@@ -2827,6 +3009,8 @@ mod tests {
         egress: Option<EgressPolicy>,
     ) -> alien_azure_clients::azure::sandbox_data_plane::Sandbox {
         alien_azure_clients::azure::sandbox_data_plane::Sandbox {
+            labels: Default::default(),
+            vnet_connection_name: Some("default".to_string()),
             id: id.to_string(),
             egress_policy: egress,
             state: Some("Running".to_string()),
@@ -2859,6 +3043,7 @@ mod tests {
             .expect_create_sandbox()
             .times(1)
             .returning(|_, request| {
+                assert!(request.customer_vnet_connection_name.is_none());
                 let policy = request.egress.expect("deny must send a policy");
                 assert_eq!(policy.default_action, "Deny");
                 assert_eq!(
@@ -2900,6 +3085,7 @@ mod tests {
             .expect_create_sandbox()
             .times(1)
             .returning(|_, request| {
+                assert!(request.customer_vnet_connection_name.is_none());
                 let policy = request.egress.expect("allowDomains must send a policy");
                 assert_eq!(policy.default_action, "Deny", "anything unlisted is denied");
                 assert_eq!(policy.traffic_inspection.as_deref(), Some("Full"));
@@ -2940,6 +3126,7 @@ mod tests {
             .expect_create_sandbox()
             .times(1)
             .returning(|_, request| {
+                assert!(request.customer_vnet_connection_name.is_none());
                 assert!(
                     request.egress.is_none(),
                     "an open sandbox sends no policy: Full inspection would block non-HTTP traffic"
@@ -3185,6 +3372,8 @@ mod tests {
         let mut client = MockSandboxDataPlaneApi::new();
         let unreadable = || {
             Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
+                labels: Default::default(),
+                vnet_connection_name: Some("default".to_string()),
                 id: "orphan".to_string(),
                 egress_policy: None,
                 state: Some("Hibernated".to_string()),
@@ -4461,6 +4650,8 @@ mod tests {
         let mut client = MockSandboxDataPlaneApi::new();
         client.expect_get_sandbox().times(1).returning(|_, _| {
             Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
+                labels: Default::default(),
+                vnet_connection_name: Some("default".to_string()),
                 id: "s1".to_string(),
                 egress_policy: None,
                 state: Some("Hibernated".to_string()),

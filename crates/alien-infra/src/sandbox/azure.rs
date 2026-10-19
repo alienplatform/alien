@@ -12,7 +12,10 @@
 //! with its own credential (which lacks Data Owner by design); the execute grant that opens the
 //! data plane is authored on that resource's permission set by a preflight, not verified here.
 //!
-//! It owns one data-plane object: the disk image built from a registry image, deleted once a
+//! Internet-mode groups also use the management role's metadata list/delete verbs to reap
+//! sessions at the gateway identity's 24-hour ceiling, without reading guest contents.
+//!
+//! It owns the disk image built from a registry image, deleted once a
 //! changed reference replaces it; `sandbox/images` grants exactly those verbs. One build per
 //! reference string, so a tag pushed again is not rebuilt: a changed image needs a new tag or digest.
 
@@ -27,8 +30,9 @@ use alien_azure_clients::azure::sandbox_data_plane::{
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    azure_disk_image_label, AzureSandboxImage, ResourceOutputs as CoreResourceOutputs,
-    ResourceStatus, Sandbox, SandboxLimits, SandboxOutputs, AZURE_DISK_IMAGE_LABEL,
+    AZURE_DISK_IMAGE_LABEL, AZURE_GATEWAY_MAX_LIFETIME_SECONDS, AzureSandboxImage,
+    ResourceOutputs as CoreResourceOutputs, ResourceStatus, Sandbox, SandboxEgress, SandboxLimits,
+    SandboxOutputs, azure_disk_image_label,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
@@ -68,6 +72,12 @@ pub(crate) struct PendingDiskImage {
 /// Azure Sandbox controller.
 #[controller]
 pub struct AzureSandboxController {
+    /// Withhold new Internet bindings until actual Azure network facts have been verified.
+    #[serde(default)]
+    pub(crate) egress_network_verified: bool,
+    /// The resource default is independent of the shared gateway metadata.
+    #[serde(default)]
+    pub(crate) default_policy: Option<alien_core::EgressPolicy>,
     /// Sandbox group that scopes every sandbox created from this declaration.
     pub(crate) sandbox_group: Option<String>,
     /// Region the group lives in; the ADC endpoint is per-region.
@@ -140,6 +150,41 @@ impl AzureSandboxController {
         info!(sandbox_id = %config.id, %group, "Azure sandbox group adopted");
 
         Ok(HandlerAction::Continue {
+            state: if matches!(config.egress, SandboxEgress::Internet) {
+                InitializingEgressKey
+            } else if self.pending_image(config).is_some() {
+                EnsureDiskImage
+            } else {
+                Ready
+            },
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(state = InitializingEgressKey, on_failure = ProvisionFailed, status = ResourceStatus::Provisioning)]
+    async fn initializing_egress_key(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        self.egress_network_verified = false;
+        self.capture_session_inputs(ctx.desired_resource_config::<Sandbox>()?)?;
+        self.egress = Some(super::azure_egress::initialize_key(ctx).await?);
+        Ok(HandlerAction::Continue {
+            state: PublishingEgressConfig,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(state = PublishingEgressConfig, on_failure = ProvisionFailed, status = ResourceStatus::Provisioning)]
+    async fn publishing_egress_config(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        self.egress_network_verified = false;
+        super::azure_egress::publish_config(ctx, self.egress.as_ref()).await?;
+        self.egress_network_verified = true;
+        let config = ctx.desired_resource_config::<Sandbox>()?;
+        Ok(HandlerAction::Continue {
             state: if self.pending_image(config).is_some() {
                 EnsureDiskImage
             } else {
@@ -168,6 +213,24 @@ impl AzureSandboxController {
     )]
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
+        let lifetime_issue = self.reap_gateway_sessions(ctx, config).await;
+        if uses_gateway(ctx, config) {
+            if !matches!(
+                self.egress,
+                Some(alien_core::bindings::SandboxEgressBinding::Gateway(_))
+            ) {
+                self.egress_network_verified = false;
+                self.capture_session_inputs(config)?;
+                return Ok(HandlerAction::Continue {
+                    state: InitializingEgressKey,
+                    suggested_delay: None,
+                });
+            }
+            self.egress_network_verified = false;
+            super::azure_egress::validate_network(ctx).await?;
+            self.egress_network_verified = true;
+        }
+
         // Refresh the binding inputs against the declaration, but do not gate the heartbeat on
         // them: a bad `code.image` is a declaration error the create and update paths already
         // fail on, and must not flip a serving sandbox to a terminal RefreshFailed here. A
@@ -201,12 +264,14 @@ impl AzureSandboxController {
         self.sweep_disk_images(ctx, &config.id).await;
         self.reap_retired_disk_images(ctx, &config.id).await;
 
-        // The data plane has no sandbox list operation, so the heartbeat carries the group's ARM
-        // provisioning state rather than a sandbox count. A read failure here leaves the sandbox
+        // The heartbeat carries the group's ARM provisioning state. A read failure leaves the sandbox
         // serving: the heartbeat is an observation, not a health gate.
         if let Ok((group, _region, resource_group)) = self.identity(&config.id) {
             let mut provisioning_state = None;
             let mut status = alien_core::SandboxHeartbeatStatus::default();
+            if let Some(issue) = lifetime_issue {
+                record_collection_issue(&mut status, issue);
+            }
 
             // sandboxGroups/read is granted, so a failure here is transient rather than a
             // permission gap. Report it as a partial collection instead of a default-Healthy
@@ -262,7 +327,13 @@ impl AzureSandboxController {
 
         Ok(HandlerAction::Continue {
             state: Ready,
-            suggested_delay: Some(Duration::from_secs(60)),
+            suggested_delay: Some(Duration::from_secs(
+                if config.egress == SandboxEgress::Internet {
+                    5
+                } else {
+                    60
+                },
+            )),
         })
     }
 
@@ -285,7 +356,9 @@ impl AzureSandboxController {
         info!(sandbox_id = %config.id, "Updated Azure sandbox configuration");
 
         Ok(HandlerAction::Continue {
-            state: if self.pending_image(config).is_some() {
+            state: if matches!(config.egress, SandboxEgress::Internet) {
+                InitializingEgressKey
+            } else if self.pending_image(config).is_some() {
                 UpdatingDiskImage
             } else {
                 Ready
@@ -355,6 +428,16 @@ impl AzureSandboxController {
             return Ok(None);
         };
 
+        if matches!(egress.declaration(), SandboxEgress::Internet)
+            && (!self.egress_network_verified
+                || !matches!(
+                    egress,
+                    alien_core::bindings::SandboxEgressBinding::Gateway(_)
+                ))
+        {
+            return Ok(None);
+        }
+
         // The data plane is per-region and separate from ARM; a caller cannot derive it from
         // the Azure client config, so the binding carries it.
         let mut binding = SandboxBinding::azure(
@@ -372,7 +455,11 @@ impl AzureSandboxController {
         };
         // All three or none, as the declaration has them: the data plane reads a missing ceiling
         // as its own default, so filling one in alone would assert a size nobody declared.
-        azure.default_policy = egress.default_policy().cloned();
+        azure.egress = egress.clone();
+        azure.default_policy = self
+            .default_policy
+            .clone()
+            .or_else(|| egress.default_policy().cloned());
         if let Some(limits) = self.limits.as_ref() {
             azure.cpu = Some(BindingValue::value(limits.cpu.clone()));
             azure.memory = Some(BindingValue::value(limits.memory.clone()));
@@ -402,7 +489,42 @@ impl AzureSandboxController {
     }
 }
 
+/// Gateway identity, session reaping and network verification apply only when the stack
+/// hosts the gateway; without it an Internet group keeps the native Ready path.
+fn uses_gateway(ctx: &ResourceControllerContext<'_>, config: &Sandbox) -> bool {
+    config.egress == SandboxEgress::Internet
+        && alien_core::sandbox_egress::has_sandbox_gateway(ctx.desired_stack)
+}
+
 impl AzureSandboxController {
+    /// Azure has no identity renewal agent. Reconcile only new gateway-mode groups;
+    /// legacy deployments retain their existing lifetime behavior. A stopped controller
+    /// or terminal failure suspends deletion, while the identity still expires at 24 hours.
+    async fn reap_gateway_sessions(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        config: &Sandbox,
+    ) -> Option<String> {
+        if !uses_gateway(ctx, config) {
+            return None;
+        }
+        let result = async {
+            let (group, client) = self.data_plane(ctx, &config.id)?;
+            super::azure_lifetime::reap_expired_azure_sandboxes(
+                client.as_ref(),
+                &group,
+                AZURE_GATEWAY_MAX_LIFETIME_SECONDS,
+            )
+            .await
+        }
+        .await;
+        if let Err(error) = result {
+            warn!(sandbox_id = %config.id, %error, "Azure gateway session cleanup failed; reconciliation will retry");
+            return Some(format!("gateway session cleanup failed: {error}"));
+        }
+        None
+    }
+
     /// Captures the image, egress, idle-pause and ceilings the binding carries from the
     /// declaration.
     ///
@@ -431,7 +553,16 @@ impl AzureSandboxController {
             // naming the image sessions can start from now.
             AzureSandboxImage::Registry(_) => {}
         }
-        self.egress = Some(config.into());
+        if !matches!(config.egress, SandboxEgress::Internet)
+            || !matches!(
+                self.egress,
+                Some(alien_core::bindings::SandboxEgressBinding::Gateway(_))
+            )
+        {
+            self.egress = Some(config.into());
+            self.egress_network_verified = false;
+        }
+        self.default_policy = config.default_policy.clone();
         self.idle_pause_seconds = config.lifecycle.idle_pause_seconds;
         self.limits = config.limits.clone();
         Ok(())
@@ -454,6 +585,7 @@ impl AzureSandboxController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<AzureSandboxHandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
+        let _ = self.reap_gateway_sessions(ctx, config).await;
         // Nothing to build: `Ready` abandons any build left in flight.
         let Some(reference) = self.pending_image(config) else {
             return Ok(AzureSandboxHandlerAction::Continue {
@@ -498,7 +630,7 @@ impl AzureSandboxController {
                                 pending.id
                             ),
                             resource_id: Some(config.id.clone()),
-                        }))
+                        }));
                     }
                 }
             }
@@ -891,8 +1023,8 @@ mod tests {
     use super::*;
     use crate::core::controller_test::SingleControllerExecutor;
     use crate::core::{
-        deserialize_controller, serialize_controller, MockPlatformServiceProvider,
-        ResourceController, ResourceRegistry,
+        MockPlatformServiceProvider, ResourceController, ResourceRegistry, deserialize_controller,
+        serialize_controller,
     };
     use alien_core::SandboxEgress;
     use alien_core::{
@@ -917,6 +1049,8 @@ mod tests {
             egress: Some(SandboxEgress::None.into()),
             idle_pause_seconds: Some(300),
             limits: None,
+            egress_network_verified: false,
+            default_policy: None,
             _internal_stay_count: None,
         };
 
@@ -965,6 +1099,8 @@ mod tests {
             egress: Some(SandboxEgress::Internet.into()),
             idle_pause_seconds: None,
             limits: None,
+            egress_network_verified: false,
+            default_policy: None,
             _internal_stay_count: None,
         };
 
@@ -1123,6 +1259,8 @@ mod tests {
             egress: Some(SandboxEgress::None.into()),
             idle_pause_seconds: None,
             limits: None,
+            egress_network_verified: false,
+            default_policy: None,
             _internal_stay_count: None,
         };
         let config = Sandbox::new("sbx".to_string())
@@ -1168,6 +1306,8 @@ mod tests {
             egress: Some(SandboxEgress::Internet.into()),
             idle_pause_seconds: None,
             limits: None,
+            egress_network_verified: false,
+            default_policy: None,
             _internal_stay_count: None,
         };
         let config = Sandbox::new("sbx".to_string())
@@ -1221,6 +1361,8 @@ mod tests {
                 disk: "40960Mi".to_string(),
                 max_processes: None,
             }),
+            egress_network_verified: false,
+            default_policy: None,
             _internal_stay_count: None,
         };
 
@@ -1251,6 +1393,8 @@ mod tests {
             egress: Some(SandboxEgress::None.into()),
             idle_pause_seconds: None,
             limits: None,
+            egress_network_verified: false,
+            default_policy: None,
             _internal_stay_count: None,
         };
 
@@ -1264,46 +1408,21 @@ mod tests {
         assert!(params.get("disk").is_none());
     }
 
-    /// The destination list must survive the controller-to-binding handoff.
     #[test]
-    fn the_binding_carries_the_allowlist() {
+    fn internet_binding_is_withheld_until_gateway_network_verification() {
         let controller = AzureSandboxController {
-            state: AzureSandboxState::Ready,
-            sandbox_group: Some("sbg".to_string()),
-            region: Some("swedencentral".to_string()),
-            resource_group: Some("rg".to_string()),
-            disk_image: Some("ubuntu".to_string()),
-            disk_image_id: None,
-            retired_disk_images: Vec::new(),
-            pending_disk_image: None,
-            built_disk_images: false,
+            sandbox_group: Some("sbg".into()),
+            region: Some("eastus".into()),
+            resource_group: Some("rg".into()),
+            disk_image: Some("ubuntu".into()),
             egress: Some(alien_core::bindings::SandboxEgressBinding::Defaults {
                 default_policy: alien_core::EgressPolicy::Allow {
                     allow: vec!["api.example.com".into()],
                 },
             }),
-            idle_pause_seconds: None,
-            limits: None,
-            _internal_stay_count: None,
+            ..Default::default()
         };
-
-        let params = controller
-            .get_binding_params()
-            .expect("binding params")
-            .expect("a fully imported sandbox group publishes a binding");
-
-        let binding: alien_core::bindings::SandboxBinding =
-            serde_json::from_value(params).expect("controller output is a valid runtime binding");
-        let alien_core::bindings::SandboxBinding::Azure(binding) = binding else {
-            panic!("the service tag must select Azure");
-        };
-        assert_eq!(binding.egress, SandboxEgress::Internet.into());
-        assert_eq!(
-            binding.default_policy,
-            Some(alien_core::EgressPolicy::Allow {
-                allow: vec!["api.example.com".into()]
-            })
-        );
+        assert!(controller.get_binding_params().unwrap().is_none());
     }
 
     /// A row without the image, egress and idle fields loads, and publishes no binding until a
@@ -1338,11 +1457,11 @@ mod tests {
     mod disk_images {
         use super::*;
         use crate::core::{StackExecutor, StackResourceStateExt};
+        use alien_azure_clients::AzureClientConfigExt as _;
         use alien_azure_clients::azure::sandbox_data_plane::{
-            DiskImageStatus, MockSandboxDataPlaneApi,
+            DiskImageStatus, ListedSandbox, MockSandboxDataPlaneApi,
         };
         use alien_azure_clients::azure::sandbox_groups::MockSandboxGroupsApi;
-        use alien_azure_clients::AzureClientConfigExt as _;
         use alien_core::{ClientConfig, StackResourceState, StackState};
         use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -1354,7 +1473,7 @@ mod tests {
                 .code(SandboxCode::Image {
                     image: image.to_string(),
                 })
-                .egress(SandboxEgress::Internet)
+                .egress(SandboxEgress::Allow)
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
@@ -1376,9 +1495,11 @@ mod tests {
                 retired_disk_images: Vec::new(),
                 pending_disk_image: None,
                 built_disk_images: false,
-                egress: Some(SandboxEgress::Internet.into()),
+                egress: Some(SandboxEgress::Allow.into()),
                 idle_pause_seconds: None,
                 limits: None,
+                egress_network_verified: false,
+                default_policy: None,
                 _internal_stay_count: None,
             }
         }
@@ -1426,8 +1547,9 @@ mod tests {
         async fn executor(
             declared: Sandbox,
             controller: AzureSandboxController,
-            client: MockSandboxDataPlaneApi,
+            mut client: MockSandboxDataPlaneApi,
         ) -> SingleControllerExecutor {
+            client.expect_list_sandboxes().returning(|_| Ok(Vec::new()));
             SingleControllerExecutor::builder()
                 .resource(declared)
                 .controller(controller)
@@ -1437,6 +1559,77 @@ mod tests {
                 .build()
                 .await
                 .expect("executor should build")
+        }
+
+        #[tokio::test]
+        async fn only_gateway_groups_reap_sessions_on_ready_ticks() {
+            // Without a gateway in the stack nothing issues 24-hour identities, so an
+            // Internet group must not have its sessions reaped.
+            for (egress, with_gateway) in [
+                (SandboxEgress::Internet, true),
+                (SandboxEgress::Internet, false),
+                (SandboxEgress::Allow, false),
+                (SandboxEgress::None, false),
+            ] {
+                let gateway = egress == SandboxEgress::Internet && with_gateway;
+                let mut client = MockSandboxDataPlaneApi::new();
+                client
+                    .expect_list_sandboxes()
+                    .times(usize::from(gateway))
+                    .returning(|_| {
+                        Ok(vec![ListedSandbox {
+                            id: "expired".into(),
+                            created_at: chrono::Utc::now() - chrono::Duration::hours(25),
+                            labels: Default::default(),
+                            state: "Suspended".into(),
+                        }])
+                    });
+                client
+                    .expect_delete_sandbox()
+                    .times(usize::from(gateway))
+                    .withf(|group, id| group == "sbg" && id == "expired")
+                    .returning(|_, _| Ok(()));
+                let mut config = sandbox("ubuntu");
+                config.egress = egress.clone();
+                let mut builder = SingleControllerExecutor::builder()
+                    .resource(config)
+                    .controller(adopted(Some("ubuntu"), None))
+                    .platform(Platform::Azure)
+                    .resource_lifecycle(ResourceLifecycle::Frozen)
+                    .service_provider(provider_with(client));
+                if with_gateway {
+                    builder = builder.with_stack_resource(
+                        alien_core::Container::new(
+                            alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.into(),
+                        )
+                        .permissions("default".into())
+                        .code(alien_core::ContainerCode::Image {
+                            image: "example.invalid/gateway:1".into(),
+                        })
+                        .cpu(alien_core::ResourceSpec {
+                            min: "0.25".into(),
+                            desired: "0.25".into(),
+                        })
+                        .memory(alien_core::ResourceSpec {
+                            min: "512Mi".into(),
+                            desired: "512Mi".into(),
+                        })
+                        .build(),
+                        ResourceLifecycle::Live,
+                    );
+                }
+                let mut run = builder.build().await.unwrap();
+                run.step().await.expect("ready tick");
+                if gateway {
+                    assert_eq!(
+                        state_of(&run).state,
+                        AzureSandboxState::InitializingEgressKey
+                    );
+                    assert!(state_of(&run).get_binding_params().unwrap().is_none());
+                } else if egress != SandboxEgress::Internet {
+                    assert_eq!(state_of(&run).state, AzureSandboxState::Ready);
+                }
+            }
         }
 
         fn retired_ids(controller: &AzureSandboxController) -> Vec<&str> {
@@ -1453,6 +1646,136 @@ mod tests {
                 retired.id == id
                     && retired.delete_after > chrono::Utc::now() + chrono::Duration::seconds(3600)
             })
+        }
+
+        fn access_denied(
+            resource_type: &str,
+            name: &str,
+        ) -> AlienError<alien_client_core::ErrorData> {
+            AlienError::new(alien_client_core::ErrorData::RemoteAccessDenied {
+                resource_type: resource_type.to_string(),
+                resource_name: name.to_string(),
+            })
+        }
+
+        /// A released deployment upgraded to this runtime before its setup grants the new
+        /// NAT Gateway and VNet-connection reads: both answer 403. Its network and legacy
+        /// sandboxes keep serving on their heartbeat ticks, publish the same binding and the
+        /// NAT IP simply stays unreported.
+        #[tokio::test]
+        async fn released_setup_without_new_reads_stays_healthy() {
+            use crate::network::AzureNetworkController;
+            use alien_azure_clients::azure::models::virtual_network::VirtualNetwork;
+            use alien_azure_clients::azure::network::{MockNetworkApi, NetworkApi};
+            use alien_core::{Network, NetworkSettings};
+
+            let denied_nat = Arc::new(AtomicUsize::new(0));
+            let denied_connection = Arc::new(AtomicUsize::new(0));
+            let mut network = MockNetworkApi::new();
+            network
+                .expect_get_virtual_network()
+                .returning(|_, _| Ok(VirtualNetwork::default()));
+            let counted = denied_nat.clone();
+            network.expect_get_nat_gateway().returning(move |_, name| {
+                counted.fetch_add(1, Ordering::SeqCst);
+                Err(access_denied("NatGateway", name))
+            });
+            let network: Arc<dyn NetworkApi> = Arc::new(network);
+
+            let mut client = MockSandboxDataPlaneApi::new();
+            client
+                .expect_list_disk_images()
+                .returning(|_| Ok(vec![image("img-1", PYTHON, "Ready")]));
+            client.expect_list_sandboxes().returning(|_| Ok(Vec::new()));
+            let client: Arc<dyn SandboxDataPlaneApi> = Arc::new(client);
+
+            let mut provider = MockPlatformServiceProvider::new();
+            let network_client = network.clone();
+            provider
+                .expect_get_azure_network_client()
+                .returning(move |_| Ok(network_client.clone()));
+            provider
+                .expect_get_azure_sandbox_data_plane_client()
+                .returning(move |_, _, _| Ok(client.clone()));
+            let counted = denied_connection.clone();
+            provider
+                .expect_get_azure_sandbox_groups_client()
+                .returning(move |_| {
+                    let mut arm = MockSandboxGroupsApi::new();
+                    arm.expect_get_sandbox_group().returning(|_, name| {
+                        Err(AlienError::new(
+                            alien_client_core::ErrorData::RemoteResourceNotFound {
+                                resource_type: "SandboxGroup".to_string(),
+                                resource_name: name.to_string(),
+                            },
+                        ))
+                    });
+                    let counted = counted.clone();
+                    arm.expect_get_default_vnet_connection()
+                        .returning(move |_, name| {
+                            counted.fetch_add(1, Ordering::SeqCst);
+                            Err(access_denied("SandboxGroupVnetConnection", name))
+                        });
+                    Ok(Arc::new(arm))
+                });
+            let provider = Arc::new(provider);
+
+            let declared_network = Network::new("default-network".to_string())
+                .settings(NetworkSettings::Create {
+                    cidr: Some("10.0.0.0/16".to_string()),
+                    availability_zones: 2,
+                })
+                .build();
+            for egress in [
+                SandboxEgress::Allow,
+                SandboxEgress::AllowDomains {
+                    domains: vec!["api.example.com".into()],
+                },
+                SandboxEgress::None,
+            ] {
+                let mut declared = sandbox(PYTHON);
+                declared.egress = egress.clone();
+                let mut controller = adopted(Some(PYTHON), Some("img-1"));
+                controller.egress = Some(egress.into());
+                let mut run = SingleControllerExecutor::builder()
+                    .resource(declared)
+                    .controller(controller)
+                    .platform(Platform::Azure)
+                    .resource_lifecycle(ResourceLifecycle::Frozen)
+                    .service_provider(provider.clone())
+                    .with_dependency(
+                        declared_network.clone(),
+                        AzureNetworkController::mock_ready("default-network"),
+                    )
+                    .build()
+                    .await
+                    .unwrap();
+                let before = state_of(&run).get_binding_params().unwrap();
+                assert!(before.is_some());
+                for _ in 0..3 {
+                    run.step().await.expect("heartbeat tick stays healthy");
+                    assert_eq!(state_of(&run).state, AzureSandboxState::Ready);
+                    assert_eq!(state_of(&run).get_binding_params().unwrap(), before);
+                }
+            }
+
+            let mut run = SingleControllerExecutor::builder()
+                .resource(declared_network)
+                .controller(AzureNetworkController::mock_ready("default-network"))
+                .platform(Platform::Azure)
+                .service_provider(provider)
+                .build()
+                .await
+                .unwrap();
+            for _ in 0..3 {
+                run.step().await.expect("network heartbeat stays healthy");
+            }
+            assert_eq!(run.status(), alien_core::ResourceStatus::Running);
+            let network = run.internal_state::<AzureNetworkController>().unwrap();
+            assert!(network.egress_public_ips.is_empty());
+            // Neither released resource kind needs the new reads: nothing was attempted.
+            assert_eq!(denied_nat.load(Ordering::SeqCst), 0);
+            assert_eq!(denied_connection.load(Ordering::SeqCst), 0);
         }
 
         fn state_of(executor: &SingleControllerExecutor) -> &AzureSandboxController {
@@ -2082,6 +2405,7 @@ mod tests {
             state.resources.insert("agents".to_string(), failed);
 
             let mut client = MockSandboxDataPlaneApi::new();
+            client.expect_list_sandboxes().returning(|_| Ok(Vec::new()));
             client
                 .expect_list_disk_images()
                 .returning(|_| Ok(Vec::new()));
@@ -2143,3 +2467,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(all(test, feature = "local"))]
+#[path = "azure_gateway_tests.rs"]
+mod gateway_tests;

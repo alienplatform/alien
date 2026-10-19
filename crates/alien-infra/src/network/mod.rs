@@ -41,3 +41,8 @@ pub use azure_import::AzureNetworkImporter;
 mod aws_sandbox;
 #[cfg(feature = "aws")]
 pub use aws_sandbox::validate_aws_sandbox_network;
+
+#[cfg(feature = "azure")]
+pub(crate) mod azure_sandbox;
+#[cfg(feature = "azure")]
+pub use azure_sandbox::validate_azure_sandbox_network;
