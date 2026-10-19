@@ -117,10 +117,6 @@ fn forward_unix_socket(socket: &Path, tcp_host: &str) {
 
 fn config(image: String) -> ContainerConfig {
     ContainerConfig {
-        egress: None,
-        security: None,
-        egress_denied_ranges: Vec::new(),
-        memory_bytes: None,
         image,
         command: None,
         ports: vec![],

@@ -97,10 +97,6 @@ async fn local_container_reaches_local_postgres_but_not_the_outside() {
         .start_container(
             CLIENT_ID,
             ContainerConfig {
-                egress: None,
-                security: None,
-                egress_denied_ranges: Vec::new(),
-                memory_bytes: None,
                 image: CLIENT_IMAGE.to_string(),
                 command: Some(vec!["sleep".to_string(), "300".to_string()]),
                 ports: vec![],

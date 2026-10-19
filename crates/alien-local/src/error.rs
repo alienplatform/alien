@@ -5,15 +5,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, AlienErrorData, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ErrorData {
-    /// The host cannot enforce the requested network boundary.
-    #[error(
-        code = "LOCAL_INTERNET_EGRESS_UNAVAILABLE",
-        message = "Local internet egress is unavailable: {message}",
-        retryable = "false",
-        internal = "false"
-    )]
-    LocalInternetEgressUnavailable { message: String },
-
     /// The selected Docker configuration cannot be used.
     #[error(
         code = "DOCKER_CONFIGURATION_INVALID",

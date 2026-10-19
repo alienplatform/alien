@@ -39,10 +39,6 @@ async fn probes_an_internal_only_health_port_through_loopback() {
         .start_container(
             &container_id,
             ContainerConfig {
-                egress: None,
-                security: None,
-                egress_denied_ranges: Vec::new(),
-                memory_bytes: None,
                 image: IMAGE.to_string(),
                 command: None,
                 ports: vec![HEALTH_PORT],

@@ -339,43 +339,7 @@ impl LocalContainerController {
         let ports: Vec<u16> = config.ports.iter().map(|p| p.port).collect();
         let health_check_port = local_health_check_port(&config, &ports)?;
 
-        let memory_bytes = if config.egress.is_some() {
-            let bytes = alien_core::instance_catalog::parse_memory_bytes(&config.memory.desired)
-                .map_err(|message| {
-                    AlienError::new(ErrorData::ResourceConfigInvalid {
-                        message,
-                        resource_id: Some(config.id.clone()),
-                    })
-                })?;
-            Some(i64::try_from(bytes).map_err(|_| {
-                AlienError::new(ErrorData::ResourceConfigInvalid {
-                    message: "Container memory exceeds the Docker limit".into(),
-                    resource_id: Some(config.id.clone()),
-                })
-            })?)
-        } else {
-            None
-        };
-        let mut egress_denied_ranges: Vec<String> = ctx
-            .desired_stack
-            .resources()
-            .filter_map(|(_, entry)| entry.config.downcast_ref::<alien_core::ComputeCluster>())
-            .map(|cluster| cluster.container_cidr().to_string())
-            .filter(|cidr| !cidr.contains(':'))
-            .collect();
-        if let Some(alien_core::NetworkSettings::Create {
-            cidr: Some(cidr), ..
-        }) = &ctx.deployment_config.stack_settings.network
-        {
-            if !cidr.contains(':') {
-                egress_denied_ranges.push(cidr.clone());
-            }
-        }
         let container_config = ContainerConfig {
-            egress: config.egress,
-            security: config.security.clone(),
-            egress_denied_ranges,
-            memory_bytes,
             image,
             command: config.command.clone(),
             ports,
