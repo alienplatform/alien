@@ -1,3 +1,4 @@
+mod federation;
 pub mod agent_platform;
 pub mod api_client;
 pub mod artifactregistry;
@@ -307,6 +308,9 @@ impl GcpClientConfigExt for GcpClientConfig {
     async fn get_bearer_token(&self, _audience: &str) -> Result<String> {
         match &self.credentials {
             GcpCredentials::AccessToken { token } => Ok(token.clone()),
+            GcpCredentials::Federated { .. } => {
+                federation::exchange(self, &Client::new()).await.map(|minted| minted.token)
+            }
             GcpCredentials::ImpersonatedServiceAccount { source, config } => {
                 generate_impersonated_access_token(source, config)
                     .await
