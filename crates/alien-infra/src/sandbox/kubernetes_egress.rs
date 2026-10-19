@@ -279,6 +279,17 @@ mod tests {
                 );
             })
             .await;
+        // A publicly numbered Service range is still a cluster destination.
+        let mut service_cidrs = server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path("/apis/networking.k8s.io/v1/servicecidrs");
+                then.status(200).json_body(json!({
+                    "apiVersion":"networking.k8s.io/v1","kind":"ServiceCIDRList","metadata":{},
+                    "items":[{"metadata":{"name":"kubernetes"},"spec":{"cidrs":["11.96.0.0/12","fd00:10::/108"]}}]
+                }));
+            })
+            .await;
         // A controller outside the cluster has no cluster search path to read.
         unsafe { std::env::set_var(CLUSTER_DOMAIN_ENV, "corp.example") };
         let first = configure(&ctx, &sandbox, "test-ns").await.unwrap();
@@ -312,12 +323,40 @@ mod tests {
         );
         assert_eq!(
             config["deniedRanges"],
-            json!(["11.128.0.0/16", "8.9.10.11/32"])
+            json!(["11.128.0.0/16", "11.96.0.0/12", "8.9.10.11/32"])
         );
         assert!(!serde_json::to_string(&first)
             .unwrap()
             .contains(config["replicaSecret"].as_str().unwrap()));
         nodes.assert_hits_async(2).await;
+
+        // Without the ServiceCIDR API, only a privately numbered API server Service is
+        // accepted; a public one cannot be excluded and refuses configuration.
+        service_cidrs.delete_async().await;
+        let mut kubernetes_service = server
+            .mock_async(|when, then| {
+                when.method(GET).path("/api/v1/namespaces/default/services/kubernetes");
+                then.status(200).json_body(json!({"kind":"Service","apiVersion":"v1","metadata":{"name":"kubernetes"},"spec":{"clusterIP":"11.96.0.1"}}));
+            })
+            .await;
+        assert_eq!(
+            crate::core::k8s_network::cluster_denied_ranges(&ctx)
+                .await
+                .unwrap_err()
+                .code,
+            "RESOURCE_CONFIG_INVALID"
+        );
+        kubernetes_service.delete_async().await;
+        let private_service = server
+            .mock_async(|when, then| {
+                when.method(GET).path("/api/v1/namespaces/default/services/kubernetes");
+                then.status(200).json_body(json!({"kind":"Service","apiVersion":"v1","metadata":{"name":"kubernetes"},"spec":{"clusterIP":"10.96.0.1"}}));
+            })
+            .await;
+        assert!(crate::core::k8s_network::cluster_denied_ranges(&ctx)
+            .await
+            .is_ok());
+        private_service.assert_async().await;
 
         let path = "/api/v1/namespaces/test-ns/services/sandbox-egress-gateway";
         let mut missing = server.mock_async(|when, then| {

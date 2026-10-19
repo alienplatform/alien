@@ -21,8 +21,8 @@ pub(crate) fn template(stack: &Stack) -> Result<Option<String>> {
     if internet.is_empty() {
         return Ok(None);
     }
-    // The operator excludes node and pod ranges from gateway egress, which needs the node
-    // list even when node heartbeat collection (and its ClusterRole) is turned off.
+    // The operator excludes node, pod and Service ranges from gateway egress, which needs
+    // these cluster reads even when node heartbeat collection (and its ClusterRole) is off.
     let mut template = String::from(
         r#"{{- $nodes := printf "%s-egress-nodes-%s" (include "deployment.fullname" . | trunc 40 | trimSuffix "-") (sha256sum (printf "%s/%s" .Release.Namespace .Release.Name) | trunc 8) -}}
 apiVersion: rbac.authorization.k8s.io/v1
@@ -33,6 +33,13 @@ rules:
   - apiGroups: [""]
     resources: ["nodes"]
     verbs: ["list"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["servicecidrs"]
+    verbs: ["list"]
+  - apiGroups: [""]
+    resources: ["services"]
+    resourceNames: ["kubernetes"]
+    verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

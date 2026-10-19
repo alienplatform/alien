@@ -381,6 +381,17 @@ async fn kubernetes_internet_sandbox_installs_a_hosted_gateway() {
             && doc["subjects"][0]["name"] == manager),
         "the operator must list nodes to exclude node and pod ranges: {node_readers:?}"
     );
+    assert!(
+        documents.iter().any(|doc| doc["kind"] == "ClusterRole"
+            && doc["metadata"]["name"]
+                .as_str()
+                .is_some_and(|name| node_readers.contains(&name))
+            && doc["rules"].as_sequence().is_some_and(|rules| rules.iter().any(|rule| {
+                rule["apiGroups"] == serde_yaml::Value::from(vec!["networking.k8s.io"])
+                    && rule["resources"] == serde_yaml::Value::from(vec!["servicecidrs"])
+            }))),
+        "the operator must list Service ranges to exclude them"
+    );
 
     // Two releases in one namespace must not claim the same node-read role names.
     let cluster_scoped = |release: &str| -> Vec<String> {

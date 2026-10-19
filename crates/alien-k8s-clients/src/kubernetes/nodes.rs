@@ -3,6 +3,7 @@ use crate::kubernetes::kubernetes_request_utils::sign_send_json;
 use alien_client_core::Result;
 use async_trait::async_trait;
 use k8s_openapi::api::core::v1::Node;
+use k8s_openapi::api::networking::v1::ServiceCIDR;
 use k8s_openapi::List;
 #[cfg(feature = "test-utils")]
 use mockall::automock;
@@ -16,6 +17,10 @@ pub trait NodeApi: Send + Sync + std::fmt::Debug {
         label_selector: Option<String>,
         field_selector: Option<String>,
     ) -> Result<List<Node>>;
+
+    /// Service address ranges (networking.k8s.io/v1, Kubernetes 1.33+). An older API
+    /// server answers not found.
+    async fn list_service_cidrs(&self) -> Result<List<ServiceCIDR>>;
 }
 
 impl KubernetesClient {
@@ -48,6 +53,15 @@ impl KubernetesClient {
         let builder = self.client().request(Method::GET, &url);
         sign_send_json(builder, &self.auth_config()).await
     }
+
+    pub async fn list_service_cidrs(&self) -> Result<List<ServiceCIDR>> {
+        let url = format!(
+            "{}/apis/networking.k8s.io/v1/servicecidrs",
+            self.get_base_url()
+        );
+        let builder = self.client().request(Method::GET, &url);
+        sign_send_json(builder, &self.auth_config()).await
+    }
 }
 
 #[async_trait]
@@ -58,5 +72,9 @@ impl NodeApi for KubernetesClient {
         field_selector: Option<String>,
     ) -> Result<List<Node>> {
         self.list_nodes(label_selector, field_selector).await
+    }
+
+    async fn list_service_cidrs(&self) -> Result<List<ServiceCIDR>> {
+        self.list_service_cidrs().await
     }
 }
