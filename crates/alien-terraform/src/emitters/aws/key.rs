@@ -30,7 +30,7 @@ impl TfEmitter for AwsKeyEmitter {
                 ),
                 attr(
                     "description",
-                    Expression::String(format!("Alien encryption key '{}'", ctx.resource_id)),
+                    Expression::String(format!("Encryption key '{}'", ctx.resource_id)),
                 ),
                 attr("enable_key_rotation", Expression::Bool(true)),
                 attr(

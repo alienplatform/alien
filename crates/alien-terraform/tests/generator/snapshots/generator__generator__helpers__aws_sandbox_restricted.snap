@@ -405,9 +405,10 @@ resource "aws_security_group" "default_network_workload" {
   vpc_id      = aws_vpc.default_network[0].id
 
   egress {
-    from_port = 0
-    to_port   = 0
-    protocol  = "-1"
+    description = "Outbound workload traffic"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
     cidr_blocks = [
       "0.0.0.0/0"
     ]

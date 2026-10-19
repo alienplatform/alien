@@ -130,29 +130,7 @@ async fn exercise(delivery_status: StatusCode, delivery_body: &str) {
             ),
         )
         .route(HEALTH_PATH, get(|| async { StatusCode::OK }));
-    let certificate = rcgen::generate_simple_self_signed(vec!["127.0.0.1".to_string()]).unwrap();
-    let server_config = rustls::ServerConfig::builder_with_provider(Arc::new(
-        rustls::crypto::ring::default_provider(),
-    ))
-    .with_safe_default_protocol_versions()
-    .unwrap()
-    .with_no_client_auth()
-    .with_single_cert(
-        vec![certificate.cert.der().clone()],
-        rustls::pki_types::PrivatePkcs8KeyDer::from(certificate.key_pair.serialize_der()).into(),
-    )
-    .unwrap();
-    let tls = axum_server::tls_rustls::RustlsConfig::from_config(Arc::new(server_config));
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    listener.set_nonblocking(true).unwrap();
-    let endpoint = listener.local_addr().unwrap().to_string();
-    let server = tokio::spawn(async move {
-        axum_server::from_tcp_rustls(listener, tls)
-            .unwrap()
-            .serve(agent.into_make_service())
-            .await
-            .unwrap();
-    });
+    let (endpoint, agent_client, server) = serve_agent(agent);
     let paused = Arc::new(AtomicBool::new(false));
     let terminated = Arc::new(AtomicUsize::new(0));
     let mut api = MockLambdaMicrovmsApi::new();
@@ -234,12 +212,7 @@ async fn exercise(delivery_status: StatusCode, delivery_body: &str) {
     )
     .with_egress(Some(SandboxEgress::Internet))
     .with_egress_manager(Arc::new(harness.reopen().await));
-    provider.agent = reqwest::Client::builder()
-        .add_root_certificate(
-            reqwest::Certificate::from_pem(certificate.cert.pem().as_bytes()).unwrap(),
-        )
-        .build()
-        .unwrap();
+    provider.agent = agent_client;
     let policy = EgressPolicy::Allow {
         allow: vec!["api.example.com".to_string()],
     };
@@ -364,6 +337,198 @@ async fn exercise(delivery_status: StatusCode, delivery_body: &str) {
         assert_eq!(harness.policy("mvm-policy"), None);
     }
     server.abort();
+}
+
+/// Serves an agent over TLS on loopback, since `authorized_request` always builds an `https://`
+/// URL. Returns the endpoint, a client that trusts it, and the server task.
+fn serve_agent(agent: Router) -> (String, reqwest::Client, tokio::task::JoinHandle<()>) {
+    let certificate = rcgen::generate_simple_self_signed(vec!["127.0.0.1".to_string()]).unwrap();
+    let server_config = rustls::ServerConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .unwrap()
+    .with_no_client_auth()
+    .with_single_cert(
+        vec![certificate.cert.der().clone()],
+        rustls::pki_types::PrivatePkcs8KeyDer::from(certificate.key_pair.serialize_der()).into(),
+    )
+    .unwrap();
+    let tls = axum_server::tls_rustls::RustlsConfig::from_config(Arc::new(server_config));
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let endpoint = listener.local_addr().unwrap().to_string();
+    let server = tokio::spawn(async move {
+        axum_server::from_tcp_rustls(listener, tls)
+            .unwrap()
+            .serve(agent.into_make_service())
+            .await
+            .unwrap();
+    });
+    let client = reqwest::Client::builder()
+        .add_root_certificate(
+            reqwest::Certificate::from_pem(certificate.cert.pem().as_bytes()).unwrap(),
+        )
+        .build()
+        .unwrap();
+    (endpoint, client, server)
+}
+
+fn microvm(id: &str, state: &str, endpoint: Option<String>) -> Microvm {
+    Microvm {
+        started_at: Some(crate::sandbox_egress::now_unix().unwrap().into()),
+        maximum_duration_in_seconds: Some(120),
+        microvm_id: Some(id.to_string()),
+        endpoint,
+        state: Some(state.to_string()),
+        image_arn: Some("image".to_string()),
+        image_version: Some("1".to_string()),
+    }
+}
+
+/// A MicroVM Lambda ended at its maximum lifetime (or is ending) never serves again. Handing its
+/// id back made the caller's first command fail with the proxy's 502; `getOrCreate` must answer
+/// it with a fresh sandbox under the requested policy, as GCP and Azure do, and must not leave
+/// the dead id's policy live on the gateway — nothing called `terminate` for it.
+///
+/// The `RUNNING` case is a sandbox that ends between `getOrCreate`'s read and the one its policy
+/// update makes: the same answer, reached a moment later.
+#[tokio::test]
+async fn aws_get_or_create_replaces_a_terminated_sandbox_and_removes_its_policy() {
+    for dead_state in ["TERMINATED", "TERMINATING", "RUNNING"] {
+        let harness = Harness::new().await;
+        // The policy the dead sandbox's own create installed, still on the gateway.
+        harness
+            .reopen()
+            .await
+            .update("mvm-dead", &EgressPolicy::Internet)
+            .await
+            .unwrap();
+        let delivered_to = Arc::new(Mutex::new(Vec::<String>::new()));
+        let seen = delivered_to.clone();
+        let agent = Router::new()
+            .route(
+                "/v1/egress",
+                put(move |Json(body): Json<serde_json::Value>| {
+                    let seen = seen.clone();
+                    async move {
+                        let token = body["token"].as_str().unwrap();
+                        let claims: EgressTokenClaims = serde_json::from_slice(
+                            &URL_SAFE_NO_PAD
+                                .decode(token.split('.').nth(1).unwrap())
+                                .unwrap(),
+                        )
+                        .unwrap();
+                        seen.lock().unwrap().push(claims.sub);
+                        StatusCode::NO_CONTENT
+                    }
+                }),
+            )
+            .route(HEALTH_PATH, get(|| async { StatusCode::OK }));
+        let (endpoint, agent_client, server) = serve_agent(agent);
+
+        let mut api = MockLambdaMicrovmsApi::new();
+        let reads = Arc::new(AtomicUsize::new(0));
+        api.expect_get_microvm().returning(move |id| {
+            Ok(if id == "mvm-dead" {
+                // The first read sees `dead_state`; any later one sees the MicroVM gone.
+                let state = if reads.fetch_add(1, Ordering::SeqCst) == 0 {
+                    dead_state
+                } else {
+                    "TERMINATED"
+                };
+                microvm(id, state, None)
+            } else {
+                microvm(id, "RUNNING", Some(endpoint.clone()))
+            })
+        });
+        api.expect_run_microvm()
+            .times(1)
+            .returning(|_, _, _, _, _, _, _, _| Ok(microvm("mvm-fresh", "PENDING", None)));
+        api.expect_create_microvm_auth_token()
+            .withf(|id, _, _| id == "mvm-fresh")
+            .returning(|_, _, _| {
+                Ok(MicrovmAuthToken {
+                    auth_token: [("X-aws-proxy-auth".to_string(), "token".to_string())].into(),
+                })
+            });
+        // The dead MicroVM is left to Lambda: it is already ending, and nothing here created it.
+        api.expect_terminate_microvm().never();
+        api.expect_suspend_microvm().never();
+        api.expect_resume_microvm().never();
+
+        let mut provider = AwsSandbox::new(
+            Arc::new(api),
+            "image",
+            "1",
+            vec!["connector".to_string()],
+            vec![],
+            None,
+            Some(120),
+        )
+        .with_egress(Some(SandboxEgress::Internet))
+        .with_egress_manager(Arc::new(harness.reopen().await));
+        provider.agent = agent_client;
+
+        let requested = EgressPolicy::Allow {
+            allow: vec!["api.example.com".to_string()],
+        };
+        let resolved = provider
+            .get_or_create(CreateSandboxRequest {
+                sandbox_id: Some("mvm-dead".to_string()),
+                egress: Some(requested.clone()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        assert!(
+            resolved.created,
+            "a {dead_state} sandbox that ends must be replaced, not handed back"
+        );
+        assert_eq!(resolved.sandbox.sandbox_id, "mvm-fresh");
+        assert_eq!(resolved.sandbox.state, SandboxState::Running);
+        assert_eq!(harness.policy("mvm-fresh"), Some(requested));
+        assert_eq!(
+            *delivered_to.lock().unwrap(),
+            vec!["mvm-fresh".to_string()],
+            "identity goes to the fresh sandbox only"
+        );
+        assert!(
+            harness.tombstoned("mvm-dead"),
+            "the {dead_state} sandbox's policy must be removed from the gateway"
+        );
+        server.abort();
+    }
+}
+
+/// Updating a terminated sandbox's policy would write a live gateway record for an id that
+/// never runs again, re-creating what its end should have removed.
+#[tokio::test]
+async fn aws_update_egress_refuses_a_terminated_sandbox() {
+    let harness = Harness::new().await;
+    let mut api = MockLambdaMicrovmsApi::new();
+    api.expect_get_microvm()
+        .returning(|id| Ok(microvm(id, "TERMINATED", None)));
+    let provider = AwsSandbox::new(
+        Arc::new(api),
+        "image",
+        "1",
+        vec!["connector".to_string()],
+        vec![],
+        None,
+        Some(120),
+    )
+    .with_egress(Some(SandboxEgress::Internet))
+    .with_egress_manager(Arc::new(harness.reopen().await));
+
+    let error = provider
+        .update_egress("mvm-dead", EgressPolicy::Internet)
+        .await
+        .unwrap_err();
+
+    assert!(error.to_string().contains("sandboxTerminated"), "{error}");
+    assert_eq!(harness.policy("mvm-dead"), None, "no policy is written");
 }
 
 #[tokio::test]
