@@ -772,22 +772,6 @@ fn migrate_legacy_remote_bindings_handoff(
                 role_arn,
             })
         }
-        Platform::Gcp => {
-            let legacy: alien_core::GcpRemoteStackManagementImportData =
-                serde_json::from_value(management.import_data.clone()).map_err(|error| {
-                    ErrorData::bad_request(format!(
-                        "Invalid legacy GCP management handoff: {error}"
-                    ))
-                })?;
-            let Some(service_account_email) = legacy.remote_bindings_service_account_email else {
-                return Ok(());
-            };
-            serde_json::to_value(alien_core::GcpRemoteBindingsImportData {
-                project_id: legacy.project_id,
-                service_account_email,
-                service_account_unique_id: String::new(),
-            })
-        }
         Platform::Azure => {
             let legacy: alien_core::AzureRemoteStackManagementImportData =
                 serde_json::from_value(management.import_data.clone()).map_err(|error| {
@@ -1433,6 +1417,9 @@ async fn prepare_import_stack(
 
     let stack_state = StackState::new(mutation_platform);
     let config = DeploymentConfig {
+        // Template preparation grants no access and does not select an
+        // installation authorization namespace.
+        gcp_federation_scope: None,
         stored_secret_input_ids: None,
         input_values: Default::default(),
         deployment_name: Some(req.deployment_name.clone()),

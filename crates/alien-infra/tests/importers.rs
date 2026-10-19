@@ -97,6 +97,7 @@ fn aws_management_config() -> ManagementConfig {
 
 fn gcp_management_config() -> ManagementConfig {
     ManagementConfig::Gcp(GcpManagementConfig {
+        federation_trust: None,
         service_account_email: "alien-manager@my-project.iam.gserviceaccount.com".to_string(),
     })
 }

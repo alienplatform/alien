@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GcpRemoteBindingsImportData {
     pub project_id: String,
+    pub federation: crate::GcpFederationAccess,
     pub service_account_email: String,
     pub service_account_unique_id: String,
 }

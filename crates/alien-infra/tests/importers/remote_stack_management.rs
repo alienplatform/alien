@@ -50,9 +50,6 @@ fn gcp_remote_stack_management_import_preserves_setup_ownership() {
         project_number: Some("123456789012".to_string()),
         service_account_email: "management@my-project.iam.gserviceaccount.com".to_string(),
         service_account_unique_id: "123456789012345678901".to_string(),
-        remote_bindings_service_account_email: Some(
-            "remote-bindings@my-project.iam.gserviceaccount.com".to_string(),
-        ),
         management_permissions_applied: true,
     };
     let state = run_through_registry(

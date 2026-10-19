@@ -74,13 +74,30 @@ pub(crate) async fn materialize_remote_binding_lease(
     match config {
         ClientConfig::Aws(config) => aws_remote_storage_lease(*config),
         ClientConfig::Gcp(config) => {
-            let token = config
-                .get_bearer_token(GCP_CLOUD_PLATFORM_SCOPE)
-                .await
-                .context(ErrorData::CredentialMaterializationFailed {
-                    platform: Platform::Gcp,
-                    purpose: "Remote Bindings".to_string(),
-                })?;
+            let (token, expires_at) =
+                if matches!(&config.credentials, GcpCredentials::Federated { .. }) {
+                    let lease = config
+                        .acquire_federated_token(&reqwest::Client::new())
+                        .await
+                        .context(ErrorData::CredentialMaterializationFailed {
+                            platform: Platform::Gcp,
+                            purpose: "Remote Bindings".to_string(),
+                        })?;
+                    (lease.token, lease.expires_at)
+                } else {
+                    let token = config
+                        .get_bearer_token(GCP_CLOUD_PLATFORM_SCOPE)
+                        .await
+                        .context(ErrorData::CredentialMaterializationFailed {
+                            platform: Platform::Gcp,
+                            purpose: "Remote Bindings".to_string(),
+                        })?;
+                    (
+                        token,
+                        Utc::now()
+                            + chrono::Duration::seconds(i64::from(REMOTE_STORAGE_DURATION_SECONDS)),
+                    )
+                };
             Ok(MaterializedCredentialLease {
                 client_config: ClientConfig::Gcp(Box::new(GcpClientConfig {
                     project_id: config.project_id,
@@ -89,8 +106,7 @@ pub(crate) async fn materialize_remote_binding_lease(
                     service_overrides: None,
                     project_number: config.project_number,
                 })),
-                expires_at: Utc::now()
-                    + chrono::Duration::seconds(i64::from(REMOTE_STORAGE_DURATION_SECONDS)),
+                expires_at,
             })
         }
         ClientConfig::Azure(config) => {

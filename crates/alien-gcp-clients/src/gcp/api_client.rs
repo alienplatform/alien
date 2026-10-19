@@ -96,9 +96,7 @@ impl GcpClientBase {
         // Cache miss or expired – fetch a fresh token.
         let (token, cache_ttl) =
             if matches!(&self.cfg.credentials, GcpCredentials::Federated { .. }) {
-                // Credential exchange calls IAM through another client. Boxing this
-                // edge keeps recursive authentication futures finite-sized.
-                let minted = Box::pin(super::federation::exchange(&self.cfg, &self.http)).await?;
+                let minted = self.cfg.acquire_federated_token(&self.http).await?;
                 let remaining =
                     (minted.expires_at - chrono::Utc::now())
                         .to_std()

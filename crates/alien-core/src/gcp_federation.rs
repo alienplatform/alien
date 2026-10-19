@@ -299,6 +299,37 @@ mod tests {
     }
 
     #[test]
+    fn broker_rejects_foreign_installation_and_access_purpose() {
+        let scope = GcpFederationScope {
+            workspace_id: "workspace".to_string(),
+            project_id: "project".to_string(),
+            deployment_group_id: "group".to_string(),
+            deployment_name: "production".to_string(),
+        };
+        let access = access();
+        scope
+            .validate_access(&access, &crate::RemoteStackManagement::RESOURCE_TYPE)
+            .unwrap();
+        assert!(scope
+            .validate_access(&access, &crate::RemoteBindings::RESOURCE_TYPE)
+            .is_err());
+        let other = GcpFederationScope {
+            deployment_group_id: "other-group".to_string(),
+            ..scope.clone()
+        };
+        assert!(other
+            .validate_access(&access, &crate::RemoteStackManagement::RESOURCE_TYPE)
+            .is_err());
+        let mut substituted = access.clone();
+        substituted.assertion_audience = other
+            .assertion_audience(&crate::RemoteStackManagement::RESOURCE_TYPE)
+            .unwrap();
+        assert!(scope
+            .validate_access(&substituted, &crate::RemoteStackManagement::RESOURCE_TYPE)
+            .is_err());
+    }
+
+    #[test]
     fn invalid_target_identifiers_cannot_construct_google_endpoints() {
         for value in [
             "",

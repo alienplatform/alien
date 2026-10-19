@@ -17,9 +17,18 @@ const STS_ENDPOINT: &str = "https://sts.googleapis.com/v1/token";
 const CLOUD_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
 
 /// Token values stay inside the authentication path and must not be logged.
-pub(crate) struct FederatedAccessToken {
+pub struct GcpFederatedAccessToken {
     pub token: String,
     pub expires_at: DateTime<Utc>,
+}
+
+impl std::fmt::Debug for GcpFederatedAccessToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GcpFederatedAccessToken")
+            .field("token", &"[REDACTED]")
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
 }
 
 #[derive(Deserialize)]
@@ -45,7 +54,7 @@ struct TokenRequestStatus {
 pub(crate) async fn exchange(
     config: &GcpClientConfig,
     http: &Client,
-) -> Result<FederatedAccessToken> {
+) -> Result<GcpFederatedAccessToken> {
     let GcpCredentials::Federated {
         access,
         source,
@@ -176,7 +185,7 @@ pub(crate) async fn exchange(
     if minted.access_token.is_empty() || expires_at <= Utc::now() {
         return Err(invalid("Target account returned an empty or expired token"));
     }
-    Ok(FederatedAccessToken {
+    Ok(GcpFederatedAccessToken {
         token: minted.access_token,
         expires_at,
     })

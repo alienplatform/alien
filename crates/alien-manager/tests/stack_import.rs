@@ -488,6 +488,7 @@ fn gcp_remote_management_import_request(
         setup_fingerprint_version: 1,
         stack_settings: StackSettings::default(),
         management_config: Some(ManagementConfig::Gcp(GcpManagementConfig {
+            federation_trust: None,
             service_account_email: "manager@example.iam.gserviceaccount.com".to_string(),
         })),
         input_values: Default::default(),
@@ -501,7 +502,6 @@ fn gcp_remote_management_import_request(
                     "{deployment_name}-management@{project_id}.iam.gserviceaccount.com"
                 ),
                 service_account_unique_id: "1234567890".to_string(),
-                remote_bindings_service_account_email: None,
                 management_permissions_applied: true,
             })
             .unwrap(),

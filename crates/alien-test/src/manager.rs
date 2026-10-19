@@ -455,6 +455,7 @@ impl TestManager {
                 let email = mgmt.management_identity_email.as_ref()?;
                 Some(alien_core::ManagementConfig::Gcp(
                     alien_core::GcpManagementConfig {
+                        federation_trust: None,
                         service_account_email: email.clone(),
                     },
                 ))

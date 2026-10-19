@@ -258,6 +258,7 @@ fn render_management_config(platform: Platform) -> Option<ManagementConfig> {
             managing_role_arn: "rendered-from-template-parameter".to_string(),
         })),
         Platform::Gcp => Some(ManagementConfig::Gcp(GcpManagementConfig {
+            federation_trust: None,
             service_account_email: "rendered-from-terraform-variable".to_string(),
         })),
         Platform::Azure => Some(ManagementConfig::Azure(AzureManagementConfig {

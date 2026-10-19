@@ -31,6 +31,8 @@ pub use infra_requirements::*;
 mod service_account;
 pub use service_account::*;
 
+mod gcp_federation;
+
 mod remote_stack_management;
 pub use remote_stack_management::*;
 

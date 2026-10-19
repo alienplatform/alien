@@ -328,6 +328,7 @@ fn management_config_from_info(
         }
         ServiceAccountInfo::Gcp(gcp_info) => {
             Ok(ManagementConfig::Gcp(alien_core::GcpManagementConfig {
+                federation_trust: None,
                 service_account_email: gcp_info.email,
             }))
         }

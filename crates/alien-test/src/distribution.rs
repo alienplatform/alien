@@ -1060,6 +1060,7 @@ fn render_management_config(
             managing_role_arn: String::new(),
         })),
         Platform::Gcp => Some(ManagementConfig::Gcp(GcpManagementConfig {
+            federation_trust: None,
             service_account_email: String::new(),
         })),
         Platform::Azure => Some(ManagementConfig::Azure(AzureManagementConfig {

@@ -15,6 +15,9 @@ use crate::{
 pub struct GcpRemoteBindingsController {
     pub(crate) service_account_email: Option<String>,
     pub(crate) service_account_unique_id: Option<String>,
+    #[serde(default)]
+    pub(crate) federation_setup: crate::gcp_federation::GcpFederationSetup,
+    pub(crate) federation_access: Option<alien_core::GcpFederationAccess>,
 }
 
 #[controller]
@@ -26,6 +29,10 @@ impl GcpRemoteBindingsController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<RemoteBindings>()?;
+        crate::gcp_federation::GcpFederationSetup::validate_installation(
+            ctx,
+            &RemoteBindings::RESOURCE_TYPE,
+        )?;
         let account_id = service_account_id(ctx.resource_prefix);
         let gcp_config = ctx.get_gcp_config()?;
         let created = ctx.service_provider.get_gcp_iam_client(gcp_config)?
@@ -51,17 +58,22 @@ impl GcpRemoteBindingsController {
             }));
         }
         Ok(HandlerAction::Continue {
-            state: GrantingImpersonation,
+            state: GrantingFederation,
             suggested_delay: None,
         })
     }
 
-    #[handler(state = GrantingImpersonation, on_failure = CreateFailed, status = ResourceStatus::Provisioning)]
-    async fn granting_impersonation(
+    #[handler(state = GrantingFederation, on_failure = CreateFailed, status = ResourceStatus::Provisioning)]
+    async fn granting_federation(
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
-        reconcile_impersonation(self, ctx).await?;
+        if !reconcile_federation(self, ctx).await? {
+            return Ok(HandlerAction::Continue {
+                state: GrantingFederation,
+                suggested_delay: Some(Duration::from_secs(1)),
+            });
+        }
         Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: None,
@@ -79,7 +91,12 @@ impl GcpRemoteBindingsController {
     #[flow_entry(Update, from = [Ready, RefreshFailed])]
     #[handler(state = UpdateStart, on_failure = UpdateFailed, status = ResourceStatus::Updating)]
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
-        reconcile_impersonation(self, ctx).await?;
+        if !reconcile_federation(self, ctx).await? {
+            return Ok(HandlerAction::Continue {
+                state: UpdateStart,
+                suggested_delay: Some(Duration::from_secs(1)),
+            });
+        }
         Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: None,
@@ -89,6 +106,12 @@ impl GcpRemoteBindingsController {
     #[flow_entry(Delete)]
     #[handler(state = DeleteStart, on_failure = DeleteFailed, status = ResourceStatus::Deleting)]
     async fn delete_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+        if !self.federation_setup.delete(ctx).await? {
+            return Ok(HandlerAction::Continue {
+                state: DeleteStart,
+                suggested_delay: Some(Duration::from_secs(1)),
+            });
+        }
         if let Some(email) = self.service_account_email.as_ref() {
             let client = ctx
                 .service_provider
@@ -112,6 +135,7 @@ impl GcpRemoteBindingsController {
         }
         self.service_account_email = None;
         self.service_account_unique_id = None;
+        self.federation_access = None;
         Ok(HandlerAction::Continue {
             state: Deleted,
             suggested_delay: None,
@@ -131,30 +155,30 @@ impl GcpRemoteBindingsController {
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
 
     fn build_outputs(&self) -> Option<ResourceOutputs> {
-        let email = self.service_account_email.clone()?;
+        let access = self.federation_access.as_ref()?;
         Some(ResourceOutputs::new(RemoteBindingsOutputs {
-            resource_id: email.clone(),
-            access_configuration: email,
+            resource_id: access.service_account_email.clone(),
+            access_configuration: serde_json::json!(access).to_string(),
         }))
     }
 }
 
-async fn reconcile_impersonation(
-    controller: &GcpRemoteBindingsController,
+async fn reconcile_federation(
+    controller: &mut GcpRemoteBindingsController,
     ctx: &ResourceControllerContext<'_>,
-) -> Result<()> {
+) -> Result<bool> {
     let config = ctx.desired_resource_config::<RemoteBindings>()?;
     let email = controller
         .service_account_email
         .clone()
         .ok_or_else(|| missing_identity(ctx))?;
-    let management = ctx.get_gcp_management_config()?.ok_or_else(|| {
-        AlienError::new(ErrorData::InfrastructureError {
-            message: "GCP management configuration is required for Remote Bindings".to_string(),
-            operation: Some("grant_remote_bindings_impersonation".to_string()),
-            resource_id: Some(config.id.clone()),
-        })
-    })?;
+    let Some(access) = controller
+        .federation_setup
+        .reconcile(ctx, &email, &RemoteBindings::RESOURCE_TYPE)
+        .await?
+    else {
+        return Ok(false);
+    };
     let client = ctx
         .service_provider
         .get_gcp_iam_client(ctx.get_gcp_config()?)?;
@@ -165,17 +189,16 @@ async fn reconcile_impersonation(
             message: "Failed to read Remote Bindings service-account IAM policy".to_string(),
             resource_id: Some(config.id.clone()),
         })?;
-    let member = format!("serviceAccount:{}", management.service_account_email);
-    let desired = vec![
-        Binding::builder()
-            .role("roles/iam.serviceAccountTokenCreator".to_string())
-            .members(vec![member.clone()])
-            .build(),
-        Binding::builder()
-            .role("roles/iam.serviceAccountUser".to_string())
-            .members(vec![member.clone()])
-            .build(),
-    ];
+    let member = access
+        .principal()
+        .context(ErrorData::ResourceConfigInvalid {
+            message: "Invalid published-resource federation principal".to_string(),
+            resource_id: Some(config.id.clone()),
+        })?;
+    let desired = vec![Binding::builder()
+        .role("roles/iam.workloadIdentityUser".to_string())
+        .members(vec![member.clone()])
+        .build()];
     let mut bindings = current.bindings;
     let owned_roles = ResourcePermissionsHelper::gcp_predefined_role_names(&desired);
     if ResourcePermissionsHelper::reconcile_gcp_project_member_bindings(
@@ -198,11 +221,12 @@ async fn reconcile_impersonation(
             )
             .await
             .context(ErrorData::CloudPlatformError {
-                message: "Failed to grant Remote Bindings impersonation".to_string(),
+                message: "Failed to grant published-resource federation".to_string(),
                 resource_id: Some(config.id.clone()),
             })?;
     }
-    Ok(())
+    controller.federation_access = Some(access);
+    Ok(true)
 }
 
 fn missing_identity(ctx: &ResourceControllerContext<'_>) -> AlienError<ErrorData> {

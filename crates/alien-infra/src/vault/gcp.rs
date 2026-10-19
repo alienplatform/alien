@@ -1459,6 +1459,7 @@ mod project_policy_writer_tests {
             .setup_run(true)
             .allow_frozen_changes(true)
             .management_config(ManagementConfig::Gcp(GcpManagementConfig {
+                federation_trust: None,
                 service_account_email: "control-plane@vendor.iam.gserviceaccount.com".to_string(),
             }))
             .build();

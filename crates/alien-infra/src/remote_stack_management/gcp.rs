@@ -34,11 +34,13 @@ pub struct GcpRemoteStackManagementController {
     pub(crate) service_account_email: Option<String>,
     /// The unique ID of the created management service account.
     pub(crate) service_account_unique_id: Option<String>,
-    /// Setup-owned service account used only for Remote Bindings data access.
-    /// Whether the service account has been bound to the role.
+    /// Whether the management service account has its resource permissions.
     pub(crate) role_bound: bool,
-    /// Whether impersonation permissions have been granted
-    pub(crate) impersonation_granted: bool,
+    /// Whether the deployment's exact federated principal has been granted access.
+    pub(crate) federation_granted: bool,
+    #[serde(default)]
+    pub(crate) federation_setup: crate::gcp_federation::GcpFederationSetup,
+    pub(crate) federation_access: Option<alien_core::GcpFederationAccess>,
     /// How the deployment names its custom roles, recorded with the service
     /// account. `None` for a service account created before it was recorded.
     pub(crate) custom_role_naming: Option<GcpCustomRoleNaming>,
@@ -63,6 +65,10 @@ impl GcpRemoteStackManagementController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<RemoteStackManagement>()?;
+        crate::gcp_federation::GcpFederationSetup::validate_installation(
+            ctx,
+            &RemoteStackManagement::RESOURCE_TYPE,
+        )?;
         let custom_role_naming = GcpCustomRoleNaming::for_deployment(ctx.state)?;
         let gcp_config = ctx.get_gcp_config()?;
         let client = ctx.service_provider.get_gcp_iam_client(gcp_config)?;
@@ -339,17 +345,17 @@ impl GcpRemoteStackManagementController {
         self.management_permissions_revision = super::management_permissions_revision(ctx)?;
 
         Ok(HandlerAction::Continue {
-            state: GrantingImpersonation,
+            state: GrantingFederation,
             suggested_delay: None,
         })
     }
 
     #[handler(
-        state = GrantingImpersonation,
+        state = GrantingFederation,
         on_failure = CreateFailed,
         status = ResourceStatus::Provisioning,
     )]
-    async fn granting_impersonation(
+    async fn granting_federation(
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
@@ -358,26 +364,28 @@ impl GcpRemoteStackManagementController {
 
         let service_account_email = self.service_account_email.as_ref().unwrap();
 
-        // Get management service account email from stack settings (required for cross-account management)
-        let gcp_management = ctx.get_gcp_management_config()?
-            .ok_or_else(|| AlienError::new(ErrorData::InfrastructureError {
-                message: "GCP management configuration is required for RemoteStackManagement. Please configure management settings in your stack.".to_string(),
-                operation: Some("grant_impersonation_permissions".to_string()),
-                resource_id: Some(config.id.clone()),
-            }))?;
-        let management_service_account_email = &gcp_management.service_account_email;
-
-        // Initial setup runs with the target's setup credentials, not the
-        // external management identity receiving this grant. A live token
-        // probe here would therefore test the wrong caller. The management
-        // credential resolver exercises this trust relationship after setup
-        // hands provisioning back to the control plane.
-
-        info!(
-            target_service_account = %service_account_email,
-            management_service_account = %management_service_account_email,
-            "Granting impersonation permissions to management service account"
-        );
+        let Some(access) = self
+            .federation_setup
+            .reconcile(
+                ctx,
+                service_account_email,
+                &RemoteStackManagement::RESOURCE_TYPE,
+            )
+            .await?
+        else {
+            return Ok(HandlerAction::Continue {
+                state: GrantingFederation,
+                suggested_delay: Some(Duration::from_secs(1)),
+            });
+        };
+        let management_principal =
+            access
+                .principal()
+                .context(ErrorData::ResourceConfigInvalid {
+                    message: "Invalid deployment federation principal".to_string(),
+                    resource_id: Some(config.id.clone()),
+                })?;
+        self.federation_access = Some(access);
 
         let context = ResourcePermissionsHelper::gcp_permission_context(ctx)?
             .with_service_account_name(
@@ -422,19 +430,13 @@ impl GcpRemoteStackManagementController {
                 resource_id: Some(config.id.clone()),
             })?;
 
-        // Reconcile impersonation bindings for the configured management service account.
+        // Reconcile the exact pool-local principal for this installation.
         let mut all_bindings = current_policy.bindings;
-        let member = format!("serviceAccount:{management_service_account_email}");
-        let desired_bindings = vec![
-            Binding::builder()
-                .role("roles/iam.serviceAccountTokenCreator".to_string())
-                .members(vec![member.clone()])
-                .build(),
-            Binding::builder()
-                .role("roles/iam.serviceAccountUser".to_string())
-                .members(vec![member.clone()])
-                .build(),
-        ];
+        let member = management_principal;
+        let desired_bindings = vec![Binding::builder()
+            .role("roles/iam.workloadIdentityUser".to_string())
+            .members(vec![member.clone()])
+            .build()];
         let owned_exact_roles =
             ResourcePermissionsHelper::gcp_predefined_role_names(&desired_bindings);
         let mut changed = ResourcePermissionsHelper::reconcile_gcp_project_member_bindings(
@@ -456,10 +458,10 @@ impl GcpRemoteStackManagementController {
         if !changed {
             info!(
                 target_service_account = %service_account_email,
-                management_service_account = %management_service_account_email,
-                "Impersonation permissions already reconciled"
+                federated_principal = %member,
+                "Federation permissions already reconciled"
             );
-            self.impersonation_granted = true;
+            self.federation_granted = true;
             return Ok(HandlerAction::Continue {
                 state: Ready,
                 suggested_delay: None,
@@ -490,10 +492,10 @@ impl GcpRemoteStackManagementController {
 
         info!(
             target_service_account = %service_account_email,
-            management_service_account = %management_service_account_email,
-            "Impersonation permissions granted successfully"
+            federated_principal = %member,
+            "Federation permissions granted successfully"
         );
-        self.impersonation_granted = true;
+        self.federation_granted = true;
 
         Ok(HandlerAction::Continue {
             state: Ready,
@@ -548,6 +550,13 @@ impl GcpRemoteStackManagementController {
     )]
     async fn delete_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<RemoteStackManagement>()?;
+
+        if !self.federation_setup.delete(ctx).await? {
+            return Ok(HandlerAction::Continue {
+                state: DeleteStart,
+                suggested_delay: Some(Duration::from_secs(1)),
+            });
+        }
 
         // Remove all IAM bindings where our service account is a member
         if !self.role_bound {
@@ -675,7 +684,7 @@ impl GcpRemoteStackManagementController {
         self.service_account_email = None;
         self.service_account_unique_id = None;
         self.role_bound = false;
-        self.impersonation_granted = false;
+        self.federation_granted = false;
 
         Ok(HandlerAction::Continue {
             state: Deleted,
@@ -705,15 +714,15 @@ impl GcpRemoteStackManagementController {
     }
 
     fn build_outputs(&self) -> Option<ResourceOutputs> {
-        if let Some(email) = &self.service_account_email {
-            Some(ResourceOutputs::new(RemoteStackManagementOutputs {
-                management_resource_id: email.clone(),
-                access_configuration: email.clone(),
-                legacy_remote_bindings_access: None,
-            }))
-        } else {
-            None
+        if !self.federation_granted {
+            return None;
         }
+        let access = self.federation_access.as_ref()?;
+        Some(ResourceOutputs::new(RemoteStackManagementOutputs {
+            management_resource_id: access.service_account_email.clone(),
+            access_configuration: serde_json::json!(access).to_string(),
+            legacy_remote_bindings_access: None,
+        }))
     }
 }
 
@@ -749,7 +758,7 @@ fn emit_gcp_remote_stack_management_heartbeat(
                     service_account_email: controller.service_account_email.clone(),
                     service_account_unique_id: controller.service_account_unique_id.clone(),
                     role_bound: controller.role_bound,
-                    impersonation_granted: controller.impersonation_granted,
+                    impersonation_granted: controller.federation_granted,
                 },
             ),
         ),
@@ -995,7 +1004,9 @@ impl GcpRemoteStackManagementController {
             )),
             service_account_unique_id: Some("123456789012345678901".to_string()),
             role_bound: true,
-            impersonation_granted: true,
+            federation_granted: true,
+            federation_setup: Default::default(),
+            federation_access: None,
             custom_role_naming: Some(GcpCustomRoleNaming::HashedLongPrefix),
             management_permissions_revision: None,
             _internal_stay_count: None,
@@ -1142,7 +1153,9 @@ mod tests {
             )),
             service_account_unique_id: Some("123456789012345678901".to_string()),
             role_bound: true,
-            impersonation_granted: true,
+            federation_granted: true,
+            federation_setup: Default::default(),
+            federation_access: None,
             ..Default::default()
         }
     }

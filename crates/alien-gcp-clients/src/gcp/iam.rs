@@ -131,6 +131,12 @@ pub trait IamApi: Send + Sync + Debug {
 
     async fn get_workload_identity_pool(&self, pool_id: String) -> Result<WorkloadIdentityPool>;
 
+    async fn update_workload_identity_pool(
+        &self,
+        pool_id: String,
+        pool: WorkloadIdentityPool,
+    ) -> Result<Operation>;
+
     async fn delete_workload_identity_pool(&self, pool_id: String) -> Result<Operation>;
 
     async fn undelete_workload_identity_pool(&self, pool_id: String) -> Result<Operation>;
@@ -562,6 +568,27 @@ impl IamApi for IamClient {
         );
         self.base
             .execute_request(Method::GET, &path, None, Option::<()>::None, &pool_id)
+            .await
+    }
+
+    async fn update_workload_identity_pool(
+        &self,
+        pool_id: String,
+        pool: WorkloadIdentityPool,
+    ) -> Result<Operation> {
+        let path = format!(
+            "projects/{}/locations/global/workloadIdentityPools/{}",
+            self.project_id,
+            urlencoding::encode(&pool_id)
+        );
+        self.base
+            .execute_request_once(
+                Method::PATCH,
+                &path,
+                Some(vec![("updateMask", "disabled".to_string())]),
+                Some(pool),
+                &pool_id,
+            )
             .await
     }
 

@@ -1416,7 +1416,12 @@ impl RunnerConfigSources<'_> {
         )
         .await;
 
+        let gcp_federation_scope = (deployment.base_platform.unwrap_or(deployment.platform)
+            == alien_core::Platform::Gcp)
+            .then(|| deployment.gcp_federation_scope());
         let config = if let Some(mut config) = deployment.deployment_config.clone() {
+            // Stored installer configuration cannot choose the broker's authorization namespace.
+            config.gcp_federation_scope = gcp_federation_scope;
             config.environment_variables = environment_variables;
             if config.deployment_name.is_none() {
                 config.deployment_name = Some(deployment.name.clone());
@@ -1452,6 +1457,7 @@ impl RunnerConfigSources<'_> {
             })?;
 
             DeploymentConfig {
+                gcp_federation_scope,
                 stored_secret_input_ids: None,
                 input_values: deployment.input_values.clone(),
                 deployment_name: Some(deployment.name.clone()),
