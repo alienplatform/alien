@@ -954,7 +954,8 @@ impl AwsSandboxController {
             && !super::egress::other_internet_sandbox_remains(ctx, &config.id)
         {
             let vault = super::egress::deployment_vault(ctx).await?;
-            super::egress::delete_shared_secrets(vault.as_ref()).await?;
+            let vault_name = format!("{}-{}", ctx.resource_prefix, alien_core::SECRETS_VAULT_ID);
+            super::egress::delete_shared_secrets(vault.as_ref(), &vault_name).await?;
             info!(sandbox_id = %config.id, "Deleted the deployment's sandbox egress key and gateway configuration");
         }
         self.egress_public_key = None;
