@@ -11,6 +11,10 @@ import {
 
 export type ManagedRuntimeUnitStatus = {
   cpu?: MetricSample | null | undefined;
+  /**
+   * Image this replica runs.
+   */
+  image?: string | null | undefined;
   ip?: string | null | undefined;
   machineId?: string | null | undefined;
   memory?: MetricSample | null | undefined;
@@ -33,6 +37,7 @@ export type ManagedRuntimeUnitStatus = {
 /** @internal */
 export type ManagedRuntimeUnitStatus$Outbound = {
   cpu?: MetricSample$Outbound | null | undefined;
+  image?: string | null | undefined;
   ip?: string | null | undefined;
   machineId?: string | null | undefined;
   memory?: MetricSample$Outbound | null | undefined;
@@ -58,6 +63,7 @@ export const ManagedRuntimeUnitStatus$outboundSchema: z.ZodType<
   ManagedRuntimeUnitStatus
 > = z.object({
   cpu: z.nullable(MetricSample$outboundSchema).optional(),
+  image: z.nullable(z.string()).optional(),
   ip: z.nullable(z.string()).optional(),
   machineId: z.nullable(z.string()).optional(),
   memory: z.nullable(MetricSample$outboundSchema).optional(),

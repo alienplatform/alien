@@ -193,14 +193,14 @@ fn set_mode(file: &std::fs::File, mode: u32) -> io::Result<()> {
     Ok(())
 }
 
-/// Removes an entry beneath the session root, for the path that just created it.
+/// Removes an entry beneath the session root.
 ///
-/// Only reached when the mode could not be set: leaving the entry would make every later write
-/// take the branch that preserves an existing entry's mode, so one failure here would be
-/// permanent rather than retryable. Walks to the parent through the same confined steps, so it can
-/// only unlink beneath the root.
+/// Walks to the parent through the same confined steps as an open, so it can only unlink beneath
+/// the root. `open_write` uses it when the mode of a file it just created could not be set:
+/// leaving that entry would make every later write take the branch that preserves an existing
+/// entry's mode, so one failure there would be permanent rather than retryable.
 #[cfg(target_os = "linux")]
-fn remove_beneath(root: &Path, requested: &str, flags: i32) -> io::Result<()> {
+pub fn remove_beneath(root: &Path, requested: &str, flags: i32) -> io::Result<()> {
     let (dir, leaf) = descend_to_parent(root, requested)?;
     // SAFETY: a valid dirfd, a NUL-terminated leaf name, and a flags word.
     if unsafe { libc::unlinkat(dir.as_raw_fd(), leaf.as_ptr(), flags) } != 0 {
@@ -291,10 +291,14 @@ mod fallback {
     pub fn create_dir_all(root: &Path, requested: &str) -> io::Result<()> {
         std::fs::create_dir_all(resolved(root, requested)?)
     }
+
+    pub fn remove_beneath(root: &Path, requested: &str, _flags: i32) -> io::Result<()> {
+        std::fs::remove_file(resolved(root, requested)?)
+    }
 }
 
 #[cfg(not(target_os = "linux"))]
-pub use fallback::{create_dir_all, open_read, open_write};
+pub use fallback::{create_dir_all, open_read, open_write, remove_beneath};
 
 #[cfg(all(test, target_os = "linux"))]
 mod tests {

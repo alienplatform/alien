@@ -17,6 +17,7 @@ let value: ManagedRuntimeUnitStatus = {
 | Field                                            | Type                                             | Required                                         | Description                                      |
 | ------------------------------------------------ | ------------------------------------------------ | ------------------------------------------------ | ------------------------------------------------ |
 | `cpu`                                            | [models.MetricSample](../models/metricsample.md) | :heavy_minus_sign:                               | N/A                                              |
+| `image`                                          | *string*                                         | :heavy_minus_sign:                               | Image this replica runs.                         |
 | `ip`                                             | *string*                                         | :heavy_minus_sign:                               | N/A                                              |
 | `machineId`                                      | *string*                                         | :heavy_minus_sign:                               | N/A                                              |
 | `memory`                                         | [models.MetricSample](../models/metricsample.md) | :heavy_minus_sign:                               | N/A                                              |

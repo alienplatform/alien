@@ -173,23 +173,30 @@ mod tests {
 
     /// Dropping the handle must stop the server: a detached task would keep serving (and
     /// keep the port bound) for the rest of the process.
+    ///
+    /// The check watches the server task itself rather than probing the port: once the
+    /// listener closes, any concurrently running test or process may bind the same
+    /// ephemeral port, so a request that succeeds after the drop does not prove this
+    /// server is still alive. A finished task has dropped its listener.
     #[tokio::test]
     async fn dropping_the_handle_stops_the_server() {
         let handle = start_gateway(vec![]).await.expect("gateway should start");
-        let url = format!("{}/healthz/ready", handle.url);
+        let url = format!("{}{READY_PATH}", handle.url);
         assert!(
             reqwest::get(&url).await.is_ok(),
             "the gateway serves while the handle is held"
         );
+        let server = handle.server.abort_handle();
 
         drop(handle);
-        // The abort lands on the next scheduler pass.
-        tokio::task::yield_now().await;
-        tokio::time::sleep(Duration::from_millis(50)).await;
 
-        assert!(
-            reqwest::get(&url).await.is_err(),
-            "the gateway must stop serving once its handle is dropped"
-        );
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while !server.is_finished() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the gateway server task must stop once its handle is dropped"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
     }
 }

@@ -1,0 +1,31 @@
+[package]
+name = "alien-sandbox-conformance"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+publish = false
+description = "Live sandbox egress conformance probes"
+
+[features]
+live = ["dep:alien-bindings", "dep:alien-error", "dep:futures", "dep:tokio", "dep:serde_json"]
+aws = ["live", "alien-bindings/aws"]
+gcp = ["live", "alien-bindings/gcp"]
+azure = ["live", "alien-bindings/azure"]
+kubernetes = ["live", "alien-bindings/kubernetes"]
+local = ["live", "alien-bindings/local"]
+
+[[bin]]
+name = "alien-sandbox-conformance"
+path = "src/main.rs"
+required-features = ["live"]
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true, optional = true }
+alien-bindings = { workspace = true, optional = true }
+alien-error = { workspace = true, optional = true }
+futures = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true, features = ["rt-multi-thread", "macros", "time"] }
+
+[dev-dependencies]
+serde_json = { workspace = true }

@@ -884,6 +884,9 @@ pub struct ManagedRuntimeUnitStatus {
     pub metrics_last_updated: Option<String>,
     pub cpu: Option<MetricSample>,
     pub memory: Option<MetricSample>,
+    /// Image this replica runs.
+    #[serde(default)]
+    pub image: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

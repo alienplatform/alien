@@ -10,8 +10,8 @@
 //!
 //! Sessions are MicroVMs started from the image at runtime. `RunMicrovm` has no `tags`, so
 //! image plus version *is* the session identity; `lambda:ListMicrovms` is account-wide and
-//! granted to no sandbox set, so sessions cannot be enumerated here and self-reap at their
-//! declared lifetime ceiling.
+//! granted to no sandbox set, so sessions cannot be enumerated here. Each lasts until its caller
+//! terminates it or AWS ends it, after eight hours at the latest.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -512,8 +512,10 @@ impl AwsSandboxController {
     ) -> Result<HandlerAction> {
         if let Some(key) = &self.egress_public_key {
             self.egress_network_verified = false;
-            super::egress::publish_aws_config(ctx, key).await?;
-            self.egress_network_verified = true;
+            if super::egress::is_declared(ctx) {
+                super::egress::publish_aws_config(ctx, key).await?;
+                self.egress_network_verified = true;
+            }
         }
         Ok(HandlerAction::Continue {
             state: Ready,
@@ -529,11 +531,10 @@ impl AwsSandboxController {
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
 
+        let declared = super::egress::is_declared(ctx);
         if matches!(config.egress, alien_core::SandboxEgress::Internet) {
             self.egress_network_verified = false;
-            // A deployment being deleted no longer declares this sandbox or its network. Its
-            // binding stays withdrawn, and the refresh must not block the deletion.
-            if ctx.desired_stack.resources.contains_key(&config.id) {
+            if declared {
                 super::egress::validate_aws_network(ctx).await?;
                 self.egress_network_verified = true;
             }
@@ -615,7 +616,7 @@ impl AwsSandboxController {
         debug!(sandbox_id = %config.id, "Sandbox ready");
 
         Ok(HandlerAction::Continue {
-            state: if self.egress_public_key.is_some() {
+            state: if self.egress_public_key.is_some() && declared {
                 RefreshingEgressConfig
             } else {
                 Ready
@@ -625,7 +626,8 @@ impl AwsSandboxController {
     }
 
     // Refresh the audience list when another Sandbox is added or removed, even
-    // when this owner's own resource configuration did not change.
+    // when this owner's own resource configuration did not change. A sandbox saved in this
+    // state before its deletion began publishes nothing.
     #[handler(state = RefreshingEgressConfig, on_failure = RefreshFailed, status = ResourceStatus::Running)]
     async fn refreshing_egress_config(
         &mut self,
@@ -633,8 +635,10 @@ impl AwsSandboxController {
     ) -> Result<HandlerAction> {
         if let Some(key) = &self.egress_public_key {
             self.egress_network_verified = false;
-            super::egress::publish_aws_config(ctx, key).await?;
-            self.egress_network_verified = true;
+            if super::egress::is_declared(ctx) {
+                super::egress::publish_aws_config(ctx, key).await?;
+                self.egress_network_verified = true;
+            }
         }
         Ok(HandlerAction::Continue {
             state: Ready,
@@ -838,8 +842,8 @@ impl AwsSandboxController {
 
     // ─────────────── DELETE FLOW ──────────────────────────────────────────
 
-    // Sessions cannot be enumerated (see the module doc) and self-reap; a delete refused while
-    // they run fails loudly here and the executor retries — nothing is fired and forgotten.
+    // Sessions cannot be enumerated and are not stopped here (see the module doc). A failed image
+    // delete fails loudly here and the executor retries it; nothing is fired and forgotten.
 
     #[flow_entry(Delete)]
     #[handler(
@@ -1298,6 +1302,10 @@ impl ImageBuildInputs {
         self
     }
 
+    /// The receipt hashes the whole request, so a release that changes any field of it (hooks,
+    /// environment, base image) does not recognise a build an earlier release started and lost
+    /// the response to: recovery misses it and builds again, leaving that version untracked.
+    /// Accepted for the narrow window it needs, a lost response retried across an upgrade.
     fn with_receipt(mut self) -> Result<Self> {
         let encoded = serde_json::to_vec(&self.clone().update_request())
             .into_alien_error()
@@ -1424,14 +1432,19 @@ pub(crate) fn aws_partition(region: &str) -> &'static str {
 /// into a Frozen image.
 ///
 /// `Ready` is not optional — AWS rejects an image enabling any MicroVM hook without it, and it
-/// is what defers the snapshot until the agent is serving. `Run` and `Resume` reseed the
-/// CSPRNG after each start, because every MicroVM shares the state resident at capture.
+/// is what defers the snapshot until the agent is serving. `Validate` runs on a MicroVM restored
+/// from the snapshot and fails the build when a command or a file write cannot work on it; 30s
+/// is AWS's default and far above the probe's sub-second work, where `Ready`'s 120s covers a
+/// boot. `Run` and `Resume` are acknowledged by the agent and nothing more: entropy separation
+/// between MicroVMs comes from the MicroVM service.
 fn agent_hooks() -> MicrovmImageHooks {
     MicrovmImageHooks::builder()
         .port(AWS_MICROVM.port)
         .microvm_image_hooks(MicrovmImageBuildHooks {
             ready: "ENABLED".to_string(),
             ready_timeout_in_seconds: 120,
+            validate: "ENABLED".to_string(),
+            validate_timeout_in_seconds: 30,
         })
         .microvm_hooks(MicrovmLifecycleHooks {
             run: "ENABLED".to_string(),
@@ -2496,7 +2509,15 @@ mod tests {
                     && request
                         .hooks
                         .as_ref()
-                        .is_some_and(|hooks| hooks.port == AWS_MICROVM.port)
+                        .is_some_and(|hooks| {
+                            hooks.port == AWS_MICROVM.port
+                                // The image build fails a broken agent here rather than at the
+                                // first session, and a roll that dropped it would say nothing.
+                                && hooks.microvm_image_hooks.as_ref().is_some_and(|build| {
+                                    build.validate == "ENABLED"
+                                        && build.validate_timeout_in_seconds == 30
+                                })
+                        })
                     && request
                         .environment_variables
                         .get("ALIEN_SANDBOX_PORT")
@@ -3623,6 +3644,439 @@ mod tests {
             .get_controller(Sandbox::RESOURCE_TYPE, Platform::Aws)
             .expect("AWS must have a registered Sandbox controller");
         assert_eq!(controller.controller_type(), "AwsSandboxController");
+    }
+
+    // ─────────────── INTERNET EGRESS REFRESH AND DELETION ──────────────────
+
+    #[cfg(all(feature = "local", feature = "test-utils"))]
+    mod internet_egress {
+        use super::*;
+
+        const OTHER_IMAGE_ARN: &str =
+            "arn:aws:lambda:us-east-1:123456789012:microvm-image:test-other";
+
+        fn internet_sandbox(id: &str) -> Sandbox {
+            let mut sandbox = sandbox();
+            sandbox.id = id.to_string();
+            sandbox.egress = SandboxEgress::Internet;
+            sandbox
+        }
+
+        /// A running internet sandbox that holds the deployment's egress public key, as every
+        /// internet sandbox does once it has initialized its egress.
+        fn running_internet_controller(image_arn: &str) -> AwsSandboxController {
+            AwsSandboxController {
+                image_identifier: Some(image_arn.to_string()),
+                image_arn: Some(image_arn.to_string()),
+                egress: Some(SandboxEgress::Internet.into()),
+                egress_network_verified: true,
+                egress_public_key: Some(crate::sandbox::egress::GatewayPublicKey {
+                    kid: "kid-test".to_string(),
+                    public_key: "public-key-test".to_string(),
+                }),
+                ..ready_controller()
+            }
+        }
+
+        fn sandbox_network() -> alien_core::Network {
+            alien_core::Network::new("network".into())
+                .settings(alien_core::NetworkSettings::Create {
+                    cidr: Some("10.0.0.0/16".into()),
+                    availability_zones: 2,
+                })
+                .build()
+        }
+
+        /// The imported network as a CloudFormation deployment records it, with the dedicated
+        /// connector and gateway subnets setup provided.
+        fn sandbox_network_controller() -> crate::AwsNetworkController {
+            crate::AwsNetworkController {
+                vpc_id: Some("vpc-test".into()),
+                private_subnet_ids: vec!["workload".into()],
+                sandbox_network: Some(alien_core::import::data::AwsSandboxNetwork {
+                    sandbox_subnet_ids: vec!["connector-a".into(), "connector-b".into()],
+                    gateway_subnet_ids: vec!["gateway-a".into(), "gateway-b".into()],
+                    sandbox_cidrs: vec![],
+                    gateway_cidrs: vec![],
+                    workload_cidrs: vec![],
+                    vpc_cidrs: vec![],
+                }),
+                ..Default::default()
+            }
+        }
+
+        /// EC2 as a valid isolated sandbox network reads: route-less connector subnets on the main
+        /// table, and gateway and workload subnets sharing one NAT route.
+        fn valid_sandbox_network_ec2() -> alien_aws_clients::ec2::MockEc2Api {
+            use serde_json::json;
+            let mut ec2 = alien_aws_clients::ec2::MockEc2Api::new();
+            ec2.expect_describe_vpcs().returning(|_| {
+                Ok(serde_json::from_value(json!({
+                    "vpcSet":{"item":[{"vpcId":"vpc-test","cidrBlock":"10.0.0.0/16"}]}
+                }))
+                .unwrap())
+            });
+            ec2.expect_describe_subnets().returning(|_| {
+                let items: Vec<_> = ["connector-a", "connector-b", "gateway-a", "gateway-b", "workload"]
+                    .iter()
+                    .enumerate()
+                    .map(|(i, id)| json!({
+                        "subnetId":id,"vpcId":"vpc-test","state":"available",
+                        "cidrBlock":format!("10.0.{i}.0/24"),"availabilityZoneId":format!("zone-{}",i%2)
+                    }))
+                    .collect();
+                Ok(serde_json::from_value(json!({"subnetSet":{"item":items}})).unwrap())
+            });
+            ec2.expect_describe_route_tables().returning(|_| {
+                let local = json!({"destinationCidrBlock":"10.0.0.0/16","gatewayId":"local","state":"active"});
+                Ok(serde_json::from_value(json!({"routeTableSet":{"item":[
+                    {"routeTableId":"main","vpcId":"vpc-test","routeSet":{"item":[local]},
+                     "associationSet":{"item":[{"main":true}]}},
+                    {"routeTableId":"nat","vpcId":"vpc-test","routeSet":{"item":[
+                        local,
+                        {"destinationCidrBlock":"0.0.0.0/0","natGatewayId":"nat-shared","state":"active"}
+                     ]},
+                     "associationSet":{"item":[{"subnetId":"gateway-a"},{"subnetId":"gateway-b"},{"subnetId":"workload"}]}}
+                ]}}))
+                .unwrap())
+            });
+            ec2
+        }
+
+        fn served_image(image_arn: &str) -> MicrovmImage {
+            MicrovmImage {
+                description: None,
+                image_identifier: Some(image_arn.to_string()),
+                image_arn: Some(image_arn.to_string()),
+                image_version: Some("1.0".to_string()),
+                state: Some("CREATED".to_string()),
+            }
+        }
+
+        /// A live key owner keeps refreshing the gateway configuration: it validates the network
+        /// and publishes the audiences of every internet sandbox the stack declares.
+        #[tokio::test]
+        async fn a_running_key_owner_refreshes_the_gateway_configuration() {
+            use crate::{LocalVaultController, LocalVaultState};
+            use alien_bindings::{providers::vault::LocalVault, Vault as _};
+            use alien_core::{Vault, SECRETS_VAULT_ID};
+
+            let directory = tempfile::tempdir().unwrap();
+            let mut microvms = MockLambdaMicrovmsApi::new();
+            microvms
+                .expect_get_microvm_image()
+                .returning(|_| Ok(served_image(IMAGE_ARN)));
+            microvms
+                .expect_list_microvm_image_versions()
+                .returning(|_| Ok(vec![]));
+            let microvms = Arc::new(microvms);
+            let ec2 = Arc::new(valid_sandbox_network_ec2());
+            let mut provider = MockPlatformServiceProvider::new();
+            provider
+                .expect_get_aws_microvms_client()
+                .returning(move |_| Ok(microvms.clone()));
+            provider
+                .expect_get_aws_ec2_client()
+                .returning(move |_| Ok(ec2.clone()));
+            let mut executor = SingleControllerExecutor::builder()
+                .resource(internet_sandbox("agents"))
+                .controller(AwsSandboxController {
+                    egress_network_verified: false,
+                    ..running_internet_controller(IMAGE_ARN)
+                })
+                .platform(Platform::Aws)
+                .service_provider(Arc::new(provider))
+                .with_stack_resource(
+                    internet_sandbox("other"),
+                    alien_core::ResourceLifecycle::Live,
+                )
+                .with_dependency(sandbox_network(), sandbox_network_controller())
+                .with_dependency(
+                    Vault::new(SECRETS_VAULT_ID.into()).build(),
+                    LocalVaultController {
+                        state: LocalVaultState::Ready,
+                        vault_path: Some(directory.path().to_string_lossy().into_owned()),
+                        ..Default::default()
+                    },
+                )
+                .build()
+                .await
+                .unwrap();
+
+            executor.step().await.expect("Ready verifies the network");
+            let controller = executor.internal_state::<AwsSandboxController>().unwrap();
+            assert_eq!(controller.state, AwsSandboxState::RefreshingEgressConfig);
+            executor.step().await.expect("the refresh publishes");
+            let controller = executor.internal_state::<AwsSandboxController>().unwrap();
+            assert_eq!(controller.state, AwsSandboxState::Ready);
+            assert!(controller.egress_network_verified);
+            assert!(controller.get_binding_params().unwrap().is_some());
+
+            let vault = LocalVault::new("secrets".into(), directory.path().into());
+            let published: serde_json::Value = serde_json::from_str(
+                &vault
+                    .get_secret(crate::sandbox::egress::GATEWAY_CONFIG)
+                    .await
+                    .expect("the key owner published the gateway configuration"),
+            )
+            .unwrap();
+            let audiences: Vec<_> = published["audiences"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|audience| audience.as_str().unwrap().rsplit('/').next().unwrap())
+                .collect();
+            assert_eq!(audiences, ["agents", "other"]);
+            assert_eq!(published["keys"][0]["kid"], "kid-test");
+        }
+
+        /// Runs the runtime cleanup a CloudFormation deployment's delete runs: an empty target
+        /// stack, the setup-owned network and vault left to setup teardown, and a Lambda Worker that
+        /// links the key-owning internet sandbox and takes several steps to delete. Returns the
+        /// final state and the MicroVM images deleted.
+        async fn delete_internet_sandboxes(
+            owner: AwsSandboxController,
+            owner_status: ResourceStatus,
+        ) -> (alien_core::StackState, Vec<String>) {
+            use crate::core::state_utils::{StackResourceStateExt, StackStateExt};
+            use crate::{
+                AwsWorkerController, LocalVaultController, LocalVaultState, StackExecutor,
+            };
+            use alien_aws_clients::lambda::MockLambdaApi;
+            use alien_aws_clients::AwsClientConfigExt;
+            use alien_core::{
+                ClientConfig, Resource, ResourceLifecycle, ResourceRef, StackResourceState,
+                StackState, Vault, Worker, WorkerCode, SECRETS_VAULT_ID,
+            };
+
+            let deleted = Arc::new(Mutex::new(Vec::new()));
+            let mut microvms = MockLambdaMicrovmsApi::new();
+            microvms
+                .expect_get_microvm_image()
+                .returning(|identifier| Ok(served_image(identifier)));
+            microvms
+                .expect_list_microvm_image_versions()
+                .returning(|_| Ok(vec![]));
+            let recorded = deleted.clone();
+            microvms
+                .expect_delete_microvm_image()
+                .returning(move |identifier| {
+                    recorded.lock().unwrap().push(identifier.to_string());
+                    Ok(())
+                });
+            let microvms = Arc::new(microvms);
+            let mut lambda = MockLambdaApi::new();
+            lambda.expect_delete_function().returning(|_, _| Ok(()));
+            lambda
+                .expect_get_function_configuration()
+                .returning(|_, _| {
+                    Err(AlienError::new(
+                        CloudClientErrorData::RemoteResourceNotFound {
+                            resource_type: "Worker".to_string(),
+                            resource_name: "test-worker".to_string(),
+                        },
+                    ))
+                });
+            let lambda = Arc::new(lambda);
+            let mut logs = alien_aws_clients::cloudwatch_logs::MockCloudWatchLogsApi::new();
+            logs.expect_delete_log_group().returning(|_| Ok(()));
+            let logs = Arc::new(logs);
+            let mut provider = MockPlatformServiceProvider::new();
+            provider
+                .expect_get_aws_microvms_client()
+                .returning(move |_| Ok(microvms.clone()));
+            provider
+                .expect_get_aws_lambda_client()
+                .returning(move |_| Ok(lambda.clone()));
+            provider
+                .expect_get_aws_logs_client()
+                .returning(move |_| Ok(logs.clone()));
+            // No EC2 client: nothing being deleted may read the network.
+
+            let mut state = StackState::new(Platform::Aws);
+            state.resource_prefix = "test".to_string();
+            let mut add = |resource: Resource,
+                           lifecycle: ResourceLifecycle,
+                           status: ResourceStatus,
+                           dependencies: Vec<ResourceRef>,
+                           controller: Box<dyn ResourceController>| {
+                let id = resource.id().to_string();
+                let mut entry = StackResourceState::new_pending(
+                    resource.resource_type().to_string(),
+                    resource,
+                    Some(lifecycle),
+                    dependencies,
+                );
+                entry.status = status;
+                entry.set_internal_controller(Some(controller)).unwrap();
+                state.resources.insert(id, entry);
+            };
+            let network_ref = ResourceRef::new(alien_core::Network::RESOURCE_TYPE, "network");
+            let vault_ref = ResourceRef::new(Vault::RESOURCE_TYPE, SECRETS_VAULT_ID);
+            let owner_ref = ResourceRef::new(Sandbox::RESOURCE_TYPE, "agents");
+            add(
+                Resource::new(sandbox_network()),
+                ResourceLifecycle::Frozen,
+                ResourceStatus::Running,
+                vec![],
+                Box::new(sandbox_network_controller()),
+            );
+            add(
+                Resource::new(Vault::new(SECRETS_VAULT_ID.into()).build()),
+                ResourceLifecycle::Frozen,
+                ResourceStatus::Running,
+                vec![],
+                Box::new(LocalVaultController {
+                    state: LocalVaultState::Ready,
+                    vault_path: Some("/nonexistent".into()),
+                    ..Default::default()
+                }),
+            );
+            add(
+                Resource::new(internet_sandbox("agents")),
+                ResourceLifecycle::Live,
+                owner_status,
+                vec![network_ref.clone(), vault_ref.clone()],
+                Box::new(owner),
+            );
+            add(
+                Resource::new(internet_sandbox("other")),
+                ResourceLifecycle::Live,
+                ResourceStatus::Running,
+                vec![network_ref, vault_ref, owner_ref.clone()],
+                Box::new(running_internet_controller(OTHER_IMAGE_ARN)),
+            );
+            let worker = Worker::new("api".into())
+                .code(WorkerCode::Image {
+                    image: "test-image-api".into(),
+                })
+                .permissions("execution".into())
+                .link(&internet_sandbox("agents"))
+                .build();
+            add(
+                Resource::new(worker),
+                ResourceLifecycle::Live,
+                ResourceStatus::Running,
+                vec![owner_ref],
+                Box::new(AwsWorkerController::mock_ready("test-api")),
+            );
+
+            state
+                .prepare_for_runtime_cleanup_destroy()
+                .expect("the delete request prepares the stack");
+            let config = alien_core::DeploymentConfig::builder()
+                .stack_settings(alien_core::StackSettings::default())
+                .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                    variables: vec![],
+                    hash: String::new(),
+                    created_at: String::new(),
+                })
+                .external_bindings(alien_core::ExternalBindings::default())
+                .allow_frozen_changes(false)
+                .build();
+            let executor = StackExecutor::for_runtime_cleanup_deletion_with_service_provider(
+                ClientConfig::Aws(Box::new(alien_aws_clients::AwsClientConfig::mock())),
+                &config,
+                Arc::new(provider),
+            )
+            .unwrap();
+            for _ in 0..40 {
+                state = executor
+                    .step(state)
+                    .await
+                    .expect("runtime cleanup step")
+                    .next_state;
+                let failed = state
+                    .resources
+                    .iter()
+                    .find(|(_, resource)| resource.error.is_some());
+                if let Some((id, resource)) = failed {
+                    panic!(
+                        "'{id}' failed with {:?} in {:?}: {}",
+                        resource.status,
+                        resource
+                            .last_failed_state
+                            .as_ref()
+                            .and_then(|saved| saved.get("state")),
+                        resource.error.as_ref().unwrap()
+                    );
+                }
+                if ["agents", "other", "api"].iter().all(|id| {
+                    state
+                        .resources
+                        .get(*id)
+                        .is_none_or(|resource| resource.status == ResourceStatus::Deleted)
+                }) {
+                    break;
+                }
+            }
+            let deleted = deleted.lock().unwrap().clone();
+            (state, deleted)
+        }
+
+        fn assert_runtime_cleanup_finished(state: &alien_core::StackState, deleted: &[String]) {
+            for id in ["agents", "other", "api"] {
+                assert!(
+                    state
+                        .resources
+                        .get(id)
+                        .is_none_or(|resource| resource.status == ResourceStatus::Deleted),
+                    "'{id}' was not deleted: {:?}",
+                    state.resources.get(id).map(|resource| resource.status)
+                );
+            }
+            let mut deleted = deleted.to_vec();
+            deleted.sort();
+            assert_eq!(deleted, [IMAGE_ARN, OTHER_IMAGE_ARN]);
+            // Setup teardown owns these; runtime cleanup leaves them running.
+            for id in ["network", alien_core::SECRETS_VAULT_ID] {
+                assert_eq!(state.resources[id].status, ResourceStatus::Running);
+            }
+        }
+
+        /// The first delete of a deployment with a running key-owning internet sandbox and a Worker
+        /// that links it. The Worker is deleted first, and the sandboxes keep running their Ready
+        /// handler meanwhile against an empty target stack that declares no network. Before the fix
+        /// they moved on to refresh the gateway configuration, failed with "this stack declares no
+        /// network", and the delete stopped in DeleteFailed until it was retried.
+        #[tokio::test]
+        async fn the_first_delete_of_a_key_owning_internet_sandbox_with_a_worker_completes() {
+            let (state, deleted) = delete_internet_sandboxes(
+                running_internet_controller(IMAGE_ARN),
+                ResourceStatus::Running,
+            )
+            .await;
+            assert_runtime_cleanup_finished(&state, &deleted);
+        }
+
+        /// A key owner saved mid-refresh when the delete arrives does not publish either.
+        #[tokio::test]
+        async fn a_key_owner_saved_mid_refresh_deletes_without_publishing() {
+            let (state, deleted) = delete_internet_sandboxes(
+                AwsSandboxController {
+                    state: AwsSandboxState::RefreshingEgressConfig,
+                    ..running_internet_controller(IMAGE_ARN)
+                },
+                ResourceStatus::Running,
+            )
+            .await;
+            assert_runtime_cleanup_finished(&state, &deleted);
+        }
+
+        /// The retry of a delete that failed this way: preparing the delete moves the refresh
+        /// failure straight to the delete flow, which is why retrying worked before the fix.
+        #[tokio::test]
+        async fn retrying_a_delete_whose_refresh_failed_completes() {
+            let (state, deleted) = delete_internet_sandboxes(
+                AwsSandboxController {
+                    state: AwsSandboxState::RefreshFailed,
+                    ..running_internet_controller(IMAGE_ARN)
+                },
+                ResourceStatus::RefreshFailed,
+            )
+            .await;
+            assert_runtime_cleanup_finished(&state, &deleted);
+        }
     }
 
     #[test]
