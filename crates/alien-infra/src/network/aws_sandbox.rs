@@ -267,7 +267,7 @@ fn subnet_cidr(resource_id: &str, id: &str, subnet: &Subnet) -> Result<String> {
         })
 }
 
-fn effective_table<'a>(
+pub(super) fn effective_table<'a>(
     resource_id: &str,
     subnet_id: &str,
     tables: &'a [RouteTable],

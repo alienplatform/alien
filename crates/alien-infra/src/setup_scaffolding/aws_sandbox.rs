@@ -156,8 +156,7 @@ pub(super) async fn reconcile(
         let SetupScaffolding::AwsSandbox { egress, .. } = records
             .get_mut(&sandbox.id)
             .unwrap_or_else(|| unreachable!("recorded above"));
-        if aws_sandbox_egress::reconcile(ctx, aws, &sandbox.id, network_id, stack_state, egress)
-            .await?
+        if aws_sandbox_egress::reconcile(ctx, aws, sandbox, network_id, stack_state, egress).await?
             == ScaffoldingProgress::InProgress
         {
             return Ok(ScaffoldingProgress::InProgress);

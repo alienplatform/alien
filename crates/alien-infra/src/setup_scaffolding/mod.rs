@@ -37,32 +37,6 @@ pub fn needs_setup_scaffolding(entry: &ResourceEntry) -> bool {
         .always_emits_setup_scaffolding()
 }
 
-/// Validate the setup path before planning resources or creating their scaffolding.
-/// Template imports already provide the dedicated network; direct setup does not.
-pub(crate) fn validate_setup_support(
-    stack: &Stack,
-    platform: Platform,
-    authority: alien_core::InitialSetupAuthority,
-) -> Result<()> {
-    if platform != Platform::Aws || authority != alien_core::InitialSetupAuthority::DirectSetup {
-        return Ok(());
-    }
-    for (resource_id, entry) in stack.resources() {
-        if entry
-            .config
-            .downcast_ref::<alien_core::Sandbox>()
-            .is_some_and(|sandbox| matches!(sandbox.egress, alien_core::SandboxEgress::Internet))
-        {
-            return Err(AlienError::new(
-                ErrorData::SandboxInternetDirectSetupUnsupported {
-                    resource_id: resource_id.clone(),
-                },
-            ));
-        }
-    }
-    Ok(())
-}
-
 /// At most one mutating call per resource, so a retry after any failure repeats nothing.
 pub async fn reconcile(
     ctx: &SetupScaffoldingContext<'_>,
@@ -375,7 +349,7 @@ pub async fn teardown(
 }
 
 #[cfg(all(test, feature = "aws"))]
-mod setup_support_tests {
+mod direct_setup_planning_tests {
     use super::*;
     use crate::StackExecutor;
     use alien_aws_clients::AwsClientConfigExt;
@@ -384,32 +358,27 @@ mod setup_support_tests {
     };
 
     #[test]
-    fn planning_refuses_only_direct_aws_internet_before_any_cloud_calls() {
-        for (authority, value, rejected) in [
+    fn planning_accepts_direct_aws_internet_and_legacy_egress() {
+        for (authority, value) in [
             (
                 InitialSetupAuthority::DirectSetup,
                 serde_json::json!("internet"),
-                true,
             ),
             (
                 InitialSetupAuthority::ImportedHandoff,
                 serde_json::json!("internet"),
-                false,
             ),
             (
                 InitialSetupAuthority::DirectSetup,
                 serde_json::json!({"mode":"allow"}),
-                false,
             ),
             (
                 InitialSetupAuthority::DirectSetup,
                 serde_json::json!({"mode":"deny"}),
-                false,
             ),
             (
                 InitialSetupAuthority::DirectSetup,
                 serde_json::json!({"mode":"allowDomains","domains":["example.com"]}),
-                false,
             ),
         ] {
             let sandbox = Sandbox::new("subject".into())
@@ -441,25 +410,15 @@ mod setup_support_tests {
             )
             .deployment_config(&config)
             .initial_setup_authority(authority)
-            // Initial setup excludes Live resources but must still reject the unsupported declaration.
             .lifecycle_filter(vec![ResourceLifecycle::Frozen])
             .service_provider(std::sync::Arc::new(
                 crate::MockPlatformServiceProvider::new(),
             ))
             .build();
-            if rejected {
-                let error = planned
-                    .err()
-                    .expect("direct Internet must fail before planning any cloud resource");
-                assert_eq!(error.code, "SANDBOX_INTERNET_DIRECT_SETUP_UNSUPPORTED");
-                assert!(error.to_string().contains("subject"));
-                assert!(error.to_string().contains("CloudFormation or Terraform"));
-            } else {
-                planned
-                    .unwrap()
-                    .plan(&StackState::new(Platform::Aws))
-                    .unwrap();
-            }
+            planned
+                .unwrap()
+                .plan(&StackState::new(Platform::Aws))
+                .unwrap();
         }
     }
 }

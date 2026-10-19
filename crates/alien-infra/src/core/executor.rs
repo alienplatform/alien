@@ -547,7 +547,6 @@ impl StackExecutor {
         let initial_setup_authority = config.initial_setup_authority;
         let platform = client_config.platform();
         let base_platform = deployment_config.base_platform;
-        crate::setup_scaffolding::validate_setup_support(stack, platform, initial_setup_authority)?;
 
         let mut graph = DiGraph::<String, ()>::new();
         let mut resource_map = HashMap::new();
