@@ -14,6 +14,7 @@ pub mod firestore;
 pub mod gcp_request_utils;
 pub mod gcs;
 pub mod iam;
+mod iam_workload_identity;
 pub mod longrunning;
 pub mod model_garden;
 pub mod monitoring;
