@@ -36,6 +36,15 @@ pub enum ErrorData {
     )]
     SandboxEgressInvalid { target: String, reason: String },
 
+    /// An AWS internet sandbox reached template rendering without the egress gateway.
+    #[error(
+        code = "SANDBOX_INTERNET_GATEWAY_MISSING",
+        message = "Sandbox '{sandbox_id}' declares egress 'internet', which routes through the managed sandbox egress gateway, but this stack has no gateway. Prepare the stack with the deployment preflights before rendering its setup template",
+        retryable = "false",
+        internal = "false"
+    )]
+    SandboxInternetGatewayMissing { sandbox_id: String },
+
     /// A deployment selected resources outside the release's declared choices.
     #[error(
         code = "CONTAINER_RESOURCE_SELECTION_INVALID",

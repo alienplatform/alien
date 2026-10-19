@@ -24,6 +24,28 @@ pub fn has_sandbox_gateway(stack: &Stack) -> bool {
         .is_some_and(|entry| entry.config.downcast_ref::<crate::Container>().is_some())
 }
 
+/// An AWS internet sandbox's connector routes through the gateway, so a setup surface that
+/// creates the connector must also create the gateway's subnets and inputs. Refuses a stack whose
+/// internet sandbox has no gateway rather than rendering references to undeclared ones.
+pub fn require_internet_sandbox_gateway(stack: &Stack) -> crate::Result<()> {
+    if has_sandbox_gateway(stack) {
+        return Ok(());
+    }
+    match stack.resources().find(|(_, entry)| {
+        entry
+            .config
+            .downcast_ref::<Sandbox>()
+            .is_some_and(|sandbox| matches!(sandbox.egress, SandboxEgress::Internet))
+    }) {
+        Some((id, _)) => Err(alien_error::AlienError::new(
+            crate::ErrorData::SandboxInternetGatewayMissing {
+                sandbox_id: id.clone(),
+            },
+        )),
+        None => Ok(()),
+    }
+}
+
 /// A setup-owned sandbox initializes the shared key before runtime work can start.
 /// Within the same lifecycle, resource-id order provides one deterministic writer.
 pub fn sandbox_egress_key_owner(stack: &Stack) -> Option<&str> {
