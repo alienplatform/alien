@@ -4103,9 +4103,13 @@ mod tests {
     }
 
     fn declared_cluster(id: &str) -> ComputeCluster {
+        declared_cluster_with_group(id, "general")
+    }
+
+    fn declared_cluster_with_group(id: &str, group_id: &str) -> ComputeCluster {
         ComputeCluster::new(id.to_string())
             .capacity_group(CapacityGroup {
-                group_id: "general".to_string(),
+                group_id: group_id.to_string(),
                 instance_type: Some("m8i.xlarge".to_string()),
                 profile: Some(MachineProfile {
                     cpu: "4.0".to_string(),
@@ -4125,6 +4129,19 @@ mod tests {
     /// Prepares an AWS stack with an internet sandbox and the given declared clusters through the
     /// gateway and compute mutations, in the order the preflight registry runs them.
     async fn prepare_internet_sandbox_with_clusters(clusters: &[&str]) -> Result<Stack> {
+        let clusters: Vec<ComputeCluster> =
+            clusters.iter().map(|id| declared_cluster(id)).collect();
+        prepare_internet_sandbox(
+            clusters,
+            deployment_config_with_compute_pool("m8i.xlarge", 1, 1),
+        )
+        .await
+    }
+
+    async fn prepare_internet_sandbox(
+        clusters: Vec<ComputeCluster>,
+        config: DeploymentConfig,
+    ) -> Result<Stack> {
         let sandbox = alien_core::Sandbox::new("agents".to_string())
             .code(alien_core::SandboxCode::Image {
                 image: "example.invalid/base:1".to_string(),
@@ -4136,12 +4153,11 @@ mod tests {
             })
             .build();
         let mut builder = Stack::new("example".to_string()).add(sandbox, ResourceLifecycle::Frozen);
-        for id in clusters {
-            builder = builder.add(declared_cluster(id), ResourceLifecycle::Frozen);
+        for cluster in clusters {
+            builder = builder.add(cluster, ResourceLifecycle::Frozen);
         }
         let stack = builder.build();
         let stack_state = StackState::new(Platform::Aws);
-        let config = deployment_config_with_compute_pool("m8i.xlarge", 1, 1);
 
         let gateway = crate::mutations::SandboxGatewayMutation;
         assert!(gateway.should_run(&stack, &stack_state, &config));
@@ -4184,6 +4200,52 @@ mod tests {
                 .iter()
                 .any(|group| group.group_id == "general"),
             "the gateway's capacity group exists on the cluster it was placed on"
+        );
+    }
+
+    /// A declared cluster without the group the gateway needs gets that group, on the same
+    /// cluster the gateway is placed on.
+    #[tokio::test]
+    async fn generated_gateway_adds_its_missing_group_to_the_declared_cluster() {
+        let prepared = prepare_internet_sandbox(
+            vec![declared_cluster_with_group("workers", "batch")],
+            deployment_config_with_compute_pools(&[
+                ("batch", "m8i.xlarge", 1, 1),
+                ("general", "m8i.xlarge", 1, 1),
+            ]),
+        )
+        .await
+        .expect("preparation adds the missing group");
+        let gateway = prepared.resources[alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID]
+            .config
+            .downcast_ref::<Container>()
+            .expect("gateway container is prepared");
+        assert_eq!(gateway.cluster.as_deref(), Some("workers"));
+        assert_eq!(gateway.pool.as_deref(), Some("general"));
+        let cluster = prepared.resources["workers"]
+            .config
+            .downcast_ref::<ComputeCluster>()
+            .unwrap();
+        let mut groups: Vec<&str> = cluster
+            .capacity_groups
+            .iter()
+            .map(|group| group.group_id.as_str())
+            .collect();
+        groups.sort();
+        assert_eq!(groups, vec!["batch", "general"]);
+        let general = cluster
+            .capacity_groups
+            .iter()
+            .find(|group| group.group_id == "general")
+            .unwrap();
+        assert_eq!(general.instance_type.as_deref(), Some("m8i.xlarge"));
+        assert_eq!(
+            prepared
+                .resources
+                .values()
+                .filter(|entry| entry.config.downcast_ref::<ComputeCluster>().is_some())
+                .count(),
+            1
         );
     }
 
