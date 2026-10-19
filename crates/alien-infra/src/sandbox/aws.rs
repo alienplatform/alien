@@ -1420,14 +1420,19 @@ pub(crate) fn aws_partition(region: &str) -> &'static str {
 /// into a Frozen image.
 ///
 /// `Ready` is not optional — AWS rejects an image enabling any MicroVM hook without it, and it
-/// is what defers the snapshot until the agent is serving. `Run` and `Resume` reseed the
-/// CSPRNG after each start, because every MicroVM shares the state resident at capture.
+/// is what defers the snapshot until the agent is serving. `Validate` runs on a MicroVM restored
+/// from the snapshot and fails the build when a command or a file write cannot work on it; 30s
+/// is AWS's default and far above the probe's sub-second work, where `Ready`'s 120s covers a
+/// boot. `Run` and `Resume` are acknowledged by the agent and nothing more: entropy separation
+/// between MicroVMs comes from the platform.
 fn agent_hooks() -> MicrovmImageHooks {
     MicrovmImageHooks::builder()
         .port(AWS_MICROVM.port)
         .microvm_image_hooks(MicrovmImageBuildHooks {
             ready: "ENABLED".to_string(),
             ready_timeout_in_seconds: 120,
+            validate: "ENABLED".to_string(),
+            validate_timeout_in_seconds: 30,
         })
         .microvm_hooks(MicrovmLifecycleHooks {
             run: "ENABLED".to_string(),

@@ -184,6 +184,10 @@ pub struct MicrovmImageBuildHooks {
     pub ready: String,
     /// Ceiling on the in-image ready hook
     pub ready_timeout_in_seconds: u32,
+    /// `ENABLED` / `DISABLED`
+    pub validate: String,
+    /// Ceiling on the validate hook, called on a MicroVM run from the finished snapshot
+    pub validate_timeout_in_seconds: u32,
 }
 
 /// Session-lifecycle hooks baked into a MicroVM image.
@@ -1141,6 +1145,8 @@ mod tests {
                     .microvm_image_hooks(MicrovmImageBuildHooks {
                         ready: "ENABLED".to_string(),
                         ready_timeout_in_seconds: 120,
+                        validate: "ENABLED".to_string(),
+                        validate_timeout_in_seconds: 30,
                     })
                     .microvm_hooks(MicrovmLifecycleHooks {
                         run: "ENABLED".to_string(),
@@ -1175,6 +1181,11 @@ mod tests {
         assert_eq!(
             body["hooks"]["microvmImageHooks"]["readyTimeoutInSeconds"],
             120
+        );
+        assert_eq!(body["hooks"]["microvmImageHooks"]["validate"], "ENABLED");
+        assert_eq!(
+            body["hooks"]["microvmImageHooks"]["validateTimeoutInSeconds"],
+            30
         );
         assert_eq!(body["hooks"]["microvmHooks"]["resumeTimeoutInSeconds"], 30);
         assert_eq!(
@@ -1214,6 +1225,8 @@ mod tests {
                     .microvm_image_hooks(MicrovmImageBuildHooks {
                         ready: "ENABLED".to_string(),
                         ready_timeout_in_seconds: 120,
+                        validate: "ENABLED".to_string(),
+                        validate_timeout_in_seconds: 30,
                     })
                     .build(),
             )
@@ -1562,7 +1575,8 @@ mod live_image_create {
                 "hooks" => {
                     body["hooks"] = serde_json::json!({
                         "port": 8971,
-                        "microvmImageHooks": { "ready": "ENABLED", "readyTimeoutInSeconds": 120 },
+                        "microvmImageHooks": { "ready": "ENABLED", "readyTimeoutInSeconds": 120,
+                                               "validate": "ENABLED", "validateTimeoutInSeconds": 30 },
                         "microvmHooks": { "run": "ENABLED", "runTimeoutInSeconds": 30,
                                           "resume": "ENABLED", "resumeTimeoutInSeconds": 30 }
                     })

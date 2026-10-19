@@ -742,6 +742,8 @@ Resources:
         MicrovmImageHooks:
           Ready: ENABLED
           ReadyTimeoutInSeconds: 120
+          Validate: ENABLED
+          ValidateTimeoutInSeconds: 30
         MicrovmHooks:
           Run: ENABLED
           RunTimeoutInSeconds: 30
