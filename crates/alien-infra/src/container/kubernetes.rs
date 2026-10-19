@@ -1928,6 +1928,8 @@ impl KubernetesContainerController {
             };
 
             // Serialize to JSON
+            // Bindings are tagged by backend; the SDK refuses an untagged container binding.
+            let binding = alien_core::bindings::ContainerBinding::Kubernetes(binding);
             Ok(Some(
                 serde_json::to_value(binding).into_alien_error().context(
                     ErrorData::ResourceStateSerializationFailed {
@@ -1984,7 +1986,7 @@ mod output_tests {
                 .internal_urls
                 .get(&3129)
                 .map(String::as_str),
-            Some("http://test-container.test-namespace.svc.cluster.local:3129")
+            Some("http://test-container.test-namespace.svc:3129")
         );
 
         assert_eq!(
@@ -1993,6 +1995,25 @@ mod output_tests {
                 .get("default")
                 .map(|endpoint| endpoint.url.as_str()),
             Some("https://container.example.test")
+        );
+
+        // Linked workloads load this through the SDK, which needs the backend tag.
+        use crate::core::ResourceController as _;
+        let binding: alien_core::bindings::ContainerBinding = serde_json::from_value(
+            controller
+                .get_binding_params()
+                .expect("binding")
+                .expect("binding params"),
+        )
+        .expect("a tagged container binding");
+        let alien_core::bindings::ContainerBinding::Kubernetes(binding) = binding else {
+            panic!("Kubernetes container binding")
+        };
+        assert_eq!(
+            binding.internal_urls.get(&3129),
+            Some(&alien_core::BindingValue::value(
+                "http://test-container.test-namespace.svc:3129".to_string()
+            ))
         );
     }
 
@@ -2032,7 +2053,7 @@ mod output_tests {
                 .internal_urls
                 .get(&3000)
                 .map(String::as_str),
-            Some("http://test-container.test-namespace.svc.cluster.local:3000")
+            Some("http://test-container.test-namespace.svc:3000")
         );
 
         assert_eq!(
@@ -2060,7 +2081,9 @@ impl KubernetesContainerController {
             .map(|port| {
                 (
                     port,
-                    format!("http://{service}.{namespace}.svc.cluster.local:{port}"),
+                    // Resolved through the workload's search path, whatever the cluster
+                    // DNS domain is.
+                    format!("http://{service}.{namespace}.svc:{port}"),
                 )
             })
             .collect()

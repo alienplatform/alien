@@ -635,6 +635,7 @@ mod tests {
             },
             kid: "one".into(),
             admin_ca_pem: None,
+            replicas: None,
         });
         let policy = serde_json::from_value(serde_json::json!({"allow":["example.com"]})).unwrap();
         let controller = KubernetesSandboxController {

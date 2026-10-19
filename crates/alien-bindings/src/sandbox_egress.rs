@@ -44,6 +44,9 @@ pub struct SandboxEgressManager {
     gateway: String,
     admin_url: String,
     admin: reqwest::Client,
+    /// Stands in for DNS so tests can name several replicas on one host.
+    #[cfg(test)]
+    replica_addresses: Option<Vec<std::net::SocketAddr>>,
 }
 impl fmt::Debug for SandboxEgressManager {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -106,6 +109,8 @@ impl SandboxEgressManager {
             gateway,
             admin_url,
             admin,
+            #[cfg(test)]
+            replica_addresses: None,
         })
     }
     /// Nonsecret launch metadata. AWS injects its own sandbox id alongside this payload.
@@ -174,55 +179,112 @@ impl SandboxEgressManager {
         let record =
             issuer.mint_record(&self.config.audience, id, (version, &WRITER_ID), policy)?;
         let body = serde_json::json!({"record":record});
-        // Partial fan-out may already have applied this write. Retry the exact record;
-        // allocating a newer version here could overwrite another writer's decision.
-        for attempt in 0..3 {
-            let operation = if policy.is_some() {
+        let operation = || {
+            if policy.is_some() {
                 EgressAdminOperation::Put
             } else {
                 EgressAdminOperation::Delete
-            };
-            let authorization =
-                issuer.mint_admin(&self.config.audience, id, operation, now_unix()?)?;
-            let method = if policy.is_some() {
-                reqwest::Method::PUT
-            } else {
-                reqwest::Method::DELETE
-            };
-            let response = self
-                .admin
-                .request(
-                    method,
-                    format!("{}/v1/policies", self.admin_url.trim_end_matches('/')),
-                )
-                .bearer_auth(authorization)
-                .json(&body)
-                .send()
-                .await;
-            match response {
-                Ok(response) if response.status() == reqwest::StatusCode::NO_CONTENT => {
-                    return Ok(record)
+            }
+        };
+        let method = if policy.is_some() {
+            reqwest::Method::PUT
+        } else {
+            reqwest::Method::DELETE
+        };
+        // A replicated write counts only once every ready replica holds it. Rolling
+        // updates briefly change the ready set, so those writes retry for longer.
+        let attempts = if self.config.replicas.is_some() { 10 } else { 3 };
+        // Partial fan-out may already have applied this write. Retry the exact record;
+        // allocating a newer version here could overwrite another writer's decision.
+        for attempt in 0..attempts {
+            let last = attempt + 1 == attempts;
+            let targets = match self.write_targets().await {
+                Ok(targets) => targets,
+                Err(error) if last => return Err(error),
+                Err(_) => {
+                    tokio::time::sleep(std::time::Duration::from_millis(100 * (attempt + 1)))
+                        .await;
+                    continue;
                 }
-                Ok(response) => {
-                    let transient = response.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE;
-                    let error = gateway_error(response).await;
-                    if !transient
-                        || error.code != "SANDBOX_EGRESS_GATEWAY_UNAVAILABLE"
-                        || attempt == 2
-                    {
-                        return Err(error);
+            };
+            let mut acknowledged = true;
+            for target in &targets {
+                let authorization =
+                    issuer.mint_admin(&self.config.audience, id, operation(), now_unix()?)?;
+                let response = self
+                    .admin
+                    .request(method.clone(), format!("{target}/v1/policies"))
+                    .bearer_auth(authorization)
+                    .json(&body)
+                    .send()
+                    .await;
+                match response {
+                    Ok(response) if response.status() == reqwest::StatusCode::NO_CONTENT => {}
+                    Ok(response) => {
+                        let transient =
+                            response.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE;
+                        let error = gateway_error(response).await;
+                        if !transient || error.code != "SANDBOX_EGRESS_GATEWAY_UNAVAILABLE" || last
+                        {
+                            return Err(error);
+                        }
+                        acknowledged = false;
+                        break;
+                    }
+                    Err(_) if last => {
+                        return Err(unavailable(
+                            "gateway policy request failed after repeated attempts",
+                        ))
+                    }
+                    Err(_) => {
+                        acknowledged = false;
+                        break;
                     }
                 }
-                Err(_) if attempt == 2 => {
-                    return Err(unavailable(
-                        "gateway policy request failed after three attempts",
-                    ))
-                }
-                Err(_) => {}
+            }
+            if acknowledged {
+                return Ok(record);
             }
             tokio::time::sleep(std::time::Duration::from_millis(100 * (attempt + 1))).await;
         }
         unreachable!("every final attempt returns")
+    }
+
+    /// Admin origins that must all acknowledge a write: the single admin address, or
+    /// every ready replica. Fewer resolvable replicas than the gateway runs refuses the
+    /// write, so no replica keeps serving a policy the caller believes was replaced.
+    async fn write_targets(&self) -> Result<Vec<String>> {
+        let Some(replicas) = &self.config.replicas else {
+            return Ok(vec![self.admin_url.trim_end_matches('/').to_string()]);
+        };
+        #[cfg(test)]
+        let resolved = self.replica_addresses.clone();
+        #[cfg(not(test))]
+        let resolved: Option<Vec<std::net::SocketAddr>> = None;
+        let mut addresses: Vec<_> = match resolved {
+            Some(addresses) => addresses,
+            None => tokio::net::lookup_host((replicas.dns.as_str(), replicas.port))
+                .await
+                .map_err(|_| unavailable("could not resolve the gateway replicas"))?
+                .collect(),
+        };
+        addresses.retain(std::net::SocketAddr::is_ipv4);
+        addresses.sort();
+        addresses.dedup();
+        if addresses.len() < replicas.count as usize {
+            return Err(unavailable(&format!(
+                "{} of {} gateway replicas are ready; a policy write must reach every replica",
+                addresses.len(),
+                replicas.count
+            )));
+        }
+        let scheme = reqwest::Url::parse(&self.admin_url)
+            .map(|url| url.scheme().to_string())
+            .unwrap_or_else(|_| "http".into());
+        Ok(addresses
+            .into_iter()
+            .map(|address| format!("{scheme}://{address}"))
+            .collect())
     }
 
     /// Read the recovery record without renewing the sandbox identity.

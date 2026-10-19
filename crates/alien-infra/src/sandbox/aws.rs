@@ -492,6 +492,7 @@ impl AwsSandboxController {
                     },
                     kid: key.kid.clone(),
                     admin_ca_pem: None,
+                    replicas: None,
                 },
             ));
         } else {

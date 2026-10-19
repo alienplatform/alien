@@ -8,6 +8,7 @@
 //! ALIEN_GATEWAY_KIND_CONTEXT=kind-<name> \
 //! ALIEN_GATEWAY_KIND_NAMESPACE=alien-gateway-<suffix> \
 //! ALIEN_GATEWAY_KIND_SESSION_IMAGE=<image that keeps running> \
+//! ALIEN_KUBERNETES_CLUSTER_DOMAIN=<the cluster DNS domain> \
 //!   cargo test -p alien-infra --features all-platforms --test kubernetes_sandbox_gateway_kind \
 //!   -- --ignored --nocapture
 //! ```
@@ -16,7 +17,8 @@
 //! pre-install hook refuses a CNI that does not enforce NetworkPolicy), and drives the real
 //! controllers until the gateway Deployment, its Services and NetworkPolicy exist and the warm
 //! pool has a session pod. It leaves the namespace in place so traffic probes can run against
-//! it; the caller deletes the namespace.
+//! it; the caller deletes the namespace. Outside the cluster the controller cannot read the
+//! cluster DNS domain from its resolver search path, so the test passes it in.
 
 #![cfg(feature = "kubernetes")]
 
@@ -243,6 +245,33 @@ async fn kubernetes_installs_and_reconciles_a_replicated_sandbox_gateway() {
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
     assert!(!pool.is_empty(), "the warm pool never created a session pod");
+    // The binding a policy writer loads: writes must reach all three replicas.
+    let binding = {
+        use alien_infra::{ResourceController as _, StackResourceStateExt as _};
+        state.resources["agent"]
+            .get_internal_controller()
+            .expect("sandbox controller")
+            .expect("sandbox controller state")
+            .get_binding_params()
+            .expect("sandbox binding")
+            .expect("sandbox binding params")
+    };
+    let alien_core::bindings::SandboxBinding::Kubernetes(binding) =
+        serde_json::from_value(binding).expect("sandbox binding")
+    else {
+        panic!("Kubernetes sandbox binding")
+    };
+    let Some(alien_core::bindings::SandboxEgressBinding::Gateway(gateway)) = binding.egress else {
+        panic!("gateway egress binding")
+    };
+    assert_eq!(
+        gateway.replicas.as_ref().map(|replicas| replicas.count),
+        Some(3)
+    );
+    println!(
+        "GATEWAY_BINDING {}",
+        serde_json::to_string(&gateway).expect("binding JSON")
+    );
     let environment = &pool[0]["spec"]["containers"][0]["env"];
     let gateway_service = kubectl_json(
         &namespace,

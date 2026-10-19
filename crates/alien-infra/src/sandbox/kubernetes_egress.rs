@@ -2,7 +2,9 @@
 
 use crate::{core::ResourceControllerContext, ErrorData, Result};
 use alien_core::{
-    bindings::{SandboxEgressBinding, SandboxEgressGateway, SandboxEgressSigningKey},
+    bindings::{
+        SandboxEgressBinding, SandboxEgressGateway, SandboxEgressReplicas, SandboxEgressSigningKey,
+    },
     kubernetes_resource_name,
     sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID,
     Sandbox, SandboxEgress, SECRETS_VAULT_ID,
@@ -12,8 +14,55 @@ use k8s_openapi::api::core::v1::EnvVar;
 
 use super::egress;
 
-/// Kubernetes' default cluster DNS domain.
-const CLUSTER_DOMAIN: &str = "cluster.local";
+/// Configures the cluster DNS domain for a controller running outside the cluster.
+const CLUSTER_DOMAIN_ENV: &str = "ALIEN_KUBERNETES_CLUSTER_DOMAIN";
+
+/// The gateway resolves its peers as an absolute DNS name, so it needs the cluster's
+/// DNS domain. Inside the cluster the kubelet lists it in the pod's resolver search path
+/// as `svc.<domain>`. Elsewhere it must be configured: a guessed domain would leave every
+/// replica unable to find the others.
+fn cluster_domain(configured: Option<&str>, resolv_conf: Option<&str>) -> Result<String> {
+    let valid = |domain: &str| {
+        !domain.is_empty()
+            && domain.len() <= 253
+            && domain.split('.').all(|label| {
+                !label.is_empty()
+                    && label.len() <= 63
+                    && label
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            })
+    };
+    let invalid = |message: String| {
+        AlienError::new(ErrorData::ResourceConfigInvalid {
+            message,
+            resource_id: Some(SANDBOX_EGRESS_GATEWAY_ID.into()),
+        })
+    };
+    if let Some(domain) = configured {
+        let domain = domain.trim().trim_end_matches('.').to_ascii_lowercase();
+        return if valid(&domain) {
+            Ok(domain)
+        } else {
+            Err(invalid(format!(
+                "{CLUSTER_DOMAIN_ENV} must be a DNS domain such as cluster.local"
+            )))
+        };
+    }
+    resolv_conf
+        .into_iter()
+        .flat_map(str::lines)
+        .filter_map(|line| line.trim().strip_prefix("search"))
+        .flat_map(str::split_whitespace)
+        .find_map(|entry| entry.trim_end_matches('.').strip_prefix("svc."))
+        .map(str::to_ascii_lowercase)
+        .filter(|domain| valid(domain))
+        .ok_or_else(|| {
+            invalid(format!(
+                "Cannot determine the cluster DNS domain for sandbox gateway replicas: the resolver search path has no svc.<domain> entry. Run the controller in the cluster or set {CLUSTER_DOMAIN_ENV}"
+            ))
+        })
+}
 
 pub(super) async fn configure(
     ctx: &ResourceControllerContext<'_>,
@@ -32,10 +81,14 @@ pub(super) async fn configure(
     } else {
         egress::read_signing_public_key(vault.as_ref()).await?
     };
+    let workload = kubernetes_resource_name(&ctx.resource_prefix, SANDBOX_EGRESS_GATEWAY_ID);
+    let peer = crate::container::peer_service_name(&workload);
     if owner {
+        let domain = cluster_domain(
+            std::env::var(CLUSTER_DOMAIN_ENV).ok().as_deref(),
+            std::fs::read_to_string("/etc/resolv.conf").ok().as_deref(),
+        )?;
         let denied = crate::core::k8s_network::cluster_denied_ranges(ctx).await?;
-        let workload = kubernetes_resource_name(&ctx.resource_prefix, SANDBOX_EGRESS_GATEWAY_ID);
-        let peer = crate::container::peer_service_name(&workload);
         let audiences: Vec<_> = ids
             .iter()
             .map(|id| format!("{}/{id}", ctx.resource_prefix))
@@ -47,7 +100,7 @@ pub(super) async fn configure(
                 "audiences": audiences, "defaultPolicies": {}, "keys": [&key],
                 "deniedRanges": denied,
                 // The gateway resolves this as an absolute name, without search domains.
-                "peers": {"dns": format!("{peer}.{namespace}.svc.{CLUSTER_DOMAIN}"), "port": 3129},
+                "peers": {"dns": format!("{peer}.{namespace}.svc.{domain}"), "port": 3129},
                 "credentials": []
             }),
         )
@@ -62,7 +115,23 @@ pub(super) async fn configure(
         },
         kid: key.kid,
         admin_ca_pem: None,
+        // Writers resolve this relative name through their own search path, so a write
+        // reaches every ready replica even if replica discovery is misconfigured.
+        replicas: Some(SandboxEgressReplicas {
+            dns: format!("{peer}.{namespace}.svc"),
+            port: 3129,
+            count: gateway_replicas(ctx),
+        }),
     }))
+}
+
+fn gateway_replicas(ctx: &ResourceControllerContext<'_>) -> u32 {
+    ctx.desired_stack
+        .resources
+        .get(SANDBOX_EGRESS_GATEWAY_ID)
+        .and_then(|entry| entry.config.downcast_ref::<alien_core::Container>())
+        .and_then(|gateway| gateway.replicas)
+        .unwrap_or(1)
 }
 
 /// Sandboxes cannot resolve cluster DNS. Resolve the owned Service in the controller
@@ -210,7 +279,20 @@ mod tests {
                 );
             })
             .await;
+        // A controller outside the cluster has no cluster search path to read.
+        unsafe { std::env::set_var(CLUSTER_DOMAIN_ENV, "corp.example") };
         let first = configure(&ctx, &sandbox, "test-ns").await.unwrap();
+        let SandboxEgressBinding::Gateway(gateway) = &first else {
+            panic!("gateway binding")
+        };
+        assert_eq!(
+            gateway.replicas,
+            Some(SandboxEgressReplicas {
+                dns: "sandbox-egress-gateway-peers.test-ns.svc".into(),
+                port: 3129,
+                count: 1,
+            })
+        );
         let stored = vault.get_secret(egress::GATEWAY_CONFIG).await.unwrap();
         let version = vault.secret_presence(egress::GATEWAY_CONFIG).await.unwrap();
         assert_eq!(configure(&ctx, &sandbox, "test-ns").await.unwrap(), first);
@@ -226,7 +308,7 @@ mod tests {
         assert_eq!(config["audiences"], json!(["test/subject"]));
         assert_eq!(
             config["peers"]["dns"],
-            "sandbox-egress-gateway-peers.test-ns.svc.cluster.local"
+            "sandbox-egress-gateway-peers.test-ns.svc.corp.example"
         );
         assert_eq!(
             config["deniedRanges"],
@@ -288,5 +370,23 @@ mod tests {
             Some("test/subject")
         );
         service.assert_async().await;
+    }
+
+    #[test]
+    fn cluster_domain_comes_from_the_search_path_or_explicit_configuration() {
+        let resolv = "nameserver 10.96.0.10\nsearch team.svc.corp.example svc.corp.example corp.example\noptions ndots:5\n";
+        assert_eq!(cluster_domain(None, Some(resolv)).unwrap(), "corp.example");
+        assert_eq!(
+            cluster_domain(Some("Other.Domain."), Some(resolv)).unwrap(),
+            "other.domain"
+        );
+        // Outside a cluster there is no svc entry; refusing beats guessing cluster.local.
+        for missing in [None, Some("nameserver 1.1.1.1\nsearch example.com\n")] {
+            assert_eq!(
+                cluster_domain(None, missing).unwrap_err().code,
+                "RESOURCE_CONFIG_INVALID"
+            );
+        }
+        assert!(cluster_domain(Some("bad domain"), None).is_err());
     }
 }

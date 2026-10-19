@@ -219,6 +219,7 @@ impl Harness {
             },
             kid: "key-1".into(),
             admin_ca_pem: None,
+            replicas: None,
         };
         let manager = SandboxEgressManager::with_endpoints(
             config.clone(),
@@ -644,4 +645,78 @@ async fn linked_container_resolves_both_gateway_ports_without_storing_an_address
         )
         .is_err());
     }
+}
+
+/// A replicated gateway counts a write only once every ready replica holds it, so a
+/// narrowed policy can never stay wide on a replica the writer did not reach.
+#[tokio::test]
+async fn replicated_writes_reach_every_ready_replica_or_fail() {
+    let h = Harness::new().await;
+    let port = reqwest::Url::parse(&h.manager.admin_url)
+        .unwrap()
+        .port()
+        .unwrap();
+    let second = Arc::new(AdminState {
+        public: h.state.public,
+        policies: StdMutex::new(Default::default()),
+        writes: StdMutex::new(Vec::new()),
+        refuse: AtomicBool::new(false),
+        transient_failures: AtomicUsize::new(0),
+        records: StdMutex::new(Vec::new()),
+        record_response: StdMutex::new(None),
+    });
+    let listener = tokio::net::TcpListener::bind(("127.0.0.2", port))
+        .await
+        .unwrap();
+    let router = Router::new()
+        .route("/v1/policies", put(policy_request).delete(policy_request))
+        .with_state(second.clone());
+    let server = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    let mut config = h.config.clone();
+    config.replicas = Some(alien_core::bindings::SandboxEgressReplicas {
+        dns: "replicas.invalid".into(),
+        port,
+        count: 2,
+    });
+    let mut manager = SandboxEgressManager::with_endpoints(
+        config,
+        h.vault.clone(),
+        h.manager.gateway.clone(),
+        h.manager.admin_url.clone(),
+    )
+    .unwrap();
+    let first: std::net::SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
+    let other: std::net::SocketAddr = format!("127.0.0.2:{port}").parse().unwrap();
+    let held = |state: &AdminState| {
+        state
+            .policies
+            .lock()
+            .unwrap()
+            .get("box-1")
+            .and_then(|row| row.1.clone())
+    };
+    let wide: EgressPolicy =
+        serde_json::from_value(serde_json::json!({"allow":["example.com","www.example.com"]}))
+            .unwrap();
+    let narrow: EgressPolicy =
+        serde_json::from_value(serde_json::json!({"allow":["example.com"]})).unwrap();
+
+    // One of two replicas is discoverable: nothing is written and the caller is told.
+    manager.replica_addresses = Some(vec![first]);
+    let error = manager.update("box-1", &wide).await.unwrap_err();
+    assert_eq!(error.code, "SANDBOX_EGRESS_GATEWAY_UNAVAILABLE");
+    assert!(held(&h.state).is_none() && held(&second).is_none());
+
+    manager.replica_addresses = Some(vec![first, other]);
+    manager.update("box-1", &wide).await.unwrap();
+    manager.update("box-1", &narrow).await.unwrap();
+    assert_eq!(held(&h.state), Some(narrow.clone()));
+    assert_eq!(held(&second), Some(narrow.clone()));
+
+    // A replica that does not acknowledge fails the write.
+    second.refuse.store(true, Ordering::SeqCst);
+    assert!(manager.update("box-1", &wide).await.is_err());
+    server.abort();
 }

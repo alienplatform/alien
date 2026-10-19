@@ -127,6 +127,22 @@ pub struct SandboxEgressGateway {
     /// Trust root for an admin listener using a deployment-issued TLS certificate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub admin_ca_pem: Option<String>,
+    /// Replicas that must each acknowledge a policy write. Absent when the gateway
+    /// replicates writes itself behind one admin address.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replicas: Option<SandboxEgressReplicas>,
+}
+
+/// Ready gateway replicas a policy write must reach.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SandboxEgressReplicas {
+    /// Name that resolves, through the workload's DNS search path, to every ready replica.
+    pub dns: String,
+    /// Admin port on each replica.
+    pub port: u16,
+    /// Replicas the gateway runs. A write refuses when fewer are resolvable.
+    pub count: u32,
 }
 
 /// Management-only vault reference for an Ed25519 PKCS#8 key.
