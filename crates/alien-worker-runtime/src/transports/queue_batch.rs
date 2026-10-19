@@ -40,20 +40,19 @@ pub(crate) fn batch_routing(
             .context(ErrorData::Other {
                 message: "Invalid queue batch configuration".into(),
             })?;
-    let mut aliases = std::collections::HashMap::new();
+    // Logical routes are authoritative. Short provider names are conveniences,
+    // not identities: distinct accounts/namespaces may reuse the same name.
+    let mut aliases: std::collections::HashMap<String, String> = sources
+        .keys()
+        .map(|source| (source.clone(), source.clone()))
+        .collect();
+    let mut short_aliases: std::collections::HashMap<String, Option<String>> =
+        std::collections::HashMap::new();
     for (source, config) in &sources {
         if let Some(config) = config {
             config.validate().context(ErrorData::Other {
                 message: "Invalid queue batch limits".into(),
             })?;
-        }
-        if aliases
-            .insert(source.clone(), source.clone())
-            .is_some_and(|previous| previous != *source)
-        {
-            return Err(alien_error::AlienError::new(ErrorData::Other {
-                message: "Ambiguous queue source bindings".into(),
-            }));
         }
         if let Some(binding) = environment.get(&alien_core::bindings::binding_env_var_name(source))
         {
@@ -64,18 +63,31 @@ pub(crate) fn batch_routing(
                 })?;
             for key in ["queueUrl", "queueName", "topic", "subscription"] {
                 if let Some(alias) = binding.get(key).and_then(serde_json::Value::as_str) {
-                    for alias in [alias, alias.rsplit('/').next().unwrap_or(alias)] {
-                        if aliases
+                    if alias.contains('/')
+                        && aliases
                             .insert(alias.to_string(), source.clone())
                             .is_some_and(|previous| previous != *source)
-                        {
-                            return Err(alien_error::AlienError::new(ErrorData::Other {
-                                message: "Ambiguous queue source bindings".into(),
-                            }));
-                        }
+                    {
+                        return Err(alien_error::AlienError::new(ErrorData::Other {
+                            message: "Ambiguous qualified queue source bindings".into(),
+                        }));
                     }
+                    let short = alias.rsplit('/').next().unwrap_or(alias).to_string();
+                    short_aliases
+                        .entry(short)
+                        .and_modify(|previous| {
+                            if previous.as_ref() != Some(source) {
+                                *previous = None;
+                            }
+                        })
+                        .or_insert_with(|| Some(source.clone()));
                 }
             }
+        }
+    }
+    for (alias, source) in short_aliases {
+        if let Some(source) = source {
+            aliases.entry(alias).or_insert(source);
         }
     }
     Ok((
@@ -279,6 +291,12 @@ async fn collect(
         if pending.is_empty() {
             continue;
         }
+        // Expired or disconnected entries no longer constrain live deliveries.
+        let deadline = pending
+            .iter()
+            .map(|entry| entry.deadline)
+            .min()
+            .expect("nonempty batch");
         let batch = QueueBatch {
             source: source.clone(),
             deliveries: pending.iter().map(|entry| entry.delivery.clone()).collect(),
@@ -331,6 +349,167 @@ mod tests {
     };
     use tokio_stream::StreamExt;
     use tonic::Request;
+
+    #[tokio::test]
+    async fn admission_bounds_bytes_across_sources_and_releases_cancelled_requests() {
+        let control = Arc::new(ControlGrpcServer::new());
+        let collectors = QueueCollectors::new(
+            (0..4)
+                .map(|i| {
+                    (
+                        i.to_string(),
+                        QueueBatchConfig {
+                            max_messages: 100,
+                            max_window_seconds: 60,
+                        },
+                    )
+                })
+                .collect(),
+            control,
+        );
+        let deadline = Instant::now() + Duration::from_secs(120);
+        let message = |source: String, size| QueueMessage {
+            source,
+            payload: vec![0; size],
+            ..Default::default()
+        };
+        assert!(
+            !collectors.clients["0"]
+                .deliver(message("0".into(), MAX_BATCH_BYTES), deadline)
+                .await,
+            "protobuf overhead must fit under the task bound"
+        );
+        let mut pending = Vec::new();
+        for index in 0..3 {
+            let source = index.to_string();
+            let collector = collectors.clients[&source].clone();
+            pending.push(tokio::spawn(async move {
+                collector
+                    .deliver(message(source, 2 * 1024 * 1024), deadline)
+                    .await
+            }));
+        }
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while collectors.clients["0"].bytes.available_permits() >= 2 * 1024 * 1024 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("three requests admitted");
+        assert!(
+            pending.iter().all(|request| !request.is_finished()),
+            "enqueue never acknowledges"
+        );
+        assert!(!tokio::time::timeout(
+            Duration::from_secs(1),
+            collectors.clients["3"].deliver(message("3".into(), 2 * 1024 * 1024), deadline)
+        )
+        .await
+        .expect("saturation rejects immediately"));
+        for request in pending {
+            request.abort();
+            assert!(request.await.expect_err("cancelled request").is_cancelled());
+        }
+        let bytes = collectors.clients["0"].bytes.clone();
+        collectors
+            .join()
+            .await
+            .expect("owned shutdown releases queued work");
+        assert_eq!(bytes.available_permits(), MAX_PENDING_BYTES);
+    }
+
+    #[test]
+    fn ambiguous_short_names_preserve_distinct_logical_and_qualified_routes() {
+        let environment = std::collections::HashMap::from([
+            (
+                "ALIEN_QUEUE_BATCH_CONFIG".into(),
+                r#"{"first":null,"second":null}"#.into(),
+            ),
+            (
+                "ALIEN_FIRST_BINDING".into(),
+                r#"{"queueName":"jobs","subscription":"projects/first/subscriptions/jobs"}"#.into(),
+            ),
+            (
+                "ALIEN_SECOND_BINDING".into(),
+                r#"{"queueName":"jobs","subscription":"projects/second/subscriptions/jobs"}"#
+                    .into(),
+            ),
+        ]);
+        let (_, aliases) = batch_routing(&environment).expect("distinct routes are valid");
+        assert_eq!(aliases["first"], "first");
+        assert_eq!(aliases["second"], "second");
+        assert_eq!(aliases["projects/first/subscriptions/jobs"], "first");
+        assert_eq!(aliases["projects/second/subscriptions/jobs"], "second");
+        assert!(!aliases.contains_key("jobs"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn expired_collection_entry_does_not_cancel_surviving_delivery() {
+        let control = Arc::new(ControlGrpcServer::new());
+        let mut tasks = control
+            .wait_for_tasks(Request::new(WaitForTasksRequest::default()))
+            .await
+            .expect("subscribe")
+            .into_inner();
+        let collectors = QueueCollectors::new(
+            std::collections::HashMap::from([(
+                String::new(),
+                QueueBatchConfig {
+                    max_messages: 3,
+                    max_window_seconds: 5,
+                },
+            )]),
+            control.clone(),
+        );
+        let collector = collectors.clients[""].clone();
+        let now = Instant::now();
+        let expired = tokio::spawn({
+            let collector = collector.clone();
+            async move {
+                collector
+                    .deliver(QueueMessage::default(), now + Duration::from_secs(1))
+                    .await
+            }
+        });
+        let live = tokio::spawn(async move {
+            collector
+                .deliver(
+                    QueueMessage {
+                        id: "live".into(),
+                        ..Default::default()
+                    },
+                    now + Duration::from_secs(60),
+                )
+                .await
+        });
+        let task = tasks.next().await.expect("stream").expect("live task");
+        let Some(Payload::QueueBatch(batch)) = task.payload else {
+            panic!("batch");
+        };
+        assert_eq!(batch.deliveries.len(), 1);
+        assert_eq!(
+            batch.deliveries[0].message.as_ref().expect("message").id,
+            "live"
+        );
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        control
+            .send_task_result(Request::new(SendTaskResultRequest {
+                task_id: task.task_id,
+                result: Some(send_task_result_request::Result::QueueBatch(
+                    QueueBatchResult {
+                        outcomes: vec![QueueDeliveryOutcome {
+                            delivery_id: batch.deliveries[0].delivery_id.clone(),
+                            disposition: Disposition::Success as i32,
+                        }],
+                    },
+                )),
+            }))
+            .await
+            .expect("live result accepted");
+        assert!(!expired.await.expect("expired waiter"));
+        assert!(live.await.expect("live waiter"));
+        collectors.join().await.expect("shutdown");
+    }
 
     #[tokio::test(start_paused = true)]
     async fn window_flush_waits_for_result_and_keeps_delivery_outcomes_independent() {

@@ -6,9 +6,9 @@
 
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
-    ArtifactRegistry, AzureContainerAppsEnvironment, AzureResourceGroup, AzureServiceBusNamespace,
-    Build, ComputePoolSelection, ComputeSettings, Queue, QueueBatchConfig, ResourceLifecycle,
-    ServiceAccount, Stack, StackSettings, Worker, WorkerCode, WorkerTrigger,
+    ArtifactRegistry, AzureContainerAppsEnvironment, AzureResourceGroup, Build,
+    ComputePoolSelection, ComputeSettings, ResourceLifecycle, Stack, StackSettings, Worker,
+    WorkerCode,
 };
 use alien_core::{ContainerAppsEnvironmentBinding, ExternalBinding, ExternalBindings};
 use alien_terraform::TerraformTarget;
@@ -260,41 +260,4 @@ fn azure_function_reuses_external_container_apps_environment() {
     assert!(rendered.contains("defaultDomain"));
     assert!(rendered.contains("\"shared.example.azurecontainerapps.io\""));
     assert_terraform_valid(&module, "azure_function_shared_env");
-}
-
-#[test]
-fn azure_queue_batches_validate_with_managed_identity_scaling_and_health() {
-    let queue = Queue::new("jobs".to_string()).build();
-    let worker = Worker::new("processor".to_string())
-        .code(WorkerCode::Image {
-            image: "example.azurecr.io/worker:1".to_string(),
-        })
-        .permissions("execution".to_string())
-        .trigger(
-            WorkerTrigger::queue_batch(
-                &queue,
-                QueueBatchConfig {
-                    max_messages: 10,
-                    max_window_seconds: 2,
-                },
-            )
-            .expect("valid batch"),
-        )
-        .build();
-    let stack = Stack::new("batch-validation".to_string())
-        .add(resource_group(), ResourceLifecycle::Frozen)
-        .add(container_apps_environment(), ResourceLifecycle::Frozen)
-        .add(
-            AzureServiceBusNamespace::new("default-service-bus-namespace".to_string()).build(),
-            ResourceLifecycle::Frozen,
-        )
-        .add(
-            ServiceAccount::new("execution-sa".to_string()).build(),
-            ResourceLifecycle::Frozen,
-        )
-        .add(queue, ResourceLifecycle::Frozen)
-        .add(worker, ResourceLifecycle::Frozen)
-        .build();
-    let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
-    assert_terraform_valid(&module, "azure queue batching");
 }

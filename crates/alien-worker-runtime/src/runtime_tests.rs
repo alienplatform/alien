@@ -458,3 +458,50 @@ fn application_runtime_env_injects_both_worker_protocol_address_names() {
         assert_eq!(env.get("PORT"), None);
     }
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn parent_exit_stops_descendants_before_releasing_transport() {
+    let config = RuntimeConfig::builder()
+        .transport(TransportType::Local)
+        .command(vec!["unused".into()])
+        .build();
+    let mut child = Command::new("/bin/sh")
+        .args(["-c", "sleep 60 & exit 42"])
+        .process_group(0)
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn process group");
+    // The descendant inherits stdout. EOF proves it no longer holds the pipe.
+    let mut output = child.stdout.take().expect("inherited pipe");
+    let control = Arc::new(ControlGrpcServer::new());
+    let (_shutdown, shutdown_rx) = broadcast::channel(1);
+    let (transport_shutdown, mut transport_rx) = broadcast::channel(1);
+    let handle = tokio::spawn(async move {
+        transport_rx.recv().await.expect("transport stopped");
+        let mut bytes = Vec::new();
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            tokio::io::AsyncReadExt::read_to_end(&mut output, &mut bytes),
+        )
+        .await
+        .expect("descendant must stop before transport joins")
+        .expect("pipe EOF");
+        Ok(())
+    });
+    let result = run_transport(
+        &config,
+        control,
+        None,
+        None,
+        Arc::new(WaitUntilGrpcServer::new()),
+        &mut child,
+        shutdown_rx,
+        Some(PrestartedTransport {
+            shutdown_tx: transport_shutdown,
+            handle,
+        }),
+    )
+    .await;
+    assert_eq!(result.expect_err("parent crashed").code, "PROCESS_FAILED");
+}

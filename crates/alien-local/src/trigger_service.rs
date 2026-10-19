@@ -335,16 +335,24 @@ async fn poll_batch_queue(
                 return Ok(());
             },
             joined = pending.join_next(), if !pending.is_empty() => {
-                joined.ok_or_else(|| AlienError::new(ErrorData::TriggerServiceError { trigger_type: "queue".into(), trigger_id: binding_name.into(), reason: "Queue task set unexpectedly empty".into() }))?.into_alien_error().context(ErrorData::TriggerServiceError {
+                let completion = joined.ok_or_else(|| AlienError::new(ErrorData::TriggerServiceError { trigger_type: "queue".into(), trigger_id: binding_name.into(), reason: "Queue task set unexpectedly empty".into() }))?.into_alien_error().context(ErrorData::TriggerServiceError {
                     trigger_type: "queue".into(), trigger_id: binding_name.into(), reason: "Queue delivery task failed".into(),
-                })?.context(ErrorData::TriggerServiceError {
-                    trigger_type: "queue".into(), trigger_id: binding_name.into(), reason: "Queue completion failed".into(),
                 })?;
+                if let Err(error) = completion {
+                    // No successful completion was confirmed. The lease makes
+                    // this delivery available again; keep other intake alive.
+                    tracing::error!(queue = %binding_name, %error, "Queue completion failed; delivery remains eligible for retry");
+                }
             },
             _ = interval.tick(), if pending.len() < 100 => {
-                let messages = queue.receive(binding_name, (100 - pending.len()).min(10)).await.context(ErrorData::TriggerServiceError {
-                    trigger_type: "queue".into(), trigger_id: binding_name.into(), reason: "Queue receive failed".into(),
-                })?;
+                let messages = match queue.receive(binding_name, (100 - pending.len()).min(10)).await {
+                    Ok(messages) => messages,
+                    Err(error) => {
+                        tracing::error!(queue = %binding_name, %error, "Queue receive failed; retrying in 2s");
+                        interval.reset_after(Duration::from_secs(2));
+                        continue;
+                    }
+                };
                 for message in messages {
                     let queue = queue.clone();
                     let collector = collector.clone();
@@ -864,6 +872,175 @@ mod tests {
     use futures_util::StreamExt;
     use std::collections::HashSet;
     use tonic::Request;
+
+    #[derive(Debug)]
+    struct RecoveringQueue {
+        inner: alien_bindings::providers::queue::local::LocalQueue,
+        fail_receive: std::sync::atomic::AtomicBool,
+        fail_ack: std::sync::atomic::AtomicBool,
+    }
+
+    impl alien_bindings::traits::Binding for RecoveringQueue {}
+
+    #[async_trait::async_trait]
+    impl Queue for RecoveringQueue {
+        async fn send(
+            &self,
+            queue: &str,
+            message: MessagePayload,
+        ) -> alien_bindings::error::Result<()> {
+            self.inner.send(queue, message).await
+        }
+        async fn send_batch(
+            &self,
+            queue: &str,
+            messages: Vec<MessagePayload>,
+        ) -> alien_bindings::error::Result<Vec<alien_bindings::traits::QueueSendResult>> {
+            self.inner.send_batch(queue, messages).await
+        }
+        async fn receive(
+            &self,
+            queue: &str,
+            count: usize,
+        ) -> alien_bindings::error::Result<Vec<alien_bindings::traits::QueueMessage>> {
+            if self
+                .fail_receive
+                .swap(false, std::sync::atomic::Ordering::SeqCst)
+            {
+                return Err(AlienError::new(
+                    alien_bindings::error::ErrorData::BindingSetupFailed {
+                        binding_type: "queue".into(),
+                        reason: "temporary receive failure".into(),
+                    },
+                ));
+            }
+            self.inner.receive(queue, count).await
+        }
+        async fn ack(&self, queue: &str, receipt: &str) -> alien_bindings::error::Result<()> {
+            if self
+                .fail_ack
+                .swap(false, std::sync::atomic::Ordering::SeqCst)
+            {
+                // Make the uncompleted lease immediately eligible for retry.
+                self.inner.nack(queue, receipt).await?;
+                return Err(AlienError::new(
+                    alien_bindings::error::ErrorData::BindingSetupFailed {
+                        binding_type: "queue".into(),
+                        reason: "temporary completion failure".into(),
+                    },
+                ));
+            }
+            self.inner.ack(queue, receipt).await
+        }
+        async fn renew_lease(
+            &self,
+            queue: &str,
+            receipt: &str,
+            seconds: u32,
+        ) -> alien_bindings::error::Result<()> {
+            self.inner.renew_lease(queue, receipt, seconds).await
+        }
+        async fn nack(&self, queue: &str, receipt: &str) -> alien_bindings::error::Result<()> {
+            self.inner.nack(queue, receipt).await
+        }
+        async fn purge(&self, queue: &str) -> alien_bindings::error::Result<()> {
+            self.inner.purge(queue).await
+        }
+    }
+
+    #[tokio::test]
+    async fn local_batch_intake_recovers_from_receive_and_completion_errors() {
+        let directory = tempfile::tempdir().expect("queue directory");
+        let queue = Arc::new(RecoveringQueue {
+            inner: alien_bindings::providers::queue::local::LocalQueue::new(
+                directory.path().to_path_buf(),
+            )
+            .await
+            .expect("queue"),
+            fail_receive: std::sync::atomic::AtomicBool::new(true),
+            fail_ack: std::sync::atomic::AtomicBool::new(true),
+        });
+        queue
+            .send("jobs", MessagePayload::Text("retryable".into()))
+            .await
+            .expect("send");
+        let control = Arc::new(ControlGrpcServer::new());
+        let mut stream = control
+            .wait_for_tasks(Request::new(WaitForTasksRequest::default()))
+            .await
+            .expect("subscribe")
+            .into_inner();
+        let collectors = QueueCollectors::new(
+            HashMap::from([(
+                "jobs".into(),
+                alien_core::QueueBatchConfig {
+                    max_messages: 1,
+                    max_window_seconds: 0,
+                },
+            )]),
+            control.clone(),
+        );
+        let collector = collectors.clients["jobs"].clone();
+        let (shutdown, mut receiver) = broadcast::channel(1);
+        let poll_queue = queue.clone();
+        let poll_control = control.clone();
+        let poller = tokio::spawn(async move {
+            poll_batch_queue(
+                "jobs",
+                poll_queue,
+                &poll_control,
+                &mut receiver,
+                collector,
+                Duration::from_secs(60),
+            )
+            .await
+        });
+        for attempt in [1, 2] {
+            let task = tokio::time::timeout(Duration::from_secs(5), stream.next())
+                .await
+                .expect("polling recovered")
+                .expect("stream")
+                .expect("task");
+            let Some(control::task::Payload::QueueBatch(batch)) = task.payload else {
+                panic!("batch");
+            };
+            assert_eq!(batch.deliveries.len(), 1);
+            assert_eq!(
+                batch.deliveries[0]
+                    .message
+                    .as_ref()
+                    .expect("message")
+                    .attempt_count,
+                attempt
+            );
+            control
+                .send_task_result(Request::new(SendTaskResultRequest {
+                    task_id: task.task_id,
+                    result: Some(send_task_result_request::Result::QueueBatch(
+                        control::QueueBatchResult {
+                            outcomes: vec![control::QueueDeliveryOutcome {
+                                delivery_id: batch.deliveries[0].delivery_id.clone(),
+                                disposition: control::queue_delivery_outcome::Disposition::Success
+                                    as i32,
+                            }],
+                        },
+                    )),
+                }))
+                .await
+                .expect("result");
+        }
+        // Joining lets the final completion finish before inspecting persisted state.
+        shutdown.send(()).expect("shutdown");
+        poller.await.expect("poller").expect("clean shutdown");
+        collectors.join().await.expect("collectors");
+        assert!(!queue.fail_receive.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(!queue.fail_ack.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(queue
+            .receive("jobs", 10)
+            .await
+            .expect("empty queue")
+            .is_empty());
+    }
 
     #[tokio::test]
     async fn local_batches_ack_independently_and_release_shutdown_delivery_after_app_stops() {

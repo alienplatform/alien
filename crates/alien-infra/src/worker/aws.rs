@@ -641,6 +641,23 @@ impl AwsWorkerController {
         let cfg = ctx.desired_resource_config::<Worker>()?;
         info!(name=%cfg.id, code=?cfg.code, "Initiating creation");
 
+        // Product limitation: Only allow at most one queue trigger per worker
+        let queue_trigger_count = cfg
+            .triggers
+            .iter()
+            .filter(|trigger| matches!(trigger, alien_core::WorkerTrigger::Queue { .. }))
+            .count();
+
+        if queue_trigger_count > 1 {
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: format!(
+                    "Worker '{}' has {} queue triggers, but only one queue trigger per worker is currently supported",
+                    cfg.id, queue_trigger_count
+                ),
+                resource_id: Some(cfg.id.clone()),
+            }));
+        }
+
         // Get the ServiceAccount for this worker's permission profile
         let service_account_id = format!("{}-sa", cfg.get_permissions());
         let service_account_ref = ResourceRef::new(
@@ -2286,6 +2303,23 @@ impl AwsWorkerController {
         let config = ctx.desired_resource_config::<Worker>()?;
         let aws_cfg = ctx.get_aws_config()?;
 
+        // Validation: Only allow at most one queue trigger per worker (non-retriable error)
+        let queue_trigger_count = config
+            .triggers
+            .iter()
+            .filter(|trigger| matches!(trigger, alien_core::WorkerTrigger::Queue { .. }))
+            .count();
+
+        if queue_trigger_count > 1 {
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: format!(
+                    "Worker '{}' has {} queue triggers, but only one queue trigger per worker is currently supported",
+                    config.id, queue_trigger_count
+                ),
+                resource_id: Some(config.id.clone()),
+            }));
+        }
+
         // Linear flow principle: Always perform this state. Create mappings for ALL queue triggers
         let mut created_any = false;
         for trigger in &config.triggers {
@@ -3726,6 +3760,23 @@ impl AwsWorkerController {
     ) -> Result<HandlerAction> {
         let current_config = ctx.desired_resource_config::<Worker>()?;
         let previous_config = ctx.previous_resource_config::<Worker>()?;
+
+        // Validation: Only allow at most one queue trigger per worker (non-retriable error)
+        let queue_trigger_count = current_config
+            .triggers
+            .iter()
+            .filter(|trigger| matches!(trigger, alien_core::WorkerTrigger::Queue { .. }))
+            .count();
+
+        if queue_trigger_count > 1 {
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: format!(
+                    "Worker '{}' has {} queue triggers, but only one queue trigger per worker is currently supported",
+                    current_config.id, queue_trigger_count
+                ),
+                resource_id: Some(current_config.id.clone()),
+            }));
+        }
 
         // Reconcile retained queues in place, including capacity-only updates.
         // Keep all owned IDs until each deletion succeeds so retries retain cleanup ownership.

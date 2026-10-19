@@ -347,6 +347,8 @@ async fn run_transport(
             (shutdown_tx, handle)
         };
 
+    // Capture before wait() clears the child ID; descendants retain this group.
+    let process_group = child.id();
     // Wait for shutdown, child exit, or transport completion
     tokio::select! {
         _ = control_server.wait_for_cancelled_task() => {
@@ -370,6 +372,7 @@ async fn run_transport(
         }
 
         child_status = child.wait() => {
+            terminate_process_group(process_group)?;
             control_server.application_stopped();
             let child_result = handle_child_exit(child_status);
             let _ = transport_shutdown_tx.send(());
@@ -949,26 +952,7 @@ async fn stream_output(
 
 /// Stop the app and its ordinary subprocesses before deciding delivery failure.
 async fn terminate_application(child: &mut Child) -> Result<()> {
-    #[cfg(unix)]
-    if let Some(pid) = child.id() {
-        let pid = pid as libc::pid_t;
-        // SAFETY: getpgid and killpg take integer IDs and no pointers. Only
-        // signal a group led by our owned child, never the runtime's group.
-        if unsafe { libc::getpgid(pid) } == pid {
-            let result = unsafe { libc::killpg(pid, libc::SIGKILL) };
-            if result != 0 {
-                let error = std::io::Error::last_os_error();
-                if error.raw_os_error() != Some(libc::ESRCH) {
-                    return Err(error)
-                        .into_alien_error()
-                        .context(ErrorData::ProcessFailed {
-                            exit_code: None,
-                            message: "Could not terminate application process group".to_string(),
-                        });
-                }
-            }
-        }
-    }
+    terminate_process_group(child.id())?;
     child
         .kill()
         .await
@@ -977,6 +961,29 @@ async fn terminate_application(child: &mut Child) -> Result<()> {
             exit_code: None,
             message: "Could not terminate application".to_string(),
         })
+}
+
+/// The ID must belong to a child spawned with process_group(0).
+fn terminate_process_group(process_group: Option<u32>) -> Result<()> {
+    #[cfg(unix)]
+    if let Some(pid) = process_group {
+        // SAFETY: the captured ID is the owned application's process group,
+        // including when its leader has already exited and been reaped.
+        if unsafe { libc::killpg(pid as libc::pid_t, libc::SIGKILL) } != 0 {
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() != Some(libc::ESRCH) {
+                return Err(error)
+                    .into_alien_error()
+                    .context(ErrorData::ProcessFailed {
+                        exit_code: None,
+                        message: "Could not terminate application process group".into(),
+                    });
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = process_group;
+    Ok(())
 }
 
 /// Graceful shutdown.

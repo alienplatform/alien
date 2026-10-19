@@ -419,6 +419,23 @@ impl GcpWorkerController {
                 }
             }
         }
+        // Product limitation: Only allow at most one queue trigger per worker
+        let queue_trigger_count = cfg
+            .triggers
+            .iter()
+            .filter(|trigger| matches!(trigger, alien_core::WorkerTrigger::Queue { .. }))
+            .count();
+
+        if queue_trigger_count > 1 {
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: format!(
+                    "Worker '{}' has {} queue triggers, but only one queue trigger per worker is currently supported",
+                    cfg.id, queue_trigger_count
+                ),
+                resource_id: Some(cfg.id.clone()),
+            }));
+        }
+
         let gcp_config = ctx.get_gcp_config()?;
         let compute = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
         let operation = match pending.phase {

@@ -841,8 +841,136 @@ impl AlienContext {
 #[cfg(test)]
 mod queue_handler_tests {
     use super::*;
+    use alien_worker_protocol::{
+        batch::validate_outcomes,
+        control::{
+            queue_delivery_outcome::Disposition, QueueDelivery, QueueDeliveryOutcome,
+            WaitForTasksRequest,
+        },
+        ControlGrpcServer,
+    };
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio_stream::wrappers::TcpListenerStream;
 
+    #[tokio::test]
+    async fn batch_handlers_round_trip_distinct_delivery_outcomes_over_grpc() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let control = ControlGrpcServer::new();
+        let service = control.clone().into_service();
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let server = tokio::spawn(async move {
+            tonic::transport::Server::builder()
+                .add_service(service)
+                .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async {
+                    let _ = stopped.await;
+                })
+                .await
+                .unwrap();
+        });
+        for source in ["jobs", "*"] {
+            let bindings = Bindings::from_env_map(HashMap::from([(
+                "ALIEN_DEPLOYMENT_TYPE".into(),
+                "local".into(),
+            )]))
+            .unwrap();
+            let mut context = AlienContext::new(
+                Arc::new(WaitUntilContext::new(Some("worker".into()))),
+                Arc::new(bindings),
+            );
+            context
+                .env_vars
+                .insert("ALIEN_WORKER_GRPC_ADDRESS".into(), address.to_string());
+            context
+                .on_queue_batch(source, |batch| async move {
+                    assert_eq!(batch.source, "jobs");
+                    assert_eq!(batch.deliveries.len(), 2);
+                    assert_eq!(
+                        batch.deliveries[0].message.as_ref().unwrap().id,
+                        batch.deliveries[1].message.as_ref().unwrap().id
+                    );
+                    assert_eq!(
+                        batch.deliveries[0].message.as_ref().unwrap().payload,
+                        b"first"
+                    );
+                    assert_eq!(
+                        batch.deliveries[1].message.as_ref().unwrap().payload,
+                        b"second"
+                    );
+                    Ok(QueueBatchResult {
+                        outcomes: vec![
+                            QueueDeliveryOutcome {
+                                delivery_id: batch.deliveries[1].delivery_id.clone(),
+                                disposition: Disposition::Retry as i32,
+                            },
+                            QueueDeliveryOutcome {
+                                delivery_id: batch.deliveries[0].delivery_id.clone(),
+                                disposition: Disposition::Success as i32,
+                            },
+                        ],
+                    })
+                })
+                .await;
+            let batch = QueueBatch {
+                source: "jobs".into(),
+                deliveries: ["first", "second"]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, body)| QueueDelivery {
+                        delivery_id: format!("delivery-{i}"),
+                        message: Some(alien_worker_protocol::control::QueueMessage {
+                            id: "same-provider-id".into(),
+                            source: "jobs".into(),
+                            payload: body.as_bytes().to_vec(),
+                            ..Default::default()
+                        }),
+                    })
+                    .collect(),
+            };
+            let mut tasks = context
+                .get_control_client()
+                .await
+                .unwrap()
+                .wait_for_tasks(WaitForTasksRequest {
+                    application_id: "rust-sdk".into(),
+                })
+                .await
+                .unwrap()
+                .into_inner();
+            let pending = tokio::spawn({
+                let control = control.clone();
+                let batch = batch.clone();
+                async move {
+                    control
+                        .send_task(
+                            Task {
+                                task_id: uuid::Uuid::new_v4().to_string(),
+                                payload: Some(TaskPayload::QueueBatch(batch)),
+                            },
+                            std::time::Duration::from_secs(10),
+                        )
+                        .await
+                        .unwrap()
+                }
+            });
+            context
+                .handle_task(tasks.message().await.unwrap().unwrap())
+                .await
+                .unwrap();
+            let result = pending
+                .await
+                .unwrap()
+                .queue_batch
+                .expect("typed batch result");
+            assert_eq!(
+                validate_outcomes(&batch, &result).unwrap(),
+                vec![Disposition::Success, Disposition::Retry]
+            );
+            drop(tasks);
+        }
+        stop.send(()).unwrap();
+        server.await.unwrap();
+    }
     #[tokio::test]
     async fn unmatched_queue_fails_and_wildcard_receives_original_source() {
         let bindings =

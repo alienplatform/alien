@@ -36,6 +36,8 @@ test = [
   "pytest>=8,<10",
   "pytest-asyncio>=1,<2",
   "ruff>=0.13,<1",
+  "types-grpcio",
+  "types-protobuf",
 ]
 
 [tool.pytest.ini_options]
@@ -44,6 +46,8 @@ asyncio_mode = "auto"
 [tool.ruff]
 target-version = "py310"
 line-length = 100
+# protoc owns these files; regenerate them instead of applying style rewrites.
+extend-exclude = ["python/alienplatform/_worker_protocol"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "ASYNC"]
