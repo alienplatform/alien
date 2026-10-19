@@ -5760,10 +5760,7 @@ mod tests {
                 .expect_update_function_code()
                 .times(usize::from(setup_applied))
                 .returning(|_, request| {
-                    assert_eq!(
-                        request.image_uri.as_deref(),
-                        Some("registry.example.com/worker:new")
-                    );
+                    assert_eq!(request.image_uri, "registry.example.com/worker:new");
                     Ok(create_successful_function_response("test-queue-func"))
                 });
             let sqs = Arc::new(sqs);
