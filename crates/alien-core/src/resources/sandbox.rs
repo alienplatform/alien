@@ -2155,28 +2155,36 @@ mod tests {
 
     /// Lambda rejects a run outside 1–28,800 rather than clamping it, so a value beyond that
     /// would pass planning, render into the package, and fail at the first sandbox. Kubernetes
-    /// takes the same field with no such bound, so the check is AWS's alone.
+    /// takes the same field with no such bound, so the check is AWS's alone. The lifetime is a
+    /// lifecycle field, so a sandbox that declares no limits is held to it too.
     #[test]
     fn a_lifetime_aws_would_reject_is_refused_while_planning() {
-        let mut sandbox = sandbox_with(SandboxEgress::None, vec![]);
+        let with_limits = sandbox_with(SandboxEgress::None, vec![]);
+        let mut without_limits = with_limits.clone();
+        without_limits.limits = None;
 
-        for seconds in [0, 28_801, 100_000] {
-            sandbox.lifecycle.max_lifetime_seconds = Some(seconds);
-            let error = sandbox
-                .validate_for_platform(Platform::Aws)
-                .expect_err("a lifetime outside what AWS runs is refused");
-            assert_eq!(error.code, "SANDBOX_LIMIT_INVALID", "{seconds}s");
+        for (declared, mut sandbox) in [("with", with_limits), ("without", without_limits)] {
+            for seconds in [0, 28_801, 30_000, 100_000] {
+                sandbox.lifecycle.max_lifetime_seconds = Some(seconds);
+                let error = sandbox
+                    .validate_for_platform(Platform::Aws)
+                    .expect_err("a lifetime outside what AWS runs is refused");
+                assert_eq!(
+                    error.code, "SANDBOX_LIMIT_INVALID",
+                    "{seconds}s {declared} limits"
+                );
 
-            // Kubernetes has no such ceiling, so the same declaration is fine there.
+                // Kubernetes has no such ceiling, so the same declaration is fine there.
+                sandbox
+                    .validate_for_platform(Platform::Kubernetes)
+                    .expect("the kubelet takes any activeDeadlineSeconds");
+            }
+
+            sandbox.lifecycle.max_lifetime_seconds = Some(28_800);
             sandbox
-                .validate_for_platform(Platform::Kubernetes)
-                .expect("the kubelet takes any activeDeadlineSeconds");
+                .validate_for_platform(Platform::Aws)
+                .expect("the ceiling itself is allowed");
         }
-
-        sandbox.lifecycle.max_lifetime_seconds = Some(28_800);
-        sandbox
-            .validate_for_platform(Platform::Aws)
-            .expect("the ceiling itself is allowed");
     }
 
     /// An image Azure can take neither as a catalog name nor as a registry image is refused while
