@@ -281,15 +281,20 @@ async fn process_command_with_budget(
 ///
 /// Panics if the forwarding client cannot be initialized, like [reqwest::Client::new].
 pub fn create_forward_client() -> reqwest::Client {
+    forward_client_builder()
+        .read_timeout(std::time::Duration::from_secs(300))
+        .build()
+        .expect("Failed to configure application HTTP forwarding")
+}
+
+/// Settings every client that forwards requests to the application must use.
+pub(crate) fn forward_client_builder() -> reqwest::ClientBuilder {
     reqwest::Client::builder()
         // Redirects belong to the caller; never replay its request elsewhere.
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(std::time::Duration::from_secs(5))
-        .read_timeout(std::time::Duration::from_secs(300))
         .no_proxy()
         .tcp_keepalive(None)
-        .build()
-        .expect("Failed to configure application HTTP forwarding")
 }
 
 /// Forward an HTTP request to the application.
@@ -977,4 +982,4 @@ mod tests {
 
 #[cfg(test)]
 #[path = "forwarding_tests.rs"]
-mod forwarding_tests;
+pub(crate) mod forwarding_tests;
