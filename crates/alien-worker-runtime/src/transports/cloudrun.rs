@@ -191,7 +191,14 @@ async fn handle_request(
     if method == axum::http::Method::POST && (path == "/" || path.starts_with("/__alien/queue/")) {
         // Peek at the body to check for PubSub push format
         let (parts, body) = request.into_parts();
-        let body_bytes = match axum::body::to_bytes(body, 4 * 1024 * 1024).await {
+        // The legacy root also carries arbitrary application HTTP uploads. Preserve
+        // its existing size policy; the explicit queue route has a bounded envelope.
+        let limit = if path == "/" {
+            usize::MAX
+        } else {
+            4 * 1024 * 1024
+        };
+        let body_bytes = match axum::body::to_bytes(body, limit).await {
             Ok(collected) => collected,
             Err(e) => {
                 error!(error = %e, "Failed to read request body");
@@ -494,6 +501,68 @@ mod queue_routing_tests {
     };
     use std::collections::HashMap;
     use tokio_stream::StreamExt;
+
+    #[tokio::test]
+    async fn large_root_upload_reaches_application_but_queue_route_stays_bounded() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (seen, mut received) = tokio::sync::mpsc::unbounded_channel();
+        let app = Router::new().fallback(any(move |request: Request<Body>| {
+            let seen = seen.clone();
+            async move {
+                let bytes = axum::body::to_bytes(request.into_body(), usize::MAX)
+                    .await
+                    .unwrap();
+                seen.send(bytes.clone()).unwrap();
+                (StatusCode::CREATED, bytes)
+            }
+        }));
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let state = TransportState {
+            received_at: tokio::time::Instant::now(),
+            collector: HashMap::new(),
+            control_server: Arc::new(ControlGrpcServer::new()),
+            app_http_port: Some(port),
+            command_timeout: Duration::from_secs(30),
+            http_client: create_forward_client(),
+            proxy_shutdown: CancellationToken::new(),
+        };
+        let upload =
+            serde_json::to_vec(&serde_json::json!({"upload": "x".repeat(5 * 1024 * 1024)}))
+                .unwrap();
+        for (path, expected_status) in [
+            ("/", StatusCode::CREATED),
+            ("/__alien/queue/jobs", StatusCode::BAD_REQUEST),
+        ] {
+            let request = Request::builder()
+                .method("POST")
+                .uri(path)
+                .header("content-type", "application/json")
+                .body(Body::from(upload.clone()))
+                .unwrap();
+            let response = handle_request(State(state.clone()), request)
+                .await
+                .into_response();
+            assert_eq!(response.status(), expected_status);
+            if path == "/" {
+                assert_eq!(
+                    axum::body::to_bytes(response.into_body(), usize::MAX)
+                        .await
+                        .unwrap()
+                        .as_ref(),
+                    upload
+                );
+                assert_eq!(received.try_recv().unwrap().as_ref(), upload);
+            } else {
+                assert!(
+                    received.try_recv().is_err(),
+                    "oversized queue envelope must not reach the app"
+                );
+            }
+        }
+        server.abort();
+        assert!(server.await.unwrap_err().is_cancelled());
+    }
 
     #[tokio::test]
     async fn single_pubsub_routes_preserve_existing_sources() {

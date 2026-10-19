@@ -212,10 +212,13 @@ export class EventLoop {
             break
           }
         } else if (task.queueBatch && entry.registration.type === "queueBatch") {
-          if (sourceMatches(src, task.queueBatch.source)) {
+          if (src === task.queueBatch.source) {
             matchedEntry = entry
             break
           }
+          // Batch sources are canonical logical names. A wildcard is only a fallback,
+          // regardless of the order in which the application registered handlers.
+          if (src === "*") matchedEntry = entry
         } else if (task.queueMessage && entry.registration.type === "queue") {
           if (sourceMatches(src, task.queueMessage.source)) {
             matchedEntry = entry

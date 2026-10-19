@@ -10,7 +10,12 @@ import { getEventHandlers, onQueueBatch } from "../src/worker-runtime/registry.j
 
 afterEach(() => getEventHandlers().clear())
 
-it.each(["jobs", "*"])("dispatches batches through real gRPC to %s", async source => {
+it.each([
+  { sources: ["jobs"] },
+  { sources: ["*"] },
+  { sources: ["*", "jobs"] },
+  { sources: ["jobs", "*"] },
+])("dispatches batches through real gRPC with registration order $sources", async ({ sources }) => {
   const results: SendTaskResultRequest[] = []
   const registrations: string[] = []
   let loop: EventLoop
@@ -44,22 +49,26 @@ it.each(["jobs", "*"])("dispatches batches through real gRPC to %s", async sourc
   const port = await server.listen("127.0.0.1:0")
   const endpoint = `127.0.0.1:${port}`
   const channel = createChannel(endpoint)
-  onQueueBatch(source, async batch => {
-    expect(batch.source).toBe("jobs")
-    expect(batch.deliveries).toHaveLength(2)
-    expect(batch.deliveries[0].message.id).toBe(batch.deliveries[1].message.id)
-    expect(batch.deliveries[0].deliveryId).not.toBe(batch.deliveries[1].deliveryId)
-    expect(batch.deliveries[0].message.payload).toEqual({ job: 1 })
-    return batch.deliveries.map((delivery, index) => ({
-      deliveryId: delivery.deliveryId,
-      disposition: index === 0 ? "success" : "retry",
-    }))
-  })
+  const calls: string[] = []
+  for (const source of sources)
+    onQueueBatch(source, async batch => {
+      calls.push(source)
+      expect(batch.source).toBe("jobs")
+      expect(batch.deliveries).toHaveLength(2)
+      expect(batch.deliveries[0].message.id).toBe(batch.deliveries[1].message.id)
+      expect(batch.deliveries[0].deliveryId).not.toBe(batch.deliveries[1].deliveryId)
+      expect(batch.deliveries[0].message.payload).toEqual({ job: 1 })
+      return batch.deliveries.map((delivery, index) => ({
+        deliveryId: delivery.deliveryId,
+        disposition: index === 0 ? "success" : "retry",
+      }))
+    })
   loop = new EventLoop(channel, "application", endpoint, ControlServiceDefinition)
   try {
     await loop.registerHandlers()
     await loop.start()
-    expect(registrations).toEqual([`queueBatch:${source}`])
+    expect(registrations).toEqual(sources.map(source => `queueBatch:${source}`))
+    expect(calls).toEqual([sources.includes("jobs") ? "jobs" : "*"])
     expect(results).toHaveLength(1)
     expect(results[0].taskId).toBe("batch-task")
     expect(results[0].queueBatch?.outcomes).toEqual([
