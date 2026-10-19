@@ -663,3 +663,47 @@ async fn denied_replace_after_a_dedicated_subnet_was_deleted_keeps_no_deleted_su
         );
     }
 }
+
+/// A recorded gateway route table that never shows up again fails setup once its lookups are
+/// used up, even though the isolated table, found first on every pass, is present.
+#[tokio::test]
+async fn a_missing_recorded_gateway_table_fails_after_its_lookups() {
+    let cloud = workload_cloud();
+    let mut controller = creating_sandbox_network();
+    for step in 0..200 {
+        let mut execution = executor(&cloud, controller, true).await;
+        execution.step().await.unwrap();
+        controller = execution
+            .internal_state::<AwsNetworkController>()
+            .unwrap()
+            .clone();
+        if controller.state == AwsNetworkState::Ready {
+            break;
+        }
+        assert!(step < 199, "setup did not converge");
+    }
+    cloud.lock().unwrap().tables.retain(|table| {
+        !table["tagSet"]["item"].as_array().is_some_and(|tags| {
+            tags.iter()
+                .any(|tag| tag["value"] == "test-network-sandbox-gateway-rt")
+        })
+    });
+    assert_eq!(cloud.lock().unwrap().tables.len(), 2);
+
+    let mut execution = executor(&cloud, controller, true).await;
+    execution.update(network()).unwrap();
+    let mut failure = None;
+    for _ in 0..=LOST_CREATE_LOOKUPS + 2 {
+        if let Err(error) = execution.step().await {
+            failure = Some(error);
+            break;
+        }
+    }
+    let failure = failure.expect("setup kept waiting for the missing gateway table");
+    assert!(
+        failure
+            .to_string()
+            .contains("Recorded dedicated route table was not returned"),
+        "{failure}"
+    );
+}

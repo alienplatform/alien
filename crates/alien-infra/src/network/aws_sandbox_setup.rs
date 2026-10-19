@@ -12,9 +12,12 @@ pub(crate) struct SandboxNetworkSetup {
     subnets: Vec<SetupSubnet>,
     /// One route-less table and one NAT table, in that order.
     tables: [Option<String>; 2],
-    /// Lookups of a lost subnet create, or of a recorded route table a list did not return yet.
+    /// Teardown lookups of a subnet whose create response was lost.
     #[serde(default)]
     lost_create_lookups: u32,
+    /// Lookups of each recorded route table a list did not return yet.
+    #[serde(default)]
+    table_lookups: [u32; 2],
     /// Idempotency token of each table's `CreateRouteTable` call, saved before the call, so a
     /// call repeated after a lost response returns the same table.
     #[serde(default)]
@@ -239,6 +242,7 @@ impl AwsNetworkController {
                 nat_id: nat_id.ok_or_else(|| invalid(id, "Workload network has no NAT"))?,
                 tables: [None, None],
                 lost_create_lookups: 0,
+                table_lookups: [0, 0],
                 table_tokens: [None, None],
                 unverified: false,
                 subnets: blocks
@@ -323,18 +327,18 @@ impl AwsNetworkController {
                 let record = self.sandbox_setup.as_mut().expect("initialized");
                 record.tables[index] = Some(table_id);
                 record.table_tokens[index] = None;
-                record.lost_create_lookups = 0;
+                record.table_lookups[index] = 0;
                 *table
             } else {
                 let record = self.sandbox_setup.as_mut().expect("initialized");
                 if setup.tables[index].is_some() {
                     // EC2 may not list a just-created table yet; look again before deciding
                     // the recorded table is missing.
-                    if record.lost_create_lookups < LOST_CREATE_LOOKUPS {
-                        record.lost_create_lookups += 1;
+                    if record.table_lookups[index] < LOST_CREATE_LOOKUPS {
+                        record.table_lookups[index] += 1;
                         return Ok(false);
                     }
-                    record.lost_create_lookups = 0;
+                    record.table_lookups[index] = 0;
                     return Err(invalid(
                         id,
                         "Recorded dedicated route table was not returned",
