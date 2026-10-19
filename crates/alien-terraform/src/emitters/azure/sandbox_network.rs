@@ -1,10 +1,11 @@
 //! Setup-owned subnet and outbound rules for each Azure sandbox group.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use alien_core::{Container, ErrorData, Result, Sandbox, SandboxEgress, import::EmitContext};
 use alien_error::AlienError;
 use hcl::expr::Expression;
+use sha2::{Digest, Sha256};
 
 use crate::{
     block::{attr, block, nested, resource_block},
@@ -57,16 +58,39 @@ pub(super) fn emit(
         }));
     }
     emit_gateway_subnet(network, fragment);
-    for (index, (id, _sandbox)) in sandboxes.into_iter().enumerate() {
+    let slots = subnet_slots(sandboxes.iter().map(|(id, _)| id.as_str()))?;
+    for (id, _sandbox) in sandboxes {
         let name = ctx.name_for(id).ok_or_else(|| {
             AlienError::new(ErrorData::OperationNotSupported {
                 operation: "Azure sandbox network setup".to_string(),
                 reason: format!("sandbox {id} has no Terraform resource name"),
             })
         })?;
-        emit_group(ctx, network, name, index + 8, fragment)?;
+        emit_group(ctx, network, name, slots[id.as_str()], fragment)?;
     }
     Ok(())
+}
+
+// Never probe for another slot: adding or removing another resource must not change
+// an existing delegated subnet. A collision is a setup error with both IDs named.
+fn subnet_slots<'a>(ids: impl IntoIterator<Item = &'a str>) -> Result<BTreeMap<&'a str, usize>> {
+    let mut owners = BTreeMap::new();
+    let mut slots = BTreeMap::new();
+    for id in ids {
+        let digest = Sha256::digest(id.as_bytes());
+        let slot =
+            8 + u64::from_be_bytes(digest[..8].try_into().expect("SHA-256 has 32 bytes")) % 120;
+        if let Some(other) = owners.insert(slot, id) {
+            return Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: "Azure sandbox network setup".into(),
+                reason: format!(
+                    "sandbox IDs '{other}' and '{id}' select the same dedicated subnet slot {slot}; choose a different ID for the new sandbox, keeping existing IDs unchanged"
+                ),
+            }));
+        }
+        slots.insert(id, slot as usize);
+    }
+    Ok(slots)
 }
 
 pub(super) fn subnet_label(network: &str, sandbox: &str) -> String {
@@ -382,4 +406,41 @@ pub(super) fn gateway_handoff(ctx: &EmitContext<'_>, network: &str) -> Result<Op
             expr::traversal(["azurerm_virtual_network", network, "address_space"]),
         ),
     ])))
+}
+
+#[cfg(test)]
+mod allocation_tests {
+    use super::*;
+
+    #[test]
+    fn existing_subnets_survive_resource_add_remove_and_reorder() {
+        let before = subnet_slots(["alpha", "beta"]).unwrap();
+        assert_eq!(before, subnet_slots(["beta", "alpha"]).unwrap());
+        let after = subnet_slots(["gamma", "alpha", "beta"]).unwrap();
+        for (id, slot) in &before {
+            assert_eq!(after[id], *slot);
+            assert_eq!(subnet_slots([*id]).unwrap()[id], *slot);
+            assert!((8..128).contains(slot));
+        }
+    }
+
+    #[test]
+    fn collisions_are_refused_instead_of_reassigning_existing_subnets() {
+        let ids: Vec<_> = (0..121).map(|i| format!("sandbox-{i}")).collect();
+        let mut owners = BTreeMap::new();
+        for id in &ids {
+            let slot = subnet_slots([id.as_str()]).unwrap()[id.as_str()];
+            if let Some(other) = owners.insert(slot, id.as_str()) {
+                let error = subnet_slots([other, id.as_str()]).unwrap_err().to_string();
+                assert!(
+                    error.contains(other)
+                        && error.contains(id)
+                        && error.contains("choose a different ID"),
+                    "{error}"
+                );
+                return;
+            }
+        }
+        panic!("121 IDs cannot occupy 120 slots without a collision");
+    }
 }
