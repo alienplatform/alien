@@ -182,7 +182,7 @@ impl Harness {
             )
             .unwrap();
         let response = reqwest::Client::new()
-            .put(format!("{}/v1/policies", self.manager.admin_url))
+            .put(self.manager.admin_url.join("v1/policies").unwrap())
             .bearer_auth(grant)
             .json(&serde_json::json!({"record":record}))
             .send()

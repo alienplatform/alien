@@ -288,6 +288,7 @@ resource "azurerm_role_definition" "management_management_resource_group_role" {
       "Microsoft.ContainerRegistry/registries/write",
       "Microsoft.ManagedIdentity/userAssignedIdentities/assign/action",
       "Microsoft.Network/loadBalancers/read",
+      "Microsoft.Network/natGateways/read",
       "Microsoft.Network/networkSecurityGroups/read",
       "Microsoft.Network/publicIPAddresses/read",
       "Microsoft.Network/virtualNetworks/read",
