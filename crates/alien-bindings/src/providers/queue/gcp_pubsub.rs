@@ -180,10 +180,13 @@ impl Queue for GcpPubSubQueue {
                 ack_deadline_seconds: 30,
             };
 
-            let _ = self
-                .client
+            self.client
                 .modify_ack_deadline(self.subscription.clone(), modify_req)
-                .await;
+                .await
+                .context(ErrorData::BindingSetupFailed {
+                    binding_type: "queue.pubsub".to_string(),
+                    reason: "Failed to establish received message leases".to_string(),
+                })?;
         }
 
         let messages = response
