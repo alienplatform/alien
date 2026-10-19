@@ -129,11 +129,19 @@ pub trait Ec2Api: Send + Sync + std::fmt::Debug {
     async fn delete_route_table(&self, route_table_id: &str) -> Result<()>;
     async fn create_route(&self, request: CreateRouteRequest) -> Result<()>;
     async fn delete_route(&self, request: DeleteRouteRequest) -> Result<()>;
+    /// Points an existing route at a different target in one call.
+    async fn replace_route(&self, request: ReplaceRouteRequest) -> Result<()>;
     async fn associate_route_table(
         &self,
         request: AssociateRouteTableRequest,
     ) -> Result<AssociateRouteTableResponse>;
     async fn disassociate_route_table(&self, association_id: &str) -> Result<()>;
+    /// Moves a subnet association to another route table in one call, so the subnet never falls
+    /// back to the main route table in between.
+    async fn replace_route_table_association(
+        &self,
+        request: ReplaceRouteTableAssociationRequest,
+    ) -> Result<ReplaceRouteTableAssociationResponse>;
 
     // Security Group Operations
     async fn describe_security_groups(
@@ -1406,12 +1414,29 @@ impl Ec2Api for Ec2Client {
         form_data.insert("Action".to_string(), "DeleteRoute".to_string());
         form_data.insert("Version".to_string(), "2016-11-15".to_string());
         form_data.insert("RouteTableId".to_string(), request.route_table_id.clone());
+        let destination = match request.destination {
+            RouteDestination::Ipv4Cidr(cidr) => ("DestinationCidrBlock", cidr),
+            RouteDestination::Ipv6Cidr(cidr) => ("DestinationIpv6CidrBlock", cidr),
+            RouteDestination::PrefixList(id) => ("DestinationPrefixListId", id),
+        };
+        form_data.insert(destination.0.to_string(), destination.1);
+
+        self.send_form_no_body(form_data, "DeleteRoute", &request.route_table_id)
+            .await
+    }
+
+    async fn replace_route(&self, request: ReplaceRouteRequest) -> Result<()> {
+        let mut form_data = HashMap::new();
+        form_data.insert("Action".to_string(), "ReplaceRoute".to_string());
+        form_data.insert("Version".to_string(), "2016-11-15".to_string());
+        form_data.insert("RouteTableId".to_string(), request.route_table_id.clone());
         form_data.insert(
             "DestinationCidrBlock".to_string(),
             request.destination_cidr_block.clone(),
         );
+        form_data.insert("NatGatewayId".to_string(), request.nat_gateway_id.clone());
 
-        self.send_form_no_body(form_data, "DeleteRoute", &request.route_table_id)
+        self.send_form_no_body(form_data, "ReplaceRoute", &request.route_table_id)
             .await
     }
 
@@ -1437,6 +1462,27 @@ impl Ec2Api for Ec2Client {
 
         self.send_form_no_body(form_data, "DisassociateRouteTable", association_id)
             .await
+    }
+
+    async fn replace_route_table_association(
+        &self,
+        request: ReplaceRouteTableAssociationRequest,
+    ) -> Result<ReplaceRouteTableAssociationResponse> {
+        let mut form_data = HashMap::new();
+        form_data.insert(
+            "Action".to_string(),
+            "ReplaceRouteTableAssociation".to_string(),
+        );
+        form_data.insert("Version".to_string(), "2016-11-15".to_string());
+        form_data.insert("AssociationId".to_string(), request.association_id.clone());
+        form_data.insert("RouteTableId".to_string(), request.route_table_id.clone());
+
+        self.send_form(
+            form_data,
+            "ReplaceRouteTableAssociation",
+            &request.association_id,
+        )
+        .await
     }
 
     // ---------------------------------------------------------------------------
@@ -3092,10 +3138,43 @@ pub struct CreateRouteRequest {
 }
 
 /// Request to delete a route.
-#[derive(Debug, Clone, Serialize, Builder)]
+#[derive(Debug, Clone, Builder)]
 pub struct DeleteRouteRequest {
     pub route_table_id: String,
+    pub destination: RouteDestination,
+}
+
+/// The destination that identifies a route within its route table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RouteDestination {
+    Ipv4Cidr(String),
+    Ipv6Cidr(String),
+    PrefixList(String),
+}
+
+/// Request to point an existing IPv4 route at a NAT gateway.
+#[derive(Debug, Clone, Builder)]
+pub struct ReplaceRouteRequest {
+    pub route_table_id: String,
     pub destination_cidr_block: String,
+    pub nat_gateway_id: String,
+}
+
+/// Request to move a subnet's route table association to another route table.
+#[derive(Debug, Clone, Builder)]
+pub struct ReplaceRouteTableAssociationRequest {
+    /// The association to replace.
+    pub association_id: String,
+    /// The route table the subnet is associated with afterwards.
+    pub route_table_id: String,
+}
+
+/// Response from replacing a route table association.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplaceRouteTableAssociationResponse {
+    /// The association that replaced the old one.
+    pub new_association_id: Option<String>,
 }
 
 /// Request to associate a route table with a subnet.
@@ -5072,6 +5151,93 @@ mod tests {
         );
     }
 
+    /// Field names follow the EC2 API reference for DeleteRoute, ReplaceRoute and
+    /// ReplaceRouteTableAssociation.
+    #[tokio::test]
+    async fn route_repair_calls_send_the_ec2_parameters() {
+        let server = MockServer::start_async().await;
+        let deletes = [
+            (
+                RouteDestination::Ipv4Cidr("10.99.0.0/16".into()),
+                "DestinationCidrBlock=10.99.0.0%2F16",
+            ),
+            (
+                RouteDestination::Ipv6Cidr("::/0".into()),
+                "DestinationIpv6CidrBlock=%3A%3A%2F0",
+            ),
+            (
+                RouteDestination::PrefixList("pl-1".into()),
+                "DestinationPrefixListId=pl-1",
+            ),
+        ];
+        for (destination, parameter) in deletes {
+            let delete = server
+                .mock_async(|when, then| {
+                    when.method(POST)
+                        .body_contains("Action=DeleteRoute")
+                        .body_contains("RouteTableId=rtb-1")
+                        .body_contains(parameter);
+                    then.status(200)
+                        .body("<DeleteRouteResponse><return>true</return></DeleteRouteResponse>");
+                })
+                .await;
+            client(&server)
+                .delete_route(
+                    DeleteRouteRequest::builder()
+                        .route_table_id("rtb-1".into())
+                        .destination(destination)
+                        .build(),
+                )
+                .await
+                .unwrap();
+            delete.assert_hits_async(1).await;
+        }
+        let replace = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .body_contains("Action=ReplaceRoute")
+                    .body_contains("RouteTableId=rtb-1")
+                    .body_contains("DestinationCidrBlock=0.0.0.0%2F0")
+                    .body_contains("NatGatewayId=nat-1");
+                then.status(200)
+                    .body("<ReplaceRouteResponse><return>true</return></ReplaceRouteResponse>");
+            })
+            .await;
+        client(&server)
+            .replace_route(
+                ReplaceRouteRequest::builder()
+                    .route_table_id("rtb-1".into())
+                    .destination_cidr_block("0.0.0.0/0".into())
+                    .nat_gateway_id("nat-1".into())
+                    .build(),
+            )
+            .await
+            .unwrap();
+        replace.assert_hits_async(1).await;
+        let association = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .body_contains("Action=ReplaceRouteTableAssociation")
+                    .body_contains("AssociationId=rtbassoc-old")
+                    .body_contains("RouteTableId=rtb-2");
+                then.status(200).body(
+                    "<ReplaceRouteTableAssociationResponse><newAssociationId>rtbassoc-new</newAssociationId></ReplaceRouteTableAssociationResponse>",
+                );
+            })
+            .await;
+        let response = client(&server)
+            .replace_route_table_association(
+                ReplaceRouteTableAssociationRequest::builder()
+                    .association_id("rtbassoc-old".into())
+                    .route_table_id("rtb-2".into())
+                    .build(),
+            )
+            .await
+            .unwrap();
+        association.assert_hits_async(1).await;
+        assert_eq!(response.new_association_id.as_deref(), Some("rtbassoc-new"));
+    }
+
     fn client(server: &MockServer) -> Ec2Client {
         let config = AwsClientConfig {
             account_id: "123456789012".to_string(),
@@ -5387,10 +5553,16 @@ mod tests {
             <item><cidrBlock>10.0.0.0/16</cidrBlock></item>
             <item><cidrBlock>198.18.0.0/16</cidrBlock></item>
             </cidrBlockAssociationSet></item></vpcSet></DescribeVpcsResponse>"#,
-        ).unwrap();
+        )
+        .unwrap();
         let vpc = response.vpc_set.unwrap().items.remove(0);
-        let ranges: Vec<_> = vpc.cidr_block_association_set.unwrap().items.into_iter()
-            .map(|association| association.cidr_block).collect();
+        let ranges: Vec<_> = vpc
+            .cidr_block_association_set
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|association| association.cidr_block)
+            .collect();
         assert_eq!(ranges, ["10.0.0.0/16", "198.18.0.0/16"]);
     }
 

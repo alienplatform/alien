@@ -1,5 +1,9 @@
 //! Direct setup's dedicated subnets. Existing workload routes and the NAT stay in place.
 use super::*;
+use alien_aws_clients::ec2::{
+    DeleteRouteRequest, ReplaceRouteRequest, ReplaceRouteTableAssociationRequest, Route,
+    RouteDestination,
+};
 use alien_core::import::data::AwsSandboxNetwork;
 use alien_core::InitialSetupAuthority;
 use std::net::Ipv4Addr;
@@ -12,9 +16,6 @@ pub(crate) struct SandboxNetworkSetup {
     subnets: Vec<SetupSubnet>,
     /// One route-less table and one NAT table, in that order.
     tables: [Option<String>; 2],
-    /// Teardown lookups of a subnet whose create response was lost.
-    #[serde(default)]
-    lost_create_lookups: u32,
     /// Lookups of each recorded route table a list did not return yet.
     #[serde(default)]
     table_lookups: [u32; 2],
@@ -28,16 +29,12 @@ pub(crate) struct SandboxNetworkSetup {
 }
 
 impl SandboxNetworkSetup {
-    pub(super) fn set_unverified(&mut self, unverified: bool) {
-        self.unverified = unverified;
-    }
-
     pub(super) fn is_unverified(&self) -> bool {
         self.unverified
     }
 }
 
-/// How many lookups a lost subnet create, or a recorded route table missing from a list, gets.
+/// How many lookups a recorded route table missing from a list gets.
 const LOST_CREATE_LOOKUPS: u32 = 12;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -100,6 +97,69 @@ fn unused_cidrs(vpc: &str, occupied: &[String], count: usize, id: &str) -> Resul
     ))
 }
 
+/// The one NAT gateway the workload subnets' active default routes use.
+fn workload_nat(id: &str, workload_subnet_ids: &[String], tables: &[RouteTable]) -> Result<String> {
+    let mut nat_id = None;
+    for subnet in workload_subnet_ids {
+        let table = super::super::aws_sandbox::effective_table(id, subnet, tables)?;
+        let defaults: Vec<_> = table
+            .route_set
+            .iter()
+            .flat_map(|set| &set.items)
+            .filter(|route| route.destination_cidr_block.as_deref() == Some("0.0.0.0/0"))
+            .collect();
+        let nat = defaults
+            .first()
+            .filter(|_| defaults.len() == 1)
+            .filter(|route| route.state.as_deref() == Some("active"))
+            .and_then(|route| route.nat_gateway_id.clone())
+            .ok_or_else(|| invalid(id, "Workload subnets require one active NAT default route"))?;
+        if nat_id.as_ref().is_some_and(|current| current != &nat) {
+            return Err(invalid(id, "Workload subnets must share one NAT gateway"));
+        }
+        nat_id = Some(nat);
+    }
+    nat_id.ok_or_else(|| invalid(id, "Workload network has no NAT"))
+}
+
+/// The destination that names `route` in its table, for deleting it.
+fn route_destination(id: &str, table_id: &str, route: &Route) -> Result<RouteDestination> {
+    if let Some(cidr) = &route.destination_cidr_block {
+        return Ok(RouteDestination::Ipv4Cidr(cidr.clone()));
+    }
+    if let Some(cidr) = &route.destination_ipv6_cidr_block {
+        return Ok(RouteDestination::Ipv6Cidr(cidr.clone()));
+    }
+    if let Some(prefix_list) = &route.destination_prefix_list_id {
+        return Ok(RouteDestination::PrefixList(prefix_list.clone()));
+    }
+    Err(invalid(
+        id,
+        format!("Route table '{table_id}' has a route without a destination"),
+    ))
+}
+
+fn subnet_spec<'a>(
+    prefix: &str,
+    id: &'a str,
+    vpc: &'a str,
+    index: usize,
+    subnet: &'a SetupSubnet,
+) -> SubnetSpec<'a> {
+    SubnetSpec::builder()
+        .vpc_id(vpc)
+        .cidr(&subnet.cidr)
+        .availability_zone(&subnet.zone)
+        .name(format!("{prefix}-{id}-sandbox-{index}"))
+        .subnet_type(if subnet.gateway {
+            "SandboxGateway"
+        } else {
+            "Sandbox"
+        })
+        .resource_id(id)
+        .build()
+}
+
 fn table_name(prefix: &str, id: &str, gateway: bool) -> String {
     format!(
         "{prefix}-{id}-sandbox-{}",
@@ -127,15 +187,21 @@ impl AwsNetworkController {
         if !required(ctx)? {
             return Ok(true);
         }
-        // An imported network already has setup's coordinates; Ready verifies them read-only.
-        if self.sandbox_network.is_some() && self.sandbox_setup.is_none() {
-            return Ok(true);
-        }
-        if ctx.initial_setup_authority != InitialSetupAuthority::DirectSetup {
-            return Err(invalid(
-                &config.id,
-                "Dedicated sandbox subnets must be created by direct setup",
-            ));
+        let direct = ctx.initial_setup_authority == InitialSetupAuthority::DirectSetup;
+        // Subnets setup does not own (an import or customer-provided subnets), and any run
+        // without direct setup's authority, change nothing: a complete topology is verified
+        // read-only. Only direct setup may create or repair its own subnets.
+        if self.sandbox_setup.is_none() || !direct {
+            if self.sandbox_network.is_some() {
+                self.verify_sandbox_network(ctx).await?;
+                return Ok(true);
+            }
+            if !direct {
+                return Err(invalid(
+                    &config.id,
+                    "Dedicated sandbox subnets must be created by direct setup",
+                ));
+            }
         }
         let id = config.id.as_str();
         let vpc = self
@@ -215,33 +281,11 @@ impl AwsNetworkController {
                 .collect::<Result<Vec<_>>>()?;
             let blocks = unused_cidrs(&cidr, &occupied, zones.len() * 2, id)?;
             let tables = self.sandbox_setup_tables(ctx, &vpc, id).await?;
-            let mut nat_id = None;
-            for subnet in &self.private_subnet_ids {
-                let table = super::super::aws_sandbox::effective_table(id, subnet, &tables)?;
-                let defaults: Vec<_> = table
-                    .route_set
-                    .iter()
-                    .flat_map(|set| &set.items)
-                    .filter(|route| route.destination_cidr_block.as_deref() == Some("0.0.0.0/0"))
-                    .collect();
-                let nat = defaults
-                    .first()
-                    .filter(|_| defaults.len() == 1)
-                    .filter(|route| route.state.as_deref() == Some("active"))
-                    .and_then(|route| route.nat_gateway_id.clone())
-                    .ok_or_else(|| {
-                        invalid(id, "Workload subnets require one active NAT default route")
-                    })?;
-                if nat_id.as_ref().is_some_and(|current| current != &nat) {
-                    return Err(invalid(id, "Workload subnets must share one NAT gateway"));
-                }
-                nat_id = Some(nat);
-            }
+            let nat_id = workload_nat(id, &self.private_subnet_ids, &tables)?;
             self.sandbox_setup = Some(SandboxNetworkSetup {
                 vpc_id: vpc,
-                nat_id: nat_id.ok_or_else(|| invalid(id, "Workload network has no NAT"))?,
+                nat_id,
                 tables: [None, None],
-                lost_create_lookups: 0,
                 table_lookups: [0, 0],
                 table_tokens: [None, None],
                 unverified: false,
@@ -270,28 +314,27 @@ impl AwsNetworkController {
                 continue;
             }
             let progress = self
-                .ensure_subnet(
-                    ctx,
-                    SubnetSpec::builder()
-                        .vpc_id(&vpc)
-                        .cidr(&subnet.cidr)
-                        .availability_zone(&subnet.zone)
-                        .name(format!("{}-{id}-sandbox-{i}", ctx.resource_prefix))
-                        .subnet_type(if subnet.gateway {
-                            "SandboxGateway"
-                        } else {
-                            "Sandbox"
-                        })
-                        .resource_id(id)
-                        .build(),
-                )
+                .ensure_subnet(ctx, subnet_spec(ctx.resource_prefix, id, &vpc, i, subnet))
                 .await?;
-            if let SubnetProgress::Created(subnet_id) = progress {
-                self.sandbox_setup.as_mut().expect("initialized").subnets[i].id = Some(subnet_id);
+            match progress {
+                SubnetProgress::Created(subnet_id) => {
+                    self.sandbox_setup.as_mut().expect("initialized").subnets[i].id =
+                        Some(subnet_id);
+                }
+                SubnetProgress::HeldByAnother(holder) => {
+                    return Err(subnet_cidr_held(&subnet.cidr, &holder, id));
+                }
+                SubnetProgress::AttemptRecorded | SubnetProgress::LookAgain(_) => {}
             }
             return Ok(false);
         }
         let tables = self.sandbox_setup_tables(ctx, &vpc, id).await?;
+        // The gateway subnets' default route follows the workload subnets' NAT gateway.
+        let nat_id = workload_nat(id, &self.private_subnet_ids, &tables)?;
+        if nat_id != setup.nat_id {
+            info!(network_id = %id, nat_id = %nat_id, "Workload NAT gateway changed; following it");
+            self.sandbox_setup.as_mut().expect("initialized").nat_id = nat_id.clone();
+        }
         for index in 0..2 {
             let name = table_name(ctx.resource_prefix, id, index == 1);
             let matching: Vec<_> = tables
@@ -376,24 +419,71 @@ impl AwsNetworkController {
                 return Ok(false);
             };
             let table_id = table.route_table_id.as_ref().expect("validated");
-            if index == 1
-                && !table
-                    .route_set
-                    .iter()
-                    .flat_map(|set| &set.items)
-                    .any(|route| route.destination_cidr_block.as_deref() == Some("0.0.0.0/0"))
-            {
-                client
-                    .create_route(
-                        CreateRouteRequest::builder()
+            let routes: Vec<_> = table.route_set.iter().flat_map(|set| &set.items).collect();
+            // Only local VPC routes stay, plus the gateway table's NAT default route. Anything
+            // else would widen what sandboxes or the gateway reach.
+            for route in &routes {
+                let ipv4_default = route.destination_cidr_block.as_deref() == Some("0.0.0.0/0");
+                if route.gateway_id.as_deref() == Some("local") || (index == 1 && ipv4_default) {
+                    continue;
+                }
+                if route.origin.as_deref() == Some("EnableVgwRoutePropagation") {
+                    return Err(invalid(id, format!("Route table '{table_id}' has routes propagated from a virtual private gateway; turn off route propagation on it")));
+                }
+                let destination = route_destination(id, table_id, route)?;
+                info!(network_id = %id, route_table_id = %table_id, destination = ?destination, "Removing a route the dedicated sandbox route table must not have");
+                match client
+                    .delete_route(
+                        DeleteRouteRequest::builder()
                             .route_table_id(table_id.clone())
-                            .destination_cidr_block("0.0.0.0/0".into())
-                            .nat_gateway_id(setup.nat_id.clone())
+                            .destination(destination)
                             .build(),
                     )
                     .await
-                    .context(cloud("CreateRoute"))?;
+                {
+                    Ok(()) => {}
+                    Err(error) if is_not_found(&error) => {}
+                    Err(error) => return Err(error).context(cloud("DeleteRoute")),
+                }
                 return Ok(false);
+            }
+            if index == 1 {
+                let nat_id = &self.sandbox_setup.as_ref().expect("initialized").nat_id;
+                let default = routes
+                    .iter()
+                    .find(|route| route.destination_cidr_block.as_deref() == Some("0.0.0.0/0"));
+                match default {
+                    None => {
+                        client
+                            .create_route(
+                                CreateRouteRequest::builder()
+                                    .route_table_id(table_id.clone())
+                                    .destination_cidr_block("0.0.0.0/0".into())
+                                    .nat_gateway_id(nat_id.clone())
+                                    .build(),
+                            )
+                            .await
+                            .context(cloud("CreateRoute"))?;
+                        return Ok(false);
+                    }
+                    Some(route)
+                        if route.nat_gateway_id.as_ref() == Some(nat_id)
+                            && route.state.as_deref() == Some("active") => {}
+                    Some(_) => {
+                        info!(network_id = %id, route_table_id = %table_id, nat_id = %nat_id, "Pointing the gateway default route back at the workload NAT gateway");
+                        client
+                            .replace_route(
+                                ReplaceRouteRequest::builder()
+                                    .route_table_id(table_id.clone())
+                                    .destination_cidr_block("0.0.0.0/0".into())
+                                    .nat_gateway_id(nat_id.clone())
+                                    .build(),
+                            )
+                            .await
+                            .context(cloud("ReplaceRoute"))?;
+                        return Ok(false);
+                    }
+                }
             }
             for subnet in setup
                 .subnets
@@ -401,13 +491,43 @@ impl AwsNetworkController {
                 .filter(|subnet| subnet.gateway == (index == 1))
             {
                 let subnet_id = subnet.id.as_ref().expect("created");
-                if table
-                    .association_set
-                    .iter()
-                    .flat_map(|set| &set.items)
-                    .any(|association| association.subnet_id.as_ref() == Some(subnet_id))
-                {
-                    continue;
+                // A subnet has at most one explicit association, in any table of the VPC.
+                let current = tables.iter().find_map(|other| {
+                    other
+                        .association_set
+                        .iter()
+                        .flat_map(|set| &set.items)
+                        .find(|association| association.subnet_id.as_ref() == Some(subnet_id))
+                        .map(|association| (other.route_table_id.as_ref(), association))
+                });
+                if let Some((current_table, association)) = current {
+                    if current_table == Some(table_id) {
+                        continue;
+                    }
+                    let association_id = association
+                        .route_table_association_id
+                        .clone()
+                        .ok_or_else(|| {
+                            invalid(id, format!("Subnet '{subnet_id}' association has no ID"))
+                        })?;
+                    info!(network_id = %id, subnet_id = %subnet_id, route_table_id = %table_id, "Moving a dedicated subnet back to its route table");
+                    match client
+                        .replace_route_table_association(
+                            ReplaceRouteTableAssociationRequest::builder()
+                                .association_id(association_id)
+                                .route_table_id(table_id.clone())
+                                .build(),
+                        )
+                        .await
+                    {
+                        Ok(_) => {}
+                        // A resend after EC2 already replaced it; the next list shows the result.
+                        Err(error) if is_not_found(&error) => {}
+                        Err(error) => {
+                            return Err(error).context(cloud("ReplaceRouteTableAssociation"))
+                        }
+                    }
+                    return Ok(false);
                 }
                 client
                     .associate_route_table(
@@ -451,6 +571,44 @@ impl AwsNetworkController {
             setup.unverified = false;
         }
         Ok(true)
+    }
+
+    /// Verify the recorded topology read-only. A failed check stays recorded on direct setup's
+    /// subnets, so the next direct setup run repairs them.
+    pub(super) async fn verify_sandbox_network(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<()> {
+        let config = ctx.desired_resource_config::<Network>()?;
+        let declared = self
+            .sandbox_network
+            .clone()
+            .ok_or_else(|| invalid(&config.id, "Sandbox network has no recorded subnets"))?;
+        let vpc_id = self
+            .vpc_id
+            .clone()
+            .ok_or_else(|| invalid(&config.id, "Sandbox network setup is missing the VPC ID"))?;
+        let client = ctx
+            .service_provider
+            .get_aws_ec2_client(ctx.get_aws_config()?)
+            .await?;
+        if let Some(setup) = self.sandbox_setup.as_mut() {
+            setup.unverified = true;
+        }
+        self.sandbox_network = Some(
+            super::super::validate_aws_sandbox_network(
+                client.as_ref(),
+                &config.id,
+                &vpc_id,
+                &declared,
+                &self.private_subnet_ids,
+            )
+            .await?,
+        );
+        if let Some(setup) = self.sandbox_setup.as_mut() {
+            setup.unverified = false;
+        }
+        Ok(())
     }
 
     async fn sandbox_setup_tables(
@@ -508,34 +666,37 @@ impl AwsNetworkController {
             .service_provider
             .get_aws_ec2_client(ctx.get_aws_config()?)
             .await?;
-        // Recover the only in-flight subnet by its exact persisted create token before deletion.
+        // A subnet create whose response was lost may have made a subnet that no read shows
+        // yet, and an empty read never proves it did not. The attempt is settled the way setup
+        // settles it: look by its token, then repeat the create. EC2 refuses a second subnet
+        // with the CIDR, so the repeat either makes the subnet (deleted below), or conflicts
+        // with the one holding it: ours, found by its token, or another, which proves this
+        // attempt made nothing. Until then the attempt stays recorded.
         if let Some(attempt) = self.subnet_create_attempt.clone() {
             if matches!(attempt.subnet_type.as_str(), "Sandbox" | "SandboxGateway") {
-                let found = self
-                    .find_subnet_by_create_attempt(ctx, &setup.vpc_id, &attempt, id)
+                let (index, subnet) = setup
+                    .subnets
+                    .iter()
+                    .enumerate()
+                    .find(|(_, subnet)| subnet.cidr == attempt.cidr)
+                    .ok_or_else(|| invalid(id, "Lost subnet create has no recorded allocation"))?;
+                let progress = self
+                    .ensure_subnet(
+                        ctx,
+                        subnet_spec(ctx.resource_prefix, id, &setup.vpc_id, index, subnet),
+                    )
                     .await?;
-                let record = self.sandbox_setup.as_mut().expect("recorded");
-                match found {
-                    Some(found) => {
-                        record
-                            .subnets
-                            .iter_mut()
-                            .find(|subnet| subnet.cidr == attempt.cidr)
-                            .ok_or_else(|| {
-                                invalid(id, "Lost subnet create has no recorded allocation")
-                            })?
-                            .id = Some(found);
+                match progress {
+                    SubnetProgress::Created(subnet_id) => {
+                        self.sandbox_setup.as_mut().expect("recorded").subnets[index].id =
+                            Some(subnet_id);
                     }
-                    // EC2 may not list a just-accepted subnet yet; look again before
-                    // concluding the create never happened.
-                    None if record.lost_create_lookups < LOST_CREATE_LOOKUPS => {
-                        record.lost_create_lookups += 1;
-                        return Ok(false);
+                    SubnetProgress::HeldByAnother(holder) => {
+                        info!(network_id = %id, cidr = %attempt.cidr, holder = %holder, "Another subnet holds the CIDR, so the lost create made nothing");
+                        self.subnet_create_attempt = None;
                     }
-                    None => {}
+                    SubnetProgress::AttemptRecorded | SubnetProgress::LookAgain(_) => {}
                 }
-                record.lost_create_lookups = 0;
-                self.subnet_create_attempt = None;
                 return Ok(false);
             }
         }
