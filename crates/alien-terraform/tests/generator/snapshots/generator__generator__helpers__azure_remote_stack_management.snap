@@ -273,6 +273,7 @@ resource "azurerm_role_definition" "management_management_resource_group_role" {
       "Microsoft.App/managedEnvironments/daprComponents/write",
       "Microsoft.App/managedEnvironments/join/action",
       "Microsoft.App/managedEnvironments/read",
+      "Microsoft.App/sandboxGroups/vnetConnections/read",
       "Microsoft.Authorization/roleAssignments/delete",
       "Microsoft.Authorization/roleAssignments/read",
       "Microsoft.Authorization/roleAssignments/write",

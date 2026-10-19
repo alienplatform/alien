@@ -488,11 +488,8 @@ fn sandbox_heartbeat_stack_scope_stops_at_the_resource_group() {
     let role = &stack_plan.custom_roles[0].role_definition;
     assert_eq!(
         role.actions,
-        vec![
-            "Microsoft.App/sandboxGroups/read".to_string(),
-            "Microsoft.App/sandboxGroups/vnetConnections/read".to_string(),
-        ],
-        "the resource-group-wide heartbeat reads only group and connection metadata"
+        vec!["Microsoft.App/sandboxGroups/read".to_string()],
+        "the resource-group-wide heartbeat is a read of the group and nothing else"
     );
     assert!(
         role.data_actions.is_empty(),

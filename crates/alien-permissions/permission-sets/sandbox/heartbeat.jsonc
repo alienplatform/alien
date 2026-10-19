@@ -33,17 +33,13 @@
           // Control-plane read only. Microsoft.App/sandboxGroups/sandboxes/stats/read returns cpu, memory and network counters with no
           // session contents, and AppEnvSessionConsoleLogs is deliberately absent — it captures
           // whatever the sandbox writes.
-          // The connection returns subnet/provisioning metadata, never guest contents.
-          "actions": [
-            "Microsoft.App/sandboxGroups/read",
-            "Microsoft.App/sandboxGroups/vnetConnections/read"
-          ]
+          "actions": ["Microsoft.App/sandboxGroups/read"]
         },
         // The stack binding is the resource group, wider than the one group this heartbeat reports
         // on, as `provision` notes. The narrower resource binding, on the sandbox group itself, is
         // rendered by the Terraform setup only for a workload profile that keys an entry by the
         // sandbox; a `"*"` holder and the management identity still hold this set at the resource
-        // group. The stack grant reaches provisioning and connection metadata only.
+        // group. The stack grant reaches provisioning state only.
         "binding": {
           "stack": {
             "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
