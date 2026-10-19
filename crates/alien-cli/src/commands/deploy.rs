@@ -242,6 +242,12 @@ enum DeployConfigNetwork {
         private_subnet_ids: Vec<String>,
         #[serde(default)]
         security_group_ids: Vec<String>,
+        #[serde(default)]
+        sandbox_subnet_ids: Vec<String>,
+        #[serde(default)]
+        sandbox_gateway_subnet_ids: Vec<String>,
+        #[serde(default)]
+        sandbox_gateway_subnet_cidrs: Vec<String>,
     },
     ByoVpcGcp {
         network_name: String,
@@ -275,14 +281,17 @@ impl From<DeployConfigNetwork> for NetworkSettings {
                 public_subnet_ids,
                 private_subnet_ids,
                 security_group_ids,
+                sandbox_subnet_ids,
+                sandbox_gateway_subnet_ids,
+                sandbox_gateway_subnet_cidrs,
             } => NetworkSettings::ByoVpcAws {
                 vpc_id,
                 public_subnet_ids,
                 private_subnet_ids,
                 security_group_ids,
-                sandbox_subnet_ids: vec![],
-                sandbox_gateway_subnet_ids: vec![],
-                sandbox_gateway_subnet_cidrs: vec![],
+                sandbox_subnet_ids,
+                sandbox_gateway_subnet_ids,
+                sandbox_gateway_subnet_cidrs,
             },
             DeployConfigNetwork::ByoVpcGcp {
                 network_name,
@@ -4981,6 +4990,43 @@ mod tests {
             preparation.assert_hits_async(1).await;
             plan.assert_hits_async(usize::from(status != 200)).await;
         }
+    }
+
+    /// An internet sandbox in an existing VPC needs the customer's sandbox subnets; a deploy
+    /// config carries them like the command-line flags do.
+    #[test]
+    fn deploy_config_carries_the_customers_sandbox_subnets() {
+        let config: DeployConfigFile = toml::from_str(
+            r#"
+[network]
+type = "byo-vpc-aws"
+vpc_id = "vpc-123"
+public_subnet_ids = ["subnet-pub"]
+private_subnet_ids = ["subnet-priv"]
+sandbox_subnet_ids = ["subnet-s1", "subnet-s2"]
+sandbox_gateway_subnet_ids = ["subnet-g1", "subnet-g2"]
+sandbox_gateway_subnet_cidrs = ["10.0.210.0/24", "10.0.211.0/24"]
+"#,
+        )
+        .expect("sandbox subnets are part of the public deploy config");
+        let args = DeployArgs::try_parse_from(["deploy", "--platform", "aws"])
+            .expect("minimal deploy args should parse");
+        let network = resolve_network_settings(&args, Some(&config), "aws").unwrap();
+        let Some(NetworkSettings::ByoVpcAws {
+            sandbox_subnet_ids,
+            sandbox_gateway_subnet_ids,
+            sandbox_gateway_subnet_cidrs,
+            ..
+        }) = network
+        else {
+            panic!("expected byo-vpc-aws settings");
+        };
+        assert_eq!(sandbox_subnet_ids, ["subnet-s1", "subnet-s2"]);
+        assert_eq!(sandbox_gateway_subnet_ids, ["subnet-g1", "subnet-g2"]);
+        assert_eq!(
+            sandbox_gateway_subnet_cidrs,
+            ["10.0.210.0/24", "10.0.211.0/24"]
+        );
     }
 
     #[test]
