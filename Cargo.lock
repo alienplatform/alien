@@ -1318,6 +1318,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "alien-sandbox-conformance"
+version = "3.3.36"
+dependencies = [
+ "alien-bindings",
+ "alien-error",
+ "futures",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "alien-sdk"
 version = "3.3.36"
 dependencies = [
