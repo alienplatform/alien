@@ -869,7 +869,7 @@ impl AwsSandboxController {
         // destroy a resource this controller does not own if they ever were.
         if !self.owns_image_deletion(ctx, &config.id) {
             return Ok(HandlerAction::Continue {
-                state: Deleted,
+                state: DeletingEgressSecrets,
                 suggested_delay: None,
             });
         }
@@ -897,7 +897,7 @@ impl AwsSandboxController {
 
         if !self.owns_image_deletion(ctx, &config.id) {
             return Ok(HandlerAction::Continue {
-                state: Deleted,
+                state: DeletingEgressSecrets,
                 suggested_delay: None,
             });
         }
@@ -944,6 +944,41 @@ impl AwsSandboxController {
         self.active_version = None;
         info!(sandbox_id = %config.id, "AWS sandbox image deleted; sessions expire on their own");
 
+        Ok(HandlerAction::Continue {
+            state: DeletingEgressSecrets,
+            suggested_delay: None,
+        })
+    }
+
+    /// The deployment's shared egress signing key and gateway configuration are written into its
+    /// own vault by the first internet sandbox and are used by every other one and by the
+    /// gateway. They go with the last internet sandbox: the others depend on the writer, so it is
+    /// deleted after them, and a sandbox removed while others remain leaves them in use.
+    #[handler(
+        state = DeletingEgressSecrets,
+        on_failure = DeleteFailed,
+        status = ResourceStatus::Deleting
+    )]
+    async fn deleting_egress_secrets(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<Sandbox>()?;
+        // A vault the deployment binds to rather than creates is not Alien-owned.
+        let vault_is_owned = !ctx
+            .deployment_config
+            .external_bindings
+            .has(alien_core::SECRETS_VAULT_ID);
+        if self.egress_public_key.is_some()
+            && vault_is_owned
+            && !super::egress::other_internet_sandbox_remains(ctx, &config.id)
+        {
+            let vault = super::egress::deployment_vault(ctx).await?;
+            let vault_name = format!("{}-{}", ctx.resource_prefix, alien_core::SECRETS_VAULT_ID);
+            super::egress::delete_shared_secrets(vault.as_ref(), &vault_name).await?;
+            info!(sandbox_id = %config.id, "Deleted the deployment's sandbox egress key and gateway configuration");
+        }
+        self.egress_public_key = None;
         Ok(HandlerAction::Continue {
             state: Deleted,
             suggested_delay: None,
@@ -1656,6 +1691,153 @@ mod tests {
                 accepted = Some((public_key, stored));
             }
         }
+    }
+
+    /// Deletes a Frozen internet sandbox that holds the deployment's egress key, next to an
+    /// optional other internet sandbox, and reports which shared vault entries remain.
+    #[cfg(feature = "local")]
+    async fn delete_internet_sandbox_with_shared_secrets(
+        other: Option<Sandbox>,
+        saved_status: Option<ResourceStatus>,
+    ) -> Vec<&'static str> {
+        use crate::{LocalVaultController, LocalVaultState};
+        use alien_bindings::{providers::vault::LocalVault, Vault as _};
+        use alien_core::{ClientConfig, ResourceLifecycle, Vault, SECRETS_VAULT_ID};
+
+        let directory = tempfile::tempdir().unwrap();
+        let vault = LocalVault::new("secrets".into(), directory.path().into());
+        let key = super::super::egress::ensure_signing_key(&vault)
+            .await
+            .unwrap();
+        vault
+            .set_secret(super::super::egress::GATEWAY_CONFIG, "{}")
+            .await
+            .unwrap();
+        let mut subject = sandbox();
+        subject.egress = SandboxEgress::Internet;
+        let mut builder = SingleControllerExecutor::builder()
+            .resource(subject)
+            .resource_lifecycle(ResourceLifecycle::Frozen)
+            .controller(AwsSandboxController {
+                egress_public_key: Some(key),
+                ..ready_controller()
+            })
+            .platform(Platform::Aws)
+            .client_config(ClientConfig::Local {
+                state_directory: directory.path().to_string_lossy().into_owned(),
+            })
+            .with_dependency(
+                Vault::new(SECRETS_VAULT_ID.into()).build(),
+                LocalVaultController {
+                    state: LocalVaultState::Ready,
+                    vault_path: Some(directory.path().to_string_lossy().into_owned()),
+                    ..Default::default()
+                },
+            );
+        let saved = other.clone();
+        if let Some(other) = other {
+            builder = builder.with_stack_resource(other, ResourceLifecycle::Live);
+        }
+        let mut executor = builder.build().await.unwrap();
+        // A sibling the teardown has dropped from the desired stack but not yet deleted.
+        if let (Some(other), Some(status)) = (saved, saved_status) {
+            executor.remove_desired_resource(&other.id);
+            let id = other.id.clone();
+            executor.insert_saved_resource(
+                &id,
+                alien_core::StackResourceState::builder()
+                    .resource_type(Sandbox::RESOURCE_TYPE.to_string())
+                    .status(status)
+                    .config(alien_core::Resource::new(other))
+                    .lifecycle(ResourceLifecycle::Live)
+                    .build(),
+            );
+        }
+        executor.delete().expect("transition to delete");
+        executor
+            .run_until_terminal()
+            .await
+            .expect("delete flow should succeed");
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+
+        let mut remaining = Vec::new();
+        for name in [
+            super::super::egress::SIGNING_KEY,
+            super::super::egress::GATEWAY_CONFIG,
+        ] {
+            match vault.get_secret(name).await {
+                Ok(_) => remaining.push(name),
+                Err(error)
+                    if matches!(
+                        error.error,
+                        Some(alien_bindings::ErrorData::VaultSecretNotFound { .. })
+                    ) => {}
+                Err(error) => panic!("vault read failed: {error:?}"),
+            }
+        }
+        remaining
+    }
+
+    /// The last internet sandbox removes the deployment's egress signing key and gateway
+    /// configuration. A live teardown left both parameters behind.
+    #[cfg(feature = "local")]
+    #[tokio::test]
+    async fn the_last_internet_sandbox_deletes_the_shared_egress_secrets() {
+        assert_eq!(
+            delete_internet_sandbox_with_shared_secrets(None, None).await,
+            Vec::<&str>::new()
+        );
+    }
+
+    fn other_internet_sandbox() -> Sandbox {
+        let mut other = sandbox();
+        other.id = "workers".into();
+        other.egress = SandboxEgress::Internet;
+        other
+    }
+
+    /// Another declared internet sandbox and the gateway still sign and read with them.
+    #[cfg(feature = "local")]
+    #[tokio::test]
+    async fn the_shared_egress_secrets_stay_while_another_internet_sandbox_is_declared() {
+        assert_eq!(
+            delete_internet_sandbox_with_shared_secrets(Some(other_internet_sandbox()), None).await,
+            vec![
+                super::super::egress::SIGNING_KEY,
+                super::super::egress::GATEWAY_CONFIG
+            ]
+        );
+    }
+
+    /// In a full teardown the desired stack is empty; a sibling still being deleted keeps them.
+    #[cfg(feature = "local")]
+    #[tokio::test]
+    async fn the_shared_egress_secrets_stay_while_another_internet_sandbox_is_still_deleting() {
+        assert_eq!(
+            delete_internet_sandbox_with_shared_secrets(
+                Some(other_internet_sandbox()),
+                Some(ResourceStatus::Deleting)
+            )
+            .await,
+            vec![
+                super::super::egress::SIGNING_KEY,
+                super::super::egress::GATEWAY_CONFIG
+            ]
+        );
+    }
+
+    /// Once the sibling is deleted, the last internet sandbox removes them.
+    #[cfg(feature = "local")]
+    #[tokio::test]
+    async fn the_shared_egress_secrets_go_once_every_other_internet_sandbox_is_deleted() {
+        assert_eq!(
+            delete_internet_sandbox_with_shared_secrets(
+                Some(other_internet_sandbox()),
+                Some(ResourceStatus::Deleted)
+            )
+            .await,
+            Vec::<&str>::new()
+        );
     }
 
     fn sandbox() -> Sandbox {
