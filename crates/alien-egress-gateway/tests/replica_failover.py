@@ -163,6 +163,8 @@ def analyze(observations, health, balancer, killed_at, refusals):
         "deregisteredAfterSeconds": round(deregistered[0] - killed_at, 3) if deregistered else None,
         "beforeKill": phase(first, killed_at),
         "afterKill": phase(killed_at, last + 1),
+        "allowedAfterDeregistration": sum(1 for item in observations if deregistered and item["target"] == ALLOWED
+                                          and item["outcome"] == "allowed" and item["startedAt"] >= deregistered[0]),
         "deadReplicaConnections": sum(1 for event in balancer if event.get("event") == "target-failed"),
         "clientFastRefusalsAfterKill": len(gated),
         "agentGateRefusalsAfterKill": len(refusals),
@@ -236,6 +238,7 @@ def check_replica_failover(suite, image, containers, networks, docker, prefix, o
     killed_at = time.time()
     docker("kill", "--signal", "KILL", prefix + "-proxy2")
     lines = loop.communicate(timeout=DURATION + 60)[0].splitlines()
+    assert loop.returncode == 0, lines[-20:]
     stop.set()
     poller.join()
     observations = [json.loads(line) for line in lines if line.startswith("{")]
@@ -256,6 +259,9 @@ def check_replica_failover(suite, image, containers, networks, docker, prefix, o
 
     def stays_open():
         assert report["deadReplicaConnections"] > 0, "no connection reached the killed replica"
+        assert report["afterKill"][ALLOWED].get("allowed", 0) > 0, report
+        assert report["deregisteredAfterSeconds"] is not None, report
+        assert report["allowedAfterDeregistration"] > 0, report
         assert report["agentGateRefusalsAfterKill"] == 0, report
         assert report["agentNotReadyHealthSamplesAfterKill"] == 0, report
     suite.record("sandbox egress stays open while the other replica answers", stays_open)

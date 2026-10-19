@@ -94,7 +94,21 @@ impl GatewayEgress {
             PolicyCheck::Rejected(error) | PolicyCheck::Unanswered(error) => Err(error),
         }
     }
+    /// Start of the current run of checks that no gateway answered, shared by the monitor and
+    /// lifecycle checks. Callers hold `update_lock`.
+    fn unanswered_since(&self) -> std::sync::MutexGuard<'_, Option<Instant>> {
+        self.unanswered_since
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
     async fn policy_check(&self) -> PolicyCheck {
+        let check = self.policy_check_once().await;
+        if !matches!(check, PolicyCheck::Unanswered(_)) {
+            *self.unanswered_since() = None;
+        }
+        check
+    }
+    async fn policy_check_once(&self) -> PolicyCheck {
         match self.policy_request(None).await {
             Ok(200) => PolicyCheck::Accepted,
             Ok(403) => {
@@ -135,31 +149,27 @@ impl GatewayEgress {
         self.monitor_policy_with(MonitorTiming::PRODUCTION).await
     }
     async fn monitor_policy_with(self: Arc<Self>, timing: MonitorTiming) {
-        // Start of the current run of checks that no gateway answered.
-        let mut unanswered_since: Option<Instant> = None;
         loop {
-            let started = Instant::now();
             let mut retry = false;
             {
                 let _update = self.update_lock.lock().await;
+                let started = Instant::now();
                 if self.awaiting_delivery.load(Ordering::Acquire)
                     || !self.path_verified.load(Ordering::Acquire)
                     || !self.current_token().is_ok_and(|token| !token.is_empty())
                 {
-                    unanswered_since = None;
+                    *self.unanswered_since() = None;
                 } else {
                     match self.policy_check().await {
                         PolicyCheck::Accepted => {
-                            unanswered_since = None;
                             self.ready.store(true, Ordering::Release);
                         }
                         PolicyCheck::Rejected(error) => {
-                            unanswered_since = None;
                             self.ready.store(false, Ordering::Release);
                             tracing::warn!(code=%error.code, "gateway policy check failed");
                         }
                         PolicyCheck::Unanswered(error) => {
-                            let since = *unanswered_since.get_or_insert(started);
+                            let since = *self.unanswered_since().get_or_insert(started);
                             if since.elapsed() < timing.grace {
                                 retry = true;
                                 tracing::warn!(code=%error.code, "gateway policy check unanswered; retrying on a new connection");
@@ -249,6 +259,7 @@ mod tests {
             ca_path: RwLock::new(None),
             identity: RwLock::new(Some(("p/r".into(), "box".into()))),
             update_lock: tokio::sync::Mutex::new(()),
+            unanswered_since: std::sync::Mutex::new(None),
         }
     }
     #[tokio::test]
@@ -443,6 +454,54 @@ mod tests {
             assert_eq!(agent.awaiting_delivery.load(Ordering::Acquire), rejected);
             monitor.abort();
         }
+    }
+
+    #[tokio::test]
+    async fn answered_lifecycle_check_restarts_the_grace() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let agent = Arc::new(agent(listener.local_addr().unwrap()));
+        agent.ready.store(true, Ordering::Release);
+        let answer_next = Arc::new(AtomicBool::new(false));
+        let server = tokio::spawn({
+            let answer_next = answer_next.clone();
+            async move {
+                loop {
+                    let (socket, _) = listener.accept().await.unwrap();
+                    if answer_next.swap(false, Ordering::AcqRel) {
+                        answer(socket, 200).await;
+                    }
+                }
+            }
+        });
+        let grace = Duration::from_millis(400);
+        let started = Instant::now();
+        let monitor = tokio::spawn(agent.clone().monitor_policy_with(MonitorTiming {
+            period: Duration::from_millis(100),
+            retry: Duration::from_millis(10),
+            grace,
+        }));
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        // A lifecycle check (token delivery or Resume) reaches a live gateway mid-streak.
+        let answered = {
+            let _update = agent.update_lock.lock().await;
+            answer_next.store(true, Ordering::Release);
+            agent.check_policy().await.unwrap();
+            Instant::now()
+        };
+        while agent.ready.load(Ordering::Acquire) {
+            assert!(
+                started.elapsed() < Duration::from_secs(3),
+                "egress never closed"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(
+            answered.elapsed() >= grace,
+            "closed {:?} after an answered check, before a new grace",
+            answered.elapsed()
+        );
+        monitor.abort();
+        server.abort();
     }
 
     #[tokio::test]
