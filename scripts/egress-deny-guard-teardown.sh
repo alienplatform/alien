@@ -80,9 +80,9 @@ fi
 
 failed=0
 
-# Sessions and image versions outlive the stack: the delete below reaches no running MicroVM, and
-# a delete on the image is accepted while removing nothing for as long as a version survives.
-# So versions go first, and the stack stays standing if that fails: it is the only way back to the
+# Sessions outlive the stack: the delete below reaches no running MicroVM. So sessions go first,
+# along with every image version but the last (AWS refuses to delete an image's last version; the
+# image delete removes it). The stack stays standing if that fails: it is the only way back to the
 # image, whether through its outputs or its resources, and deleting it would leave MicroVMs
 # billing with nothing left pointing at them.
 if [ -n "$image_arn" ]; then

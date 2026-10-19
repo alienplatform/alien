@@ -1924,10 +1924,14 @@ mod live_deny {
         );
     }
 
-    /// Reclaims everything a guard run leaves on the probe image: its sessions, then its versions.
+    /// Reclaims everything a guard run leaves on the probe image: its sessions, then every version
+    /// but one.
     ///
-    /// A MicroVM the run did not terminate bills for hours and no stack delete reaches it, and a
-    /// surviving version holds the image open so the delete that follows cannot remove it.
+    /// A MicroVM the run did not terminate bills for hours and no stack delete reaches it. The
+    /// last version is left for the stack delete: AWS refuses to delete an image's last version
+    /// on its own ("This is the last version. Please delete the entire image"), and deleting the
+    /// image removes it, the same way the sandbox controller tears an image down.
+    /// `the_probe_image_is_gone` then checks that the stack delete really removed the image.
     #[tokio::test]
     #[ignore]
     async fn reclaim_the_probe_image() {
@@ -1952,11 +1956,12 @@ mod live_deny {
         let mut stranded = Vec::new();
         let mut terminating = Vec::new();
         let mut undeleted = Vec::new();
-        for version in client
+        let versions = client
             .list_microvm_image_versions(&image)
             .await
-            .expect("ListMicrovmImageVersions")
-        {
+            .expect("ListMicrovmImageVersions");
+        let last = versions.len().saturating_sub(1);
+        for (index, version) in versions.into_iter().enumerate() {
             let version = version.image_version.expect("a version identifier");
             for microvm in client
                 .list_microvms(&image, &version)
@@ -2001,6 +2006,10 @@ mod live_deny {
                 }
             }
 
+            if index == last {
+                continue;
+            }
+
             // Best-effort for the same reason termination is: a version that refuses to delete
             // would otherwise abandon every version after it, and abort before the report below
             // naming what is still billing.
@@ -2029,24 +2038,23 @@ mod live_deny {
         );
         assert!(
             undeleted.is_empty(),
-            "image versions the reclaim could not delete hold the image open, so the stack \
-             delete cannot remove it: {undeleted:?}"
+            "image versions the reclaim could not delete: {undeleted:?}"
         );
         let left = client
             .list_microvm_image_versions(&image)
             .await
             .expect("ListMicrovmImageVersions");
         assert!(
-            left.is_empty(),
-            "the probe image still holds versions, so the stack delete cannot remove it: {left:?}"
+            left.len() <= 1,
+            "the probe image still holds more than the one version its delete removes: {left:?}"
         );
     }
 
     /// The probe image is gone once its stack is.
     ///
-    /// Asserted rather than assumed: a delete on a `CREATED` image is accepted and removes
-    /// nothing while its versions survive (`delete_images_versions_first`), so a teardown can
-    /// report success over an image that is still there.
+    /// Asserted rather than assumed: a stack can reach `DELETE_COMPLETE` over an image whose
+    /// delete was accepted and never carried out, so a teardown could otherwise report success
+    /// over an image that is still there.
     #[tokio::test]
     #[ignore]
     async fn the_probe_image_is_gone() {
