@@ -3,17 +3,17 @@
 use std::collections::BTreeSet;
 
 use alien_core::{
-    sandbox_egress::{SANDBOX_EGRESS_GATEWAY_ID, SANDBOX_EGRESS_VAULT_ID},
     Build, Container, ContainerCode, ContainerEgress, ContainerSecurity, ContainerSecurityProfile,
     Daemon, DeploymentConfig, HealthCheck, Platform, Resource, ResourceEntry, ResourceLifecycle,
     ResourceSpec, Sandbox, SandboxEgress, Stack, StackState, Vault, Worker,
+    sandbox_egress::{SANDBOX_EGRESS_GATEWAY_ID, SANDBOX_EGRESS_VAULT_ID},
 };
 use alien_error::AlienError;
 use async_trait::async_trait;
 
 use crate::{
-    error::{ErrorData, Result},
     StackMutation,
+    error::{ErrorData, Result},
 };
 
 const GATEWAY_IMAGE: &str = "ghcr.io/alienplatform/alien-egress-gateway@sha256:b252a1b423b95385e5df0c57a37daae6937daa274e3c7783c71704584b18483d";
@@ -65,7 +65,9 @@ impl StackMutation for SandboxGatewayMutation {
             .collect();
         for (id, entry) in stack.resources() {
             if sandboxes.contains(id) && entry.remote_access {
-                return Err(invalid(format!("Sandbox '{id}': internet egress cannot be used with remoteAccess because policy administration is private to this deployment")));
+                return Err(invalid(format!(
+                    "Sandbox '{id}': internet egress cannot be used with remoteAccess because policy administration is private to this deployment"
+                )));
             }
             let links = entry
                 .config
@@ -76,7 +78,9 @@ impl StackMutation for SandboxGatewayMutation {
                 .or_else(|| entry.config.downcast_ref::<Build>().map(|r| &r.links));
             if links.is_some_and(|links| links.iter().any(|link| sandboxes.contains(link.id()))) {
                 if entry.config.downcast_ref::<Build>().is_some() {
-                    return Err(invalid(format!("Build '{id}' cannot manage an internet Sandbox: private gateway administration supports Worker, Container and Daemon consumers")));
+                    return Err(invalid(format!(
+                        "Build '{id}' cannot manage an internet Sandbox: private gateway administration supports Worker, Container and Daemon consumers"
+                    )));
                 }
             }
         }
@@ -151,7 +155,6 @@ impl StackMutation for SandboxGatewayMutation {
             match stack.resources.get(SANDBOX_EGRESS_VAULT_ID) {
                 Some(existing)
                     if existing.config.downcast_ref::<Vault>().is_some()
-                        && existing.lifecycle == ResourceLifecycle::Frozen
                         && existing.enabled_when.is_none()
                         && !existing.remote_access => {}
                 Some(_) => {
@@ -185,7 +188,7 @@ impl StackMutation for SandboxGatewayMutation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{compile_time::AllowedUserResourcesCheck, CompileTimeCheck};
+    use crate::{CompileTimeCheck, compile_time::AllowedUserResourcesCheck};
     use alien_core::{
         EnvironmentVariablesSnapshot, ExternalBindings, SandboxCode, SandboxLifecyclePolicy,
         StackSettings,
@@ -302,8 +305,10 @@ mod tests {
             .mutate(stack, &state, &config)
             .await
             .unwrap();
-        assert!(prepared
-            .resources()
-            .all(|(_, entry)| entry.config.downcast_ref::<alien_core::Kv>().is_none()));
+        assert!(
+            prepared
+                .resources()
+                .all(|(_, entry)| entry.config.downcast_ref::<alien_core::Kv>().is_none())
+        );
     }
 }

@@ -2,8 +2,8 @@
 use std::{
     net::SocketAddr,
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, RwLock,
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -19,7 +19,7 @@ use alien_error::{AlienError, Context, IntoAlienError};
 use crate::{
     config::Config,
     credentials::{self, Credentials},
-    error::{invalid, unavailable, Result},
+    error::{Result, invalid, unavailable},
     server::Gateway,
     store::PolicyStore,
 };
@@ -133,21 +133,25 @@ impl LiveGateway {
     }
 }
 
+/// Azure deployments link a dedicated gateway vault; AWS links the secrets vault. Only a
+/// missing binding selects the fallback, so a broken dedicated binding still fails closed.
 pub async fn read_vault_config(bindings: &Bindings) -> Result<String> {
-    // Azure deployments link a dedicated gateway vault; AWS uses the secrets vault.
-    let vault = if std::env::var_os(alien_core::bindings::binding_env_var_name(
-        alien_core::sandbox_egress::SANDBOX_EGRESS_VAULT_ID,
-    ))
-    .is_some()
-    {
-        alien_core::sandbox_egress::SANDBOX_EGRESS_VAULT_ID
-    } else {
-        alien_core::SECRETS_VAULT_ID
-    };
-    bindings
-        .vault(vault)
+    let vault = match bindings
+        .vault(alien_core::sandbox_egress::SANDBOX_EGRESS_VAULT_ID)
         .await
-        .context(unavailable("load config vault"))?
+    {
+        Err(error)
+            if matches!(
+                error.error,
+                Some(alien_bindings::ErrorData::BindingNotConfigured { .. })
+            ) =>
+        {
+            bindings.vault(alien_core::SECRETS_VAULT_ID).await
+        }
+        loaded => loaded,
+    }
+    .context(unavailable("load config vault"))?;
+    vault
         .get_secret("sandbox-egress-gateway-config")
         .await
         .context(unavailable("read gateway config"))

@@ -2,8 +2,8 @@
 use std::{
     collections::HashMap,
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicU64, Ordering},
     },
 };
 
@@ -13,8 +13,8 @@ use alien_egress_gateway::{
     token,
 };
 use base64::{
-    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
     Engine,
+    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
 };
 use ed25519_compact::{KeyPair, Seed};
 use serde_json::json;
@@ -130,4 +130,30 @@ async fn vault_refresh_rotates_keys_and_bounds_last_good_config() {
         .unwrap();
     live.refresh(&bindings).await.unwrap();
     assert!(live.snapshot().is_some());
+}
+
+/// Azure links only the dedicated gateway vault; the config is read from it, and the app
+/// secrets vault is not needed.
+#[tokio::test]
+async fn config_is_read_from_the_dedicated_gateway_vault() {
+    let dir = tempfile::tempdir().unwrap();
+    let bindings = Bindings::from_env_map(HashMap::from([
+        ("ALIEN_DEPLOYMENT_TYPE".into(), "local".into()),
+        (
+            "ALIEN_SANDBOX_EGRESS_VAULT_BINDING".into(),
+            json!({"service":"local-vault","dataDir":dir.path().join("vault"),"vaultName":"sandbox-egress-vault"}).to_string(),
+        ),
+    ]))
+    .unwrap();
+    bindings
+        .vault("sandbox-egress-vault")
+        .await
+        .unwrap()
+        .set_secret("sandbox-egress-gateway-config", "{\"from\":\"dedicated\"}")
+        .await
+        .unwrap();
+    assert_eq!(
+        runtime::read_vault_config(&bindings).await.unwrap(),
+        "{\"from\":\"dedicated\"}"
+    );
 }

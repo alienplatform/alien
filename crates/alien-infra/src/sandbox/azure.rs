@@ -1563,15 +1563,14 @@ mod tests {
 
         #[tokio::test]
         async fn only_gateway_groups_reap_sessions_on_ready_ticks() {
-            // Without a gateway in the stack nothing issues 24-hour identities, so an
-            // Internet group must not have its sessions reaped.
-            for (egress, with_gateway) in [
-                (SandboxEgress::Internet, true),
-                (SandboxEgress::Internet, false),
-                (SandboxEgress::Allow, false),
-                (SandboxEgress::None, false),
+            // Only Internet groups receive 24-hour gateway identities; preparation installs
+            // the gateway for them. Other groups' sessions must never be reaped.
+            for egress in [
+                SandboxEgress::Internet,
+                SandboxEgress::Allow,
+                SandboxEgress::None,
             ] {
-                let gateway = egress == SandboxEgress::Internet && with_gateway;
+                let gateway = egress == SandboxEgress::Internet;
                 let mut client = MockSandboxDataPlaneApi::new();
                 client
                     .expect_list_sandboxes()
@@ -1591,33 +1590,12 @@ mod tests {
                     .returning(|_, _| Ok(()));
                 let mut config = sandbox("ubuntu");
                 config.egress = egress.clone();
-                let mut builder = SingleControllerExecutor::builder()
+                let builder = SingleControllerExecutor::builder()
                     .resource(config)
                     .controller(adopted(Some("ubuntu"), None))
                     .platform(Platform::Azure)
                     .resource_lifecycle(ResourceLifecycle::Frozen)
                     .service_provider(provider_with(client));
-                if with_gateway {
-                    builder = builder.with_stack_resource(
-                        alien_core::Container::new(
-                            alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.into(),
-                        )
-                        .permissions("default".into())
-                        .code(alien_core::ContainerCode::Image {
-                            image: "example.invalid/gateway:1".into(),
-                        })
-                        .cpu(alien_core::ResourceSpec {
-                            min: "0.25".into(),
-                            desired: "0.25".into(),
-                        })
-                        .memory(alien_core::ResourceSpec {
-                            min: "512Mi".into(),
-                            desired: "512Mi".into(),
-                        })
-                        .build(),
-                        ResourceLifecycle::Live,
-                    );
-                }
                 let mut run = builder.build().await.unwrap();
                 run.step().await.expect("ready tick");
                 if gateway {

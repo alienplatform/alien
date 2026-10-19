@@ -7,10 +7,7 @@ use crate::vault::LocalVaultController;
 use alien_azure_clients::azure::AzureClientConfigExt;
 use alien_azure_clients::azure::sandbox_groups::MockSandboxGroupsApi;
 use alien_bindings::{Vault as VaultApi, providers::vault::LocalVault};
-use alien_core::{
-    Container, ContainerCode, Network, NetworkSettings, Platform, ResourceLifecycle,
-    SECRETS_VAULT_ID, SandboxCode, Vault,
-};
+use alien_core::{Network, NetworkSettings, Platform, ResourceLifecycle, SandboxCode, Vault};
 use std::sync::Arc;
 
 async fn executor(
@@ -78,28 +75,12 @@ async fn executor(
             network,
         )
         .with_dependency(
-            Vault::new(SECRETS_VAULT_ID.into()).build(),
+            // Preparation installs the gateway Container and this dedicated vault on Azure.
+            Vault::new(alien_core::sandbox_egress::SANDBOX_EGRESS_VAULT_ID.into()).build(),
             LocalVaultController {
                 vault_path: Some(directory.to_string_lossy().into_owned()),
                 ..Default::default()
             },
-        )
-        .with_stack_resource(
-            Container::new(alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.into())
-                .permissions("default".into())
-                .code(ContainerCode::Image {
-                    image: "example.invalid/gateway:1".into(),
-                })
-                .cpu(alien_core::ResourceSpec {
-                    min: "0.25".into(),
-                    desired: "0.25".into(),
-                })
-                .memory(alien_core::ResourceSpec {
-                    min: "512Mi".into(),
-                    desired: "512Mi".into(),
-                })
-                .build(),
-            ResourceLifecycle::Live,
         );
     if earlier_live {
         builder = builder.with_stack_resource(
