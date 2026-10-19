@@ -1054,11 +1054,11 @@ fn artifact_uri(sandbox: &Sandbox) -> Result<BundleUri<'_>> {
 /// Lifecycle hooks, served by the agent on its own port.
 ///
 /// `Ready` is not optional: AWS rejects an image that enables any MicroVM hook without it, and
-/// it is what defers the snapshot until the agent is actually serving. `Validate` runs on a
+/// it is what defers the snapshot until the agent is serving. `Validate` runs on a
 /// MicroVM restored from the snapshot and fails the build when a command or a file write cannot
 /// work on it; 30s is AWS's default and far above the probe's sub-second work. `Run` and
 /// `Resume` are acknowledged by the agent and nothing more: entropy separation between MicroVMs
-/// comes from the platform.
+/// comes from the MicroVM service.
 fn hooks() -> Expression {
     Expression::from_iter([
         ("Port", Expression::Number(AGENT_PORT.into())),

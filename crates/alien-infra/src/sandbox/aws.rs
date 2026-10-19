@@ -1294,6 +1294,10 @@ impl ImageBuildInputs {
         self
     }
 
+    /// The receipt hashes the whole request, so a release that changes any field of it (hooks,
+    /// environment, base image) does not recognise a build an earlier release started and lost
+    /// the response to: recovery misses it and builds again, leaving that version untracked.
+    /// Accepted for the narrow window it needs, a lost response retried across an upgrade.
     fn with_receipt(mut self) -> Result<Self> {
         let encoded = serde_json::to_vec(&self.clone().update_request())
             .into_alien_error()
@@ -1424,7 +1428,7 @@ pub(crate) fn aws_partition(region: &str) -> &'static str {
 /// from the snapshot and fails the build when a command or a file write cannot work on it; 30s
 /// is AWS's default and far above the probe's sub-second work, where `Ready`'s 120s covers a
 /// boot. `Run` and `Resume` are acknowledged by the agent and nothing more: entropy separation
-/// between MicroVMs comes from the platform.
+/// between MicroVMs comes from the MicroVM service.
 fn agent_hooks() -> MicrovmImageHooks {
     MicrovmImageHooks::builder()
         .port(AWS_MICROVM.port)
