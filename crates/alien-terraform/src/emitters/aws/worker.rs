@@ -351,25 +351,19 @@ fn queue_trigger_resources(
                             .map_or(1, |batch| i64::from(batch.max_messages)),
                     )),
                 ),
-                attr(
-                    "maximum_batching_window_in_seconds",
-                    Expression::Number(hcl::Number::from(
-                        batch
-                            .as_ref()
-                            .map_or(0, |batch| i64::from(batch.max_window_seconds)),
-                    )),
-                ),
-                attr(
-                    "function_response_types",
-                    Expression::Array(if batch.is_some() {
-                        vec![Expression::String("ReportBatchItemFailures".to_string())]
-                    } else {
-                        Vec::new()
-                    }),
-                ),
                 attr("enabled", Expression::Bool(true)),
             ],
         );
+        if let Some(batch) = batch {
+            mapping.body.0.push(attr(
+                "maximum_batching_window_in_seconds",
+                Expression::Number(batch.max_window_seconds.into()),
+            ));
+            mapping.body.0.push(attr(
+                "function_response_types",
+                Expression::Array(vec![Expression::String("ReportBatchItemFailures".into())]),
+            ));
+        }
         if let Some(capacity) = function.queue_source_maximum_concurrency() {
             mapping.body.0.push(nested_block(
                 "scaling_config",

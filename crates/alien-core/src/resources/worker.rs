@@ -296,7 +296,11 @@ impl Worker {
     pub fn runtime_binding_links(&self) -> Vec<ResourceRef> {
         let mut links = self.links.clone();
         for trigger in &self.triggers {
-            if let WorkerTrigger::Queue { queue, .. } = trigger {
+            if let WorkerTrigger::Queue {
+                queue,
+                batch: Some(_),
+            } = trigger
+            {
                 if !links.contains(queue) {
                     links.push(queue.clone());
                 }
@@ -305,8 +309,18 @@ impl Worker {
         links
     }
 
-    /// Batch settings keyed by logical queue source; single-message triggers are omitted.
+    /// Whether the worker explicitly opts into queue batching.
+    pub fn has_queue_batches(&self) -> bool {
+        self.triggers
+            .iter()
+            .any(|trigger| matches!(trigger, WorkerTrigger::Queue { batch: Some(_), .. }))
+    }
+
+    /// Batch routing is emitted only for workers that explicitly opt into batching.
     pub fn queue_batch_environment(&self) -> Result<Option<String>> {
+        if !self.has_queue_batches() {
+            return Ok(None);
+        }
         let mut batches = std::collections::BTreeMap::new();
         for trigger in &self.triggers {
             if let WorkerTrigger::Queue { queue, batch } = trigger {
@@ -344,6 +358,9 @@ impl Worker {
     /// AWS requires at least two per mapping. Below that threshold the function's
     /// reserved concurrency remains the compute cap; it is not a distributed lock.
     pub fn queue_source_maximum_concurrency(&self) -> Option<u32> {
+        if !self.has_queue_batches() {
+            return None;
+        }
         let sources = self
             .triggers
             .iter()

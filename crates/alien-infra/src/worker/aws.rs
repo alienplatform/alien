@@ -2202,6 +2202,8 @@ impl AwsWorkerController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Worker>()?;
+        self.ensure_batch_queue_visibility(ctx, &config, false)
+            .await?;
 
         // Skip this step if the worker doesn't have public ingress
         // For private workers, the initial env vars already have complete self-binding
@@ -2727,6 +2729,8 @@ impl AwsWorkerController {
 
         let current_config = ctx.desired_resource_config::<Worker>()?;
         let previous_config = ctx.previous_resource_config::<Worker>()?;
+        self.ensure_batch_queue_visibility(ctx, &current_config, false)
+            .await?;
         let code_changed = current_config.code != previous_config.code;
 
         // UpdateCodeStart only handles code updates if needed
@@ -2845,11 +2849,15 @@ impl AwsWorkerController {
     ) -> Result<HandlerAction> {
         let current_config = ctx.desired_resource_config::<Worker>()?;
         let previous_config = ctx.previous_resource_config::<Worker>()?;
+        self.ensure_batch_queue_visibility(ctx, &current_config, false)
+            .await?;
         let config_changed = current_config.permissions != previous_config.permissions
             || current_config.memory_mb != previous_config.memory_mb
             || current_config.timeout_seconds != previous_config.timeout_seconds
             || current_config.environment != previous_config.environment
-            || current_config.links != previous_config.links;
+            || current_config.links != previous_config.links
+            || (current_config.triggers != previous_config.triggers
+                && (current_config.has_queue_batches() || previous_config.has_queue_batches()));
 
         if !config_changed {
             return Ok(HandlerAction::Continue {
@@ -3778,38 +3786,50 @@ impl AwsWorkerController {
             }));
         }
 
-        // Reconcile retained queues in place, including capacity-only updates.
-        // Keep all owned IDs until each deletion succeeds so retries retain cleanup ownership.
         let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
-        let mut desired_mappings = std::collections::HashSet::new();
-        for trigger in &current_config.triggers {
-            if let alien_core::WorkerTrigger::Queue { queue, .. } = trigger {
-                desired_mappings.insert(
-                    self.create_queue_event_source_mapping(ctx, aws_cfg, &current_config, queue)
+        if current_config.triggers != previous_config.triggers
+            || current_config.has_queue_batches()
+            || previous_config.has_queue_batches()
+        {
+            // Reconcile retained queues in place, including capacity-only updates.
+            // Keep all owned IDs until each deletion succeeds so retries retain cleanup ownership.
+            let client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
+            let mut desired_mappings = std::collections::HashSet::new();
+            for trigger in &current_config.triggers {
+                if let alien_core::WorkerTrigger::Queue { queue, .. } = trigger {
+                    desired_mappings.insert(
+                        self.create_queue_event_source_mapping(
+                            ctx,
+                            aws_cfg,
+                            &current_config,
+                            queue,
+                        )
                         .await?,
-                );
-            }
-        }
-        for uuid in self.event_source_mappings.clone() {
-            if desired_mappings.contains(&uuid) {
-                continue;
-            }
-            match client.delete_event_source_mapping(&uuid).await {
-                Ok(_) => {}
-                Err(error)
-                    if matches!(
-                        error.error,
-                        Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
-                    ) => {}
-                Err(error) => {
-                    return Err(error.context(ErrorData::CloudPlatformError {
-                        message: format!("Failed to remove queue event source mapping '{uuid}'"),
-                        resource_id: Some(current_config.id.clone()),
-                    }))
+                    );
                 }
             }
-            self.event_source_mappings.retain(|owned| owned != &uuid);
+            for uuid in self.event_source_mappings.clone() {
+                if desired_mappings.contains(&uuid) {
+                    continue;
+                }
+                match client.delete_event_source_mapping(&uuid).await {
+                    Ok(_) => {}
+                    Err(error)
+                        if matches!(
+                            error.error,
+                            Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+                        ) => {}
+                    Err(error) => {
+                        return Err(error.context(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Failed to remove queue event source mapping '{uuid}'"
+                            ),
+                            resource_id: Some(current_config.id.clone()),
+                        }))
+                    }
+                }
+                self.event_source_mappings.retain(|owned| owned != &uuid);
+            }
         }
 
         let triggers_changed = current_config.triggers != previous_config.triggers;
@@ -5106,6 +5126,109 @@ impl AwsWorkerController {
         }
     }
 
+    /// Worker-only batch changes do not schedule a queue update. Check setup-owned
+    /// queues before changing the worker, and increase Live visibility before enabling
+    /// its mapping. Both writes are idempotent if a response or checkpoint is lost.
+    async fn ensure_batch_queue_visibility(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        worker: &Worker,
+        apply: bool,
+    ) -> Result<()> {
+        for trigger in &worker.triggers {
+            let alien_core::WorkerTrigger::Queue {
+                queue,
+                batch: Some(batch),
+            } = trigger
+            else {
+                continue;
+            };
+            let required = worker
+                .timeout_seconds
+                .saturating_mul(6)
+                .saturating_add(batch.max_window_seconds)
+                .clamp(30, 43_200);
+            let controller =
+                ctx.require_dependency::<crate::queue::aws::AwsQueueController>(queue)?;
+            let url = controller.queue_url.as_deref().ok_or_else(|| {
+                AlienError::new(ErrorData::DependencyNotReady {
+                    resource_id: worker.id.clone(),
+                    dependency_id: queue.id.clone(),
+                })
+            })?;
+            let client = ctx
+                .service_provider
+                .get_aws_sqs_client(ctx.get_aws_config()?)
+                .await?;
+            let attributes = client
+                .get_queue_attributes(
+                    url,
+                    alien_aws_clients::sqs::GetQueueAttributesRequest::builder()
+                        .attribute_names(vec!["VisibilityTimeout".into()])
+                        .build(),
+                )
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Cannot verify visibility for queue '{}' before batching",
+                        queue.id
+                    ),
+                    resource_id: Some(worker.id.clone()),
+                })?;
+            let current = attributes
+                .get_queue_attributes_result
+                .attributes
+                .iter()
+                .find(|attribute| attribute.name == "VisibilityTimeout")
+                .and_then(|attribute| attribute.value.parse::<u32>().ok())
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::ResourceConfigInvalid {
+                        message: format!(
+                            "Queue '{}' returned no valid visibility timeout",
+                            queue.id
+                        ),
+                        resource_id: Some(worker.id.clone()),
+                    })
+                })?;
+            if current >= required {
+                continue;
+            }
+            let resource = ctx.desired_stack.resources.get(&queue.id).ok_or_else(|| {
+                AlienError::new(ErrorData::DependencyNotReady {
+                    resource_id: worker.id.clone(),
+                    dependency_id: queue.id.clone(),
+                })
+            })?;
+            if resource.lifecycle != alien_core::ResourceLifecycle::Live {
+                return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                    message: format!("Queue '{}' is setup-owned: rerun setup with VisibilityTimeout at least {required} seconds before enabling batching (current {current})", queue.id),
+                    resource_id: Some(worker.id.clone()),
+                }));
+            }
+            if apply {
+                client
+                    .set_queue_attributes(
+                        url,
+                        alien_aws_clients::sqs::SetQueueAttributesRequest::builder()
+                            .attributes(std::collections::HashMap::from([(
+                                "VisibilityTimeout".into(),
+                                required.to_string(),
+                            )]))
+                            .build(),
+                    )
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Cannot increase queue '{}' visibility before enabling batching",
+                            queue.id
+                        ),
+                        resource_id: Some(worker.id.clone()),
+                    })?;
+            }
+        }
+        Ok(())
+    }
+
     /// Creates an SQS event source mapping for a queue trigger
     async fn create_queue_event_source_mapping(
         &mut self,
@@ -5114,6 +5237,8 @@ impl AwsWorkerController {
         worker_config: &alien_core::Worker,
         queue_ref: &alien_core::ResourceRef,
     ) -> Result<String> {
+        self.ensure_batch_queue_visibility(ctx, worker_config, true)
+            .await?;
         let batch = worker_config.queue_batch_config(&queue_ref.id);
         if let Some(batch) = batch {
             batch.validate().context(ErrorData::ResourceConfigInvalid {
@@ -5212,6 +5337,16 @@ impl AwsWorkerController {
                 if !self.event_source_mappings.contains(&uuid) {
                     self.event_source_mappings.push(uuid.clone());
                 }
+                let was_batched = ctx
+                    .state
+                    .resources
+                    .get(&worker_config.id)
+                    .and_then(|state| state.previous_config.as_ref())
+                    .and_then(|config| config.downcast_ref::<Worker>())
+                    .is_some_and(|previous| previous.queue_batch_config(&queue_ref.id).is_some());
+                if batch.is_none() && !was_batched {
+                    return Ok(uuid);
+                }
                 lambda_client
                     .update_event_source_mapping(
                         &uuid,
@@ -5241,9 +5376,9 @@ impl AwsWorkerController {
             .event_source_arn(queue_arn.clone())
             .function_name(worker_name.clone())
             .batch_size(batch_size)
-            .maximum_batching_window_in_seconds(window)
-            .function_response_types(response_types)
-            .scaling_config(scaling)
+            .maybe_maximum_batching_window_in_seconds(batch.map(|_| window))
+            .maybe_function_response_types(batch.map(|_| response_types))
+            .maybe_scaling_config(batch.map(|_| scaling))
             .enabled(true)
             .build();
 
@@ -5487,8 +5622,179 @@ mod tests {
     use alien_core::standard_resource_tags;
 
     #[tokio::test]
+    async fn queue_rollout_updates_private_runtime_environment_on_batch_only_changes() {
+        for enabled in [true, false] {
+            let mut worker = function_with_queue_trigger();
+            let mut previous = worker.clone();
+            let batched = alien_core::WorkerTrigger::queue_batch(
+                &test_queue(),
+                alien_core::QueueBatchConfig {
+                    max_messages: 8,
+                    max_window_seconds: 5,
+                },
+            )
+            .unwrap();
+            if enabled {
+                worker.triggers = vec![batched];
+            } else {
+                previous.triggers = vec![batched];
+            }
+            let mut lambda = MockLambdaApi::new();
+            lambda
+                .expect_update_function_configuration()
+                .times(1)
+                .returning(move |_, request| {
+                    let variables = request
+                        .environment
+                        .as_ref()
+                        .unwrap()
+                        .variables
+                        .as_ref()
+                        .unwrap();
+                    assert_eq!(variables.contains_key("ALIEN_QUEUE_BATCH_CONFIG"), enabled);
+                    assert_eq!(variables.contains_key("ALIEN_TEST_QUEUE_BINDING"), enabled);
+                    Ok(create_successful_function_response("test-queue-func"))
+                });
+            let mut sqs = alien_aws_clients::sqs::MockSqsApi::new();
+            sqs.expect_get_queue_attributes()
+                .times(if enabled { 1 } else { 0 })
+                .returning(|_, _| {
+                    Ok(alien_aws_clients::sqs::GetQueueAttributesResponse {
+                        get_queue_attributes_result:
+                            alien_aws_clients::sqs::GetQueueAttributesResult {
+                                attributes: vec![alien_aws_clients::sqs::Attribute {
+                                    name: "VisibilityTimeout".into(),
+                                    value: "43200".into(),
+                                }],
+                            },
+                    })
+                });
+            let sqs = Arc::new(sqs);
+            let mut provider = setup_mock_service_provider(Arc::new(lambda), None, None);
+            Arc::get_mut(&mut provider)
+                .unwrap()
+                .expect_get_aws_sqs_client()
+                .returning(move |_| Ok(sqs.clone()));
+            let controller = AwsWorkerController {
+                state: AwsWorkerState::UpdateConfigStart,
+                ..AwsWorkerController::mock_ready("test-queue-func")
+            };
+            let restored = serde_json::from_value::<AwsWorkerController>(
+                serde_json::to_value(controller).unwrap(),
+            )
+            .unwrap();
+            let mut executor = SingleControllerExecutor::builder()
+                .resource(worker)
+                .previous_resource(previous)
+                .controller(restored)
+                .platform(Platform::Aws)
+                .service_provider(provider)
+                .with_test_dependencies()
+                .with_dependency(
+                    test_queue(),
+                    crate::queue::aws::AwsQueueController {
+                        state: crate::queue::aws::AwsQueueState::Ready,
+                        queue_name: Some("physical-jobs".into()),
+                        queue_url: Some(
+                            "https://sqs.us-east-1.amazonaws.com/123456789012/physical-jobs".into(),
+                        ),
+                        ..Default::default()
+                    },
+                )
+                .build()
+                .await
+                .unwrap();
+            executor
+                .step()
+                .await
+                .expect("batch-only change must update private worker environment");
+            assert_eq!(
+                executor
+                    .internal_state::<AwsWorkerController>()
+                    .unwrap()
+                    .state,
+                AwsWorkerState::UpdateConfigWaitForActive
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn batch_enable_checks_setup_owned_queue_before_worker_mutation() {
+        let mut worker = function_with_queue_trigger();
+        let previous = worker.clone();
+        worker.triggers = vec![alien_core::WorkerTrigger::queue_batch(
+            &test_queue(),
+            alien_core::QueueBatchConfig {
+                max_messages: 8,
+                max_window_seconds: 5,
+            },
+        )
+        .unwrap()];
+        worker.code = alien_core::WorkerCode::Image {
+            image: "registry.example.com/worker:new".into(),
+        };
+        let required = worker.timeout_seconds * 6 + 5;
+        let mut sqs = alien_aws_clients::sqs::MockSqsApi::new();
+        sqs.expect_get_queue_attributes()
+            .times(1)
+            .returning(move |_, _| {
+                Ok(alien_aws_clients::sqs::GetQueueAttributesResponse {
+                    get_queue_attributes_result: alien_aws_clients::sqs::GetQueueAttributesResult {
+                        attributes: vec![alien_aws_clients::sqs::Attribute {
+                            name: "VisibilityTimeout".into(),
+                            value: (required - 5).to_string(),
+                        }],
+                    },
+                })
+            });
+        // No SetQueueAttributes or Lambda mutation is authorized for this failed opt-in.
+        let sqs = Arc::new(sqs);
+        let mut provider = setup_mock_service_provider(Arc::new(MockLambdaApi::new()), None, None);
+        Arc::get_mut(&mut provider)
+            .unwrap()
+            .expect_get_aws_sqs_client()
+            .returning(move |_| Ok(sqs.clone()));
+        let controller = AwsWorkerController {
+            state: AwsWorkerState::UpdateCodeStart,
+            ..AwsWorkerController::mock_ready("test-queue-func")
+        };
+        let restored = serde_json::from_value::<AwsWorkerController>(
+            serde_json::to_value(controller).unwrap(),
+        )
+        .unwrap();
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(worker)
+            .previous_resource(previous)
+            .controller(restored)
+            .platform(Platform::Aws)
+            .service_provider(provider)
+            .with_test_dependencies()
+            .with_dependency(
+                test_queue(),
+                crate::queue::aws::AwsQueueController {
+                    state: crate::queue::aws::AwsQueueState::Ready,
+                    queue_name: Some("physical-jobs".into()),
+                    queue_url: Some(
+                        "https://sqs.us-east-1.amazonaws.com/123456789012/physical-jobs".into(),
+                    ),
+                    ..Default::default()
+                },
+            )
+            .dependency_lifecycle("test-queue", alien_core::ResourceLifecycle::Frozen)
+            .build()
+            .await
+            .unwrap();
+        let error = executor
+            .step()
+            .await
+            .expect_err("setup must increase visibility first");
+        assert!(error.to_string().contains("setup-owned"), "{error}");
+        assert!(error.to_string().contains(&required.to_string()), "{error}");
+    }
+
+    #[tokio::test]
     async fn queue_mapping_updates_preserve_identity_and_reset_removed_settings() {
-        for mode in 0..3 {
+        for mode in 0..4 {
             let mut worker = function_with_queue_trigger();
             worker.concurrency_limit = Some(if mode == 1 { 1 } else { 8 });
             let mut previous = worker.clone();
@@ -5498,12 +5804,12 @@ mod tests {
             };
             if let alien_core::WorkerTrigger::Queue { batch: target, .. } = &mut worker.triggers[0]
             {
-                *target = (mode != 1).then_some(batch.clone());
+                *target = (mode != 1 && mode != 3).then_some(batch.clone());
             }
             if let alien_core::WorkerTrigger::Queue { batch: target, .. } =
                 &mut previous.triggers[0]
             {
-                *target = (mode != 0).then_some(batch);
+                *target = (mode != 0 && mode != 3).then_some(batch);
             }
             if mode == 2 {
                 previous.concurrency_limit = Some(4);
@@ -5520,7 +5826,7 @@ mod tests {
             let mut lambda = MockLambdaApi::new();
             lambda
                 .expect_list_event_source_mappings()
-                .times(1)
+                .times(if mode == 3 { 0 } else { 1 })
                 .withf(|request| {
                     request.event_source_arn.as_deref()
                         == Some("arn:aws:sqs:us-east-1:123456789012:imported-a7d9-jobs")
@@ -5533,7 +5839,7 @@ mod tests {
                 });
             lambda
                 .expect_update_event_source_mapping()
-                .times(1)
+                .times(if mode == 3 { 0 } else { 1 })
                 .withf(move |id, request| {
                     id == "retained-id"
                         && request.batch_size == Some(if mode == 1 { 1 } else { 10 })
@@ -5556,11 +5862,57 @@ mod tests {
                 .returning(move |_, _| Ok(mapping()));
             lambda
                 .expect_delete_event_source_mapping()
-                .times(1)
+                .times(if mode == 3 { 0 } else { 1 })
                 .withf(|id| id == "removed-id")
                 .returning(move |_| Ok(mapping()));
             // No create expectation: retained subscriptions must never be replaced.
-            let provider = setup_mock_service_provider(Arc::new(lambda), None, None);
+            let required = worker.timeout_seconds * 6 + 5;
+            let visibility = Arc::new(std::sync::atomic::AtomicU32::new(required - 5));
+            let observed_visibility = visibility.clone();
+            let mut sqs = alien_aws_clients::sqs::MockSqsApi::new();
+            sqs.expect_get_queue_attributes()
+                .times(if mode == 0 {
+                    2
+                } else if mode == 2 {
+                    1
+                } else {
+                    0
+                })
+                .returning(move |_, _| {
+                    Ok(alien_aws_clients::sqs::GetQueueAttributesResponse {
+                        get_queue_attributes_result:
+                            alien_aws_clients::sqs::GetQueueAttributesResult {
+                                attributes: vec![alien_aws_clients::sqs::Attribute {
+                                    name: "VisibilityTimeout".into(),
+                                    value: observed_visibility
+                                        .load(std::sync::atomic::Ordering::SeqCst)
+                                        .to_string(),
+                                }],
+                            },
+                    })
+                });
+            sqs.expect_set_queue_attributes()
+                .times(if mode == 0 || mode == 2 { 1 } else { 0 })
+                .withf(move |_, request| {
+                    request.attributes.get("VisibilityTimeout") == Some(&required.to_string())
+                })
+                .returning(move |_, _| {
+                    visibility.store(required, std::sync::atomic::Ordering::SeqCst);
+                    if mode == 0 {
+                        Err(AlienError::new(CloudClientErrorData::InvalidInput {
+                            message: "response lost after visibility was increased".into(),
+                            field_name: None,
+                        }))
+                    } else {
+                        Ok(())
+                    }
+                });
+            let sqs = Arc::new(sqs);
+            let mut provider = setup_mock_service_provider(Arc::new(lambda), None, None);
+            Arc::get_mut(&mut provider)
+                .unwrap()
+                .expect_get_aws_sqs_client()
+                .returning(move |_| Ok(sqs.clone()));
             let mut controller = AwsWorkerController::mock_ready("test-queue-func");
             controller.state = AwsWorkerState::UpdateEventSourceMappings;
             controller.event_source_mappings = vec!["retained-id".into(), "removed-id".into()];
@@ -5576,23 +5928,41 @@ mod tests {
                 ),
                 ..Default::default()
             };
-            let mut executor = SingleControllerExecutor::builder()
-                .resource(worker)
-                .previous_resource(previous)
-                .controller(
-                    restored
-                        .as_any()
-                        .downcast_ref::<AwsWorkerController>()
-                        .expect("worker")
-                        .clone(),
-                )
-                .platform(Platform::Aws)
-                .service_provider(provider)
-                .with_test_dependencies()
-                .with_dependency(test_queue(), queue)
-                .build()
-                .await
-                .expect("executor");
+            let build = |controller: AwsWorkerController| {
+                SingleControllerExecutor::builder()
+                    .resource(worker.clone())
+                    .previous_resource(previous.clone())
+                    .controller(controller)
+                    .platform(Platform::Aws)
+                    .service_provider(provider.clone())
+                    .with_test_dependencies()
+                    .with_dependency(test_queue(), queue.clone())
+                    .build()
+            };
+            let mut executor = build(
+                restored
+                    .as_any()
+                    .downcast_ref::<AwsWorkerController>()
+                    .unwrap()
+                    .clone(),
+            )
+            .await
+            .expect("executor");
+            if mode == 0 {
+                executor
+                    .step()
+                    .await
+                    .expect_err("visibility response was lost before mapping mutation");
+                let saved = executor.internal_state::<AwsWorkerController>().unwrap();
+                assert_eq!(
+                    saved.event_source_mappings,
+                    vec!["retained-id", "removed-id"]
+                );
+                let mut restored: AwsWorkerController =
+                    serde_json::from_value(serde_json::to_value(saved).unwrap()).unwrap();
+                restored.state = AwsWorkerState::UpdateEventSourceMappings;
+                executor = build(restored).await.expect("restore retry checkpoint");
+            }
             executor
                 .step()
                 .await
@@ -5602,7 +5972,11 @@ mod tests {
                     .internal_state::<AwsWorkerController>()
                     .expect("controller")
                     .event_source_mappings,
-                vec!["retained-id"]
+                if mode == 3 {
+                    vec!["retained-id", "removed-id"]
+                } else {
+                    vec!["retained-id"]
+                }
             );
         }
     }

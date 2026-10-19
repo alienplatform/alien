@@ -145,6 +145,17 @@ acknowledge these deliveries through a queue binding. `on_queue_message`
 continues to handle triggers without batch configuration. `"*"` matches any
 otherwise unregistered source.
 
+Batching is an explicit deployment opt-in. Deploy a runtime and SDK that support
+batch handlers when adding `batch` to a queue trigger. A manager upgrade alone
+preserves legacy queue routes and concurrency settings. Removing `batch` restores
+single-message infrastructure settings; deploy a single-message handler with that
+change. On AWS, enabling batching checks queue visibility against six times the
+Worker timeout plus the collection window. Live queues are increased when needed;
+a derived visibility increase for setup-owned queues returns setup-required before
+Worker updates. Rerun setup and complete its normal handoff before enabling batching;
+the controller also verifies installed visibility before changing the Worker.
+Disabling batching never shortens an existing queue visibility timeout.
+
 A batch may contain fewer than `maxMessages`. The collection window is a maximum
 wait, not a periodic schedule or a minimum batch size. Messages are unordered and
 may be delivered again, including after an uncertain acknowledgment. Make work

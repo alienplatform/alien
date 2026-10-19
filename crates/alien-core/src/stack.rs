@@ -107,6 +107,30 @@ pub struct Stack {
 }
 
 impl Stack {
+    /// SQS visibility derived from all consumers, including a batch collection window.
+    pub fn queue_visibility_timeout_seconds(&self, queue_id: &str) -> u32 {
+        self.resources
+            .values()
+            .filter_map(|entry| {
+                let worker = entry.config.downcast_ref::<crate::Worker>()?;
+                worker
+                    .triggers
+                    .iter()
+                    .filter_map(|trigger| match trigger {
+                        crate::WorkerTrigger::Queue { queue, batch } if queue.id == queue_id => {
+                            Some(worker.timeout_seconds.saturating_mul(6).saturating_add(
+                                batch.as_ref().map_or(0, |batch| batch.max_window_seconds),
+                            ))
+                        }
+                        _ => None,
+                    })
+                    .max()
+            })
+            .max()
+            .unwrap_or(30)
+            .clamp(30, 43_200)
+    }
+
     /// Explicit consumers whose links grant access to every port on a container.
     /// Cluster-wide reach is separate and remains the backend's existing behavior.
     pub fn container_linkers(&self, container_id: &str) -> Vec<ResourceRef> {
@@ -153,6 +177,19 @@ impl Stack {
                         .remove("defaultPolicy");
                 }
                 canonicalize_json(&mut value);
+                // Bind setup approval to derived queue settings too. Preserve old digests
+                // for stacks without explicit batching.
+                if entry.config.downcast_ref::<crate::Queue>().is_some()
+                    && self.resources.values().any(|consumer| {
+                        consumer
+                            .config
+                            .downcast_ref::<crate::Worker>()
+                            .is_some_and(|worker| worker.queue_batch_config(id).is_some())
+                    })
+                {
+                    value["queueBatchVisibilityTimeout"] =
+                        self.queue_visibility_timeout_seconds(id).into();
+                }
                 (id, value)
             })
             .collect::<Vec<_>>();

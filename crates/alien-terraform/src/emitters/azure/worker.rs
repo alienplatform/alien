@@ -118,7 +118,11 @@ impl TfEmitter for AzureWorkerEmitter {
 
         let mut queue_fragment = TfFragment::default();
         for (index, trigger) in function.triggers.iter().enumerate() {
-            let WorkerTrigger::Queue { queue, batch } = trigger else {
+            let WorkerTrigger::Queue {
+                queue,
+                batch: Some(batch),
+            } = trigger
+            else {
                 continue;
             };
             let sa_label = service_account_label.as_deref().ok_or_else(|| {
@@ -170,12 +174,7 @@ impl TfEmitter for AzureWorkerEmitter {
                             ("queueName", queue_name.clone()),
                             (
                                 "messageCount",
-                                Expression::String(
-                                    batch
-                                        .as_ref()
-                                        .map_or(1, |batch| batch.max_messages)
-                                        .to_string(),
-                                ),
+                                Expression::String(batch.max_messages.to_string()),
                             ),
                         ]),
                     ),
@@ -287,11 +286,7 @@ impl TfEmitter for AzureWorkerEmitter {
             &client_config_label,
             Vec::<Structure>::new(),
         ));
-        if function
-            .triggers
-            .iter()
-            .any(|trigger| matches!(trigger, WorkerTrigger::Queue { .. }))
-        {
+        if function.has_queue_batches() {
             // AzureRM does not expose appHealth. Enable Dapr only with the health
             // gate configured, through the stable ARM API, after components exist.
             body.push(nested(block(

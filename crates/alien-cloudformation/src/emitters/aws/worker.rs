@@ -419,14 +419,12 @@ fn queue_trigger_resources(
                     .map_or(1, |batch| i64::from(batch.max_messages)),
             ),
         );
-        mapping.properties.insert(
-            "MaximumBatchingWindowInSeconds".to_string(),
-            CfExpression::Integer(
-                batch
-                    .as_ref()
-                    .map_or(0, |batch| i64::from(batch.max_window_seconds)),
-            ),
-        );
+        if let Some(batch) = batch {
+            mapping.properties.insert(
+                "MaximumBatchingWindowInSeconds".to_string(),
+                CfExpression::Integer(i64::from(batch.max_window_seconds)),
+            );
+        }
         if batch.is_some() {
             mapping.properties.insert(
                 "FunctionResponseTypes".to_string(),

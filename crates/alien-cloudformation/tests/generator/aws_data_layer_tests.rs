@@ -4,9 +4,9 @@ use super::helpers::{custom_resource_registration, render_built_ins, render_buil
 use alien_cloudformation::{CloudFormationTarget, RegistrationMode};
 use alien_core::{
     permissions::ManagementPermissions, AwsOpenSearch, Email, Key, Kv, LifecycleRule,
-    PermissionProfile, PermissionSetReference, Queue, RemoteBindings, RemoteStackManagement,
-    ResourceLifecycle, ResourceRef, ServiceAccount, Stack, StackSettings, Storage, Vault, Worker,
-    WorkerCode, WorkerTrigger,
+    PermissionProfile, PermissionSetReference, Queue, QueueBatchConfig, RemoteBindings,
+    RemoteStackManagement, ResourceLifecycle, ResourceRef, ServiceAccount, Stack, StackSettings,
+    Storage, Vault, Worker, WorkerCode, WorkerTrigger,
 };
 
 #[test]
@@ -927,4 +927,57 @@ fn automatic_packages_refuse_resources_the_runtime_cannot_create() {
         .build();
     render_automatic(&extended, "stack-wide management extension")
         .expect("stack-wide management extensions are supported");
+}
+
+#[test]
+fn queue_batch_rollout_setup_preserves_visibility_and_live_ownership() {
+    for enabled in [false, true] {
+        let queue = Queue::new("jobs".into()).build();
+        let trigger = if enabled {
+            WorkerTrigger::queue_batch(
+                &queue,
+                QueueBatchConfig {
+                    max_messages: 8,
+                    max_window_seconds: 5,
+                },
+            )
+            .unwrap()
+        } else {
+            WorkerTrigger::queue(&queue)
+        };
+        let worker = Worker::new("processor".into())
+            .code(WorkerCode::Image {
+                image: "registry.example.com/worker:1".into(),
+            })
+            .permissions("execution".into())
+            .timeout_seconds(60)
+            .unwrap()
+            .trigger(trigger)
+            .build();
+        let stack = Stack::new("queue-rollout".into())
+            .add(queue, ResourceLifecycle::Frozen)
+            .add(worker, ResourceLifecycle::Live)
+            .build();
+        let (template, _) = render_built_ins_template(
+            &stack,
+            StackSettings::default(),
+            RegistrationMode::OutputsFallback,
+            CloudFormationTarget::Aws,
+            "aws",
+            "queue batch rollout setup",
+        );
+        let queue = template
+            .resources
+            .values()
+            .find(|resource| resource.resource_type == "AWS::SQS::Queue")
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&queue.properties["VisibilityTimeout"]).unwrap(),
+            serde_json::json!(if enabled { 365 } else { 360 })
+        );
+        assert!(!template
+            .resources
+            .values()
+            .any(|resource| resource.resource_type == "AWS::Lambda::Function"));
+    }
 }

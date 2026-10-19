@@ -589,7 +589,10 @@ impl Default for PreflightRunner {
 #[cfg(test)]
 mod setup_update_authorization_tests {
     use super::*;
-    use alien_core::{PermissionsConfig, SetupUpdateAuthorization};
+    use alien_core::{
+        PermissionsConfig, Queue, QueueBatchConfig, ResourceLifecycle, SetupUpdateAuthorization,
+        Worker, WorkerCode, WorkerTrigger,
+    };
     use indexmap::IndexMap;
 
     fn empty_stack() -> Stack {
@@ -602,6 +605,144 @@ mod setup_update_authorization_tests {
             inputs: vec![],
             permissions: PermissionsConfig::default(),
             supported_platforms: None,
+        }
+    }
+
+    #[cfg(feature = "runtime-checks")]
+    #[tokio::test]
+    async fn queue_batch_visibility_requires_matching_setup_handoff() {
+        let stack = |window: Option<u32>, image: &str, lifecycle| {
+            let queue = Queue::new("jobs".into()).build();
+            let trigger = match window {
+                Some(window) => WorkerTrigger::queue_batch(
+                    &queue,
+                    QueueBatchConfig {
+                        max_messages: 10,
+                        max_window_seconds: window,
+                    },
+                )
+                .unwrap(),
+                None => WorkerTrigger::queue(&queue),
+            };
+            Stack::new("stack".into())
+                .add(queue, lifecycle)
+                .add(
+                    Worker::new("consumer".into())
+                        .code(WorkerCode::Image {
+                            image: image.into(),
+                        })
+                        .permissions("execution".into())
+                        .trigger(trigger)
+                        .build(),
+                    ResourceLifecycle::Live,
+                )
+                .build()
+        };
+        // Reload a legacy stack with the omitted batch field, as stored before batching.
+        let old: Stack = serde_json::from_value(
+            serde_json::to_value(stack(None, "app:v1", ResourceLifecycle::Frozen)).unwrap(),
+        )
+        .unwrap();
+        let target = stack(Some(5), "app:v2", ResourceLifecycle::Frozen);
+        let runner = PreflightRunner::with_registry(PreflightRegistry::new());
+        let config = deployment_config();
+        let state = StackState::new(Platform::Aws);
+        // No cloud client is available: the setup gate must run before provider writes.
+        let client = ClientConfig::Local {
+            state_directory: "/unused".into(),
+        };
+        let error = runner
+            .run_deployment_time_preflights(
+                target.clone(),
+                &state,
+                &config,
+                &client,
+                Some(&old),
+                None,
+                None,
+            )
+            .await
+            .expect_err("derived Frozen queue visibility needs setup");
+        assert_eq!(error.code, "DEPLOYMENT_SETUP_REQUIRED");
+        assert!(!error.retryable);
+        assert!(error.message.contains("Frozen queue 'jobs'"));
+        assert_ne!(old.setup_update_digest(), target.setup_update_digest());
+
+        let mut approval = authorization(&old);
+        approval.target_frozen_digest = target.setup_update_digest();
+        let (_, _, authorized) = runner
+            .run_deployment_time_preflights(
+                target.clone(),
+                &state,
+                &config,
+                &client,
+                Some(&old),
+                Some(&approval),
+                None,
+            )
+            .await
+            .expect("matching setup handoff permits the prepared target");
+        assert!(authorized);
+        let error = runner
+            .run_deployment_time_preflights(
+                stack(Some(10), "app:v2", ResourceLifecycle::Frozen),
+                &state,
+                &config,
+                &client,
+                Some(&old),
+                Some(&approval),
+                None,
+            )
+            .await
+            .expect_err("approval for a smaller window cannot authorize a larger one");
+        assert_eq!(error.code, "DEPLOYMENT_SETUP_REQUIRED");
+
+        for (baseline, desired) in [
+            (old.clone(), old.clone()),
+            (
+                old.clone(),
+                stack(None, "app:v2", ResourceLifecycle::Frozen),
+            ),
+            (
+                target.clone(),
+                stack(None, "app:v3", ResourceLifecycle::Frozen),
+            ),
+            (
+                target.clone(),
+                stack(Some(1), "app:v3", ResourceLifecycle::Frozen),
+            ),
+            (
+                stack(None, "app:v1", ResourceLifecycle::Live),
+                stack(Some(5), "app:v2", ResourceLifecycle::Live),
+            ),
+        ] {
+            let (_, _, authorized) = runner
+                .run_deployment_time_preflights(
+                    desired,
+                    &state,
+                    &config,
+                    &client,
+                    Some(&baseline),
+                    None,
+                    None,
+                )
+                .await
+                .expect("unchanged, legacy, decreasing, or Live queue needs no setup");
+            assert!(!authorized);
+        }
+        for platform in [Platform::Gcp, Platform::Azure] {
+            runner
+                .run_deployment_time_preflights(
+                    target.clone(),
+                    &StackState::new(platform),
+                    &config,
+                    &client,
+                    Some(&old),
+                    None,
+                    None,
+                )
+                .await
+                .expect("SQS visibility gate is AWS-only");
         }
     }
 
