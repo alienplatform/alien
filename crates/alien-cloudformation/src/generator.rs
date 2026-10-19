@@ -242,6 +242,10 @@ pub fn generate_cloudformation_template_with_profile(
 ) -> Result<CfTemplate> {
     validate_stack_for_cloudformation(stack)?;
     validate_stack_settings(&options.stack_settings)?;
+    // A Kubernetes target runs sandboxes as pods behind the chart's NetworkPolicy.
+    if !options.target.is_kubernetes() {
+        alien_core::sandbox_egress::require_internet_sandbox_gateway(stack)?;
+    }
     alien_core::validate_automatic_setup_resources(
         stack,
         options.target.cloud_platform(),

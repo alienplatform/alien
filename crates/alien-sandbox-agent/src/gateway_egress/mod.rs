@@ -69,6 +69,7 @@ pub struct GatewayEgress {
     ca_path: RwLock<Option<String>>,
     identity: RwLock<Option<(String, String)>>,
     update_lock: tokio::sync::Mutex<()>,
+    unanswered_since: std::sync::Mutex<Option<std::time::Instant>>,
 }
 
 impl GatewayEgress {
@@ -154,6 +155,7 @@ impl GatewayEgress {
             ca_path: RwLock::new(None),
             identity: RwLock::new(identity),
             update_lock: tokio::sync::Mutex::new(()),
+            unanswered_since: std::sync::Mutex::new(None),
         })))
     }
 

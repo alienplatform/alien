@@ -1552,10 +1552,7 @@ mod tests {
     async fn frozen_sandbox_initializes_the_key_before_the_live_sandbox() {
         use crate::{LocalVaultController, LocalVaultState};
         use alien_bindings::{providers::vault::LocalVault, Vault as _};
-        use alien_core::{
-            ClientConfig, Container, ContainerCode, ResourceLifecycle, ResourceSpec, Vault,
-            SECRETS_VAULT_ID,
-        };
+        use alien_core::{ClientConfig, ResourceLifecycle, Vault, SECRETS_VAULT_ID};
 
         let directory = tempfile::tempdir().unwrap();
         let vault = LocalVault::new("secrets".into(), directory.path().into());
@@ -1564,20 +1561,6 @@ mod tests {
         frozen.egress = SandboxEgress::Internet;
         let mut live = frozen.clone();
         live.id = "a-live".into();
-        let gateway = Container::new(alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.into())
-            .code(ContainerCode::Image {
-                image: "example.invalid/gateway:1".into(),
-            })
-            .cpu(ResourceSpec {
-                min: "0.5".into(),
-                desired: "0.5".into(),
-            })
-            .memory(ResourceSpec {
-                min: "512Mi".into(),
-                desired: "512Mi".into(),
-            })
-            .permissions("gateway".into())
-            .build();
         let mut accepted = None;
         for (current, lifecycle, other, other_lifecycle) in [
             (
@@ -1605,7 +1588,6 @@ mod tests {
                     state_directory: directory.path().to_string_lossy().into_owned(),
                 })
                 .with_stack_resource(other, other_lifecycle)
-                .with_stack_resource(gateway.clone(), ResourceLifecycle::Live)
                 .with_dependency(
                     Vault::new(SECRETS_VAULT_ID.into()).build(),
                     LocalVaultController {
