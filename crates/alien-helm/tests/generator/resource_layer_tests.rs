@@ -426,6 +426,44 @@ async fn kubernetes_internet_sandbox_installs_a_hosted_gateway() {
         probe["metadata"]["annotations"]["helm.sh/hook"],
         "pre-install,pre-upgrade"
     );
+    // The probe image is pinned by digest.
+    let image = probe["spec"]["template"]["spec"]["containers"][0]["image"]
+        .as_str()
+        .unwrap();
+    assert!(image.contains("@sha256:"), "{image}");
+    // Reads and deletions are limited to the probe's own objects; creation, which RBAC
+    // cannot scope, is confined by an admission policy bound to the probe account.
+    let probe_name = probe["metadata"]["name"].as_str().unwrap();
+    let role = documents
+        .iter()
+        .find(|doc| doc["kind"] == "Role" && doc["metadata"]["name"] == probe_name)
+        .expect("probe Role");
+    for rule in role["rules"].as_sequence().unwrap() {
+        let verbs = rule["verbs"].as_sequence().unwrap();
+        if verbs.iter().any(|verb| verb == "delete" || verb == "get") {
+            let names = rule["resourceNames"].as_sequence().expect("named objects only");
+            assert!(names
+                .iter()
+                .all(|name| name.as_str().is_some_and(|name| name.starts_with(probe_name))));
+        } else {
+            assert_eq!(verbs, &vec![serde_yaml::Value::from("create")], "{rule:?}");
+        }
+    }
+    let admission = documents
+        .iter()
+        .find(|doc| doc["kind"] == "ValidatingAdmissionPolicy")
+        .expect("probe admission policy");
+    let condition = admission["spec"]["matchConditions"][0]["expression"]
+        .as_str()
+        .unwrap();
+    assert!(condition.contains(&format!(":{probe_name}'")), "{condition}");
+    let rules = serde_yaml::to_string(&admission["spec"]["validations"]).unwrap();
+    assert!(rules.contains("automountServiceAccountToken == false") && rules.contains(image));
+    assert!(documents
+        .iter()
+        .any(|doc| doc["kind"] == "ValidatingAdmissionPolicyBinding"
+            && doc["spec"]["policyName"] == admission["metadata"]["name"]
+            && doc["spec"]["validationActions"] == serde_yaml::Value::from(vec!["Deny"])));
 
     let policy = documents
         .iter()

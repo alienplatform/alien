@@ -329,10 +329,28 @@ mod tests {
             .unwrap()
             .contains(config["replicaSecret"].as_str().unwrap()));
         nodes.assert_hits_async(2).await;
+        service_cidrs.delete_async().await;
 
+        // A served but empty ServiceCIDR list cannot show where Services live.
+        let empty = server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path("/apis/networking.k8s.io/v1/servicecidrs");
+                then.status(200).json_body(json!({
+                    "apiVersion":"networking.k8s.io/v1","kind":"ServiceCIDRList","metadata":{},"items":[]
+                }));
+            })
+            .await;
+        assert_eq!(
+            crate::core::k8s_network::cluster_denied_ranges(&ctx)
+                .await
+                .unwrap_err()
+                .code,
+            "RESOURCE_CONFIG_INVALID"
+        );
+        empty.delete_async().await;
         // Without the ServiceCIDR API, only a privately numbered API server Service is
         // accepted; a public one cannot be excluded and refuses configuration.
-        service_cidrs.delete_async().await;
         let mut kubernetes_service = server
             .mock_async(|when, then| {
                 when.method(GET).path("/api/v1/namespaces/default/services/kubernetes");

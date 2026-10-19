@@ -33,7 +33,7 @@ pub(crate) async fn cluster_denied_ranges(
                 .into_iter()
                 .chain(spec.pod_cidr)
             {
-                if !cidr.contains(':') {
+                if !cidr.contains(':') && reaches_public(&cidr) {
                     excluded.insert(cidr);
                 }
             }
@@ -41,7 +41,9 @@ pub(crate) async fn cluster_denied_ranges(
         if let Some(status) = node.status {
             for address in status.addresses.unwrap_or_default() {
                 if let Ok(address) = address.address.parse::<std::net::Ipv4Addr>() {
-                    excluded.insert(format!("{address}/32"));
+                    if alien_core::is_public_ipv4(address) {
+                        excluded.insert(format!("{address}/32"));
+                    }
                 }
             }
         }
@@ -85,6 +87,12 @@ async fn service_ranges(ctx: &ResourceControllerContext<'_>) -> Result<BTreeSet<
         .list_service_cidrs()
         .await
     {
+        Ok(list) if list.items.is_empty() => {
+            Err(alien_error::AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "The ServiceCIDR API lists no Service ranges, so Service addresses cannot be excluded from egress".into(),
+                resource_id: Some(ctx.desired_config.id().into()),
+            }))
+        }
         Ok(list) => Ok(list
             .items
             .into_iter()
@@ -129,4 +137,41 @@ fn is_private(address: std::net::Ipv4Addr) -> bool {
         || (a == 172 && (16..32).contains(&b))
         || (a == 192 && b == 168)
         || (a == 100 && (64..128).contains(&b))
+}
+
+/// Node and pod ranges that are entirely private are already denied by the gateway and the
+/// public-address rule. Listing only publicly numbered ones keeps the published gateway
+/// configuration stable as nodes join and leave, which would otherwise roll the gateway.
+fn reaches_public(cidr: &str) -> bool {
+    let Some((address, prefix)) = cidr.split_once('/') else {
+        return true;
+    };
+    let (Ok(address), Ok(prefix)) = (address.parse::<std::net::Ipv4Addr>(), prefix.parse::<u32>())
+    else {
+        return true;
+    };
+    if prefix > 32 {
+        return true;
+    }
+    let mask = u32::MAX.checked_shl(32 - prefix).unwrap_or(0);
+    let first = u32::from(address) & mask;
+    let last = first | !mask;
+    // A range starting and ending in denied space and no wider than a /8 stays within one
+    // denied block.
+    prefix < 8
+        || alien_core::is_public_ipv4(first.into())
+        || alien_core::is_public_ipv4(last.into())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn only_publicly_numbered_cluster_ranges_are_listed() {
+        for private in ["192.168.0.0/24", "10.244.3.0/24", "100.64.0.0/16", "172.31.0.2/32"] {
+            assert!(!super::reaches_public(private), "{private}");
+        }
+        for public in ["11.128.0.0/16", "8.9.10.11/32", "192.168.0.0/15", "10.0.0.0/7"] {
+            assert!(super::reaches_public(public), "{public}");
+        }
+    }
 }

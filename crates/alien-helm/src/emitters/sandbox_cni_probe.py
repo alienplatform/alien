@@ -40,7 +40,9 @@ def main():
     owner = request("GET", f"/apis/batch/v1/namespaces/{namespace}/jobs/{job}")
     owner_ref = [{"apiVersion": "batch/v1", "kind": "Job", "name": job,
                   "uid": owner["metadata"]["uid"]}]
-    prefix = "alien-cni-" + uuid.uuid4().hex[:12]
+    # Fixed names: the probe's Role may read and delete only these objects.
+    prefix = job
+    runtime_class = os.environ["PROBE_RUNTIME_CLASS"]
     created = []
     deadline = time.monotonic() + 210
     marker = uuid.uuid4().hex
@@ -56,11 +58,34 @@ def main():
 
     def create(path, resource):
         resource["metadata"]["ownerReferences"] = owner_ref
-        result = request("POST", path, resource)
+        name = resource["metadata"]["name"]
+        try:
+            result = request("POST", path, resource)
+        except urllib.error.HTTPError as error:
+            if error.code != 409:
+                raise
+            # A previous run's object with the same fixed name; replace it.
+            request("DELETE", path + "/" + name, {"gracePeriodSeconds": 0})
+            while time.monotonic() < deadline:
+                try:
+                    request("GET", path + "/" + name)
+                except urllib.error.HTTPError as gone:
+                    if gone.code == 404:
+                        break
+                    raise
+                time.sleep(1)
+            result = request("POST", path, resource)
         created.append(path + "/" + result["metadata"]["name"])
         return result
 
     def pod(role, code):
+        spec = pod_spec(role, code)
+        # Clients run in the sandbox runtime class, as sessions do.
+        if role != "listener":
+            spec["spec"]["runtimeClassName"] = runtime_class
+        return spec
+
+    def pod_spec(role, code):
         return {
             "apiVersion": "v1", "kind": "Pod",
             "metadata": {"name": prefix + "-" + role,
@@ -96,6 +121,21 @@ def main():
                 return current
             time.sleep(1)
         raise RuntimeError(f"{role} probe deadline: refusing unproven NetworkPolicy enforcement")
+
+    # Pod creation is confined by an admission policy for this account. Refuse to run
+    # unless it rejects a pod that asks for a service account token.
+    escalation = pod_spec("admission-check", "pass")
+    escalation["spec"]["automountServiceAccountToken"] = True
+    while True:
+        try:
+            request("POST", pods + "?dryRun=All", escalation)
+        except urllib.error.HTTPError as error:
+            if error.code in (400, 403, 422):
+                break
+            raise
+        if time.monotonic() > deadline - 180:
+            raise RuntimeError("The probe admission policy is not enforced; refusing to create pods")
+        time.sleep(1)
 
     try:
         # The server and positive control have no policy. Only the subject is denied.

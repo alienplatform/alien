@@ -25,6 +25,24 @@ pub(crate) fn peer_service_name(workload: &str) -> String {
     format!("{}-{}-peers", &workload[..40], &digest[..16])
 }
 
+/// Headless discovery for replicas of the same Container.
+fn peer_service(
+    service: &k8s_openapi::api::core::v1::Service,
+    service_name: &str,
+    labels: std::collections::BTreeMap<String, String>,
+) -> k8s_openapi::api::core::v1::Service {
+    let mut peer = service.clone();
+    peer.metadata.name = Some(peer_service_name(service_name));
+    let spec = peer.spec.as_mut().expect("generated Service has a spec");
+    spec.cluster_ip = Some("None".into());
+    // Starting replicas enter discovery as soon as they have an address, so every policy
+    // write also reaches a replica that is still catching up. Replica-to-replica writes
+    // and snapshots do not wait for readiness; only the client Service waits for it.
+    spec.publish_not_ready_addresses = Some(true);
+    spec.selector.get_or_insert_default().extend(labels);
+    peer
+}
+
 impl KubernetesContainerController {
     pub(super) async fn reconcile_internal_service(
         &mut self,
@@ -35,17 +53,11 @@ impl KubernetesContainerController {
     ) -> Result<()> {
         if let Some(service) = self.build_internal_service(config, service_name, namespace, ctx) {
             let peer = config.egress.is_some().then(|| {
-                let mut peer = service.clone();
-                peer.metadata.name = Some(peer_service_name(service_name));
-                let spec = peer.spec.as_mut().expect("generated Service has a spec");
-                spec.cluster_ip = Some("None".into());
-                // Only ready endpoints enter discovery. A gateway's readiness probe
-                // must report false until its policy snapshot has been synchronized.
-                spec.publish_not_ready_addresses = Some(false);
-                spec.selector
-                    .get_or_insert_default()
-                    .extend(kubernetes_branded_resource_labels(ctx, &config.id));
-                peer
+                peer_service(
+                    &service,
+                    service_name,
+                    kubernetes_branded_resource_labels(ctx, &config.id),
+                )
             });
             self.upsert_service(config, service, ctx, true).await?;
             if let Some(peer) = peer {
@@ -259,5 +271,25 @@ impl KubernetesContainerController {
             }),
             ..Default::default()
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn starting_replicas_are_discoverable_before_they_take_traffic() {
+        let service = k8s_openapi::api::core::v1::Service {
+            spec: Some(k8s_openapi::api::core::v1::ServiceSpec::default()),
+            ..Default::default()
+        };
+        let peer = super::peer_service(&service, "sandbox-egress-gateway", Default::default());
+        let spec = peer.spec.unwrap();
+        assert_eq!(spec.cluster_ip.as_deref(), Some("None"));
+        // Writers and replica fan-out must reach a replica that is still catching up.
+        assert_eq!(spec.publish_not_ready_addresses, Some(true));
+        assert_eq!(
+            peer.metadata.name.as_deref(),
+            Some("sandbox-egress-gateway-peers")
+        );
     }
 }

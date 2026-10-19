@@ -112,6 +112,9 @@ fn image_needing_pull_secret<'a>(
     (image_host == manager_host).then_some(image.as_str())
 }
 
+/// Longer than the gateway's 30 s resynchronization interval plus resolver caching.
+const GATEWAY_READY_DELAY_SECONDS: i32 = 45;
+
 fn first_declared_container_port(config: &Container) -> Option<u16> {
     config.ports.first().map(|port| port.port)
 }
@@ -2413,11 +2416,21 @@ impl KubernetesContainerController {
             .as_ref()
             .map(http_probe)
             .transpose()?;
-        let readiness_probe = config
+        let gateway = config.id == alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID;
+        let mut readiness_probe = config
             .kubernetes_readiness_probe
             .as_ref()
             .map(http_probe)
             .transpose()?;
+        if gateway {
+            if let Some(probe) = readiness_probe.as_mut() {
+                // A writer's DNS can lag a starting replica's address by a few seconds, so a
+                // write in that window reaches the other replicas only. The replica
+                // resynchronizes from every peer 30 s after its first synchronization; it
+                // takes traffic only after that second pass has the write.
+                probe.initial_delay_seconds = Some(GATEWAY_READY_DELAY_SECONDS);
+            }
+        }
         let security = config.security.as_ref();
         if security.is_some_and(|settings| settings.run_as_user <= 0 || settings.run_as_group <= 0)
         {
@@ -2526,6 +2539,8 @@ impl KubernetesContainerController {
         let pod_spec = PodSpec {
             node_selector,
             service_account_name: Some(service_account_name.to_string()),
+            // The gateway never calls the Kubernetes API; its configuration is projected.
+            automount_service_account_token: gateway.then_some(false),
             security_context: security.map(|settings| PodSecurityContext {
                 run_as_non_root: Some(true),
                 run_as_user: Some(settings.run_as_user),
@@ -2966,6 +2981,46 @@ mod tests {
             container_id: Some("web".to_string()),
             ..Default::default()
         }
+    }
+
+    #[tokio::test]
+    async fn gateway_replicas_wait_out_a_resynchronization_and_get_no_api_token() {
+        let mut gateway = manifest_test_container(&[], false);
+        gateway.id = alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.to_string();
+        let mut ordinary = manifest_test_container(&[], false);
+        for config in [&mut gateway, &mut ordinary] {
+            config.kubernetes_readiness_probe = Some(KubernetesHttpProbe {
+                path: "/health".to_string(),
+                port: 8080,
+            });
+        }
+        for (config, delay, automount) in [
+            (&gateway, Some(GATEWAY_READY_DELAY_SECONDS), Some(false)),
+            (&ordinary, None, None),
+        ] {
+            let harness =
+                KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
+            let pod = manifest_test_controller()
+                .build_deployment(config, "web", "test-ns", "web-sa", None, None, &harness.ctx())
+                .await
+                .expect("deployment manifest")
+                .spec
+                .expect("deployment spec")
+                .template
+                .spec
+                .expect("pod spec");
+            assert_eq!(pod.automount_service_account_token, automount, "{}", config.id);
+            assert_eq!(
+                pod.containers[0]
+                    .readiness_probe
+                    .as_ref()
+                    .and_then(|probe| probe.initial_delay_seconds),
+                delay,
+                "{}",
+                config.id
+            );
+        }
+        assert!(GATEWAY_READY_DELAY_SECONDS > 30);
     }
 
     #[tokio::test]
