@@ -812,17 +812,16 @@ impl Sandbox for AwsSandbox {
     /// type — the grant could only be account-wide, on the management profile any stack with a
     /// sandbox holds. The
     /// reason to accept that would be recovering a MicroVM whose `RunMicrovm` response never
-    /// arrived, since nobody holds its id. Lambda already reaps those: with no traffic to its
-    /// endpoint a MicroVM is suspended after the idle duration and terminated after the suspended
-    /// one, both 300s unless the declaration widens the first — and an orphan receives no traffic
-    /// by definition. A declared `maxLifetimeSeconds` bounds it outright. Reconnecting to a
-    /// sandbox whose id *is* known is `get`, which reads it directly.
+    /// arrived, since nobody holds its id. AWS suspends a MicroVM for lack of traffic only under a
+    /// declared idle policy, so without one such an orphan runs until its lifetime ends, eight
+    /// hours at the latest. Reconnecting to a sandbox whose id *is* known is `get`, which reads it
+    /// directly.
     async fn list(&self) -> Result<Vec<SandboxInstance>> {
         Err(AlienError::new(ErrorData::OperationNotSupported {
             operation: "sandbox.list".to_string(),
             reason:
                 "enumerating sandboxes would need an account-wide grant; reach a known sandbox \
-                     with get, and Lambda terminates one nobody reaches"
+                     with get"
                     .to_string(),
         }))
     }
@@ -1786,10 +1785,8 @@ mod tests {
         assert_eq!(found.sandbox_id, "older");
     }
 
-    /// Enumeration would cost an account-wide `ListMicrovms`, and the case it would serve —
-    /// a `RunMicrovm` whose response never arrived, leaving a MicroVM nobody holds the id for —
-    /// is already handled by Lambda: no traffic reaches an orphan's endpoint, so it suspends
-    /// after the idle duration and is terminated after the suspended one.
+    /// Enumeration would cost an account-wide `ListMicrovms`, and the case it would serve is a
+    /// `RunMicrovm` whose response never arrived, leaving a MicroVM nobody holds the id for.
     #[tokio::test]
     async fn sandboxes_are_not_enumerable_and_nothing_asks_aws_to_be() {
         let mut client = MockLambdaMicrovmsApi::new();

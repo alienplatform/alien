@@ -10,8 +10,8 @@
 //!
 //! Sessions are MicroVMs started from the image at runtime. `RunMicrovm` has no `tags`, so
 //! image plus version *is* the session identity; `lambda:ListMicrovms` is account-wide and
-//! granted to no sandbox set, so sessions cannot be enumerated here and self-reap at their
-//! declared lifetime ceiling.
+//! granted to no sandbox set, so sessions cannot be enumerated here. Each lasts until its caller
+//! terminates it or AWS ends it, after eight hours at the latest.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -834,8 +834,8 @@ impl AwsSandboxController {
 
     // ─────────────── DELETE FLOW ──────────────────────────────────────────
 
-    // Sessions cannot be enumerated (see the module doc) and self-reap; a delete refused while
-    // they run fails loudly here and the executor retries — nothing is fired and forgotten.
+    // Sessions cannot be enumerated and are not stopped here (see the module doc). A failed image
+    // delete fails loudly here and the executor retries it; nothing is fired and forgotten.
 
     #[flow_entry(Delete)]
     #[handler(
