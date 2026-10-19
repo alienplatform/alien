@@ -25,6 +25,9 @@ pub struct BuildConfigQuery {
 #[serde(rename_all = "camelCase")]
 pub struct BuildConfigResponse {
     pub repository_name: String,
+    /// Present only when sandbox images have an independent, provisionable destination.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sandbox_repository_prefix: Option<String>,
     /// Registry host deployments pull release images from (`host[:port]` of
     /// this manager's public URL). Clients that push through a different
     /// address reference images by this host so deployments can pull them.
@@ -68,6 +71,10 @@ async fn get_build_config(
         if let Some(prefix) = state.registry_routing_table.prefix_for_platform(platform) {
             return Json(BuildConfigResponse {
                 repository_name: prefix.to_string(),
+                sandbox_repository_prefix: state
+                    .registry_routing_table
+                    .sandbox_prefix_for_platform(platform)
+                    .map(str::to_string),
                 registry_host: registry_host(&state),
             })
             .into_response();
@@ -93,6 +100,7 @@ async fn get_build_config(
     if let Some(route) = routes.resolve("") {
         return Json(BuildConfigResponse {
             repository_name: route.prefix.clone(),
+            sandbox_repository_prefix: None,
             registry_host: registry_host(&state),
         })
         .into_response();

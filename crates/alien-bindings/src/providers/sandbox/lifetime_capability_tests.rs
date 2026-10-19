@@ -90,9 +90,11 @@ async fn aws_declares_a_lifetime_and_a_create_carrying_one_reaches_the_backend()
     microvms
         .expect_run_microvm()
         .times(1)
-        .withf(|_, _, _, _, _, _, max_lifetime| *max_lifetime == Some(600))
-        .returning(|_, _, _, _, _, _, _| {
+        .withf(|_, _, _, _, _, _, max_lifetime, _| *max_lifetime == Some(600))
+        .returning(|_, _, _, _, _, _, _, _| {
             Ok(alien_aws_clients::aws::lambda_microvms::Microvm {
+                started_at: None,
+                maximum_duration_in_seconds: None,
                 microvm_id: Some("s1".to_string()),
                 endpoint: None,
                 state: Some("PENDING".to_string()),
@@ -102,6 +104,8 @@ async fn aws_declares_a_lifetime_and_a_create_carrying_one_reaches_the_backend()
         });
     microvms.expect_get_microvm().returning(|id| {
         Ok(alien_aws_clients::aws::lambda_microvms::Microvm {
+            started_at: None,
+            maximum_duration_in_seconds: None,
             microvm_id: Some(id.to_string()),
             endpoint: None,
             state: Some("RUNNING".to_string()),
@@ -242,7 +246,7 @@ async fn azure_declares_no_lifetime_and_sends_nothing() {
         Arc::new(alien_azure_clients::azure::sandbox_data_plane::MockSandboxDataPlaneApi::new()),
         "group".to_string(),
         "ubuntu".to_string(),
-        SandboxEgress::Allow,
+        SandboxEgress::Internet,
         None,
         "1".to_string(),
         "2Gi".to_string(),
@@ -282,6 +286,8 @@ async fn kubernetes_narrows_the_platform_flag_and_claims_nothing() {
     let sandbox = KubernetesSandbox::new(
         "sbx",
         &KubernetesSandboxBinding {
+            default_policy: None,
+            egress: None,
             namespace: BindingValue::Value("alien".to_string()),
             runtime_class: BindingValue::Value("gvisor".to_string()),
             selector: BindingValue::Value("alien/sandbox=sbx".to_string()),
@@ -331,6 +337,8 @@ async fn local_declares_no_lifetime_and_asks_its_manager_for_nothing() {
     let sandbox = LocalSandbox::new(
         "sbx",
         &LocalSandboxBinding {
+            default_policy: None,
+            egress: None,
             manager_url: BindingValue::Value(manager),
             sandbox_key: BindingValue::Value("sbx".to_string()),
             token_path: BindingValue::Value(token.path().display().to_string()),

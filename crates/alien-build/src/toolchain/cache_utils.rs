@@ -287,3 +287,32 @@ pub async fn save_cache(
 
     Ok(())
 }
+
+/// Resolve a cache URL, including its path prefix, using standard provider settings.
+pub fn store_from_url(
+    url: Option<&str>,
+) -> Result<Option<std::sync::Arc<dyn object_store::ObjectStore>>> {
+    let Some(url) = url else {
+        return Ok(None);
+    };
+    let url = url::Url::parse(url)
+        .into_alien_error()
+        .context(ErrorData::BuildConfigInvalid {
+            message: "Invalid build cache URL".to_string(),
+        })?;
+    let (store, path) = object_store::parse_url_opts(
+        &url,
+        std::env::vars()
+            .filter(|(key, _)| {
+                key.starts_with("AWS_") || key.starts_with("AZURE_") || key.starts_with("GOOGLE_")
+            })
+            .map(|(key, value)| (key.to_ascii_lowercase(), value)),
+    )
+    .into_alien_error()
+    .context(ErrorData::BuildConfigInvalid {
+        message: "Could not initialize build cache storage".to_string(),
+    })?;
+    Ok(Some(std::sync::Arc::new(
+        object_store::prefix::PrefixStore::new(store, path),
+    )))
+}

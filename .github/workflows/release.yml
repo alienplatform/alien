@@ -1693,8 +1693,9 @@ jobs:
             target/x86_64-unknown-linux-musl/release/alien-worker-runtime
             target/x86_64-unknown-linux-musl/release/alien-manager
             target/x86_64-unknown-linux-musl/release/alien-sandbox-agent
+            target/x86_64-unknown-linux-musl/release/alien-egress-gateway
           # Bump the -bN suffix whenever the set of cached binaries changes.
-          key: release-linux-x86_64-v${{ needs.prepare.outputs.version }}-${{ needs.prepare.outputs.source_ref }}-b2-${{ hashFiles('.ci-tool-versions/rust-toolchain.toml', '.ci-tool-versions/mise*.toml') }}
+          key: release-linux-x86_64-v${{ needs.prepare.outputs.version }}-${{ needs.prepare.outputs.source_ref }}-b3-${{ hashFiles('.ci-tool-versions/rust-toolchain.toml', '.ci-tool-versions/mise*.toml') }}
 
       - uses: ./.ci-tool-versions/.github/actions/setup-rust
         if: steps.binary-cache.outputs.cache-hit != 'true'
@@ -1710,13 +1711,14 @@ jobs:
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
         run: |
           depot cargo build --release \
-            -p alien-deploy-cli -p alien-operator -p alien-worker-runtime -p alien-manager -p alien-sandbox-agent \
+            -p alien-deploy-cli -p alien-operator -p alien-worker-runtime -p alien-manager -p alien-sandbox-agent -p alien-egress-gateway \
+            --features alien-egress-gateway/cloud,alien-egress-gateway/local \
             --target x86_64-unknown-linux-musl
 
       - name: Stage binaries for upload
         run: |
           mkdir -p staged/x86_64-unknown-linux-musl
-          for binary in alien-deploy alien-operator alien-worker-runtime alien-manager alien-sandbox-agent; do
+          for binary in alien-deploy alien-operator alien-worker-runtime alien-manager alien-sandbox-agent alien-egress-gateway; do
             cp "target/x86_64-unknown-linux-musl/release/${binary}" "staged/x86_64-unknown-linux-musl/${binary}"
           done
 
@@ -1755,8 +1757,9 @@ jobs:
             target/aarch64-unknown-linux-musl/release/alien-worker-runtime
             target/aarch64-unknown-linux-musl/release/alien-manager
             target/aarch64-unknown-linux-musl/release/alien-sandbox-agent
+            target/aarch64-unknown-linux-musl/release/alien-egress-gateway
           # Bump the -bN suffix whenever the set of cached binaries changes.
-          key: release-linux-aarch64-v${{ needs.prepare.outputs.version }}-${{ needs.prepare.outputs.source_ref }}-b2-${{ hashFiles('.ci-tool-versions/rust-toolchain.toml', '.ci-tool-versions/mise*.toml') }}
+          key: release-linux-aarch64-v${{ needs.prepare.outputs.version }}-${{ needs.prepare.outputs.source_ref }}-b3-${{ hashFiles('.ci-tool-versions/rust-toolchain.toml', '.ci-tool-versions/mise*.toml') }}
 
       - uses: ./.ci-tool-versions/.github/actions/setup-rust
         if: steps.binary-cache.outputs.cache-hit != 'true'
@@ -1772,13 +1775,14 @@ jobs:
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
         run: |
           depot cargo build --release \
-            -p alien-deploy-cli -p alien-operator -p alien-worker-runtime -p alien-manager -p alien-sandbox-agent \
+            -p alien-deploy-cli -p alien-operator -p alien-worker-runtime -p alien-manager -p alien-sandbox-agent -p alien-egress-gateway \
+            --features alien-egress-gateway/cloud,alien-egress-gateway/local \
             --target aarch64-unknown-linux-musl
 
       - name: Stage binaries for upload
         run: |
           mkdir -p staged/aarch64-unknown-linux-musl
-          for binary in alien-deploy alien-operator alien-worker-runtime alien-manager alien-sandbox-agent; do
+          for binary in alien-deploy alien-operator alien-worker-runtime alien-manager alien-sandbox-agent alien-egress-gateway; do
             cp "target/aarch64-unknown-linux-musl/release/${binary}" "staged/aarch64-unknown-linux-musl/${binary}"
           done
 
@@ -1816,7 +1820,7 @@ jobs:
           path: |
             target/aarch64-apple-darwin/release/alien-deploy
             target/aarch64-apple-darwin/release/alien-operator
-          key: release-darwin-aarch64-v${{ needs.prepare.outputs.version }}-${{ needs.prepare.outputs.source_ref }}-b2-${{ hashFiles('.ci-tool-versions/rust-toolchain.toml', '.ci-tool-versions/mise*.toml') }}
+          key: release-darwin-aarch64-v${{ needs.prepare.outputs.version }}-${{ needs.prepare.outputs.source_ref }}-b3-${{ hashFiles('.ci-tool-versions/rust-toolchain.toml', '.ci-tool-versions/mise*.toml') }}
 
       - if: steps.binary-cache.outputs.cache-hit != 'true'
         name: Install Rust toolchain
@@ -1900,7 +1904,7 @@ jobs:
           path: |
             target/x86_64-pc-windows-msvc/release/alien-deploy.exe
             target/x86_64-pc-windows-msvc/release/alien-operator.exe
-          key: release-windows-x86_64-v${{ needs.prepare.outputs.version }}-${{ needs.prepare.outputs.source_ref }}-b2-${{ hashFiles('.ci-tool-versions/rust-toolchain.toml', '.ci-tool-versions/mise*.toml') }}
+          key: release-windows-x86_64-v${{ needs.prepare.outputs.version }}-${{ needs.prepare.outputs.source_ref }}-b3-${{ hashFiles('.ci-tool-versions/rust-toolchain.toml', '.ci-tool-versions/mise*.toml') }}
 
       - if: steps.binary-cache.outputs.cache-hit != 'true'
         name: Install Rust toolchain
@@ -2067,7 +2071,7 @@ jobs:
         run: |
           for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
             mkdir -p "target/${target}/release"
-            for binary in alien-operator alien-worker-runtime alien-manager alien-sandbox-agent; do
+            for binary in alien-operator alien-worker-runtime alien-manager alien-sandbox-agent alien-egress-gateway; do
               cp "./linux-bins/binaries-${target}/${binary}" "target/${target}/release/${binary}"
               chmod +x "target/${target}/release/${binary}"
             done
@@ -2239,6 +2243,28 @@ jobs:
           provenance: true
           sbom: true
 
+      - name: Metadata (alien-egress-gateway)
+        id: meta_egress_gateway
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/alienplatform/alien-egress-gateway
+          tags: |
+            type=raw,value=qualification-${{ inputs.source_ref }}
+
+      - name: Publish alien-egress-gateway
+        id: publish_egress_gateway
+        uses: depot/build-push-action@v1
+        with:
+          project: ${{ vars.DEPOT_PROJECT_ID }}
+          context: .
+          file: docker/Dockerfile.alien-egress-gateway
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta_egress_gateway.outputs.tags }}
+          labels: ${{ steps.meta_egress_gateway.outputs.labels }}
+          provenance: true
+          sbom: true
+
       - name: Metadata (alien-sandbox-agent)
         id: meta_sandbox_agent
         uses: docker/metadata-action@v5
@@ -2301,7 +2327,7 @@ jobs:
           RELEASE_COMMIT: ${{ inputs.source_ref }}
         run: |
           DIGESTS='{}'
-          for name in alien-base alien-worker-typescript alien-builder alien-operator alien-manager alien-sandbox-agent; do
+          for name in alien-base alien-worker-typescript alien-builder alien-operator alien-manager alien-sandbox-agent alien-egress-gateway; do
             qualified="ghcr.io/alienplatform/${name}:qualification-${RELEASE_COMMIT}"
             digest=$(docker buildx imagetools inspect "$qualified" |
               sed -n 's/^Digest:[[:space:]]*//p' | head -n1)

@@ -7,7 +7,7 @@ import json
 import ssl
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Generic, Literal, TypeVar
+from typing import Any, Generic, Literal, TypedDict, TypeVar
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from . import _native  # type: ignore[attr-defined]
@@ -328,6 +328,11 @@ class Container:
         self._handle = _LazyHandle[Any]("container", name)
 
     @translate_errors
+    async def internal_urls(self) -> dict[int, str]:
+        """Internal URLs keyed by port for the linked container."""
+        return (await self._handle.get()).internal_urls()
+
+    @translate_errors
     async def internal_url(self) -> str:
         return (await self._handle.get()).internal_url()
 
@@ -472,6 +477,13 @@ class CommandStream(AsyncIterator[CommandFrame]):
         await self._handle.close()
 
 
+class SandboxAllowEgress(TypedDict):
+    allow: list[str]
+
+
+EgressPolicy = Literal["internet"] | SandboxAllowEgress
+
+
 class Sandbox:
     def __init__(self, name: str) -> None:
         self._handle = _LazyHandle[Any]("sandbox", name)
@@ -488,9 +500,14 @@ class Sandbox:
         tenant_key: str | None = None,
         env: Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
+        egress: EgressPolicy | None = None,
     ) -> SandboxInfo:
         value = await (await self._handle.get()).create(
-            sandbox_id, tenant_key, dict(env) if env else None, timeout_ms
+            sandbox_id,
+            tenant_key,
+            dict(env) if env else None,
+            timeout_ms,
+            json.dumps(egress) if egress is not None else None,
         )
         return _sandbox_info(value)
 
@@ -507,11 +524,20 @@ class Sandbox:
         tenant_key: str | None = None,
         env: Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
+        egress: EgressPolicy | None = None,
     ) -> tuple[SandboxInfo, bool]:
         value = await (await self._handle.get()).get_or_create(
-            sandbox_id, tenant_key, dict(env) if env else None, timeout_ms
+            sandbox_id,
+            tenant_key,
+            dict(env) if env else None,
+            timeout_ms,
+            json.dumps(egress) if egress is not None else None,
         )
         return _sandbox_info(value.sandbox), value.created
+
+    @translate_errors
+    async def update_egress(self, sandbox_id: str, egress: EgressPolicy) -> None:
+        await (await self._handle.get()).update_egress(sandbox_id, json.dumps(egress))
 
     @translate_errors
     async def list(self) -> list[SandboxInfo]:

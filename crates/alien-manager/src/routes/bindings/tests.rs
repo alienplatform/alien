@@ -489,6 +489,8 @@ fn remote_sandbox_validation_refuses_a_sandbox_that_restricts_egress() {
         unreachable!("the fixture is the AWS variant")
     };
     let restricted = SandboxBinding::Aws(AwsSandboxBinding {
+        default_policy: None,
+        egress: None,
         allow_egress: false,
         egress_connector_arns: vec![BindingValue::value(
             "arn:aws:lambda:us-east-1:123456789012:network-connector:stack-agents".to_string(),
@@ -506,6 +508,27 @@ fn remote_sandbox_validation_refuses_a_sandbox_that_restricts_egress() {
         "{}",
         error.message
     );
+}
+
+#[test]
+fn remote_sandbox_validation_refuses_internet_even_without_gateway_metadata() {
+    for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+        let mut binding = open_sandbox_binding_for(platform);
+        match &mut binding {
+            SandboxBinding::Aws(binding) => binding.egress = Some(SandboxEgress::Internet.into()),
+            SandboxBinding::GcpAgentPlatform(binding) => {
+                binding.egress = Some(SandboxEgress::Internet.into());
+            }
+            SandboxBinding::Azure(binding) => binding.egress = SandboxEgress::Internet.into(),
+            _ => unreachable!("the fixture uses cloud bindings"),
+        }
+        let deployment = deployment_on_platform(sandbox_stack_state(binding, platform), platform);
+        let Err(error) = remote_sandbox_binding(&deployment, "agents") else {
+            panic!("Internet must not become direct access through a remote lease");
+        };
+        assert_eq!(error.code, "BAD_REQUEST");
+        assert!(error.message.contains("gateway"), "{error}");
+    }
 }
 
 /// Preflight refuses a remote binding by its permission set's platform coverage, while this route
@@ -559,6 +582,55 @@ fn remote_sandbox_validation_refuses_platforms_without_a_durable_parent() {
         "{}",
         error.message
     );
+}
+
+#[test]
+fn remote_sandbox_never_erases_a_new_internet_declaration() {
+    for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+        let mut binding = open_sandbox_binding_for(platform);
+        match &mut binding {
+            SandboxBinding::Aws(value) => value.egress = Some(SandboxEgress::Internet.into()),
+            SandboxBinding::GcpAgentPlatform(value) => {
+                value.egress = Some(SandboxEgress::Internet.into())
+            }
+            SandboxBinding::Azure(value) => value.egress = SandboxEgress::Internet.into(),
+            _ => unreachable!(),
+        }
+        let deployment = deployment_on_platform(sandbox_stack_state(binding, platform), platform);
+        assert!(
+            remote_sandbox_binding(&deployment, "agents").is_err(),
+            "{platform} cannot encode Internet in a legacy remote lease"
+        );
+    }
+}
+
+#[test]
+fn azure_remote_sandbox_accepts_only_legacy_open_egress() {
+    for (egress, allowed) in [
+        (SandboxEgress::Allow, true),
+        (SandboxEgress::Internet, false),
+        (SandboxEgress::None, false),
+        (
+            SandboxEgress::AllowDomains {
+                domains: vec!["example.com".into()],
+            },
+            false,
+        ),
+    ] {
+        let SandboxBinding::Azure(mut binding) = open_sandbox_binding_for(Platform::Azure) else {
+            unreachable!();
+        };
+        binding.egress = egress.into();
+        let deployment = deployment_on_platform(
+            sandbox_stack_state(SandboxBinding::Azure(binding), Platform::Azure),
+            Platform::Azure,
+        );
+        let result = remote_sandbox_binding(&deployment, "agents");
+        assert_eq!(result.is_ok(), allowed);
+        if let Ok(RemoteSandboxBinding::Azure(binding)) = result {
+            assert!(binding.allow_egress);
+        }
+    }
 }
 
 /// The wire contract remote clients decode. `service` selects the variant, so a rename is a silent
@@ -1487,4 +1559,28 @@ async fn readable_desired_release_after_a_failed_update_is_checked_for_sandboxes
             .expect("a readable desired release resolves"),
         "a desired release that adds a remote sandbox may share the identity"
     );
+}
+
+#[tokio::test]
+async fn internal_credential_responses_preserve_retryability_without_exposing_payloads() {
+    let deployment = deployment(StackState::new(Platform::Aws));
+    for (status, retryable) in [(503, true), (403, false)] {
+        let error = AlienError::new(alien_aws_clients::ErrorData::HttpResponseError {
+            message: "synthetic-private-payload".to_string(),
+            url: "http://localhost/token".to_string(),
+            http_status: status,
+            http_request_text: Some("synthetic-secret".to_string()),
+            http_response_text: None,
+        })
+        .into_generic();
+        let response = remote_credential_error_response(error, &deployment);
+        let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["retryable"], retryable);
+        assert_eq!(body["code"], "REMOTE_CREDENTIAL_HANDOFF_FAILED");
+        assert!(!body.to_string().contains("synthetic-private-payload"));
+        assert!(!body.to_string().contains("synthetic-secret"));
+    }
 }

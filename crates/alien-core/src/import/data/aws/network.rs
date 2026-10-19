@@ -18,6 +18,32 @@ pub struct AwsFailureDomainSubnets {
     pub private_subnet_ids: Vec<String>,
 }
 
+/// Setup network coordinates; the deployment controller verifies actual EC2 routes and CIDRs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "jsonschema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct AwsSandboxNetwork {
+    /// Route-less connector subnet identifiers.
+    #[serde(deserialize_with = "crate::network_ids::deserialize_ids_or_csv")]
+    pub sandbox_subnet_ids: Vec<String>,
+    /// Dedicated NAT-routed subnets for the gateway's internal load balancer.
+    #[serde(deserialize_with = "crate::network_ids::deserialize_ids_or_csv")]
+    pub gateway_subnet_ids: Vec<String>,
+    /// Source ranges permitted on the gateway proxy port.
+    #[serde(deserialize_with = "crate::network_ids::deserialize_ids_or_csv")]
+    pub sandbox_cidrs: Vec<String>,
+    /// Only destinations permitted by the connector security group.
+    #[serde(deserialize_with = "crate::network_ids::deserialize_ids_or_csv")]
+    pub gateway_cidrs: Vec<String>,
+    /// Source ranges permitted on the gateway admin port.
+    #[serde(deserialize_with = "crate::network_ids::deserialize_ids_or_csv")]
+    pub workload_cidrs: Vec<String>,
+    /// Every associated VPC IPv4 range, denied by the gateway.
+    #[serde(deserialize_with = "crate::network_ids::deserialize_ids_or_csv")]
+    pub vpc_cidrs: Vec<String>,
+}
+
 /// AWS Network ImportData.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -34,6 +60,12 @@ pub struct AwsNetworkImportData {
     pub nat_gateway_id: Option<String>,
     /// Elastic IP allocation ID backing the NAT gateway.
     pub eip_allocation_id: Option<String>,
+    /// Public addresses allocated to this deployment's NAT; empty when unknown.
+    #[serde(default)]
+    pub egress_public_ips: Vec<String>,
+    /// Dedicated sandbox networking to verify after setup; absent on older imports.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox_network: Option<AwsSandboxNetwork>,
     /// Public subnet IDs.
     #[serde(deserialize_with = "crate::network_ids::deserialize_ids")]
     pub public_subnet_ids: Vec<String>,
@@ -46,7 +78,10 @@ pub struct AwsNetworkImportData {
     pub private_route_table_id: Option<String>,
     /// Security group ID for private workloads.
     // Keeps the published schema unchanged: without it, `default` adds `"default": null`.
-    #[cfg_attr(feature = "jsonschema", schemars(skip_serializing_if = "Option::is_none"))]
+    #[cfg_attr(
+        feature = "jsonschema",
+        schemars(skip_serializing_if = "Option::is_none")
+    )]
     #[serde(
         default,
         deserialize_with = "crate::network_ids::deserialize_optional_id"

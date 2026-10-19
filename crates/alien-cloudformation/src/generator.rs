@@ -12,7 +12,7 @@ use crate::{
 use alien_core::{
     import::{EmitContext, CURRENT_SETUP_IMPORT_FORMAT_VERSION},
     CapacityGroup, CapacityGroupScalePolicy, ComputeCluster, ComputePoolSelection, Container,
-    Daemon, DeploymentModel, DomainSettings, ErrorData, ExposeProtocol, HeartbeatsMode,
+    Daemon, DeploymentModel, DomainSettings, ErrorData, ExposeProtocol, HeartbeatsMode, Key,
     KubernetesCluster, KubernetesSettings, Network, NetworkSettings, Platform, RemoteBindings,
     ResourceLifecycle, Result, Sandbox, Stack, StackInputDefaultValue, StackInputDefinition,
     StackInputKind, StackInputProvider, StackSettings, Storage, TelemetryMode, UpdatesMode, Worker,
@@ -242,6 +242,10 @@ pub fn generate_cloudformation_template_with_profile(
 ) -> Result<CfTemplate> {
     validate_stack_for_cloudformation(stack)?;
     validate_stack_settings(&options.stack_settings)?;
+    // A Kubernetes target runs sandboxes as pods behind the chart's NetworkPolicy.
+    if !options.target.is_kubernetes() {
+        alien_core::sandbox_egress::require_internet_sandbox_gateway(stack)?;
+    }
     alien_core::validate_automatic_setup_resources(
         stack,
         options.target.cloud_platform(),
@@ -664,7 +668,10 @@ fn add_deployer_secret_outputs(
     deployer_secrets_vault_binding: Option<&CfExpression>,
 ) -> Result<()> {
     // Preflights omit this vault when every deployer input retains a stored value.
-    if !stack.resources.contains_key(alien_core::DEPLOYER_SECRETS_VAULT_ID) {
+    if !stack
+        .resources
+        .contains_key(alien_core::DEPLOYER_SECRETS_VAULT_ID)
+    {
         return Ok(());
     }
     let platform = target.deployment_platform();
@@ -1287,6 +1294,27 @@ fn apply_resource_dependencies(
             {
                 continue;
             }
+            // Volume grants reference the key and node roles themselves. The executor
+            // dependency orders cluster completion, but applying it to the roles can
+            // cycle through a workload identity that is also allowed to use the key.
+            if dependency.resource_type() == &Key::RESOURCE_TYPE
+                && entry.config.downcast_ref::<ComputeCluster>().is_some()
+                && stack.resources().any(|(_, entry)| {
+                    entry
+                        .config
+                        .downcast_ref::<Container>()
+                        .is_some_and(|container| {
+                            container.cluster.as_deref() == Some(resource_id.as_str())
+                                && container
+                                    .persistent_storage
+                                    .as_ref()
+                                    .and_then(|storage| storage.encryption_key.as_ref())
+                                    == Some(dependency)
+                        })
+                })
+            {
+                continue;
+            }
             // Node grants reference both the role and Storage in their own policy. The
             // executor edge orders cluster completion, not creation of every fragment:
             // stamping it onto the role can cycle through a workload identity. Explicit
@@ -1483,6 +1511,23 @@ fn add_network_parameters(
     network: Option<&NetworkSettings>,
     target: CloudFormationTarget,
 ) {
+    if !target.is_kubernetes() && alien_core::sandbox_egress::has_sandbox_gateway(stack) {
+        for (name, description) in [
+            ("SandboxSubnetIds", "Only used with use-existing. Dedicated sandbox connector subnets with no default route; at least two availability zones."),
+            ("SandboxGatewaySubnetIds", "Only used with use-existing. Two or three dedicated gateway subnets, with only local routes and a default route through the deployment NAT."),
+            ("SandboxGatewaySubnetCidrs", "Only used with use-existing. Exact IPv4 CIDRs of SandboxGatewaySubnetIds, in the same order. Used for connector security-group destinations; the deployment controller verifies them against EC2 before enabling internet sandboxes."),
+        ] {
+            // A create-new install does not use these inputs. The CIDR placeholders
+            // grant no reachable destination; a BYO install must replace them with its
+            // exact subnet CIDRs or controller verification refuses to publish access.
+            let defaults = if name == "SandboxGatewaySubnetCidrs" {
+                vec![alien_core::sandbox_egress::LOOPBACK_ONLY_CIDR.to_string(); 2]
+            } else {
+                vec![]
+            };
+            template.parameters.insert(name.to_string(), comma_list_parameter(description, defaults));
+        }
+    }
     let defaults = NetworkParameterDefaults::from_settings(network);
     let mut modes = vec![
         CfExpression::from("create-new"),
@@ -1537,15 +1582,19 @@ fn add_network_parameters(
                 number_parameter(
                     "Only used with create-new. Number of availability zones for the new VPC.",
                     u32::from(defaults.availability_zones),
-                    Some(if target.is_kubernetes() {
-                        vec![CfExpression::from(2u8), CfExpression::from(3u8)]
-                    } else {
-                        vec![
-                            CfExpression::from(1u8),
-                            CfExpression::from(2u8),
-                            CfExpression::from(3u8),
-                        ]
-                    }),
+                    Some(
+                        if target.is_kubernetes()
+                            || alien_core::sandbox_egress::has_sandbox_gateway(stack)
+                        {
+                            vec![CfExpression::from(2u8), CfExpression::from(3u8)]
+                        } else {
+                            vec![
+                                CfExpression::from(1u8),
+                                CfExpression::from(2u8),
+                                CfExpression::from(3u8),
+                            ]
+                        },
+                    ),
                 ),
             );
             template.parameters.insert(
@@ -1849,6 +1898,12 @@ fn add_standard_conditions(
         }
     }
     let has_created_network = stack_has_created_network(stack, settings.setup_management);
+    if !target.is_kubernetes() && alien_core::sandbox_egress::has_sandbox_gateway(stack) {
+        template.conditions.insert("SandboxGatewayHasThirdSubnet".into(), CfExpression::equals(
+            CfExpression::object([("Fn::Length", CfExpression::ref_("SandboxGatewaySubnetCidrs"))]),
+            CfExpression::Integer(3),
+        ));
+    }
     if has_dynamic_aws_network_settings(settings.network.as_ref()) || has_created_network {
         template.conditions.insert(
             CONDITION_NETWORK_MODE_CREATE.to_string(),

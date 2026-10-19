@@ -1780,7 +1780,7 @@ mod setup_update_authorization_tests {
             .code(alien_core::SandboxCode::Image {
                 image: "s3://acme-artifacts/agents/bundle.zip".to_string(),
             })
-            .egress(alien_core::SandboxEgress::Deny)
+            .egress(alien_core::SandboxEgress::None)
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
@@ -2236,7 +2236,7 @@ mod setup_update_authorization_tests {
         };
         const V1: &str = "s3://bucket/sandbox-bundle/v1/bundle.zip";
         const BASE_A: &str = "123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base-a:1";
-        let baseline = with(V1, BASE_A, alien_core::SandboxEgress::Allow);
+        let baseline = with(V1, BASE_A, alien_core::SandboxEgress::Internet);
         let reimport = |target: Stack| {
             reimport_runtime_metadata(
                 &record(baseline.clone()),
@@ -2253,16 +2253,16 @@ mod setup_update_authorization_tests {
             with(
                 V1,
                 "123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base-b:1",
-                alien_core::SandboxEgress::Allow,
+                alien_core::SandboxEgress::Internet,
             ),
-            with(V1, BASE_A, alien_core::SandboxEgress::Deny),
+            with(V1, BASE_A, alien_core::SandboxEgress::None),
         ] {
             assert!(reimport(setup_owned).is_some());
         }
         assert!(reimport(with(
             "s3://bucket/sandbox-bundle/v2/bundle.zip",
             "123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base-a:2",
-            alien_core::SandboxEgress::Allow,
+            alien_core::SandboxEgress::Internet,
         ))
         .is_none());
     }

@@ -27,7 +27,9 @@ cat > "$fixture/image-command.json" <<'JSON'
 JSON
 docker build -q -t "$image" "$fixture" >/dev/null
 image_created=true
-docker run -d --name "$container" --cap-add=NET_ADMIN \
+docker run -d --name "$container" --cap-drop=ALL \
+  --cap-add=CHOWN --cap-add=DAC_OVERRIDE --cap-add=FOWNER --cap-add=KILL \
+  --cap-add=SETGID --cap-add=SETUID --cap-add=SETPCAP --cap-add=NET_ADMIN \
   -v "$agent_binary:/usr/local/bin/alien-sandbox-agent:ro" \
   -v "$fixture/image-command.json:/opt/alien/image-command.json:ro" \
   -e ALIEN_SANDBOX_ROOT=/sandbox -e ALIEN_SANDBOX_PORT=8971 \

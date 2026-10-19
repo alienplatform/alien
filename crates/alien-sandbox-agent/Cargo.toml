@@ -5,6 +5,7 @@ edition.workspace = true
 license-file.workspace = true
 
 [dependencies]
+httparse = "1.10"
 alien-core = { workspace = true, features = ["sandbox-capability", "sandbox-process"] }
 alien-error = { workspace = true }
 serde = { workspace = true }
@@ -26,6 +27,9 @@ path = "src/main.rs"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+nlink = "0.32"
 
 [dev-dependencies]
 tempfile = { workspace = true }

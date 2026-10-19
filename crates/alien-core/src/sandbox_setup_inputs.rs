@@ -8,7 +8,7 @@ use crate::remote_bindings::{
     remote_binding_for_entry, remote_binding_is_deliverable, RemoteBindingDefinition,
 };
 use crate::sandbox_build_role::SandboxBuildRole;
-use crate::sandbox_egress::sandbox_egress_network;
+use crate::sandbox_egress::{sandbox_egress_network, sandbox_needs_connector};
 use crate::{
     ErrorData, ResourceLifecycle, Result, Sandbox, SandboxCode, Stack, BUNDLE_REGION_TOKEN,
 };
@@ -29,15 +29,17 @@ pub const SETUP_INPUTS_COMPARISON_ACCOUNT: SetupAccount<'static> = SetupAccount 
     region: BUNDLE_REGION_TOKEN,
 };
 
-/// The id of the network an AWS sandbox's egress connector attaches to, `None` for `allow`.
+/// The id of the setup-owned network every AWS sandbox connector attaches to.
 /// The error is the refusal message, for the caller to wrap in its own error.
 pub fn aws_sandbox_egress_network_id<'a>(
     stack: &'a Stack,
     sandbox: &Sandbox,
 ) -> std::result::Result<Option<&'a str>, String> {
-    let network = match sandbox_egress_network(stack, sandbox.cloud_egress()) {
-        Ok(Some(network)) => network,
-        Ok(None) => return Ok(None),
+    if !sandbox_needs_connector(stack, sandbox) {
+        return Ok(None);
+    }
+    let network = match sandbox_egress_network(stack) {
+        Ok(network) => network,
         Err(refusal) => return Err(refusal.to_string()),
     };
     if network.entry.lifecycle != ResourceLifecycle::Frozen {
@@ -106,10 +108,7 @@ pub fn aws_sandbox_setup_inputs(
     let grant =
         aws_sandbox_remote_grant(stack, sandbox).map(|definition| definition.permission_set);
     Ok(vec![
-        (
-            "egress",
-            serde_json::to_value(&sandbox.egress).expect("sandbox egress serializes to JSON"),
-        ),
+        ("egress", sandbox.setup_digest_value()),
         ("egress network", serde_json::json!(network)),
         (
             "build role policy",
@@ -128,9 +127,15 @@ pub fn comparable_aws_sandbox_setup_inputs(
 ) -> Vec<(&'static str, Value)> {
     aws_sandbox_setup_inputs(stack, sandbox, lifecycle, SETUP_INPUTS_COMPARISON_ACCOUNT)
         .unwrap_or_else(|_| {
-            vec![(
-                "configuration",
-                serde_json::to_value(sandbox).expect("a sandbox serializes to JSON"),
-            )]
+            vec![("configuration", {
+                let mut value =
+                    serde_json::to_value(sandbox).expect("a sandbox serializes to JSON");
+                value["egress"] = sandbox.setup_digest_value();
+                value
+                    .as_object_mut()
+                    .expect("sandbox config is an object")
+                    .remove("defaultPolicy");
+                value
+            })]
         })
 }

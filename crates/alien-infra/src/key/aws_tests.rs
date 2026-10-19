@@ -60,7 +60,8 @@ async fn revoked_key_suspends_dependents_and_resumes_same_resources() {
         .withf(|request| {
             request.key_id == KEY_ARN
                 && request.plaintext == "YWxpZW4ta2V5LWhlYWx0aA=="
-                && request.encryption_context.as_ref().unwrap()["alien.dev/purpose"] == "key-health"
+                && request.encryption_context.as_ref().unwrap()["deployment-purpose"]
+                    == "key-health"
         })
         .returning(move |_| match observed.load(Ordering::SeqCst) {
             0 => Ok(EncryptResponse {

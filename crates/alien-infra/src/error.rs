@@ -37,6 +37,24 @@ pub enum ErrorData {
         message: String,
     },
 
+    /// Direct setup cannot add an internet sandbox's dedicated subnets to the default VPC.
+    #[error(
+        code = "SANDBOX_INTERNET_DEFAULT_VPC_UNSUPPORTED",
+        message = "Sandbox '{resource_id}' uses internet egress, which needs private subnets, and the account's default VPC has only public subnets. Set the network to create or byo-vpc-aws.",
+        retryable = "false",
+        internal = "false"
+    )]
+    SandboxInternetDefaultVpcUnsupported { resource_id: String },
+
+    /// Direct deploy builds an internet sandbox's network only in a VPC it creates.
+    #[error(
+        code = "SANDBOX_INTERNET_DIRECT_EXISTING_VPC_UNSUPPORTED",
+        message = "Sandbox '{resource_id}' uses internet egress, which AWS direct deploy supports only in a VPC it creates. To use an existing VPC, deploy with CloudFormation or Terraform and provide SandboxSubnetIds, SandboxGatewaySubnetIds and SandboxGatewaySubnetCidrs, or let direct deploy create a new VPC.",
+        retryable = "false",
+        internal = "false"
+    )]
+    SandboxInternetDirectExistingVpcUnsupported { resource_id: String },
+
     /// Resource configuration validation failed.
     #[error(
         code = "RESOURCE_CONFIG_INVALID",
@@ -423,7 +441,7 @@ pub enum ErrorData {
     #[error(
         code = "AUTHENTICATION_FAILED",
         message = "Authentication failed: {message}",
-        retryable = "false",
+        retryable = "inherit",
         internal = "false"
     )]
     AuthenticationFailed {

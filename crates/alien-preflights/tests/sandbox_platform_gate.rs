@@ -38,7 +38,7 @@ fn sandbox(limits: Option<SandboxLimits>) -> Sandbox {
         .code(SandboxCode::Image {
             image: "ubuntu".to_string(),
         })
-        .egress(SandboxEgress::Deny)
+        .egress(SandboxEgress::None)
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,
@@ -105,7 +105,7 @@ fn source_sandbox() -> Sandbox {
                 build_args: None,
             },
         })
-        .egress(SandboxEgress::Deny)
+        .egress(SandboxEgress::None)
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,
@@ -160,5 +160,43 @@ async fn source_reaches_azure_and_gcp_frozen_through_the_runner() {
             .await
             .expect("compile-time checks run");
         assert!(summary.success, "{platform} builds it: {summary:?}");
+    }
+}
+
+#[tokio::test]
+async fn unsupported_internet_sandboxes_fail_planning_without_optional_limits() {
+    for platform in [
+        Platform::Gcp,
+        Platform::Azure,
+        Platform::Kubernetes,
+        Platform::Local,
+    ] {
+        let mut declared = sandbox(None);
+        declared.egress = SandboxEgress::Internet;
+        let result = PreflightRunner::new()
+            .run_compile_time_checks(&stack_with(declared), platform)
+            .await
+            .expect("preflight runs");
+        assert!(
+            !result.success,
+            "{platform} cannot host the gateway: {result:?}"
+        );
+        let rendered = format!("{result:?}");
+        assert!(
+            rendered.contains("SANDBOX_EGRESS_GATEWAY_UNAVAILABLE"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("agent"), "{rendered}");
+
+        let mut legacy = sandbox(None);
+        legacy.egress = SandboxEgress::Allow;
+        let result = PreflightRunner::new()
+            .run_compile_time_checks(&stack_with(legacy), platform)
+            .await
+            .expect("legacy preflight runs");
+        assert!(
+            result.success,
+            "released Allow stays available on {platform}: {result:?}"
+        );
     }
 }

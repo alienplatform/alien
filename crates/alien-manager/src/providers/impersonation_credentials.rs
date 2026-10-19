@@ -10,9 +10,10 @@ use std::sync::Arc;
 use alien_bindings::traits::ImpersonationRequest;
 use alien_bindings::{BindingsProviderApi, ServiceAccountInfo};
 use alien_core::{ClientConfig, DeploymentStatus, EnvironmentInfo, ManagementConfig, Platform};
-use alien_error::{AlienError, Context, GenericError, IntoAlienError};
+use alien_error::{AlienError, Context, GenericError};
 use async_trait::async_trait;
 
+use super::credential_errors::classify_credential_error;
 use crate::error::ErrorData;
 use crate::traits::{
     CredentialResolver, DeploymentRecord, RemoteStorageCredentialSource, ResolvedCredentials,
@@ -111,7 +112,7 @@ impl ImpersonationCredentialResolver {
                     deployment_id: deployment.id.clone(),
                     platform,
                 })
-                .map_err(AlienError::into_generic)?;
+                .map_err(|error| classify_credential_error(error.into_generic()))?;
 
             return Ok(resolved);
         }
@@ -232,7 +233,7 @@ impl CredentialResolver for ImpersonationCredentialResolver {
                 deployment_id: deployment.id.clone(),
                 platform: deployment.platform,
             })
-            .map_err(AlienError::into_generic)?;
+            .map_err(|error| classify_credential_error(error.into_generic()))?;
         Ok(RemoteStorageCredentialSource::Direct(resolved))
     }
 
@@ -258,16 +259,12 @@ impl CredentialResolver for ImpersonationCredentialResolver {
             Err(_) => return Ok(None),
         };
 
-        let info = service_account
-            .get_info()
-            .await
-            .into_alien_error()
-            .context(GenericError {
-                message: format!(
-                    "Failed to get management service account info for {}",
-                    platform
-                ),
-            })?;
+        let info = service_account.get_info().await.context(GenericError {
+            message: format!(
+                "Failed to get management service account info for {}",
+                platform
+            ),
+        })?;
 
         Ok(Some(management_config_from_info(info, platform)?))
     }
@@ -281,13 +278,11 @@ pub async fn impersonate_management_sa(
     let service_account = bindings_provider
         .load_service_account("management")
         .await
-        .into_alien_error()
-        .context(GenericError {
-            message: format!(
-                "Management service account binding not found for {}",
-                platform
-            ),
-        })?;
+        .context(ErrorData::CredentialMaterializationFailed {
+            platform,
+            purpose: "load management service account".to_string(),
+        })
+        .map_err(|error| classify_credential_error(error.into_generic()))?;
 
     let impersonation_request = ImpersonationRequest {
         session_name: Some(format!(
@@ -301,13 +296,11 @@ pub async fn impersonate_management_sa(
     let client_config = service_account
         .impersonate(impersonation_request)
         .await
-        .into_alien_error()
-        .context(GenericError {
-            message: format!(
-                "Failed to impersonate management service account for {}",
-                platform
-            ),
-        })?;
+        .context(ErrorData::CredentialMaterializationFailed {
+            platform,
+            purpose: "impersonate management service account".to_string(),
+        })
+        .map_err(|error| classify_credential_error(error.into_generic()))?;
 
     if client_config.platform() != platform {
         return Err(AlienError::new(GenericError {
@@ -668,6 +661,128 @@ mod tests {
             error.code, "REMOTE_CREDENTIAL_HANDOFF_FAILED",
             "the real resolver path must expose the code consumed by the bounded provisioning retry"
         );
+    }
+
+    #[tokio::test]
+    async fn gcp_credential_handoff_preserves_token_error_retryability() {
+        let server = httpmock::MockServer::start_async().await;
+        let directory = tempfile::tempdir().unwrap();
+        let token_path = directory.path().join("subject-token");
+        std::fs::write(&token_path, "synthetic-token").unwrap();
+        let base_config = ClientConfig::Gcp(Box::new(GcpClientConfig {
+            project_id: "managing-project".to_string(),
+            region: "us-central1".to_string(),
+            credentials: GcpCredentials::ExternalAccount {
+                audience: "synthetic-audience".to_string(),
+                subject_token_type: "urn:ietf:params:oauth:token-type:jwt".to_string(),
+                token_url: server.url("/token"),
+                credential_source_file: token_path.to_string_lossy().to_string(),
+                service_account_impersonation_url: None,
+            },
+            service_overrides: Some(GcpServiceOverrides {
+                endpoints: HashMap::from([("iamcredentials".to_string(), server.base_url())]),
+            }),
+            project_number: Some("123456789".to_string()),
+        }));
+        let provider: Arc<dyn BindingsProviderApi> = Arc::new(
+            BindingsProvider::new(
+                base_config,
+                HashMap::from([(
+                    "management".to_string(),
+                    serde_json::to_value(ServiceAccountBinding::gcp_service_account(
+                        "management@example.invalid",
+                        "synthetic-id",
+                    ))
+                    .unwrap(),
+                )]),
+            )
+            .unwrap(),
+        );
+        let resolver = ImpersonationCredentialResolver::new(
+            provider.clone(),
+            HashMap::from([(Platform::Gcp, provider)]),
+            HashSet::from([Platform::Gcp]),
+        );
+        for (status, retryable) in [(403, false), (503, true)] {
+            let response = server
+                .mock_async(|when, then| {
+                    when.method(httpmock::Method::POST).path("/token");
+                    then.status(status).body("synthetic rejection");
+                })
+                .await;
+            let error = resolver
+                .resolve_from_env(&gcp_handoff_deployment(), HashMap::new())
+                .await
+                .unwrap_err();
+            response.assert_hits_async(1).await;
+            assert_eq!(error.code, "REMOTE_CREDENTIAL_HANDOFF_FAILED");
+            assert_eq!(error.retryable, retryable, "HTTP {status}: {error}");
+            assert!(error.to_string().contains(&status.to_string()));
+            response.delete_async().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn gcp_target_denials_and_missing_setup_are_permanent() {
+        let server = httpmock::MockServer::start_async().await;
+        let _management = server.mock_async(|when, then| {
+            when.method(httpmock::Method::POST).path("/projects/-/serviceAccounts/management%40example.invalid:generateAccessToken");
+            then.status(200).json_body(serde_json::json!({"accessToken": "synthetic-management-token", "expireTime": "2099-01-01T00:00:00Z"}));
+        }).await;
+        let config = ClientConfig::Gcp(Box::new(GcpClientConfig {
+            project_id: "managing-project".to_string(),
+            region: "us-central1".to_string(),
+            credentials: GcpCredentials::AccessToken {
+                token: "synthetic-source".to_string(),
+            },
+            service_overrides: Some(GcpServiceOverrides {
+                endpoints: HashMap::from([("iamcredentials".to_string(), server.base_url())]),
+            }),
+            project_number: Some("123456789".to_string()),
+        }));
+        let provider: Arc<dyn BindingsProviderApi> = Arc::new(
+            BindingsProvider::new(
+                config,
+                HashMap::from([(
+                    "management".to_string(),
+                    serde_json::to_value(ServiceAccountBinding::gcp_service_account(
+                        "management@example.invalid",
+                        "synthetic-id",
+                    ))
+                    .unwrap(),
+                )]),
+            )
+            .unwrap(),
+        );
+        let resolver = ImpersonationCredentialResolver::new(
+            provider.clone(),
+            HashMap::from([(Platform::Gcp, provider)]),
+            HashSet::from([Platform::Gcp]),
+        );
+        for (status, retryable) in [(403, false), (429, true), (503, true)] {
+            let response = server.mock_async(|when, then| {
+                when.method(httpmock::Method::POST).path("/projects/-/serviceAccounts/deployment%40target-project.iam.gserviceaccount.com:generateAccessToken");
+                then.status(status).json_body(serde_json::json!({"error": {"code": status, "message": "synthetic target rejection"}}));
+            }).await;
+            let error = resolver
+                .resolve_from_env(&gcp_handoff_deployment(), HashMap::new())
+                .await
+                .unwrap_err();
+            assert_eq!(
+                error.retryable, retryable,
+                "GCP target HTTP {status}: {error}"
+            );
+            assert!(response.hits_async().await > 0);
+            response.delete_async().await;
+        }
+        let mut missing = gcp_handoff_deployment();
+        missing.stack_state.as_mut().unwrap().resources.clear();
+        let error = resolver
+            .resolve_from_env(&missing, HashMap::new())
+            .await
+            .unwrap_err();
+        assert!(!error.retryable, "{error}");
+        assert!(error.to_string().contains("missing outputs"));
     }
 
     #[test]

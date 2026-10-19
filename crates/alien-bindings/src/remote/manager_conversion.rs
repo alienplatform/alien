@@ -410,6 +410,8 @@ impl ResolvedRemoteBinding {
                     .collect::<Result<Vec<u16>>>()?;
                 Self::SandboxAws {
                     binding: Box::new(alien_core::AwsSandboxBinding {
+                        default_policy: None,
+                        egress: None,
                         image_arn: alien_core::BindingValue::Value(binding.image_arn),
                         image_version: alien_core::BindingValue::Value(binding.image_version),
                         region: alien_core::BindingValue::Value(binding.region),
@@ -467,6 +469,7 @@ impl ResolvedRemoteBinding {
                 }
                 Self::SandboxAzure {
                     binding: Box::new(alien_core::AzureSandboxBinding {
+                        default_policy: None,
                         sandbox_group: alien_core::BindingValue::Value(binding.sandbox_group),
                         data_plane_endpoint: alien_core::BindingValue::Value(
                             binding.data_plane_endpoint,
@@ -474,7 +477,7 @@ impl ResolvedRemoteBinding {
                         region: alien_core::BindingValue::Value(binding.region),
                         resource_group: alien_core::BindingValue::Value(binding.resource_group),
                         disk_image: alien_core::BindingValue::Value(binding.disk_image),
-                        egress: alien_core::SandboxEgress::Allow,
+                        egress: alien_core::SandboxEgress::Allow.into(),
                         idle_pause_seconds: binding
                             .idle_pause_seconds
                             .map(|seconds| {
@@ -504,6 +507,8 @@ impl ResolvedRemoteBinding {
                     client_config.credentials;
                 Self::SandboxGcpAgentPlatform {
                     binding: Box::new(alien_core::GcpAgentPlatformSandboxBinding {
+                        default_policy: None,
+                        egress: None,
                         engine: alien_core::BindingValue::Value(binding.engine),
                         template: alien_core::BindingValue::Value(binding.template),
                         region: alien_core::BindingValue::Value(binding.region),

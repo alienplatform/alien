@@ -107,6 +107,33 @@ pub struct Stack {
 }
 
 impl Stack {
+    /// Explicit consumers whose links grant access to every port on a container.
+    /// Cluster-wide reach is separate and remains the backend's existing behavior.
+    pub fn container_linkers(&self, container_id: &str) -> Vec<ResourceRef> {
+        let target = ResourceRef::new(crate::Container::RESOURCE_TYPE, container_id);
+        self.resources
+            .iter()
+            .filter_map(|(id, entry)| {
+                let links = if let Some(resource) = entry.config.downcast_ref::<crate::Worker>() {
+                    &resource.links
+                } else if let Some(resource) = entry.config.downcast_ref::<crate::Container>() {
+                    &resource.links
+                } else if let Some(resource) = entry.config.downcast_ref::<crate::Daemon>() {
+                    &resource.links
+                } else if let Some(resource) = entry.config.downcast_ref::<crate::Build>() {
+                    &resource.links
+                } else if let Some(resource) = entry.config.downcast_ref::<crate::Sandbox>() {
+                    &resource.links
+                } else {
+                    return None;
+                };
+                links
+                    .contains(&target)
+                    .then(|| ResourceRef::new(entry.config.resource_type(), id.clone()))
+            })
+            .collect()
+    }
+
     /// Digest of what setup owns: every Frozen entry plus each Live sandbox's setup inputs. Without
     /// a Live sandbox the bytes equal the Frozen-only projection. Declined gated entries must be
     /// stripped by the caller.
@@ -118,6 +145,13 @@ impl Stack {
             .map(|(id, entry)| {
                 let mut value =
                     serde_json::to_value(entry).expect("resource entries always serialize to JSON");
+                if let Some(sandbox) = entry.config.downcast_ref::<crate::Sandbox>() {
+                    value["config"]["egress"] = sandbox.setup_digest_value();
+                    value["config"]
+                        .as_object_mut()
+                        .expect("resource config is an object")
+                        .remove("defaultPolicy");
+                }
                 canonicalize_json(&mut value);
                 (id, value)
             })
@@ -746,7 +780,7 @@ mod tests {
                 image: image.to_string(),
             })
             .maybe_private_base_image(private_base_image.map(str::to_string))
-            .egress(crate::SandboxEgress::Deny)
+            .egress(crate::SandboxEgress::None)
             .lifecycle(crate::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
@@ -911,7 +945,7 @@ mod tests {
             ),
             (
                 LiveSandbox {
-                    egress: crate::SandboxEgress::Deny,
+                    egress: crate::SandboxEgress::None,
                     ..LiveSandbox::installed()
                 },
                 "egress allow to deny",
@@ -943,7 +977,7 @@ mod tests {
 
         let deny = |network_id| {
             LiveSandbox {
-                egress: crate::SandboxEgress::Deny,
+                egress: crate::SandboxEgress::None,
                 network_id,
                 ..LiveSandbox::installed()
             }

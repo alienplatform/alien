@@ -1,3 +1,4 @@
+pub(crate) mod credential_errors;
 pub mod environment_credentials;
 pub mod impersonation_credentials;
 pub mod in_memory_telemetry;

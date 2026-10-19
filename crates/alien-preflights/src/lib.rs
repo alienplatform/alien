@@ -349,6 +349,7 @@ impl PreflightRegistry {
         registry.add_compile_time_check(Box::new(compile_time::ResourceEnabledValidCheck));
         registry.add_compile_time_check(Box::new(compile_time::FrozenResourceLifecycleCheck));
         registry.add_compile_time_check(Box::new(compile_time::ContainerLifecycleCheck));
+        registry.add_compile_time_check(Box::new(compile_time::ContainerNetworkSettingsCheck));
         registry.add_compile_time_check(Box::new(compile_time::KubernetesWorkloadSettingsCheck));
         registry.add_compile_time_check(Box::new(compile_time::PublicWorkerLifecycleCheck));
         registry.add_compile_time_check(Box::new(compile_time::MachinesResourcesCheck));
@@ -392,6 +393,10 @@ impl PreflightRegistry {
         // released before it existed keep deploying and updating.
         registry.add_build_time_check(Box::new(compile_time::UniqueEndpointHostLabelsCheck));
 
+        registry.add_deployment_prerequisite_check(Box::new(
+            deployment_prerequisites::SandboxEgressGatewayCheck,
+        ));
+
         // Add deployment prerequisite checks. These validate the concrete
         // deployment target/config, so they run only after deployment-time
         // mutations have produced the final stack shape.
@@ -432,6 +437,7 @@ impl PreflightRegistry {
         // Add compatibility checks
         registry.add_compatibility_check(Box::new(compatibility::PermissionProfilesUnchangedCheck));
         registry.add_compatibility_check(Box::new(compatibility::SandboxSetupInputsUnchangedCheck));
+        registry.add_compatibility_check(Box::new(compile_time::ContainerNetworkSettingsCheck));
 
         // Add runtime checks
         #[cfg(feature = "runtime-checks")]
@@ -474,6 +480,8 @@ impl PreflightRegistry {
 
         // Phase 2: Resource creation
         registry.add_mutation(Box::new(mutations::KubernetesClusterMutation));
+        // Add the gateway before compute sizing, vault grants, and service accounts.
+        registry.add_mutation(Box::new(mutations::SandboxGatewayMutation));
         registry.add_mutation(Box::new(mutations::ComputeClusterMutation));
         registry.add_mutation(Box::new(mutations::RemoteStackManagementMutation));
         registry.add_mutation(Box::new(mutations::SecretsVaultMutation));
@@ -498,6 +506,7 @@ impl PreflightRegistry {
         registry.add_mutation(Box::new(mutations::ManagementPermissionProfileMutation));
 
         // Phase 4: Dependency wiring (must be last, after all resources exist)
+        registry.add_mutation(Box::new(mutations::SandboxGatewayLinksMutation));
         registry.add_mutation(Box::new(mutations::ServiceAccountDependenciesMutation));
         registry.add_mutation(Box::new(mutations::InfrastructureDependenciesMutation));
 

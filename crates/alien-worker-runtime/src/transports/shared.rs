@@ -276,14 +276,25 @@ async fn process_command_with_budget(
 /// with no proxy, generous timeouts (the app may make slow cloud API calls),
 /// and disabled TCP user timeout (gVisor on Cloud Run Gen2 can prematurely
 /// close idle connections with the default settings).
+///
+/// # Panics
+///
+/// Panics if the forwarding client cannot be initialized, like [reqwest::Client::new].
 pub fn create_forward_client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(5))
+    forward_client_builder()
         .read_timeout(std::time::Duration::from_secs(300))
+        .build()
+        .expect("Failed to configure application HTTP forwarding")
+}
+
+/// Settings every client that forwards requests to the application must use.
+pub(crate) fn forward_client_builder() -> reqwest::ClientBuilder {
+    reqwest::Client::builder()
+        // Redirects belong to the caller; never replay its request elsewhere.
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(std::time::Duration::from_secs(5))
         .no_proxy()
         .tcp_keepalive(None)
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new())
 }
 
 /// Forward an HTTP request to the application.
@@ -968,3 +979,7 @@ mod tests {
         server.abort();
     }
 }
+
+#[cfg(test)]
+#[path = "forwarding_tests.rs"]
+pub(crate) mod forwarding_tests;

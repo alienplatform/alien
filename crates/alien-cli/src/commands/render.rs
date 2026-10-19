@@ -677,7 +677,7 @@ mod tests {
             .egress(if remote {
                 SandboxEgress::Allow
             } else {
-                SandboxEgress::Deny
+                SandboxEgress::None
             })
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: Some(3600),

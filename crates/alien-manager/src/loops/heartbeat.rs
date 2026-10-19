@@ -27,10 +27,27 @@ pub struct HeartbeatLoop {
 #[async_trait]
 pub(crate) trait HeartbeatDeploymentProcessor: Send + Sync {
     async fn process_heartbeat_deployment(&self, item: AcquiredDeployment, session: &str);
+
+    async fn exclude_deferred(
+        &self,
+        _filter: &mut DeploymentFilter,
+        _refresh: bool,
+    ) -> Result<bool, alien_error::AlienError> {
+        Ok(true)
+    }
 }
 
 #[async_trait]
 impl HeartbeatDeploymentProcessor for DeploymentLoop {
+    async fn exclude_deferred(
+        &self,
+        filter: &mut DeploymentFilter,
+        refresh: bool,
+    ) -> Result<bool, alien_error::AlienError> {
+        self.exclude_deferred(&Subject::system(), filter, refresh)
+            .await
+    }
+
     async fn process_heartbeat_deployment(&self, item: AcquiredDeployment, session: &str) {
         self.process_heartbeat_deployment(item.deployment, item.execution_claim, session)
             .await;
@@ -75,8 +92,8 @@ impl HeartbeatLoop {
     }
 
     /// One heartbeat tick: acquire running deployments and run one health-check step.
-    async fn tick(&self) {
-        let filter = DeploymentFilter {
+    pub(super) async fn tick(&self) {
+        let mut filter = DeploymentFilter {
             statuses: Some(vec!["running".to_string(), "refresh-failed".to_string()]),
             platforms: if self.config.targets.is_empty() {
                 None
@@ -95,8 +112,25 @@ impl HeartbeatLoop {
         // Acquire in batches no larger than the processing concurrency. A lease
         // is only renewed once its deployment is being processed, so a larger
         // batch would leave the surplus holding leases that nothing extends.
+        // Older stores keep direct heartbeat acquisition. An inclusion-list
+        // fallback could starve running deployments beyond the store's list cap.
+        let supports_exclusions = self.deployment_store.supports_acquire_exclusions();
         let batches = HEARTBEAT_DEPLOYMENTS_PER_TICK.div_ceil(MAX_CONCURRENT_DEPLOYMENTS);
-        for _ in 0..batches {
+        for batch in 0..batches {
+            if supports_exclusions {
+                match self
+                    .deployment_processor
+                    .exclude_deferred(&mut filter, batch == 0)
+                    .await
+                {
+                    Ok(true) => {}
+                    Ok(false) => break,
+                    Err(error) => {
+                        error!(%error, "Heartbeat: failed to filter deferred deployments");
+                        break;
+                    }
+                }
+            }
             let session = uuid::Uuid::new_v4().to_string();
             match self
                 .deployment_store
@@ -211,6 +245,9 @@ mod tests {
         };
         let acquire_calls = Arc::new(AtomicUsize::new(0));
         let mut store = MockDeploymentStore::new();
+        store
+            .expect_supports_acquire_exclusions()
+            .return_const(false);
         store.expect_acquire().times(2).returning({
             let acquire_calls = acquire_calls.clone();
             let acquired = acquired.clone();

@@ -488,7 +488,7 @@ fn aws_remote_sandbox_with_restricted_egress_carries_no_grant() {
         .code(SandboxCode::Image {
             image: "s3://acme-artifacts/agents/bundle.zip".to_string(),
         })
-        .egress(SandboxEgress::Deny)
+        .egress(SandboxEgress::None)
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,

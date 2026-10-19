@@ -20,7 +20,9 @@ use alien_core::sandbox_egress::{
     NETWORK_CONNECTOR_TYPE_NAME, SANDBOX_EGRESS_POLICY_NAME,
 };
 use alien_core::sandbox_setup_inputs::aws_sandbox_egress_network_id;
-use alien_core::{AwsSandboxEgressScaffolding, ResourceStatus, Sandbox, Stack, StackState};
+use alien_core::{
+    AwsSandboxEgressScaffolding, ResourceStatus, Sandbox, SandboxEgress, Stack, StackState,
+};
 use alien_error::{AlienError, Context, IntoAlienError};
 use serde_json::Value;
 use tracing::info;
@@ -53,13 +55,13 @@ pub(super) fn egress_network<'a>(stack: &'a Stack, sandbox: &Sandbox) -> Result<
 pub(super) async fn reconcile(
     ctx: &SetupScaffoldingContext<'_>,
     aws: &AwsClientConfig,
-    sandbox_id: &str,
+    sandbox: &Sandbox,
     network_id: &str,
     stack_state: &StackState,
     record: &mut Option<AwsSandboxEgressScaffolding>,
 ) -> Result<ScaffoldingProgress> {
-    let Some((vpc_id, private_subnet_ids)) = network_ready(stack_state, network_id, sandbox_id)?
-    else {
+    let sandbox_id = sandbox.id.as_str();
+    let Some(network) = network_ready(stack_state, network_id, sandbox)? else {
         info!(
             sandbox_id,
             network_id, "Waiting for the network before sandbox egress"
@@ -86,7 +88,7 @@ pub(super) async fn reconcile(
 
     let ec2 = ctx.service_provider.get_aws_ec2_client(aws).await?;
     let Some(security_group_id) =
-        deny_security_group(ctx, ec2.as_ref(), sandbox_id, &name, &vpc_id, record).await?
+        deny_security_group(ctx, ec2.as_ref(), sandbox_id, &name, &network, record).await?
     else {
         return Ok(ScaffoldingProgress::InProgress);
     };
@@ -96,7 +98,7 @@ pub(super) async fn reconcile(
         .resource_prefix(ctx.resource_prefix)
         .sandbox_id(sandbox_id)
         .operator_role_arn(&operator_role_arn)
-        .private_subnet_ids(&private_subnet_ids)
+        .private_subnet_ids(&network.subnet_ids)
         .security_group_id(&security_group_id)
         .build()
         .desired_state();
@@ -107,13 +109,20 @@ pub(super) async fn reconcile(
     connector(ctx, cloudcontrol.as_ref(), sandbox_id, &desired, record).await
 }
 
-/// The VPC and private subnets of a network setup has finished creating, or `None` while it has
-/// not.
+/// Where a connector attaches and, for internet egress, the gateway subnets its group may reach.
+struct ConnectorNetwork {
+    vpc_id: String,
+    subnet_ids: Vec<String>,
+    gateway_cidrs: Vec<String>,
+}
+
+/// The connector network of a network setup has finished creating, or `None` while it has not.
 fn network_ready(
     stack_state: &StackState,
     network_id: &str,
-    sandbox_id: &str,
-) -> Result<Option<(String, Vec<String>)>> {
+    sandbox: &Sandbox,
+) -> Result<Option<ConnectorNetwork>> {
+    let sandbox_id = sandbox.id.as_str();
     let Some(state) = stack_state.resources.get(network_id) else {
         return Ok(None);
     };
@@ -131,7 +140,24 @@ fn network_ready(
         })?;
     match network.vpc_id {
         Some(vpc_id) if !network.private_subnet_ids.is_empty() => {
-            Ok(Some((vpc_id, network.private_subnet_ids)))
+            let (subnet_ids, gateway_cidrs) = if matches!(sandbox.egress, SandboxEgress::Internet) {
+                // A running network without the dedicated subnets is one setup is about to
+                // update: an existing deployment that adds its first internet sandbox. Wait for
+                // that update rather than attach the connector to ordinary private subnets.
+                match network.sandbox_network.filter(|topology| {
+                    !topology.sandbox_subnet_ids.is_empty() && !topology.gateway_cidrs.is_empty()
+                }) {
+                    Some(topology) => (topology.sandbox_subnet_ids, topology.gateway_cidrs),
+                    None => return Ok(None),
+                }
+            } else {
+                (network.private_subnet_ids, Vec::new())
+            };
+            Ok(Some(ConnectorNetwork {
+                vpc_id,
+                subnet_ids,
+                gateway_cidrs,
+            }))
         }
         _ => Err(AlienError::new(ErrorData::ResourceConfigInvalid {
             message: format!(
@@ -234,9 +260,10 @@ async fn deny_security_group(
     ec2: &dyn Ec2Api,
     sandbox_id: &str,
     name: &str,
-    vpc_id: &str,
+    network: &ConnectorNetwork,
     record: &mut Option<AwsSandboxEgressScaffolding>,
 ) -> Result<Option<String>> {
+    let vpc_id = network.vpc_id.as_str();
     let described = ec2
         .describe_security_groups(
             DescribeSecurityGroupsRequest::builder()
@@ -360,7 +387,7 @@ async fn deny_security_group(
 
     let foreign: Vec<&IpPermissionResponse> = rules
         .iter()
-        .filter(|rule| !is_loopback_rule(rule))
+        .filter(|rule| !is_connector_rule(rule, &network.gateway_cidrs))
         .collect();
     if !foreign.is_empty() {
         let revoke = foreign
@@ -393,21 +420,47 @@ async fn deny_security_group(
         }
         return Ok(None);
     }
-    if rules.is_empty() {
+    let wanted = if network.gateway_cidrs.is_empty() {
+        vec![IpPermission {
+            ip_protocol: "-1".to_string(),
+            from_port: None,
+            to_port: None,
+            ip_ranges: Some(vec![IpRange {
+                cidr_ip: LOOPBACK_ONLY_CIDR.to_string(),
+                description: None,
+            }]),
+            ipv6_ranges: None,
+            user_id_group_pairs: None,
+        }]
+    } else {
+        let present: Vec<&str> = rules
+            .iter()
+            .flat_map(|rule| rule.ip_ranges.iter())
+            .flat_map(|set| &set.items)
+            .filter_map(|range| range.cidr_ip.as_deref())
+            .collect();
+        network
+            .gateway_cidrs
+            .iter()
+            .filter(|cidr| !present.contains(&cidr.as_str()))
+            .map(|cidr| IpPermission {
+                ip_protocol: "tcp".to_string(),
+                from_port: Some(3128),
+                to_port: Some(3128),
+                ip_ranges: Some(vec![IpRange {
+                    cidr_ip: cidr.clone(),
+                    description: Some("Sandbox gateway CONNECT".into()),
+                }]),
+                ipv6_ranges: None,
+                user_id_group_pairs: None,
+            })
+            .collect()
+    };
+    if rules.is_empty() || (!network.gateway_cidrs.is_empty() && !wanted.is_empty()) {
         let authorized = ec2
             .authorize_security_group_egress(AuthorizeSecurityGroupEgressRequest {
                 group_id: group_id.clone(),
-                ip_permissions: vec![IpPermission {
-                    ip_protocol: "-1".to_string(),
-                    from_port: None,
-                    to_port: None,
-                    ip_ranges: Some(vec![IpRange {
-                        cidr_ip: LOOPBACK_ONLY_CIDR.to_string(),
-                        description: Some("Sandbox sessions reach nothing outbound".to_string()),
-                    }]),
-                    ipv6_ranges: None,
-                    user_id_group_pairs: None,
-                }],
+                ip_permissions: wanted,
             })
             .await;
         match authorized {
@@ -514,6 +567,33 @@ fn record_group(record: &mut Option<AwsSandboxEgressScaffolding>, group_id: Stri
         unreachable!("the operator role step records the egress objects first")
     };
     egress.security_group_id = Some(group_id);
+}
+
+/// Only CONNECT to the dedicated gateway subnets. No DNS, admin port, IPv6 or SG references.
+fn is_connector_rule(rule: &IpPermissionResponse, gateway_cidrs: &[String]) -> bool {
+    if gateway_cidrs.is_empty() {
+        return is_loopback_rule(rule);
+    }
+    let cidrs: Vec<_> = rule.ip_ranges.iter().flat_map(|set| &set.items).collect();
+    matches!(rule.ip_protocol.as_deref(), Some("tcp" | "6"))
+        && rule.from_port == Some(3128)
+        && rule.to_port == Some(3128)
+        && !cidrs.is_empty()
+        && cidrs.iter().all(|range| {
+            range
+                .cidr_ip
+                .as_ref()
+                .is_some_and(|cidr| gateway_cidrs.contains(cidr))
+        })
+        && rule
+            .ipv6_ranges
+            .as_ref()
+            .is_none_or(|set| set.items.is_empty())
+        && rule.groups.as_ref().is_none_or(|set| set.items.is_empty())
+        && rule
+            .prefix_list_ids
+            .as_ref()
+            .is_none_or(|set| set.items.is_empty())
 }
 
 /// One all-protocol rule to `127.0.0.1/32` and nothing else on it.
@@ -1175,6 +1255,8 @@ mod tests {
     #[derive(Debug, Clone, PartialEq)]
     struct Rule {
         protocol: String,
+        from_port: Option<i32>,
+        to_port: Option<i32>,
         cidrs: Vec<String>,
         ipv6_cidrs: Vec<String>,
         groups: Vec<String>,
@@ -1184,6 +1266,8 @@ mod tests {
     fn rule(cidr: &str) -> Rule {
         Rule {
             protocol: "-1".to_string(),
+            from_port: None,
+            to_port: None,
             cidrs: vec![cidr.to_string()],
             ipv6_cidrs: vec![],
             groups: vec![],
@@ -1471,8 +1555,8 @@ mod tests {
                     .iter()
                     .map(|rule| IpPermissionResponse {
                         ip_protocol: Some(rule.protocol.clone()),
-                        from_port: None,
-                        to_port: None,
+                        from_port: rule.from_port,
+                        to_port: rule.to_port,
                         ip_ranges: Some(IpRangeSet {
                             items: rule
                                 .cidrs
@@ -1535,6 +1619,8 @@ mod tests {
             .iter()
             .map(|permission| Rule {
                 protocol: permission.ip_protocol.clone(),
+                from_port: permission.from_port,
+                to_port: permission.to_port,
                 cidrs: permission
                     .ip_ranges
                     .iter()
@@ -2078,10 +2164,151 @@ mod tests {
         }
     }
 
+    fn internet_state() -> StackState {
+        let mut state = stack_state(Some(ResourceStatus::Running));
+        state
+            .resources
+            .get_mut("default-network")
+            .unwrap()
+            .internal_state
+            .as_mut()
+            .unwrap()["sandboxNetwork"] = json!({
+            "sandboxSubnetIds": ["subnet-isolated-a", "subnet-isolated-b"],
+            "gatewaySubnetIds": ["subnet-gateway-a", "subnet-gateway-b"],
+            "sandboxCidrs": ["10.0.48.0/24", "10.0.49.0/24"],
+            "gatewayCidrs": ["10.0.50.0/24", "10.0.51.0/24"],
+            "workloadCidrs": ["10.0.128.0/20", "10.0.144.0/20"],
+            "vpcCidrs": ["10.0.0.0/16"]
+        });
+        state
+    }
+
+    fn internet_stack() -> Stack {
+        // The managed gateway makes Internet use a connector rather than legacy unrestricted egress.
+        let mut stack = stack(SandboxEgress::Internet, created_network());
+        stack.resources.insert(
+            alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.into(),
+            alien_core::ResourceEntry {
+                config: Resource::new(
+                    alien_core::Container::new(
+                        alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.into(),
+                    )
+                    .code(alien_core::ContainerCode::Image {
+                        image: "example.invalid/gateway".into(),
+                    })
+                    .permissions("gateway".into())
+                    .cpu(alien_core::ResourceSpec {
+                        min: "0.25".into(),
+                        desired: "0.25".into(),
+                    })
+                    .memory(alien_core::ResourceSpec {
+                        min: "512Mi".into(),
+                        desired: "512Mi".into(),
+                    })
+                    .build(),
+                ),
+                lifecycle: ResourceLifecycle::Live,
+                dependencies: vec![],
+                enabled_when: None,
+                remote_access: false,
+            },
+        );
+        stack
+    }
+
+    #[tokio::test]
+    async fn internet_connector_only_reaches_connect_in_dedicated_gateway_subnets() {
+        let cloud = Shared::default();
+        let stack = internet_stack();
+        let state = internet_state();
+        let mut records = BTreeMap::new();
+        converge(&cloud, &stack, &state, &mut records).await;
+        {
+            let account = cloud.lock().unwrap();
+            assert_eq!(account.groups.len(), 1);
+            assert_eq!(
+                account.groups[0].egress,
+                vec![
+                    Rule {
+                        protocol: "tcp".into(),
+                        from_port: Some(3128),
+                        to_port: Some(3128),
+                        ..rule("10.0.50.0/24")
+                    },
+                    Rule {
+                        protocol: "tcp".into(),
+                        from_port: Some(3128),
+                        to_port: Some(3128),
+                        ..rule("10.0.51.0/24")
+                    },
+                ]
+            );
+            // Build the expected provider request from the dedicated subnet IDs.
+            let dedicated = vec!["subnet-isolated-a".into(), "subnet-isolated-b".into()];
+            let expected = SandboxEgressConnector::builder()
+                .resource_prefix(PREFIX)
+                .sandbox_id("agents")
+                .operator_role_arn(OPERATOR_ARN)
+                .private_subnet_ids(&dedicated)
+                .security_group_id("sg-1")
+                .build()
+                .desired_state();
+            assert!(connector_mismatches(&account.connectors[0].1, &expected).is_empty());
+        }
+        // Repair an accidental admin-port grant and a missing CONNECT destination without opening anything else.
+        {
+            let mut account = cloud.lock().unwrap();
+            account.groups[0].egress[0].from_port = Some(3129);
+            account.groups[0].egress[0].to_port = Some(3129);
+        }
+        converge(&cloud, &stack, &state, &mut records).await;
+        assert!(cloud.lock().unwrap().groups[0]
+            .egress
+            .iter()
+            .all(|rule| rule.from_port == Some(3128) && rule.to_port == Some(3128)));
+        assert!(converge(&cloud, &stack, &state, &mut records)
+            .await
+            .is_empty());
+        destroy(&cloud, &stack, &mut records).await;
+        assert!(cloud.lock().unwrap().groups.is_empty());
+        assert!(cloud.lock().unwrap().connectors.is_empty());
+    }
+
+    #[tokio::test]
+    async fn internet_waits_for_dedicated_subnets_instead_of_using_private_subnets() {
+        let cloud = Shared::default();
+        let stack = internet_stack();
+        // An existing deployment adding its first internet sandbox: the network still runs
+        // without the dedicated subnets until setup updates it.
+        let state = stack_state(Some(ResourceStatus::Running));
+        let mut records = BTreeMap::new();
+        for _ in 0..10 {
+            let (progress, _) = step(&cloud, &stack, &state, &mut records).await.unwrap();
+            assert_eq!(progress, ScaffoldingProgress::InProgress);
+        }
+        assert!(cloud.lock().unwrap().groups.is_empty());
+        assert!(cloud.lock().unwrap().connectors.is_empty());
+        // Once the network update records them, the connector uses only the dedicated subnets.
+        let state = internet_state();
+        converge(&cloud, &stack, &state, &mut records).await;
+        let account = cloud.lock().unwrap();
+        assert_eq!(account.connectors.len(), 1);
+        let dedicated = vec!["subnet-isolated-a".into(), "subnet-isolated-b".into()];
+        let expected = SandboxEgressConnector::builder()
+            .resource_prefix(PREFIX)
+            .sandbox_id("agents")
+            .operator_role_arn(OPERATOR_ARN)
+            .private_subnet_ids(&dedicated)
+            .security_group_id("sg-1")
+            .build()
+            .desired_state();
+        assert!(connector_mismatches(&account.connectors[0].1, &expected).is_empty());
+    }
+
     #[tokio::test]
     async fn deny_builds_role_then_a_loopback_only_group_then_the_connector() {
         let cloud = Shared::default();
-        let stack = stack(SandboxEgress::Deny, created_network());
+        let stack = stack(SandboxEgress::None, created_network());
         let state = stack_state(Some(ResourceStatus::Running));
         let mut records = BTreeMap::new();
 
@@ -2134,7 +2361,7 @@ mod tests {
     #[tokio::test]
     async fn a_converged_deny_sandbox_changes_nothing() {
         let cloud = Shared::default();
-        let stack = stack(SandboxEgress::Deny, created_network());
+        let stack = stack(SandboxEgress::None, created_network());
         let state = stack_state(Some(ResourceStatus::Running));
         let mut records = BTreeMap::new();
         converge(&cloud, &stack, &state, &mut records).await;
@@ -2190,7 +2417,7 @@ mod tests {
     #[tokio::test]
     async fn deny_waits_for_its_network_without_creating_egress_objects() {
         let cloud = Shared::default();
-        let stack = stack(SandboxEgress::Deny, created_network());
+        let stack = stack(SandboxEgress::None, created_network());
         let mut records = BTreeMap::new();
         for network in [None, Some(ResourceStatus::Provisioning)] {
             let state = stack_state(network);
@@ -2235,26 +2462,16 @@ mod tests {
     #[tokio::test]
     async fn deny_is_refused_on_a_network_with_no_private_subnets() {
         assert_refused_before_any_call(
-            stack(SandboxEgress::Deny, Some(NetworkSettings::UseDefault)),
+            stack(SandboxEgress::None, Some(NetworkSettings::UseDefault)),
             "only public subnets",
         )
         .await;
-        assert_refused_before_any_call(stack(SandboxEgress::Deny, None), "declares no network")
+        assert_refused_before_any_call(stack(SandboxEgress::None, None), "declares no network")
             .await;
-        assert_refused_before_any_call(
-            stack(
-                SandboxEgress::AllowDomains {
-                    domains: vec!["example.com".to_string()],
-                },
-                created_network(),
-            ),
-            "allowDomains",
-        )
-        .await;
     }
 
     async fn assert_not_adoptable(cloud: &Shared, expected: &str) {
-        let stack = stack(SandboxEgress::Deny, created_network());
+        let stack = stack(SandboxEgress::None, created_network());
         let state = stack_state(Some(ResourceStatus::Running));
         let mut records = BTreeMap::new();
         let connectors_before = cloud.lock().unwrap().connectors.len();
@@ -2296,7 +2513,7 @@ mod tests {
     #[tokio::test]
     async fn a_recorded_group_the_name_lookup_misses_is_kept() {
         let cloud = Shared::default();
-        let stack = stack(SandboxEgress::Deny, created_network());
+        let stack = stack(SandboxEgress::None, created_network());
         let state = stack_state(Some(ResourceStatus::Running));
         let mut records = BTreeMap::new();
         converge(&cloud, &stack, &state, &mut records).await;
@@ -2318,7 +2535,7 @@ mod tests {
     #[tokio::test]
     async fn a_duplicate_group_name_waits_for_the_group_to_be_seen() {
         let cloud = Shared::default();
-        let stack = stack(SandboxEgress::Deny, created_network());
+        let stack = stack(SandboxEgress::None, created_network());
         let state = stack_state(Some(ResourceStatus::Running));
         let mut records = BTreeMap::new();
         {
@@ -2349,7 +2566,7 @@ mod tests {
     #[tokio::test]
     async fn rule_writes_the_next_read_misses_are_not_failures() {
         let cloud = Shared::default();
-        let stack = stack(SandboxEgress::Deny, created_network());
+        let stack = stack(SandboxEgress::None, created_network());
         let state = stack_state(Some(ResourceStatus::Running));
         let mut records = BTreeMap::new();
         cloud.lock().unwrap().rule_read_lags = 2;
@@ -2397,7 +2614,7 @@ mod tests {
         for extra in [v6, peer] {
             let cloud = preexisting_group(vec![extra.clone()]);
             cloud.lock().unwrap().groups[0].tags = tags_for(PREFIX, "agents");
-            let stack = stack(SandboxEgress::Deny, created_network());
+            let stack = stack(SandboxEgress::None, created_network());
             let state = stack_state(Some(ResourceStatus::Running));
 
             let made = converge(&cloud, &stack, &state, &mut BTreeMap::new()).await;
@@ -2451,7 +2668,7 @@ mod tests {
     #[tokio::test]
     async fn an_unrecorded_group_carrying_setup_tags_is_recorded_and_repaired() {
         let cloud = open_group_tagged_for(PREFIX, "agents");
-        let stack = stack(SandboxEgress::Deny, created_network());
+        let stack = stack(SandboxEgress::None, created_network());
         let state = stack_state(Some(ResourceStatus::Running));
         let mut records = BTreeMap::new();
 
@@ -2518,7 +2735,7 @@ mod tests {
             inbound: false,
             stale_egress: None,
         });
-        let stack = stack(SandboxEgress::Deny, created_network());
+        let stack = stack(SandboxEgress::None, created_network());
         let state = stack_state(Some(ResourceStatus::Running));
         let mut records = record_with_group("sg-old");
         let mut calls = 0;
@@ -2555,7 +2772,7 @@ mod tests {
     #[tokio::test]
     async fn a_recorded_group_that_is_gone_is_replaced() {
         let cloud = Shared::default();
-        let stack = stack(SandboxEgress::Deny, created_network());
+        let stack = stack(SandboxEgress::None, created_network());
         let state = stack_state(Some(ResourceStatus::Running));
         let mut records = record_with_group("sg-deleted-by-hand");
 
@@ -2579,7 +2796,7 @@ mod tests {
     /// every object while set up, and none after, without refusing their own objects.
     #[tokio::test]
     async fn a_lost_response_at_any_mutating_call_still_converges() {
-        let stack = stack(SandboxEgress::Deny, created_network());
+        let stack = stack(SandboxEgress::None, created_network());
         let state = stack_state(Some(ResourceStatus::Running));
         let total = {
             let cloud = Shared::default();
@@ -2729,7 +2946,7 @@ mod tests {
                 "{not json".to_string(),
             );
         }
-        let stack = stack(SandboxEgress::Deny, created_network());
+        let stack = stack(SandboxEgress::None, created_network());
         let state = stack_state(Some(ResourceStatus::Running));
         let mut records = BTreeMap::new();
         let mut calls = 0;
@@ -2807,7 +3024,7 @@ mod tests {
     #[tokio::test]
     async fn a_connector_created_before_a_crash_is_found_not_created_again() {
         let cloud = Shared::default();
-        let stack = stack(SandboxEgress::Deny, created_network());
+        let stack = stack(SandboxEgress::None, created_network());
         let state = stack_state(Some(ResourceStatus::Running));
         let mut records = BTreeMap::new();
         let mut calls = 0;
@@ -2868,7 +3085,7 @@ mod tests {
     #[tokio::test]
     async fn teardown_deletes_connector_then_group_then_roles_and_waits_out_the_group() {
         let cloud = Shared::default();
-        let stack = stack(SandboxEgress::Deny, created_network());
+        let stack = stack(SandboxEgress::None, created_network());
         let state = stack_state(Some(ResourceStatus::Running));
         let mut records = BTreeMap::new();
         converge(&cloud, &stack, &state, &mut records).await;
@@ -2963,7 +3180,7 @@ mod tests {
         cloud: &Shared,
         records: &mut BTreeMap<String, SetupScaffolding>,
     ) -> Result<ScaffoldingProgress> {
-        let stack = stack(SandboxEgress::Deny, created_network());
+        let stack = stack(SandboxEgress::None, created_network());
         let state = stack_state(Some(ResourceStatus::Running));
         let mut calls = 0;
         loop {
@@ -2987,7 +3204,7 @@ mod tests {
             "InvalidRequest".to_string(),
             "unable to assume the provided NetworkConnectorOperatorRole".to_string(),
         ));
-        let stack = stack(SandboxEgress::Deny, created_network());
+        let stack = stack(SandboxEgress::None, created_network());
         let state = stack_state(Some(ResourceStatus::Running));
         let mut records = BTreeMap::new();
 
@@ -3023,7 +3240,7 @@ mod tests {
     async fn a_connector_request_still_running_is_waited_for_not_repeated() {
         let cloud = Shared::default();
         cloud.lock().unwrap().requests_in_flight = true;
-        let stack = stack(SandboxEgress::Deny, created_network());
+        let stack = stack(SandboxEgress::None, created_network());
         let state = stack_state(Some(ResourceStatus::Running));
         let mut records = BTreeMap::new();
         drive_to_connector_create(&cloud, &mut records)
@@ -3052,7 +3269,7 @@ mod tests {
     #[tokio::test]
     async fn a_request_cloud_control_no_longer_knows_is_dropped() {
         let cloud = Shared::default();
-        let stack = stack(SandboxEgress::Deny, created_network());
+        let stack = stack(SandboxEgress::None, created_network());
         let state = stack_state(Some(ResourceStatus::Running));
         let mut records = BTreeMap::new();
         converge(&cloud, &stack, &state, &mut records).await;
@@ -3079,7 +3296,7 @@ mod tests {
         let cloud = Shared::default();
         cloud.lock().unwrap().failing_create =
             Some(("ResourceConflict".to_string(), "busy".to_string()));
-        let stack = stack(SandboxEgress::Deny, created_network());
+        let stack = stack(SandboxEgress::None, created_network());
         let state = stack_state(Some(ResourceStatus::Running));
         let mut records = BTreeMap::new();
         drive_to_connector_create(&cloud, &mut records)
@@ -3124,7 +3341,7 @@ mod tests {
     #[tokio::test]
     async fn a_connector_delete_that_found_it_gone_is_not_an_error() {
         let cloud = Shared::default();
-        let stack = stack(SandboxEgress::Deny, created_network());
+        let stack = stack(SandboxEgress::None, created_network());
         let state = stack_state(Some(ResourceStatus::Running));
         let mut records = BTreeMap::new();
         converge(&cloud, &stack, &state, &mut records).await;
@@ -3147,7 +3364,7 @@ mod tests {
     #[tokio::test]
     async fn a_failed_connector_delete_surfaces_aws_status_message() {
         let cloud = Shared::default();
-        let stack = stack(SandboxEgress::Deny, created_network());
+        let stack = stack(SandboxEgress::None, created_network());
         let state = stack_state(Some(ResourceStatus::Running));
         let mut records = BTreeMap::new();
         converge(&cloud, &stack, &state, &mut records).await;
@@ -3193,7 +3410,7 @@ mod tests {
             .unwrap();
         assert_eq!(progress, ScaffoldingProgress::InProgress);
 
-        let stack = stack(SandboxEgress::Deny, created_network());
+        let stack = stack(SandboxEgress::None, created_network());
         let state = stack_state(Some(ResourceStatus::Running));
         converge(&cloud, &stack, &state, &mut records).await;
         assert_eq!(cloud.lock().unwrap().connectors.len(), 1);
@@ -3203,7 +3420,7 @@ mod tests {
     async fn a_pending_connector_is_waited_for_not_recreated() {
         let cloud = Shared::default();
         cloud.lock().unwrap().created_state = Some("PENDING");
-        let stack = stack(SandboxEgress::Deny, created_network());
+        let stack = stack(SandboxEgress::None, created_network());
         let state = stack_state(Some(ResourceStatus::Running));
         let mut records = BTreeMap::new();
         drive_to_connector_create(&cloud, &mut records)
@@ -3225,7 +3442,7 @@ mod tests {
     async fn an_operator_role_name_past_iams_limit_is_refused() {
         let cloud = Shared::default();
         let stack = stack_with(
-            SandboxEgress::Deny,
+            SandboxEgress::None,
             created_network(),
             ResourceLifecycle::Frozen,
             "a-sandbox-id-long-enough-to-push-the-egress-name-over",
@@ -3260,7 +3477,7 @@ mod tests {
     #[tokio::test]
     async fn a_running_network_with_no_private_subnets_is_refused() {
         let cloud = Shared::default();
-        let stack = stack(SandboxEgress::Deny, created_network());
+        let stack = stack(SandboxEgress::None, created_network());
         let state = stack_state_with(Some(ResourceStatus::Running), vec![]);
         let mut records = BTreeMap::new();
 
@@ -3286,7 +3503,7 @@ mod tests {
     async fn deny_is_refused_on_a_network_the_runtime_creates() {
         assert_refused_before_any_call(
             stack_with(
-                SandboxEgress::Deny,
+                SandboxEgress::None,
                 created_network(),
                 ResourceLifecycle::Live,
                 "agents",
@@ -3487,7 +3704,7 @@ mod tests {
     async fn a_deny_sandbox_seeded_by_direct_setup_serves_a_binding_the_runtime_loads() {
         let sandbox = Sandbox {
             preview_ports: vec![8080],
-            ..sandbox(SandboxEgress::Deny)
+            ..sandbox(SandboxEgress::None)
         };
         let served = serve_from_seed(sandbox, created_network()).await;
 
@@ -3515,7 +3732,7 @@ mod tests {
     async fn a_frozen_deny_sandbox_is_built_from_its_seed_into_a_binding_the_runtime_loads() {
         let sandbox = Sandbox {
             preview_ports: vec![8080],
-            ..sandbox(SandboxEgress::Deny)
+            ..sandbox(SandboxEgress::None)
         };
         let served = serve_from_seed_as(
             ResourceLifecycle::Frozen,
@@ -3660,7 +3877,7 @@ mod tests {
     /// deployment is destroyed rather than set up again. Teardown still finds and deletes it.
     #[tokio::test]
     async fn a_destroy_after_a_lost_checkpoint_deletes_what_setup_made() {
-        let stack = stack(SandboxEgress::Deny, created_network());
+        let stack = stack(SandboxEgress::None, created_network());
         let state = stack_state(Some(ResourceStatus::Running));
         for made in 1..=8 {
             let cloud = Shared::default();
@@ -3687,7 +3904,7 @@ mod tests {
     /// sandbox: what the lost step created must still be found and deleted.
     #[tokio::test]
     async fn a_destroy_from_the_record_before_a_lost_checkpoint_deletes_what_setup_made() {
-        let stack = stack(SandboxEgress::Deny, created_network());
+        let stack = stack(SandboxEgress::None, created_network());
         let state = stack_state(Some(ResourceStatus::Running));
         for made in 1..=8 {
             let cloud = Shared::default();
@@ -3722,7 +3939,7 @@ mod tests {
     #[tokio::test]
     async fn a_destroy_deletes_a_group_made_after_the_recorded_one_went_missing() {
         let cloud = Shared::default();
-        let stack = stack(SandboxEgress::Deny, created_network());
+        let stack = stack(SandboxEgress::None, created_network());
         let state = stack_state(Some(ResourceStatus::Running));
         let mut records = BTreeMap::new();
         converge(&cloud, &stack, &state, &mut records).await;
@@ -3751,7 +3968,7 @@ mod tests {
     /// Should Cloud Control not read a connector's tags back, its operator role still marks it.
     #[tokio::test]
     async fn a_destroy_deletes_an_unrecorded_connector_by_its_operator_role() {
-        let stack = stack(SandboxEgress::Deny, created_network());
+        let stack = stack(SandboxEgress::None, created_network());
         let state = stack_state(Some(ResourceStatus::Running));
         let cloud = Shared::default();
         converge(&cloud, &stack, &state, &mut BTreeMap::new()).await;
@@ -3769,7 +3986,7 @@ mod tests {
     /// Recovery claims by name only what also carries setup's tags for this sandbox.
     #[tokio::test]
     async fn a_destroy_leaves_same_named_objects_setup_did_not_tag() {
-        let stack = stack(SandboxEgress::Deny, created_network());
+        let stack = stack(SandboxEgress::None, created_network());
         let with_roles = |tagged: &[&str]| {
             let cloud = preexisting_group(vec![rule("127.0.0.1/32")]);
             let mut c = cloud.lock().unwrap();
@@ -3817,7 +4034,7 @@ mod tests {
     async fn setup_run_again_switches_a_serving_sandbox_between_allow_and_deny() {
         let cloud = Shared::default();
         let allow = stack(SandboxEgress::Allow, created_network());
-        let deny = stack(SandboxEgress::Deny, created_network());
+        let deny = stack(SandboxEgress::None, created_network());
         let mut state = stack_state(Some(ResourceStatus::Running));
         let mut records = BTreeMap::new();
         converge(&cloud, &allow, &state, &mut records).await;
@@ -3895,7 +4112,7 @@ mod tests {
         BTreeMap<String, SetupScaffolding>,
     ) {
         let cloud = Shared::default();
-        let stack = stack(SandboxEgress::Deny, created_network());
+        let stack = stack(SandboxEgress::None, created_network());
         let mut state = stack_state(Some(ResourceStatus::Running));
         let mut records = BTreeMap::new();
         converge(&cloud, &stack, &state, &mut records).await;

@@ -384,6 +384,7 @@ const remoteBindingsFactories: Record<keyof RawRemoteBindingsHandleConstructor, 
 }
 
 const sandboxMembers: Record<keyof RawSandboxHandle, true> = {
+  updateEgress: true,
   cancelJob: true,
   capabilities: true,
   create: true,

@@ -319,6 +319,14 @@ async fn get_secret(
 
     let value = match vault.get_secret(&key).await {
         Ok(value) => value,
+        Err(err)
+            if matches!(
+                err.error,
+                Some(alien_bindings::ErrorData::VaultSecretNotFound { .. })
+            ) =>
+        {
+            return Err(err.context(ErrorData::VaultSecretNotFound { vault_name }));
+        }
         Err(err) => {
             error!(
                 error = %err,

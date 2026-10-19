@@ -4,14 +4,14 @@
 
 use crate::error::{ErrorData, Result};
 use crate::registry::{registry_failure, RegistryFailure};
+use crate::sandbox_identity::{unreadable_file, BaseIdentity};
 use crate::{
     base_image_build_retry_delay, is_retryable_dockdash_image_pull_error,
     BASE_IMAGE_BUILD_MAX_ATTEMPTS,
 };
 use alien_core::presigned::redact_url_for_error;
 use alien_core::sandbox_image::{
-    gcp_agent_platform_env, AGENT_MODE, AGENT_PATH, EXEC_USER, GCP_AGENT_PLATFORM,
-    SESSION_ROOT_MODE,
+    AGENT_MODE, AGENT_PATH, GCP_AGENT_LOG_FILTER, GCP_AGENT_PLATFORM, SESSION_ROOT_MODE,
 };
 use alien_error::{AlienError, Context, GenericError, IntoAlienError};
 use dockdash::{
@@ -74,8 +74,8 @@ pub async fn build_gcp_sandbox_image(
         resource_name: resource_name.to_string(),
         reason,
     };
-    let passwd = read_identity_file(&base, "/etc/passwd", resource_name).await?;
-    let group = read_identity_file(&base, "/etc/group", resource_name).await?;
+    let identity = BaseIdentity::read(&base, resource_name).await?;
+    let contract = identity.contract(GCP_AGENT_PLATFORM, None)?;
     // Only the identity files were needed, and a pulled base is a full archive on disk.
     drop(base);
 
@@ -117,20 +117,19 @@ pub async fn build_gcp_sandbox_image(
     // Each pulled image holds a full archive on disk; only the agent binary was needed.
     drop(agent);
 
-    let contract = GCP_AGENT_PLATFORM;
     let user = contract.user().ok_or_else(|| {
         AlienError::new(rejected(
             "The GCP image contract declares no user".to_string(),
         ))
     })?;
     let passwd = merge_identity(
-        passwd.as_deref(),
+        identity.passwd.as_deref(),
         "root:x:0:0:root:/root:/sbin/nologin",
         &contract.passwd_entry(),
         contract.exec_uid,
     );
     let group = merge_identity(
-        group.as_deref(),
+        identity.group.as_deref(),
         "root:x:0:",
         &contract.group_entry(),
         contract.exec_gid(),
@@ -179,7 +178,8 @@ pub async fn build_gcp_sandbox_image(
                 .user(&user)
                 .expose_port(&contract.exposed_port())
                 .entrypoint(vec![AGENT_PATH.to_string()]);
-            for (name, value) in gcp_agent_platform_env() {
+            builder = builder.env("RUST_LOG", GCP_AGENT_LOG_FILTER);
+            for (name, value) in contract.contract_env_vars() {
                 builder = builder.env(name, &value);
             }
             Ok(builder)
@@ -366,84 +366,31 @@ fn release_tag(reference: &str) -> String {
         .unwrap_or_else(|| reference.to_string())
 }
 
-/// `None` for a base with no such file, which is how a scratch or distroless base looks. A link
-/// or directory in its place is an error: following it could read a file the runtime never uses.
-async fn read_identity_file(
-    base: &Image,
-    path: &str,
-    resource_name: &str,
-) -> Result<Option<String>> {
-    let bytes = match base.read_file(path).await {
-        Ok(bytes) => bytes,
-        Err(error) => {
-            let context = unreadable_file(&error, resource_name, path, "the base image");
-            return Err(error).into_alien_error().context(context);
-        }
-    };
-    bytes
-        .map(|bytes| {
-            String::from_utf8(bytes)
-                .into_alien_error()
-                .context(ErrorData::ImageBuildRejected {
-                    resource_name: resource_name.to_string(),
-                    reason: format!("{path} in the base image is not UTF-8"),
-                })
-        })
-        .transpose()
-}
-
-/// Why `path` could not be read from `image`. A link or a directory where the file should be is the
-/// image's to fix, so a retry would read the same thing; any other failure is on this side.
-fn unreadable_file(
-    error: &dockdash::Error,
-    resource_name: &str,
-    path: &str,
-    image: &str,
-) -> ErrorData {
-    match error {
-        dockdash::Error::InvalidPath { .. } => ErrorData::ImageBuildRejected {
-            resource_name: resource_name.to_string(),
-            reason: format!("{path} in {image} is not a regular file"),
-        },
-        _ => ErrorData::ImageBuildFailed {
-            resource_name: resource_name.to_string(),
-            reason: format!("Failed to read {path} from {image}"),
-            build_output: None,
-        },
-    }
-}
-
-/// Keeps the base's entries except the exec identity's name or id, keeps or adds `root`, and
-/// appends the exec identity. A base that ships its own user at the exec id (`node`, `ubuntu`)
-/// loses that entry, since two names for one id make `id` and every exec ambiguous.
+/// Preserve existing accounts, including their names and home directories. Add an identity
+/// only when its numeric id is absent; never replace an application's account with sandbox.
 fn merge_identity(base: Option<&str>, root_line: &str, exec_line: &str, exec_id: u32) -> String {
-    let exec_id = exec_id.to_string();
-    let kept: Vec<&str> = base
-        .unwrap_or_default()
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .filter(|line| {
-            let fields: Vec<&str> = line.split(':').collect();
-            fields.first() != Some(&EXEC_USER) && fields.get(2) != Some(&exec_id.as_str())
-        })
-        .collect();
-    let mut merged = String::new();
-    if !kept.iter().any(|line| line.starts_with("root:")) {
-        merged.push_str(root_line);
+    let mut merged = base.unwrap_or_default().to_string();
+    if !merged.is_empty() && !merged.ends_with('\n') {
         merged.push('\n');
     }
-    for line in kept {
-        merged.push_str(line);
-        merged.push('\n');
+    for (id, entry) in [(0, root_line), (exec_id, exec_line)] {
+        if !merged.lines().any(|line| {
+            line.split(':')
+                .nth(2)
+                .and_then(|value| value.parse::<u32>().ok())
+                == Some(id)
+        }) {
+            merged.push_str(entry);
+            merged.push('\n');
+        }
     }
-    merged.push_str(exec_line);
-    merged.push('\n');
     merged
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_core::sandbox_image::gcp_agent_platform_env;
     use dockdash::test_utils::setup_local_registry;
     use dockdash::PushOptions;
     use httpmock::Method::GET;
@@ -606,8 +553,7 @@ mod tests {
             .collect()
     }
 
-    /// `node` ships at uid 1000, the exec uid, so the base takes the replacement path: one identity
-    /// at that id, named per the contract, and every other base user kept.
+    /// An existing account at the fallback uid retains its name, home and group.
     #[tokio::test]
     async fn the_layered_image_carries_the_agent_identity_and_contract() {
         let (_registry, host) = setup_local_registry().await.expect("local registry");
@@ -655,7 +601,7 @@ mod tests {
             .expect("passwd");
         assert_eq!(
             at_exec_id(&passwd),
-            vec![GCP_AGENT_PLATFORM.passwd_entry().as_str()]
+            vec!["node:x:1000:1000::/home/node:/bin/bash"]
         );
         assert!(
             passwd.starts_with("root:x:0:0:root:/root:/bin/bash\n"),
@@ -668,10 +614,7 @@ mod tests {
         let group = pushed_file(&target, protocol.clone(), "/etc/group")
             .await
             .expect("group");
-        assert_eq!(
-            at_exec_id(&group),
-            vec![GCP_AGENT_PLATFORM.group_entry().as_str()]
-        );
+        assert_eq!(at_exec_id(&group), vec!["node:x:1000:"]);
         assert_eq!(
             pushed_file(&target, protocol, AGENT_PATH).await.as_deref(),
             Some("#!/bin/sh\nexit 0\n")

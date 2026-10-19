@@ -2,6 +2,7 @@ import {
   type ContainerAutoscaling,
   type ContainerCode,
   type Container as ContainerConfig,
+  type ContainerEgress,
   type ContainerGpuSpec,
   ContainerSchema,
   type ContainerSecurity,
@@ -32,6 +33,7 @@ export type {
   Container as ContainerConfig,
   ContainerAutoscaling,
   ContainerCode,
+  ContainerEgress,
   ContainerGpuSpec,
   ContainerOutputs,
   ContainerPort,
@@ -277,7 +279,8 @@ export class Container extends ResourceBuilder {
 
   /**
    * Adds an internal-only port to the container.
-   * Automatically creates DNS records for service discovery.
+   * Reachable by this compute cluster and every resource that links to this container.
+   * A link grants access to all declared ports; users need a publicEndpoint.
    * @param port Port number (e.g., 3000, 8080, 5432).
    * @returns The Container builder instance.
    */
@@ -337,6 +340,18 @@ export class Container extends ResourceBuilder {
       hostLabel: endpoint.hostLabel,
       wildcardSubdomains: endpoint.wildcardSubdomains ?? false,
     } satisfies PublicEndpoint)
+    return this
+  }
+
+  /**
+   * Allows public addresses and DNS, this container's own replicas on declared
+   * TCP ports, and the platform credential proxy for its own identity.
+   * Service discovery resolves only this container's own service.
+   * Requires security.profile = "restricted"; unsupported backends refuse the
+   * plan. Without this setting, existing full network access is unchanged.
+   */
+  public egress(policy: ContainerEgress): this {
+    this._config.egress = policy
     return this
   }
 

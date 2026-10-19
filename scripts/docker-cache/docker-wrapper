@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Capture the exporter archive before the toolchain normalizes its index.
+set -euo pipefail
+"${REAL_DOCKER:?set REAL_DOCKER to the real Docker executable}" "$@"
+if [[ ${1:-} == buildx && ${2:-} == build ]]; then
+  for argument in "$@"; do
+    if [[ $argument == type=oci,dest=* ]]; then
+      destination=${argument#type=oci,dest=}
+      destination=${destination%%,*}
+      cp "$destination" "$destination.before-normalization"
+    fi
+  done
+fi

@@ -4,6 +4,7 @@
 */
 
 import * as z from "zod";
+import { EgressPolicySchema } from "./egress-policy-schema.js";
 import { SandboxCodeSchema } from "./sandbox-code-schema.js";
 import { SandboxEgressSchema } from "./sandbox-egress-schema.js";
 import { SandboxLifecyclePolicySchema } from "./sandbox-lifecycle-policy-schema.js";
@@ -17,10 +18,13 @@ export const SandboxSchema = z.object({
     get "code"(){
                 return SandboxCodeSchema.describe("Specifies where the sandbox's root filesystem comes from.")
               },
-get "egress"(){
-                return SandboxEgressSchema.describe("Outbound network policy for a sandbox.")
+get "defaultPolicy"(){
+                return z.union([EgressPolicySchema, z.null()]).optional()
               },
-"id": z.string().describe("Identifier for the sandbox. Must contain only alphanumeric characters, hyphens, and\nunderscores ([A-Za-z0-9-_]). Maximum 64 characters."),
+get "egress"(){
+                return SandboxEgressSchema.describe("Outbound network policy")
+              },
+"id": z.string().describe("Identifier for the sandbox. Must be DNS-compatible: lowercase letters, digits and hyphens,\nstarting and ending with a letter or digit, with no consecutive hyphens."),
 get "lifecycle"(){
                 return SandboxLifecyclePolicySchema.describe("How long a sandbox may live and when it is paused.\n\nDeclaration-time ceilings, not per-request values: every sandbox created through this\ndeclaration's binding is held to them, whatever a caller asks for at runtime.")
               },

@@ -1339,6 +1339,9 @@ impl Ec2Api for Ec2Client {
         if let Some(tag_specs) = &request.tag_specifications {
             Self::add_tag_specifications(&mut form_data, tag_specs);
         }
+        if let Some(client_token) = &request.client_token {
+            form_data.insert("ClientToken".to_string(), client_token.clone());
+        }
 
         self.send_create_once(form_data, "CreateRouteTable", &request.vpc_id)
             .await
@@ -2543,11 +2546,26 @@ pub struct Vpc {
     pub vpc_id: Option<String>,
     pub state: Option<String>,
     pub cidr_block: Option<String>,
+    /// All IPv4 ranges, including secondary and publicly routed VPC networks.
+    pub cidr_block_association_set: Option<VpcCidrBlockAssociationSet>,
     pub owner_id: Option<String>,
     pub instance_tenancy: Option<String>,
     pub is_default: Option<bool>,
     #[serde(rename = "tagSet")]
     pub tag_set: Option<TagSet>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VpcCidrBlockAssociationSet {
+    #[serde(rename = "item", default)]
+    pub items: Vec<VpcCidrBlockAssociation>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VpcCidrBlockAssociation {
+    pub cidr_block: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -2658,8 +2676,21 @@ pub struct Subnet {
     pub available_ip_address_count: Option<i32>,
     pub default_for_az: Option<bool>,
     pub map_public_ip_on_launch: Option<bool>,
+    pub ipv6_cidr_block_association_set: Option<SubnetIpv6CidrBlockAssociationSet>,
     #[serde(rename = "tagSet")]
     pub tag_set: Option<TagSet>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SubnetIpv6CidrBlockAssociationSet {
+    #[serde(rename = "item", default)]
+    pub items: Vec<SubnetIpv6CidrBlockAssociation>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubnetIpv6CidrBlockAssociation {
+    pub ipv6_cidr_block: Option<String>,
 }
 
 /// Request to create a subnet.
@@ -2992,6 +3023,8 @@ pub struct RouteSet {
 #[serde(rename_all = "camelCase")]
 pub struct Route {
     pub destination_cidr_block: Option<String>,
+    pub destination_ipv6_cidr_block: Option<String>,
+    pub destination_prefix_list_id: Option<String>,
     pub gateway_id: Option<String>,
     pub nat_gateway_id: Option<String>,
     pub instance_id: Option<String>,
@@ -3025,6 +3058,10 @@ pub struct CreateRouteTableRequest {
     pub vpc_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tag_specifications: Option<Vec<TagSpecification>>,
+    /// Idempotency token. Repeating a request with the same token returns the route table the
+    /// first request created instead of a new one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_token: Option<String>,
 }
 
 /// Response from creating a route table.
@@ -5340,6 +5377,21 @@ mod tests {
         let mut form_data = HashMap::new();
         Ec2Client::add_cpu_options(&mut form_data, None);
         assert!(form_data.is_empty());
+    }
+
+    #[test]
+    fn describe_vpcs_preserves_secondary_ipv4_ranges() {
+        let response: DescribeVpcsResponse = quick_xml::de::from_str(
+            r#"<DescribeVpcsResponse><vpcSet><item><vpcId>vpc-test</vpcId>
+            <cidrBlock>10.0.0.0/16</cidrBlock><cidrBlockAssociationSet>
+            <item><cidrBlock>10.0.0.0/16</cidrBlock></item>
+            <item><cidrBlock>198.18.0.0/16</cidrBlock></item>
+            </cidrBlockAssociationSet></item></vpcSet></DescribeVpcsResponse>"#,
+        ).unwrap();
+        let vpc = response.vpc_set.unwrap().items.remove(0);
+        let ranges: Vec<_> = vpc.cidr_block_association_set.unwrap().items.into_iter()
+            .map(|association| association.cidr_block).collect();
+        assert_eq!(ranges, ["10.0.0.0/16", "198.18.0.0/16"]);
     }
 
     /// `Some(CpuOptions { nested_virtualization: None })` → nothing appended.

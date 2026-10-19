@@ -54,7 +54,7 @@ pub struct VaultArgs {
     #[command(subcommand)]
     pub action: VaultAction,
 
-    /// Target deployment name (default: "default")
+    /// Target deployment ID or name (default: "default")
     #[arg(long, default_value = "default", global = true)]
     pub deployment: String,
 
@@ -148,8 +148,7 @@ pub async fn vault_task(args: VaultArgs, port: u16) -> Result<()> {
     // Ensure dev server is running (deployments are registered there)
     crate::commands::ensure_server_running(port).await?;
 
-    // Get deployment ID by name
-    let deployment_id = get_deployment_id_by_name(&args.deployment, port).await?;
+    let deployment_id = get_local_deployment_id(&args.deployment, port).await?;
 
     let current_dir = get_current_dir()?;
     let state_dir = current_dir.join(&args.state_dir);
@@ -220,8 +219,8 @@ pub async fn vault_task(args: VaultArgs, port: u16) -> Result<()> {
     Ok(())
 }
 
-/// Get deployment ID by name using the manager API
-async fn get_deployment_id_by_name(deployment_name: &str, port: u16) -> Result<String> {
+/// Resolve an existing local deployment by ID or name using the manager API.
+async fn get_local_deployment_id(deployment_name: &str, port: u16) -> Result<String> {
     let client = alien_manager_api::Client::new(&format!("http://localhost:{}", port));
 
     let response = client
@@ -239,7 +238,13 @@ async fn get_deployment_id_by_name(deployment_name: &str, port: u16) -> Result<S
     let deployment = deployments
         .items
         .iter()
-        .find(|d| d.name.as_str() == deployment_name)
+        .find(|d| d.id.as_str() == deployment_name)
+        .or_else(|| {
+            deployments
+                .items
+                .iter()
+                .find(|d| d.name.as_str() == deployment_name)
+        })
         .ok_or_else(|| {
             AlienError::new(ErrorData::ValidationError {
                 field: "deployment".to_string(),
@@ -392,7 +397,7 @@ pub struct VaultRemoteArgs {
     #[command(subcommand)]
     pub action: VaultAction,
 
-    /// Target deployment ID or name (required). Global so it can follow the subcommand; clap
+    /// Target deployment ID, name, or group/name. Global so it can follow the subcommand; clap
     /// refuses a required global argument, so [`VaultRemoteArgs::deployment`] checks it.
     #[arg(long, global = true)]
     pub deployment: Option<String>,
@@ -416,11 +421,7 @@ pub async fn vault_remote_task(
     ctx: crate::execution_context::ExecutionMode,
 ) -> Result<()> {
     let deployment = args.deployment()?.to_string();
-    let manager_url = ctx.manager_url();
-    let http = ctx.auth_http().await?.client;
-
-    // Resolve deployment ID: if the user passed a name, look it up.
-    let deployment_id = resolve_deployment_id(&deployment, &http, &manager_url).await?;
+    let (manager_url, http, deployment_id) = resolve_vault_target(&ctx, &deployment).await?;
 
     match args.action {
         VaultAction::Set {
@@ -435,7 +436,10 @@ pub async fn vault_remote_task(
             validate_vault_name(&secret_name)?;
             let url = format!(
                 "{}/v1/deployments/{}/vault/{}/secrets/{}",
-                manager_url, deployment_id, vault_name, secret_name,
+                manager_url,
+                urlencoding::encode(&deployment_id),
+                vault_name,
+                secret_name,
             );
             let resp = http
                 .put(&url)
@@ -470,7 +474,10 @@ pub async fn vault_remote_task(
             validate_vault_name(&secret_name)?;
             let url = format!(
                 "{}/v1/deployments/{}/vault/{}/secrets/{}",
-                manager_url, deployment_id, vault_name, secret_name,
+                manager_url,
+                urlencoding::encode(&deployment_id),
+                vault_name,
+                secret_name,
             );
             let resp = http.get(&url).send().await.into_alien_error().context(
                 ErrorData::ApiRequestFailed {
@@ -537,6 +544,54 @@ pub async fn vault_remote_task(
     }
 
     Ok(())
+}
+
+/// Use the deployment's manager and workspace, as other manager-routed commands do.
+async fn resolve_vault_target(
+    ctx: &crate::execution_context::ExecutionMode,
+    deployment: &str,
+) -> Result<(String, reqwest::Client, String)> {
+    #[cfg(feature = "platform")]
+    if ctx.is_platform() {
+        let reference = if deployment.starts_with("dep_") || deployment.contains('/') {
+            deployment.to_string()
+        } else {
+            let workspace = ctx.resolve_workspace_with_bootstrap(true).await?;
+            let (project_id, _) = ctx.resolve_project(None, true).await?;
+            let client = ctx.sdk_client().await?;
+            let matches = super::deploy::live_deployments_named(
+                &client,
+                Some(&workspace),
+                &project_id,
+                deployment,
+            )
+            .await?;
+            match matches.as_slice() {
+                [matched] => matched.id.to_string(),
+                [] => return Err(AlienError::new(ErrorData::ValidationError {
+                    field: "deployment".to_string(),
+                    message: format!("Deployment '{deployment}' not found"),
+                })),
+                _ => return Err(AlienError::new(ErrorData::ValidationError {
+                    field: "deployment".to_string(),
+                    message: format!("Multiple deployments are named '{deployment}'. Use a dep_ ID or <group>/<name>."),
+                })),
+            }
+        };
+        let resolved =
+            crate::platform_deployment_resolver::resolve_with_manager(ctx, &reference, None, true)
+                .await?;
+        return Ok((
+            resolved.manager.manager_url,
+            resolved.manager.http_client,
+            resolved.detail.id.to_string(),
+        ));
+    }
+
+    let manager_url = ctx.manager_url();
+    let http = ctx.auth_http().await?.client;
+    let deployment_id = resolve_deployment_id(deployment, &http, &manager_url).await?;
+    Ok((manager_url, http, deployment_id))
 }
 
 async fn delete_remote_secret(
@@ -813,16 +868,24 @@ mod tests {
 
 /// Resolve a deployment ID from a name or ID string.
 ///
-/// If the input looks like a UUID, use it directly. Otherwise, list deployments
-/// from the manager and find a match by name.
+/// Resolve prefixed IDs first; a missing ID may be an existing deployment name.
+/// Legacy UUIDs retain their direct lookup behavior.
 async fn resolve_deployment_id(
     name_or_id: &str,
     http: &reqwest::Client,
     manager_url: &str,
 ) -> Result<String> {
-    // If it looks like a UUID, use it directly.
     if uuid::Uuid::try_parse(name_or_id).is_ok() {
         return Ok(name_or_id.to_string());
+    }
+    if name_or_id.starts_with("dep_") {
+        let manager = alien_manager_api::Client::new_with_client(manager_url, http.clone());
+        match crate::deployment_resolver::resolve(&manager, name_or_id, false).await {
+            Ok(deployment) => return Ok(deployment.id.to_string()),
+            // A valid name can also begin with dep_. Only a missing ID permits fallback.
+            Err(error) if error.http_status_code == Some(404) => {}
+            Err(error) => return Err(error),
+        }
     }
 
     // Otherwise, list deployments and find by name.

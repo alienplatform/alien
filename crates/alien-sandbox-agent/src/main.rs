@@ -46,20 +46,28 @@ const ENV_ISOLATION: &str = "ALIEN_SANDBOX_ISOLATION";
 const DEFAULT_OUTPUT_CAP: usize = 4 * 1024 * 1024;
 
 fn main() -> Result<()> {
+    #[cfg(target_os = "linux")]
+    if std::env::args().nth(1).as_deref() == Some("--egress-path-check") {
+        std::process::exit(
+            if alien_sandbox_agent::gateway_egress::command_path_is_closed() {
+                0
+            } else {
+                1
+            },
+        );
+    }
     tracing_subscriber::fmt::init();
 
     let state = Arc::new(load_state()?);
     let port: u16 = parse(ENV_PORT)?;
     let mut run_image_command = false;
-    if let Ok(encoded) = std::env::var("ALIEN_SANDBOX_EGRESS") {
-        let policy = serde_json::from_str(&encoded)
-            .into_alien_error()
-            .context(failed(
-                "parse egress policy",
-                "invalid startup policy".to_string(),
-            ))?;
+    if std::env::var_os("ALIEN_SANDBOX_EGRESS").is_some() {
         #[cfg(target_os = "linux")]
-        {
+        if let Some(policy) = alien_sandbox_agent::egress::legacy_from_env()? {
+            alien_sandbox_agent::egress::install(&policy, state.exec_identity.uid)?;
+        }
+        #[cfg(target_os = "linux")]
+        if unsafe { libc::geteuid() } == 0 {
             alien_sandbox_agent::privilege::prepare_identity(
                 state.exec_identity,
                 &state.session_root,
@@ -69,15 +77,14 @@ fn main() -> Result<()> {
                 "prepare declared command identity",
                 "cannot write the image's passwd/group entries".to_string(),
             ))?;
-            alien_sandbox_agent::egress::install(&policy, state.exec_identity.uid)?;
             alien_sandbox_agent::privilege::restrict_supervisor()
                 .into_alien_error()
                 .context(failed(
                     "reduce supervisor capabilities",
                     "cannot restrict the supervisor grant".to_string(),
                 ))?;
-            // The directory was created for the image's default uid. The declaration owns the
-            // identity, so fix it before commands or uploaded files can exist.
+            // Ensure the writable root agrees with the built image's command identity before
+            // commands or uploaded files can exist.
             let path = std::ffi::CString::new(state.session_root.as_os_str().as_encoded_bytes())
                 .into_alien_error()
                 .context(failed("prepare session root", "invalid path".to_string()))?;
@@ -111,6 +118,10 @@ fn main() -> Result<()> {
             "bind the agent listener",
             "the agent could not take its port".to_string(),
         ))?;
+    #[cfg(target_os = "linux")]
+    if let Some(egress) = &state.gateway_egress {
+        egress.protect_control_listener(&std_listener)?;
+    }
 
     // Linux capabilities are per thread. Build the runtime only after bootstrap reduction,
     // so every worker inherits the reduced set rather than keeping AWS's ALL grant.
@@ -123,6 +134,14 @@ fn main() -> Result<()> {
             "could not create the runtime".to_string(),
         ))?;
     runtime.block_on(async move {
+        #[cfg(target_os = "linux")]
+        if let Some(egress) = &state.gateway_egress {
+            match egress.start().await {
+                Ok(()) => { if egress.ensure_ready().is_ok() { egress.start_image_once(state.exec_identity)?; } }
+                Err(error) => tracing::error!(code = %error.code, "egress startup failed; session routes remain unavailable"),
+            }
+            run_image_command = false;
+        }
         let image_child = if run_image_command {
             alien_sandbox_agent::image_command::start(state.exec_identity)?
         } else {
@@ -283,6 +302,15 @@ fn load_state() -> Result<AgentState> {
         gid: parse(ENV_EXEC_GID)?,
     };
 
+    // A prebuilt bundle cannot be inspected by a setup emitter. Treat an explicit declaration
+    // as an assertion, never an override of the identity selected from the image at build time.
+    if std::env::var_os("ALIEN_SANDBOX_EXPECTED_EXEC_UID").is_some() {
+        let declared: u32 = parse("ALIEN_SANDBOX_EXPECTED_EXEC_UID")?;
+        if declared != exec_identity.uid {
+            return Err(invalid("ALIEN_SANDBOX_EXPECTED_EXEC_UID", "privilegedSupervisor.commandUid disagrees with the built image; rebuild the bundle with the matching command uid"));
+        }
+    }
+
     let isolation = load_isolation()?;
 
     // SAFETY: both are always-successful getters with no arguments.
@@ -298,6 +326,10 @@ fn load_state() -> Result<AgentState> {
         exec_identity,
         output_cap,
         jobs: JobRegistry::new(),
+        #[cfg(target_os = "linux")]
+        gateway_egress: alien_sandbox_agent::gateway_egress::GatewayEgress::from_env(
+            exec_identity,
+        )?,
     })
 }
 

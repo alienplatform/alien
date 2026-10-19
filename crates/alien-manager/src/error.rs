@@ -4,8 +4,6 @@ use alien_core::Platform;
 use alien_error::AlienErrorData;
 use serde::{Deserialize, Serialize};
 
-pub(crate) const REMOTE_CREDENTIAL_HANDOFF_FAILED_CODE: &str = "REMOTE_CREDENTIAL_HANDOFF_FAILED";
-
 /// Errors for alien-manager operations.
 #[derive(Debug, Clone, AlienErrorData, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -19,6 +17,16 @@ pub enum ErrorData {
         http_status_code = 404
     )]
     DeploymentNotFound { deployment_id: String },
+
+    /// The requested vault key does not exist.
+    #[error(
+        code = "VAULT_SECRET_NOT_FOUND",
+        message = "Secret not found in vault '{vault_name}'",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 404
+    )]
+    VaultSecretNotFound { vault_name: String },
 
     /// Deployment is locked by another session
     #[error(
@@ -134,7 +142,7 @@ pub enum ErrorData {
     #[error(
         code = "REMOTE_CREDENTIAL_HANDOFF_FAILED",
         message = "Remote credential handoff failed for deployment '{deployment_id}' on '{platform}'",
-        retryable = "true",
+        retryable = "inherit",
         internal = "inherit",
         human = "transparent"
     )]

@@ -5,16 +5,13 @@
 
 import * as z from "zod";
 
-/**
- * @description Outbound network policy for a sandbox.
- */
-export const SandboxEgressSchema = z.union([z.object({
+export const SandboxEgressSchema = z.union([z.union([z.object({
     "mode": z.enum(["deny"])
     }), z.object({
     "mode": z.enum(["allow"])
     }), z.object({
-    "domains": z.array(z.string()).describe("Hostnames the sandbox may reach"),
+    "domains": z.array(z.string()),
 "mode": z.enum(["allowDomains"])
-    })]).describe("Outbound network policy for a sandbox.")
+    })]), z.enum(["none", "internet"])])
 
 export type SandboxEgress = z.infer<typeof SandboxEgressSchema>

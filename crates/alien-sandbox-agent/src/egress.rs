@@ -6,13 +6,45 @@ use std::{
     io::Write,
     net::{Ipv4Addr, ToSocketAddrs},
     os::unix::fs::{OpenOptionsExt, PermissionsExt},
-    process::{Command, Stdio},
 };
 
-use alien_core::SandboxEgress;
 use alien_error::{AlienError, Context, IntoAlienError};
 
+use nlink::netlink::{
+    nftables::{
+        Chain, ChainType, CmpOp, CtState, Expr, Family, Hook, MetaKey, Policy, Priority, Register,
+        Rule,
+    },
+    Connection, Nftables,
+};
+
 use crate::error::{ErrorData, Result};
+
+/// The released object-form policies keep their direct, UID-filtered supervisor path.
+#[derive(serde::Deserialize)]
+#[serde(tag = "mode", rename_all = "camelCase")]
+pub enum LegacyEgress {
+    Deny,
+    Allow,
+    AllowDomains { domains: Vec<String> },
+}
+
+/// New string policies are handled by the gateway; object policies retain released behavior.
+pub fn legacy_from_env() -> Result<Option<LegacyEgress>> {
+    let Ok(encoded) = std::env::var("ALIEN_SANDBOX_EGRESS") else {
+        return Ok(None);
+    };
+    if matches!(encoded.as_str(), "none" | "internet")
+        || serde_json::from_str::<String>(&encoded)
+            .is_ok_and(|value| matches!(value.as_str(), "none" | "internet"))
+    {
+        return Ok(None);
+    }
+    serde_json::from_str(&encoded)
+        .map(Some)
+        .into_alien_error()
+        .context(failed("parse legacy startup policy"))
+}
 
 fn failed(reason: impl ToString) -> ErrorData {
     ErrorData::OperationFailed {
@@ -36,9 +68,9 @@ fn public(ip: Ipv4Addr) -> bool {
 
 /// Resolves once at startup and pins the result in /etc/hosts. Commands get no DNS exception:
 /// allowing arbitrary DNS queries would let them bypass a deny/allowlist with query names.
-fn destinations(policy: &SandboxEgress) -> Result<BTreeSet<Ipv4Addr>> {
+fn destinations(policy: &LegacyEgress) -> Result<BTreeSet<Ipv4Addr>> {
     let mut ips = BTreeSet::new();
-    if let SandboxEgress::AllowDomains { domains } = policy {
+    if let LegacyEgress::AllowDomains { domains } = policy {
         let mut hosts = String::new();
         for domain in domains {
             if domain.is_empty()
@@ -127,11 +159,9 @@ fn pin_hosts(hosts: &str) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Atomically installs default-deny IPv4 egress for the declaration-owned command uid.
-/// AWS's internal transport must initialize after image restore; filtering its root traffic
-/// prevents the VM from serving requests. Native nftables uid matching is supported even
-/// though this kernel lacks the iptables owner extension.
-pub fn install(policy: &SandboxEgress, command_uid: u32) -> Result<()> {
+/// Preserves the released supervisor policy: only the command UID is filtered. Agent and
+/// platform transport traffic keep their existing route; legacy policies never use the gateway.
+pub fn install(policy: &LegacyEgress, command_uid: u32) -> Result<()> {
     if unsafe { libc::geteuid() } != 0 || command_uid == 0 {
         return Err(AlienError::new(failed(
             "requires a root supervisor and a non-root command uid",
@@ -139,18 +169,8 @@ pub fn install(policy: &SandboxEgress, command_uid: u32) -> Result<()> {
     }
     crate::privilege::block_command_ipv6();
     let ips = destinations(policy)?;
-    // Keep other tables and AWS transport unchanged. add is idempotent; flush and replacement
-    // are submitted in one atomic batch, so commands never see a partial policy on restart.
-    let mut rules = format!("add table ip alien_egress\nflush table ip alien_egress\nadd chain ip alien_egress output {{ type filter hook output priority 0; policy accept; }}\nadd chain ip alien_egress commands\nadd rule ip alien_egress output meta skuid {command_uid} jump commands\n");
-    let mut add =
-        |rule: &str| rules.push_str(&format!("add rule ip alien_egress commands {rule}\n"));
-    if !matches!(policy, SandboxEgress::Allow) {
-        add("udp dport 53 drop");
-        add("tcp dport 53 drop");
-    }
-    add("oifname \"lo\" accept");
-    add("ct state established,related accept");
-    if matches!(policy, SandboxEgress::Allow) {
+    let mut resolvers = Vec::new();
+    if matches!(policy, LegacyEgress::Allow) {
         let resolv = fs::read_to_string("/etc/resolv.conf")
             .into_alien_error()
             .context(failed("read resolver configuration"))?;
@@ -158,62 +178,104 @@ pub fn install(policy: &SandboxEgress, command_uid: u32) -> Result<()> {
             let mut words = line.split_whitespace();
             if words.next() == Some("nameserver") {
                 if let Some(ip) = words.next().and_then(|s| s.parse::<Ipv4Addr>().ok()) {
-                    for protocol in ["udp", "tcp"] {
-                        add(&format!("ip daddr {ip} {protocol} dport 53 accept"));
-                    }
+                    resolvers.push(ip);
                 }
             }
         }
     }
-    match policy {
-        SandboxEgress::Deny => {}
-        SandboxEgress::AllowDomains { .. } => {
-            for ip in ips {
-                add(&format!("ip daddr {ip} accept"));
+    crate::netfilter::install(async {
+        let conn = Connection::<Nftables>::new()?;
+        let mut batch = conn.transaction();
+        if conn
+            .list_tables()
+            .await?
+            .iter()
+            .any(|t| t.name == "alien_egress" && t.family == Family::Ip)
+        {
+            batch = batch.del_table("alien_egress", Family::Ip);
+        }
+        let command = || Rule::new("alien_egress", "commands").family(Family::Ip);
+        batch = batch
+            .add_table("alien_egress", Family::Ip)
+            .add_chain(
+                Chain::new("alien_egress", "output")?
+                    .family(Family::Ip)
+                    .chain_type(ChainType::Filter)
+                    .hook(Hook::Output)
+                    .priority(Priority::Filter)
+                    .policy(Policy::Accept),
+            )
+            .add_chain(Chain::new("alien_egress", "commands")?.family(Family::Ip))
+            .add_rule(
+                Rule::new("alien_egress", "output")
+                    .family(Family::Ip)
+                    .expr(Expr::Meta {
+                        dreg: Register::R0,
+                        key: MetaKey::SkUid,
+                    })
+                    .expr(Expr::Cmp {
+                        sreg: Register::R0,
+                        op: CmpOp::Eq,
+                        data: command_uid.to_ne_bytes().to_vec(),
+                    })
+                    .try_jump("commands")?,
+            );
+        if !matches!(policy, LegacyEgress::Allow) {
+            batch = batch
+                .add_rule(command().match_udp_dport(53).drop())
+                .add_rule(command().match_tcp_dport(53).drop());
+        }
+        batch = batch.add_rule(command().match_oif("lo").accept()).add_rule(
+            command()
+                .match_ct_state(CtState::ESTABLISHED | CtState::RELATED)
+                .accept(),
+        );
+        for ip in resolvers {
+            batch = batch
+                .add_rule(
+                    command()
+                        .match_daddr_v4(ip, 32)
+                        .match_udp_dport(53)
+                        .accept(),
+                )
+                .add_rule(
+                    command()
+                        .match_daddr_v4(ip, 32)
+                        .match_tcp_dport(53)
+                        .accept(),
+                );
+        }
+        match policy {
+            LegacyEgress::Deny => {}
+            LegacyEgress::AllowDomains { .. } => {
+                for ip in ips {
+                    batch = batch.add_rule(command().match_daddr_v4(ip, 32).accept());
+                }
+            }
+            LegacyEgress::Allow => {
+                for (address, prefix) in [
+                    ([0, 0, 0, 0], 8),
+                    ([10, 0, 0, 0], 8),
+                    ([100, 64, 0, 0], 10),
+                    ([127, 0, 0, 0], 8),
+                    ([169, 254, 0, 0], 16),
+                    ([172, 16, 0, 0], 12),
+                    ([192, 168, 0, 0], 16),
+                    ([192, 0, 0, 0], 24),
+                    ([198, 18, 0, 0], 15),
+                    ([224, 0, 0, 0], 3),
+                ] {
+                    batch = batch.add_rule(
+                        command()
+                            .match_daddr_v4(Ipv4Addr::from(address), prefix)
+                            .drop(),
+                    );
+                }
+                batch = batch.add_rule(command().accept());
             }
         }
-        SandboxEgress::Allow => {
-            for cidr in [
-                "0.0.0.0/8",
-                "10.0.0.0/8",
-                "100.64.0.0/10",
-                "127.0.0.0/8",
-                "169.254.0.0/16",
-                "172.16.0.0/12",
-                "192.168.0.0/16",
-                "192.0.0.0/24",
-                "198.18.0.0/15",
-                "224.0.0.0/3",
-            ] {
-                add(&format!("ip daddr {cidr} drop"));
-            }
-            add("accept");
-        }
-    }
-    add("drop");
-    let mut child = Command::new("/usr/sbin/nft")
-        .args(["--file", "-"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .into_alien_error()
-        .context(failed("start nft (the image must include nftables)"))?;
-    child
-        .stdin
-        .take()
-        .expect("piped stdin")
-        .write_all(rules.as_bytes())
-        .into_alien_error()
-        .context(failed("write rules"))?;
-    let output = child
-        .wait_with_output()
-        .into_alien_error()
-        .context(failed("wait for nft"))?;
-    if !output.status.success() {
-        return Err(AlienError::new(failed(String::from_utf8_lossy(
-            &output.stderr,
-        ))));
-    }
-    Ok(())
+        batch.add_rule(command().drop()).commit(&conn).await
+    })
+    .into_alien_error()
+    .context(failed("install legacy command egress rules"))
 }

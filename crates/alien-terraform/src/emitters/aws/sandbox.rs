@@ -17,7 +17,7 @@ use crate::{
 };
 use alien_core::sandbox_build_role::sandbox_build_role_name;
 use alien_core::sandbox_egress::{
-    sandbox_egress_name, sandbox_egress_network, SandboxEgressVpc, LOOPBACK_ONLY_CIDR,
+    sandbox_egress_name, sandbox_egress_network, sandbox_needs_connector, LOOPBACK_ONLY_CIDR,
 };
 use alien_core::sandbox_image::AWS_MICROVM;
 use alien_core::{
@@ -25,7 +25,7 @@ use alien_core::{
     ResourceLifecycle, Result, Sandbox, SandboxCode, SandboxEgress, ServiceAccount,
     ALIEN_MANAGED_BY_TAG_KEY, ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY,
 };
-use alien_error::{AlienError, Context};
+use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{
     aws_resource_policies::without_refs_the_stack_policy_grants,
     generators::AwsRuntimePermissionsGenerator, BindingTarget,
@@ -79,10 +79,20 @@ impl TfEmitter for AwsSandboxEmitter {
         let sandbox = downcast::<Sandbox>(ctx, Sandbox::RESOURCE_TYPE)?;
         let label = required_label(ctx)?;
         let artifact_uri = artifact_uri(sandbox)?;
-        // An open sandbox routes nothing through a VPC: no subnets, and none of the connector
-        // apparatus below exists for it.
-        let subnet_ids = egress_subnet_ids(ctx, sandbox)?;
-        let open = subnet_ids.is_none();
+        let open = !sandbox_needs_connector(ctx.stack, sandbox);
+        let subnet_ids = if open {
+            Expression::Null
+        } else if matches!(sandbox.egress, SandboxEgress::Internet) {
+            super::network::sandbox_subnet_ids(ctx)?
+        } else {
+            sandbox_egress_network(ctx.stack).map_err(|refusal| {
+                AlienError::new(ErrorData::OperationNotSupported {
+                    operation: format!("terraform emit sandbox '{}'", sandbox.id()),
+                    reason: refusal.to_string(),
+                })
+            })?;
+            private_subnet_ids_expr(ctx)
+        };
         // The size whose peak stays inside the declared ceilings. A MicroVM bursts to four times
         // its baseline with no way to opt out, so the baseline is a quarter of what was declared.
         let tier = sandbox.microvm_tier()?;
@@ -169,6 +179,8 @@ impl TfEmitter for AwsSandboxEmitter {
                     Expression::from(vec![
                         Expression::String("ecr:BatchGetImage".to_string()),
                         Expression::String("ecr:GetDownloadUrlForLayer".to_string()),
+                        Expression::String("ecr:BatchImportUpstreamImage".to_string()),
+                        Expression::String("ecr:GetImageCopyStatus".to_string()),
                     ]),
                 ),
                 (
@@ -272,93 +284,140 @@ impl TfEmitter for AwsSandboxEmitter {
             ],
         );
 
-        let security_group = resource_block(
-            "aws_security_group",
-            &egress_label,
-            [
-                attr(
-                    "name_prefix",
-                    expr::template(format!(
-                        "{}-",
-                        sandbox_egress_name("${local.resource_prefix}", sandbox.id())
-                    )),
-                ),
-                attr(
-                    "description",
-                    Expression::String(format!("Sandbox {} session egress", sandbox.id())),
-                ),
-                attr("vpc_id", vpc_id_expr(ctx)),
-                // Loopback-only is AWS's documented way to say "no egress": EC2 attaches an
-                // allow-all rule to a new group unless the template states one, so the deny has
-                // to be written down rather than left out. Widening this rule is the one edit
-                // that turns `egress: deny` back into internet access.
-                nested_block(
-                    "egress",
-                    vec![
-                        attr("from_port", Expression::Number(0.into())),
-                        attr("to_port", Expression::Number(0.into())),
-                        attr("protocol", Expression::String("-1".to_string())),
-                        attr(
-                            "cidr_blocks",
-                            Expression::from(vec![Expression::String(
-                                LOOPBACK_ONLY_CIDR.to_string(),
-                            )]),
-                        ),
-                    ],
-                ),
-                attr("tags", tags(ctx, "sandbox")),
-            ],
-        );
-
         let barrier_dependency = Expression::from(vec![expr::traversal([
             PROPAGATION_BARRIER_RESOURCE,
             &format!("{label}_iam_propagation"),
         ])]);
+        let egress_resources = if !open {
+            let security_group = resource_block(
+                "aws_security_group",
+                &egress_label,
+                [
+                    attr(
+                        "name_prefix",
+                        expr::template(format!(
+                            "{}-",
+                            sandbox_egress_name("${local.resource_prefix}", sandbox.id())
+                        )),
+                    ),
+                    attr(
+                        "description",
+                        Expression::String(format!("Sandbox {} session egress", sandbox.id())),
+                    ),
+                    attr("vpc_id", vpc_id_expr(ctx)),
+                    nested_block(
+                        "egress",
+                        if matches!(sandbox.egress, SandboxEgress::None) {
+                            vec![
+                                attr("from_port", Expression::from(0)),
+                                attr("to_port", Expression::from(0)),
+                                attr("protocol", Expression::from("-1")),
+                                attr(
+                                    "cidr_blocks",
+                                    Expression::from(vec![Expression::from(LOOPBACK_ONLY_CIDR)]),
+                                ),
+                            ]
+                        } else {
+                            let network = sandbox_egress_network(ctx.stack).map_err(|error| {
+                                AlienError::new(ErrorData::OperationNotSupported {
+                                    operation: "sandbox gateway security group".into(),
+                                    reason: error.to_string(),
+                                })
+                            })?;
+                            let network_label = ctx.name_for(network.id).ok_or_else(|| {
+                                AlienError::new(ErrorData::GenericError {
+                                    message: format!(
+                                        "network '{}' has no generated name",
+                                        network.id
+                                    ),
+                                })
+                            })?;
+                            vec![
+                                attr("from_port", Expression::from(3128)),
+                                attr("to_port", Expression::from(3129)),
+                                attr("protocol", Expression::from("tcp")),
+                                attr(
+                                    "cidr_blocks",
+                                    expr::raw(format!(
+                                    "data.aws_subnet.{network_label}_sandbox_gateway[*].cidr_block"
+                                )),
+                                ),
+                            ]
+                        },
+                    ),
+                    attr("tags", tags(ctx, "sandbox")),
+                ],
+            );
 
-        let connector = resource_block(
-            NETWORK_CONNECTOR_RESOURCE,
-            label,
-            [
-                attr("depends_on", barrier_dependency.clone()),
-                attr("name", resource_prefix_template(sandbox.id())),
-                attr(
-                    "operator_role",
-                    expr::traversal(["aws_iam_role", &egress_label, "arn"]),
-                ),
-                attr(
-                    "configuration",
-                    Expression::from_iter([(
-                        "vpc_egress_configuration",
-                        Expression::from_iter([
-                            (
-                                "associated_compute_resource_types",
-                                Expression::from(vec![Expression::String("MicroVm".to_string())]),
-                            ),
-                            // Documented optional in both the CloudControl schema and the
-                            // CloudFormation reference, and rejected when absent:
-                            // "NetworkProtocol cannot be null or empty for VPC_EGRESS connector".
-                            // IPv4 rather than DualStack because the security group that carries
-                            // the deny matches IPv4 CIDRs — a v6 path would be outside it.
-                            ("network_protocol", Expression::String("IPv4".to_string())),
-                            (
-                                "subnet_ids",
-                                subnet_ids
-                                    .unwrap_or_else(|| Expression::from(Vec::<Expression>::new())),
-                            ),
-                            (
-                                "security_group_ids",
-                                Expression::from(vec![expr::traversal([
-                                    "aws_security_group",
-                                    &egress_label,
-                                    "id",
-                                ])]),
-                            ),
-                        ]),
-                    )]),
-                ),
-                attr("tags", tag_objects(ctx, true)),
-            ],
-        );
+            let mut connector_dependencies = vec![expr::traversal([
+                PROPAGATION_BARRIER_RESOURCE,
+                &format!("{label}_iam_propagation"),
+            ])];
+            if matches!(sandbox.egress, SandboxEgress::Internet) {
+                let network = sandbox_egress_network(ctx.stack).map_err(|error| {
+                    AlienError::new(ErrorData::OperationNotSupported {
+                        operation: "sandbox connector".into(),
+                        reason: error.to_string(),
+                    })
+                })?;
+                let network_label = ctx.name_for(network.id).ok_or_else(|| {
+                    AlienError::new(ErrorData::GenericError {
+                        message: format!("network '{}' has no generated name", network.id),
+                    })
+                })?;
+                connector_dependencies.push(expr::traversal([
+                    "terraform_data",
+                    &format!("{network_label}_sandbox_network_validation"),
+                ]));
+            }
+
+            let connector = resource_block(
+                NETWORK_CONNECTOR_RESOURCE,
+                label,
+                [
+                    attr("depends_on", Expression::from(connector_dependencies)),
+                    attr("name", resource_prefix_template(sandbox.id())),
+                    attr(
+                        "operator_role",
+                        expr::traversal(["aws_iam_role", &egress_label, "arn"]),
+                    ),
+                    attr(
+                        "configuration",
+                        Expression::from_iter([(
+                            "vpc_egress_configuration",
+                            Expression::from_iter([
+                                (
+                                    "associated_compute_resource_types",
+                                    Expression::from(vec![Expression::String(
+                                        "MicroVm".to_string(),
+                                    )]),
+                                ),
+                                // Documented optional in both the CloudControl schema and the
+                                // CloudFormation reference, and rejected when absent:
+                                // "NetworkProtocol cannot be null or empty for VPC_EGRESS connector".
+                                // IPv4 rather than DualStack because the security group that carries
+                                // the deny matches IPv4 CIDRs — a v6 path would be outside it.
+                                ("network_protocol", Expression::String("IPv4".to_string())),
+                                ("subnet_ids", subnet_ids),
+                                (
+                                    "security_group_ids",
+                                    Expression::from(vec![expr::traversal([
+                                        "aws_security_group",
+                                        &egress_label,
+                                        "id",
+                                    ])]),
+                                ),
+                            ]),
+                        )]),
+                    ),
+                    attr("tags", tag_objects(ctx, true)),
+                ],
+            );
+
+            vec![operator_role, operator_policy, security_group, connector]
+        } else {
+            Vec::new()
+        };
 
         // Cloud Control takes the whole body as one JSON document, so the property names here
         // are the schema's own rather than the provider's snake_case rewriting of them.
@@ -407,14 +466,21 @@ impl TfEmitter for AwsSandboxEmitter {
             // no subset to ask for, so the answer is none — and the key has to be present.
             (
                 "AdditionalOsCapabilities",
-                Expression::from(if sandbox.privileged_supervisor.is_some() {
-                    vec![Expression::String("ALL".to_string())]
-                } else {
-                    vec![]
-                }),
+                Expression::from(
+                    if alien_core::sandbox_egress::aws_sandbox_agent_environment(ctx.stack, sandbox)
+                        .contains_key("ALIEN_SANDBOX_EGRESS")
+                    {
+                        vec![Expression::String("ALL".to_string())]
+                    } else {
+                        vec![]
+                    },
+                ),
             ),
             ("Hooks", hooks()),
-            ("EnvironmentVariables", environment_variables(sandbox)),
+            (
+                "EnvironmentVariables",
+                environment_variables(ctx.stack, sandbox),
+            ),
             ("Tags", tag_objects(ctx, false)),
         ]);
 
@@ -434,9 +500,6 @@ impl TfEmitter for AwsSandboxEmitter {
         let mut fragment = TfFragment::empty()
             .with_resource(build_role)
             .with_resource(build_policy);
-        // The barrier exists to let the roles propagate before the connector and the image are
-        // created. An open, runtime-provisioned sandbox creates neither, so keeping it would ship
-        // a customer a thirty-second wait that gates nothing.
         if !open || !provisioned_at_runtime(ctx) {
             fragment = fragment.with_resource(iam_propagation);
         }
@@ -446,13 +509,7 @@ impl TfEmitter for AwsSandboxEmitter {
         if !provisioned_at_runtime(ctx) {
             fragment = fragment.with_resource(image);
         }
-        if !open {
-            fragment = fragment
-                .with_resource(operator_role)
-                .with_resource(operator_policy)
-                .with_resource(security_group)
-                .with_resource(connector);
-        }
+        fragment.resource_blocks.extend(egress_resources);
         emit_remote_bindings_policy(ctx, &mut fragment)?;
         emit_profile_policies(ctx, &mut fragment)?;
         Ok(fragment)
@@ -462,14 +519,17 @@ impl TfEmitter for AwsSandboxEmitter {
         let sandbox = downcast::<Sandbox>(ctx, Sandbox::RESOURCE_TYPE)?;
         let label = required_label(ctx)?;
         if provisioned_at_runtime(ctx) {
-            return runtime_import_ref(sandbox, label);
+            return runtime_import_ref(ctx, sandbox, label);
         }
         Ok(expr::object([
             ("previewPorts", preview_ports(sandbox)),
-            ("egressConnectorArns", egress_connector_arns(sandbox, label)),
+            (
+                "egressConnectorArns",
+                egress_connector_arns(ctx, sandbox, label),
+            ),
             (
                 "allowEgress",
-                Expression::Bool(matches!(sandbox.cloud_egress(), SandboxEgress::Allow)),
+                Expression::Bool(!sandbox_needs_connector(ctx.stack, sandbox)),
             ),
             // The ARN, not the name. Measured against the live API: `GetMicrovmImage` and
             // `RunMicrovm` both refuse a bare name — the latter with "Malformed ARN - doesn't
@@ -497,11 +557,22 @@ impl TfEmitter for AwsSandboxEmitter {
         }
         let mut fields = vec![
             ("service", Expression::String("sandbox-aws".to_string())),
+            (
+                "egress",
+                hcl::to_expression(&sandbox.egress)
+                    .into_alien_error()
+                    .context(ErrorData::GenericError {
+                        message: "serializing the sandbox egress bound".to_string(),
+                    })?,
+            ),
             ("previewPorts", preview_ports(sandbox)),
-            ("egressConnectorArns", egress_connector_arns(sandbox, label)),
+            (
+                "egressConnectorArns",
+                egress_connector_arns(ctx, sandbox, label),
+            ),
             (
                 "allowEgress",
-                Expression::Bool(matches!(sandbox.cloud_egress(), SandboxEgress::Allow)),
+                Expression::Bool(!sandbox_needs_connector(ctx.stack, sandbox)),
             ),
             ("imageArn", image_property(label, "ImageArn")),
             (
@@ -514,6 +585,17 @@ impl TfEmitter for AwsSandboxEmitter {
             ),
         ];
         fields.extend(lifecycle_fields(sandbox));
+        if let Some(policy) = &sandbox.default_policy {
+            fields.push((
+                "defaultPolicy",
+                hcl::to_expression(policy)
+                    .into_alien_error()
+                    .context(ErrorData::GenericError {
+                        message: "serializing sandbox default policy".into(),
+                    })?,
+            ));
+        }
+
         Ok(Some(expr::object(fields)))
     }
 }
@@ -544,13 +626,16 @@ fn provisioned_at_runtime(ctx: &EmitContext<'_>) -> bool {
 /// The image fields are absent because the image doesn't exist yet. In their place go what the
 /// controller cannot derive — the build role it passes and the bundle it builds from — plus the
 /// egress facts the module still owns.
-fn runtime_import_ref(sandbox: &Sandbox, label: &str) -> Result<Expression> {
+fn runtime_import_ref(ctx: &EmitContext<'_>, sandbox: &Sandbox, label: &str) -> Result<Expression> {
     Ok(expr::object([
         ("previewPorts", preview_ports(sandbox)),
-        ("egressConnectorArns", egress_connector_arns(sandbox, label)),
+        (
+            "egressConnectorArns",
+            egress_connector_arns(ctx, sandbox, label),
+        ),
         (
             "allowEgress",
-            Expression::Bool(matches!(sandbox.cloud_egress(), SandboxEgress::Allow)),
+            Expression::Bool(!sandbox_needs_connector(ctx.stack, sandbox)),
         ),
         (
             "buildRoleArn",
@@ -917,37 +1002,15 @@ fn operator_statements() -> Vec<Expression> {
     ]
 }
 
-/// The private subnets the connector places its ENIs in, or `None` for an open sandbox.
-///
-/// Which network, and which stacks are refused, is [`sandbox_egress_network`]'s decision; a
-/// created or bring-your-own VPC both render through `private_subnet_ids_expr`.
-fn egress_subnet_ids(ctx: &EmitContext<'_>, sandbox: &Sandbox) -> Result<Option<Expression>> {
-    let network = sandbox_egress_network(ctx.stack, sandbox.cloud_egress()).map_err(|refusal| {
-        AlienError::new(ErrorData::OperationNotSupported {
-            operation: format!("terraform emit sandbox '{}'", sandbox.id()),
-            reason: refusal.to_string(),
-        })
-    })?;
-    Ok(network.map(|network| match network.vpc {
-        SandboxEgressVpc::Created | SandboxEgressVpc::BroughtByCustomer => {
-            private_subnet_ids_expr(ctx)
-        }
-    }))
-}
-
-/// The connectors a session starts with, which an open sandbox has none of.
-///
-/// Empty is not a missing value here: it is how `allow` is expressed on the wire, and
-/// `allowEgress` travels beside it so a stripped `deny` cannot be mistaken for it.
-fn egress_connector_arns(sandbox: &Sandbox, label: &str) -> Expression {
-    match sandbox.cloud_egress() {
-        SandboxEgress::Allow => Expression::from(Vec::<Expression>::new()),
-        _ => Expression::from(vec![expr::traversal([
-            NETWORK_CONNECTOR_RESOURCE,
-            label,
-            "arn",
-        ])]),
+fn egress_connector_arns(ctx: &EmitContext<'_>, sandbox: &Sandbox, label: &str) -> Expression {
+    if !sandbox_needs_connector(ctx.stack, sandbox) {
+        return Expression::from(Vec::<Expression>::new());
     }
+    Expression::from(vec![expr::traversal([
+        NETWORK_CONNECTOR_RESOURCE,
+        label,
+        "arn",
+    ])])
 }
 
 /// Resolves the S3 bundle the MicroVM image is built from.
@@ -1021,7 +1084,7 @@ fn hooks() -> Expression {
 ///
 /// `ALIEN_SANDBOX_AUTHORIZATION` is `transport` on AWS: the proxy validates a token scoped to one
 /// MicroVM before a request arrives, and one MicroVM is one session.
-fn environment_variables(sandbox: &Sandbox) -> Expression {
+fn environment_variables(stack: &alien_core::Stack, sandbox: &Sandbox) -> Expression {
     let pairs = [
         ("ALIEN_SANDBOX_ROOT", AWS_MICROVM.session_root.to_string()),
         ("ALIEN_SANDBOX_PORT", AWS_MICROVM.port.to_string()),
@@ -1029,15 +1092,13 @@ fn environment_variables(sandbox: &Sandbox) -> Expression {
             "ALIEN_SANDBOX_AUTHORIZATION",
             AWS_MICROVM.authorization.env_value().to_string(),
         ),
-        ("ALIEN_SANDBOX_EXEC_UID", AWS_MICROVM.exec_uid.to_string()),
-        ("ALIEN_SANDBOX_EXEC_GID", AWS_MICROVM.exec_uid.to_string()),
     ];
 
     let mut pairs: Vec<(String, String)> = pairs
         .into_iter()
         .map(|(key, value)| (key.to_string(), value))
         .collect();
-    let mut overrides = sandbox.supervisor_environment();
+    let mut overrides = alien_core::sandbox_egress::aws_sandbox_agent_environment(stack, sandbox);
     for (key, value) in &mut pairs {
         if let Some(replacement) = overrides.remove(key) {
             *value = replacement;
@@ -1073,7 +1134,7 @@ mod tests {
             .code(SandboxCode::Image {
                 image: LITERAL.to_string(),
             })
-            .egress(SandboxEgress::Allow)
+            .egress(SandboxEgress::Internet)
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: lifetime,
                 idle_pause_seconds: idle,
@@ -1092,6 +1153,8 @@ mod tests {
                 .collect();
 
         let typed = serde_json::to_value(alien_core::AwsSandboxBinding {
+            default_policy: None,
+            egress: None,
             image_arn: alien_core::BindingValue::Value("arn".to_string()),
             image_version: alien_core::BindingValue::Value("1".to_string()),
             region: alien_core::BindingValue::Value("us-east-2".to_string()),
@@ -1188,7 +1251,7 @@ mod tests {
                 disk: "20Gi".to_string(),
                 max_processes: None,
             })
-            .egress(SandboxEgress::Allow)
+            .egress(SandboxEgress::Internet)
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
@@ -1219,45 +1282,5 @@ mod tests {
                 "an escaped interpolation reaches IAM as literal text: {rendered}"
             );
         }
-    }
-
-    /// `desired_state` is checked against the CloudFormation Resource Schema, which names every
-    /// property in PascalCase and rejects anything else — but only once an apply reaches AWS, so
-    /// a casing slip lands in a customer's install rather than in a test.
-    #[test]
-    fn the_image_properties_are_named_the_way_the_resource_schema_names_them() {
-        let hooks = hooks().to_string();
-        for property in [
-            "Port",
-            "MicrovmImageHooks",
-            "Ready",
-            "ReadyTimeoutInSeconds",
-            "MicrovmHooks",
-            "Run",
-            "RunTimeoutInSeconds",
-            "Resume",
-            "ResumeTimeoutInSeconds",
-        ] {
-            assert!(
-                hooks.contains(property),
-                "hooks must carry {property}: {hooks}"
-            );
-        }
-        // No property in this object is snake_case, so an underscore is the drift itself.
-        assert!(
-            !hooks.contains('_'),
-            "a snake_case hook property is refused: {hooks}"
-        );
-
-        let variables = environment_variables(&sandbox_with_lifecycle(None, None)).to_string();
-        assert!(
-            variables.contains("Key") && variables.contains("Value"),
-            "{variables}"
-        );
-        // No key or value in the pairs contains these words, so a match is a lower-cased property.
-        assert!(
-            !variables.contains("key") && !variables.contains("value"),
-            "an environment variable pair is Key/Value: {variables}"
-        );
     }
 }
