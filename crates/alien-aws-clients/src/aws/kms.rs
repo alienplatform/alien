@@ -177,7 +177,7 @@ pub async fn probe_external_key(client: &dyn KmsApi, key_id: &str) -> Result<boo
         .encrypt(
             EncryptRequest::builder(key_id.to_string(), "YWxpZW4ta2V5LWhlYWx0aA==".to_string())
                 .encryption_context(BTreeMap::from([(
-                    "alien.dev/purpose".to_string(),
+                    "deployment-purpose".to_string(),
                     "key-health".to_string(),
                 )]))
                 .build(),

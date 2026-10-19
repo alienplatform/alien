@@ -523,6 +523,10 @@ fn create_topology(
             nested_block(
                 "egress",
                 vec![
+                    attr(
+                        "description",
+                        Expression::String("Outbound workload traffic".to_string()),
+                    ),
                     attr("from_port", Expression::Number(hcl::Number::from(0i64))),
                     attr("to_port", Expression::Number(hcl::Number::from(0i64))),
                     attr("protocol", Expression::String("-1".to_string())),

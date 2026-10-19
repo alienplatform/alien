@@ -14,7 +14,7 @@
             "resources": ["${resourceName}"],
             "condition": {
               "StringEquals": {
-                "kms:EncryptionContext:alien.dev/purpose": "key-health"
+                "kms:EncryptionContext:deployment-purpose": "key-health"
               }
             }
           }
