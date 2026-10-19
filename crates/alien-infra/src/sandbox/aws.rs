@@ -531,8 +531,12 @@ impl AwsSandboxController {
 
         if matches!(config.egress, alien_core::SandboxEgress::Internet) {
             self.egress_network_verified = false;
-            super::egress::validate_aws_network(ctx).await?;
-            self.egress_network_verified = true;
+            // A deployment being deleted no longer declares this sandbox or its network. Its
+            // binding stays withdrawn, and the refresh must not block the deletion.
+            if ctx.desired_stack.resources.contains_key(&config.id) {
+                super::egress::validate_aws_network(ctx).await?;
+                self.egress_network_verified = true;
+            }
         }
 
         if let Some(image_identifier) = self.image_identifier.clone() {

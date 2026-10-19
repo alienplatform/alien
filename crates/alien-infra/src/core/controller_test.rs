@@ -640,6 +640,12 @@ impl SingleControllerExecutor {
         Ok(())
     }
 
+    /// Removes a resource from the desired stack without transitioning any controller, as when
+    /// the deployment declaring it is deleted while this resource still runs.
+    pub fn remove_desired_resource(&mut self, resource_id: &str) {
+        self.desired_stack.resources.swap_remove(resource_id);
+    }
+
     /// Transitions a resource from teardown-required into its teardown flow.
     pub fn teardown(&mut self) -> Result<()> {
         self.controller
