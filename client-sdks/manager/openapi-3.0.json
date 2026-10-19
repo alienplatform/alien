@@ -12850,6 +12850,27 @@
                 },
                 "description": "IDs of public subnets (required for public ingress)"
               },
+              "sandbox_gateway_subnet_cidrs": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "The IPv4 CIDRs of `sandbox_gateway_subnet_ids`, in the same order: the only\ndestinations sandbox connectors may reach. Same as the `SandboxGatewaySubnetCidrs`\nsetup parameter."
+              },
+              "sandbox_gateway_subnet_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Two or three subnets, in different availability zones, whose only default route is\nthe private subnets' NAT gateway. The sandbox egress gateway's internal load balancer\nruns in them. Same as the `SandboxGatewaySubnetIds` setup parameter."
+              },
+              "sandbox_subnet_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Subnets for internet sandboxes' egress connectors, with no route beyond the VPC.\nDirect deploy needs these, the gateway subnets and their CIDRs to run an internet\nsandbox in an existing VPC; it creates no subnets there. Same as the\n`SandboxSubnetIds` setup parameter."
+              },
               "security_group_ids": {
                 "type": "array",
                 "items": {
