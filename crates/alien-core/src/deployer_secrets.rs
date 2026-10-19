@@ -1,9 +1,9 @@
 //! Deployer secrets that live only in the customer's own secret store.
 //!
 //! A secret stack input the deployer provides is *vault-native*: the deployer
-//! writes the value into their cloud's secret store, in the stack's `secrets`
+//! writes the value into their cloud's secret store, in the stack's `deployer-secrets`
 //! vault, under a key Alien derives from the input id. Alien tells them where
-//! (a console link and a CLI command with a placeholder), checks whether the
+//! (a console link and a CLI command with a hidden prompt), checks whether the
 //! slot is filled using metadata-only calls, and the workload reads the value
 //! at start. Setup paths never carry the value.
 //!
@@ -20,26 +20,22 @@ use crate::{
     VaultBinding,
 };
 
-/// Prefix of every vault key that holds a deployer secret, so these keys
-/// never collide with the env-var-named keys Alien syncs itself.
-pub const DEPLOYER_SECRET_KEY_PREFIX: &str = "input-";
-
 /// Placeholder for the secret value in the CLI commands Alien shows.
 pub const DEPLOYER_SECRET_VALUE_PLACEHOLDER: &str = "<VALUE>";
 
-/// The `secrets` vault key for a deployer secret input: `input-` plus the input
-/// id in lowercase kebab case (`databasePassword` → `input-database-password`).
+/// The `deployer-secrets` vault key is the input id in lowercase kebab case
+/// (`databasePassword` → `database-password`).
 ///
 /// Only `[a-z0-9-]` survive, so the key is valid unchanged in every backend
 /// (SSM, Secret Manager, Key Vault and Kubernetes object names).
 pub fn deployer_secret_vault_key(input_id: &str) -> String {
-    let mut key = String::from(DEPLOYER_SECRET_KEY_PREFIX);
+    let mut key = String::new();
     let mut previous_lower_or_digit = false;
     let mut pending_separator = false;
     for character in input_id.chars() {
         if character.is_ascii_alphanumeric() {
             let starts_word = character.is_ascii_uppercase() && previous_lower_or_digit;
-            if (pending_separator || starts_word) && !key.ends_with('-') {
+            if (pending_separator || starts_word) && !key.is_empty() && !key.ends_with('-') {
                 key.push('-');
             }
             key.push(character.to_ascii_lowercase());
@@ -64,7 +60,7 @@ pub fn is_deployer_secret_input(input: &StackInputDefinition) -> bool {
 pub fn deployer_secret_value_refusal(name: &str) -> String {
     format!(
         "'{name}' is a deployer secret: its value goes into your own secret store and never \
-         through Alien. Do not pass it here; write it into the deployment's secrets vault \
+         through Alien. Do not pass it here; write it into the deployment's deployer-secrets vault \
          instead (the deployment status shows the secret's name and the command that writes it)."
     )
 }
@@ -74,7 +70,7 @@ pub fn deployer_secret_value_refusal(name: &str) -> String {
 pub struct DeployerSecretSlot<'a> {
     /// The stack input.
     pub input: &'a StackInputDefinition,
-    /// Key of the value in the `secrets` vault.
+    /// Key of the value in the `deployer-secrets` vault.
     pub vault_key: String,
     /// The deployment still stores a value for this input from before slots
     /// were vault-native. It is used until the control plane drops it.
@@ -186,6 +182,34 @@ pub enum DeployerSecretStore {
     LocalVault,
 }
 
+/// Commands for a shell family. Values are never sent to the control plane.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct DeployerSecretCommandVariants {
+    /// Command with a visible value placeholder; shell history can retain it.
+    pub inline: String,
+    /// Hidden-input command, without the value in shell history or process arguments.
+    pub prompt: String,
+}
+
+/// Shell-specific instructions generated beside the secret location.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct DeployerSecretCommands {
+    /// Bash (including 3.2) and zsh on Linux and macOS.
+    pub unix: DeployerSecretCommandVariants,
+    /// Windows PowerShell 5.1 and PowerShell 7.
+    pub windows: DeployerSecretCommandVariants,
+    /// Expected account, project, subscription or Kubernetes namespace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    /// Read-only identity check, valid in both shell families.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check_command: Option<String>,
+}
+
 /// Where a deployer writes a vault-native secret.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -202,8 +226,11 @@ pub struct DeployerSecretLocation {
     /// Cloud console page where the secret is created, when the store has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub console_url: Option<String>,
-    /// Command that writes the value, with `<VALUE>` in place of the secret.
+    /// Command that prompts without echoing and writes the value through stdin.
     pub cli_command: String,
+    /// Optional for compatibility with reports from older engines.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commands: Option<DeployerSecretCommands>,
     /// Command that deletes the secret. Deleting a deployment keeps the
     /// secrets the deployer wrote, since Alien never owned their values.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -213,6 +240,10 @@ pub struct DeployerSecretLocation {
 /// What a location needs beyond the vault binding.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DeployerSecretLocationContext {
+    /// Display label used by the hidden prompt.
+    pub secret_label: Option<String>,
+    /// AWS account that owns the deployment.
+    pub aws_account_id: Option<String>,
     /// AWS region of the stack.
     pub aws_region: Option<String>,
     /// GCP project id of the stack.
@@ -225,23 +256,25 @@ pub struct DeployerSecretLocationContext {
     pub deployment_name: Option<String>,
 }
 
-/// Where the deployer writes the value for `vault_key` of the `secrets` vault
+/// Where the deployer writes the value for `vault_key` of the `deployer-secrets` vault
 /// described by `binding`.
 pub fn deployer_secret_location(
     binding: &VaultBinding,
     vault_key: &str,
     context: &DeployerSecretLocationContext,
 ) -> crate::Result<DeployerSecretLocation> {
-    let placeholder = DEPLOYER_SECRET_VALUE_PLACEHOLDER;
-    let location = match binding {
+    let label = context.secret_label.as_deref().unwrap_or(vault_key);
+    let mut prepare = String::new();
+    let mut location = match binding {
         VaultBinding::ParameterStore(binding) => {
             let prefix = concrete(&binding.vault_prefix, "vaultPrefix")?;
             let name = vault_naming::parameter_store_parameter_name(&prefix, vault_key);
             let region = context.aws_region.as_deref();
             let region_flag = region
-                .map(|region| format!(" --region {region}"))
+                .map(|region| format!(" --region {}", shell_quote(region)))
                 .unwrap_or_default();
             DeployerSecretLocation {
+                commands: None,
                 store: DeployerSecretStore::AwsParameterStore,
                 vault_name: None,
                 console_url: region.map(|region| {
@@ -250,7 +283,7 @@ pub fn deployer_secret_location(
                     )
                 }),
                 cli_command: format!(
-                    "aws ssm put-parameter{region_flag} --name '{name}' --type SecureString --overwrite --value '{placeholder}'"
+                    "aws ssm put-parameter{region_flag} --name {} --type SecureString --overwrite --value file:///dev/stdin", shell_quote(&name)
                 ),
                 delete_command: Some(format!(
                     "aws ssm delete-parameter{region_flag} --name '{name}'"
@@ -263,9 +296,14 @@ pub fn deployer_secret_location(
             let name = vault_naming::secret_manager_secret_id(&prefix, vault_key);
             let project = context.gcp_project_id.as_deref();
             let project_flag = project
-                .map(|project| format!(" --project {project}"))
+                .map(|project| format!(" --project {}", shell_quote(project)))
                 .unwrap_or_default();
+            prepare = format!(
+                "(gcloud secrets describe {0}{project_flag} >/dev/null 2>&1 || gcloud secrets create {0}{project_flag} --replication-policy=automatic) &&\n",
+                shell_quote(&name)
+            );
             DeployerSecretLocation {
+                commands: None,
                 store: DeployerSecretStore::GcpSecretManager,
                 vault_name: None,
                 console_url: project.map(|project| {
@@ -276,7 +314,7 @@ pub fn deployer_secret_location(
                 // Creates the secret the first time; every run adds the value
                 // as a new version, so the same command rotates it.
                 cli_command: format!(
-                    "(gcloud secrets describe {name}{project_flag} >/dev/null 2>&1 || gcloud secrets create {name}{project_flag} --replication-policy=automatic) && printf '%s' '{placeholder}' | gcloud secrets versions add {name}{project_flag} --data-file=-"
+                    "gcloud secrets versions add {}{project_flag} --data-file=-", shell_quote(&name)
                 ),
                 delete_command: Some(format!(
                     "gcloud secrets delete {name}{project_flag} --quiet"
@@ -288,6 +326,7 @@ pub fn deployer_secret_location(
             let vault_name = concrete(&binding.vault_name, "vaultName")?;
             let name = vault_naming::key_vault_secret_name(vault_key);
             DeployerSecretLocation {
+                commands: None,
                 store: DeployerSecretStore::AzureKeyVault,
                 vault_name: Some(vault_name.clone()),
                 console_url: match (
@@ -300,7 +339,9 @@ pub fn deployer_secret_location(
                     _ => None,
                 },
                 cli_command: format!(
-                    "az keyvault secret set --vault-name {vault_name} --name {name} --value '{placeholder}'"
+                    "az keyvault secret set --vault-name {} --name {} --file /dev/stdin --encoding utf-8 --output none",
+                    shell_quote(&vault_name),
+                    shell_quote(&name)
                 ),
                 delete_command: Some(format!(
                     "az keyvault secret delete --vault-name {vault_name} --name {name}"
@@ -313,11 +354,14 @@ pub fn deployer_secret_location(
             let namespace = concrete(&binding.namespace, "namespace")?;
             let name = vault_naming::kubernetes_secret_name(&prefix, vault_key);
             DeployerSecretLocation {
+                commands: None,
                 store: DeployerSecretStore::KubernetesSecret,
                 vault_name: None,
                 console_url: None,
                 cli_command: format!(
-                    "kubectl create secret generic {name} --namespace {namespace} --from-literal={}='{placeholder}'",
+                    "kubectl create secret generic {} --namespace {} --from-file={}=/dev/stdin --dry-run=client -o yaml | kubectl apply -f -",
+                    shell_quote(&name),
+                    shell_quote(&namespace),
                     vault_naming::KUBERNETES_SECRET_VALUE_KEY
                 ),
                 delete_command: Some(format!(
@@ -330,15 +374,17 @@ pub fn deployer_secret_location(
             let deployment_flag = context
                 .deployment_name
                 .as_deref()
-                .map(|name| format!(" --deployment {name}"))
+                .map(|name| format!(" --deployment {}", shell_quote(name)))
                 .unwrap_or_default();
             DeployerSecretLocation {
+                commands: None,
                 store: DeployerSecretStore::LocalVault,
                 vault_name: None,
                 console_url: None,
                 cli_command: format!(
-                    "alien dev vault{deployment_flag} set {} {vault_key} '{placeholder}'",
-                    binding.vault_name
+                    "alien dev vault{deployment_flag} set {} {} --stdin",
+                    shell_quote(&binding.vault_name),
+                    shell_quote(vault_key)
                 ),
                 delete_command: Some(format!(
                     "alien dev vault{deployment_flag} delete {} {vault_key}",
@@ -348,11 +394,191 @@ pub fn deployer_secret_location(
             }
         }
     };
+    let unix_inline = match location.store {
+        DeployerSecretStore::AwsParameterStore => location
+            .cli_command
+            .replace("file:///dev/stdin", "'<VALUE>'"),
+        DeployerSecretStore::AzureKeyVault => location
+            .cli_command
+            .replace("--file /dev/stdin --encoding utf-8", "--value '<VALUE>'"),
+        DeployerSecretStore::KubernetesSecret => location.cli_command.replace(
+            "--from-file=value=/dev/stdin",
+            "--from-literal=value='<VALUE>'",
+        ),
+        DeployerSecretStore::LocalVault => format!(
+            "{} '<VALUE>'",
+            location.cli_command.trim_end_matches(" --stdin")
+        ),
+        DeployerSecretStore::GcpSecretManager => format!(
+            "{}printf '%s' '<VALUE>' | {}",
+            prepare.replace('\n', " "),
+            location.cli_command
+        ),
+    };
+    let windows = windows_secret_commands(binding, vault_key, context)?;
+    // Secret inputs have no multiline declaration; Enter completes a hidden single-line read.
+    // A subshell prevents values or shell options from leaking into the caller's session.
+    let prompt = shell_quote(&format!("{label}: "));
+    location.cli_command = format!(
+        "(set +x; set -o pipefail; printf '%s' {prompt} >&2; IFS= read -rs secret || [ -n \"$secret\" ]\n[ -n \"$secret\" ] && printf '\\n' >&2 && {prepare}printf '%s' \"$secret\" | {}\n)",
+        location.cli_command,
+        prepare = prepare.replace('\n', " "),
+    );
+    let (target, check_command) = match binding {
+        VaultBinding::ParameterStore(_) => (
+            context.aws_account_id.clone(),
+            Some("aws sts get-caller-identity --query Account --output text".to_string()),
+        ),
+        VaultBinding::SecretManager(_) => (
+            context.gcp_project_id.clone(),
+            Some("gcloud auth list --filter=status:ACTIVE --format=\"value(account)\"".to_string()),
+        ),
+        VaultBinding::KeyVault(_) => (
+            context.azure_subscription_id.clone(),
+            Some("az account show --query id --output tsv".to_string()),
+        ),
+        VaultBinding::KubernetesSecret(binding) => (
+            Some(concrete(&binding.namespace, "namespace")?),
+            Some("kubectl config current-context".to_string()),
+        ),
+        VaultBinding::Local(_) => (context.deployment_name.clone(), None),
+    };
+    location.commands = Some(DeployerSecretCommands {
+        unix: DeployerSecretCommandVariants {
+            inline: unix_inline,
+            prompt: location.cli_command.clone(),
+        },
+        windows,
+        target,
+        check_command,
+    });
     Ok(location)
 }
 
+// PowerShell 5.1 string pipelines add a newline and default to ASCII. A UTF-8
+// file avoids both transformations and native argument quoting of secret values.
+fn windows_secret_commands(
+    binding: &VaultBinding,
+    vault_key: &str,
+    context: &DeployerSecretLocationContext,
+) -> crate::Result<DeployerSecretCommandVariants> {
+    let mut prepare = String::new();
+    let write = match binding {
+        VaultBinding::ParameterStore(binding) => {
+            let name = vault_naming::parameter_store_parameter_name(
+                &concrete(&binding.vault_prefix, "vaultPrefix")?,
+                vault_key,
+            );
+            let region = context
+                .aws_region
+                .as_deref()
+                .map(|value| format!(" --region {}", powershell_quote(value)))
+                .unwrap_or_default();
+            format!(
+                "aws ssm put-parameter{region} --name {} --type SecureString --overwrite --value \"file://$path\"",
+                powershell_quote(&name)
+            )
+        }
+        VaultBinding::SecretManager(binding) => {
+            let name = powershell_quote(&vault_naming::secret_manager_secret_id(
+                &concrete(&binding.vault_prefix, "vaultPrefix")?,
+                vault_key,
+            ));
+            let project = context
+                .gcp_project_id
+                .as_deref()
+                .map(|value| format!(" --project {}", powershell_quote(value)))
+                .unwrap_or_default();
+            prepare = format!(
+                "gcloud secrets describe {name}{project} 2>$null | Out-Null; if ($LASTEXITCODE -ne 0) {{ gcloud secrets create {name}{project} --replication-policy=automatic; if ($LASTEXITCODE -ne 0) {{ throw 'Could not create secret' }} }}; "
+            );
+            format!("gcloud secrets versions add {name}{project} --data-file=$path")
+        }
+        VaultBinding::KeyVault(binding) => format!(
+            "az keyvault secret set --vault-name {} --name {} --file $path --encoding utf-8 --output none",
+            powershell_quote(&concrete(&binding.vault_name, "vaultName")?),
+            powershell_quote(&vault_naming::key_vault_secret_name(vault_key))
+        ),
+        VaultBinding::KubernetesSecret(binding) => format!(
+            "kubectl create secret generic {} --namespace {} --from-file=\"value=$path\" --dry-run=client -o yaml | kubectl apply -f -",
+            powershell_quote(&vault_naming::kubernetes_secret_name(
+                &concrete(&binding.vault_prefix, "vaultPrefix")?,
+                vault_key
+            )),
+            powershell_quote(&concrete(&binding.namespace, "namespace")?)
+        ),
+        VaultBinding::Local(binding) => {
+            let deployment = context
+                .deployment_name
+                .as_deref()
+                .map(|value| format!(" --deployment {}", powershell_quote(value)))
+                .unwrap_or_default();
+            format!(
+                "alien dev vault{deployment} set {} {} --file $path",
+                powershell_quote(&binding.vault_name),
+                powershell_quote(vault_key)
+            )
+        }
+    };
+    let file = "$path = [IO.Path]::GetTempFileName()";
+    let save = "[IO.File]::WriteAllText($path, $value, (New-Object Text.UTF8Encoding $false))";
+    let cleanup = "Remove-Item -LiteralPath $path -Force; $value = $null";
+    let result = "; if ($LASTEXITCODE -ne 0) { throw 'Could not write secret' }";
+    let inline = format!(
+        "& {{ $value = '<VALUE>'; {file}; try {{ {save}; {prepare}{write}{result} }} finally {{ {cleanup} }} }}"
+    );
+    let inline = match binding {
+        VaultBinding::ParameterStore(_) => write.replace("\"file://$path\"", "'<VALUE>'"),
+        VaultBinding::KeyVault(_) => {
+            write.replace("--file $path --encoding utf-8", "--value '<VALUE>'")
+        }
+        VaultBinding::KubernetesSecret(_) => write.replace(
+            "--from-file=\"value=$path\"",
+            "--from-literal=value='<VALUE>'",
+        ),
+        VaultBinding::Local(binding) => {
+            let deployment = context
+                .deployment_name
+                .as_deref()
+                .map(|value| format!(" --deployment {}", powershell_quote(value)))
+                .unwrap_or_default();
+            format!(
+                "alien dev vault{deployment} set {} {} '<VALUE>'",
+                powershell_quote(&binding.vault_name),
+                powershell_quote(vault_key)
+            )
+        }
+        VaultBinding::SecretManager(_) => inline,
+    };
+    let label = powershell_quote(context.secret_label.as_deref().unwrap_or(vault_key));
+    // NetworkCredential unwraps SecureString on both Windows PowerShell 5.1 and PowerShell 7.
+    // Keep the native file transport: Windows string pipelines alter encoding and newlines.
+    let prompt = format!(
+        "& {{ $value = [Net.NetworkCredential]::new('', (Read-Host {label} -AsSecureString)).Password\nif (!$value) {{ return }}\n{file}\ntry {{ {save}\n{prepare}{write}{result}\n}} finally {{ {cleanup} }} }}"
+    );
+    Ok(DeployerSecretCommandVariants { inline, prompt })
+}
+
+fn powershell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+fn shell_quote(value: &str) -> String {
+    if !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"-_./:@".contains(&byte))
+    {
+        value.to_string()
+    } else {
+        format!("'{}'", value.replace('\'', "'\"'\"'"))
+    }
+}
+
 fn concrete(value: &BindingValue<String>, field: &str) -> crate::Result<String> {
-    value.clone().into_value(crate::SECRETS_VAULT_ID, field)
+    value
+        .clone()
+        .into_value(crate::DEPLOYER_SECRETS_VAULT_ID, field)
 }
 
 /// Whether a deployer secret slot holds a usable value. Alien learns this from
@@ -427,7 +653,7 @@ pub const ENV_ALIEN_DEPLOYER_SECRETS: &str = "ALIEN_DEPLOYER_SECRETS";
 pub struct DeployerSecretEnv {
     /// Environment variable name.
     pub name: String,
-    /// Key in the `secrets` vault.
+    /// Key in the `deployer-secrets` vault.
     pub vault_key: String,
     /// Full name in the secret store (the Kubernetes Secret on Kubernetes).
     pub secret_name: String,
@@ -470,17 +696,14 @@ pub fn deployer_secret_environment(
         platform,
     )
     .into_iter()
+    // Stored presence selects existing delivery even when plaintext inputs are
+    // omitted. Preflight does not grant these inputs access to the native vault.
+    .filter(|slot| !slot.has_stored_value)
     .filter_map(|slot| {
-        let report = reports
+        reports
             .iter()
-            .find(|report| report.input_id == slot.input.id)?;
-        // Only a concrete legacy value supplies delivery. Presence IDs do
-        // not supply a value for a pure deployer slot.
-        (!values
-            .get(&slot.input.id)
-            .is_some_and(|value| !value.is_null())
-            && (!slot.has_stored_value || report.status == DeployerSecretStatus::Present))
-            .then_some((slot, report))
+            .find(|report| report.input_id == slot.input.id)
+            .map(|report| (slot, report))
     })
     .flat_map(|(slot, report)| {
         slot.input.env.iter().map(move |mapping| {
@@ -649,14 +872,11 @@ mod tests {
     fn vault_keys_are_kebab_case_and_backend_safe() {
         assert_eq!(
             deployer_secret_vault_key("databasePassword"),
-            "input-database-password"
+            "database-password"
         );
-        assert_eq!(deployer_secret_vault_key("api_key"), "input-api-key");
-        assert_eq!(
-            deployer_secret_vault_key("OAuth2Token"),
-            "input-oauth2-token"
-        );
-        assert_eq!(deployer_secret_vault_key("a--b__c"), "input-a-b-c");
+        assert_eq!(deployer_secret_vault_key("api_key"), "api-key");
+        assert_eq!(deployer_secret_vault_key("OAuth2Token"), "oauth2-token");
+        assert_eq!(deployer_secret_vault_key("a--b__c"), "a-b-c");
     }
 
     #[test]
@@ -672,7 +892,7 @@ mod tests {
 
         let slots = deployer_secret_slots(&inputs, &stored, Some(&[]), &[], Platform::Aws);
         assert_eq!(slots.len(), 1);
-        assert_eq!(slots[0].vault_key, "input-database-password");
+        assert_eq!(slots[0].vault_key, "database-password");
         assert!(slots[0].has_stored_value);
     }
 
@@ -719,35 +939,39 @@ mod tests {
             deployment_name: Some("default".to_string()),
             ..Default::default()
         };
-        let key = "input-database-password";
+        let key = "database-password";
 
         let aws = deployer_secret_location(
-            &VaultBinding::parameter_store("stack-secrets"),
+            &VaultBinding::parameter_store("stack-deployer-secrets"),
             key,
             &context,
         )
         .unwrap();
-        assert_eq!(aws.name, "stack-secrets-input-database-password");
+        assert_eq!(aws.name, "stack-deployer-secrets-database-password");
         assert_eq!(aws.store, DeployerSecretStore::AwsParameterStore);
         assert!(aws.cli_command.contains("--type SecureString"));
-        assert!(aws.cli_command.contains("'<VALUE>'"));
+
         assert_eq!(
             aws.delete_command.as_deref(),
-            Some("aws ssm delete-parameter --region us-east-1 --name 'stack-secrets-input-database-password'")
+            Some(
+                "aws ssm delete-parameter --region us-east-1 --name 'stack-deployer-secrets-database-password'"
+            )
         );
 
         let gcp = deployer_secret_location(
-            &VaultBinding::secret_manager("stack-secrets"),
+            &VaultBinding::secret_manager("stack-deployer-secrets"),
             key,
             &context,
         )
         .unwrap();
-        assert_eq!(gcp.name, "stack-secrets-input-database-password");
+        assert_eq!(gcp.name, "stack-deployer-secrets-database-password");
         assert_eq!(gcp.vault_name, None);
         assert!(gcp.console_url.unwrap().contains("project=acme-prod"));
         assert_eq!(
             gcp.delete_command.as_deref(),
-            Some("gcloud secrets delete stack-secrets-input-database-password --project acme-prod --quiet")
+            Some(
+                "gcloud secrets delete stack-deployer-secrets-database-password --project acme-prod --quiet"
+            )
         );
 
         // A Key Vault secret name alone does not say which vault holds it, so
@@ -767,28 +991,28 @@ mod tests {
         );
 
         let kubernetes = deployer_secret_location(
-            &VaultBinding::kubernetes_secret("apps", "Stack-Secrets"),
+            &VaultBinding::kubernetes_secret("apps", "Stack-Deployer-Secrets"),
             key,
             &context,
         )
         .unwrap();
-        assert_eq!(kubernetes.name, "stack-secrets-input-database-password");
+        assert_eq!(kubernetes.name, "stack-deployer-secrets-database-password");
         assert!(kubernetes.cli_command.contains("--namespace apps"));
         assert_eq!(
             kubernetes.delete_command.as_deref(),
-            Some("kubectl delete secret stack-secrets-input-database-password --namespace apps")
+            Some("kubectl delete secret stack-deployer-secrets-database-password --namespace apps")
         );
 
-        let local =
-            deployer_secret_location(&VaultBinding::local("secrets", "/tmp/x"), key, &context)
-                .unwrap();
-        assert_eq!(
-            local.cli_command,
-            "alien dev vault --deployment default set secrets input-database-password '<VALUE>'"
-        );
+        let local = deployer_secret_location(
+            &VaultBinding::local("deployer-secrets", "/tmp/x"),
+            key,
+            &context,
+        )
+        .unwrap();
+
         assert_eq!(
             local.delete_command.as_deref(),
-            Some("alien dev vault --deployment default delete secrets input-database-password")
+            Some("alien dev vault --deployment default delete deployer-secrets database-password")
         );
     }
 
@@ -797,19 +1021,17 @@ mod tests {
         let binding = VaultBinding::ParameterStore(crate::ParameterStoreVaultBinding {
             vault_prefix: BindingValue::expression(serde_json::json!({"Ref": "Prefix"})),
         });
-        assert!(deployer_secret_location(
-            &binding,
-            "input-x",
-            &DeployerSecretLocationContext::default()
-        )
-        .is_err());
+        assert!(
+            deployer_secret_location(&binding, "x", &DeployerSecretLocationContext::default())
+                .is_err()
+        );
     }
 
     #[test]
     fn only_required_unfilled_slots_block_start() {
         let location = deployer_secret_location(
-            &VaultBinding::local("secrets", "/tmp/x"),
-            "input-x",
+            &VaultBinding::local("deployer-secrets", "/tmp/x"),
+            "x",
             &DeployerSecretLocationContext::default(),
         )
         .unwrap();
@@ -842,8 +1064,9 @@ mod tests {
             message: None,
             version: None,
             location: DeployerSecretLocation {
+                commands: None,
                 store: DeployerSecretStore::AwsParameterStore,
-                name: "stack-secrets-input-database-password".to_string(),
+                name: "stack-deployer-secrets-database-password".to_string(),
                 vault_name: None,
                 console_url: None,
                 cli_command: String::new(),
@@ -881,10 +1104,10 @@ mod tests {
         assert_eq!(env.len(), 1);
         let (variable, targets) = &env[0];
         assert_eq!(variable.name, "DATABASE_PASSWORD");
-        assert_eq!(variable.vault_key, "input-database-password");
+        assert_eq!(variable.vault_key, "database-password");
         assert_eq!(
             variable.secret_name,
-            "stack-secrets-input-database-password"
+            "stack-deployer-secrets-database-password"
         );
         assert!(variable.required);
         assert_eq!(variable.vault_name, None);
@@ -899,7 +1122,7 @@ mod tests {
         )];
         let location = deployer_secret_location(
             &VaultBinding::key_vault("stacksecrets7f3a"),
-            "input-database-password",
+            "database-password",
             &DeployerSecretLocationContext::default(),
         )
         .unwrap();
@@ -916,7 +1139,7 @@ mod tests {
         );
 
         assert_eq!(env.len(), 1);
-        assert_eq!(env[0].0.secret_name, "input-database-password");
+        assert_eq!(env[0].0.secret_name, "database-password");
         assert_eq!(env[0].0.vault_name.as_deref(), Some("stacksecrets7f3a"));
     }
 
@@ -1018,7 +1241,7 @@ mod tests {
     }
 
     #[test]
-    fn stored_secret_ids_keep_deployer_only_slots_and_legacy_fallback() {
+    fn stored_secret_ids_keep_deployer_only_slots_on_stored_delivery() {
         let inputs = vec![secret("apiKey", vec![StackInputProvider::Deployer])];
         let values = HashMap::new();
         let present = vec!["apiKey".to_string()];
@@ -1042,8 +1265,10 @@ mod tests {
             Platform::Aws,
             &[report("apiKey", DeployerSecretStatus::Present)],
         );
-        assert_eq!(environment.len(), 1);
-        assert_eq!(environment[0].0.vault_key, "input-api-key");
+        assert!(
+            environment.is_empty(),
+            "a filled native slot cannot replace stored delivery without its read grant"
+        );
     }
 
     #[test]

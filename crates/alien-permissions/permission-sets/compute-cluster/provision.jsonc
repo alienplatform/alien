@@ -446,11 +446,19 @@
         }
       },
       // Secret Manager for worker runtime secrets
+      // Creating a secret is authorized on the parent project. This cannot
+      // restrict the requested secret id; creation is an indirect trust limit.
+      {
+        "grant": { "permissions": ["secretmanager.secrets.create"] },
+        "binding": {
+          "stack": { "scope": "projects/${projectName}" },
+          "resource": { "scope": "projects/${projectName}" }
+        }
+      },
       {
         "grant": {
           "permissions": [
             "secretmanager.secrets.get",
-            "secretmanager.secrets.create",
             "secretmanager.secrets.delete",
             "secretmanager.versions.add",
             "secretmanager.secrets.getIamPolicy",
@@ -459,10 +467,18 @@
         },
         "binding": {
           "stack": {
-            "scope": "projects/${projectName}"
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "SharedRuntimeSecretsOnly",
+              "expression": "resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-\") && !resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-deployer-secrets-\")"
+            }
           },
           "resource": {
-            "scope": "projects/${projectName}"
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "SharedRuntimeSecretsOnly",
+              "expression": "resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-\") && !resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-deployer-secrets-\")"
+            }
           }
         }
       }
@@ -491,6 +507,8 @@
             "Microsoft.Compute/virtualMachineScaleSets/write",
             "Microsoft.Compute/virtualMachineScaleSets/read",
             "Microsoft.Compute/virtualMachineScaleSets/delete",
+            // Scale-in, node-cohort retirement, and rolling replacement delete individual VMs.
+            "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/delete",
             "Microsoft.Compute/virtualMachineScaleSets/instanceView/read",
             "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/read",
             "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/instanceView/read",
@@ -535,24 +553,6 @@
             "Microsoft.Authorization/roleAssignments/write",
             "Microsoft.Authorization/roleAssignments/delete"
           ]
-        },
-        "binding": {
-          "stack": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
-          },
-          "resource": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
-          }
-        }
-      },
-      // Key Vault for worker runtime secrets
-      {
-        "grant": {
-          "actions": [
-            "Microsoft.KeyVault/vaults/secrets/write",
-            "Microsoft.KeyVault/vaults/secrets/read"
-          ],
-          "dataActions": ["Microsoft.KeyVault/vaults/secrets/delete"]
         },
         "binding": {
           "stack": {

@@ -34,7 +34,7 @@ fn sandbox(id: &str) -> Sandbox {
             disk: "1Gi".to_string(),
             max_processes: None,
         })
-        .egress(SandboxEgress::Deny)
+        .egress(SandboxEgress::None)
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: Some(600),
             idle_pause_seconds: None,

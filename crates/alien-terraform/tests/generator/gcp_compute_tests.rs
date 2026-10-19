@@ -189,7 +189,7 @@ fn gcp_sandbox_stack(lifecycle: ResourceLifecycle) -> Stack {
                 .code(SandboxCode::Image {
                     image: "python:3.12".to_string(),
                 })
-                .egress(SandboxEgress::Deny)
+                .egress(SandboxEgress::None)
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
@@ -435,7 +435,7 @@ fn a_frozen_gcp_sandbox_manager_gets_template_verbs_on_its_engine_only() {
                 .code(SandboxCode::Image {
                     image: "python:3.12".to_string(),
                 })
-                .egress(SandboxEgress::Deny)
+                .egress(SandboxEgress::None)
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,

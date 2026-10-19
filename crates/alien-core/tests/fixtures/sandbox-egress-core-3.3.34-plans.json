@@ -1,0 +1,66 @@
+{
+  "id": "legacy-egress-plans",
+  "resources": {
+    "direct": {
+      "config": {
+        "id": "direct",
+        "type": "sandbox",
+        "code": {
+          "image": "s3://compatibility-bundles/sandbox-bundle/v1/bundle.zip",
+          "type": "image"
+        },
+        "egress": {
+          "mode": "allow"
+        },
+        "lifecycle": {
+          "maxLifetimeSeconds": 3600
+        }
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "denied": {
+      "config": {
+        "id": "denied",
+        "type": "sandbox",
+        "code": {
+          "image": "s3://compatibility-bundles/sandbox-bundle/v1/bundle.zip",
+          "type": "image"
+        },
+        "egress": {
+          "mode": "deny"
+        },
+        "lifecycle": {
+          "maxLifetimeSeconds": 3600
+        },
+        "privilegedSupervisor": {
+          "commandUid": 60000
+        }
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    },
+    "domains": {
+      "config": {
+        "id": "domains",
+        "type": "sandbox",
+        "code": {
+          "image": "s3://compatibility-bundles/sandbox-bundle/v1/bundle.zip",
+          "type": "image"
+        },
+        "egress": {
+          "domains": ["api.example.com"],
+          "mode": "allowDomains"
+        },
+        "lifecycle": {
+          "maxLifetimeSeconds": 3600
+        },
+        "privilegedSupervisor": {
+          "commandUid": 60000
+        }
+      },
+      "dependencies": [],
+      "lifecycle": "live"
+    }
+  }
+}

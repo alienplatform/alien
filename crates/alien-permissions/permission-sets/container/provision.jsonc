@@ -646,7 +646,8 @@
           "actions": [
             "ec2:DeleteSecurityGroup",
             "ec2:AuthorizeSecurityGroupIngress",
-            "ec2:RevokeSecurityGroupIngress"
+            "ec2:RevokeSecurityGroupIngress",
+            "ec2:RevokeSecurityGroupEgress"
           ]
         },
         "binding": {
@@ -1016,24 +1017,6 @@
             "Microsoft.Compute/snapshots/write",
             "Microsoft.Compute/snapshots/delete",
             "Microsoft.Compute/disks/beginGetAccess/action"
-          ]
-        },
-        "binding": {
-          "stack": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
-          },
-          "resource": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
-          }
-        }
-      },
-      // Key Vault certificate for HTTPS containers
-      {
-        "grant": {
-          "dataActions": [
-            "Microsoft.KeyVault/vaults/certificates/import/action",
-            "Microsoft.KeyVault/vaults/certificates/read",
-            "Microsoft.KeyVault/vaults/certificates/delete"
           ]
         },
         "binding": {

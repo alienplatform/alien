@@ -49,14 +49,19 @@ impl ResourceEntry {
     }
 
     /// Whether the controller's non-secret binding locator must be synchronized
-    /// into stack state. The built-in secrets vault is consumed by the manager,
-    /// but is not exposed through the external Remote Bindings API.
+    /// into stack state. Reserved vault locators support secret sync and metadata
+    /// checks, without exposing either vault through the Remote Bindings API.
     pub fn publishes_binding_params(&self) -> bool {
         self.remote_access
             || self
                 .config
                 .downcast_ref::<crate::Vault>()
-                .is_some_and(|vault| vault.id == "secrets")
+                .is_some_and(|vault| {
+                    matches!(
+                        vault.id.as_str(),
+                        crate::SECRETS_VAULT_ID | crate::DEPLOYER_SECRETS_VAULT_ID
+                    )
+                })
     }
 }
 
@@ -102,6 +107,33 @@ pub struct Stack {
 }
 
 impl Stack {
+    /// Explicit consumers whose links grant access to every port on a container.
+    /// Cluster-wide reach is separate and remains the backend's existing behavior.
+    pub fn container_linkers(&self, container_id: &str) -> Vec<ResourceRef> {
+        let target = ResourceRef::new(crate::Container::RESOURCE_TYPE, container_id);
+        self.resources
+            .iter()
+            .filter_map(|(id, entry)| {
+                let links = if let Some(resource) = entry.config.downcast_ref::<crate::Worker>() {
+                    &resource.links
+                } else if let Some(resource) = entry.config.downcast_ref::<crate::Container>() {
+                    &resource.links
+                } else if let Some(resource) = entry.config.downcast_ref::<crate::Daemon>() {
+                    &resource.links
+                } else if let Some(resource) = entry.config.downcast_ref::<crate::Build>() {
+                    &resource.links
+                } else if let Some(resource) = entry.config.downcast_ref::<crate::Sandbox>() {
+                    &resource.links
+                } else {
+                    return None;
+                };
+                links
+                    .contains(&target)
+                    .then(|| ResourceRef::new(entry.config.resource_type(), id.clone()))
+            })
+            .collect()
+    }
+
     /// Digest of what setup owns: every Frozen entry plus each Live sandbox's setup inputs. Without
     /// a Live sandbox the bytes equal the Frozen-only projection. Declined gated entries must be
     /// stripped by the caller.
@@ -113,6 +145,13 @@ impl Stack {
             .map(|(id, entry)| {
                 let mut value =
                     serde_json::to_value(entry).expect("resource entries always serialize to JSON");
+                if let Some(sandbox) = entry.config.downcast_ref::<crate::Sandbox>() {
+                    value["config"]["egress"] = sandbox.setup_digest_value();
+                    value["config"]
+                        .as_object_mut()
+                        .expect("resource config is an object")
+                        .remove("defaultPolicy");
+                }
                 canonicalize_json(&mut value);
                 (id, value)
             })
@@ -741,7 +780,7 @@ mod tests {
                 image: image.to_string(),
             })
             .maybe_private_base_image(private_base_image.map(str::to_string))
-            .egress(crate::SandboxEgress::Deny)
+            .egress(crate::SandboxEgress::None)
             .lifecycle(crate::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
@@ -906,7 +945,7 @@ mod tests {
             ),
             (
                 LiveSandbox {
-                    egress: crate::SandboxEgress::Deny,
+                    egress: crate::SandboxEgress::None,
                     ..LiveSandbox::installed()
                 },
                 "egress allow to deny",
@@ -938,7 +977,7 @@ mod tests {
 
         let deny = |network_id| {
             LiveSandbox {
-                egress: crate::SandboxEgress::Deny,
+                egress: crate::SandboxEgress::None,
                 network_id,
                 ..LiveSandbox::installed()
             }

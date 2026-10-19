@@ -11,6 +11,7 @@ use utoipa::OpenApi;
 
 #[derive(OpenApi)]
 #[openapi(components(schemas(
+    CredentialRetry,
     Worker,
     WorkerCode,
     WorkerOutputs,
@@ -26,6 +27,7 @@ use utoipa::OpenApi;
     ContainerGpuSpec,
     ContainerAutoscaling,
     ContainerPort,
+    ContainerEgress,
     ContainerTunnel,
     ExposeProtocol,
     PublicEndpoint,
@@ -141,6 +143,8 @@ use utoipa::OpenApi;
     SandboxCode,
     SandboxLimits,
     SandboxEgress,
+    LegacySandboxEgress,
+    EgressPolicy,
     SandboxLifecyclePolicy,
     SandboxPrivilegedSupervisor,
     SandboxCapabilities,
@@ -162,6 +166,8 @@ use utoipa::OpenApi;
     // Vault-native deployer secret reports (deployment runtime metadata)
     DeployerSecretReport,
     DeployerSecretLocation,
+    DeployerSecretCommands,
+    DeployerSecretCommandVariants,
     DeployerSecretStatus,
     DeployerSecretStore,
     UpdatesMode,
@@ -228,6 +234,7 @@ use utoipa::OpenApi;
     AwsKeyImportData,
     AwsVaultImportData,
     AwsNetworkImportData,
+    AwsSandboxNetwork,
     AwsServiceAccountImportData,
     AwsRemoteStackManagementImportData,
     AwsRemoteBindingsImportData,

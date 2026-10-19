@@ -20,7 +20,9 @@ use crate::managed_secret::provision_managed_test_secret;
 use crate::manager::TestManager;
 
 const LOCAL_DELETION_TIMEOUT: Duration = Duration::from_secs(120);
-const DISTRIBUTION_DELETION_HANDOFF_TIMEOUT: Duration = Duration::from_secs(600);
+// Runtime cleanup may spend 20 minutes waiting for shared Lambda VPC interfaces.
+// Keep setup artifacts and execution-role permissions until that handoff finishes.
+const DISTRIBUTION_DELETION_HANDOFF_TIMEOUT: Duration = Duration::from_secs(25 * 60);
 const DEFAULT_DEPLOYMENT_RUNNING_TIMEOUT: Duration = Duration::from_secs(600);
 const AZURE_DEPLOYMENT_RUNNING_TIMEOUT: Duration = Duration::from_secs(1_800);
 

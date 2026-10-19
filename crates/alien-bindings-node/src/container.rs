@@ -18,6 +18,16 @@ impl ContainerHandle {
 
 #[napi]
 impl ContainerHandle {
+    /// Return internal URLs keyed by port for the linked container.
+    #[napi]
+    pub async fn get_internal_urls(&self) -> std::collections::HashMap<String, String> {
+        self.inner
+            .get_internal_urls()
+            .into_iter()
+            .map(|(port, url)| (port.to_string(), url))
+            .collect()
+    }
+
     /// Return the URL reachable from the deployment's private network.
     #[napi]
     pub async fn get_internal_url(&self) -> String {

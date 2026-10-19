@@ -15,6 +15,7 @@ use alien_manager_api::SdkResultExt;
 use clap::{Parser, Subcommand};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use tokio::io::AsyncReadExt;
 use tracing::info;
 
 #[derive(Parser, Debug, Clone)]
@@ -26,9 +27,12 @@ Vaults store sensitive data like API keys, tokens, and credentials that your
 functions need at runtime. Each deployment has isolated vault state.
 
 EXAMPLES:
-    # Set a secret in the default deployment
-    alien dev vault set customer-secrets GITHUB_TOKEN ghp_xxx
+    # Set a secret from stdin in the default deployment
+    secret-source | alien dev vault set app-secrets GITHUB_TOKEN --stdin
     
+    # Set a secret from a UTF-8 file (also works in Windows PowerShell)
+    alien dev vault set app-secrets GITHUB_TOKEN --file key.txt
+
     # Get a secret
     alien dev vault get customer-secrets GITHUB_TOKEN
 
@@ -50,7 +54,7 @@ pub struct VaultArgs {
     #[command(subcommand)]
     pub action: VaultAction,
 
-    /// Target deployment name (default: "default")
+    /// Target deployment ID or name (default: "default")
     #[arg(long, default_value = "default", global = true)]
     pub deployment: String,
 
@@ -67,8 +71,15 @@ pub enum VaultAction {
         vault_name: String,
         /// Secret name (e.g., "GITHUB_TOKEN")
         secret_name: String,
-        /// Secret value
-        value: String,
+        /// Secret value (prefer --stdin to keep it out of process arguments)
+        #[arg(required_unless_present_any = ["stdin", "file"], conflicts_with_all = ["stdin", "file"])]
+        value: Option<String>,
+        /// Read the exact secret bytes from stdin, without trimming whitespace
+        #[arg(long)]
+        stdin: bool,
+        /// Read a UTF-8 file exactly, without adding a newline or exposing the value in arguments
+        #[arg(long, conflicts_with = "stdin")]
+        file: Option<PathBuf>,
     },
     /// Get a secret value from a vault
     Get {
@@ -89,6 +100,31 @@ pub enum VaultAction {
         /// Vault name
         vault_name: String,
     },
+}
+
+async fn read_secret_value(value: Option<String>, file: Option<PathBuf>) -> Result<String> {
+    if let Some(value) = value {
+        return Ok(value);
+    }
+    if let Some(path) = file {
+        return tokio::fs::read_to_string(path)
+            .await
+            .into_alien_error()
+            .context(ErrorData::ValidationError {
+                field: "file".to_string(),
+                message: "Failed to read the UTF-8 secret file".to_string(),
+            });
+    }
+    let mut value = String::new();
+    tokio::io::stdin()
+        .read_to_string(&mut value)
+        .await
+        .into_alien_error()
+        .context(ErrorData::ValidationError {
+            field: "stdin".to_string(),
+            message: "Failed to read the secret from stdin".to_string(),
+        })?;
+    Ok(value)
 }
 
 /// Validate a vault or secret name to prevent path traversal attacks.
@@ -112,8 +148,7 @@ pub async fn vault_task(args: VaultArgs, port: u16) -> Result<()> {
     // Ensure dev server is running (deployments are registered there)
     crate::commands::ensure_server_running(port).await?;
 
-    // Get deployment ID by name
-    let deployment_id = get_deployment_id_by_name(&args.deployment, port).await?;
+    let deployment_id = get_local_deployment_id(&args.deployment, port).await?;
 
     let current_dir = get_current_dir()?;
     let state_dir = current_dir.join(&args.state_dir);
@@ -135,7 +170,10 @@ pub async fn vault_task(args: VaultArgs, port: u16) -> Result<()> {
             vault_name,
             secret_name,
             value,
+            stdin: _,
+            file,
         } => {
+            let value = read_secret_value(value, file).await?;
             validate_vault_name(&vault_name)?;
             validate_vault_name(&secret_name)?;
             set_secret(&vault_name, &secret_name, &value, &vault_path).await?;
@@ -181,8 +219,8 @@ pub async fn vault_task(args: VaultArgs, port: u16) -> Result<()> {
     Ok(())
 }
 
-/// Get deployment ID by name using the manager API
-async fn get_deployment_id_by_name(deployment_name: &str, port: u16) -> Result<String> {
+/// Resolve an existing local deployment by ID or name using the manager API.
+async fn get_local_deployment_id(deployment_name: &str, port: u16) -> Result<String> {
     let client = alien_manager_api::Client::new(&format!("http://localhost:{}", port));
 
     let response = client
@@ -200,7 +238,13 @@ async fn get_deployment_id_by_name(deployment_name: &str, port: u16) -> Result<S
     let deployment = deployments
         .items
         .iter()
-        .find(|d| d.name.as_str() == deployment_name)
+        .find(|d| d.id.as_str() == deployment_name)
+        .or_else(|| {
+            deployments
+                .items
+                .iter()
+                .find(|d| d.name.as_str() == deployment_name)
+        })
         .ok_or_else(|| {
             AlienError::new(ErrorData::ValidationError {
                 field: "deployment".to_string(),
@@ -353,7 +397,7 @@ pub struct VaultRemoteArgs {
     #[command(subcommand)]
     pub action: VaultAction,
 
-    /// Target deployment ID or name (required). Global so it can follow the subcommand; clap
+    /// Target deployment ID, name, or group/name. Global so it can follow the subcommand; clap
     /// refuses a required global argument, so [`VaultRemoteArgs::deployment`] checks it.
     #[arg(long, global = true)]
     pub deployment: Option<String>,
@@ -377,23 +421,25 @@ pub async fn vault_remote_task(
     ctx: crate::execution_context::ExecutionMode,
 ) -> Result<()> {
     let deployment = args.deployment()?.to_string();
-    let manager_url = ctx.manager_url();
-    let http = ctx.auth_http().await?.client;
-
-    // Resolve deployment ID: if the user passed a name, look it up.
-    let deployment_id = resolve_deployment_id(&deployment, &http, &manager_url).await?;
+    let (manager_url, http, deployment_id) = resolve_vault_target(&ctx, &deployment).await?;
 
     match args.action {
         VaultAction::Set {
             vault_name,
             secret_name,
             value,
+            stdin: _,
+            file,
         } => {
+            let value = read_secret_value(value, file).await?;
             validate_vault_name(&vault_name)?;
             validate_vault_name(&secret_name)?;
             let url = format!(
                 "{}/v1/deployments/{}/vault/{}/secrets/{}",
-                manager_url, deployment_id, vault_name, secret_name,
+                manager_url,
+                urlencoding::encode(&deployment_id),
+                vault_name,
+                secret_name,
             );
             let resp = http
                 .put(&url)
@@ -428,7 +474,10 @@ pub async fn vault_remote_task(
             validate_vault_name(&secret_name)?;
             let url = format!(
                 "{}/v1/deployments/{}/vault/{}/secrets/{}",
-                manager_url, deployment_id, vault_name, secret_name,
+                manager_url,
+                urlencoding::encode(&deployment_id),
+                vault_name,
+                secret_name,
             );
             let resp = http.get(&url).send().await.into_alien_error().context(
                 ErrorData::ApiRequestFailed {
@@ -497,6 +546,54 @@ pub async fn vault_remote_task(
     Ok(())
 }
 
+/// Use the deployment's manager and workspace, as other manager-routed commands do.
+async fn resolve_vault_target(
+    ctx: &crate::execution_context::ExecutionMode,
+    deployment: &str,
+) -> Result<(String, reqwest::Client, String)> {
+    #[cfg(feature = "platform")]
+    if ctx.is_platform() {
+        let reference = if deployment.starts_with("dep_") || deployment.contains('/') {
+            deployment.to_string()
+        } else {
+            let workspace = ctx.resolve_workspace_with_bootstrap(true).await?;
+            let (project_id, _) = ctx.resolve_project(None, true).await?;
+            let client = ctx.sdk_client().await?;
+            let matches = super::deploy::live_deployments_named(
+                &client,
+                Some(&workspace),
+                &project_id,
+                deployment,
+            )
+            .await?;
+            match matches.as_slice() {
+                [matched] => matched.id.to_string(),
+                [] => return Err(AlienError::new(ErrorData::ValidationError {
+                    field: "deployment".to_string(),
+                    message: format!("Deployment '{deployment}' not found"),
+                })),
+                _ => return Err(AlienError::new(ErrorData::ValidationError {
+                    field: "deployment".to_string(),
+                    message: format!("Multiple deployments are named '{deployment}'. Use a dep_ ID or <group>/<name>."),
+                })),
+            }
+        };
+        let resolved =
+            crate::platform_deployment_resolver::resolve_with_manager(ctx, &reference, None, true)
+                .await?;
+        return Ok((
+            resolved.manager.manager_url,
+            resolved.manager.http_client,
+            resolved.detail.id.to_string(),
+        ));
+    }
+
+    let manager_url = ctx.manager_url();
+    let http = ctx.auth_http().await?.client;
+    let deployment_id = resolve_deployment_id(deployment, &http, &manager_url).await?;
+    Ok((manager_url, http, deployment_id))
+}
+
 async fn delete_remote_secret(
     http: &reqwest::Client,
     manager_url: &str,
@@ -539,11 +636,94 @@ async fn delete_remote_secret(
 
 #[cfg(test)]
 mod tests {
-    use axum::{extract::Path, http::StatusCode, routing::delete, Router};
+    use axum::{Router, extract::Path, http::StatusCode, routing::delete};
     use clap::Parser;
     use tempfile::TempDir;
 
     use super::*;
+
+    #[test]
+    fn set_accepts_exactly_one_value_source() {
+        let piped =
+            VaultArgs::try_parse_from(["vault", "set", "secrets", "key", "--stdin"]).unwrap();
+        assert!(matches!(
+            piped.action,
+            VaultAction::Set {
+                value: None,
+                stdin: true,
+                ..
+            }
+        ));
+        let argument =
+            VaultArgs::try_parse_from(["vault", "set", "secrets", "key", "fake-value"]).unwrap();
+        assert!(
+            matches!(argument.action, VaultAction::Set { value: Some(value), stdin: false, .. } if value == "fake-value")
+        );
+        assert!(VaultArgs::try_parse_from(["vault", "set", "secrets", "key"]).is_err());
+        assert!(
+            VaultArgs::try_parse_from(["vault", "set", "secrets", "key", "fake-value", "--stdin"])
+                .is_err()
+        );
+        let remote = VaultRemoteArgs::try_parse_from([
+            "vault",
+            "--deployment",
+            "test",
+            "set",
+            "secrets",
+            "key",
+            "--stdin",
+        ])
+        .unwrap();
+        assert!(matches!(
+            remote.action,
+            VaultAction::Set {
+                value: None,
+                stdin: true,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn file_values_preserve_unicode_and_trailing_newlines() {
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("value.txt");
+        let expected = "fake-test-value '$ \" café\n\n";
+        tokio::fs::write(&path, expected).await.unwrap();
+        let args = VaultArgs::try_parse_from([
+            "vault",
+            "set",
+            "secrets",
+            "key",
+            "--file",
+            path.to_str().unwrap(),
+        ])
+        .unwrap();
+        let VaultAction::Set { value, file, .. } = args.action else {
+            panic!("expected set")
+        };
+        let actual = read_secret_value(value, file).await.unwrap();
+        assert_eq!(actual.as_bytes(), expected.as_bytes());
+        for extra in ["--stdin", "fake-value"] {
+            assert!(
+                VaultArgs::try_parse_from([
+                    "vault",
+                    "set",
+                    "secrets",
+                    "key",
+                    "--file",
+                    "value.txt",
+                    extra
+                ])
+                .is_err()
+            );
+        }
+        assert!(
+            read_secret_value(None, Some(directory.path().join("missing")))
+                .await
+                .is_err()
+        );
+    }
 
     #[test]
     fn delete_action_parses_for_local_and_remote_commands() {
@@ -688,16 +868,24 @@ mod tests {
 
 /// Resolve a deployment ID from a name or ID string.
 ///
-/// If the input looks like a UUID, use it directly. Otherwise, list deployments
-/// from the manager and find a match by name.
+/// Resolve prefixed IDs first; a missing ID may be an existing deployment name.
+/// Legacy UUIDs retain their direct lookup behavior.
 async fn resolve_deployment_id(
     name_or_id: &str,
     http: &reqwest::Client,
     manager_url: &str,
 ) -> Result<String> {
-    // If it looks like a UUID, use it directly.
     if uuid::Uuid::try_parse(name_or_id).is_ok() {
         return Ok(name_or_id.to_string());
+    }
+    if name_or_id.starts_with("dep_") {
+        let manager = alien_manager_api::Client::new_with_client(manager_url, http.clone());
+        match crate::deployment_resolver::resolve(&manager, name_or_id, false).await {
+            Ok(deployment) => return Ok(deployment.id.to_string()),
+            // A valid name can also begin with dep_. Only a missing ID permits fallback.
+            Err(error) if error.http_status_code == Some(404) => {}
+            Err(error) => return Err(error),
+        }
     }
 
     // Otherwise, list deployments and find by name.

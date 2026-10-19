@@ -5,9 +5,10 @@ use crate::azure::token_cache::AzureTokenCache;
 use crate::azure::AzureClientConfig;
 use alien_client_core::{ErrorData, Result};
 
-use alien_error::{Context, IntoAlienError};
-use reqwest::{Client, Method, StatusCode};
+use alien_error::{AlienError, Context, IntoAlienError};
+use reqwest::{Client, Method, StatusCode, Url};
 use serde::Deserialize;
+use std::collections::HashSet;
 
 #[cfg(feature = "test-utils")]
 use mockall::automock;
@@ -568,57 +569,78 @@ impl AuthorizationApi for AzureAuthorizationClient {
             Some(query_params),
         );
 
-        let builder = AzureRequestBuilder::new(Method::GET, url.clone()).content_length("");
-
-        let req = builder.build()?;
-        let signed = self.base.sign_request(req, &bearer_token).await?;
-        let resp = self
-            .base
-            .execute_request(signed, "ListRoleAssignments", &scope_string)
-            .await?;
-
-        let response_body =
-            resp.text()
-                .await
-                .into_alien_error()
-                .context(ErrorData::HttpRequestFailed {
-                    message: format!("Azure ListRoleAssignments: failed to read response body"),
-                })?;
-
         #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
         struct RoleAssignmentListResponse {
             value: Vec<RoleAssignment>,
+            next_link: Option<String>,
         }
 
-        let response: RoleAssignmentListResponse = serde_json::from_str(&response_body)
+        let origin = Url::parse(&url)
             .into_alien_error()
-            .context(ErrorData::HttpResponseError {
-                message: format!(
-                    "Azure ListRoleAssignments: JSON parse error. Body: {}",
-                    response_body
-                ),
-                url: url.to_string(),
-                http_status: 200,
-                http_request_text: None,
-                http_response_text: Some(response_body),
-            })?;
-
-        // Filter by role definition ID if provided
-        let assignments = if let Some(role_def_id) = role_definition_id {
-            response
-                .value
-                .into_iter()
-                .filter(|assignment| {
+            .context(ErrorData::InvalidInput {
+                message: "Invalid role-assignment endpoint".to_string(),
+                field_name: None,
+            })?
+            .origin();
+        let mut next_url = Some(url);
+        let mut visited = HashSet::new();
+        let mut assignments = Vec::new();
+        while let Some(url) = next_url {
+            let parsed = Url::parse(&url)
+                .into_alien_error()
+                .context(ErrorData::InvalidInput {
+                    message: "Invalid role-assignment continuation URL".to_string(),
+                    field_name: Some("nextLink".to_string()),
+                })?;
+            // Never send the bearer token to a different origin or follow a cycle.
+            if parsed.origin() != origin
+                || !parsed.username().is_empty()
+                || parsed.password().is_some()
+                || parsed.fragment().is_some()
+                || !visited.insert(parsed.to_string())
+            {
+                return Err(AlienError::new(ErrorData::InvalidInput {
+                    message: "Unsafe or repeated role-assignment continuation URL".to_string(),
+                    field_name: Some("nextLink".to_string()),
+                }));
+            }
+            let request = AzureRequestBuilder::new(Method::GET, url.clone())
+                .content_length("")
+                .build()?;
+            let signed = self.base.sign_request(request, &bearer_token).await?;
+            let response = self
+                .base
+                .execute_request(signed, "ListRoleAssignments", &scope_string)
+                .await?;
+            let response_body =
+                response
+                    .text()
+                    .await
+                    .into_alien_error()
+                    .context(ErrorData::HttpRequestFailed {
+                        message: "Azure ListRoleAssignments: failed to read response body"
+                            .to_string(),
+                    })?;
+            let page: RoleAssignmentListResponse = serde_json::from_str(&response_body)
+                .into_alien_error()
+                .context(ErrorData::HttpResponseError {
+                    message: "Azure ListRoleAssignments: invalid response page".to_string(),
+                    url,
+                    http_status: 200,
+                    http_request_text: None,
+                    http_response_text: Some(response_body),
+                })?;
+            assignments.extend(page.value.into_iter().filter(|assignment| {
+                role_definition_id.as_ref().is_none_or(|id| {
                     assignment
                         .properties
                         .as_ref()
-                        .map_or(false, |props| props.role_definition_id == role_def_id)
+                        .is_some_and(|props| &props.role_definition_id == id)
                 })
-                .collect()
-        } else {
-            response.value
-        };
-
+            }));
+            next_url = page.next_link;
+        }
         Ok(assignments)
     }
 
@@ -686,7 +708,304 @@ impl AuthorizationApi for AzureAuthorizationClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::azure::AzureCredentials;
+    use crate::azure::{AzureCredentials, ServiceOverrides};
+    use httpmock::{Method::GET, MockServer};
+    use serde_json::json;
+    use std::{
+        collections::HashMap,
+        io::{Read, Write},
+        net::TcpListener,
+        time::Duration,
+    };
+
+    const ASSIGNMENTS_PATH: &str = "/subscriptions/sub-123/resourceGroups/rg-1/providers/Microsoft.Authorization/roleAssignments";
+
+    fn test_client(server: &MockServer) -> AzureAuthorizationClient {
+        let mut config = test_config();
+        config.service_overrides = Some(ServiceOverrides {
+            endpoints: HashMap::from([("management".to_string(), server.base_url())]),
+        });
+        AzureAuthorizationClient::new(Client::new(), AzureTokenCache::new(config))
+    }
+
+    #[tokio::test]
+    async fn role_assignments_include_and_filter_all_pages() {
+        let server = MockServer::start_async().await;
+        let first = server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path(ASSIGNMENTS_PATH)
+                    .query_param("api-version", "2022-04-01")
+                    .query_param("$filter", "atScope()");
+                then.status(200).body(
+                    json!({"value": [{"id":"first", "properties": {
+                "principalId":"principal", "roleDefinitionId":"other-role"
+            }}], "nextLink": format!("{}/page2?cursor=next", server.base_url())})
+                    .to_string(),
+                );
+            })
+            .await;
+        let second = server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path("/page2")
+                    .query_param("cursor", "next")
+                    .header("authorization", "Bearer token");
+                then.status(200).body(
+                    json!({"value": [{"id":"second", "properties": {
+                        "principalId":"principal", "roleDefinitionId":"wanted-role"
+                    }}]})
+                    .to_string(),
+                );
+            })
+            .await;
+        let client = test_client(&server);
+        let scope = Scope::ResourceGroup {
+            resource_group_name: "rg-1".into(),
+        };
+        let all = client.list_role_assignments(&scope, None).await.unwrap();
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0].id.as_deref(), Some("first"));
+        assert_eq!(all[1].id.as_deref(), Some("second"));
+        let filtered = client
+            .list_role_assignments(&scope, Some("wanted-role".into()))
+            .await
+            .unwrap();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].id.as_deref(), Some("second"));
+        first.assert_hits_async(2).await;
+        second.assert_hits_async(2).await;
+    }
+
+    #[tokio::test]
+    async fn role_assignment_invalid_later_page_does_not_return_partial_inventory() {
+        let server = MockServer::start_async().await;
+        let first = server
+            .mock_async(|when, then| {
+                when.method(GET).path(ASSIGNMENTS_PATH);
+                then.status(200).body(
+                    json!({"value": [{"id":"first", "properties": {
+                "principalId":"principal", "roleDefinitionId":"wanted-role"
+            }}], "nextLink": format!("{}/page2", server.base_url())})
+                    .to_string(),
+                );
+            })
+            .await;
+        let invalid = server
+            .mock_async(|when, then| {
+                when.method(GET).path("/page2");
+                then.status(200).body("{}");
+            })
+            .await;
+        let error = test_client(&server)
+            .list_role_assignments(
+                &Scope::ResourceGroup {
+                    resource_group_name: "rg-1".into(),
+                },
+                None,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "HTTP_RESPONSE_ERROR");
+        assert!(error.internal);
+        assert!(error.retryable);
+        match error.error {
+            Some(ErrorData::HttpResponseError {
+                http_response_text, ..
+            }) => {
+                assert_eq!(http_response_text.as_deref(), Some("{}"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        first.assert_hits_async(1).await;
+        invalid.assert_hits_async(1).await;
+    }
+
+    #[tokio::test]
+    async fn role_assignment_pagination_rejects_foreign_origins_and_cycles() {
+        for foreign in [false, true] {
+            let server = MockServer::start_async().await;
+            let other = MockServer::start_async().await;
+            let next = format!(
+                "{}/page2",
+                if foreign {
+                    other.base_url()
+                } else {
+                    server.base_url()
+                }
+            );
+            let first = server
+                .mock_async(|when, then| {
+                    when.method(GET).path(ASSIGNMENTS_PATH);
+                    then.status(200)
+                        .body(json!({"value": [], "nextLink": next}).to_string());
+                })
+                .await;
+            let repeated = server
+                .mock_async(|when, then| {
+                    when.method(GET).path("/page2");
+                    then.status(200)
+                        .body(json!({"value": [], "nextLink": next}).to_string());
+                })
+                .await;
+            let forbidden = other
+                .mock_async(|when, then| {
+                    when.method(GET);
+                    then.status(200).body(json!({"value": []}).to_string());
+                })
+                .await;
+            let error = test_client(&server)
+                .list_role_assignments(
+                    &Scope::ResourceGroup {
+                        resource_group_name: "rg-1".into(),
+                    },
+                    None,
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(error.code, "INVALID_INPUT");
+            first.assert_hits_async(1).await;
+            repeated
+                .assert_hits_async(if foreign { 0 } else { 1 })
+                .await;
+            forbidden.assert_hits_async(0).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn role_assignment_pagination_rejects_credentials_and_fragments() {
+        for suffix in ["credentials", "fragment"] {
+            let server = MockServer::start_async().await;
+            let next = if suffix == "credentials" {
+                server
+                    .base_url()
+                    .replacen("http://", "http://user:password@", 1)
+                    + "/page2"
+            } else {
+                format!("{}/page2#fragment", server.base_url())
+            };
+            let first = server
+                .mock_async(|when, then| {
+                    when.method(GET).path(ASSIGNMENTS_PATH);
+                    then.status(200)
+                        .json_body(json!({"value": [], "nextLink": next}));
+                })
+                .await;
+            let forbidden = server
+                .mock_async(|when, then| {
+                    when.method(GET).path("/page2");
+                    then.status(200).json_body(json!({"value": []}));
+                })
+                .await;
+            let error = test_client(&server)
+                .list_role_assignments(
+                    &Scope::ResourceGroup {
+                        resource_group_name: "rg-1".into(),
+                    },
+                    None,
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(error.code, "INVALID_INPUT");
+            first.assert_hits_async(1).await;
+            forbidden.assert_hits_async(0).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn role_assignment_provider_error_does_not_return_partial_inventory() {
+        for status in [400, 403] {
+            let server = MockServer::start_async().await;
+            let first = server
+                .mock_async(|when, then| {
+                    when.method(GET).path(ASSIGNMENTS_PATH);
+                    then.status(200).json_body(json!({
+                        "value": [{"id": "first"}],
+                        "nextLink": format!("{}/page2", server.base_url())
+                    }));
+                })
+                .await;
+            let second = server
+                .mock_async(|when, then| {
+                    when.method(GET).path("/page2");
+                    then.status(status).json_body(
+                        json!({"error": {"code": "ProviderFailure", "message": "test failure"}}),
+                    );
+                })
+                .await;
+            let error = test_client(&server)
+                .list_role_assignments(
+                    &Scope::ResourceGroup {
+                        resource_group_name: "rg-1".into(),
+                    },
+                    None,
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(
+                error.code,
+                if status == 400 {
+                    "INVALID_INPUT"
+                } else {
+                    "REMOTE_ACCESS_DENIED"
+                }
+            );
+            if status == 400 {
+                assert!(error.to_string().contains("test failure"));
+            }
+            first.assert_hits_async(1).await;
+            // Access-denied responses retain the client's existing retry policy.
+            second
+                .assert_hits_async(if status == 403 { 4 } else { 1 })
+                .await;
+        }
+    }
+
+    #[tokio::test]
+    async fn role_assignment_truncated_body_preserves_read_error_classification() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0; 1024];
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                let count = stream.read(&mut buffer).unwrap();
+                assert_ne!(count, 0);
+                request.extend_from_slice(&buffer[..count]);
+            }
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\nConnection: close\r\n\r\n{}")
+                .unwrap();
+        });
+        let mut config = test_config();
+        config.service_overrides = Some(ServiceOverrides {
+            endpoints: HashMap::from([("management".to_string(), endpoint)]),
+        });
+        let client = AzureAuthorizationClient::new(
+            Client::builder()
+                .timeout(Duration::from_secs(5))
+                .build()
+                .unwrap(),
+            AzureTokenCache::new(config),
+        );
+        let result = client
+            .list_role_assignments(
+                &Scope::ResourceGroup {
+                    resource_group_name: "rg-1".to_string(),
+                },
+                None,
+            )
+            .await;
+        server.join().unwrap();
+        let error = result.unwrap_err();
+        assert_eq!(error.code, "HTTP_REQUEST_FAILED");
+        assert!(!error.internal);
+        assert!(error.retryable);
+    }
 
     fn test_config() -> AzureClientConfig {
         AzureClientConfig {

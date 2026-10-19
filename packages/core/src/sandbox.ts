@@ -1,4 +1,5 @@
 import {
+  type EgressPolicy,
   type ResourceType,
   type SandboxCode,
   type Sandbox as SandboxConfig,
@@ -11,6 +12,8 @@ import {
 import { type Resource, ResourceBuilder } from "./resource.js"
 
 export type {
+  EgressPolicy,
+  LegacySandboxEgress,
   Sandbox as SandboxConfig,
   SandboxCapabilities,
   SandboxCode,
@@ -26,19 +29,8 @@ export { SandboxSchema as SandboxConfigSchema } from "./generated/index.js"
  * An isolated environment for running untrusted code.
  *
  * The declaration provisions a durable parent; individual sandboxes are created and destroyed
- * at runtime through the binding. Backends differ:
- * - AWS: Lambda MicroVMs on Firecracker, with an Alien agent inside the image
- * - Azure: Container Apps Sandboxes, whose data plane implements the API natively
- * - GCP: Cloud Run sandboxes launched inside the workload's own instance
- * - Kubernetes: pods under a sandboxed runtime class (gVisor or Kata)
- * - Local: Docker, which shares a kernel and is therefore development-only for untrusted code
- *
- * Capabilities are not uniform. Call `capabilities()` on the binding and branch, or handle the
- * typed error — an unsupported capability never silently succeeds. Notably GCP cannot
- * reconnect to a sandbox (its id is scoped to one Cloud Run instance), Azure matches egress hostnames and AWS can pin their IPv4 addresses with privilegedSupervisor, no platform can snapshot a sandbox, and only AWS
- * and Local run a command under a different identity than the process supervising it. Elsewhere the
- * command shares the supervisor's user, so it can read the supervisor's environment and
- * signal it, and the container is the isolation boundary.
+ * at runtime through the binding. Runtime policies control each sandbox independently.
+ * Unsupported policies are refused when planning the stack.
  *
  * Limits are enforced ceilings, not scheduling hints, and are validated when the stack is
  * planned. A platform that cannot enforce them rejects the sandbox rather than ignoring them.
@@ -81,16 +73,29 @@ export class Sandbox extends ResourceBuilder {
   }
 
   /**
-   * Sets the outbound network policy.
+   * "none" disables outbound networking. "internet" opts into the deployment
+   * gateway, public addresses only, a fixed outbound IP, connection logs and
+   * per-sandbox runtime policies. Opting in requires updating deployment setup.
+   * Legacy object values retain their released backend behavior and do not
+   * opt into the gateway. They are deprecated in favor of the new values.
    */
   public egress(egress: SandboxEgress): this {
     this._config.egress = egress
     return this
   }
 
-  /** Fixes the unprivileged command identity and lets Alien's supervisor enforce egress. */
-  public privilegedSupervisor(supervisor: SandboxPrivilegedSupervisor): this {
-    this._config.privilegedSupervisor = supervisor
+  /**
+   * @deprecated Existing supervisor enforcement is preserved. The new
+   * egress("internet") enables gateway enforcement and the supervisor automatically.
+   */
+  public privilegedSupervisor(settings: SandboxPrivilegedSupervisor): this {
+    this._config.privilegedSupervisor = settings
+    return this
+  }
+
+  /** Sets the runtime policy used when create omits one; requires egress("internet"). */
+  public defaultPolicy(policy: EgressPolicy): this {
+    this._config.defaultPolicy = policy
     return this
   }
 

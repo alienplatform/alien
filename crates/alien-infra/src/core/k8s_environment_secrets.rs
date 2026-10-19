@@ -619,15 +619,15 @@ mod tests {
         let deployer_secrets = serde_json::json!([
             {
                 "name": "DATABASE_PASSWORD",
-                "vaultKey": "input-database-password",
-                "secretName": "stack-secrets-input-database-password",
+                "vaultKey": "database-password",
+                "secretName": "stack-deployer-secrets-database-password",
                 "label": "Database password",
                 "required": true,
             },
             {
                 "name": "LICENSE_KEY",
-                "vaultKey": "input-license-key",
-                "secretName": "stack-secrets-input-license-key",
+                "vaultKey": "license-key",
+                "secretName": "stack-deployer-secrets-license-key",
                 "label": "License key",
                 "required": false,
             },
@@ -659,11 +659,11 @@ mod tests {
                 .expect("a secretKeyRef")
         };
         let password = reference("DATABASE_PASSWORD");
-        assert_eq!(password.name, "stack-secrets-input-database-password");
+        assert_eq!(password.name, "stack-deployer-secrets-database-password");
         assert_eq!(password.key, "value");
         assert_eq!(password.optional, Some(false));
         let license = reference("LICENSE_KEY");
-        assert_eq!(license.name, "stack-secrets-input-license-key");
+        assert_eq!(license.name, "stack-deployer-secrets-license-key");
         assert_eq!(license.optional, Some(true));
         assert!(env_vars
             .iter()

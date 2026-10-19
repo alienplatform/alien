@@ -104,3 +104,45 @@ fn azure_queue_publisher_and_consumer_have_distinct_queue_roles() {
         "Azure Service Bus Data Receiver"
     );
 }
+
+#[test]
+fn gcp_queue_provisioning_can_apply_bindings_without_message_access() {
+    let generator = GcpRuntimePermissionsGenerator::new();
+    let context = create_test_context().with_resource_name("jobs");
+    let permission_set = get_permission_set("queue/provision").expect("queue provision set");
+    let plan = generator
+        .generate_grant_plan(permission_set, BindingTarget::Stack, &context)
+        .expect("queue provisioning grant plan");
+
+    for permission in [
+        "pubsub.topics.setIamPolicy",
+        "pubsub.subscriptions.setIamPolicy",
+    ] {
+        let role = plan
+            .custom_roles
+            .iter()
+            .find(|role| role.included_permissions.iter().any(|p| p == permission))
+            .unwrap_or_else(|| panic!("queue provisioning lacks {permission}"));
+        assert!(
+            plan.bindings.iter().any(|binding| {
+                binding.role == role.name && binding.target == GcpBindingTargetScope::Project
+            }),
+            "provisioning must bind {permission} before the queue exists"
+        );
+    }
+    for role in &plan.custom_roles {
+        for permission in ["pubsub.topics.publish", "pubsub.subscriptions.consume"] {
+            assert!(
+                !role.included_permissions.iter().any(|p| p == permission),
+                "provisioning grants message access: {permission}"
+            );
+        }
+    }
+    assert!(
+        plan.bindings.iter().all(|binding| plan
+            .custom_roles
+            .iter()
+            .any(|role| role.name == binding.role)),
+        "queue provisioning must not add a broad predefined role"
+    );
+}

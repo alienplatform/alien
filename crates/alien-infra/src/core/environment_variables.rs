@@ -70,7 +70,7 @@ pub(crate) fn applicable_secret_environment_variables<'a>(
 }
 
 /// Replaces a local workload's `ALIEN_DEPLOYER_SECRETS` list with the values
-/// the developer set in the local `secrets` vault (`alien dev vault set`), read
+/// the developer set in the local `deployer-secrets` vault (`alien dev vault set`), read
 /// as the process starts so a changed value is picked up by the next restart.
 /// Returns the names it set; a required secret that is not set fails the start
 /// with "missing: <label>", an optional one stays unset.
@@ -105,7 +105,7 @@ pub(crate) async fn resolve_local_deployer_secrets(
             })
         })?;
     let vault = bindings_provider
-        .load_vault(alien_core::SECRETS_VAULT_ID)
+        .load_vault(alien_core::DEPLOYER_SECRETS_VAULT_ID)
         .await
         .context(ErrorData::ResourceConfigInvalid {
             message: "Failed to load the local secrets vault".to_string(),
@@ -781,7 +781,7 @@ mod tests {
                 &vault(&dir),
                 vec![secret(
                     "DATABASE_PASSWORD",
-                    "input-database-password",
+                    "database-password",
                     "Database password",
                     true,
                 )],
@@ -826,12 +826,12 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let secrets = vec![secret(
                 "DATABASE_PASSWORD",
-                "input-database-password",
+                "database-password",
                 "Database password",
                 true,
             )];
             vault(&dir)
-                .set_secret("input-database-password", "first")
+                .set_secret("database-password", "first")
                 .await
                 .unwrap();
 
@@ -844,7 +844,7 @@ mod tests {
 
             // Rotation: the next start sees the new value.
             vault(&dir)
-                .set_secret("input-database-password", "rotated")
+                .set_secret("database-password", "rotated")
                 .await
                 .unwrap();
             let mut env = HashMap::new();

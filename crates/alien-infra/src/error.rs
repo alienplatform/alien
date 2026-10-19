@@ -37,6 +37,15 @@ pub enum ErrorData {
         message: String,
     },
 
+    /// Internet sandbox networking currently requires a template-owned AWS setup.
+    #[error(
+        code = "SANDBOX_INTERNET_DIRECT_SETUP_UNSUPPORTED",
+        message = "Sandbox '{resource_id}' uses internet egress, which AWS direct deploy does not support. Deploy this sandbox with CloudFormation or Terraform. Existing allow, deny, and allowDomains declarations are unchanged.",
+        retryable = "false",
+        internal = "false"
+    )]
+    SandboxInternetDirectSetupUnsupported { resource_id: String },
+
     /// Resource configuration validation failed.
     #[error(
         code = "RESOURCE_CONFIG_INVALID",
@@ -423,7 +432,7 @@ pub enum ErrorData {
     #[error(
         code = "AUTHENTICATION_FAILED",
         message = "Authentication failed: {message}",
-        retryable = "false",
+        retryable = "inherit",
         internal = "false"
     )]
     AuthenticationFailed {
@@ -504,6 +513,21 @@ pub enum ErrorData {
         message: String,
     },
 
+    /// A cloud object with the name a resource uses already exists and this deployment did not create it.
+    #[error(
+        code = "EXISTING_CLOUD_RESOURCE_NOT_OWNED",
+        message = "{object} already exists and is not managed by this deployment. Resource '{resource_id}' will not use or change it; remove the existing one or give the resource a different ID.",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    ExistingCloudResourceNotOwned {
+        /// Resource that would have used the name
+        resource_id: String,
+        /// The existing object, named as the cloud names it (for example "S3 bucket 'x'")
+        object: String,
+    },
+
     /// A cloud object setup would create already exists and is not one setup can safely adopt.
     #[error(
         code = "SETUP_SCAFFOLDING_NOT_ADOPTABLE",
@@ -519,6 +543,20 @@ pub enum ErrorData {
         object: String,
         /// Every property that differs from what setup would have created
         reason: String,
+    },
+
+    /// A controller exhausted its bounded retries of terminal cloud operations.
+    #[error(
+        code = "CLOUD_OPERATION_RETRIES_EXHAUSTED",
+        message = "{operation} for resource '{resource_id}' failed after {attempts} terminal operations: {message}",
+        retryable = "false",
+        internal = "inherit"
+    )]
+    CloudOperationRetriesExhausted {
+        resource_id: String,
+        operation: String,
+        attempts: u32,
+        message: String,
     },
 
     /// Errors originating from cloud platform operations.

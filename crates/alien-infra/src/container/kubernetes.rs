@@ -179,6 +179,9 @@ pub struct KubernetesContainerController {
     pub(crate) service_name: Option<String>,
     /// The first declared service port for binding construction.
     pub(crate) service_port: Option<u16>,
+    /// All declared ports, retained for per-port internal binding URLs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) service_ports: Vec<u16>,
     /// The container ID (for binding construction)
     pub(crate) container_id: Option<String>,
     /// Public endpoint route/certificate state.
@@ -327,6 +330,7 @@ impl KubernetesContainerController {
         self.container_id = Some(config.id.clone());
         self.service_name = Some(container_name.clone());
         self.service_port = first_declared_container_port(config);
+        self.service_ports = config.ports.iter().map(|port| port.port).collect();
         self.namespace = Some(namespace.clone());
         // Generate ServiceAccount name following Helm naming convention
         let service_account_name =
@@ -1129,6 +1133,7 @@ impl KubernetesContainerController {
             .await?;
         self.env_secret.record(env_secret_plan.as_ref());
         self.service_port = first_declared_container_port(config);
+        self.service_ports = config.ports.iter().map(|port| port.port).collect();
         self.reconcile_internal_service(config, workload_name, namespace, ctx)
             .await?;
         if self.is_stateful {
@@ -1749,6 +1754,7 @@ impl KubernetesContainerController {
                     Some(namespace) => format!("{workload_name}.{namespace}.svc.cluster.local"),
                     None => format!("{workload_name}.svc.cluster.local"),
                 },
+                internal_urls: self.internal_urls(),
                 replicas: Vec::new(), // Replica details tracked separately
                 // Kubernetes leaves volume snapshots to the cluster's own tooling. With no
                 // volumes reported, there is nothing to restore.
@@ -1807,6 +1813,11 @@ impl KubernetesContainerController {
             (&self.container_id, &self.service_name, &self.namespace)
         {
             let binding = KubernetesContainerBinding {
+                internal_urls: self
+                    .internal_urls()
+                    .into_iter()
+                    .map(|(port, url)| (port, BindingValue::value(url)))
+                    .collect(),
                 name: BindingValue::Value(container_id.clone()),
                 namespace: BindingValue::Value(namespace.clone()),
                 service_name: BindingValue::Value(service_name.clone()),
@@ -1853,6 +1864,7 @@ mod output_tests {
             is_stateful: false,
             namespace: Some("test-namespace".to_string()),
             service_name: Some("test-container".to_string()),
+            service_ports: vec![3000, 3129],
             service_port: Some(3000),
             container_id: Some("container".to_string()),
             public_endpoint,
@@ -1865,6 +1877,14 @@ mod output_tests {
         let container_outputs = outputs
             .downcast_ref::<ContainerOutputs>()
             .expect("container outputs");
+
+        assert_eq!(
+            container_outputs
+                .internal_urls
+                .get(&3129)
+                .map(String::as_str),
+            Some("http://test-container.test-namespace.svc.cluster.local:3129")
+        );
 
         assert_eq!(
             container_outputs
@@ -1890,6 +1910,7 @@ mod output_tests {
             is_stateful: false,
             namespace: Some("test-namespace".to_string()),
             service_name: Some("test-container".to_string()),
+            service_ports: Vec::new(),
             service_port: Some(3000),
             container_id: Some("container".to_string()),
             public_endpoint,
@@ -1904,6 +1925,11 @@ mod output_tests {
             .expect("container outputs");
 
         assert_eq!(
+            container_outputs.internal_urls.get(&3000).map(String::as_str),
+            Some("http://test-container.test-namespace.svc.cluster.local:3000")
+        );
+
+        assert_eq!(
             container_outputs
                 .public_endpoints
                 .get("default")
@@ -1914,6 +1940,26 @@ mod output_tests {
 }
 
 impl KubernetesContainerController {
+    fn internal_urls(&self) -> HashMap<u16, String> {
+        let (Some(service), Some(namespace)) = (&self.service_name, &self.namespace) else {
+            return HashMap::new();
+        };
+        let ports: Vec<_> = if self.service_ports.is_empty() {
+            self.service_port.into_iter().collect()
+        } else {
+            self.service_ports.clone()
+        };
+        ports
+            .into_iter()
+            .map(|port| {
+                (
+                    port,
+                    format!("http://{service}.{namespace}.svc.cluster.local:{port}"),
+                )
+            })
+            .collect()
+    }
+
     /// Creates a controller in a ready state with mock values for testing purposes.
     #[cfg(feature = "test-utils")]
     pub fn mock_ready(container_name: &str, namespace: &str, is_stateful: bool) -> Self {
@@ -1923,6 +1969,7 @@ impl KubernetesContainerController {
             is_stateful,
             namespace: Some(namespace.to_string()),
             service_name: Some(container_name.to_string()),
+            service_ports: Vec::new(),
             service_port: Some(80),
             container_id: Some("test-container".to_string()),
             public_endpoint: KubernetesPublicEndpointState::default(),
@@ -2868,6 +2915,7 @@ mod tests {
             is_stateful: false,
             namespace: Some("test-ns".to_string()),
             service_name: Some("api".to_string()),
+            service_ports: Vec::new(),
             service_port: Some(3000),
             container_id: Some("api".to_string()),
             public_endpoint: KubernetesPublicEndpointState::default(),
@@ -3234,8 +3282,8 @@ mod tests {
         for version in ["7", "7", "8"] {
             let deployer_secrets = serde_json::json!([{
                 "name": "DATABASE_PASSWORD",
-                "vaultKey": "input-database-password",
-                "secretName": "stack-secrets-input-database-password",
+                "vaultKey": "database-password",
+                "secretName": "stack-deployer-secrets-database-password",
                 "label": "Database password",
                 "required": true,
                 "version": version,
@@ -3268,7 +3316,7 @@ mod tests {
                 .find(|var| var.name == "DATABASE_PASSWORD")
                 .and_then(|var| var.value_from.as_ref()?.secret_key_ref.as_ref())
                 .expect("DATABASE_PASSWORD is a secretKeyRef");
-            assert_eq!(reference.name, "stack-secrets-input-database-password");
+            assert_eq!(reference.name, "stack-deployer-secrets-database-password");
             templates.push(template);
         }
 

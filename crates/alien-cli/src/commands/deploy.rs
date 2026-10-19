@@ -796,7 +796,7 @@ async fn create_self_deployment(
 
 /// Deployments in the project, in any group, that are named exactly `name` and
 /// not deleted.
-async fn live_deployments_named(
+pub(super) async fn live_deployments_named(
     client: &SdkClient,
     workspace: Option<&str>,
     project_id: &str,

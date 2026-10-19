@@ -13,6 +13,10 @@ local fast_steps = new Mapping<String, Step> {
         // The generated OpenAPI inputs are already tracked above the size limit.
         exclude = List(
             "packages/permissions/generated/bytes.js",
+            "client-sdks/manager/openapi.json",
+            "client-sdks/manager/openapi-3.0.json",
+            "client-sdks/manager/rust/openapi-3.0.json",
+            "crates/alien-manager/openapi.json",
             "client-sdks/platform/openapi.json",
             "client-sdks/platform/rust/openapi.json",
             "client-sdks/platform/rust/openapi-3.0.json",

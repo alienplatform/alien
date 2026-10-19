@@ -206,7 +206,7 @@ impl<'de> Deserialize<'de> for PublicEndpointOutput {
     }
 }
 
-/// Validates a public endpoint name within a resource.
+/// Validates an endpoint name within a resource.
 pub fn validate_endpoint_name(resource_id: &str, name: &str) -> Result<()> {
     let valid = !name.is_empty()
         && name.len() <= 63
@@ -220,7 +220,7 @@ pub fn validate_endpoint_name(resource_id: &str, name: &str) -> Result<()> {
         return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
             resource_id: resource_id.to_string(),
             reason:
-                "public endpoint name must be a single lowercase DNS label: letters, numbers, hyphens, no dots, and no leading or trailing hyphen"
+                "endpoint name must be a single lowercase DNS label: letters, numbers, hyphens, no dots, and no leading or trailing hyphen"
                     .to_string(),
         }));
     }

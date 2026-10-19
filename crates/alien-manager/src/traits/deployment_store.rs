@@ -293,6 +293,8 @@ pub struct DeploymentFilter {
     pub deployment_group_id: Option<String>,
     pub name: Option<String>,
     pub deployment_ids: Option<Vec<String>>,
+    /// IDs acquisition must skip, applied before its limit.
+    pub excluded_deployment_ids: Vec<String>,
     pub statuses: Option<Vec<String>>,
     pub platforms: Option<Vec<Platform>>,
     pub setup_method: Option<String>,
@@ -497,6 +499,14 @@ pub struct ReconcileOutcome {
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
 pub trait DeploymentStore: Send + Sync {
+    /// Whether acquisition honors excluded IDs before applying its limit.
+    /// Stores must opt in after their entire acquisition path supports exclusions.
+    /// Other stores retain candidate-list filtering to avoid reacquiring skipped
+    /// work while preserving their existing per-tick batching.
+    fn supports_acquire_exclusions(&self) -> bool {
+        false
+    }
+
     /// Whether executable deployment targets require an operation claim.
     ///
     /// Stores backed by a control plane with durable deployment operations

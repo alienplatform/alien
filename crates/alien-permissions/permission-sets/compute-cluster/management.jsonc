@@ -581,11 +581,19 @@
       // secrets for compute host boot. Management owns the fleet lifecycle,
       // so it must also own these secret versions and the per-secret IAM
       // grant to the compute node service account.
+      // Creating a secret is authorized on the parent project. This cannot
+      // restrict the requested secret id; creation is an indirect trust limit.
+      {
+        "grant": { "permissions": ["secretmanager.secrets.create"] },
+        "binding": {
+          "stack": { "scope": "projects/${projectName}" },
+          "resource": { "scope": "projects/${projectName}" }
+        }
+      },
       {
         "grant": {
           "permissions": [
             "secretmanager.secrets.get",
-            "secretmanager.secrets.create",
             "secretmanager.secrets.delete",
             "secretmanager.versions.add",
             "secretmanager.secrets.getIamPolicy",
@@ -594,10 +602,18 @@
         },
         "binding": {
           "stack": {
-            "scope": "projects/${projectName}"
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "SharedRuntimeSecretsOnly",
+              "expression": "resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-\") && !resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-deployer-secrets-\")"
+            }
           },
           "resource": {
-            "scope": "projects/${projectName}"
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "SharedRuntimeSecretsOnly",
+              "expression": "resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-\") && !resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-deployer-secrets-\")"
+            }
           }
         }
       }
@@ -635,6 +651,8 @@
             // ComputeCluster delete flow all delete scale sets with this role. Without it the
             // delete is denied and the scale set outlives the cluster.
             "Microsoft.Compute/virtualMachineScaleSets/delete",
+            // Scale-in, node-cohort retirement, and rolling replacement delete individual VMs.
+            "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/delete",
             // Every scale set PUT (scaling, a size change, a rolling update) re-checks join on
             // the cluster NSG its network profile links to. The NSG is created at setup, so
             // nothing else gives the management identity this action.

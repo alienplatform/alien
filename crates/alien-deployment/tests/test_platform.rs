@@ -35,7 +35,7 @@ impl TestVaultEnv {
     /// cloud's CLI, outside Alien.
     fn customer_vault(&self) -> alien_bindings::providers::vault::LocalVault {
         alien_bindings::providers::vault::LocalVault::new(
-            "secrets".to_string(),
+            "deployer-secrets".to_string(),
             self._temp_dir.path().to_path_buf(),
         )
     }
@@ -3097,10 +3097,70 @@ fn deployer_reports(state: &DeploymentState) -> Vec<alien_core::DeployerSecretRe
 }
 
 #[tokio::test]
+async fn imported_initial_deployment_resumes_after_waiting_for_secrets() {
+    let vault_env = test_vault_env().await;
+    let mut stack = create_test_stack_with_storage("test-stack", "archive", "worker");
+    stack.inputs = vec![database_password_input()];
+    let config = create_test_config("initial-env", false);
+    let mut blocked = run_until_status(
+        create_initial_state(stack),
+        config.clone(),
+        &[DeploymentStatus::WaitingForSecrets],
+    )
+    .await;
+    // Automatic setup registration records the imported release before its
+    // workloads settle. This is initial provisioning, with no prepared update.
+    let release = blocked.target_release.clone().unwrap();
+    blocked.current_release = Some(release.clone());
+    let metadata = blocked.runtime_metadata.as_mut().unwrap();
+    metadata.automatic_setup = true;
+    metadata.initial_setup_authority = alien_core::InitialSetupAuthority::DirectSetup;
+    assert!(metadata.pending_prepared_stack.is_none());
+    let frozen = blocked.stack_state.as_ref().unwrap().resources["archive"].clone();
+    assert_eq!(
+        deployer_reports(&blocked)[0].status,
+        alien_core::DeployerSecretStatus::Missing
+    );
+
+    vault_env
+        .customer_vault()
+        .set_secret("database-password", "customer-only-value")
+        .await
+        .unwrap();
+    let checkpoint = serde_json::from_value(serde_json::to_value(&blocked).unwrap()).unwrap();
+    let running = run_to_completion(checkpoint, config).await;
+    assert_eq!(running.status, DeploymentStatus::Running);
+    assert_eq!(running.current_release, Some(release));
+    assert!(running.target_release.is_none());
+    assert!(running
+        .runtime_metadata
+        .as_ref()
+        .unwrap()
+        .pending_prepared_stack
+        .is_none());
+    assert_eq!(
+        running.stack_state.as_ref().unwrap().resources["worker"].status,
+        alien_core::ResourceStatus::Running
+    );
+    assert_eq!(
+        serde_json::to_value(&running.stack_state.as_ref().unwrap().resources["archive"]).unwrap(),
+        serde_json::to_value(frozen).unwrap()
+    );
+    assert_eq!(
+        deployer_reports(&running)[0].status,
+        alien_core::DeployerSecretStatus::Present
+    );
+    assert!(!serde_json::to_string(&running)
+        .unwrap()
+        .contains("customer-only-value"));
+}
+
+#[tokio::test]
 async fn initial_update_resumes_prepared_target_after_waiting_for_secrets() {
     let vault_env = test_vault_env().await;
     let config = create_test_config("target-env", false);
-    let old_stack = create_test_stack_with_storage("test-stack", "archive", "old-worker");
+    let mut old_stack = create_test_stack_with_storage("test-stack", "archive", "old-worker");
+    old_stack.inputs = vec![database_password_input()];
     let mut state = run_until_status(
         create_initial_state(old_stack),
         config.clone(),
@@ -3155,7 +3215,7 @@ async fn initial_update_resumes_prepared_target_after_waiting_for_secrets() {
 
     vault_env
         .customer_vault()
-        .set_secret("input-database-password", "demo-secret")
+        .set_secret("database-password", "demo-secret")
         .await
         .unwrap();
     let checkpoint = serde_json::from_value(serde_json::to_value(&blocked).unwrap()).unwrap();
@@ -3224,8 +3284,7 @@ async fn test_missing_deployer_secret_blocks_workloads_until_written() {
     let reports = deployer_reports(&blocked);
     assert_eq!(reports.len(), 1);
     assert_eq!(reports[0].status, alien_core::DeployerSecretStatus::Missing);
-    assert_eq!(reports[0].location.name, "input-database-password");
-    assert!(reports[0].location.cli_command.contains("'<VALUE>'"));
+    assert_eq!(reports[0].location.name, "database-password");
     let worker = blocked
         .stack_state
         .as_ref()
@@ -3239,7 +3298,7 @@ async fn test_missing_deployer_secret_blocks_workloads_until_written() {
 
     vault_env
         .customer_vault()
-        .set_secret("input-database-password", "customer-only-value")
+        .set_secret("database-password", "customer-only-value")
         .await
         .unwrap();
 
@@ -3258,8 +3317,8 @@ async fn test_missing_deployer_secret_blocks_workloads_until_written() {
         alien_secrets["deployerSecrets"],
         serde_json::json!([{
             "name": "DATABASE_PASSWORD",
-            "vaultKey": "input-database-password",
-            "secretName": "input-database-password",
+            "vaultKey": "database-password",
+            "secretName": "database-password",
             "label": "Database password",
             "required": true,
             "version": deployer_reports(&running)[0].version,
@@ -3319,7 +3378,7 @@ async fn test_redeploy_after_deployer_secret_overwrite_restarts_workloads() {
     let config = create_test_config("hash_v1", false);
     vault_env
         .customer_vault()
-        .set_secret("input-database-password", "customer-value-v1")
+        .set_secret("database-password", "customer-value-v1")
         .await
         .unwrap();
 
@@ -3343,7 +3402,7 @@ async fn test_redeploy_after_deployer_secret_overwrite_restarts_workloads() {
     // redeploys the same release with the same config.
     vault_env
         .customer_vault()
-        .set_secret("input-database-password", "customer-value-v2")
+        .set_secret("database-password", "customer-value-v2")
         .await
         .unwrap();
     let mut redeploy = running;
@@ -3409,7 +3468,55 @@ async fn test_stored_dual_secret_presence_starts_without_vault_slots() {
 }
 
 #[tokio::test]
-async fn test_stored_deployer_secret_keeps_working_until_the_slot_is_filled() {
+async fn existing_running_deployment_without_deployer_vault_reports_setup_required() {
+    let _vault = test_vault_env().await;
+    let config = create_test_config("unchanged", false);
+    let mut stack = create_test_stack("test-stack", "test-function");
+    // The prepared release predates the dedicated vault. A health check must
+    // report the new setup requirement without stopping existing workloads.
+    let mut running = run_to_completion(create_initial_state(stack.clone()), config.clone()).await;
+    stack.inputs = vec![database_password_input()];
+    running
+        .runtime_metadata
+        .as_mut()
+        .unwrap()
+        .prepared_stack
+        .as_mut()
+        .unwrap()
+        .inputs = stack.inputs;
+    let original_worker =
+        serde_json::to_value(&running.stack_state.as_ref().unwrap().resources["test-function"])
+            .unwrap();
+    for _ in 0..2 {
+        let result = alien_deployment::step(running, config.clone(), ClientConfig::Test, None)
+            .await
+            .unwrap();
+        running = result.state;
+        assert_eq!(running.status, DeploymentStatus::Running);
+        let reports = deployer_reports(&running);
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0].status, alien_core::DeployerSecretStatus::Missing);
+        assert!(reports[0]
+            .message
+            .as_deref()
+            .unwrap()
+            .contains("Setup required"));
+        assert!(!running
+            .stack_state
+            .as_ref()
+            .unwrap()
+            .resources
+            .contains_key(alien_core::DEPLOYER_SECRETS_VAULT_ID));
+        assert_eq!(
+            serde_json::to_value(&running.stack_state.as_ref().unwrap().resources["test-function"])
+                .unwrap(),
+            original_worker
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_stored_deployer_secret_keeps_legacy_delivery_without_a_native_vault() {
     use alien_bindings::Vault as _;
 
     let vault_env = test_vault_env().await;
@@ -3433,10 +3540,13 @@ async fn test_stored_deployer_secret_keeps_working_until_the_slot_is_filled() {
     .await;
 
     assert_eq!(running.status, DeploymentStatus::Running);
-    assert_eq!(
-        deployer_reports(&running)[0].status,
-        alien_core::DeployerSecretStatus::Missing
-    );
+    assert!(deployer_reports(&running).is_empty());
+    assert!(!running
+        .stack_state
+        .as_ref()
+        .unwrap()
+        .resources
+        .contains_key(alien_core::DEPLOYER_SECRETS_VAULT_ID));
     assert!(
         !worker_environment(&running, "test-function").contains_key(alien_core::ENV_ALIEN_SECRETS),
         "the stored value keeps today's path until the slot is filled"
@@ -3444,7 +3554,7 @@ async fn test_stored_deployer_secret_keeps_working_until_the_slot_is_filled() {
 
     vault_env
         .customer_vault()
-        .set_secret("input-database-password", "customer-only-value")
+        .set_secret("database-password", "customer-only-value")
         .await
         .unwrap();
     let result = alien_deployment::step(running, config, ClientConfig::Test, None)
@@ -3452,11 +3562,7 @@ async fn test_stored_deployer_secret_keeps_working_until_the_slot_is_filled() {
         .unwrap();
 
     assert_eq!(result.state.status, DeploymentStatus::Running);
-    assert_eq!(
-        deployer_reports(&result.state)[0].status,
-        alien_core::DeployerSecretStatus::Present,
-        "a running deployment reports the slot once it is filled"
-    );
+    assert!(deployer_reports(&result.state).is_empty(), "stored values keep their existing delivery even if a customer writes an unrelated native slot");
 }
 
 /// A config built the way a manager builds one on every step (and after a restart): new
@@ -3519,7 +3625,7 @@ async fn rebuilt_injected_config_plans_no_update() {
     let vault_env = test_vault_env().await;
     vault_env
         .customer_vault()
-        .set_secret("input-database-password", "value-v1")
+        .set_secret("database-password", "value-v1")
         .await
         .unwrap();
     let worker_id = "drift-rebuilt-fn";
@@ -3585,7 +3691,7 @@ async fn deployer_secret_rewritten_mid_create_converges_after_one_update() {
     let vault_env = test_vault_env().await;
     let vault = vault_env.customer_vault();
     vault
-        .set_secret("input-database-password", "value-v1")
+        .set_secret("database-password", "value-v1")
         .await
         .unwrap();
     let worker_id = "drift-rewrite-fn";
@@ -3607,7 +3713,7 @@ async fn deployer_secret_rewritten_mid_create_converges_after_one_update() {
     }
     assert_eq!(state.status, DeploymentStatus::Provisioning);
     vault
-        .set_secret("input-database-password", "value-v2")
+        .set_secret("database-password", "value-v2")
         .await
         .unwrap();
 
@@ -3678,7 +3784,7 @@ async fn fail_create_after_deployer_secret_rewrite(
         Some(alien_core::ResourceStatus::Provisioning)
     );
     vault
-        .set_secret("input-database-password", "value-v2")
+        .set_secret("database-password", "value-v2")
         .await
         .unwrap();
     run_to_completion(state, config.clone()).await
@@ -3703,7 +3809,7 @@ async fn provisioning_retry_resumes_a_failed_create_with_deployer_only_drift() {
     let vault_env = test_vault_env().await;
     let vault = vault_env.customer_vault();
     vault
-        .set_secret("input-database-password", "value-v1")
+        .set_secret("database-password", "value-v1")
         .await
         .unwrap();
     let worker_id = "drift-prov-retry-fn";
@@ -3754,7 +3860,7 @@ async fn update_retry_resumes_a_failed_create_with_deployer_only_drift() {
     let vault_env = test_vault_env().await;
     let vault = vault_env.customer_vault();
     vault
-        .set_secret("input-database-password", "value-v1")
+        .set_secret("database-password", "value-v1")
         .await
         .unwrap();
     let worker_id = "drift-upd-retry-fn";

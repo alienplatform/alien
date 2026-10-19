@@ -22,6 +22,7 @@ fn fully_populated_deployer_secret() -> DeployerSecretReport {
         message: Some("must be a SecureString".to_string()),
         version: Some("3".to_string()),
         location: DeployerSecretLocation {
+            commands: None,
             store: DeployerSecretStore::AzureKeyVault,
             name: "my-app-database-password".to_string(),
             vault_name: Some("my-app-vault".to_string()),

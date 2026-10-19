@@ -1599,39 +1599,6 @@ async fn terminate_reports_unconfirmed_when_the_sandbox_stays_present() {
 
 // ---- unit guards ------------------------------------------------------------------------------
 
-/// AllowDomains is refused naming the sandbox and both accepted modes; the two expressible modes
-/// map to the boolean. Mutation check: return `Ok` for AllowDomains and this fails.
-#[test]
-fn egress_refuses_domain_scoping_and_names_the_modes() {
-    let error = egress_control_config(
-        "sbx-7",
-        &SandboxEgress::AllowDomains {
-            domains: vec!["x.io".into()],
-        },
-    )
-    .expect_err("domain-scoped egress has no representation");
-    assert_eq!(error.code, "INVALID_INPUT", "{error}");
-    let rendered = error.to_string();
-    assert!(rendered.contains("sbx-7"), "names the sandbox: {rendered}");
-    assert!(
-        rendered.contains("allow") && rendered.contains("deny"),
-        "names both modes: {rendered}"
-    );
-
-    assert_eq!(
-        egress_control_config("s", &SandboxEgress::Deny)
-            .expect("deny maps")
-            .internet_access,
-        Some(false)
-    );
-    assert_eq!(
-        egress_control_config("s", &SandboxEgress::Allow)
-            .expect("allow maps")
-            .internet_access,
-        Some(true)
-    );
-}
-
 /// A sandbox id that could address another sandbox never reaches a URL. Mutation check: weaken
 /// `is_addressable_id` to accept '/' and the traversal ids below stop being refused.
 #[tokio::test]

@@ -219,6 +219,7 @@ pub fn controller_impl(_args: TokenStream, input: TokenStream) -> TokenStream {
     let mut needs_update_method = None;
     let mut requires_convergence_reconciliation_method = None;
     let mut nothing_deleted_yet_method = None;
+    let mut has_runtime_setup_inputs_method = None;
 
     for item in &item_impl.items {
         match item {
@@ -242,6 +243,11 @@ pub fn controller_impl(_args: TokenStream, input: TokenStream) -> TokenStream {
 
                 if method.sig.ident == "nothing_deleted_yet" {
                     nothing_deleted_yet_method = Some(method.clone());
+                    continue;
+                }
+
+                if method.sig.ident == "has_runtime_setup_inputs" {
+                    has_runtime_setup_inputs_method = Some(method.clone());
                     continue;
                 }
 
@@ -321,6 +327,7 @@ pub fn controller_impl(_args: TokenStream, input: TokenStream) -> TokenStream {
         needs_update_method.as_ref(),
         requires_convergence_reconciliation_method.as_ref(),
         nothing_deleted_yet_method.as_ref(),
+        has_runtime_setup_inputs_method.as_ref(),
     );
 
     // Generate handler methods
@@ -488,6 +495,7 @@ fn generate_controller_impl(
     needs_update_method: Option<&ImplItemFn>,
     requires_convergence_reconciliation_method: Option<&ImplItemFn>,
     nothing_deleted_yet_method: Option<&ImplItemFn>,
+    has_runtime_setup_inputs_method: Option<&ImplItemFn>,
 ) -> TokenStream2 {
     let step_match_arms = generate_step_match_arms(state_enum_name, handler_action_name, handlers);
     let get_status_match_arms =
@@ -530,6 +538,17 @@ fn generate_controller_impl(
         let method_block = &method.block;
         quote! {
             fn nothing_deleted_yet(&self) -> bool {
+                #method_block
+            }
+        }
+    } else {
+        quote! {}
+    };
+
+    let has_runtime_setup_inputs_impl = if let Some(method) = has_runtime_setup_inputs_method {
+        let method_block = &method.block;
+        quote! {
+            fn has_runtime_setup_inputs(&self) -> bool {
                 #method_block
             }
         }
@@ -624,6 +643,8 @@ fn generate_controller_impl(
             #requires_convergence_reconciliation_impl
 
             #nothing_deleted_yet_impl
+
+            #has_runtime_setup_inputs_impl
 
             fn reset_stay_count(&mut self) {
                 self._internal_stay_count = None;

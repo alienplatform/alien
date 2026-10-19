@@ -16,7 +16,9 @@ use crate::{
     template::{CfExpression, CfResource},
 };
 use alien_core::sandbox_build_role::sandbox_build_role_name;
-use alien_core::sandbox_egress::{sandbox_egress_network, SandboxEgressVpc, LOOPBACK_ONLY_CIDR};
+use alien_core::sandbox_egress::{
+    sandbox_egress_network, sandbox_needs_connector, SandboxEgressVpc, LOOPBACK_ONLY_CIDR,
+};
 use alien_core::sandbox_image::AWS_MICROVM;
 use alien_core::{
     import::EmitContext, BundleUri, ErrorData, RemoteBindings, ResourceLifecycle, Result, Sandbox,
@@ -79,8 +81,6 @@ impl CfEmitter for AwsSandboxEmitter {
         );
         role.properties.insert("Tags".to_string(), tags(ctx));
 
-        // An open sandbox routes nothing through a VPC, so none of this exists for it: no
-        // connector to attach, no group to deny with, and no role to manage interfaces.
         let mut egress_resources = Vec::new();
         if let Some((vpc_id, subnet_ids)) = egress {
             // Lambda assumes this to manage the connector's network interfaces. AWS documents the
@@ -110,11 +110,7 @@ impl CfEmitter for AwsSandboxEmitter {
             security_group
                 .properties
                 .insert("VpcId".to_string(), vpc_id);
-            // EC2 adds an allow-all egress rule to any group whose template states none, so the deny
-            // has to be written down. Loopback-only is AWS's documented way to say it. Widening this
-            // rule is the one edit that turns `egress: deny` back into internet access.
-            security_group.properties.insert(
-                "SecurityGroupEgress".to_string(),
+            let egress_rules = if matches!(sandbox.egress, SandboxEgress::None) {
                 CfExpression::list([CfExpression::object([
                     ("IpProtocol", CfExpression::from("-1")),
                     ("CidrIp", CfExpression::from(LOOPBACK_ONLY_CIDR)),
@@ -122,8 +118,13 @@ impl CfEmitter for AwsSandboxEmitter {
                         "Description",
                         CfExpression::from("Sandbox sessions reach nothing outbound"),
                     ),
-                ])]),
-            );
+                ])])
+            } else {
+                super::network::gateway_egress_rules(ctx)?
+            };
+            security_group
+                .properties
+                .insert("SecurityGroupEgress".to_string(), egress_rules);
             security_group
                 .properties
                 .insert("Tags".to_string(), tags(ctx));
@@ -228,19 +229,24 @@ impl CfEmitter for AwsSandboxEmitter {
                 CfExpression::Integer(tier.baseline_memory_mib),
             )])]),
         );
-        // AWS exposes only ALL; the agent reduces it before running image code or commands.
+        // AWS rejects named capabilities: only ALL is accepted. The agent drops to eight
+        // before creating worker threads; every image command and exec receives none.
         properties.insert(
             "AdditionalOsCapabilities".to_string(),
-            CfExpression::list(if sandbox.privileged_supervisor.is_some() {
-                vec![CfExpression::from("ALL")]
-            } else {
-                vec![]
-            }),
+            CfExpression::list(
+                if alien_core::sandbox_egress::aws_sandbox_agent_environment(ctx.stack, sandbox)
+                    .contains_key("ALIEN_SANDBOX_EGRESS")
+                {
+                    vec![CfExpression::from("ALL")]
+                } else {
+                    vec![]
+                },
+            ),
         );
         properties.insert("Hooks".to_string(), hooks());
         properties.insert(
             "EnvironmentVariables".to_string(),
-            environment_variables(sandbox),
+            environment_variables(ctx.stack, sandbox),
         );
         properties.insert("Tags".to_string(), tags(ctx));
 
@@ -263,17 +269,17 @@ impl CfEmitter for AwsSandboxEmitter {
         let sandbox = resource_config::<Sandbox>(ctx, Sandbox::RESOURCE_TYPE)?;
         let image_id = required_logical_id(ctx)?;
         if provisioned_at_runtime(ctx) {
-            return runtime_import_ref(sandbox, image_id);
+            return runtime_import_ref(ctx, sandbox, image_id);
         }
         Ok(CfExpression::object([
             ("previewPorts", preview_ports(sandbox)),
             (
                 "egressConnectorArns",
-                egress_connector_arns(sandbox, image_id),
+                egress_connector_arns(ctx, sandbox, image_id),
             ),
             (
                 "allowEgress",
-                CfExpression::from(matches!(sandbox.cloud_egress(), SandboxEgress::Allow)),
+                CfExpression::from(!sandbox_needs_connector(ctx.stack, sandbox)),
             ),
             // Both `GetMicrovmImage` and `RunMicrovm` require the ARN — measured against the
             // live API, where a bare name is refused with "Malformed ARN - doesn't start with
@@ -305,14 +311,23 @@ impl CfEmitter for AwsSandboxEmitter {
         }
         let mut fields = vec![
             ("service".to_string(), CfExpression::from("sandbox-aws")),
+            (
+                "egress".to_string(),
+                serde_json::to_value(&sandbox.egress)
+                    .and_then(serde_json::from_value::<CfExpression>)
+                    .into_alien_error()
+                    .context(ErrorData::GenericError {
+                        message: "serializing the sandbox egress bound".to_string(),
+                    })?,
+            ),
             ("previewPorts".to_string(), preview_ports(sandbox)),
             (
                 "egressConnectorArns".to_string(),
-                egress_connector_arns(sandbox, image_id),
+                egress_connector_arns(ctx, sandbox, image_id),
             ),
             (
                 "allowEgress".to_string(),
-                CfExpression::from(matches!(sandbox.cloud_egress(), SandboxEgress::Allow)),
+                CfExpression::from(!sandbox_needs_connector(ctx.stack, sandbox)),
             ),
             (
                 "imageArn".to_string(),
@@ -325,6 +340,18 @@ impl CfEmitter for AwsSandboxEmitter {
             ("region".to_string(), CfExpression::ref_("AWS::Region")),
         ];
         fields.extend(lifecycle_fields(sandbox));
+        if let Some(policy) = &sandbox.default_policy {
+            fields.push((
+                "defaultPolicy".to_string(),
+                serde_json::to_value(policy)
+                    .and_then(serde_json::from_value::<CfExpression>)
+                    .into_alien_error()
+                    .context(ErrorData::GenericError {
+                        message: "serializing sandbox default policy".into(),
+                    })?,
+            ));
+        }
+
         Ok(Some(CfExpression::object(fields)))
     }
 }
@@ -543,7 +570,11 @@ fn provisioned_at_runtime(ctx: &EmitContext<'_>) -> bool {
 /// The image fields are absent because the image doesn't exist yet. The build role and bundle
 /// stand in: the controller derives both, but reads these to know the image is its own to delete
 /// and when a bundle change needs a rebuild. The egress facts the setup stack still owns follow.
-fn runtime_import_ref(sandbox: &Sandbox, image_id: &str) -> Result<CfExpression> {
+fn runtime_import_ref(
+    ctx: &EmitContext<'_>,
+    sandbox: &Sandbox,
+    image_id: &str,
+) -> Result<CfExpression> {
     // Mirrors the logical id `emit_resources` gives the build role. No shared constant ties them,
     // so a rename there leaves this GetAtt pointing at nothing and the template fails at deploy.
     let role_id = format!("{image_id}BuildRole");
@@ -551,11 +582,11 @@ fn runtime_import_ref(sandbox: &Sandbox, image_id: &str) -> Result<CfExpression>
         ("previewPorts", preview_ports(sandbox)),
         (
             "egressConnectorArns",
-            egress_connector_arns(sandbox, image_id),
+            egress_connector_arns(ctx, sandbox, image_id),
         ),
         (
             "allowEgress",
-            CfExpression::from(matches!(sandbox.cloud_egress(), SandboxEgress::Allow)),
+            CfExpression::from(!sandbox_needs_connector(ctx.stack, sandbox)),
         ),
         ("buildRoleArn", CfExpression::get_att(&role_id, "Arn")),
         ("bundleUri", code_artifact_uri(artifact_uri(sandbox)?)),
@@ -665,6 +696,8 @@ fn build_policies(
                 CfExpression::list([
                     CfExpression::from("ecr:BatchGetImage"),
                     CfExpression::from("ecr:GetDownloadUrlForLayer"),
+                    CfExpression::from("ecr:BatchImportUpstreamImage"),
+                    CfExpression::from("ecr:GetImageCopyStatus"),
                 ]),
             ),
             (
@@ -734,7 +767,7 @@ fn hooks() -> CfExpression {
 ///
 /// `transport` authorization on AWS: the proxy validates a token scoped to one MicroVM before a
 /// request arrives, and one MicroVM is one session.
-fn environment_variables(sandbox: &Sandbox) -> CfExpression {
+fn environment_variables(stack: &alien_core::Stack, sandbox: &Sandbox) -> CfExpression {
     let pairs = [
         ("ALIEN_SANDBOX_ROOT", AWS_MICROVM.session_root.to_string()),
         ("ALIEN_SANDBOX_PORT", AWS_MICROVM.port.to_string()),
@@ -742,15 +775,13 @@ fn environment_variables(sandbox: &Sandbox) -> CfExpression {
             "ALIEN_SANDBOX_AUTHORIZATION",
             AWS_MICROVM.authorization.env_value().to_string(),
         ),
-        ("ALIEN_SANDBOX_EXEC_UID", AWS_MICROVM.exec_uid.to_string()),
-        ("ALIEN_SANDBOX_EXEC_GID", AWS_MICROVM.exec_uid.to_string()),
     ];
 
     let mut pairs: Vec<(String, String)> = pairs
         .into_iter()
         .map(|(key, value)| (key.to_string(), value))
         .collect();
-    let mut overrides = sandbox.supervisor_environment();
+    let mut overrides = alien_core::sandbox_egress::aws_sandbox_agent_environment(stack, sandbox);
     for (key, value) in &mut pairs {
         if let Some(replacement) = overrides.remove(key) {
             *value = replacement;
@@ -831,30 +862,31 @@ fn operator_policies() -> CfExpression {
     ])])
 }
 
-/// The VPC and private subnets the connector attaches to, or `None` for an open sandbox.
+/// The VPC and isolated subnets every session connector attaches to.
 ///
 /// Which network, and which stacks are refused, is [`sandbox_egress_network`]'s decision.
 fn egress_network(
     ctx: &EmitContext<'_>,
     sandbox: &Sandbox,
 ) -> Result<Option<(CfExpression, CfExpression)>> {
+    if !sandbox_needs_connector(ctx.stack, sandbox) {
+        return Ok(None);
+    }
     let refuse = |reason: String| {
         AlienError::new(ErrorData::OperationNotSupported {
             operation: format!("cloudformation emit sandbox '{}'", sandbox.id()),
             reason,
         })
     };
-    let Some(network) = sandbox_egress_network(ctx.stack, sandbox.cloud_egress())
-        .map_err(|refusal| refuse(refusal.to_string()))?
-    else {
-        return Ok(None);
-    };
+    let network =
+        sandbox_egress_network(ctx.stack).map_err(|refusal| refuse(refusal.to_string()))?;
     let network_id = ctx.name_for(network.id).ok_or_else(|| {
         refuse(format!(
             "network '{}' has no logical id in this template",
             network.id
         ))
     })?;
+    let gateway = matches!(sandbox.egress, SandboxEgress::Internet);
 
     Ok(Some(match network.vpc {
         // Deliberately not `private_subnet_ids_expr`: its use-default branch resolves to
@@ -870,26 +902,41 @@ fn egress_network(
             ),
             CfExpression::if_(
                 CONDITION_NETWORK_MODE_CREATE,
-                subnet_refs(network_id, "PrivateSubnet"),
-                CfExpression::ref_(PARAM_PRIVATE_SUBNET_IDS),
+                subnet_refs(
+                    network_id,
+                    if gateway {
+                        "SandboxSubnet"
+                    } else {
+                        "PrivateSubnet"
+                    },
+                ),
+                CfExpression::ref_(if gateway {
+                    "SandboxSubnetIds"
+                } else {
+                    PARAM_PRIVATE_SUBNET_IDS
+                }),
             ),
         ),
-        SandboxEgressVpc::BroughtByCustomer => (vpc_id_expr(ctx), private_subnet_ids_expr(ctx)),
+        SandboxEgressVpc::BroughtByCustomer => (
+            vpc_id_expr(ctx),
+            if gateway {
+                CfExpression::ref_("SandboxSubnetIds")
+            } else {
+                private_subnet_ids_expr(ctx)
+            },
+        ),
     }))
 }
 
-/// The connectors a session starts with, which an open sandbox has none of.
-///
-/// Empty is not a missing value here: it is how `allow` is expressed on the wire, and the
-/// binding carries `allowEgress` alongside so the two cannot be confused.
-fn egress_connector_arns(sandbox: &Sandbox, image_id: &str) -> CfExpression {
-    match sandbox.cloud_egress() {
-        SandboxEgress::Allow => CfExpression::list([]),
-        _ => CfExpression::list([CfExpression::get_att(
-            format!("{image_id}EgressConnector"),
-            "Arn",
-        )]),
+/// Only isolated sessions use a setup-owned connector.
+fn egress_connector_arns(ctx: &EmitContext<'_>, sandbox: &Sandbox, image_id: &str) -> CfExpression {
+    if !sandbox_needs_connector(ctx.stack, sandbox) {
+        return CfExpression::list([]);
     }
+    CfExpression::list([CfExpression::get_att(
+        format!("{image_id}EgressConnector"),
+        "Arn",
+    )])
 }
 
 /// Resolves the S3 bundle the MicroVM image is built from.
@@ -1022,7 +1069,7 @@ mod tests {
                 .code(SandboxCode::Image {
                     image: "s3://acme-artifacts/agents/bundle.zip".to_string(),
                 })
-                .egress(SandboxEgress::Allow)
+                .egress(SandboxEgress::Internet)
                 .lifecycle(alien_core::SandboxLifecyclePolicy {
                     max_lifetime_seconds: lifetime,
                     idle_pause_seconds: idle,
@@ -1035,6 +1082,8 @@ mod tests {
 
         let emitted = declared(Some(600), Some(1800));
         let typed = serde_json::to_value(alien_core::AwsSandboxBinding {
+            default_policy: None,
+            egress: None,
             image_arn: alien_core::BindingValue::Value("arn".to_string()),
             image_version: alien_core::BindingValue::Value("1".to_string()),
             region: alien_core::BindingValue::Value("us-east-2".to_string()),
@@ -1114,7 +1163,7 @@ mod tests {
                 disk: "20Gi".to_string(),
                 max_processes: None,
             })
-            .egress(SandboxEgress::Allow)
+            .egress(SandboxEgress::Internet)
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
@@ -1185,7 +1234,7 @@ mod tests {
                 disk: "20Gi".to_string(),
                 max_processes: None,
             })
-            .egress(SandboxEgress::Allow)
+            .egress(SandboxEgress::Internet)
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,

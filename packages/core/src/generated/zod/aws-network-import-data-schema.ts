@@ -5,6 +5,7 @@
 
 import * as z from "zod";
 import { AwsFailureDomainSubnetsSchema } from "./aws-failure-domain-subnets-schema.js";
+import { AwsSandboxNetworkSchema } from "./aws-sandbox-network-schema.js";
 
 /**
  * @description AWS Network ImportData.
@@ -12,6 +13,7 @@ import { AwsFailureDomainSubnetsSchema } from "./aws-failure-domain-subnets-sche
 export const AwsNetworkImportDataSchema = z.object({
     "availabilityZones": z.array(z.string()).describe("Availability zone names used by created or BYO subnets."),
 "cidrBlock": z.string().describe("VPC CIDR block when the VPC is created by this stack.").nullish(),
+"egressPublicIps": z.optional(z.array(z.string()).describe("Public addresses allocated to this deployment's NAT; empty when unknown.")),
 "eipAllocationId": z.string().describe("Elastic IP allocation ID backing the NAT gateway.").nullish(),
 "internetGatewayId": z.string().describe("Internet gateway ID when created by this stack.").nullish(),
 "isByoVpc": z.boolean().describe("True when the VPC is owned outside this stack."),
@@ -20,6 +22,9 @@ export const AwsNetworkImportDataSchema = z.object({
 "privateSubnetIds": z.array(z.string()).describe("Private subnet IDs."),
 "publicRouteTableId": z.string().describe("Public route table ID.").nullish(),
 "publicSubnetIds": z.array(z.string()).describe("Public subnet IDs."),
+get "sandboxNetwork"(){
+                return z.union([AwsSandboxNetworkSchema, z.null()]).optional()
+              },
 "securityGroupId": z.string().describe("Security group ID for private workloads.").nullish(),
 "subnetsByFailureDomain": z.optional(z.object({
     

@@ -8754,6 +8754,17 @@
           "repositoryPrefix": {
             "$ref": "#/components/schemas/BindingValue_String",
             "description": "Repository prefix for this registry (used to construct ECR repository names)"
+          },
+          "sandboxRepositoryPrefix": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BindingValue_String",
+                "description": "Optional namespace for sandbox images served by regional ECR pull-through caches.\nConfigure cache rules before enabling this; workers keep using `repositoryPrefix`."
+              }
+            ]
           }
         }
       },

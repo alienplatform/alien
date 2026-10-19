@@ -181,7 +181,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_setup_input_change_fails_and_names_the_input() {
-        let deny = |network_id| stack_with(None, BUNDLE_V1, SandboxEgress::Deny, network_id);
+        let deny = |network_id| stack_with(None, BUNDLE_V1, SandboxEgress::None, network_id);
         let mut remote = stack(None, BUNDLE_V1);
         remote
             .resources

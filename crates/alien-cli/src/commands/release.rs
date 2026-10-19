@@ -648,12 +648,37 @@ async fn release_task_core(
                         .await?
                 };
 
-            let mut pushed =
-                push_stack_with_cache(built_stack, platform, &output_dir, &push_settings)
-                    .await
-                    .context(ErrorData::ReleaseFailed {
-                        message: format!("Failed to push images for {} platform", platform_str),
-                    })?;
+            let needs_sandbox_push = platform == Platform::Aws && args.image_repo.is_none() && !ctx.is_dev()
+                && built_stack.resources().any(|(_, entry)| {
+                    entry.config.downcast_ref::<Sandbox>().is_some_and(|sandbox| {
+                        matches!(&sandbox.code, SandboxCode::Image { image } if Path::new(image).is_dir())
+                    })
+                });
+            let sandbox_repository = if needs_sandbox_push {
+                let manager = ctx
+                    .resolve_manager(&project_link.project_id, platform_str)
+                    .await?;
+                provision_sandbox_push_repository(
+                    &manager,
+                    &platform,
+                    &project_link.project_id,
+                    ctx.is_platform(),
+                )
+                .await?
+            } else {
+                None
+            };
+            let mut pushed = push_stack_with_cache_and_sandbox(
+                built_stack,
+                platform,
+                &output_dir,
+                &push_settings,
+                sandbox_repository.as_deref(),
+            )
+            .await
+            .context(ErrorData::ReleaseFailed {
+                message: format!("Failed to push images for {} platform", platform_str),
+            })?;
             if let Some(public_host) = public_registry_host {
                 let push_host = push_settings
                     .repository
@@ -1484,6 +1509,94 @@ async fn build_proxy_push_settings(
     ))
 }
 
+async fn provision_sandbox_push_repository(
+    manager: &ManagerContext,
+    platform: &Platform,
+    project_id: &str,
+    hosted: bool,
+) -> Result<Option<String>> {
+    let manager_url = &manager.manager_url;
+    // An older standalone manager advertises no separate destination. Keep its existing
+    // repository without issuing a request to an unsupported provisioning endpoint.
+    if !hosted {
+        let url = format!("{manager_url}/v1/build-config?platform={platform}");
+        let mut request = manager.http_client.get(&url);
+        if let Some(token) = &manager.auth_token {
+            request = request.bearer_auth(token);
+        }
+        let config: serde_json::Value = request
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to discover sandbox registry capability".to_string(),
+            })?
+            .error_for_status()
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Manager refused build configuration".to_string(),
+            })?
+            .json()
+            .await
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Invalid build configuration".to_string(),
+            })?;
+        if config
+            .get("sandboxRepositoryPrefix")
+            .and_then(|value| value.as_str())
+            .is_none()
+        {
+            return Ok(None);
+        }
+    }
+    let (url, body, key) = if hosted {
+        (
+            format!("{manager_url}/v1/artifact-registry/repositories?platform=aws"),
+            serde_json::json!({ "name": project_id, "sandbox": true }),
+            "name",
+        )
+    } else {
+        (
+            format!("{manager_url}/v1/image-repositories"),
+            serde_json::json!({ "projectId": project_id, "platform": platform, "sandbox": true }),
+            "repository",
+        )
+    };
+    let mut request = manager.http_client.post(&url).json(&body);
+    if let Some(token) = &manager.auth_token {
+        request = request.bearer_auth(token);
+    }
+    let response = request
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to provision sandbox image repository".to_string(),
+        })?
+        .error_for_status()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Manager refused sandbox image repository provisioning".to_string(),
+        })?;
+    let body: serde_json::Value =
+        response
+            .json()
+            .await
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Invalid sandbox image repository response".to_string(),
+            })?;
+    let sandbox = body.get(key).and_then(|v| v.as_str()).ok_or_else(|| {
+        AlienError::new(ErrorData::ConfigurationError {
+            message: "Sandbox image repository response has no repository name".to_string(),
+        })
+    })?;
+    Ok(Some(
+        manager_proxy_push_settings(manager_url, sandbox, manager)?.repository,
+    ))
+}
+
 /// Push settings for `repository` on the manager's OCI proxy at `registry_host`, which forwards
 /// the push to the upstream cloud registry. `registry_host` may carry a URL scheme.
 pub(crate) fn manager_proxy_push_settings(
@@ -1985,24 +2098,43 @@ const PUSH_CACHE_FILE: &str = "push-cache-v2.json";
 /// Pushes the built stack's local images, reusing the pushed reference of any artifact already
 /// pushed to the same repository. `push_stack` tags every push afresh, so this cache is what
 /// keeps an unchanged artifact's reference stable across runs.
+#[cfg(test)]
 async fn push_stack_with_cache(
+    built_stack: Stack,
+    platform: Platform,
+    output_dir: &PathBuf,
+    push_settings: &PushSettings,
+) -> alien_error::Result<Stack, alien_build::error::ErrorData> {
+    push_stack_with_cache_and_sandbox(built_stack, platform, output_dir, push_settings, None).await
+}
+
+async fn push_stack_with_cache_and_sandbox(
     mut built_stack: Stack,
     platform: Platform,
     output_dir: &PathBuf,
     push_settings: &PushSettings,
+    sandbox_repository: Option<&str>,
 ) -> alien_error::Result<Stack, alien_build::error::ErrorData> {
     if platform == Platform::Aws {
         alien_build::validate_aws_worker_artifacts(&built_stack)?;
     }
     let platform_str = platform.as_str();
     let mut push_cache = load_push_cache(output_dir, platform_str);
-    drop_images_missing_from_registry(&built_stack, &mut push_cache, push_settings, platform).await;
+    drop_images_missing_from_registry(
+        &built_stack,
+        &mut push_cache,
+        push_settings,
+        sandbox_repository,
+        platform,
+    )
+    .await;
     let pre_push_stack = built_stack.clone();
 
-    let cache_hits = apply_push_cache(
+    let cache_hits = apply_push_cache_with_destinations(
         &mut built_stack,
         &push_cache,
         &push_settings.repository,
+        sandbox_repository,
         platform,
     );
     if cache_hits > 0 {
@@ -2015,7 +2147,13 @@ async fn push_stack_with_cache(
     info!("   Pushing images to {}...", push_settings.repository);
 
     let push_started = Instant::now();
-    let pushed = alien_build::push_stack(built_stack, platform, push_settings).await?;
+    let pushed = alien_build::push_stack_with_sandbox_repository(
+        built_stack,
+        platform,
+        push_settings,
+        sandbox_repository,
+    )
+    .await?;
     info!(
         "Push for platform '{}' completed in {:.2}s",
         platform_str,
@@ -2039,10 +2177,18 @@ async fn drop_images_missing_from_registry(
     stack: &Stack,
     cache: &mut HashMap<String, String>,
     push_settings: &PushSettings,
+    sandbox_repository: Option<&str>,
     platform: Platform,
 ) {
     let mut reused = stack.clone();
-    if apply_push_cache(&mut reused, cache, &push_settings.repository, platform) == 0 {
+    if apply_push_cache_with_destinations(
+        &mut reused,
+        cache,
+        &push_settings.repository,
+        sandbox_repository,
+        platform,
+    ) == 0
+    {
         return;
     }
     let mut hits = HashMap::new();
@@ -2148,10 +2294,21 @@ fn push_cache_key(kind: &str, path: &str, platform: Platform) -> Option<String> 
 /// Apply cached push URIs to a stack, replacing local image paths with
 /// previously-pushed remote URIs where the content hash matches.
 /// Returns the number of cache hits.
+#[cfg(test)]
 fn apply_push_cache(
     stack: &mut Stack,
     cache: &HashMap<String, String>,
     repository: &str,
+    platform: Platform,
+) -> usize {
+    apply_push_cache_with_destinations(stack, cache, repository, None, platform)
+}
+
+fn apply_push_cache_with_destinations(
+    stack: &mut Stack,
+    cache: &HashMap<String, String>,
+    repository: &str,
+    sandbox_repository: Option<&str>,
     platform: Platform,
 ) -> usize {
     if cache.is_empty() {
@@ -2162,6 +2319,11 @@ fn apply_push_cache(
 
     for (_resource_id, resource_entry) in stack.resources_mut() {
         let cache_kind = resource_entry.config.resource_type().as_ref().to_string();
+        let repository = if cache_kind == "sandbox" {
+            sandbox_repository.unwrap_or(repository)
+        } else {
+            repository
+        };
         if let Some(func) = resource_entry.config.downcast_mut::<Worker>() {
             if let WorkerCode::Image { ref image } = func.code {
                 if let Some(key) = push_cache_key(&cache_kind, image, platform) {
@@ -2683,7 +2845,7 @@ mod tests {
             .code(SandboxCode::Image {
                 image: image.to_string(),
             })
-            .egress(alien_core::SandboxEgress::Allow)
+            .egress(alien_core::SandboxEgress::Internet)
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
@@ -3262,5 +3424,88 @@ mod tests {
             "an existing channel passes the check and the flow reaches the stack: {}",
             existing.message
         );
+    }
+
+    #[test]
+    fn sandbox_cache_destination_does_not_reuse_a_legacy_push() {
+        let local = "/tmp/build/aws/sandbox-synthetic";
+        let old = "registry.example/acme-prj_a:old";
+        let new = "registry.example/sandbox-acme/acme-prj_a:new";
+        let stack = Stack::new("test".to_string())
+            .add(sandbox_with_image(local), ResourceLifecycle::Live)
+            .build();
+        let key = push_cache_key("sandbox", local, Platform::Aws).unwrap();
+        let mut cache = HashMap::from([(key.clone(), old.to_string())]);
+        let mut candidate = stack.clone();
+        assert_eq!(
+            apply_push_cache_with_destinations(
+                &mut candidate,
+                &cache,
+                "registry.example/acme-prj_a",
+                Some("registry.example/sandbox-acme/acme-prj_a"),
+                Platform::Aws
+            ),
+            0
+        );
+        cache.insert(key, new.to_string());
+        assert_eq!(
+            apply_push_cache_with_destinations(
+                &mut candidate,
+                &cache,
+                "registry.example/acme-prj_a",
+                Some("registry.example/sandbox-acme/acme-prj_a"),
+                Platform::Aws
+            ),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn old_standalone_manager_keeps_its_existing_sandbox_repository() {
+        let server = httpmock::MockServer::start_async().await;
+        let config = server
+            .mock_async(|when, then| {
+                when.method("GET").path("/v1/build-config");
+                then.status(200)
+                    .json_body(serde_json::json!({"repositoryName": "acme"}));
+            })
+            .await;
+        let ctx = ExecutionMode::Standalone {
+            server_url: server.base_url(),
+            api_key: "test-token".to_string(),
+        };
+        let manager = ctx.resolve_manager("prj_a", "aws").await.unwrap();
+        assert_eq!(
+            provision_sandbox_push_repository(&manager, &Platform::Aws, "prj_a", false)
+                .await
+                .unwrap(),
+            None
+        );
+        config.assert_async().await;
+    }
+    #[tokio::test]
+    async fn dev_repository_name_does_not_select_the_hosted_endpoint() {
+        let server = httpmock::MockServer::start_async().await;
+        let config = server
+            .mock_async(|when, then| {
+                when.method("GET").path("/v1/build-config");
+                then.status(200)
+                    .json_body(serde_json::json!({"repositoryName": "artifacts/default"}));
+            })
+            .await;
+        let ctx = ExecutionMode::Standalone {
+            server_url: server.base_url(),
+            api_key: "test-token".to_string(),
+        };
+        let mut manager = ctx.resolve_manager("default", "aws").await.unwrap();
+        manager.repository_name = Some("artifacts/default".to_string());
+        manager.auth_token = None;
+        assert_eq!(
+            provision_sandbox_push_repository(&manager, &Platform::Aws, "default", false)
+                .await
+                .unwrap(),
+            None
+        );
+        config.assert_async().await;
     }
 }

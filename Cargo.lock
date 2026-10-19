@@ -115,7 +115,7 @@ checksum = "250f629c0161ad8107cf89319e990051fae62832fd343083bea452d93e2205fd"
 
 [[package]]
 name = "alien-ai-gateway"
-version = "3.3.33"
+version = "3.3.34"
 dependencies = [
  "alien-bindings",
  "alien-core",
@@ -143,7 +143,7 @@ dependencies = [
 
 [[package]]
 name = "alien-aws-clients"
-version = "3.3.33"
+version = "3.3.34"
 dependencies = [
  "alien-aws-clients",
  "alien-client-core",
@@ -167,7 +167,7 @@ dependencies = [
  "mockall",
  "quick-xml 0.41.0",
  "rand 0.9.5",
- "rcgen",
+ "rcgen 0.13.2",
  "regex",
  "reqwest 0.12.28",
  "serde",
@@ -186,7 +186,7 @@ dependencies = [
 
 [[package]]
 name = "alien-azure-clients"
-version = "3.3.33"
+version = "3.3.34"
 dependencies = [
  "alien-azure-model-generator",
  "alien-azure-models-1",
@@ -208,9 +208,9 @@ dependencies = [
  "httpmock",
  "mockall",
  "p12",
- "pem",
+ "pem 3.0.6",
  "rand 0.9.5",
- "rcgen",
+ "rcgen 0.13.2",
  "regex",
  "regress 0.11.1",
  "reqwest 0.12.28",
@@ -231,7 +231,7 @@ dependencies = [
 
 [[package]]
 name = "alien-azure-model-generator"
-version = "3.3.33"
+version = "3.3.34"
 dependencies = [
  "openapiv3",
  "prettyplease 0.2.37",
@@ -242,7 +242,7 @@ dependencies = [
 
 [[package]]
 name = "alien-azure-models-1"
-version = "3.3.33"
+version = "3.3.34"
 dependencies = [
  "alien-azure-model-generator",
  "chrono",
@@ -255,7 +255,7 @@ dependencies = [
 
 [[package]]
 name = "alien-azure-models-2"
-version = "3.3.33"
+version = "3.3.34"
 dependencies = [
  "alien-azure-model-generator",
  "chrono",
@@ -268,7 +268,7 @@ dependencies = [
 
 [[package]]
 name = "alien-azure-models-3"
-version = "3.3.33"
+version = "3.3.34"
 dependencies = [
  "alien-azure-model-generator",
  "chrono",
@@ -281,7 +281,7 @@ dependencies = [
 
 [[package]]
 name = "alien-azure-models-4"
-version = "3.3.33"
+version = "3.3.34"
 dependencies = [
  "alien-azure-model-generator",
  "chrono",
@@ -294,7 +294,7 @@ dependencies = [
 
 [[package]]
 name = "alien-azure-models-5"
-version = "3.3.33"
+version = "3.3.34"
 dependencies = [
  "alien-azure-model-generator",
  "chrono",
@@ -307,7 +307,7 @@ dependencies = [
 
 [[package]]
 name = "alien-bindings"
-version = "3.3.33"
+version = "3.3.34"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -322,20 +322,26 @@ dependencies = [
  "alien-platform-api",
  "async-trait",
  "axum 0.8.9",
+ "axum-server",
  "base64 0.22.1",
+ "bon",
  "bytes",
  "chrono",
  "container-registry 0.3.1 (git+https://github.com/alienplatform/container_registry-rs.git?rev=fd28e7c)",
  "dotenvy",
+ "ed25519-compact",
  "futures",
  "hex",
  "hickory-resolver",
  "k8s-openapi",
  "object_store",
  "oci-client",
+ "pkcs8 0.10.2",
+ "rcgen 0.13.2",
  "regex",
  "reqwest 0.12.28",
  "rstest",
+ "rustls 0.23.43",
  "sec",
  "serde",
  "serde_json",
@@ -355,7 +361,7 @@ dependencies = [
 
 [[package]]
 name = "alien-bindings-node"
-version = "3.3.33"
+version = "3.3.34"
 dependencies = [
  "alien-bindings",
  "alien-core",
@@ -373,7 +379,7 @@ dependencies = [
 
 [[package]]
 name = "alien-bindings-python"
-version = "3.3.33"
+version = "3.3.34"
 dependencies = [
  "alien-ai-gateway",
  "alien-bindings",
@@ -391,7 +397,7 @@ dependencies = [
 
 [[package]]
 name = "alien-build"
-version = "3.3.33"
+version = "3.3.34"
 dependencies = [
  "alien-build",
  "alien-core",
@@ -432,7 +438,7 @@ dependencies = [
 
 [[package]]
 name = "alien-cli"
-version = "3.3.33"
+version = "3.3.34"
 dependencies = [
  "alien-aws-clients",
  "alien-bindings",
@@ -514,7 +520,7 @@ dependencies = [
 
 [[package]]
 name = "alien-cli-common"
-version = "3.3.33"
+version = "3.3.34"
 dependencies = [
  "alien-core",
  "alien-deployment",
@@ -537,7 +543,7 @@ dependencies = [
 
 [[package]]
 name = "alien-client-config"
-version = "3.3.33"
+version = "3.3.34"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -555,7 +561,7 @@ dependencies = [
 
 [[package]]
 name = "alien-client-core"
-version = "3.3.33"
+version = "3.3.34"
 dependencies = [
  "alien-error",
  "anyhow",
@@ -574,7 +580,7 @@ dependencies = [
 
 [[package]]
 name = "alien-cloudformation"
-version = "3.3.33"
+version = "3.3.34"
 dependencies = [
  "alien-core",
  "alien-error",
@@ -589,7 +595,7 @@ dependencies = [
 
 [[package]]
 name = "alien-commands"
-version = "3.3.33"
+version = "3.3.34"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -627,7 +633,7 @@ dependencies = [
 
 [[package]]
 name = "alien-commands-client"
-version = "3.3.33"
+version = "3.3.34"
 dependencies = [
  "alien-core",
  "base64 0.23.1",
@@ -642,7 +648,7 @@ dependencies = [
 
 [[package]]
 name = "alien-core"
-version = "3.3.33"
+version = "3.3.34"
 dependencies = [
  "alien-error",
  "alien-macros",
@@ -656,11 +662,15 @@ dependencies = [
  "clap",
  "ed25519-compact",
  "futures",
+ "idna",
  "indexmap 2.14.1",
  "insta",
+ "ipnet",
  "libc",
  "lognorm",
  "nanoid",
+ "proptest",
+ "psl",
  "regex",
  "reqwest 0.12.28",
  "rstest",
@@ -668,6 +678,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "tempfile",
  "thiserror 2.0.20",
  "tokio",
  "tracing",
@@ -678,7 +689,7 @@ dependencies = [
 
 [[package]]
 name = "alien-deploy-cli"
-version = "3.3.33"
+version = "3.3.34"
 dependencies = [
  "alien-cli-common",
  "alien-core",
@@ -725,7 +736,7 @@ dependencies = [
 
 [[package]]
 name = "alien-deployment"
-version = "3.3.33"
+version = "3.3.34"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -757,8 +768,48 @@ dependencies = [
 ]
 
 [[package]]
+name = "alien-egress-gateway"
+version = "3.3.34"
+dependencies = [
+ "alien-bindings",
+ "alien-core",
+ "alien-error",
+ "async-trait",
+ "axum 0.8.9",
+ "base64 0.22.1",
+ "bytes",
+ "chrono",
+ "ed25519-compact",
+ "futures-util",
+ "hickory-resolver",
+ "hmac 0.12.1",
+ "http 1.5.0",
+ "http-body-util",
+ "httparse",
+ "hyper 1.11.1",
+ "hyper-util",
+ "ipnet",
+ "libc",
+ "proptest",
+ "rcgen 0.14.10",
+ "reqwest 0.12.28",
+ "rustls 0.23.43",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "tokio-rustls 0.26.4",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "webpki-roots 1.0.9",
+]
+
+[[package]]
 name = "alien-error"
-version = "3.3.33"
+version = "3.3.34"
 dependencies = [
  "alien-error-derive",
  "anyhow",
@@ -771,7 +822,7 @@ dependencies = [
 
 [[package]]
 name = "alien-error-derive"
-version = "3.3.33"
+version = "3.3.34"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -781,7 +832,7 @@ dependencies = [
 
 [[package]]
 name = "alien-gcp-clients"
-version = "3.3.33"
+version = "3.3.34"
 dependencies = [
  "alien-client-core",
  "alien-core",
@@ -796,7 +847,7 @@ dependencies = [
  "jwt-simple",
  "mockall",
  "rand 0.9.5",
- "rcgen",
+ "rcgen 0.13.2",
  "regex",
  "reqwest 0.12.28",
  "serde",
@@ -815,7 +866,7 @@ dependencies = [
 
 [[package]]
 name = "alien-helm"
-version = "3.3.33"
+version = "3.3.34"
 dependencies = [
  "alien-core",
  "alien-error",
@@ -835,7 +886,7 @@ dependencies = [
 
 [[package]]
 name = "alien-infra"
-version = "3.3.33"
+version = "3.3.34"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -873,7 +924,7 @@ dependencies = [
  "k8s-openapi",
  "mockall",
  "p12",
- "pem",
+ "pem 3.0.6",
  "petgraph 0.8.3",
  "rand 0.9.5",
  "regex",
@@ -898,7 +949,7 @@ dependencies = [
 
 [[package]]
 name = "alien-k8s-clients"
-version = "3.3.33"
+version = "3.3.34"
 dependencies = [
  "alien-client-core",
  "alien-core",
@@ -927,7 +978,7 @@ dependencies = [
 
 [[package]]
 name = "alien-local"
-version = "3.3.33"
+version = "3.3.34"
 dependencies = [
  "alien-bindings",
  "alien-build",
@@ -946,6 +997,7 @@ dependencies = [
  "dockdash",
  "futures",
  "futures-util",
+ "httpmock",
  "libc",
  "notify",
  "object_store",
@@ -975,7 +1027,7 @@ dependencies = [
 
 [[package]]
 name = "alien-macros"
-version = "3.3.33"
+version = "3.3.34"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -984,7 +1036,7 @@ dependencies = [
 
 [[package]]
 name = "alien-manager"
-version = "3.3.33"
+version = "3.3.34"
 dependencies = [
  "aegis",
  "alien-aws-clients",
@@ -1058,7 +1110,7 @@ dependencies = [
 
 [[package]]
 name = "alien-manager-api"
-version = "3.3.33"
+version = "3.3.34"
 dependencies = [
  "alien-error",
  "chrono",
@@ -1077,7 +1129,7 @@ dependencies = [
 
 [[package]]
 name = "alien-observer"
-version = "3.3.33"
+version = "3.3.34"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -1097,7 +1149,7 @@ dependencies = [
 
 [[package]]
 name = "alien-operations-sdk"
-version = "3.3.33"
+version = "3.3.34"
 dependencies = [
  "alien-core",
  "alien-error",
@@ -1113,9 +1165,10 @@ dependencies = [
 
 [[package]]
 name = "alien-operator"
-version = "3.3.33"
+version = "3.3.34"
 dependencies = [
  "aegis",
+ "alien-bindings",
  "alien-client-config",
  "alien-commands",
  "alien-core",
@@ -1165,7 +1218,7 @@ dependencies = [
 
 [[package]]
 name = "alien-permission-types"
-version = "3.3.33"
+version = "3.3.34"
 dependencies = [
  "indexmap 2.14.1",
  "serde",
@@ -1174,7 +1227,7 @@ dependencies = [
 
 [[package]]
 name = "alien-permissions"
-version = "3.3.33"
+version = "3.3.34"
 dependencies = [
  "alien-core",
  "alien-error",
@@ -1196,7 +1249,7 @@ dependencies = [
 
 [[package]]
 name = "alien-platform-api"
-version = "3.3.33"
+version = "3.3.34"
 dependencies = [
  "alien-core",
  "alien-error",
@@ -1212,11 +1265,12 @@ dependencies = [
  "serde_json",
  "syn 2.0.119",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
 name = "alien-preflights"
-version = "3.3.33"
+version = "3.3.34"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -1238,7 +1292,7 @@ dependencies = [
 
 [[package]]
 name = "alien-sandbox-agent"
-version = "3.3.33"
+version = "3.3.34"
 dependencies = [
  "alien-core",
  "alien-error",
@@ -1248,7 +1302,9 @@ dependencies = [
  "chrono",
  "ed25519-compact",
  "futures",
+ "httparse",
  "libc",
+ "nlink",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -1261,7 +1317,7 @@ dependencies = [
 
 [[package]]
 name = "alien-sdk"
-version = "3.3.33"
+version = "3.3.34"
 dependencies = [
  "alien-bindings",
  "alien-core",
@@ -1283,7 +1339,7 @@ dependencies = [
 
 [[package]]
 name = "alien-terraform"
-version = "3.3.33"
+version = "3.3.34"
 dependencies = [
  "alien-core",
  "alien-error",
@@ -1298,7 +1354,7 @@ dependencies = [
 
 [[package]]
 name = "alien-test"
-version = "3.3.33"
+version = "3.3.34"
 dependencies = [
  "alien-ai-gateway",
  "alien-aws-clients",
@@ -1350,7 +1406,7 @@ dependencies = [
 
 [[package]]
 name = "alien-test-app"
-version = "3.3.33"
+version = "3.3.34"
 dependencies = [
  "alien-error",
  "alien-sdk",
@@ -1396,7 +1452,7 @@ dependencies = [
 
 [[package]]
 name = "alien-tunnel"
-version = "3.3.33"
+version = "3.3.34"
 dependencies = [
  "alien-error",
  "alien-tunnel",
@@ -1420,7 +1476,7 @@ dependencies = [
 
 [[package]]
 name = "alien-worker-protocol"
-version = "3.3.33"
+version = "3.3.34"
 dependencies = [
  "alien-error",
  "async-stream",
@@ -1439,7 +1495,7 @@ dependencies = [
 
 [[package]]
 name = "alien-worker-runtime"
-version = "3.3.33"
+version = "3.3.34"
 dependencies = [
  "alien-bindings",
  "alien-commands",
@@ -1679,6 +1735,45 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8824ecca2e851cec16968d54a01dd372ef8f95b244fb84b84e70128be347c3c6"
 dependencies = [
  "term",
+]
+
+[[package]]
+name = "asn1-rs"
+version = "0.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b7f43a50ac4fdca5df8e885c21b835997f0a1cdee65494a6847694a98652d9d8"
+dependencies = [
+ "asn1-rs-derive",
+ "asn1-rs-impl",
+ "displaydoc",
+ "nom",
+ "num-traits",
+ "rusticata-macros",
+ "thiserror 2.0.20",
+ "time",
+]
+
+[[package]]
+name = "asn1-rs-derive"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3109e49b1e4909e9db6515a30c633684d68cdeaa252f215214cb4fa1a5bfee2c"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+ "synstructure",
+]
+
+[[package]]
+name = "asn1-rs-impl"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b18050c2cd6fe86c3a76584ef5e0baf286d038cda203eb6223df2cc413565f7"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -2519,6 +2614,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "axum-server"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1df331683d982a0b9492b38127151e6453639cd34926eb9c07d4cd8c6d22bfc"
+dependencies = [
+ "arc-swap",
+ "bytes",
+ "either",
+ "fs-err",
+ "http 1.5.0",
+ "http-body 1.1.0",
+ "hyper 1.11.1",
+ "hyper-util",
+ "pin-project-lite",
+ "rustls 0.23.43",
+ "rustls-pki-types",
+ "tokio",
+ "tokio-rustls 0.26.4",
+ "tower-service",
+]
+
+[[package]]
 name = "backon"
 version = "1.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2654,7 +2771,16 @@ version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0700ddab506f33b20a03b13996eccd309a48e5ff77d0d95926aa0210fb4e95f1"
 dependencies = [
- "bit-vec",
+ "bit-vec 0.6.3",
+]
+
+[[package]]
+name = "bit-set"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "56d87354e4229f54a44f7bf2435906a4656dba36026ab6eaca629a2c436a691c"
+dependencies = [
+ "bit-vec 0.10.1",
 ]
 
 [[package]]
@@ -2662,6 +2788,25 @@ name = "bit-vec"
 version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "349f9b6a179ed607305526ca489b34ad0a41aed5f7980fa90eb03160b69598fb"
+
+[[package]]
+name = "bit-vec"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b71798fca2c1fe1086445a7258a4bc81e6e49dcd24c8d0dd9a1e57395b603f51"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "bit-vec"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5727b15fa97d4f4fee0a3b7c3d550ed0269f54329207b86388de918604e31269"
+dependencies = [
+ "borsh",
+ "serde",
+]
 
 [[package]]
 name = "bitflags"
@@ -2817,6 +2962,30 @@ dependencies = [
  "darling 0.24.1",
  "ident_case",
  "prettyplease 0.3.0",
+ "proc-macro2",
+ "quote",
+ "syn 3.0.3",
+]
+
+[[package]]
+name = "borsh"
+version = "1.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "553c5d846a6ba5150c65e3b1b8ec073bcf1abc20f9b7220de384a4443ea4e20a"
+dependencies = [
+ "borsh-derive",
+ "bytes",
+ "cfg_aliases",
+]
+
+[[package]]
+name = "borsh-derive"
+version = "1.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "12cdfe656708a01f89b451a7d36466e6fe6c414de0aa18fc54f864f6f9ca9f56"
+dependencies = [
+ "once_cell",
+ "proc-macro-crate",
  "proc-macro2",
  "quote",
  "syn 3.0.3",
@@ -3407,6 +3576,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
+name = "core_detect"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f8f80099a98041a3d1622845c271458a2d73e688351bf3cb999266764b81d48"
+
+[[package]]
 name = "cpubits"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3841,6 +4016,20 @@ dependencies = [
  "const-oid 0.10.2",
  "pem-rfc7468 1.0.0",
  "zeroize",
+]
+
+[[package]]
+name = "der-parser"
+version = "10.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "07da5016415d5a3c4dd39b11ed26f915f52fc4e0dc197d87908bc916e51bc1a6"
+dependencies = [
+ "asn1-rs",
+ "displaydoc",
+ "nom",
+ "num-bigint",
+ "num-traits",
+ "rusticata-macros",
 ]
 
 [[package]]
@@ -4559,6 +4748,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8878864ba14bb86e818a412bfd6f18f9eabd4ec0f008a28e8f7eb61db532fcf9"
 dependencies = [
  "futures-core",
+]
+
+[[package]]
+name = "fs-err"
+version = "3.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b5c95b673b8f6f7235229ae11c5642d81b04c2e64c1e2fb417bc0cf73ca45f29"
+dependencies = [
+ "autocfg",
+ "tokio",
 ]
 
 [[package]]
@@ -6158,7 +6357,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "55cb077ad656299f160924eb2912aa147d7339ea7d69e1b5517326fdcec3c1ca"
 dependencies = [
  "ascii-canvas",
- "bit-set",
+ "bit-set 0.5.3",
  "ena",
  "itertools 0.11.0",
  "lalrpop-util",
@@ -6800,6 +6999,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27b02d87554356db9e9a873add8782d4ea6e3e58ea071a9adb9a2e8ddb884a8b"
 
 [[package]]
+name = "netlink-sys"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c99d38e00b420df49e940fe0826e667c3dad82ac68eb4c2bbf754c1c14a83a10"
+dependencies = [
+ "bytes",
+ "libc",
+ "log",
+]
+
+[[package]]
 name = "new_debug_unreachable"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6843,6 +7053,36 @@ dependencies = [
  "tracing",
  "url",
  "windows-sys 0.45.0",
+]
+
+[[package]]
+name = "nlink"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6b316da22cdd6b936514a1de61815b6ce8e6f59bbda0f4c3846bf60c70c0e016"
+dependencies = [
+ "bitflags 2.13.1",
+ "bytes",
+ "libc",
+ "netlink-sys",
+ "nlink-macros",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+ "winnow 1.0.4",
+ "zerocopy",
+]
+
+[[package]]
+name = "nlink-macros"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac07396bcfdf09858f4801b1ed38aca98382ecbfd308c52d222e5a5947ff36d4"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.3",
 ]
 
 [[package]]
@@ -7165,6 +7405,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "oid-registry"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "12f40cff3dde1b6087cc5d5f5d4d65712f34016a03ed60e9c08dcc392736b5b7"
+dependencies = [
+ "asn1-rs",
+]
+
+[[package]]
 name = "olpc-cjson"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7431,7 +7680,7 @@ dependencies = [
  "lazy_static",
  "rc2",
  "sha1 0.10.7",
- "yasna",
+ "yasna 0.5.2",
 ]
 
 [[package]]
@@ -7541,6 +7790,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d30c53c26bc5b31a98cd02d20f25a7c8567146caf63ed593a9d87b2775291be"
 dependencies = [
  "base64 0.22.1",
+ "serde_core",
+]
+
+[[package]]
+name = "pem"
+version = "4.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d354a98a3d1251555de99e8fdd8afda05573c31b82f59063a7b0a29b5527f120"
+dependencies = [
+ "base64 0.23.1",
  "serde_core",
 ]
 
@@ -8206,6 +8465,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "proptest"
+version = "1.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b8530004ccb15eae51c7e40009fbe317f341f804db54dc033eec1c50be28cfa0"
+dependencies = [
+ "bit-set 0.11.1",
+ "bit-vec 0.10.1",
+ "bitflags 2.13.1",
+ "chacha20",
+ "core_detect",
+ "num-traits",
+ "rand 0.10.2",
+ "rand_xorshift",
+ "regex-syntax",
+ "rusty-fork",
+ "tempfile",
+ "unarray",
+]
+
+[[package]]
 name = "prost"
 version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8291,6 +8570,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "psl"
+version = "2.1.242"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e4f4ed67e1e9a42feede52064e3ded03efa4322860c14ccffe3743c978b66231"
+dependencies = [
+ "psl-types",
+]
+
+[[package]]
+name = "psl-types"
+version = "2.0.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33cb294fe86a74cbcf50d4445b37da762029549ebeea341421c7c70370f86cac"
+
+[[package]]
 name = "pyo3"
 version = "0.29.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8371,6 +8665,12 @@ dependencies = [
  "serde",
  "serde_derive",
 ]
+
+[[package]]
+name = "quick-error"
+version = "1.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a1d01941d82fa2ab50be1e79e6714289dd7cde78eba4c074bc5a4374f650dfe0"
 
 [[package]]
 name = "quick-xml"
@@ -8608,6 +8908,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rand_xorshift"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "60aa6af80be32871323012e02e6e65f8a7cc7890931ae421d217ad8fe0df2ccf"
+dependencies = [
+ "rand_core 0.10.1",
+]
+
+[[package]]
 name = "rand_xoshiro"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8640,11 +8949,25 @@ version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75e669e5202259b5314d1ea5397316ad400819437857b90861765f24c4cf80a2"
 dependencies = [
- "pem",
+ "pem 3.0.6",
  "ring",
  "rustls-pki-types",
  "time",
- "yasna",
+ "yasna 0.5.2",
+]
+
+[[package]]
+name = "rcgen"
+version = "0.14.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8774e05a7d0de114588e6a28fe7e71694b82614ed569d86d8b389dfbc98b8ad8"
+dependencies = [
+ "pem 4.0.0",
+ "ring",
+ "rustls-pki-types",
+ "time",
+ "x509-parser",
+ "yasna 0.6.0",
 ]
 
 [[package]]
@@ -9112,6 +9435,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rusticata-macros"
+version = "4.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "faf0c4a6ece9950b9abdb62b1cfcf2a68b3b67a10ba445b3bb85be2a293d0632"
+dependencies = [
+ "nom",
+]
+
+[[package]]
 name = "rustix"
 version = "0.38.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9284,6 +9616,18 @@ name = "rustversion"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
+
+[[package]]
+name = "rusty-fork"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc6bf79ff24e648f6da1f8d1f011e9cac26491b619e6b9280f2b47f1774e6ee2"
+dependencies = [
+ "fnv",
+ "quick-error",
+ "tempfile",
+ "wait-timeout",
+]
 
 [[package]]
 name = "ryu"
@@ -11604,6 +11948,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "unarray"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eaea85b334db583fe3274d12b4cd1880032beab409c0d774be044d4480ab9a94"
+
+[[package]]
 name = "uncased"
 version = "0.9.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11839,6 +12189,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "231fdcd7ef3037e8330d8e17e61011a2c244126acc0a982f4040ac3f9f0bc077"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "wait-timeout"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "09ac3b126d3914f9849036f826e054cbabdc8519970b8998ddaf3b5bd3c65f11"
+dependencies = [
+ "libc",
 ]
 
 [[package]]
@@ -12646,6 +13005,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "x509-parser"
+version = "0.18.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d43b0f71ce057da06bc0851b23ee24f3f86190b07203dd8f567d0b706a185202"
+dependencies = [
+ "asn1-rs",
+ "data-encoding",
+ "der-parser",
+ "lazy_static",
+ "nom",
+ "oid-registry",
+ "ring",
+ "rusticata-macros",
+ "thiserror 2.0.20",
+ "time",
+]
+
+[[package]]
 name = "xattr"
 version = "1.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -12696,6 +13073,16 @@ version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e17bb3549cc1321ae1296b9cdc2698e2b6cb1992adfa19a8c72e5b7a738f44cd"
 dependencies = [
+ "time",
+]
+
+[[package]]
+name = "yasna"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b5f6765e852b9b4dc8e2a76843e4d64d1cea8e79bcde0b6901aea8e7c7f08282"
+dependencies = [
+ "bit-vec 0.9.1",
  "time",
 ]
 

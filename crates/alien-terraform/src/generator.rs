@@ -26,9 +26,9 @@ use alien_core::{
     import::{EmitContext, CURRENT_SETUP_IMPORT_FORMAT_VERSION},
     ComputeCluster, DeploymentModel, ErrorData, HeartbeatsMode, Key, KubernetesCertificateMode,
     KubernetesExposureSettings, KubernetesSettings, Network, NetworkSettings, RemoteBindings,
-    RemoteStackManagement, ResourceLifecycle, Result, Sandbox, SandboxEgress, Stack,
-    StackInputDefaultValue, StackInputDefinition, StackInputKind, StackInputProvider,
-    StackInputValidation, StackSettings, TelemetryMode, UpdatesMode,
+    RemoteStackManagement, ResourceLifecycle, Result, Sandbox, Stack, StackInputDefaultValue,
+    StackInputDefinition, StackInputKind, StackInputProvider, StackInputValidation, StackSettings,
+    TelemetryMode, UpdatesMode,
 };
 use alien_error::{AlienError, IntoAlienError};
 use hcl::{
@@ -269,7 +269,7 @@ fn generate_terraform_module_internal(
     let mut registration_resources: Vec<(Option<String>, Expression)> = Vec::new();
     let mut shared_locals: IndexMap<String, Expression> = IndexMap::new();
     let mut gated = crate::gating::GatedAddresses::default();
-    let mut secrets_vault_binding: Option<Expression> = None;
+    let mut deployer_secrets_vault_binding: Option<Expression> = None;
 
     for (resource_id, resource) in stack.resources() {
         let resource_type = resource.config.resource_type();
@@ -350,8 +350,8 @@ fn generate_terraform_module_internal(
         shared_locals.extend(local_contributions);
         per_resource.insert(resource_id.clone(), fragment);
 
-        if resource_id.as_str() == alien_core::SECRETS_VAULT_ID {
-            secrets_vault_binding = emitter.emit_binding_ref(&ctx)?;
+        if resource_id.as_str() == alien_core::DEPLOYER_SECRETS_VAULT_ID {
+            deployer_secrets_vault_binding = emitter.emit_binding_ref(&ctx)?;
         }
 
         let registration_data = emitter.emit_import_ref(&ctx)?;
@@ -511,6 +511,7 @@ fn generate_terraform_module_internal(
             &options.supported_aws_regions,
             &stack_inputs,
             alien_core::restricts_network_mode(stack, target.is_kubernetes()),
+            !target.is_kubernetes() && alien_core::sandbox_egress::has_sandbox_gateway(stack),
             profile,
         )?)?,
     );
@@ -585,7 +586,7 @@ fn generate_terraform_module_internal(
             target,
             options.registration.as_ref(),
             &stack_inputs,
-            deployer_secret_outputs(stack, target, secrets_vault_binding.as_ref())?,
+            deployer_secret_outputs(stack, target, deployer_secrets_vault_binding.as_ref())?,
         ))?,
     );
     if let Some(contents) = remote_bindings_permissions_md(stack, target) {
@@ -1664,7 +1665,7 @@ fn stack_inputs_for_terraform(stack: &Stack, target: TerraformTarget) -> Vec<Sta
 
 /// One output per deployer secret, naming where the deployer writes its value.
 ///
-/// The name comes from the `secrets` vault's binding: a Parameter Store or
+/// The name comes from the `deployer-secrets` vault's binding: a Parameter Store or
 /// Secret Manager prefix, or a Key Vault. On a Kubernetes target the value is
 /// a Secret in the deployment's namespace whose name the operator derives, so
 /// the output carries the vault key and the deployment status shows the full
@@ -1672,8 +1673,15 @@ fn stack_inputs_for_terraform(stack: &Stack, target: TerraformTarget) -> Vec<Sta
 fn deployer_secret_outputs(
     stack: &Stack,
     target: TerraformTarget,
-    secrets_vault_binding: Option<&Expression>,
+    deployer_secrets_vault_binding: Option<&Expression>,
 ) -> Result<Vec<(String, Expression, String)>> {
+    // Preflights omit this vault when every deployer input retains a stored value.
+    if !stack
+        .resources
+        .contains_key(alien_core::DEPLOYER_SECRETS_VAULT_ID)
+    {
+        return Ok(Vec::new());
+    }
     let platform = target.deployment_platform();
     let inputs: Vec<&StackInputDefinition> = stack
         .inputs()
@@ -1690,7 +1698,7 @@ fn deployer_secret_outputs(
         return Ok(Vec::new());
     }
 
-    let binding_field = |field: &str| match secrets_vault_binding {
+    let binding_field = |field: &str| match deployer_secrets_vault_binding {
         Some(Expression::Object(binding)) => binding.iter().find_map(|(key, value)| {
             matches!(key, hcl::expr::ObjectKey::Identifier(id) if id.as_str() == field)
                 .then(|| value.clone())
@@ -1703,7 +1711,7 @@ fn deployer_secret_outputs(
             reason: format!(
                 "deployer secret inputs live in the '{}' vault, which this module does not \
                  emit; run the stack through preflights so the vault is added",
-                alien_core::SECRETS_VAULT_ID
+                alien_core::DEPLOYER_SECRETS_VAULT_ID
             ),
         })
     };
@@ -1858,6 +1866,7 @@ fn variables_body(
     supported_aws_regions: &[String],
     stack_inputs: &[StackInputDefinition],
     needs_named_subnets: bool,
+    needs_gateway_subnets: bool,
     profile: alien_core::SetupConfigurationProfile,
 ) -> Result<Body> {
     let mut blocks: Vec<Structure> = Vec::new();
@@ -1940,6 +1949,13 @@ fn variables_body(
 
     if matches!(target.cloud_platform(), alien_core::Platform::Aws) {
         blocks.push(nested(aws_region_variable_block(supported_aws_regions)));
+        if needs_gateway_subnets {
+            for (name, description) in [
+                ("sandbox_subnet_ids", "Dedicated sandbox connector subnets with only local routes, in at least two availability zones. Required with use-existing."),
+                ("sandbox_gateway_subnet_ids", "Dedicated gateway subnets in at least two zones, with only local routes and the deployment NAT default route. Required with use-existing."),
+            ] { blocks.push(nested(list_variable_block(name, description, Some(vec![])))); }
+        }
+
         blocks.push(nested(variable_block(
             "managing_role_arn",
             "ARN of the management identity allowed to assume setup-created roles.",
@@ -4269,7 +4285,7 @@ fn readme_md(
         // approver looking for it.
         let scaffolding = if live_sandboxes
             .iter()
-            .any(|sandbox| !matches!(sandbox.cloud_egress(), SandboxEgress::Allow))
+            .any(|sandbox| alien_core::sandbox_egress::sandbox_needs_connector(stack, sandbox))
         {
             "build scaffolding — the build role, egress connector, operator role, and security \
              group —"
@@ -4313,6 +4329,7 @@ fn readme_md(
             // to demand subnets and the restriction would explain itself with a resource the
             // module does not contain.
             alien_core::restricts_network_mode(stack, target.is_kubernetes()),
+            !target.is_kubernetes() && alien_core::sandbox_egress::has_sandbox_gateway(stack),
         ));
     }
     if target.is_kubernetes() {
@@ -4445,8 +4462,13 @@ fn readme_azure_inputs(target: TerraformTarget) -> String {
 ///
 /// An installer reads this and picks a value; documenting one the module refuses at plan makes
 /// the package contradict itself.
-fn readme_network_inputs(target: TerraformTarget, needs_named_subnets: bool) -> String {
+fn readme_network_inputs(
+    target: TerraformTarget,
+    needs_named_subnets: bool,
+    needs_gateway_subnets: bool,
+) -> String {
     match target.cloud_platform() {
+        alien_core::Platform::Aws if needs_gateway_subnets => "Network settings:\n\n- `network_mode`: `create-new` or `use-existing`. Sandboxes require explicit subnet IDs, so the default network is not offered.\n- `vpc_cidr`, `availability_zones`: used with `create-new`; use at least two availability zones.\n- `vpc_id`, `public_subnet_ids`, `private_subnet_ids`, `security_group_ids`: used with `use-existing`.\n- `sandbox_subnet_ids`: dedicated connector subnets in at least two zones, with only local VPC routes and no IPv6 CIDRs. Required with `use-existing`. Setup reads each effective route table, including the main table, and rejects any non-local route.\n- `sandbox_gateway_subnet_ids`: dedicated gateway subnets in at least two zones. Required with `use-existing` when the sandbox gateway is enabled; gateway and workload subnets must use the same NAT gateway. Gateway subnets may have only local routes and that NAT default route.\n\nThe gateway Container owns its internal load balancer and enforces internet-only egress. Sandbox setup creates the isolated connector network.".to_string(),
         alien_core::Platform::Aws if needs_named_subnets => "Network settings:\n\n- `network_mode`: `create-new` or `use-existing`. Private resources require explicit subnet IDs, so the default network is not offered.\n- `vpc_cidr`, `availability_zones`: used with `create-new`.\n- `vpc_id`, `public_subnet_ids`, `private_subnet_ids`, `security_group_ids`: required with `use-existing`.".to_string(),
         alien_core::Platform::Aws => "Network settings:\n\n- `network_mode`: `create-new`, `use-existing`, or `use-default`.\n- `vpc_cidr`, `availability_zones`: used with `create-new`.\n- `vpc_id`, `public_subnet_ids`, `private_subnet_ids`, `security_group_ids`: required with `use-existing`.".to_string(),
         alien_core::Platform::Gcp => "Network settings:\n\n- `network_mode`: `create-new`, `use-existing`, or `use-default`.\n- `network_cidr`, `availability_zones`: used with `create-new`.\n- `network_name`, `subnet_name`, `network_region`: required with `use-existing`.".to_string(),

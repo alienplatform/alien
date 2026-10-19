@@ -10,6 +10,7 @@ pub mod merge;
 pub mod plan;
 pub mod registry;
 pub mod sandbox_bundle;
+pub mod sandbox_identity;
 #[cfg(test)]
 mod sandbox_publish_tests;
 pub mod settings;
@@ -27,6 +28,7 @@ use alien_preflights::runner::PreflightRunner;
 use command_output::image_build_error_with_output;
 use dockdash::{Image as DockDashImage, Layer as DockDashLayer, PullPolicy};
 use error::{DockdashResultExt, ErrorData, Result};
+use fs2::FileExt;
 use oci_client::client::{Client as OciClient, ClientConfig as OciClientConfig};
 use oci_client::manifest::{
     ImageIndexEntry, OciImageIndex, Platform as OciPlatform, IMAGE_MANIFEST_MEDIA_TYPE,
@@ -35,17 +37,14 @@ use oci_client::manifest::{
 use oci_client::Reference;
 use rand::distr::Alphanumeric;
 use rand::Rng;
-use reqwest::Url;
 use settings::{BinaryTargetExt, BuildSettings, PlatformBuildSettings, PushSettings};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::error::Error as StdError;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, LazyLock, Weak};
 use std::time::{Duration, Instant};
 use tokio::fs;
 use tokio::process::Command;
-use tokio::sync::Mutex;
 use tokio::time::sleep;
 
 use tracing::{info, warn};
@@ -53,9 +52,6 @@ use tracing::{info, warn};
 const BASE_IMAGE_BUILD_MAX_ATTEMPTS: usize = 3;
 const IMAGE_PUSH_MAX_ATTEMPTS: usize = 3;
 const ARTIFACT_CACHE_METADATA_FILE: &str = ".alien-build-cache.json";
-
-static IMAGE_EXPORT_LOCKS: LazyLock<Mutex<HashMap<String, Weak<Mutex<()>>>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct ArtifactCacheMetadata {
@@ -754,6 +750,16 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                                     resource_name: sandbox_id.clone()
                                 }))
                             }
+                        };
+
+                        let result = match result {
+                            Ok(image_uri) => sandbox_identity::validate_declared_uid(
+                                &sandbox,
+                                Path::new(&image_uri),
+                            )
+                            .await
+                            .map(|()| image_uri),
+                            Err(error) => Err(error),
                         };
 
                         match &result {
@@ -1557,15 +1563,26 @@ fn apply_pushed_images(stack: &mut Stack, updates: Vec<(String, String)>) {
 /// Push built images from local OCI tarballs to a container registry.
 /// Reads a stack with local image directory references, pushes them to the registry,
 /// and returns an updated stack with pushed image URLs (in memory, not saved to disk).
+/// Push images to one destination, preserving the original registry API.
+pub async fn push_stack(
+    stack: Stack,
+    platform: Platform,
+    push_settings: &PushSettings,
+) -> Result<Stack> {
+    push_stack_with_sandbox_repository(stack, platform, push_settings, None).await
+}
+
+/// Push sandbox images to an independently assigned destination when configured.
 #[alien_event(AlienEvent::PushingStack {
     stack: stack.id().to_string(),
     platform: platform.as_str().to_string(),
     destination: push_settings.destination_label.clone(),
 })]
-pub async fn push_stack(
+pub async fn push_stack_with_sandbox_repository(
     mut stack: Stack,
     platform: Platform,
     push_settings: &PushSettings,
+    sandbox_repository: Option<&str>,
 ) -> Result<Stack> {
     let push_started = Instant::now();
     info!(
@@ -1604,7 +1621,9 @@ pub async fn push_stack(
             let resource_name = target.resource_name().to_string();
             let resource_names = target.resource_names.clone();
             let platform = platform.clone();
-            let repository = push_settings.repository.clone();
+            let repository = if target.resource_type == "sandbox" {
+                sandbox_repository.unwrap_or(&push_settings.repository)
+            } else { &push_settings.repository }.to_string();
             let push_opts = push_settings.options.clone();
             let bus = current_bus.clone();
             let cancel_token = cancel_token.clone();
@@ -3199,25 +3218,7 @@ async fn build_target_to_file(
         target.runtime_platform_id()
     );
 
-    // Parse cache store from cache URL if provided
-    let cache_store = if let Some(cache_url) = &settings.cache_url {
-        let url =
-            Url::parse(cache_url)
-                .into_alien_error()
-                .context(ErrorData::BuildConfigInvalid {
-                    message: format!("Invalid cache URL: {}", cache_url),
-                })?;
-
-        let (store, _path) = object_store::parse_url(&url).into_alien_error().context(
-            ErrorData::BuildConfigInvalid {
-                message: format!("Failed to parse cache URL: {}", cache_url),
-            },
-        )?;
-
-        Some(std::sync::Arc::from(store))
-    } else {
-        None
-    };
+    let cache_store = toolchain::cache_utils::store_from_url(settings.cache_url.as_deref())?;
 
     // The build directory is the parent of output_path (e.g., .alien/build/local/function-name/)
     // This is where intermediate artifacts (bootstrap files, compiled binaries) should go.
@@ -3883,6 +3884,45 @@ fn is_retryable_oci_error(error: &oci_client::errors::OciDistributionError) -> b
     }
 }
 
+/// A tag can switch architectures between pull and save in another process. File ownership
+/// releases the lock on errors, cancellation or process exit; keep the file so waiters share it.
+async fn lock_image_export(image_key: &str, resource_name: &str) -> Result<std::fs::File> {
+    let error = || ErrorData::ImageBuildFailed {
+        resource_name: resource_name.to_string(),
+        reason: "Failed to acquire the Docker image export lock".to_string(),
+        build_output: None,
+    };
+    let cache = dirs::cache_dir().ok_or_else(|| AlienError::new(error()))?;
+    let lock_dir = cache.join("alien").join("image-export-locks");
+    let lock_path = lock_dir.join(format!("{:x}.lock", Sha256::digest(image_key.as_bytes())));
+    fs::create_dir_all(lock_dir)
+        .await
+        .into_alien_error()
+        .context(error())?;
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(lock_path)
+        .await
+        .into_alien_error()
+        .context(error())?
+        .into_std()
+        .await;
+    loop {
+        match FileExt::try_lock_exclusive(&file) {
+            Ok(()) => return Ok(file),
+            // Contention is an asynchronous wait, so cancellation cannot strand a blocking
+            // worker and prevent the CLI's Tokio runtime from shutting down.
+            Err(error) if error.raw_os_error() == fs2::lock_contended_error().raw_os_error() => {
+                sleep(Duration::from_millis(50)).await;
+            }
+            Err(source) => return Err(source).into_alien_error().context(error()),
+        }
+    }
+}
+
 /// Resolve a registry image and export an OCI archive for each target architecture.
 #[alien_event(AlienEvent::BuildingResource {
     resource_name: container_name.to_string(),
@@ -3920,9 +3960,8 @@ async fn pull_and_export_image(
             reason: "Failed to create container directory for export".to_string(),
         })?;
 
-    // Classic Docker stores one architecture under a tag. Keep pulls and saves
-    // for the same repository together, including short/fully qualified aliases.
-    // Unrelated repositories can still export concurrently.
+    // Docker tags are shared across processes, including separate build/test runners.
+    // Keep every pull/save pair under the same advisory lock for short/full-name aliases.
     let image_reference = Reference::try_from(image).into_alien_error().context(
         ErrorData::InvalidResourceConfig {
             resource_id: container_name.to_string(),
@@ -3934,21 +3973,9 @@ async fn pull_and_export_image(
         image_reference.registry(),
         image_reference.repository()
     );
-    let image_lock = {
-        let mut locks = IMAGE_EXPORT_LOCKS.lock().await;
-        locks.retain(|_, lock| lock.strong_count() > 0);
-        match locks.get(&image_key).and_then(Weak::upgrade) {
-            Some(lock) => lock,
-            None => {
-                let lock = Arc::new(Mutex::new(()));
-                locks.insert(image_key, Arc::downgrade(&lock));
-                lock
-            }
-        }
-    };
 
     for target in targets {
-        let image_guard = image_lock.lock().await;
+        let image_guard = lock_image_export(&image_key, container_name).await?;
         let arch_str = match target.to_dockdash_arch() {
             dockdash::Arch::Amd64 => "amd64",
             dockdash::Arch::ARM64 => "arm64",
@@ -4012,10 +4039,20 @@ async fn pull_and_export_image(
         drop(image_guard);
 
         // Flatten the saved archive to a single image manifest before the OCI reader sees it.
-        crate::toolchain::docker::DockerToolchain::normalize_oci_archive(
-            &output_tarball,
-            arch_str,
-        )?;
+        let archive_path = output_tarball.clone();
+        tokio::task::spawn_blocking(move || {
+            crate::toolchain::docker::DockerToolchain::normalize_oci_archive(
+                &archive_path,
+                arch_str,
+            )
+        })
+        .await
+        .into_alien_error()
+        .context(ErrorData::ImageBuildFailed {
+            resource_name: container_name.to_string(),
+            reason: "Image archive normalization task failed".to_string(),
+            build_output: None,
+        })??;
 
         info!(
             "Successfully exported {} to {}",
@@ -4102,6 +4139,7 @@ async fn compute_function_content_hash(dir: &Path) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     #[tokio::test]
     async fn materializing_same_artifact_preserves_its_contents() {
@@ -5024,6 +5062,44 @@ mod tests {
         assert!(
             metadata.cmd.is_some() || metadata.entrypoint.is_some(),
             "Alpine image should have entrypoint or cmd"
+        );
+    }
+
+    #[test]
+    fn canceling_an_export_lock_wait_does_not_block_runtime_shutdown() {
+        let key = tempfile::tempdir().expect("unique lock key");
+        let key = key.path().display().to_string();
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+        let held = runtime
+            .block_on(lock_image_export(&key, "holder"))
+            .expect("hold lock");
+        drop(runtime);
+        let (finished, completion) = std::sync::mpsc::channel();
+        let waiter = std::thread::spawn(move || {
+            let runtime = tokio::runtime::Runtime::new().expect("waiter runtime");
+            runtime.block_on(async move {
+                let waiting = tokio::spawn(async move { lock_image_export(&key, "waiter").await });
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                assert!(
+                    !waiting.is_finished(),
+                    "the other runtime still holds the lock"
+                );
+                waiting.abort();
+                assert!(waiting
+                    .await
+                    .expect_err("waiter was canceled")
+                    .is_cancelled());
+            });
+            drop(runtime);
+            finished.send(()).expect("report runtime shutdown");
+        });
+        let exited_while_locked = completion.recv_timeout(Duration::from_secs(3)).is_ok();
+        // Release before asserting so a regressed blocking waiter can still finish cleanup.
+        drop(held);
+        waiter.join().expect("waiter thread");
+        assert!(
+            exited_while_locked,
+            "a canceled lock wait must not hold runtime shutdown open"
         );
     }
 
@@ -6400,7 +6476,7 @@ mod sandbox_build_tests {
                 src: "./sandbox".to_string(),
                 toolchain,
             })
-            .egress(SandboxEgress::Allow)
+            .egress(SandboxEgress::Internet)
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
@@ -6458,7 +6534,7 @@ mod sandbox_build_tests {
             .code(SandboxCode::Image {
                 image: "public.ecr.aws/acme/base:v1".to_string(),
             })
-            .egress(SandboxEgress::Allow)
+            .egress(SandboxEgress::Internet)
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
@@ -6501,7 +6577,7 @@ mod sandbox_push_tests {
             .code(SandboxCode::Image {
                 image: image.to_string(),
             })
-            .egress(SandboxEgress::Allow)
+            .egress(SandboxEgress::Internet)
             .lifecycle(lifecycle())
             .build()
     }
@@ -6713,7 +6789,7 @@ mod sandbox_push_tests {
                             binary_name: "box".to_string(),
                         },
                     })
-                    .egress(SandboxEgress::Allow)
+                    .egress(SandboxEgress::Internet)
                     .lifecycle(lifecycle())
                     .build(),
                 ResourceLifecycle::Live,

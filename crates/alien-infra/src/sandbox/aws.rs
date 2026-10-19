@@ -56,6 +56,18 @@ pub(crate) struct RetiredVersion {
 /// AWS Sandbox controller.
 #[controller]
 pub struct AwsSandboxController {
+    /// Withhold new internet bindings until actual EC2 routes have passed verification.
+    #[serde(default)]
+    pub(crate) egress_network_verified: bool,
+    /// Bound installed with the parent and published to runtime bindings.
+    #[serde(default)]
+    pub(crate) egress: Option<alien_core::bindings::SandboxEgressBinding>,
+    /// Public signing material; the private key remains only in the secrets vault.
+    #[serde(default)]
+    pub(crate) egress_public_key: Option<super::egress::GatewayPublicKey>,
+    /// Resource default retained independently of the gateway metadata.
+    #[serde(default)]
+    pub(crate) default_policy: Option<alien_core::EgressPolicy>,
     /// Startup security contract of the active version (empty for legacy images).
     #[serde(default)]
     pub(crate) supervisor_environment: BTreeMap<String, String>,
@@ -124,6 +136,12 @@ pub struct AwsSandboxController {
 
 #[controller]
 impl AwsSandboxController {
+    fn has_runtime_setup_inputs(&self) -> bool {
+        // Built-image imports omit the role. Runtime registrations and resumed
+        // runtime builds retain it, including Frozen-to-Live handoffs.
+        self.build_role_arn.is_some()
+    }
+
     // ─────────────── CREATE FLOW ──────────────────────────────────────────
 
     #[flow_entry(Create)]
@@ -137,6 +155,8 @@ impl AwsSandboxController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
+        self.egress_network_verified = false;
+        self.egress = Some(config.into());
 
         // Direct setup steps a Frozen sandbox before its build role exists; the registration lands
         // only once the role is ready, so until then the build waits rather than fails.
@@ -187,7 +207,10 @@ impl AwsSandboxController {
             &bundle_uri,
             tier.baseline_memory_mib,
         )
-        .with_supervisor(config)
+        .with_agent_environment(alien_core::sandbox_egress::aws_sandbox_agent_environment(
+            ctx.desired_stack,
+            config,
+        ))
         .with_receipt()?;
 
         // A create whose response never reached state leaves an image under this
@@ -303,7 +326,8 @@ impl AwsSandboxController {
         self.image_arn = Some(image_arn);
         self.pending_version = Some(image_version);
         self.pending_bundle_uri = Some(bundle_uri);
-        self.pending_supervisor_environment = config.supervisor_environment();
+        self.pending_supervisor_environment =
+            alien_core::sandbox_egress::aws_sandbox_agent_environment(ctx.desired_stack, config);
         self.region = Some(aws_config.region.clone());
 
         info!(sandbox_id = %config.id, image = %image_name, "MicroVM image build started");
@@ -428,6 +452,70 @@ impl AwsSandboxController {
         .await?;
 
         Ok(HandlerAction::Continue {
+            state: InitializingEgressKey,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(state = InitializingEgressKey, on_failure = ProvisionFailed, status = ResourceStatus::Provisioning)]
+    async fn initializing_egress_key(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<Sandbox>()?;
+        self.default_policy = config.default_policy.clone();
+        let ids = super::egress::internet_sandbox_ids(ctx.desired_stack);
+        if alien_core::sandbox_egress::has_sandbox_gateway(ctx.desired_stack)
+            && ids.iter().any(|id| id == ctx.desired_config.id())
+        {
+            let vault = super::egress::deployment_vault(ctx).await?;
+            self.egress_public_key = Some(
+                if alien_core::sandbox_egress::sandbox_egress_key_owner(ctx.desired_stack)
+                    == Some(ctx.desired_config.id())
+                {
+                    super::egress::ensure_signing_key(vault.as_ref()).await?
+                } else {
+                    super::egress::read_signing_public_key(vault.as_ref()).await?
+                },
+            );
+            let key = self
+                .egress_public_key
+                .as_ref()
+                .expect("key initialized above");
+            self.egress = Some(alien_core::bindings::SandboxEgressBinding::Gateway(
+                alien_core::bindings::SandboxEgressGateway {
+                    container: alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.into(),
+                    audience: format!("{}/{}", ctx.resource_prefix, config.id),
+                    signing_key: alien_core::bindings::SandboxEgressSigningKey {
+                        vault: alien_core::SECRETS_VAULT_ID.into(),
+                        key: super::egress::SIGNING_KEY.into(),
+                    },
+                    kid: key.kid.clone(),
+                    admin_ca_pem: None,
+                },
+            ));
+        } else {
+            self.egress_public_key = None;
+            self.egress_network_verified = false;
+            self.egress = Some(config.into());
+        }
+        Ok(HandlerAction::Continue {
+            state: PublishingEgressConfig,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(state = PublishingEgressConfig, on_failure = ProvisionFailed, status = ResourceStatus::Provisioning)]
+    async fn publishing_egress_config(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        if let Some(key) = &self.egress_public_key {
+            self.egress_network_verified = false;
+            super::egress::publish_aws_config(ctx, key).await?;
+            self.egress_network_verified = true;
+        }
+        Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: None,
         })
@@ -440,6 +528,12 @@ impl AwsSandboxController {
     )]
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
+
+        if matches!(config.egress, alien_core::SandboxEgress::Internet) {
+            self.egress_network_verified = false;
+            super::egress::validate_aws_network(ctx).await?;
+            self.egress_network_verified = true;
+        }
 
         if let Some(image_identifier) = self.image_identifier.clone() {
             let aws_config = ctx.get_aws_config()?;
@@ -517,14 +611,36 @@ impl AwsSandboxController {
         debug!(sandbox_id = %config.id, "Sandbox ready");
 
         Ok(HandlerAction::Continue {
-            state: Ready,
+            state: if self.egress_public_key.is_some() {
+                RefreshingEgressConfig
+            } else {
+                Ready
+            },
             suggested_delay: Some(Duration::from_secs(60)),
+        })
+    }
+
+    // Refresh the audience list when another Sandbox is added or removed, even
+    // when this owner's own resource configuration did not change.
+    #[handler(state = RefreshingEgressConfig, on_failure = RefreshFailed, status = ResourceStatus::Running)]
+    async fn refreshing_egress_config(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        if let Some(key) = &self.egress_public_key {
+            self.egress_network_verified = false;
+            super::egress::publish_aws_config(ctx, key).await?;
+            self.egress_network_verified = true;
+        }
+        Ok(HandlerAction::Continue {
+            state: Ready,
+            suggested_delay: None,
         })
     }
 
     // ─────────────── UPDATE FLOW ──────────────────────────────────────────
 
-    #[flow_entry(Update, from = [Ready, RefreshFailed])]
+    #[flow_entry(Update, from = [Ready, RefreshingEgressConfig, RefreshFailed])]
     #[handler(
         state = UpdatingSandbox,
         on_failure = UpdateFailed,
@@ -535,6 +651,8 @@ impl AwsSandboxController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
+        self.egress_network_verified = false;
+        self.egress = Some(config.into());
 
         // The session-policy ceilings feed the binding and cost nothing to refresh.
         self.idle_pause_seconds = config.lifecycle.idle_pause_seconds;
@@ -546,7 +664,7 @@ impl AwsSandboxController {
         if !self.owns_image_builds(ctx, &config.id) {
             info!(sandbox_id = %config.id, "Updated AWS sandbox configuration");
             return Ok(HandlerAction::Continue {
-                state: Ready,
+                state: InitializingEgressKey,
                 suggested_delay: None,
             });
         }
@@ -555,11 +673,15 @@ impl AwsSandboxController {
         let desired_bundle = desired_bundle_uri(&config, &aws_config.region)?;
 
         if self.bundle_uri.as_deref() == Some(desired_bundle.as_str())
-            && self.supervisor_environment == config.supervisor_environment()
+            && self.supervisor_environment
+                == alien_core::sandbox_egress::aws_sandbox_agent_environment(
+                    ctx.desired_stack,
+                    config,
+                )
         {
             info!(sandbox_id = %config.id, "Updated AWS sandbox configuration");
             return Ok(HandlerAction::Continue {
-                state: Ready,
+                state: InitializingEgressKey,
                 suggested_delay: None,
             });
         }
@@ -628,7 +750,10 @@ impl AwsSandboxController {
             &desired_bundle,
             tier.baseline_memory_mib,
         )
-        .with_supervisor(config)
+        .with_agent_environment(alien_core::sandbox_egress::aws_sandbox_agent_environment(
+            ctx.desired_stack,
+            config,
+        ))
         .for_roll(self.active_version.as_deref())
         .for_retry(self.build_retry_generation)
         .with_receipt()?
@@ -679,7 +804,8 @@ impl AwsSandboxController {
         // ACTIVE, so the binding keeps naming the bundle sessions can actually start from.
         self.pending_version = Some(image_version);
         self.pending_bundle_uri = Some(desired_bundle);
-        self.pending_supervisor_environment = config.supervisor_environment();
+        self.pending_supervisor_environment =
+            alien_core::sandbox_egress::aws_sandbox_agent_environment(ctx.desired_stack, config);
         if let Some(arn) = rolled.image_arn {
             self.image_arn = Some(arn);
         }
@@ -803,6 +929,13 @@ impl AwsSandboxController {
     fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
         use alien_core::bindings::{AwsSandboxBinding, BindingValue, SandboxBinding};
 
+        if self.egress.as_ref().is_some_and(|egress| {
+            matches!(egress.declaration(), alien_core::SandboxEgress::Internet)
+        }) && !self.egress_network_verified
+        {
+            return Ok(None);
+        }
+
         // Only the active version is publishable. It is set when a build is observed ACTIVE,
         // ~160s after the create call returns every other field below — and during a roll it
         // still names the version that is serving, so an update never withdraws a working
@@ -819,6 +952,15 @@ impl AwsSandboxController {
         // token can be minted for; neither can be inferred from the image, and a session
         // started without the connectors reaches the public internet.
         let binding = SandboxBinding::Aws(AwsSandboxBinding {
+            default_policy: self.default_policy.clone().or_else(|| {
+                self.egress
+                    .as_ref()
+                    .and_then(|value| value.default_policy().cloned())
+            }),
+            egress: self.egress.as_ref().map(|value| match value {
+                alien_core::bindings::SandboxEgressBinding::Gateway(_) => value.clone(),
+                _ => value.declaration().clone().into(),
+            }),
             image_arn: BindingValue::value(image_arn.clone()),
             image_version: BindingValue::value(image_version.clone()),
             region: BindingValue::value(region.clone()),
@@ -1123,9 +1265,13 @@ struct ImageBuildInputs {
 }
 
 impl ImageBuildInputs {
-    fn with_supervisor(mut self, sandbox: &Sandbox) -> Self {
-        self.environment.extend(sandbox.supervisor_environment());
-        if sandbox.privileged_supervisor.is_some() {
+    fn with_agent_environment(mut self, environment: BTreeMap<String, String>) -> Self {
+        self.environment.extend(environment);
+        if self.environment.contains_key("ALIEN_SANDBOX_EGRESS") {
+            // AWS rejects named capabilities (including NET_ADMIN): the API enum is only ALL.
+            // The agent drops to eight capabilities before starting worker threads and gives
+            // commands none. Omitting ALL prevents netlink firewall installation.
+            // https://docs.aws.amazon.com/lambda/latest/dg/microvms-images.html#microvms-images-os-capabilities
             self.additional_os_capabilities = vec!["ALL".to_string()];
             // Fold the complete policy into the token without truncating away its digest.
             let digest =
@@ -1294,8 +1440,7 @@ fn agent_hooks() -> MicrovmImageHooks {
 
 /// The agent's configuration contract, identical to the setup emitters' rendering.
 ///
-/// `ALIEN_SANDBOX_ISOLATION` is absent here and from both setup emitters. The image's own `ENV`
-/// is the only place it is set.
+/// Identity and isolation come from the image: runtime defaults would overwrite its USER.
 fn agent_environment() -> BTreeMap<String, String> {
     BTreeMap::from([
         (
@@ -1309,14 +1454,6 @@ fn agent_environment() -> BTreeMap<String, String> {
         (
             "ALIEN_SANDBOX_AUTHORIZATION".to_string(),
             AWS_MICROVM.authorization.env_value().to_string(),
-        ),
-        (
-            "ALIEN_SANDBOX_EXEC_UID".to_string(),
-            AWS_MICROVM.exec_uid.to_string(),
-        ),
-        (
-            "ALIEN_SANDBOX_EXEC_GID".to_string(),
-            AWS_MICROVM.exec_uid.to_string(),
         ),
     ])
 }
@@ -1409,12 +1546,109 @@ mod tests {
     const DENY_CONNECTOR_ARN: &str =
         "arn:aws:lambda:us-east-1:123456789012:network-connector:nc-deny123";
 
+    /// The setup-owned image creates the key while the earlier Live image is still pending.
+    #[cfg(feature = "local")]
+    #[tokio::test]
+    async fn frozen_sandbox_initializes_the_key_before_the_live_sandbox() {
+        use crate::{LocalVaultController, LocalVaultState};
+        use alien_bindings::{providers::vault::LocalVault, Vault as _};
+        use alien_core::{
+            ClientConfig, Container, ContainerCode, ResourceLifecycle, ResourceSpec, Vault,
+            SECRETS_VAULT_ID,
+        };
+
+        let directory = tempfile::tempdir().unwrap();
+        let vault = LocalVault::new("secrets".into(), directory.path().into());
+        let mut frozen = sandbox();
+        frozen.id = "z-frozen".into();
+        frozen.egress = SandboxEgress::Internet;
+        let mut live = frozen.clone();
+        live.id = "a-live".into();
+        let gateway = Container::new(alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.into())
+            .code(ContainerCode::Image {
+                image: "example.invalid/gateway:1".into(),
+            })
+            .cpu(ResourceSpec {
+                min: "0.5".into(),
+                desired: "0.5".into(),
+            })
+            .memory(ResourceSpec {
+                min: "512Mi".into(),
+                desired: "512Mi".into(),
+            })
+            .permissions("gateway".into())
+            .build();
+        let mut accepted = None;
+        for (current, lifecycle, other, other_lifecycle) in [
+            (
+                frozen.clone(),
+                ResourceLifecycle::Frozen,
+                live.clone(),
+                ResourceLifecycle::Live,
+            ),
+            (
+                live,
+                ResourceLifecycle::Live,
+                frozen,
+                ResourceLifecycle::Frozen,
+            ),
+        ] {
+            let mut executor = SingleControllerExecutor::builder()
+                .resource(current)
+                .resource_lifecycle(lifecycle)
+                .controller(AwsSandboxController {
+                    state: AwsSandboxState::InitializingEgressKey,
+                    ..Default::default()
+                })
+                .platform(Platform::Aws)
+                .client_config(ClientConfig::Local {
+                    state_directory: directory.path().to_string_lossy().into_owned(),
+                })
+                .with_stack_resource(other, other_lifecycle)
+                .with_stack_resource(gateway.clone(), ResourceLifecycle::Live)
+                .with_dependency(
+                    Vault::new(SECRETS_VAULT_ID.into()).build(),
+                    LocalVaultController {
+                        state: LocalVaultState::Ready,
+                        vault_path: Some(directory.path().to_string_lossy().into_owned()),
+                        ..Default::default()
+                    },
+                )
+                .build()
+                .await
+                .unwrap();
+            executor
+                .step()
+                .await
+                .expect("shared key initialization advances");
+            let controller = executor.internal_state::<AwsSandboxController>().unwrap();
+            assert_eq!(controller.state, AwsSandboxState::PublishingEgressConfig);
+            let public_key = controller
+                .egress_public_key
+                .clone()
+                .expect("public key published");
+            let stored = vault
+                .get_secret(super::super::egress::SIGNING_KEY)
+                .await
+                .unwrap();
+            if let Some((expected_public, expected_stored)) = &accepted {
+                assert_eq!(&public_key, expected_public);
+                assert!(
+                    &stored == expected_stored,
+                    "Live initialization must not rotate the key"
+                );
+            } else {
+                accepted = Some((public_key, stored));
+            }
+        }
+    }
+
     fn sandbox() -> Sandbox {
         Sandbox::new("agents".to_string())
             .code(SandboxCode::Image {
                 image: BUNDLE_URI.to_string(),
             })
-            .egress(SandboxEgress::Deny)
+            .egress(SandboxEgress::None)
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: Some(1800),
                 idle_pause_seconds: Some(600),
@@ -1430,7 +1664,7 @@ mod tests {
             .code(SandboxCode::Image {
                 image: bundle_uri.to_string(),
             })
-            .egress(SandboxEgress::Deny)
+            .egress(SandboxEgress::None)
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: Some(1800),
                 idle_pause_seconds: Some(600),
@@ -2761,14 +2995,14 @@ mod tests {
                     && request.additional_os_capabilities == vec!["ALL"]
                     && request
                         .environment_variables
-                        .get("ALIEN_SANDBOX_EXEC_UID")
+                        .get("ALIEN_SANDBOX_EXPECTED_EXEC_UID")
                         .map(String::as_str)
                         == Some("60001")
                     && request
                         .environment_variables
                         .get("ALIEN_SANDBOX_EGRESS")
                         .map(String::as_str)
-                        == Some("{\"mode\":\"deny\"}")
+                        == Some(r#"{"mode":"deny"}"#)
             })
             .times(1)
             .returning(|_, _| {

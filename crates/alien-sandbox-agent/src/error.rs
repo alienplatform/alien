@@ -5,6 +5,15 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, AlienErrorData, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ErrorData {
+    /// The sandbox has not proved it can reach the internet only through the gateway.
+    #[error(
+        code = "EGRESS_PATH_UNEXPECTED",
+        message = "EGRESS_PATH_UNEXPECTED: sandbox egress path is not verified",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 503
+    )]
+    EgressPathUnexpected,
     /// A file path was refused before any filesystem access.
     #[error(
         code = "PATH_REFUSED",

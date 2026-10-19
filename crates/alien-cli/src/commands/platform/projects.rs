@@ -1046,7 +1046,7 @@ fn sandbox_source_stack(src: &Path, toolchain: ToolchainConfig, platform: Platfo
             src: src.display().to_string(),
             toolchain,
         })
-        .egress(SandboxEgress::Deny)
+        .egress(SandboxEgress::None)
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,

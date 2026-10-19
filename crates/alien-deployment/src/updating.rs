@@ -1044,7 +1044,7 @@ mod tests {
         async fn a_sandbox_switched_to_deny_waits_for_setup_to_build_its_connector() {
             assert_setup_required(
                 sandbox(SandboxEgress::Allow, BUNDLE, None),
-                sandbox(SandboxEgress::Deny, BUNDLE, None),
+                sandbox(SandboxEgress::None, BUNDLE, None),
                 None,
             )
             .await;
@@ -1053,7 +1053,7 @@ mod tests {
         #[tokio::test]
         async fn a_sandbox_switched_to_allow_waits_for_setup_to_reseed_it() {
             assert_setup_required(
-                sandbox(SandboxEgress::Deny, BUNDLE, None),
+                sandbox(SandboxEgress::None, BUNDLE, None),
                 sandbox(SandboxEgress::Allow, BUNDLE, None),
                 None,
             )
@@ -1076,7 +1076,12 @@ mod tests {
 
         #[tokio::test]
         async fn a_sandbox_added_by_an_update_waits_for_setup_to_create_its_build_role() {
-            assert_setup_required(empty(), sandbox(SandboxEgress::Allow, BUNDLE, None), None).await;
+            assert_setup_required(
+                empty(),
+                sandbox(SandboxEgress::Allow, BUNDLE, None),
+                None,
+            )
+            .await;
         }
 
         /// Every release publishes its bundle under a new version segment of the same prefix,
@@ -1085,9 +1090,9 @@ mod tests {
         async fn a_new_bundle_version_or_session_policy_needs_no_setup() {
             assert_updates(
                 InitialSetupAuthority::DirectSetup,
-                sandbox(SandboxEgress::Deny, BUNDLE, None),
+                sandbox(SandboxEgress::None, BUNDLE, None),
                 sandbox(
-                    SandboxEgress::Deny,
+                    SandboxEgress::None,
                     "s3://acme-artifacts/sandbox-bundle/0ddba11/bundle.zip",
                     Some(300),
                 ),
@@ -1177,7 +1182,7 @@ mod tests {
                             .code(SandboxCode::Image {
                                 image: image.to_string(),
                             })
-                            .egress(SandboxEgress::Deny)
+                            .egress(SandboxEgress::None)
                             .lifecycle(SandboxLifecyclePolicy {
                                 max_lifetime_seconds: Some(3600),
                                 idle_pause_seconds: None,

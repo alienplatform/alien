@@ -1,0 +1,59 @@
+{
+  "binding": {
+    "allowEgress": true,
+    "imageArn": "arn:aws:lambda:us-east-1:123456789012:microvm-image:test-agents",
+    "imageVersion": "1.0",
+    "previewPorts": [8080],
+    "region": "us-east-1",
+    "service": "sandbox-aws"
+  },
+  "state": {
+    "_internal": {
+      "_controllerStateVersion": 1,
+      "activeVersion": "1.0",
+      "allowEgress": true,
+      "buildRetryGeneration": 0,
+      "buildRoleArn": "arn:aws:iam::123456789012:role/test-agents-build",
+      "bundleUri": "s3://acme-artifacts/sandbox-bundle/f00dcafe/bundle.zip",
+      "deletingVersion": null,
+      "egressConnectorArns": [],
+      "grantedBundleUri": "s3://acme-artifacts/sandbox-bundle/f00dcafe/bundle.zip",
+      "idlePauseSeconds": null,
+      "imageArn": "arn:aws:lambda:us-east-1:123456789012:microvm-image:test-agents",
+      "imageIdentifier": "arn:aws:lambda:us-east-1:123456789012:microvm-image:test-agents",
+      "internalStayCount": null,
+      "maxLifetimeSeconds": null,
+      "pendingBundleUri": null,
+      "pendingSupervisorEnvironment": {},
+      "pendingVersion": null,
+      "previewPorts": [8080],
+      "region": "us-east-1",
+      "retiredVersions": [],
+      "state": "ready",
+      "supervisorEnvironment": {},
+      "type": "AwsSandboxController"
+    },
+    "config": {
+      "code": {
+        "image": "s3://acme-artifacts/sandbox-bundle/f00dcafe/bundle.zip",
+        "type": "image"
+      },
+      "egress": {
+        "mode": "allow"
+      },
+      "id": "agents",
+      "lifecycle": {},
+      "previewPorts": [8080],
+      "type": "sandbox"
+    },
+    "controllerPlatform": "aws",
+    "lifecycle": "live",
+    "outputs": {
+      "identifier": "arn:aws:lambda:us-east-1:123456789012:microvm-image:test-agents",
+      "parentName": "arn:aws:lambda:us-east-1:123456789012:microvm-image:test-agents",
+      "type": "sandbox"
+    },
+    "status": "running",
+    "type": "sandbox"
+  }
+}

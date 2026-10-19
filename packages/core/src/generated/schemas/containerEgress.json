@@ -1,0 +1,1 @@
+{"type":"string","description":"Outbound network restriction enforced outside the container.\nInternet access also permits this container's own replicas on declared TCP ports,\nown-service discovery, and the credential proxy for its own identity.\nAbsence preserves the runtime's existing full-network behavior.","enum":["internet"],"x-readme-ref-name":"ContainerEgress"}

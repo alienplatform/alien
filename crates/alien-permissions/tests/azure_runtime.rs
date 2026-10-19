@@ -252,7 +252,8 @@ fn azure_resource_group_actions(permission_set_id: &str) -> Vec<String> {
 }
 
 /// The manager runs the ComputeCluster delete flow, capacity-group removal and the legacy
-/// node-cohort retirement with the management role. Each deletes Azure scale sets, and the
+/// node-cohort retirement with the management role. Scaling and rolling upgrades also delete
+/// individual VMSS instances. These flows delete Azure scale sets, and the
 /// delete flow then deletes the cluster's network security group. A denied delete ends the
 /// resource as deleted, so a missing grant leaks the scale set (and its VMs, which keep the
 /// subnet in use) instead of failing.
@@ -262,6 +263,7 @@ fn compute_cluster_management_can_delete_what_its_flows_delete() {
         let actions = azure_resource_group_actions(permission_set_id);
         for action in [
             "Microsoft.Compute/virtualMachineScaleSets/delete",
+            "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/delete",
             "Microsoft.Network/networkSecurityGroups/delete",
         ] {
             assert!(

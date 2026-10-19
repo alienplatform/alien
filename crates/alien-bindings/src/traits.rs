@@ -369,6 +369,19 @@ pub trait ArtifactRegistry: Binding {
         self.create_repository(project_id).await
     }
 
+    /// Optional namespace whose sandbox repositories are cached on demand.
+    fn sandbox_repository_prefix(&self) -> Option<String> {
+        None
+    }
+
+    /// Creates a project sandbox repository, preserving the normal destination unless configured.
+    async fn create_sandbox_project_repository(
+        &self,
+        project_id: &str,
+    ) -> Result<RepositoryResponse> {
+        self.create_project_repository(project_id).await
+    }
+
     /// Gets repository details. `repo_id` is the routable name returned by
     /// [`Self::create_repository`]; implementations MUST NOT re-apply
     /// prefixing.
@@ -1020,6 +1033,11 @@ pub trait Worker: Binding {
 /// A trait for container bindings that enable container-to-container communication
 #[async_trait]
 pub trait Container: Binding {
+    /// Internal URLs for the ports this binding grants access to.
+    fn get_internal_urls(&self) -> std::collections::HashMap<u16, String> {
+        std::collections::HashMap::new()
+    }
+
     /// Get the internal URL for container-to-container communication.
     ///
     /// This returns the internal service discovery URL that other containers
@@ -1052,6 +1070,9 @@ pub trait Container: Binding {
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreateSandboxRequest {
+    /// Optional policy within the declaration; omission uses the declared policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub egress: Option<alien_core::EgressPolicy>,
     /// Sandbox id to reconnect to, for the verbs that take one. AWS, Azure and GCP always
     /// allocate their own on `create` and ignore this; only Local and Kubernetes honor it as the
     /// new sandbox's id. Read the id back from the response rather than assume the one sent.
@@ -1296,6 +1317,22 @@ pub struct PreviewCapability {
 /// typed error — an unsupported capability is never a silent no-op.
 #[async_trait]
 pub trait Sandbox: Binding {
+    /// Network declaration carried by the resolved binding.
+    fn egress_declaration(&self) -> Option<&alien_core::SandboxEgress>;
+
+    /// Changes a sandbox's runtime policy, including while paused.
+    /// Backends without gateway enforcement refuse this operation explicitly.
+    async fn update_egress(
+        &self,
+        _sandbox_id: &str,
+        egress: alien_core::EgressPolicy,
+    ) -> Result<()> {
+        crate::providers::sandbox::egress::validate(&egress, self.egress_declaration())?;
+        Err(crate::providers::sandbox::egress::unsupported(
+            "update_egress",
+        ))
+    }
+
     /// What this platform's backend supports.
     fn capabilities(&self) -> alien_core::SandboxCapabilities;
 

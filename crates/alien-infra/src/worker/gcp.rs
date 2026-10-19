@@ -27,8 +27,8 @@ use alien_gcp_clients::pubsub::{OidcToken, PushConfig, Subscription, Topic};
 // Note: Role controller removed - workers now use ServiceAccount and permission profiles
 use alien_core::{
     CertificateStatus, DnsRecordStatus, GcpCloudRunWorkerHeartbeatData, HeartbeatBackend, Network,
-    ObservedHealth, Platform, ProviderLifecycleState, ResourceDefinition, ResourceHeartbeat,
-    ResourceHeartbeatData, ResourceOutputs, ResourceRef, ResourceStatus, Worker,
+    NetworkSettings, ObservedHealth, Platform, ProviderLifecycleState, ResourceDefinition,
+    ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs, ResourceRef, ResourceStatus, Worker,
     WorkerHeartbeatData, WorkerOutputs, WorkloadHeartbeatStatus,
 };
 use alien_error::{AlienError, Context, ContextError, GenericError, IntoAlienError};
@@ -60,6 +60,13 @@ fn is_cross_project_image_pull_permission_error(message: &str) -> bool {
 
 fn image_pull_permission_retry_delay(attempt: u8) -> Duration {
     Duration::from_secs(10 * (1_u64 << attempt.saturating_sub(1).min(3)))
+}
+
+fn is_remote_resource_not_found(error: &AlienError<CloudClientErrorData>) -> bool {
+    matches!(
+        &error.error,
+        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+    )
 }
 
 fn is_remote_resource_conflict(error: &AlienError<CloudClientErrorData>) -> bool {
@@ -312,6 +319,9 @@ pub struct GcpWorkerController {
     pub(crate) uses_custom_domain: bool,
     /// Timestamp when certificate was issued (for renewal detection)
     pub(crate) certificate_issued_at: Option<String>,
+    /// Saved before insert so retries and deletion retain ownership of both certificates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) pending_ssl_certificate: Option<PendingSslCertificate>,
 
     // HTTPS Load Balancer components
     /// The serverless NEG name pointing to Cloud Run
@@ -342,7 +352,196 @@ pub struct GcpWorkerController {
     pub(crate) commands_subscription_name: Option<String>,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PendingSslCertificate {
+    name: String,
+    issued_at: String,
+    previous_name: Option<String>,
+    phase: CertificateRenewalPhase,
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum CertificateRenewalPhase {
+    Create,
+    Bind,
+    Cleanup,
+}
+
 impl GcpWorkerController {
+    async fn renew_certificate(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        let cfg = ctx.desired_resource_config::<Worker>()?;
+        let resource = ctx
+            .deployment_config
+            .domain_metadata
+            .as_ref()
+            .and_then(|meta| meta.resources.get(&cfg.id));
+        let Some(pending) = self.pending_ssl_certificate.clone() else {
+            if cfg.public_endpoints.is_empty()
+                || self.uses_custom_domain
+                || self.target_https_proxy_name.is_none()
+            {
+                return Ok(true);
+            }
+            let Some(issued_at) = resource.and_then(|value| value.issued_at.as_ref()) else {
+                return Ok(true);
+            };
+            if self.certificate_issued_at.as_ref() == Some(issued_at) {
+                return Ok(true);
+            }
+            // Persist ownership before the first remote mutation, including its lost-response case.
+            self.pending_ssl_certificate = Some(PendingSslCertificate {
+                name: get_gcp_worker_resource_name(
+                    ctx.resource_prefix,
+                    &cfg.id,
+                    &format!("cert-{}", uuid::Uuid::new_v4().simple()),
+                ),
+                issued_at: issued_at.clone(),
+                previous_name: self.ssl_certificate_name.clone(),
+                phase: CertificateRenewalPhase::Create,
+            });
+            return Ok(false);
+        };
+        if self.compute_operation_name.is_some() {
+            match self
+                .compute_operation_done(ctx, &cfg.id, "certificate renewal")
+                .await
+            {
+                Ok(false) => return Ok(false),
+                Ok(true) => return Ok(self.finish_certificate_renewal_step(pending)),
+                Err(error) => {
+                    // Each phase is safe to repeat for its recorded name. Keep the old
+                    // binding after failed polling, including a terminal operation error.
+                    self.compute_operation_name = None;
+                    self.compute_operation_region = None;
+                    return Err(error);
+                }
+            }
+        }
+        let gcp_config = ctx.get_gcp_config()?;
+        let compute = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let operation = match pending.phase {
+            CertificateRenewalPhase::Create => {
+                let description =
+                    format!("Certificate renewal {} for worker {}", pending.name, cfg.id);
+                match compute.get_ssl_certificate(pending.name.clone()).await {
+                    Ok(certificate) => {
+                        if certificate.description.as_deref() != Some(description.as_str()) {
+                            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                                message: format!(
+                                    "SSL certificate '{}' does not belong to this renewal",
+                                    pending.name
+                                ),
+                                resource_id: Some(cfg.id.clone()),
+                            }));
+                        }
+                        return Ok(self.finish_certificate_renewal_step(pending));
+                    }
+                    Err(error) if is_remote_resource_not_found(&error) => {}
+                    Err(error) => {
+                        return Err(error.context(ErrorData::CloudPlatformError {
+                            message: "Failed to look up pending SSL certificate".to_string(),
+                            resource_id: Some(cfg.id.clone()),
+                        }))
+                    }
+                }
+                if resource.and_then(|value| value.issued_at.as_ref()) != Some(&pending.issued_at) {
+                    // Nothing was inserted; start the newer metadata on the next heartbeat.
+                    self.pending_ssl_certificate = None;
+                    return Ok(false);
+                }
+                let resource = resource.ok_or_else(|| {
+                    AlienError::new(ErrorData::ResourceConfigInvalid {
+                        message: "Domain metadata missing during certificate renewal".to_string(),
+                        resource_id: Some(cfg.id.clone()),
+                    })
+                })?;
+                let chain = resource.certificate_chain.as_ref().ok_or_else(|| {
+                    AlienError::new(ErrorData::ResourceConfigInvalid {
+                        message: "Certificate chain missing (certificate not issued)".to_string(),
+                        resource_id: Some(cfg.id.clone()),
+                    })
+                })?;
+                let key = resource.private_key.as_ref().ok_or_else(|| {
+                    AlienError::new(ErrorData::ResourceConfigInvalid {
+                        message: "Private key missing (certificate not issued)".to_string(),
+                        resource_id: Some(cfg.id.clone()),
+                    })
+                })?;
+                let certificate = SslCertificate::builder()
+                    .name(pending.name.clone())
+                    .description(description)
+                    .r#type("SELF_MANAGED".to_string())
+                    .self_managed(
+                        SslCertificateSelfManaged::builder()
+                            .certificate(chain.clone())
+                            .private_key(key.clone())
+                            .build(),
+                    )
+                    .build();
+                compute.insert_ssl_certificate(certificate).await
+            }
+            CertificateRenewalPhase::Bind => {
+                let proxy = self.target_https_proxy_name.clone().ok_or_else(|| {
+                    AlienError::new(ErrorData::ResourceConfigInvalid {
+                        message: "HTTPS proxy missing during certificate renewal".to_string(),
+                        resource_id: Some(cfg.id.clone()),
+                    })
+                })?;
+                let url = format!(
+                    "projects/{}/global/sslCertificates/{}",
+                    gcp_config.project_id, pending.name
+                );
+                compute
+                    .set_target_https_proxy_ssl_certificates(proxy, vec![url])
+                    .await
+            }
+            CertificateRenewalPhase::Cleanup => {
+                let Some(previous) = pending
+                    .previous_name
+                    .as_ref()
+                    .filter(|name| *name != &pending.name)
+                else {
+                    return Ok(self.finish_certificate_renewal_step(pending));
+                };
+                match compute.delete_ssl_certificate(previous.clone()).await {
+                    Err(error) if is_remote_resource_not_found(&error) => {
+                        return Ok(self.finish_certificate_renewal_step(pending))
+                    }
+                    result => result,
+                }
+            }
+        }
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Certificate renewal {:?} failed", pending.phase),
+            resource_id: Some(cfg.id.clone()),
+        })?;
+        self.record_compute_operation(operation, None, &cfg.id, "Certificate renewal")?;
+        if self.compute_operation_name.is_some() {
+            return Ok(false);
+        }
+        Ok(self.finish_certificate_renewal_step(pending))
+    }
+
+    fn finish_certificate_renewal_step(&mut self, mut pending: PendingSslCertificate) -> bool {
+        match pending.phase {
+            CertificateRenewalPhase::Create => pending.phase = CertificateRenewalPhase::Bind,
+            CertificateRenewalPhase::Bind => {
+                // Only a confirmed binding permits retiring the previous certificate.
+                self.ssl_certificate_name = Some(pending.name.clone());
+                self.certificate_issued_at = Some(pending.issued_at.clone());
+                pending.phase = CertificateRenewalPhase::Cleanup;
+            }
+            CertificateRenewalPhase::Cleanup => {
+                self.pending_ssl_certificate = None;
+                return true;
+            }
+        }
+        self.pending_ssl_certificate = Some(pending);
+        false
+    }
+
     fn record_compute_operation(
         &mut self,
         operation: ComputeOperation,
@@ -2056,7 +2255,7 @@ impl GcpWorkerController {
         let gcp_config = ctx.get_gcp_config()?;
         let client = ctx.service_provider.get_gcp_cloudrun_client(gcp_config)?;
         let worker_config = ctx.desired_resource_config::<Worker>()?;
-        let service_name = self.service_name.as_ref().ok_or_else(|| {
+        let service_name = self.service_name.clone().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceControllerConfigError {
                 resource_id: worker_config.id.clone(),
                 message: "Service name not set in state".to_string(),
@@ -2123,34 +2322,9 @@ impl GcpWorkerController {
             }
         }
 
-        // Check for certificate renewal on auto-managed public domains.
-        if !worker_config.public_endpoints.is_empty() && !self.uses_custom_domain {
-            let metadata = ctx
-                .deployment_config
-                .domain_metadata
-                .as_ref()
-                .and_then(|meta| meta.resources.get(&worker_config.id));
+        emit_gcp_cloud_run_worker_heartbeat(ctx, &worker_config, &service_name, &service);
 
-            if let Some(resource) = metadata {
-                // Check if certificate has been renewed (issued_at timestamp changed)
-                if let Some(new_issued_at) = &resource.issued_at {
-                    if self.certificate_issued_at.as_ref() != Some(new_issued_at) {
-                        info!(
-                            worker=%worker_config.id,
-                            old_issued_at=?self.certificate_issued_at,
-                            new_issued_at=%new_issued_at,
-                            "Certificate renewed, triggering update to re-import certificate"
-                        );
-                        return Ok(HandlerAction::Continue {
-                            state: UpdateImportingSslCertificate,
-                            suggested_delay: None,
-                        });
-                    }
-                }
-            }
-        }
-
-        emit_gcp_cloud_run_worker_heartbeat(ctx, &worker_config, service_name, &service);
+        self.renew_certificate(ctx).await?;
 
         debug!(name = %worker_config.id, "Heartbeat check passed");
         Ok(HandlerAction::Continue {
@@ -2170,148 +2344,12 @@ impl GcpWorkerController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
-        let cfg = ctx.desired_resource_config::<Worker>()?;
-
-        if cfg.public_endpoints.is_empty() || self.uses_custom_domain {
+        if !self.renew_certificate(ctx).await? {
             return Ok(HandlerAction::Continue {
-                state: UpdateStart,
-                suggested_delay: None,
+                state: UpdateImportingSslCertificate,
+                suggested_delay: Some(Duration::from_secs(2)),
             });
         }
-
-        let Some(resource) = ctx
-            .deployment_config
-            .domain_metadata
-            .as_ref()
-            .and_then(|meta| meta.resources.get(&cfg.id))
-        else {
-            return Ok(HandlerAction::Continue {
-                state: UpdateStart,
-                suggested_delay: None,
-            });
-        };
-
-        if resource.issued_at == self.certificate_issued_at {
-            return Ok(HandlerAction::Continue {
-                state: UpdateStart,
-                suggested_delay: None,
-            });
-        }
-
-        let Some(proxy_name) = self.target_https_proxy_name.clone() else {
-            return Ok(HandlerAction::Continue {
-                state: UpdateStart,
-                suggested_delay: None,
-            });
-        };
-
-        let certificate_chain = resource.certificate_chain.as_ref().ok_or_else(|| {
-            AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: "Certificate chain missing (certificate not issued)".to_string(),
-                resource_id: Some(cfg.id.clone()),
-            })
-        })?;
-        let private_key = resource.private_key.as_ref().ok_or_else(|| {
-            AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: "Private key missing (certificate not issued)".to_string(),
-                resource_id: Some(cfg.id.clone()),
-            })
-        })?;
-
-        let issued_suffix = resource
-            .issued_at
-            .as_deref()
-            .unwrap_or("renewed")
-            .chars()
-            .filter(|c| c.is_ascii_alphanumeric())
-            .take(16)
-            .collect::<String>()
-            .to_lowercase();
-        let ssl_cert_name = get_gcp_worker_resource_name(
-            ctx.resource_prefix,
-            &cfg.id,
-            &format!("cert-{issued_suffix}"),
-        );
-        let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
-
-        let ssl_certificate = SslCertificate::builder()
-            .name(ssl_cert_name.clone())
-            .description(format!("Renewed SSL certificate for worker {}", cfg.id))
-            .r#type("SELF_MANAGED".to_string())
-            .self_managed(
-                SslCertificateSelfManaged::builder()
-                    .certificate(certificate_chain.clone())
-                    .private_key(private_key.clone())
-                    .build(),
-            )
-            .build();
-
-        match compute_client.insert_ssl_certificate(ssl_certificate).await {
-            Ok(_) => {}
-            Err(e) if is_remote_resource_conflict(&e) => {
-                info!(
-                    worker=%cfg.id,
-                    cert_name=%ssl_cert_name,
-                    "Renewed SSL certificate already exists; treating as imported"
-                );
-            }
-            Err(e) => {
-                return Err(e.context(ErrorData::CloudPlatformError {
-                    message: "Failed to import renewed SSL certificate to GCP".to_string(),
-                    resource_id: Some(cfg.id.clone()),
-                }));
-            }
-        }
-
-        let ssl_cert_url = format!(
-            "projects/{}/global/sslCertificates/{}",
-            gcp_config.project_id, ssl_cert_name
-        );
-        compute_client
-            .set_target_https_proxy_ssl_certificates(proxy_name, vec![ssl_cert_url])
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to bind renewed SSL certificate to target HTTPS proxy".to_string(),
-                resource_id: Some(cfg.id.clone()),
-            })?;
-
-        let previous_ssl_certificate_name = self.ssl_certificate_name.clone();
-
-        self.ssl_certificate_name = Some(ssl_cert_name);
-        self.certificate_issued_at = resource.issued_at.clone();
-
-        if let Some(previous_ssl_certificate_name) = previous_ssl_certificate_name {
-            if self.ssl_certificate_name.as_deref() != Some(previous_ssl_certificate_name.as_str())
-            {
-                match compute_client
-                    .delete_ssl_certificate(previous_ssl_certificate_name.clone())
-                    .await
-                {
-                    Ok(_) => {
-                        info!(
-                            worker=%cfg.id,
-                            cert_name=%previous_ssl_certificate_name,
-                            "Deleted previous SSL certificate after renewal"
-                        );
-                    }
-                    Err(e)
-                        if matches!(
-                            e.error,
-                            Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                        ) => {}
-                    Err(e) => {
-                        warn!(
-                            worker=%cfg.id,
-                            cert_name=%previous_ssl_certificate_name,
-                            error=%e,
-                            "Failed to delete previous SSL certificate after renewal"
-                        );
-                    }
-                }
-            }
-        }
-
         Ok(HandlerAction::Continue {
             state: UpdateStart,
             suggested_delay: None,
@@ -2324,6 +2362,22 @@ impl GcpWorkerController {
         status = ResourceStatus::Updating,
     )]
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+        // Older heartbeats entered this update state after installing a certificate,
+        // even though the executor had never planned an update for this worker.
+        if self.ssl_certificate_name.is_some()
+            && self.certificate_issued_at.is_some()
+            && ctx
+                .state
+                .resources
+                .get(ctx.desired_config.id())
+                .is_some_and(|resource| resource.previous_config.is_none())
+        {
+            return Ok(HandlerAction::Continue {
+                state: Ready,
+                suggested_delay: Some(Duration::from_secs(30)),
+            });
+        }
+
         let cfg = ctx.desired_resource_config::<Worker>()?;
         let previous_cfg = ctx.previous_resource_config::<Worker>()?;
         if cfg == previous_cfg {
@@ -3701,6 +3755,88 @@ impl GcpWorkerController {
     ) -> Result<HandlerAction> {
         let gcp_config = ctx.get_gcp_config()?;
 
+        if self.pending_ssl_certificate.is_some() && self.compute_operation_name.is_some() {
+            match self
+                .compute_operation_done(
+                    ctx,
+                    ctx.desired_config.id(),
+                    "certificate renewal before deletion",
+                )
+                .await
+            {
+                Ok(false) => {
+                    return Ok(HandlerAction::Stay {
+                        max_times: None,
+                        suggested_delay: Some(Duration::from_secs(2)),
+                    })
+                }
+                Ok(true) => {}
+                Err(error) => {
+                    self.compute_operation_name = None;
+                    self.compute_operation_region = None;
+                    return Err(error);
+                }
+            }
+        }
+        if let Some(pending) = self.pending_ssl_certificate.clone() {
+            // The HTTPS proxy has already been removed. Delete the additional certificate
+            // before the currently tracked one, retaining its name on any failure.
+            let additional = if self.ssl_certificate_name.as_ref() == Some(&pending.name) {
+                pending
+                    .previous_name
+                    .as_ref()
+                    .filter(|name| *name != &pending.name)
+                    .cloned()
+            } else {
+                Some(pending.name.clone())
+            };
+            if let Some(name) = additional {
+                let compute = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+                let owned = match compute.get_ssl_certificate(name.clone()).await {
+                    Ok(cert) => {
+                        name != pending.name
+                            || cert.description.as_deref()
+                                == Some(
+                                    format!(
+                                        "Certificate renewal {} for worker {}",
+                                        pending.name,
+                                        ctx.desired_config.id()
+                                    )
+                                    .as_str(),
+                                )
+                    }
+                    Err(error) if is_remote_resource_not_found(&error) => false,
+                    Err(error) => {
+                        return Err(error.context(ErrorData::CloudPlatformError {
+                            message: "Failed to look up pending SSL certificate during deletion"
+                                .to_string(),
+                            resource_id: Some(ctx.desired_config.id().to_string()),
+                        }))
+                    }
+                };
+                if owned {
+                    match compute.delete_ssl_certificate(name).await {
+                        Ok(_) => {}
+                        Err(error) if is_remote_resource_not_found(&error) => {}
+                        Err(error) => {
+                            return Err(error.context(ErrorData::CloudPlatformError {
+                                message: "Failed to delete pending SSL certificate".to_string(),
+                                resource_id: Some(ctx.desired_config.id().to_string()),
+                            }))
+                        }
+                    }
+                    // Recheck existence on the next step, including asynchronous deletion.
+                    return Ok(HandlerAction::Stay {
+                        max_times: None,
+                        suggested_delay: Some(Duration::from_secs(2)),
+                    });
+                }
+            }
+            self.pending_ssl_certificate = None;
+            self.compute_operation_name = None;
+            self.compute_operation_region = None;
+        }
+
         if let Some(ssl_cert_name) = &self.ssl_certificate_name {
             info!(name=%ssl_cert_name, "Deleting SSL certificate");
 
@@ -4171,10 +4307,17 @@ impl GcpWorkerController {
 
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
 
-    terminal_state!(
+    #[handler(
         state = RefreshFailed,
-        status = ResourceStatus::RefreshFailed
-    );
+        on_failure = RefreshFailed,
+        status = ResourceStatus::RefreshFailed,
+    )]
+    async fn refresh_failed(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        self.ready(ctx).await
+    }
 
     fn build_outputs(&self) -> Option<ResourceOutputs> {
         self.url.as_ref().map(|url| {
@@ -4632,13 +4775,39 @@ impl GcpWorkerController {
     /// the network name and subnetwork name from the Network controller to configure
     /// the Cloud Run service with Direct VPC Egress.
     ///
+    /// With `UseDefault`, public traffic uses Cloud Run's dynamic outbound IPs even
+    /// if the customer added NAT to the default network. A fixed outbound IP needs
+    /// `Create` or `ByoVpcGcp` with the appropriate NAT configuration.
+    ///
     /// Returns `None` if no Network resource exists in the stack.
     fn get_vpc_access(&self, ctx: &ResourceControllerContext<'_>) -> Result<Option<VpcAccess>> {
         // Check if the stack has a Network resource
         let network_id = "default-network";
-        if !ctx.desired_stack.resources.contains_key(network_id) {
+        let Some(network_entry) = ctx.desired_stack.resources.get(network_id) else {
             return Ok(None);
-        }
+        };
+        let network_config = network_entry
+            .config
+            .downcast_ref::<Network>()
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::ResourceControllerConfigError {
+                    resource_id: network_id.to_string(),
+                    message: "Expected a Network resource for Direct VPC egress".to_string(),
+                })
+            })?;
+
+        let egress = match network_config.settings {
+            NetworkSettings::UseDefault => VpcEgress::PrivateRangesOnly,
+            NetworkSettings::Create { .. } | NetworkSettings::ByoVpcGcp { .. } => {
+                VpcEgress::AllTraffic
+            }
+            NetworkSettings::ByoVpcAws { .. } | NetworkSettings::ByoVnetAzure { .. } => {
+                return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
+                    resource_id: network_id.to_string(),
+                    message: "Direct VPC egress requires GCP network settings".to_string(),
+                }));
+            }
+        };
 
         // Get the Network controller state via require_dependency
         let network_ref = ResourceRef::new(Network::RESOURCE_TYPE, network_id.to_string());
@@ -4664,7 +4833,7 @@ impl GcpWorkerController {
 
         Ok(Some(
             VpcAccess::builder()
-                .egress(VpcEgress::AllTraffic)
+                .egress(egress)
                 .network_interfaces(vec![network_interface])
                 .build(),
         ))
@@ -5622,6 +5791,7 @@ impl GcpWorkerController {
             ssl_certificate_name: None,
             uses_custom_domain: false,
             certificate_issued_at: None,
+            pending_ssl_certificate: None,
             serverless_neg_name: None,
             backend_service_name: None,
             url_map_name: None,
@@ -5651,7 +5821,11 @@ mod tests {
     //!
     //! See `crate::core::controller_test` for a comprehensive guide on testing infrastructure controllers.
 
+    use super::{CertificateRenewalPhase, PendingSslCertificate};
+    use crate::core::{ResourceController, StackExecutor, StackResourceStateExt};
+    use alien_gcp_clients::compute::{OperationError, OperationErrorItem, SslCertificate};
     use std::collections::HashMap;
+    use std::sync::Mutex;
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -5659,12 +5833,13 @@ mod tests {
 
     use alien_client_core::ErrorData as CloudClientErrorData;
     use alien_core::{
-        CertificateStatus, DnsRecordStatus, DomainMetadata, Platform, ResourceDomainInfo,
-        ResourceStatus, Worker, WorkerOutputs,
+        CertificateStatus, DnsRecordStatus, DomainMetadata, Network, NetworkSettings, Platform,
+        Resource, ResourceDomainInfo, ResourceStatus, Worker, WorkerOutputs,
     };
     use alien_error::AlienError;
     use alien_gcp_clients::cloudrun::{
-        Condition, ConditionState, Ingress as CloudRunIngress, MockCloudRunApi, Service,
+        Condition, ConditionState, Ingress as CloudRunIngress, MockCloudRunApi, NetworkInterface,
+        RevisionTemplate, Service, VpcAccess, VpcEgress,
     };
     use alien_gcp_clients::gcp::compute::{Address, MockComputeApi, Operation, OperationStatus};
     use alien_gcp_clients::iam::{IamPolicy, MockIamApi};
@@ -5765,6 +5940,423 @@ mod tests {
                 "cert",
             )
         );
+    }
+
+    #[rstest]
+    #[case::never_updated(false, false, false)]
+    #[case::previously_updated(true, false, false)]
+    #[case::old_update_checkpoint(false, true, false)]
+    #[case::pending_metadata(false, false, true)]
+    #[tokio::test]
+    async fn certificate_renewal_returns_to_ready_without_updating_worker(
+        #[case] previously_updated: bool,
+        #[case] old_checkpoint: bool,
+        #[case] pending_metadata: bool,
+    ) {
+        let mut cloudrun = MockCloudRunApi::new();
+        cloudrun
+            .expect_get_service()
+            .returning(|_, name| Ok(create_successful_service_response(&name)));
+        let mut compute = MockComputeApi::new();
+        compute
+            .expect_insert_ssl_certificate()
+            .times(if pending_metadata { 0 } else { 1 })
+            .returning(|cert| {
+                assert!(cert
+                    .self_managed
+                    .unwrap()
+                    .certificate
+                    .unwrap()
+                    .contains("MIIBtest"));
+                Ok(Operation {
+                    status: Some(OperationStatus::Done),
+                    ..Default::default()
+                })
+            });
+        compute
+            .expect_set_target_https_proxy_ssl_certificates()
+            .times(if pending_metadata { 0 } else { 1 })
+            .returning(|proxy, certs| {
+                assert_eq!(proxy, "test-proxy");
+                assert_eq!(certs.len(), 1);
+                Ok(Operation {
+                    status: Some(OperationStatus::Done),
+                    ..Default::default()
+                })
+            });
+        compute
+            .expect_delete_ssl_certificate()
+            .times(if pending_metadata { 0 } else { 1 })
+            .returning(|name| {
+                assert_eq!(name, "old-cert");
+                Ok(Operation {
+                    status: Some(OperationStatus::Done),
+                    ..Default::default()
+                })
+            });
+        compute.expect_get_ssl_certificate().returning(|name| {
+            Err(AlienError::new(
+                CloudClientErrorData::RemoteResourceNotFound {
+                    resource_type: "SslCertificate".to_string(),
+                    resource_name: name,
+                },
+            ))
+        });
+        let provider = setup_mock_service_provider(Arc::new(cloudrun), Some(Arc::new(compute)));
+        let mut controller = GcpWorkerController {
+            ssl_certificate_name: Some("old-cert".to_string()),
+            target_https_proxy_name: Some("test-proxy".to_string()),
+            certificate_issued_at: Some("2023-01-01T00:00:00Z".to_string()),
+            ..GcpWorkerController::mock_ready("test-public-func")
+        };
+        if old_checkpoint {
+            controller.state = GcpWorkerState::UpdateImportingSslCertificate;
+        }
+        let mut metadata = create_test_domain_metadata("public-func");
+        if pending_metadata {
+            let info = metadata.resources.get_mut("public-func").unwrap();
+            info.issued_at = None;
+            info.certificate_chain = None;
+            info.private_key = None;
+        }
+        let mut completed = false;
+        for _ in 0..10 {
+            controller = serde_json::from_value(serde_json::to_value(controller).unwrap()).unwrap();
+            let mut builder = SingleControllerExecutor::builder()
+                .resource(function_public_ingress())
+                .controller(controller)
+                .platform(Platform::Gcp)
+                .service_provider(provider.clone())
+                .domain_metadata(metadata.clone());
+            if previously_updated {
+                let mut previous = function_public_ingress();
+                previous.code = alien_core::WorkerCode::Image {
+                    image: "old-image:previous".to_string(),
+                };
+                builder = builder.previous_resource(previous);
+            }
+            let mut executor = builder.build().await.unwrap();
+            let result = executor.step().await.expect("certificate renewal succeeds");
+            controller = executor
+                .internal_state::<GcpWorkerController>()
+                .unwrap()
+                .clone();
+            if controller.state == GcpWorkerState::Ready
+                && controller.pending_ssl_certificate.is_none()
+                && controller.certificate_issued_at.as_deref()
+                    == Some(if pending_metadata {
+                        "2023-01-01T00:00:00Z"
+                    } else {
+                        "2024-01-01T00:00:00Z"
+                    })
+            {
+                assert!(result.suggested_delay.is_some_and(|delay| !delay.is_zero()));
+                completed = true;
+                break;
+            }
+        }
+        assert!(completed, "renewal must finish at Ready");
+    }
+
+    #[rstest]
+    #[case::create_entry("create")]
+    #[case::bind_entry("bind")]
+    #[case::cleanup_entry("cleanup")]
+    #[case::lost_insert_response("lost_insert")]
+    #[case::lost_bind_response("lost_bind")]
+    #[case::old_delete_error("delete_error")]
+    #[case::terminal_bind_error("terminal_bind")]
+    #[case::async_bind_confirmation("async_bind")]
+    #[case::foreign_certificate("foreign")]
+    #[case::fail_then_delete("delete")]
+    #[tokio::test]
+    async fn certificate_renewal_checkpoint_matrix(#[case] scenario: &'static str) {
+        #[derive(Default)]
+        struct Cloud {
+            certificates: HashMap<String, SslCertificate>,
+            bound: String,
+            failed: bool,
+            service_deleted: bool,
+            polls: usize,
+        }
+        fn done() -> Operation {
+            Operation {
+                status: Some(OperationStatus::Done),
+                ..Default::default()
+            }
+        }
+        fn failed_response() -> AlienError<CloudClientErrorData> {
+            AlienError::new(CloudClientErrorData::InvalidInput {
+                message: "injected provider failure".to_string(),
+                field_name: None,
+            })
+        }
+        let old = SslCertificate {
+            name: Some("old-cert".to_string()),
+            ..Default::default()
+        };
+        let candidate = SslCertificate {
+            name: Some("candidate".to_string()),
+            description: Some(
+                if scenario == "foreign" {
+                    "someone else's certificate"
+                } else {
+                    "Certificate renewal candidate for worker public-func"
+                }
+                .to_string(),
+            ),
+            ..Default::default()
+        };
+        let mut cloud = Cloud {
+            bound: "old-cert".to_string(),
+            ..Default::default()
+        };
+        cloud.certificates.insert("old-cert".to_string(), old);
+        if matches!(scenario, "bind" | "cleanup" | "foreign") {
+            cloud
+                .certificates
+                .insert("candidate".to_string(), candidate);
+        }
+        if scenario == "cleanup" {
+            cloud.bound = "candidate".to_string();
+        }
+        let cloud = Arc::new(Mutex::new(cloud));
+        let mut compute = MockComputeApi::new();
+        let view = cloud.clone();
+        compute.expect_get_ssl_certificate().returning(move |name| {
+            view.lock()
+                .unwrap()
+                .certificates
+                .get(&name)
+                .cloned()
+                .ok_or_else(|| {
+                    AlienError::new(CloudClientErrorData::RemoteResourceNotFound {
+                        resource_type: "SslCertificate".to_string(),
+                        resource_name: name,
+                    })
+                })
+        });
+        let view = cloud.clone();
+        compute
+            .expect_insert_ssl_certificate()
+            .returning(move |cert| {
+                let mut cloud = view.lock().unwrap();
+                let name = cert.name.clone().unwrap();
+                assert!(
+                    !cloud.certificates.contains_key(&name),
+                    "must rediscover a committed insert"
+                );
+                cloud.certificates.insert(name, cert);
+                if matches!(scenario, "lost_insert" | "delete") && !cloud.failed {
+                    cloud.failed = true;
+                    return Err(failed_response());
+                }
+                Ok(done())
+            });
+        let view = cloud.clone();
+        compute
+            .expect_set_target_https_proxy_ssl_certificates()
+            .returning(move |proxy, certs| {
+                assert_eq!(proxy, "test-proxy");
+                assert_eq!(
+                    certs,
+                    vec!["projects/test-project-123/global/sslCertificates/candidate"]
+                );
+                let mut cloud = view.lock().unwrap();
+                if matches!(scenario, "terminal_bind" | "async_bind") && !cloud.failed {
+                    cloud.failed = true;
+                    return Ok(Operation {
+                        name: Some("bind-operation".to_string()),
+                        status: Some(OperationStatus::Running),
+                        ..Default::default()
+                    });
+                }
+                cloud.bound = "candidate".to_string();
+                if scenario == "lost_bind" && !cloud.failed {
+                    cloud.failed = true;
+                    return Err(failed_response());
+                }
+                Ok(done())
+            });
+        let view = cloud.clone();
+        compute
+            .expect_get_global_operation()
+            .returning(move |name| {
+                assert_eq!(name, "bind-operation");
+                if scenario == "async_bind" {
+                    let mut cloud = view.lock().unwrap();
+                    cloud.polls += 1;
+                    if cloud.polls == 1 {
+                        return Ok(Operation {
+                            name: Some(name),
+                            status: Some(OperationStatus::Running),
+                            ..Default::default()
+                        });
+                    }
+                    cloud.bound = "candidate".to_string();
+                    return Ok(done());
+                }
+                Ok(Operation {
+                    status: Some(OperationStatus::Done),
+                    error: Some(OperationError {
+                        errors: vec![OperationErrorItem {
+                            message: Some("binding rejected".to_string()),
+                            ..Default::default()
+                        }],
+                    }),
+                    ..Default::default()
+                })
+            });
+        let view = cloud.clone();
+        compute
+            .expect_delete_ssl_certificate()
+            .returning(move |name| {
+                let mut cloud = view.lock().unwrap();
+                assert_ne!(cloud.bound, name, "never delete a bound certificate");
+                if scenario == "delete_error" && !cloud.failed {
+                    cloud.failed = true;
+                    return Err(failed_response());
+                }
+                cloud.certificates.remove(&name);
+                Ok(done())
+            });
+        let view = cloud.clone();
+        compute
+            .expect_delete_target_https_proxy()
+            .returning(move |_| {
+                view.lock().unwrap().bound.clear();
+                Ok(done())
+            });
+        let mut cloudrun = MockCloudRunApi::new();
+        let view = cloud.clone();
+        cloudrun.expect_get_service().returning(move |_, name| {
+            if view.lock().unwrap().service_deleted {
+                Err(AlienError::new(
+                    CloudClientErrorData::RemoteResourceNotFound {
+                        resource_type: "Service".to_string(),
+                        resource_name: name,
+                    },
+                ))
+            } else {
+                Ok(create_successful_service_response(&name))
+            }
+        });
+        let view = cloud.clone();
+        cloudrun
+            .expect_delete_service()
+            .returning(move |_, _, _, _| {
+                view.lock().unwrap().service_deleted = true;
+                Ok(create_successful_operation_response("delete-service"))
+            });
+        cloudrun
+            .expect_get_operation()
+            .returning(|_, _| Ok(create_completed_operation_response("delete-service")));
+        compute
+            .expect_delete_global_forwarding_rule()
+            .returning(|_| Ok(done()));
+        let provider = setup_mock_service_provider(Arc::new(cloudrun), Some(Arc::new(compute)));
+        let phase = match scenario {
+            "bind" => CertificateRenewalPhase::Bind,
+            "cleanup" => CertificateRenewalPhase::Cleanup,
+            _ => CertificateRenewalPhase::Create,
+        };
+        let mut controller = GcpWorkerController {
+            ssl_certificate_name: Some(
+                if scenario == "cleanup" {
+                    "candidate"
+                } else {
+                    "old-cert"
+                }
+                .to_string(),
+            ),
+            certificate_issued_at: Some(
+                if scenario == "cleanup" {
+                    "2024-01-01T00:00:00Z"
+                } else {
+                    "2023-01-01T00:00:00Z"
+                }
+                .to_string(),
+            ),
+            target_https_proxy_name: Some("test-proxy".to_string()),
+            forwarding_rule_name: Some("test-forwarding-rule".to_string()),
+            pending_ssl_certificate: Some(PendingSslCertificate {
+                name: "candidate".to_string(),
+                issued_at: "2024-01-01T00:00:00Z".to_string(),
+                previous_name: Some("old-cert".to_string()),
+                phase,
+            }),
+            ..GcpWorkerController::mock_ready("test-public-func")
+        };
+        let mut failures = 0;
+        for _ in 0..30 {
+            controller = serde_json::from_value(serde_json::to_value(controller).unwrap()).unwrap();
+            let mut executor = SingleControllerExecutor::builder()
+                .resource(function_public_ingress())
+                .controller(controller)
+                .platform(Platform::Gcp)
+                .service_provider(provider.clone())
+                .domain_metadata(create_test_domain_metadata("public-func"))
+                .build()
+                .await
+                .unwrap();
+            let result = executor.step().await;
+            controller = executor
+                .internal_state::<GcpWorkerController>()
+                .unwrap()
+                .clone();
+            if let Err(error) = result {
+                failures += 1;
+                assert!(cloud.lock().unwrap().certificates.contains_key("old-cert"));
+                if scenario != "delete_error" {
+                    assert_eq!(
+                        controller.certificate_issued_at.as_deref(),
+                        Some("2023-01-01T00:00:00Z")
+                    );
+                }
+                if scenario == "terminal_bind" {
+                    assert_eq!(cloud.lock().unwrap().bound, "old-cert");
+                }
+                if scenario == "foreign" {
+                    assert!(error.message.contains("does not belong"));
+                    assert_eq!(cloud.lock().unwrap().bound, "old-cert");
+                }
+                controller.transition_to_failure();
+                if matches!(scenario, "delete" | "foreign") {
+                    let mut deleting = SingleControllerExecutor::builder()
+                        .resource(function_public_ingress())
+                        .controller(controller)
+                        .platform(Platform::Gcp)
+                        .service_provider(provider.clone())
+                        .build()
+                        .await
+                        .unwrap();
+                    deleting.delete().unwrap();
+                    deleting.run_until_terminal().await.unwrap();
+                    assert_eq!(deleting.status(), ResourceStatus::Deleted);
+                    let cloud = cloud.lock().unwrap();
+                    assert!(!cloud.certificates.contains_key("old-cert"));
+                    assert_eq!(
+                        cloud.certificates.contains_key("candidate"),
+                        scenario == "foreign"
+                    );
+                    return;
+                }
+            } else if controller.pending_ssl_certificate.is_none() {
+                assert_eq!(controller.state, GcpWorkerState::Ready);
+                let cloud = cloud.lock().unwrap();
+                assert_eq!(cloud.bound, "candidate");
+                assert_eq!(cloud.certificates.len(), 1);
+                assert_eq!(
+                    failures,
+                    usize::from(matches!(
+                        scenario,
+                        "lost_insert" | "lost_bind" | "delete_error" | "terminal_bind"
+                    ))
+                );
+                return;
+            }
+        }
+        panic!("renewal did not converge");
     }
 
     fn create_test_domain_metadata(resource_id: &str) -> DomainMetadata {
@@ -6298,6 +6890,328 @@ mod tests {
         });
 
         Arc::new(mock_cloudrun)
+    }
+
+    #[rstest]
+    #[case::default_network(Some(NetworkSettings::UseDefault), Some(VpcEgress::PrivateRangesOnly))]
+    #[case::created_network(Some(NetworkSettings::Create { cidr: None, availability_zones: 2 }), Some(VpcEgress::AllTraffic))]
+    #[case::byo_network(Some(NetworkSettings::ByoVpcGcp {
+        network_name: "customer-vpc".to_string(),
+        subnet_name: "customer-subnet".to_string(),
+        region: "us-central1".to_string(),
+    }), Some(VpcEgress::AllTraffic))]
+    #[case::no_network(None, None)]
+    #[tokio::test]
+    async fn worker_vpc_egress_follows_network_mode(
+        #[case] settings: Option<NetworkSettings>,
+        #[case] expected_egress: Option<VpcEgress>,
+        #[values(false, true)] updating: bool,
+    ) {
+        let worker = basic_function();
+        let service_name = format!("test-{}", worker.id);
+        let sent_services = Arc::new(Mutex::new(Vec::new()));
+        let mut cloudrun = MockCloudRunApi::new();
+        let created_services = Arc::clone(&sent_services);
+        cloudrun
+            .expect_create_service()
+            .times(usize::from(!updating))
+            .returning(move |_, _, service, _| {
+                created_services.lock().unwrap().push(service);
+                Ok(create_successful_operation_response("create-worker"))
+            });
+        let updated_services = Arc::clone(&sent_services);
+        let expected_name = service_name.clone();
+        cloudrun
+            .expect_patch_service()
+            .times(usize::from(updating))
+            .returning(move |_, name, service, _, _, allow_missing| {
+                assert_eq!(name, expected_name);
+                assert_eq!(service.etag.as_deref(), Some("existing-etag"));
+                assert_ne!(allow_missing, Some(true));
+                updated_services.lock().unwrap().push(service);
+                Ok(create_successful_operation_response("update-worker"))
+            });
+        cloudrun.expect_delete_service().never();
+        cloudrun
+            .expect_get_operation()
+            .returning(|_, _| Ok(create_completed_operation_response("worker")));
+        cloudrun.expect_get_service().returning(|_, name| {
+            let mut service = create_successful_service_response(&name);
+            service.etag = Some("existing-etag".to_string());
+            // Existing services use ALL_TRAFFIC, including ones on a network without NAT.
+            service.template = Some(
+                RevisionTemplate::builder()
+                    .vpc_access(VpcAccess::builder().egress(VpcEgress::AllTraffic).build())
+                    .build(),
+            );
+            Ok(service)
+        });
+        cloudrun
+            .expect_get_service_iam_policy()
+            .returning(|_, _| Ok(create_empty_iam_policy()));
+        cloudrun
+            .expect_set_service_iam_policy()
+            .returning(|_, _, _| Ok(create_empty_iam_policy()));
+
+        let controller = if updating {
+            GcpWorkerController::mock_ready(&service_name)
+        } else {
+            GcpWorkerController::default()
+        };
+        let mut builder = SingleControllerExecutor::builder()
+            .resource(worker.clone())
+            .controller(controller)
+            .platform(Platform::Gcp)
+            .service_provider(setup_mock_service_provider(Arc::new(cloudrun), None))
+            .with_test_dependencies();
+        let mut expected_interface = None;
+        if let Some(settings) = settings {
+            let mut network = crate::network::GcpNetworkController::mock_ready("default-network");
+            match &settings {
+                NetworkSettings::UseDefault => {
+                    network.network_name = Some("default".to_string());
+                    network.subnetwork_name = Some("default".to_string());
+                    network.is_byo_vpc = true;
+                    network.cloud_nat_name = None;
+                }
+                NetworkSettings::ByoVpcGcp {
+                    network_name,
+                    subnet_name,
+                    ..
+                } => {
+                    network.network_name = Some(network_name.clone());
+                    network.subnetwork_name = Some(subnet_name.clone());
+                    network.is_byo_vpc = true;
+                    network.cloud_nat_name = None;
+                }
+                NetworkSettings::Create { .. } => {}
+                _ => unreachable!(),
+            }
+            expected_interface = Some(
+                NetworkInterface::builder()
+                    .network(network.network_name.clone().unwrap())
+                    .subnetwork(network.subnetwork_name.clone().unwrap())
+                    .build(),
+            );
+            builder = builder.with_dependency(
+                Network::new("default-network".to_string())
+                    .settings(settings)
+                    .build(),
+                network,
+            );
+        }
+        let mut executor = builder.build().await.unwrap();
+        if updating {
+            assert_eq!(executor.status(), ResourceStatus::Running);
+            let mut updated_worker = worker;
+            updated_worker
+                .environment
+                .insert("RELEASE".to_string(), "next".to_string());
+            executor.update(updated_worker).unwrap();
+        }
+        executor.run_until_terminal().await.unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        let sent_services = sent_services.lock().unwrap();
+        assert_eq!(sent_services.len(), 1);
+        let vpc_access = sent_services[0]
+            .template
+            .as_ref()
+            .unwrap()
+            .vpc_access
+            .as_ref();
+        assert_eq!(
+            vpc_access.and_then(|access| access.egress.clone()),
+            expected_egress
+        );
+        if let Some(expected_interface) = expected_interface {
+            let interfaces = vpc_access.unwrap().network_interfaces.as_ref().unwrap();
+            assert_eq!(interfaces.len(), 1);
+            assert_eq!(interfaces[0].network, expected_interface.network);
+            assert_eq!(interfaces[0].subnetwork, expected_interface.subnetwork);
+        } else {
+            assert!(vpc_access.is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn changed_worker_config_replaces_failed_default_network_service() {
+        let worker = basic_function();
+        let worker_id = worker.id.clone();
+        let service_name = format!("test-{worker_id}");
+        let mut cloudrun = MockCloudRunApi::new();
+        cloudrun
+            .expect_get_operation()
+            .withf(|_, name| name == "failed-create")
+            .times(1)
+            .returning(|_, _| {
+                Ok(LongRunningOperation::builder()
+                    .name("failed-create".to_string())
+                    .done(true)
+                    .result(OperationResult::Error {
+                        error: Status::builder()
+                            .code(9)
+                            .message("Container failed to start and listen".to_string())
+                            .build(),
+                    })
+                    .build())
+            });
+        let mut replacements = mockall::Sequence::new();
+        let deleted_name = service_name.clone();
+        cloudrun
+            .expect_delete_service()
+            .times(1)
+            .in_sequence(&mut replacements)
+            .returning(move |_, name, _, _| {
+                assert_eq!(name, deleted_name);
+                Ok(create_successful_operation_response("delete-worker"))
+            });
+        let created_name = service_name.clone();
+        cloudrun
+            .expect_create_service()
+            .times(1)
+            .in_sequence(&mut replacements)
+            .returning(move |_, name, service, _| {
+                assert_eq!(name, created_name);
+                let template = service.template.unwrap();
+                let vpc = template.vpc_access.unwrap();
+                assert_eq!(vpc.egress, Some(VpcEgress::PrivateRangesOnly));
+                let interfaces = vpc.network_interfaces.unwrap();
+                assert_eq!(interfaces.len(), 1);
+                assert_eq!(interfaces[0].network.as_deref(), Some("default"));
+                assert_eq!(interfaces[0].subnetwork.as_deref(), Some("default"));
+                let containers = template.containers;
+                assert!(containers[0]
+                    .env
+                    .iter()
+                    .any(|var| { var.name == "RELEASE" && var.value.as_deref() == Some("next") }));
+                Ok(create_successful_operation_response("create-worker"))
+            });
+        cloudrun.expect_patch_service().never();
+        cloudrun
+            .expect_get_operation()
+            .withf(|_, name| matches!(name.as_str(), "delete-worker" | "create-worker"))
+            .times(2)
+            .returning(|_, name| Ok(create_completed_operation_response(&name)));
+        cloudrun.expect_get_service().times(1).returning(|_, name| {
+            Err(AlienError::new(
+                CloudClientErrorData::RemoteResourceNotFound {
+                    resource_type: "Service".to_string(),
+                    resource_name: name,
+                },
+            ))
+        });
+        cloudrun
+            .expect_get_service()
+            .times(1)
+            .returning(|_, name| Ok(create_successful_service_response(&name)));
+        cloudrun
+            .expect_get_service_iam_policy()
+            .returning(|_, _| Ok(create_empty_iam_policy()));
+        cloudrun
+            .expect_set_service_iam_policy()
+            .returning(|_, _, _| Ok(create_empty_iam_policy()));
+        let provider = setup_mock_service_provider(Arc::new(cloudrun), None);
+        let checkpoint = GcpWorkerController {
+            state: GcpWorkerState::CreatingService,
+            service_name: Some(service_name),
+            operation_name: Some("failed-create".to_string()),
+            project_id: Some("test-project".to_string()),
+            region: Some("us-central1".to_string()),
+            ..Default::default()
+        };
+        let mut failed = checkpoint.clone();
+        failed.state = GcpWorkerState::CreateFailed;
+        let mut network = crate::network::GcpNetworkController::mock_ready("default-network");
+        network.network_name = Some("default".to_string());
+        network.subnetwork_name = Some("default".to_string());
+        network.cloud_nat_name = None;
+        network.is_byo_vpc = true;
+        let fixture = SingleControllerExecutor::builder()
+            .resource(worker.clone())
+            .controller(failed)
+            .platform(Platform::Gcp)
+            .service_provider(provider.clone())
+            .with_dependency(
+                Network::new("default-network".to_string())
+                    .settings(NetworkSettings::UseDefault)
+                    .build(),
+                network,
+            )
+            .build()
+            .await
+            .unwrap();
+        let mut state = fixture.stack_state().clone();
+        assert_eq!(
+            state.resources[&worker_id].status,
+            ResourceStatus::ProvisionFailed
+        );
+        state
+            .resources
+            .get_mut(&worker_id)
+            .unwrap()
+            .set_last_failed_controller(Some(Box::new(checkpoint)))
+            .unwrap();
+        // A plain Retry restores the old operation checkpoint; it cannot change egress.
+        let mut retry_state = state.clone();
+        assert!(retry_state
+            .resources
+            .get_mut(&worker_id)
+            .unwrap()
+            .retry_failed()
+            .unwrap());
+        let old_executor = fixture.with_context(|ctx| {
+            StackExecutor::builder(ctx.desired_stack, ctx.client_config.clone())
+                .deployment_config(ctx.deployment_config)
+                .service_provider(provider.clone())
+                .step_running_resources(false)
+                .build()
+                .unwrap()
+        });
+        let retried = old_executor.step(retry_state).await.unwrap().next_state;
+        assert_eq!(
+            retried.resources[&worker_id].status,
+            ResourceStatus::ProvisionFailed
+        );
+        let resumed = retried.resources[&worker_id]
+            .get_last_failed_controller()
+            .unwrap()
+            .unwrap();
+        let resumed = resumed
+            .as_any()
+            .downcast_ref::<GcpWorkerController>()
+            .unwrap();
+        assert_eq!(resumed.state, GcpWorkerState::CreatingService);
+        assert_eq!(resumed.operation_name.as_deref(), Some("failed-create"));
+
+        let mut updated_worker = worker;
+        updated_worker
+            .environment
+            .insert("RELEASE".to_string(), "next".to_string());
+        let updated_resource = Resource::new(updated_worker);
+        let executor = fixture.with_context(|ctx| {
+            let mut desired = ctx.desired_stack.clone();
+            desired.resources.get_mut(&worker_id).unwrap().config = updated_resource.clone();
+            StackExecutor::builder(&desired, ctx.client_config.clone())
+                .deployment_config(ctx.deployment_config)
+                .service_provider(provider)
+                .step_running_resources(false)
+                .build()
+                .unwrap()
+        });
+        let plan = executor.plan(&state).unwrap();
+        assert_eq!(plan.replaces, vec![worker_id.clone()]);
+        assert!(plan.creates.is_empty());
+        assert!(!plan.updates.contains_key(&worker_id));
+        for _ in 0..40 {
+            state = executor.step(state).await.unwrap().next_state;
+            if state.resources[&worker_id].status == ResourceStatus::Running {
+                break;
+            }
+        }
+        let recovered = &state.resources[&worker_id];
+        assert_eq!(recovered.status, ResourceStatus::Running);
+        assert_eq!(recovered.config, updated_resource);
+        assert!(recovered.last_failed_state.is_none());
     }
 
     // ─────────────── CREATE AND DELETE FLOW TESTS ────────────────────
@@ -7210,6 +8124,7 @@ mod tests {
             ssl_certificate_name: None,
             uses_custom_domain: false,
             certificate_issued_at: None,
+            pending_ssl_certificate: None,
             serverless_neg_name: None,
             backend_service_name: None,
             url_map_name: None,

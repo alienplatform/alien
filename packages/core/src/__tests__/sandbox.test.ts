@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { Sandbox } from "../sandbox.js"
+import { Sandbox, type SandboxEgress } from "../sandbox.js"
 
 const limits = { cpu: "1", memory: "2Gi", disk: "20Gi", maxProcesses: 256 }
 const lifecycle = { maxLifetimeSeconds: 3600 }
@@ -8,7 +8,7 @@ function complete() {
   return new Sandbox("agent")
     .code({ type: "image", image: "ubuntu:24.04" })
     .limits(limits)
-    .egress({ mode: "deny" })
+    .egress("none")
     .lifecycle(lifecycle)
 }
 
@@ -19,7 +19,7 @@ describe("Sandbox", () => {
     expect(r.config.type).toBe("sandbox")
     expect(r.config.id).toBe("agent")
     expect(r.config.limits).toEqual(limits)
-    expect(r.config.egress).toEqual({ mode: "deny" })
+    expect(r.config.egress).toEqual("none")
   })
 
   // Ceilings are optional because not every platform can enforce them. Declaring none takes the
@@ -28,7 +28,7 @@ describe("Sandbox", () => {
   it("accepts a declaration that names no ceilings", () => {
     const sandbox = new Sandbox("agent")
       .code({ type: "image", image: "ubuntu:24.04" })
-      .egress({ mode: "deny" })
+      .egress("none")
       .lifecycle(lifecycle)
 
     expect(sandbox.build().config.limits).toBeUndefined()
@@ -43,12 +43,14 @@ describe("Sandbox", () => {
     expect(() => sandbox.build()).toThrow()
   })
 
-  it("carries a hostname allowlist through the schema", () => {
+  it("carries a runtime default independently of the declaration", () => {
     const r = complete()
-      .egress({ mode: "allowDomains", domains: ["example.com"] })
+      .egress("internet")
+      .defaultPolicy({ allow: ["example.com"] })
       .build()
 
-    expect(r.config.egress).toEqual({ mode: "allowDomains", domains: ["example.com"] })
+    expect(r.config.egress).toBe("internet")
+    expect(r.config.defaultPolicy).toEqual({ allow: ["example.com"] })
   })
 
   it("carries declared preview ports", () => {
@@ -69,4 +71,18 @@ describe("Sandbox", () => {
   it("exposes the resource type for permission targets", () => {
     expect(Sandbox.any()).toBe("sandbox")
   })
+})
+
+it("preserves deprecated declarations and supervisor settings without gateway migration", () => {
+  const policies: SandboxEgress[] = [
+    { mode: "deny" },
+    { mode: "allow" },
+    { mode: "allowDomains", domains: ["api.example.com"] },
+  ]
+  for (const egress of policies) {
+    const resource = complete().egress(egress).privilegedSupervisor({ commandUid: 60000 }).build()
+    expect(resource.config.egress).toEqual(egress)
+    expect(resource.config.privilegedSupervisor).toEqual({ commandUid: 60000 })
+    expect(resource.config.defaultPolicy).toBeUndefined()
+  }
 })

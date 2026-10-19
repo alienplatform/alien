@@ -1,3 +1,4 @@
+import type { CreateSandboxOptions } from "./types.js"
 /**
  * The binding factories, parameterized over how the native addon is
  * obtained. `index.ts` binds them to the lazy {@link loadAddon}; `native.ts`
@@ -190,6 +191,7 @@ function makeSandbox(handle: () => Promise<RawSandboxHandle>): Sandbox {
             options?.tenantKey ?? null,
             options?.env ?? null,
             options?.timeoutMs ?? null,
+            options?.egress ?? null,
           ),
         ),
       ),
@@ -198,16 +200,24 @@ function makeSandbox(handle: () => Promise<RawSandboxHandle>): Sandbox {
         const found = await raw.get(sandboxId)
         return found === null ? null : instance(found)
       }),
-    getOrCreate: options =>
+    getOrCreate: (
+      idOrOptions?: string | CreateSandboxOptions,
+      overrides?: Omit<CreateSandboxOptions, "sandboxId">,
+    ) =>
       guard(handle, async raw => {
+        const options =
+          typeof idOrOptions === "string" ? { ...overrides, sandboxId: idOrOptions } : idOrOptions
         const resolved = await raw.getOrCreate(
           options?.sandboxId ?? null,
           options?.tenantKey ?? null,
           options?.env ?? null,
           options?.timeoutMs ?? null,
+          options?.egress ?? null,
         )
         return { sandbox: instance(resolved.sandbox), created: resolved.created }
       }),
+    updateEgress: (sandboxId, egress) =>
+      guard(handle, async raw => raw.updateEgress(sandboxId, egress)),
     list: () => guard(handle, async raw => (await raw.list()).map(instance)),
     startJob: (sandboxId, command, options) =>
       guard(handle, async raw =>
@@ -441,6 +451,7 @@ function makeQueue(handle: () => Promise<RawQueueHandle>): Queue {
 
 function makeContainer(handle: () => Promise<RawContainerHandle>): Container {
   return {
+    getInternalUrls: () => guard(handle, raw => raw.getInternalUrls()),
     getInternalUrl: () => guard(handle, raw => raw.getInternalUrl()),
     getPublicUrl: () => guard(handle, raw => raw.getPublicUrl()),
   }

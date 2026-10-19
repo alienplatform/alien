@@ -22,6 +22,9 @@ bundle-signature = ["dep:ed25519-compact"]
 sandbox-process = ["tokio/process", "tokio/io-util", "tokio/time", "tokio/macros", "tokio/sync"]
 
 [dependencies]
+idna = { workspace = true }
+ipnet = { workspace = true }
+psl = { workspace = true }
 lognorm = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
@@ -49,6 +52,8 @@ tracing = { workspace = true }
 url = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
+proptest = { workspace = true }
+tempfile = { workspace = true }
 insta = { workspace = true, features = ["yaml", "json"] }
 rstest = { workspace = true }
 axum = { workspace = true, features = ["tokio", "http2"] }

@@ -104,6 +104,9 @@ jobs:
           NODE_OPTIONS: "--max-old-space-size=12288"
         run: pnpm test:ts
 
+      - name: Install zsh for deployer command tests
+        run: sudo apt-get update && sudo apt-get install -y zsh
+
       - name: Rust tests (non-cloud)
         run: |
           cargo nextest run --workspace \

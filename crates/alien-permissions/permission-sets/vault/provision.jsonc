@@ -22,8 +22,27 @@
     ],
     "gcp": [
       {
+        "grant": { "permissions": ["secretmanager.secrets.delete"] },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "PreserveDeployerSecrets",
+              "expression": "resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-\") && !resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-deployer-secrets-\")"
+            }
+          },
+          "resource": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "DeleteResourceVaultSecrets",
+              "expression": "resource.name.startsWith(\"projects/${projectNumber}/secrets/${resourceName}-\") && !resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-deployer-secrets-\")"
+            }
+          }
+        }
+      },
+      {
         "grant": {
-          "permissions": ["secretmanager.secrets.create", "secretmanager.secrets.delete"]
+          "permissions": ["secretmanager.secrets.create"]
         },
         "binding": {
           "stack": {
@@ -54,7 +73,13 @@
     "azure": [
       {
         "grant": {
-          "predefinedRoles": ["Key Vault Contributor"]
+          // Vault lifecycle only. A provider-wide Contributor grant also includes
+          // ARM secret child-resource writes; payload operations belong to data-write.
+          "actions": [
+            "Microsoft.KeyVault/vaults/read",
+            "Microsoft.KeyVault/vaults/write",
+            "Microsoft.KeyVault/vaults/delete"
+          ]
         },
         "binding": {
           "stack": {

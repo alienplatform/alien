@@ -234,11 +234,13 @@ locals {
       id   = "default-network"
       type = "network"
       importData = {
+        sandboxNetwork      = null
         vpcId               = var.network_mode == "create-new" ? aws_vpc.default_network[0].id : var.network_mode == "use-existing" ? var.vpc_id : null
         cidrBlock           = var.network_mode == "create-new" ? aws_vpc.default_network[0].cidr_block : null
         internetGatewayId   = var.network_mode == "create-new" ? aws_internet_gateway.default_network[0].id : null
         natGatewayId        = var.network_mode == "create-new" ? aws_nat_gateway.default_network[0].id : null
         eipAllocationId     = var.network_mode == "create-new" ? aws_eip.default_network_nat[0].id : null
+        egressPublicIps     = var.network_mode == "create-new" ? [aws_eip.default_network_nat[0].public_ip] : []
         publicSubnetIds     = var.network_mode == "create-new" ? aws_subnet.default_network_public[*].id : var.network_mode == "use-existing" ? compact([for id in var.public_subnet_ids : trimspace(id)]) : []
         privateSubnetIds    = var.network_mode == "create-new" ? aws_subnet.default_network_private[*].id : var.network_mode == "use-existing" ? compact([for id in var.private_subnet_ids : trimspace(id)]) : []
         publicRouteTableId  = var.network_mode == "create-new" ? aws_route_table.default_network_public[0].id : null
@@ -460,7 +462,7 @@ resource "aws_cloudcontrolapi_resource" "agents" {
     time_sleep.agents_iam_propagation
   ]
   type_name     = "AWS::Lambda::MicrovmImage"
-  desired_state = jsonencode({ "Name" = "${local.resource_prefix}-agents", "Description" = "Sandbox agents", "BaseImageArn" = "arn:${data.aws_partition.current.partition}:lambda:${data.aws_region.current.region}:aws:microvm-image:al2023-1", "BaseImageVersion" = "1", "BuildRoleArn" = aws_iam_role.agents.arn, "CodeArtifact" = { "Uri" = "s3://acme-artifacts/agents/bundle.zip" }, "Logging" = { "Disabled" = true }, "EgressNetworkConnectors" = ["arn:${data.aws_partition.current.partition}:lambda:${data.aws_region.current.region}:aws:network-connector:aws-network-connector:INTERNET_EGRESS"], "CpuConfigurations" = [{ "Architecture" = "ARM_64" }], "Resources" = [{ "MinimumMemoryInMiB" = 2048 }], "AdditionalOsCapabilities" = [], "Hooks" = { "Port" = 8971, "MicrovmImageHooks" = { "Ready" = "ENABLED", "ReadyTimeoutInSeconds" = 120 }, "MicrovmHooks" = { "Run" = "ENABLED", "RunTimeoutInSeconds" = 30, "Resume" = "ENABLED", "ResumeTimeoutInSeconds" = 30 } }, "EnvironmentVariables" = [{ "Key" = "ALIEN_SANDBOX_ROOT", "Value" = "/sandbox" }, { "Key" = "ALIEN_SANDBOX_PORT", "Value" = "8971" }, { "Key" = "ALIEN_SANDBOX_AUTHORIZATION", "Value" = "transport" }, { "Key" = "ALIEN_SANDBOX_EXEC_UID", "Value" = "60000" }, { "Key" = "ALIEN_SANDBOX_EXEC_GID", "Value" = "60000" }], "Tags" = [{ "Key" = "managed-by", "Value" = "setup" }, { "Key" = "deployment", "Value" = local.resource_prefix }, { "Key" = "resource", "Value" = "agents" }, { "Key" = "resource-type", "Value" = "sandbox" }] })
+  desired_state = jsonencode({ "Name" = "${local.resource_prefix}-agents", "Description" = "Sandbox agents", "BaseImageArn" = "arn:${data.aws_partition.current.partition}:lambda:${data.aws_region.current.region}:aws:microvm-image:al2023-1", "BaseImageVersion" = "1", "BuildRoleArn" = aws_iam_role.agents.arn, "CodeArtifact" = { "Uri" = "s3://acme-artifacts/agents/bundle.zip" }, "Logging" = { "Disabled" = true }, "EgressNetworkConnectors" = ["arn:${data.aws_partition.current.partition}:lambda:${data.aws_region.current.region}:aws:network-connector:aws-network-connector:INTERNET_EGRESS"], "CpuConfigurations" = [{ "Architecture" = "ARM_64" }], "Resources" = [{ "MinimumMemoryInMiB" = 2048 }], "AdditionalOsCapabilities" = [], "Hooks" = { "Port" = 8971, "MicrovmImageHooks" = { "Ready" = "ENABLED", "ReadyTimeoutInSeconds" = 120 }, "MicrovmHooks" = { "Run" = "ENABLED", "RunTimeoutInSeconds" = 30, "Resume" = "ENABLED", "ResumeTimeoutInSeconds" = 30 } }, "EnvironmentVariables" = [{ "Key" = "ALIEN_SANDBOX_ROOT", "Value" = "/sandbox" }, { "Key" = "ALIEN_SANDBOX_PORT", "Value" = "8971" }, { "Key" = "ALIEN_SANDBOX_AUTHORIZATION", "Value" = "transport" }], "Tags" = [{ "Key" = "managed-by", "Value" = "setup" }, { "Key" = "deployment", "Value" = local.resource_prefix }, { "Key" = "resource", "Value" = "agents" }, { "Key" = "resource-type", "Value" = "sandbox" }] })
 }
 
 resource "aws_iam_role" "agents_egress" {

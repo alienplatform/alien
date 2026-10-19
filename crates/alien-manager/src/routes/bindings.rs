@@ -1125,18 +1125,11 @@ async fn resolve_binding(
         .await
     {
         Ok(source) => source,
-        Err(error) => {
-            return error
-                .context(ErrorData::RemoteCredentialHandoffFailed {
-                    deployment_id: deployment.id.clone(),
-                    platform: deployment.platform,
-                })
-                .into_response()
-        }
+        Err(error) => return remote_credential_error_response(error.into_generic(), &deployment),
     };
     let lease = match materialize_remote_binding_lease(resolved, scope).await {
         Ok(materialized) => materialized,
-        Err(error) => return error.into_response(),
+        Err(error) => return remote_credential_error_response(error.into_generic(), &deployment),
     };
 
     let now = Utc::now();
@@ -1927,6 +1920,15 @@ fn remote_sandbox_binding(
                 reason: format!("Sandbox resource '{resource_id}' has an invalid remote binding"),
             })?;
 
+    if binding.default_policy().is_some()
+        || binding.egress().is_some_and(|value| {
+            value.gateway().is_some()
+                || *value.declaration() == alien_core::SandboxEgress::Internet
+        })
+    {
+        return Err(ErrorData::bad_request(format!("Sandbox resource '{resource_id}' requires gateway policy support; use an ordinary workload binding")));
+    }
+
     // The stored binding must be the deployment's own cloud. The platform gate above only says
     // the grant exists there; without this, an AWS binding recorded on an Azure deployment would
     // resolve into an AWS credential lease for a sandbox that is not on AWS.
@@ -1958,7 +1960,10 @@ fn remote_sandbox_binding(
             // Bypassable rather than unreachable: the grant is a data-plane role whose holder
             // creates sandboxes directly, so handing out the lease would report a restriction
             // that is not one. Same reference as the AWS arm for the full contrast.
-            if !matches!(binding.egress, alien_core::SandboxEgress::Allow) {
+            if !matches!(
+                binding.egress.declaration(),
+                alien_core::SandboxEgress::Allow
+            ) {
                 return Err(ErrorData::bad_request(format!(
                     "Sandbox resource '{resource_id}' restricts egress; Remote Bindings can only reach a sandbox declared with open egress"
                 )));
@@ -1989,7 +1994,10 @@ fn remote_sandbox_binding(
                 )?,
                 disk_image: concrete_binding_value(&binding.disk_image, "Azure sandbox diskImage")?,
                 // Checked immediately above, so this is the checked value rather than a literal.
-                allow_egress: matches!(binding.egress, alien_core::SandboxEgress::Allow),
+                allow_egress: matches!(
+                    binding.egress.declaration(),
+                    alien_core::SandboxEgress::Allow
+                ),
                 idle_pause_seconds: binding.idle_pause_seconds,
                 cpu: optional(binding.cpu, "Azure sandbox cpu")?,
                 memory: optional(binding.memory, "Azure sandbox memory")?,
@@ -2012,6 +2020,23 @@ fn remote_sandbox_binding(
             deployment.platform
         ))),
     }
+}
+
+fn remote_credential_error_response(error: AlienError, deployment: &DeploymentRecord) -> Response {
+    let error = crate::providers::credential_errors::classify_credential_error(error);
+    tracing::warn!(deployment_id = %deployment.id, error_code = %error.code, error = %error,
+        "Remote binding credential resolution failed");
+    // Sanitizing an internal cause must not erase the retry decision used by
+    // clients to fall back to a still-valid cached credential lease.
+    let retryable = error.retryable;
+    let mut safe_error = error.into_external();
+    safe_error.retryable = retryable;
+    safe_error
+        .context(ErrorData::RemoteCredentialHandoffFailed {
+            deployment_id: deployment.id.clone(),
+            platform: deployment.platform,
+        })
+        .into_response()
 }
 
 #[cfg(test)]

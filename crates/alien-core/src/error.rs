@@ -7,6 +7,35 @@ use crate::{Platform, ResourceType};
 #[derive(Debug, Clone, AlienErrorData, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ErrorData {
+    /// The image's command identity cannot be resolved safely.
+    #[error(
+        code = "SANDBOX_IMAGE_USER_INVALID",
+        message = "Invalid sandbox image USER '{user}': {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    SandboxImageUserInvalid { user: String, reason: String },
+    /// Policy exceeds the portable target-count or canonical JSON size limit.
+    #[error(
+        code = "SANDBOX_EGRESS_POLICY_TOO_LARGE",
+        message = "Sandbox egress policy exceeds {limit}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    SandboxEgressPolicyTooLarge { limit: String },
+
+    /// An egress target cannot be enforced safely.
+    #[error(
+        code = "SANDBOX_EGRESS_INVALID",
+        message = "Invalid sandbox egress target '{target}': {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    SandboxEgressInvalid { target: String, reason: String },
+
     /// A deployment selected resources outside the release's declared choices.
     #[error(
         code = "CONTAINER_RESOURCE_SELECTION_INVALID",

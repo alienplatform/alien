@@ -69,7 +69,7 @@ impl ResourceImporter for AzureSandboxImporter {
             retired_disk_images: Vec::new(),
             pending_disk_image: None,
             built_disk_images: false,
-            egress: Some(sandbox.egress.clone()),
+            egress: Some(sandbox.into()),
             idle_pause_seconds: sandbox.lifecycle.idle_pause_seconds,
             limits: sandbox.limits.clone(),
             _internal_stay_count: None,
@@ -200,7 +200,7 @@ mod tests {
                 .code(SandboxCode::Image {
                     image: "ubuntu".to_string(),
                 })
-                .egress(SandboxEgress::Deny)
+                .egress(SandboxEgress::None)
                 .limits(SandboxLimits {
                     cpu: "4000m".to_string(),
                     memory: "8192Mi".to_string(),
@@ -225,7 +225,7 @@ mod tests {
             .expect("imported sandbox should have controller state");
         assert_eq!(internal["sandboxGroup"], "sbg");
         assert_eq!(internal["diskImage"], "ubuntu");
-        assert_eq!(internal["egress"]["mode"], "deny");
+        assert_eq!(internal["egress"], "none");
         assert_eq!(internal["idlePauseSeconds"], 300);
         assert_eq!(internal["limits"]["cpu"], "4000m");
         assert_eq!(internal["limits"]["memory"], "8192Mi");
@@ -242,7 +242,7 @@ mod tests {
                 .code(SandboxCode::Image {
                     image: "docker.io/library/python:3.14-slim".to_string(),
                 })
-                .egress(SandboxEgress::Deny)
+                .egress(SandboxEgress::None)
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
@@ -276,7 +276,7 @@ mod tests {
                 .code(SandboxCode::Image {
                     image: PYTHON.to_string(),
                 })
-                .egress(SandboxEgress::Deny)
+                .egress(SandboxEgress::None)
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
@@ -364,7 +364,7 @@ mod tests {
                         target: None,
                     },
                 })
-                .egress(SandboxEgress::Deny)
+                .egress(SandboxEgress::None)
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,

@@ -280,7 +280,7 @@ fn aws_network_byo_vpc_emits_no_resources() {
 /// Rendering and reading the statements back is the only place that shows up.
 #[test]
 fn aws_sandbox_build_policy_is_a_well_formed_scoped_document() {
-    let (stack, settings) = sandbox_stack("acme-sandbox", SandboxEgress::Deny);
+    let (stack, settings) = sandbox_stack("acme-sandbox", SandboxEgress::None);
     let module = render(&stack, TerraformTarget::Aws, settings);
 
     let rendered: String = module.iter().map(|(_, contents)| contents).collect();
@@ -325,7 +325,7 @@ fn aws_sandbox_build_policy_is_a_well_formed_scoped_document() {
 /// built somewhere the binding will not look for it.
 #[test]
 fn aws_sandbox_module_configures_the_awscc_provider() {
-    let (stack, settings) = sandbox_stack("acme-sandbox-provider", SandboxEgress::Deny);
+    let (stack, settings) = sandbox_stack("acme-sandbox-provider", SandboxEgress::None);
     let module = render(&stack, TerraformTarget::Aws, settings);
     let rendered: String = module.iter().map(|(_, contents)| contents).collect();
 
@@ -381,25 +381,6 @@ fn aws_sandbox_allowing_egress_builds_no_connector() {
         rendered.contains("allowEgress"),
         "the empty connector list must be readable as open, not stripped:\n{rendered}"
     );
-}
-
-/// An egress mode the artifact cannot deliver is refused, not dropped.
-///
-/// AWS offers no domain filter at the connector, so `allowDomains` has nothing to render into and
-/// would otherwise be silently ignored while the customer believed it applied.
-#[test]
-fn aws_sandbox_refuses_an_egress_mode_it_cannot_deliver() {
-    for mode in [SandboxEgress::AllowDomains {
-        domains: vec!["example.com".to_string()],
-    }] {
-        let (stack, settings) = sandbox_stack("acme-sandbox-egress", mode.clone());
-        let error = try_render(&stack, TerraformTarget::Aws, settings)
-            .expect_err(&format!("egress {mode:?} must be refused at emit time"));
-        assert!(
-            error.to_string().contains("VPC egress connector"),
-            "the refusal must name why: {error}"
-        );
-    }
 }
 
 /// A bundle key a runtime rebuild can be granted: the version segment moves, the prefix does not.
@@ -487,7 +468,7 @@ fn live_sandbox_stack(name: &str, egress: SandboxEgress) -> (Stack, StackSetting
 /// declares.
 #[test]
 fn a_live_sandbox_module_keeps_the_build_role_and_drops_the_image() {
-    let (mut stack, settings) = live_sandbox_stack("acme-sandbox-live", SandboxEgress::Deny);
+    let (mut stack, settings) = live_sandbox_stack("acme-sandbox-live", SandboxEgress::None);
     stack
         .resources
         .get_mut("agents")
@@ -549,7 +530,7 @@ fn a_live_sandbox_module_keeps_the_build_role_and_drops_the_image() {
             &serde_json::json!({
                 "Sid": "PullSandboxBaseImage",
                 "Effect": "Allow",
-                "Action": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"],
+                "Action": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer", "ecr:BatchImportUpstreamImage", "ecr:GetImageCopyStatus"],
                 "Resource": "arn:${data.aws_partition.current.partition}:ecr:\
                              ${data.aws_region.current.region}:123456789012:repository/acme/agents-base"
             }),
@@ -636,7 +617,7 @@ fn an_open_live_sandbox_module_keeps_only_the_build_role_and_no_barrier() {
 /// build that never happens.
 #[test]
 fn a_kubernetes_target_readme_makes_no_runtime_build_promise() {
-    let (stack, settings) = live_sandbox_stack("acme-sandbox-eks-live", SandboxEgress::Deny);
+    let (stack, settings) = live_sandbox_stack("acme-sandbox-eks-live", SandboxEgress::None);
     let module = render(&stack, TerraformTarget::Eks, settings);
     let rendered: String = module.iter().map(|(_, contents)| contents).collect();
     assert!(
@@ -659,7 +640,7 @@ fn a_kubernetes_target_readme_makes_no_runtime_build_promise() {
 /// second backend nobody uses, billed and permissioned.
 #[test]
 fn a_kubernetes_target_emits_no_microvm_infrastructure_for_a_sandbox() {
-    let (stack, settings) = sandbox_stack("acme-sandbox-eks", SandboxEgress::Deny);
+    let (stack, settings) = sandbox_stack("acme-sandbox-eks", SandboxEgress::None);
     let module = render(&stack, TerraformTarget::Eks, settings);
     let rendered: String = module.iter().map(|(_, contents)| contents).collect();
 
@@ -677,7 +658,7 @@ fn a_kubernetes_target_emits_no_microvm_infrastructure_for_a_sandbox() {
 
 #[test]
 fn aws_sandbox_deny_builds_a_connector_that_permits_nothing_outbound() {
-    let (stack, settings) = sandbox_stack("acme-sandbox-deny", SandboxEgress::Deny);
+    let (stack, settings) = sandbox_stack("acme-sandbox-deny", SandboxEgress::None);
     let module = render(&stack, TerraformTarget::Aws, settings);
     let rendered: String = module.iter().map(|(_, contents)| contents).collect();
 
@@ -776,14 +757,12 @@ fn a_deny_sandbox_attaches_to_the_first_of_two_networks() {
                 ResourceLifecycle::Frozen,
             )
             .add(
-                sandbox_fixture_with(SandboxEgress::Deny, LIVE_BUNDLE),
+                sandbox_fixture_with(SandboxEgress::None, LIVE_BUNDLE),
                 ResourceLifecycle::Live,
             )
             .build();
-        let chosen =
-            alien_core::sandbox_egress::sandbox_egress_network(&stack, &SandboxEgress::Deny)
-                .expect("both networks are attachable")
-                .expect("deny attaches to a network");
+        let chosen = alien_core::sandbox_egress::sandbox_egress_network(&stack)
+            .expect("both networks are attachable");
         assert_eq!(chosen.id, "first-net");
 
         let module = render(
@@ -817,7 +796,7 @@ fn a_deny_sandbox_attaches_to_the_first_of_two_networks() {
 fn aws_sandbox_refuses_to_render_without_a_network_to_attach_to() {
     let stack = Stack::new("acme-sandbox-no-network".to_string())
         .add(
-            sandbox_fixture(SandboxEgress::Deny),
+            sandbox_fixture(SandboxEgress::None),
             ResourceLifecycle::Frozen,
         )
         .build();
@@ -834,7 +813,7 @@ fn aws_sandbox_refuses_to_render_without_a_network_to_attach_to() {
 /// rather than by matching rendered text, because what matters is that Terraform itself rejects it.
 #[test]
 fn a_restricted_sandbox_makes_terraform_refuse_the_default_network_at_plan_time() {
-    let (stack, settings) = sandbox_stack("acme-sandbox-denied", SandboxEgress::Deny);
+    let (stack, settings) = sandbox_stack("acme-sandbox-denied", SandboxEgress::None);
     let module = render(&stack, TerraformTarget::Aws, settings);
 
     assert_terraform_valid(&module, "restricted sandbox module");
@@ -912,7 +891,7 @@ const PARITY_CASES: [(ResourceLifecycle, &str, Option<&str>); 6] = [
 /// setup's sandbox tags, which both roles the module creates for a deny sandbox carry.
 #[test]
 fn the_management_role_may_not_rewrite_a_sandboxs_setup_roles() {
-    let (mut stack, settings) = sandbox_stack("acme-guarded", SandboxEgress::Deny);
+    let (mut stack, settings) = sandbox_stack("acme-guarded", SandboxEgress::None);
     stack.permissions.management =
         ManagementPermissions::extend(PermissionProfile::new().global([
             "sandbox/management",
@@ -1200,7 +1179,7 @@ fn the_emitted_build_role_matches_the_shared_policy_builder() {
 /// grant changed in the module alone would give the two install paths different roles.
 #[test]
 fn the_emitted_operator_role_matches_the_shared_builder() {
-    let (stack, settings) = sandbox_stack("acme-sandbox-egress-parity", SandboxEgress::Deny);
+    let (stack, settings) = sandbox_stack("acme-sandbox-egress-parity", SandboxEgress::None);
     let module = render(&stack, TerraformTarget::Aws, settings);
     let sandbox_file: hcl::Body = hcl::parse(module.get("agents.tf").expect("agents.tf renders"))
         .unwrap_or_else(|error| panic!("agents.tf parses: {error}"));
@@ -1327,9 +1306,9 @@ fn the_emitted_registration_matches_the_direct_seed() {
             SandboxEgress::Allow,
             "s3://acme-artifacts-{region}/sandbox-bundle/f00dcafe/bundle.zip",
         ),
-        (SandboxEgress::Deny, LIVE_BUNDLE),
+        (SandboxEgress::None, LIVE_BUNDLE),
         (
-            SandboxEgress::Deny,
+            SandboxEgress::None,
             "s3://acme-artifacts-{region}/sandbox-bundle/f00dcafe/bundle.zip",
         ),
     ] {
@@ -1379,6 +1358,7 @@ fn the_emitted_registration_matches_the_direct_seed() {
             serde_json::from_value(evaluate_registration(&sandbox_file, import_data))
                 .unwrap_or_else(|error| panic!("{case}: the importer must accept it: {error}"));
         let direct = alien_core::import::data::AwsSandboxImportData::runtime_built(
+            &stack,
             &sandbox,
             alien_core::sandbox_build_role::sandbox_build_role_arn(
                 PARITY_PARTITION,
@@ -1438,7 +1418,7 @@ fn deny_module(network: &NetworkSettings) -> alien_terraform::ModuleFiles {
             ResourceLifecycle::Frozen,
         )
         .add(
-            sandbox_fixture_with(SandboxEgress::Deny, LIVE_BUNDLE),
+            sandbox_fixture_with(SandboxEgress::None, LIVE_BUNDLE),
             ResourceLifecycle::Live,
         )
         .build();
@@ -1895,8 +1875,8 @@ fn sandbox_module_with_account(
         )
         .add(
             match lifecycle {
-                ResourceLifecycle::Live => sandbox_fixture_with(SandboxEgress::Deny, LIVE_BUNDLE),
-                _ => sandbox_fixture(SandboxEgress::Deny),
+                ResourceLifecycle::Live => sandbox_fixture_with(SandboxEgress::None, LIVE_BUNDLE),
+                _ => sandbox_fixture(SandboxEgress::None),
             },
             lifecycle,
         )

@@ -26,12 +26,12 @@ use alien_aws_clients::ec2::{
     AuthorizeSecurityGroupEgressRequest, AuthorizeSecurityGroupIngressRequest,
     CreateInternetGatewayRequest, CreateNatGatewayRequest, CreateRouteRequest,
     CreateRouteTableRequest, CreateSecurityGroupRequest, CreateSubnetRequest, CreateVpcRequest,
-    DescribeAvailabilityZonesRequest, DescribeInternetGatewaysRequest,
-    DescribeNatGatewaysRequest, DescribeNetworkInterfacesRequest, DescribeRouteTablesRequest,
-    DescribeSecurityGroupsRequest, DescribeSubnetsRequest, DescribeVpcsRequest,
-    DetachInternetGatewayRequest, Filter, IpPermission, IpPermissionResponse, IpRange,
-    ModifyVpcAttributeRequest, NatGateway, NetworkInterface, RouteTable, RouteTableAssociation,
-    SecurityGroup, Subnet, Tag, TagSet, TagSpecification,
+    DescribeAvailabilityZonesRequest, DescribeInternetGatewaysRequest, DescribeNatGatewaysRequest,
+    DescribeNetworkInterfacesRequest, DescribeRouteTablesRequest, DescribeSecurityGroupsRequest,
+    DescribeSubnetsRequest, DescribeVpcsRequest, DetachInternetGatewayRequest, Filter,
+    IpPermission, IpPermissionResponse, IpRange, ModifyVpcAttributeRequest, NatGateway,
+    NetworkInterface, RouteTable, RouteTableAssociation, SecurityGroup, Subnet, Tag, TagSet,
+    TagSpecification,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::aws::AwsFailureDomainSubnets;
@@ -1051,7 +1051,10 @@ mod tests {
                     .message
                     .contains("used 1, applied limit 1, additional demand 1"));
                 assert_eq!(
-                    executor.internal_state::<AwsNetworkController>().expect("network controller state").state,
+                    executor
+                        .internal_state::<AwsNetworkController>()
+                        .expect("network controller state")
+                        .state,
                     AwsNetworkState::CreateStart,
                 );
             } else {
@@ -1093,6 +1096,12 @@ pub struct AwsNetworkController {
     // NAT Gateway
     pub nat_gateway_id: Option<String>,
     pub(crate) eip_allocation_id: Option<String>,
+    /// NAT addresses learned during creation or handed off by setup.
+    #[serde(default)]
+    pub egress_public_ips: Vec<String>,
+    /// Setup coordinates; actual CIDRs and routes are verified during refresh.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox_network: Option<alien_core::import::data::AwsSandboxNetwork>,
 
     // Subnets
     #[serde(deserialize_with = "alien_core::network_ids::deserialize_ids")]
@@ -1109,7 +1118,10 @@ pub struct AwsNetworkController {
     // security group (which admits 5432 only from this stack SG — see
     // permission-sets/postgres/provision.jsonc) can reference it without
     // re-discovering it by tag (mirrors the already-public GCP `subnetwork_self_link`).
-    #[serde(default, deserialize_with = "alien_core::network_ids::deserialize_optional_id")]
+    #[serde(
+        default,
+        deserialize_with = "alien_core::network_ids::deserialize_optional_id"
+    )]
     pub security_group_id: Option<String>,
 
     // Metadata
@@ -2720,6 +2732,7 @@ mod failure_domain_compatibility_tests {
             available_ip_address_count: None,
             default_for_az: None,
             map_public_ip_on_launch: None,
+            ipv6_cidr_block_association_set: None,
             tag_set: None,
         }
     }
@@ -4039,6 +4052,15 @@ impl AwsNetworkController {
 
         match nat_gateway.state.as_deref() {
             Some("available") => {
+                self.egress_public_ips = nat_gateway
+                    .nat_gateway_address_set
+                    .as_ref()
+                    .into_iter()
+                    .flat_map(|addresses| &addresses.items)
+                    .filter_map(|address| address.public_ip.clone())
+                    .collect();
+                self.egress_public_ips.sort();
+                self.egress_public_ips.dedup();
                 info!(nat_gateway_id = %nat_gateway_id, "NAT Gateway is available, adding route");
 
                 // Add route to NAT Gateway in private route table
@@ -4119,6 +4141,7 @@ impl AwsNetworkController {
                 let reason = nat_gateway_failure_reason(&nat_gateway);
                 let failed_id = nat_gateway_id.clone();
                 self.nat_gateway_id = None;
+                self.egress_public_ips.clear();
                 self.nat_gateway_create_token = None;
                 self.nat_gateway_attempt += 1;
                 // The executor keeps what a failed handler wrote, so the retry of this failure
@@ -4417,6 +4440,29 @@ impl AwsNetworkController {
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Network>()?;
 
+        if let Some(declared) = &self.sandbox_network {
+            let vpc_id = self.vpc_id.as_deref().ok_or_else(|| {
+                AlienError::new(ErrorData::ResourceConfigInvalid {
+                    message: "Sandbox network setup is missing the VPC ID".into(),
+                    resource_id: Some(config.id.clone()),
+                })
+            })?;
+            let client = ctx
+                .service_provider
+                .get_aws_ec2_client(ctx.get_aws_config()?)
+                .await?;
+            self.sandbox_network = Some(
+                super::validate_aws_sandbox_network(
+                    client.as_ref(),
+                    &config.id,
+                    vpc_id,
+                    declared,
+                    &self.private_subnet_ids,
+                )
+                .await?,
+            );
+        }
+
         // For BYO-VPC, we don't need to verify - preflights already validated
         if self.is_byo_vpc {
             debug!(network_id = %config.id, "BYO-VPC network ready");
@@ -4629,6 +4675,7 @@ impl AwsNetworkController {
             Err(error) if is_not_found(&error) => {
                 info!(nat_gateway_id = %nat_gateway_id, "NAT Gateway already deleted");
                 self.nat_gateway_id = None;
+                self.egress_public_ips.clear();
                 Ok(HandlerAction::Continue {
                     state: ReleasingElasticIp,
                     suggested_delay: None,
@@ -4714,6 +4761,7 @@ impl AwsNetworkController {
             None | Some("deleted") | Some("failed") => {
                 info!(nat_gateway_id = %nat_gateway_id, "NAT Gateway deleted");
                 self.nat_gateway_id = None;
+                self.egress_public_ips.clear();
                 Ok(HandlerAction::Continue {
                     state: ReleasingElasticIp,
                     suggested_delay: None,
@@ -5439,6 +5487,7 @@ impl AwsNetworkController {
                 availability_zones: self.availability_zones.len() as u8,
                 has_public_subnets: !self.public_subnet_ids.is_empty(),
                 has_nat_gateway: self.nat_gateway_id.is_some(),
+                egress_public_ips: self.egress_public_ips.clone(),
                 cidr: self.cidr_block.clone(),
             })
         })
@@ -5461,6 +5510,8 @@ impl AwsNetworkController {
             internet_gateway_id: Some(format!("igw-{}", vpc_id)),
             nat_gateway_id: Some(format!("nat-{}", vpc_id)),
             eip_allocation_id: Some(format!("eipalloc-{}", vpc_id)),
+            egress_public_ips: vec!["203.0.113.10".to_string()],
+            sandbox_network: None,
             public_subnet_ids: (0..az_count)
                 .map(|i| format!("subnet-pub-{}-{}", vpc_id, i))
                 .collect(),
@@ -5516,6 +5567,8 @@ impl AwsNetworkController {
             internet_gateway_id: None,
             nat_gateway_id: None,
             eip_allocation_id: None,
+            egress_public_ips: Vec::new(),
+            sandbox_network: None,
             public_subnet_ids,
             private_subnet_ids: private_subnet_ids.clone(),
             public_route_table_id: None,
@@ -6347,10 +6400,9 @@ mod controller_state_tests {
         );
         let cause = error.source.as_ref().expect("quota cause");
         assert_eq!(cause.code, "CLOUD_QUOTA_EXCEEDED");
-        let quota: alien_preflights::quotas::QuotaIdentity = serde_json::from_value(
-            cause.context.as_ref().expect("quota context")["quota"].clone(),
-        )
-        .expect("typed quota identity");
+        let quota: alien_preflights::quotas::QuotaIdentity =
+            serde_json::from_value(cause.context.as_ref().expect("quota context")["quota"].clone())
+                .expect("typed quota identity");
         assert_eq!(
             quota,
             aws_network_quota_identity(&quota.scope, "L-A4707A72", "Internet gateways per Region")
@@ -8381,7 +8433,8 @@ mod controller_state_tests {
         let calls = Arc::new(AtomicUsize::new(0));
         let seen = calls.clone();
         let mut ec2 = MockEc2Api::new();
-        ec2.expect_describe_route_tables().returning(|_| Ok(parse(json!({}))));
+        ec2.expect_describe_route_tables()
+            .returning(|_| Ok(parse(json!({}))));
         ec2.expect_delete_security_group()
             .times(2)
             .returning(move |_| {
@@ -8440,7 +8493,9 @@ mod controller_state_tests {
     #[tokio::test]
     async fn teardown_with_a_denied_subnet_fails_after_one_revisit() {
         let mut ec2 = MockEc2Api::new();
-        ec2.expect_delete_security_group().times(1).returning(|_| Ok(()));
+        ec2.expect_delete_security_group()
+            .times(1)
+            .returning(|_| Ok(()));
         // The first pass and the one revisit, for each of the two subnets.
         ec2.expect_delete_subnet()
             .times(4)
@@ -8538,17 +8593,39 @@ mod controller_state_tests {
     #[tokio::test]
     async fn old_parent_delete_checkpoint_resumes_retained_child_cleanup() {
         let mut ec2 = MockEc2Api::new();
-        ec2.expect_delete_security_group().times(1).returning(|_| Ok(()));
+        ec2.expect_delete_security_group()
+            .times(1)
+            .returning(|_| Ok(()));
         ec2.expect_delete_vpc().times(1).returning(|_| Ok(()));
         let mut saved = serde_json::to_value(AwsNetworkController {
-            state: AwsNetworkState::DeletingVpc, vpc_id: Some("vpc-1".into()),
-            security_group_id: Some("sg-retained".into()), ..Default::default()
-        }).unwrap();
-        saved.as_object_mut().unwrap().remove("waitForRetainedDeleteIterations");
-        let mut executor = executor(ec2, serde_json::from_value(saved).unwrap(), Some("10.0.0.0/16")).await;
-        executor.step().await.expect("old failed parent resumes cleanup");
-        assert_eq!(controller(&executor).state, AwsNetworkState::DeletingNatGateway);
-        executor.run_until_terminal().await.expect("retained child and parent deleted");
+            state: AwsNetworkState::DeletingVpc,
+            vpc_id: Some("vpc-1".into()),
+            security_group_id: Some("sg-retained".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        saved
+            .as_object_mut()
+            .unwrap()
+            .remove("waitForRetainedDeleteIterations");
+        let mut executor = executor(
+            ec2,
+            serde_json::from_value(saved).unwrap(),
+            Some("10.0.0.0/16"),
+        )
+        .await;
+        executor
+            .step()
+            .await
+            .expect("old failed parent resumes cleanup");
+        assert_eq!(
+            controller(&executor).state,
+            AwsNetworkState::DeletingNatGateway
+        );
+        executor
+            .run_until_terminal()
+            .await
+            .expect("retained child and parent deleted");
         assert_eq!(executor.status(), ResourceStatus::Deleted);
         assert!(controller(&executor).security_group_id.is_none());
         assert!(controller(&executor).vpc_id.is_none());

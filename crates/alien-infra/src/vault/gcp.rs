@@ -370,6 +370,10 @@ fn vault_custom_role_names(
         let Some(set) = alien_permissions::get_permission_set(id) else {
             continue;
         };
+        // Other providers can define vault operations with no GCP equivalent.
+        if set.platforms.gcp.is_none() {
+            continue;
+        }
         for target in [BindingTarget::Stack, BindingTarget::Resource] {
             let plan = generator
                 .generate_grant_plan(set, target, permission_context)
