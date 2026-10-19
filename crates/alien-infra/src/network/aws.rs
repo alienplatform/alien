@@ -1199,8 +1199,8 @@ enum SubnetProgress {
     AttemptRecorded,
     /// The recorded attempt found nothing yet; look again after this wait before creating.
     LookAgain(AwsNetworkHandlerAction),
-    /// EC2 refused the create because the subnet with this ID, which lacks the attempt's token,
-    /// holds the CIDR. A VPC never has two subnets with one CIDR, so the attempt created nothing.
+    /// EC2 refused the create because the subnet with this ID, which is not the attempt's own,
+    /// holds an overlapping CIDR. Subnets of a VPC never overlap, so the attempt made nothing.
     HeldByAnother(String),
 }
 
@@ -1512,8 +1512,9 @@ impl AwsNetworkController {
         .and_then(|ids| single_create_attempt_match(ids, "subnet", &attempt.token, resource_id))
     }
 
-    /// The subnet holding `attempt`'s CIDR in `vpc_id`, if a read shows one, and whether it
-    /// carries the attempt's token.
+    /// The subnet whose CIDR overlaps `attempt`'s in `vpc_id`, if a read shows one, and whether
+    /// it is the attempt's own subnet. EC2 refuses a create whose CIDR overlaps any subnet of
+    /// the VPC, not only an equal one.
     async fn find_subnet_holding_cidr(
         &self,
         ctx: &ResourceControllerContext<'_>,
@@ -1525,38 +1526,54 @@ impl AwsNetworkController {
             .service_provider
             .get_aws_ec2_client(ctx.get_aws_config()?)
             .await?;
-        let filters = vec![
-            Filter {
-                name: "vpc-id".to_string(),
-                values: vec![vpc_id.to_string()],
-            },
-            Filter {
-                name: "cidr-block".to_string(),
-                values: vec![attempt.cidr.clone()],
-            },
-        ];
-        let subnets = client
-            .describe_subnets(DescribeSubnetsRequest::builder().filters(filters).build())
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to look up the subnet holding {}", attempt.cidr),
+        let wanted = sandbox_setup::range(&attempt.cidr).ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: format!("Invalid subnet CIDR '{}'", attempt.cidr),
                 resource_id: Some(resource_id.to_string()),
-            })?
-            .subnet_set
-            .map(|set| set.items)
-            .unwrap_or_default();
-        Ok(subnets
-            .into_iter()
-            .find(|subnet| subnet.cidr_block.as_deref() == Some(attempt.cidr.as_str()))
-            .and_then(|subnet| {
-                let ours = has_create_attempt_tags(
-                    subnet.tag_set.as_ref(),
-                    ctx.resource_prefix,
-                    resource_id,
-                    &attempt.token,
-                );
-                subnet.subnet_id.map(|id| (id, ours))
-            }))
+            })
+        })?;
+        let mut next_token = None;
+        loop {
+            let response = client
+                .describe_subnets(DescribeSubnetsRequest {
+                    filters: Some(vec![Filter {
+                        name: "vpc-id".to_string(),
+                        values: vec![vpc_id.to_string()],
+                    }]),
+                    next_token,
+                    ..Default::default()
+                })
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to look up the subnet holding {}", attempt.cidr),
+                    resource_id: Some(resource_id.to_string()),
+                })?;
+            let holder = response
+                .subnet_set
+                .into_iter()
+                .flat_map(|set| set.items)
+                .find(|subnet| {
+                    subnet
+                        .cidr_block
+                        .as_deref()
+                        .and_then(sandbox_setup::range)
+                        .is_some_and(|(start, end)| start <= wanted.1 && wanted.0 <= end)
+                });
+            if let Some(subnet) = holder {
+                let ours = subnet.cidr_block.as_deref() == Some(attempt.cidr.as_str())
+                    && has_create_attempt_tags(
+                        subnet.tag_set.as_ref(),
+                        ctx.resource_prefix,
+                        resource_id,
+                        &attempt.token,
+                    );
+                return Ok(subnet.subnet_id.map(|id| (id, ours)));
+            }
+            next_token = response.next_token.filter(|token| !token.is_empty());
+            if next_token.is_none() {
+                return Ok(None);
+            }
+        }
     }
 
     /// Find the internet gateway the `create_internet_gateway` call with this token made.

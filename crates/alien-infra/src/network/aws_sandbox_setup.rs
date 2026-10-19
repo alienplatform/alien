@@ -1,7 +1,7 @@
 //! Direct setup's dedicated subnets. Existing workload routes and the NAT stay in place.
 use super::*;
 use alien_aws_clients::ec2::{
-    DeleteRouteRequest, ReplaceRouteRequest, ReplaceRouteTableAssociationRequest, Route,
+    DeleteRouteRequest, Ec2Api, ReplaceRouteRequest, ReplaceRouteTableAssociationRequest, Route,
     RouteDestination,
 };
 use alien_core::import::data::AwsSandboxNetwork;
@@ -53,7 +53,8 @@ fn invalid(id: &str, message: impl Into<String>) -> AlienError<ErrorData> {
     })
 }
 
-fn range(cidr: &str) -> Option<(u32, u32)> {
+/// The first and last address of an IPv4 CIDR.
+pub(super) fn range(cidr: &str) -> Option<(u32, u32)> {
     let (ip, bits) = cidr.split_once('/')?;
     let ip = u32::from(ip.parse::<Ipv4Addr>().ok()?);
     let bits: u32 = bits.parse().ok()?;
@@ -137,6 +138,29 @@ fn route_destination(id: &str, table_id: &str, route: &Route) -> Result<RouteDes
         id,
         format!("Route table '{table_id}' has a route without a destination"),
     ))
+}
+
+/// Whether EC2 still has the VPC.
+async fn vpc_exists(client: &dyn Ec2Api, vpc_id: &str, id: &str) -> Result<bool> {
+    match client
+        .describe_vpcs(
+            DescribeVpcsRequest::builder()
+                .vpc_ids(vec![vpc_id.to_string()])
+                .build(),
+        )
+        .await
+    {
+        Ok(response) => Ok(response
+            .vpc_set
+            .into_iter()
+            .flat_map(|set| set.items)
+            .any(|vpc| vpc.vpc_id.as_deref() == Some(vpc_id))),
+        Err(error) if is_not_found(&error) => Ok(false),
+        Err(error) => Err(error).context(ErrorData::CloudPlatformError {
+            message: format!("Failed to check whether VPC '{vpc_id}' still exists"),
+            resource_id: Some(id.into()),
+        }),
+    }
 }
 
 fn subnet_spec<'a>(
@@ -680,12 +704,24 @@ impl AwsNetworkController {
                     .enumerate()
                     .find(|(_, subnet)| subnet.cidr == attempt.cidr)
                     .ok_or_else(|| invalid(id, "Lost subnet create has no recorded allocation"))?;
-                let progress = self
+                let progress = match self
                     .ensure_subnet(
                         ctx,
                         subnet_spec(ctx.resource_prefix, id, &setup.vpc_id, index, subnet),
                     )
-                    .await?;
+                    .await
+                {
+                    Ok(progress) => progress,
+                    // A VPC deleted outside Alien took every subnet in it along.
+                    Err(error) => {
+                        if vpc_exists(client.as_ref(), &setup.vpc_id, id).await? {
+                            return Err(error);
+                        }
+                        info!(network_id = %id, vpc_id = %setup.vpc_id, "The VPC is gone, so the lost subnet create left nothing");
+                        self.subnet_create_attempt = None;
+                        return Ok(false);
+                    }
+                };
                 match progress {
                     SubnetProgress::Created(subnet_id) => {
                         self.sandbox_setup.as_mut().expect("recorded").subnets[index].id =

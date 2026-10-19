@@ -23,6 +23,22 @@ struct Cloud {
     subnet_deletes_allowed: Option<usize>,
     /// The CIDR of every `CreateSubnet` call, including refused ones.
     subnet_creates: Vec<String>,
+    /// The latest subnet created, which lagging reads leave out.
+    last_subnet: Option<String>,
+    /// The VPC was deleted outside Alien.
+    vpc_deleted: bool,
+}
+
+fn overlaps(a: &str, b: &str) -> bool {
+    let (a, b) = (range(a).unwrap(), range(b).unwrap());
+    a.0 <= b.1 && b.0 <= a.1
+}
+
+fn vpc_not_found() -> AlienError<CloudClientErrorData> {
+    AlienError::new(CloudClientErrorData::RemoteResourceNotFound {
+        resource_type: "VPC".into(),
+        resource_name: "vpc-existing".into(),
+    })
 }
 fn parse<T: serde::de::DeserializeOwned>(value: Value) -> T {
     serde_json::from_value(value).unwrap()
@@ -52,22 +68,27 @@ fn matches_filters(value: &Value, filters: Option<&Vec<Filter>>) -> bool {
 }
 fn provider(cloud: &Arc<Mutex<Cloud>>) -> Arc<MockPlatformServiceProvider> {
     let mut ec2 = MockEc2Api::new();
-    ec2.expect_describe_vpcs().returning(|_|Ok(parse(json!({"vpcSet":{"item":[{"vpcId":"vpc-existing","cidrBlock":"10.54.0.0/16","state":"available"}]}}))));
+    let c = cloud.clone();
+    ec2.expect_describe_vpcs().returning(move |_| {
+        if c.lock().unwrap().vpc_deleted {
+            return Err(vpc_not_found());
+        }
+        Ok(parse(json!({"vpcSet":{"item":[{"vpcId":"vpc-existing","cidrBlock":"10.54.0.0/16","state":"available"}]}})))
+    });
     let c = cloud.clone();
     ec2.expect_describe_subnets().returning(move |request| {
         let mut c = c.lock().unwrap();
-        let by_cidr = request
-            .filters
-            .iter()
-            .flatten()
-            .any(|filter| filter.name == "cidr-block");
-        if by_cidr && c.unlisted_lookups > 0 {
+        // A lagging list read leaves out the newest subnet; a read by ID sees it.
+        let hidden = if request.subnet_ids.is_none() && c.unlisted_lookups > 0 {
             c.unlisted_lookups -= 1;
-            return Ok(parse(json!({"subnetSet":{"item":[]}})));
-        }
+            c.last_subnet.clone()
+        } else {
+            None
+        };
         let subnets: Vec<_> = c
             .subnets
             .iter()
+            .filter(|subnet| hidden.as_ref().is_none_or(|id| subnet["subnetId"] != *id))
             .filter(|subnet| {
                 matches_filters(subnet, request.filters.as_ref())
                     && request
@@ -83,8 +104,11 @@ fn provider(cloud: &Arc<Mutex<Cloud>>) -> Arc<MockPlatformServiceProvider> {
     ec2.expect_create_subnet().returning(move|request|{
         let mut c=c.lock().unwrap();
         c.subnet_creates.push(request.cidr_block.clone());
-        // EC2 never lets two subnets of a VPC share a CIDR, whatever its reads show.
-        if c.subnets.iter().any(|subnet|subnet["cidrBlock"]==request.cidr_block) {
+        if c.vpc_deleted {
+            return Err(vpc_not_found());
+        }
+        // EC2 never lets subnets of a VPC overlap, whatever its reads show.
+        if c.subnets.iter().any(|subnet|overlaps(subnet["cidrBlock"].as_str().unwrap(), &request.cidr_block)) {
             return Err(AlienError::new(CloudClientErrorData::RemoteResourceConflict {
                 message: "InvalidSubnet.Conflict".into(),
                 resource_type: "Subnet".into(),
@@ -93,6 +117,7 @@ fn provider(cloud: &Arc<Mutex<Cloud>>) -> Arc<MockPlatformServiceProvider> {
         }
         c.mutations+=1;
         let subnet=json!({"subnetId":format!("subnet-dedicated-{}",c.mutations),"vpcId":request.vpc_id,"cidrBlock":request.cidr_block,"availabilityZone":request.availability_zone,"availabilityZoneId":request.availability_zone,"state":"available","tagSet":tags(request.tag_specifications)});
+        c.last_subnet=subnet["subnetId"].as_str().map(str::to_string);
         c.subnets.push(subnet.clone());Ok(parse(json!({"subnet":subnet})))
     });
     let c = cloud.clone();
@@ -1379,4 +1404,69 @@ async fn an_imported_cloudformation_network_is_updated_without_changing_its_subn
         "{error:?}"
     );
     assert_eq!(cloud.lock().unwrap().mutations, 0);
+}
+
+/// EC2 refuses a subnet whose CIDR overlaps another subnet's, not only an equal one. When a
+/// customer subnet overlapping the allocation took the range before the create, teardown
+/// settles the lost create against it: the attempt made nothing, and the customer's subnet stays.
+#[tokio::test]
+async fn teardown_settles_a_lost_create_against_an_overlapping_subnet() {
+    let cloud = workload_cloud();
+    let checkpoint = checkpoint_before_first_dedicated_subnet(&cloud).await;
+    let attempt = checkpoint.subnet_create_attempt.clone().unwrap();
+    {
+        let mut c = cloud.lock().unwrap();
+        // The create never reached EC2; a customer subnet covering its range did.
+        c.subnets
+            .retain(|subnet| subnet["cidrBlock"] != attempt.cidr);
+        c.subnets.push(json!({"subnetId":"subnet-customer","vpcId":"vpc-existing","cidrBlock":"10.54.32.0/20","availabilityZone":"us-east-2a","availabilityZoneId":"use2-aza","state":"available"}));
+    }
+    let mut execution = executor_with_authority(
+        &cloud,
+        checkpoint,
+        true,
+        InitialSetupAuthority::ImportedHandoff,
+    )
+    .await;
+    execution.delete().unwrap();
+    execution.run_until_terminal().await.unwrap();
+    assert_eq!(
+        execution
+            .internal_state::<AwsNetworkController>()
+            .unwrap()
+            .state,
+        AwsNetworkState::Deleted
+    );
+    let c = cloud.lock().unwrap();
+    assert!(c
+        .subnets
+        .iter()
+        .any(|subnet| subnet["subnetId"] == "subnet-customer"));
+    assert_eq!(c.subnets.len(), 3);
+}
+
+/// When the VPC itself was deleted outside Alien, a lost subnet create left nothing behind and
+/// teardown finishes instead of failing on every retry.
+#[tokio::test]
+async fn teardown_settles_a_lost_create_in_a_vpc_deleted_outside_alien() {
+    let cloud = workload_cloud();
+    let checkpoint = checkpoint_before_first_dedicated_subnet(&cloud).await;
+    {
+        let mut c = cloud.lock().unwrap();
+        c.vpc_deleted = true;
+        c.subnets.clear();
+        c.tables.clear();
+    }
+    let mut execution = executor_with_authority(
+        &cloud,
+        checkpoint,
+        true,
+        InitialSetupAuthority::ImportedHandoff,
+    )
+    .await;
+    execution.delete().unwrap();
+    execution.run_until_terminal().await.unwrap();
+    let state = execution.internal_state::<AwsNetworkController>().unwrap();
+    assert_eq!(state.state, AwsNetworkState::Deleted);
+    assert!(state.subnet_create_attempt.is_none());
 }
