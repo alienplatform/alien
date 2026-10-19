@@ -12,9 +12,13 @@ pub(crate) struct SandboxNetworkSetup {
     subnets: Vec<SetupSubnet>,
     /// One route-less table and one NAT table, in that order.
     tables: [Option<String>; 2],
-    /// Teardown lookups for a subnet whose create response was lost.
+    /// Lookups of a lost subnet create, or of a recorded route table a list did not return yet.
     #[serde(default)]
     lost_create_lookups: u32,
+    /// Idempotency token of each table's `CreateRouteTable` call, saved before the call, so a
+    /// call repeated after a lost response returns the same table.
+    #[serde(default)]
+    table_tokens: [Option<String>; 2],
     /// A refresh could not verify the topology; the next setup run reconciles it.
     #[serde(default)]
     unverified: bool,
@@ -30,7 +34,7 @@ impl SandboxNetworkSetup {
     }
 }
 
-/// How many teardown lookups a lost subnet create gets before it is taken as never created.
+/// How many lookups a lost subnet create, or a recorded route table missing from a list, gets.
 const LOST_CREATE_LOOKUPS: u32 = 12;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -235,6 +239,7 @@ impl AwsNetworkController {
                 nat_id: nat_id.ok_or_else(|| invalid(id, "Workload network has no NAT"))?,
                 tables: [None, None],
                 lost_create_lookups: 0,
+                table_tokens: [None, None],
                 unverified: false,
                 subnets: blocks
                     .into_iter()
@@ -315,15 +320,32 @@ impl AwsNetworkController {
                 {
                     return Err(invalid(id, "Dedicated route table identity changed"));
                 }
-                self.sandbox_setup.as_mut().expect("initialized").tables[index] = Some(table_id);
+                let record = self.sandbox_setup.as_mut().expect("initialized");
+                record.tables[index] = Some(table_id);
+                record.table_tokens[index] = None;
+                record.lost_create_lookups = 0;
                 *table
             } else {
+                let record = self.sandbox_setup.as_mut().expect("initialized");
                 if setup.tables[index].is_some() {
+                    // EC2 may not list a just-created table yet; look again before deciding
+                    // the recorded table is missing.
+                    if record.lost_create_lookups < LOST_CREATE_LOOKUPS {
+                        record.lost_create_lookups += 1;
+                        return Ok(false);
+                    }
+                    record.lost_create_lookups = 0;
                     return Err(invalid(
                         id,
                         "Recorded dedicated route table was not returned",
                     ));
                 }
+                // The token is saved by a step of its own. A create repeated after a lost
+                // response, while the list still misses the table, returns that same table.
+                let Some(token) = setup.table_tokens[index].clone() else {
+                    record.table_tokens[index] = Some(new_create_attempt_token());
+                    return Ok(false);
+                };
                 let response = client
                     .create_route_table(
                         CreateRouteTableRequest::builder()
@@ -335,16 +357,18 @@ impl AwsNetworkController {
                                 name,
                                 [],
                             )])
+                            .client_token(token)
                             .build(),
                     )
                     .await
                     .context(cloud("CreateRouteTable"))?;
-                self.sandbox_setup.as_mut().expect("initialized").tables[index] = Some(
-                    response
-                        .route_table
-                        .and_then(|table| table.route_table_id)
-                        .ok_or_else(|| invalid(id, "CreateRouteTable returned no ID"))?,
-                );
+                let table_id = response
+                    .route_table
+                    .and_then(|table| table.route_table_id)
+                    .ok_or_else(|| invalid(id, "CreateRouteTable returned no ID"))?;
+                let record = self.sandbox_setup.as_mut().expect("initialized");
+                record.tables[index] = Some(table_id);
+                record.table_tokens[index] = None;
                 return Ok(false);
             };
             let table_id = table.route_table_id.as_ref().expect("validated");
@@ -538,6 +562,7 @@ impl AwsNetworkController {
                 }
             }
             self.wait_for_delete_dependencies_iterations = 0;
+            self.delete_removed_something = true;
             self.sandbox_setup.as_mut().expect("recorded").subnets[index].id = None;
             return Ok(false);
         }
@@ -580,6 +605,7 @@ impl AwsNetworkController {
                     })
                 }
             }
+            self.delete_removed_something = true;
             for recorded in &mut self.sandbox_setup.as_mut().expect("recorded").tables {
                 if recorded.as_ref() == Some(&table_id) {
                     *recorded = None;
@@ -588,7 +614,7 @@ impl AwsNetworkController {
             return Ok(false);
         }
         // A missing list result is not proof of deletion for a recorded ID.
-        for table_id in setup.tables.iter().flatten() {
+        if let Some(table_id) = setup.tables.iter().flatten().next() {
             match client.delete_route_table(table_id).await {
                 Ok(()) => {}
                 Err(error) if is_not_found(&error) => {}
@@ -610,6 +636,7 @@ impl AwsNetworkController {
                     })
                 }
             }
+            self.delete_removed_something = true;
             for recorded in &mut self.sandbox_setup.as_mut().expect("recorded").tables {
                 if recorded.as_ref() == Some(table_id) {
                     *recorded = None;

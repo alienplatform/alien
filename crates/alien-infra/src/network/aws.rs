@@ -1181,6 +1181,10 @@ pub struct AwsNetworkController {
     /// resets this separately from the per-child dependency waits.
     #[serde(default)]
     pub(crate) wait_for_retained_delete_iterations: u32,
+    /// Set by the delete flow once it removed (or found gone) a recorded dedicated sandbox
+    /// subnet or route table, so a delete denied after that does not put the failed create back.
+    #[serde(default)]
+    pub(crate) delete_removed_something: bool,
 }
 
 /// Where creating one subnet got to.
@@ -2820,12 +2824,13 @@ mod failure_domain_compatibility_tests {
 
 #[controller]
 impl AwsNetworkController {
-    // DeleteStart only looks up lost creates; the NAT gateway step has not run yet.
+    // DeleteStart looks up lost creates and deletes direct setup's dedicated sandbox subnets
+    // and route tables, recording each removal; the NAT gateway step has not run yet.
     fn nothing_deleted_yet(&self) -> bool {
         matches!(
             self.state,
             AwsNetworkState::DeleteStart | AwsNetworkState::DeletingNatGateway
-        )
+        ) && !self.delete_removed_something
     }
 
     // ─────────────── CREATE FLOW ──────────────────────────────
@@ -5639,6 +5644,7 @@ impl AwsNetworkController {
             extra_eip_allocation_ids: Vec::new(),
             wait_for_delete_dependencies_iterations: 0,
             wait_for_retained_delete_iterations: 0,
+            delete_removed_something: false,
             _internal_stay_count: None,
         }
     }
@@ -5693,6 +5699,7 @@ impl AwsNetworkController {
             extra_eip_allocation_ids: Vec::new(),
             wait_for_delete_dependencies_iterations: 0,
             wait_for_retained_delete_iterations: 0,
+            delete_removed_something: false,
             _internal_stay_count: None,
         }
     }

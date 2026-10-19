@@ -11,6 +11,14 @@ struct Cloud {
     mutations: usize,
     /// Lookups by CIDR that do not see a just-created subnet yet.
     unlisted_lookups: usize,
+    /// Route table lists after each create that do not see the new table yet.
+    table_lag: usize,
+    unlisted_table_lookups: usize,
+    last_table: Option<String>,
+    /// Route tables by the client token of the call that created them.
+    table_tokens: Vec<(String, Value)>,
+    /// Subnet deletes allowed before EC2 denies them; `None` allows all.
+    subnet_deletes_allowed: Option<usize>,
 }
 fn parse<T: serde::de::DeserializeOwned>(value: Value) -> T {
     serde_json::from_value(value).unwrap()
@@ -75,13 +83,40 @@ fn provider(cloud: &Arc<Mutex<Cloud>>) -> Arc<MockPlatformServiceProvider> {
         c.subnets.push(subnet.clone());Ok(parse(json!({"subnet":subnet})))
     });
     let c = cloud.clone();
-    ec2.expect_describe_route_tables().returning(move|request|{
-        let c=c.lock().unwrap();Ok(parse(json!({"routeTableSet":{"item":c.tables.iter().filter(|table|matches_filters(table,request.filters.as_ref())).collect::<Vec<_>>()}})))
-    });
+    ec2.expect_describe_route_tables()
+        .returning(move |request| {
+            let mut c = c.lock().unwrap();
+            let hidden = if c.unlisted_table_lookups > 0 {
+                c.unlisted_table_lookups -= 1;
+                c.last_table.clone()
+            } else {
+                None
+            };
+            let tables: Vec<_> = c
+                .tables
+                .iter()
+                .filter(|table| matches_filters(table, request.filters.as_ref()))
+                .filter(|table| {
+                    hidden
+                        .as_ref()
+                        .is_none_or(|id| table["routeTableId"] != *id)
+                })
+                .collect();
+            Ok(parse(json!({"routeTableSet":{"item":tables}})))
+        });
     let c = cloud.clone();
     ec2.expect_create_route_table().returning(move|request|{
-        let mut c=c.lock().unwrap();c.mutations+=1;
+        let mut c=c.lock().unwrap();
+        // EC2 returns the table an earlier call with the same token created.
+        if let Some(token) = &request.client_token {
+            if let Some((_, table)) = c.table_tokens.iter().find(|(seen, _)| seen == token) {
+                return Ok(parse(json!({"routeTable":table})));
+            }
+        }
+        c.mutations+=1;
         let table=json!({"routeTableId":format!("rtb-dedicated-{}",c.mutations),"vpcId":request.vpc_id,"routeSet":{"item":[local()]},"associationSet":{"item":[]},"tagSet":tags(request.tag_specifications)});
+        c.last_table=table["routeTableId"].as_str().map(str::to_string);c.unlisted_table_lookups=c.table_lag;
+        if let Some(token) = request.client_token { c.table_tokens.push((token, table.clone())); }
         c.tables.push(table.clone());Ok(parse(json!({"routeTable":table})))
     });
     let c = cloud.clone();
@@ -111,6 +146,15 @@ fn provider(cloud: &Arc<Mutex<Cloud>>) -> Arc<MockPlatformServiceProvider> {
     ec2.expect_delete_subnet().returning(move |id| {
         assert!(id.starts_with("subnet-dedicated-"));
         let mut c = c.lock().unwrap();
+        if let Some(allowed) = c.subnet_deletes_allowed.as_mut() {
+            if *allowed == 0 {
+                return Err(AlienError::new(CloudClientErrorData::RemoteAccessDenied {
+                    resource_type: "EC2 Resource".into(),
+                    resource_name: id.into(),
+                }));
+            }
+            *allowed -= 1;
+        }
         c.mutations += 1;
         c.subnets.retain(|subnet| subnet["subnetId"] != id);
         for table in &mut c.tables {
@@ -437,4 +481,185 @@ async fn teardown_keeps_looking_for_a_subnet_whose_create_response_was_lost() {
     let c = cloud.lock().unwrap();
     assert_eq!(c.unlisted_lookups, 0);
     assert_eq!(c.subnets.len(), 2, "the dedicated subnet was left behind");
+}
+
+/// A VPC with two workload subnets that route through one NAT gateway.
+fn workload_cloud() -> Arc<Mutex<Cloud>> {
+    let cloud = Arc::new(Mutex::new(Cloud::default()));
+    {
+        let mut c = cloud.lock().unwrap();
+        for (zone, cidr) in [("a", "10.54.0.0/20"), ("b", "10.54.16.0/20")] {
+            c.subnets.push(json!({"subnetId":format!("subnet-work-{zone}"),"vpcId":"vpc-existing","cidrBlock":cidr,"availabilityZone":format!("us-east-2{zone}"),"availabilityZoneId":format!("use2-az{zone}"),"state":"available"}));
+        }
+        c.tables.push(json!({"routeTableId":"rtb-work","vpcId":"vpc-existing","routeSet":{"item":[local(),{"destinationCidrBlock":"0.0.0.0/0","natGatewayId":"nat-existing","state":"active"}]},"associationSet":{"item":[{"subnetId":"subnet-work-a"},{"subnetId":"subnet-work-b"}]}}));
+    }
+    cloud
+}
+
+fn creating_sandbox_network() -> AwsNetworkController {
+    AwsNetworkController {
+        state: AwsNetworkState::CreatingSandboxNetwork,
+        vpc_id: Some("vpc-existing".into()),
+        private_subnet_ids: vec!["subnet-work-a".into(), "subnet-work-b".into()],
+        is_byo_vpc: true,
+        ..Default::default()
+    }
+}
+
+/// EC2 lists a just-created route table only a few reads later. The first table's create
+/// response is lost and the lists after it miss the table: the repeated create returns that same
+/// table instead of a second one, and a recorded table missing from a list is looked for again
+/// instead of failing setup.
+#[tokio::test]
+async fn route_table_list_lag_after_a_lost_create_response_creates_no_duplicate() {
+    let cloud = workload_cloud();
+    cloud.lock().unwrap().table_lag = 3;
+    let mut controller = creating_sandbox_network();
+    let mut lost = false;
+    for step in 0..200 {
+        let tables = cloud.lock().unwrap().tables.len();
+        let checkpoint = controller.clone();
+        let mut execution = executor(&cloud, controller, true).await;
+        execution.step().await.unwrap();
+        controller = execution
+            .internal_state::<AwsNetworkController>()
+            .unwrap()
+            .clone();
+        if !lost && cloud.lock().unwrap().tables.len() > tables {
+            lost = true;
+            controller = checkpoint;
+            continue;
+        }
+        if controller.state == AwsNetworkState::Ready {
+            break;
+        }
+        assert!(step < 199, "setup did not converge");
+    }
+    assert!(lost);
+    assert_eq!(
+        cloud.lock().unwrap().tables.len(),
+        3,
+        "the workload table and exactly two dedicated tables"
+    );
+}
+
+/// A failed direct create is replaced after a config change, and its replace delete removes the
+/// dedicated subnets one per step. When a later delete is denied, the failed create must not be
+/// put back with the ID of a subnet already deleted: reverting the config would resume setup
+/// against a subnet that no longer exists.
+#[tokio::test]
+async fn denied_replace_after_a_dedicated_subnet_was_deleted_keeps_no_deleted_subnet() {
+    use crate::core::state_utils::StackResourceStateExt;
+    use crate::core::ResourceController;
+    use crate::StackExecutor;
+    use alien_aws_clients::AwsClientConfigExt;
+    use alien_core::{
+        ClientConfig, Resource, Stack, StackResourceState, StackSettings, StackState,
+    };
+
+    let cloud = workload_cloud();
+    let mut controller = creating_sandbox_network();
+    // The create made two dedicated subnets, then failed.
+    while cloud.lock().unwrap().subnets.len() < 4 {
+        let mut execution = executor(&cloud, controller, true).await;
+        execution.step().await.unwrap();
+        controller = execution
+            .internal_state::<AwsNetworkController>()
+            .unwrap()
+            .clone();
+    }
+    let checkpoint = controller.clone();
+    controller.transition_to_failure();
+    let created = Resource::new(network());
+    let mut failed = StackResourceState::new_pending(
+        created.resource_type().to_string(),
+        created,
+        Some(alien_core::ResourceLifecycle::Frozen),
+        vec![],
+    );
+    failed.status = ResourceStatus::ProvisionFailed;
+    failed
+        .set_internal_controller(Some(Box::new(controller)))
+        .unwrap();
+    failed
+        .set_last_failed_controller(Some(Box::new(checkpoint)))
+        .unwrap();
+    let mut state = StackState::new(Platform::Aws);
+    state.resources.insert("network".into(), failed);
+
+    // The first subnet delete succeeds, the second is denied.
+    cloud.lock().unwrap().subnet_deletes_allowed = Some(1);
+    let changed = Network::new("network".into())
+        .settings(NetworkSettings::ByoVpcAws {
+            vpc_id: "vpc-existing".into(),
+            public_subnet_ids: vec![],
+            private_subnet_ids: vec!["subnet-work-a".into(), "subnet-work-b".into()],
+            security_group_ids: vec!["sg-changed".into()],
+        })
+        .build();
+    let stack = Stack::new("test".into())
+        .add(changed, alien_core::ResourceLifecycle::Frozen)
+        .add(gateway(), alien_core::ResourceLifecycle::Live)
+        .build();
+    let config = alien_core::DeploymentConfig::builder()
+        .stack_settings(StackSettings::default())
+        .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+            variables: vec![],
+            hash: String::new(),
+            created_at: String::new(),
+        })
+        .external_bindings(alien_core::ExternalBindings::default())
+        .allow_frozen_changes(true)
+        .build();
+    let executor = StackExecutor::builder(
+        &stack,
+        ClientConfig::Aws(Box::new(alien_aws_clients::AwsClientConfig::mock())),
+    )
+    .deployment_config(&config)
+    .initial_setup_authority(InitialSetupAuthority::DirectSetup)
+    .lifecycle_filter(vec![alien_core::ResourceLifecycle::Frozen])
+    .service_provider(provider(&cloud))
+    .build()
+    .unwrap();
+    assert_eq!(
+        executor.plan(&state).unwrap().replaces,
+        vec!["network".to_string()]
+    );
+    for _ in 0..20 {
+        if state.resources["network"]
+            .error
+            .as_ref()
+            .is_some_and(|error| error.code == "REPLACE_DELETE_DENIED")
+        {
+            break;
+        }
+        state = executor.step(state).await.unwrap().next_state;
+    }
+
+    let network = &state.resources["network"];
+    let error = network.error.as_ref().expect("the denial is recorded");
+    assert_eq!(error.code, "REPLACE_DELETE_DENIED");
+    assert!(
+        error.message.contains("Part of it may already be deleted"),
+        "{}",
+        error.message
+    );
+    let kept = network
+        .get_internal_controller_typed::<AwsNetworkController>()
+        .unwrap();
+    let c = cloud.lock().unwrap();
+    assert_eq!(c.subnets.len(), 3, "one dedicated subnet was deleted");
+    for subnet_id in kept
+        .sandbox_setup
+        .iter()
+        .flat_map(|setup| &setup.subnets)
+        .filter_map(|subnet| subnet.id.as_ref())
+    {
+        assert!(
+            c.subnets
+                .iter()
+                .any(|subnet| subnet["subnetId"] == *subnet_id),
+            "deleted subnet '{subnet_id}' is still recorded"
+        );
+    }
 }
