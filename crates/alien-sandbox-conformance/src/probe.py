@@ -17,8 +17,9 @@ import urllib.parse
 TIMEOUT = 5
 MAX_BODY = 1024 * 1024
 
-# Set once the first TCP connection completes. A deadline, reset or route error after
-# that point means the network carried the traffic, so it cannot count as a denial.
+# Set once the first TCP connection completes or a UDP query leaves the guest. A
+# deadline, reset or route error after that point may follow traffic that reached its
+# destination (a server can record a query and drop the reply), so it is not a denial.
 CONNECTED = False
 
 
@@ -43,6 +44,8 @@ def dns_query(probe):
         # Connected UDP accepts replies only from the selected server and port.
         connection.connect((str(server), probe["port"]))
         connection.send(request)
+        global CONNECTED
+        CONNECTED = True
         response = connection.recv(4096)
     if len(response) < 12:
         return {"outcome": "protocolFailed"}

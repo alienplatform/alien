@@ -72,8 +72,9 @@ pub enum Observation {
     Timeout,
     /// The peer refused or reset a connection before it was established.
     Refused,
-    /// A TCP connection was established, then the exchange timed out, was reset or lost
-    /// its route. The network carried the traffic, so this is not evidence of a denial.
+    /// A TCP connection was established or a UDP DNS query was sent, then the exchange
+    /// timed out, was reset or lost its route. The traffic may have reached its
+    /// destination, so this is not evidence of a denial.
     IncompleteAfterConnect,
     /// DNS did not resolve. This alone is not evidence of policy enforcement.
     DnsFailed,

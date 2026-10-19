@@ -105,9 +105,13 @@ python3 crates/alien-sandbox-conformance/after/verify_logs.py \
 
 Each completed connection must have a distinct event with the expected audience,
 sandbox ID, host, port, decision, timestamp, byte counts, and duration. Both
-positive controls and denied subjects need events. Floor denials by name or IP must have
+positive controls and denied subjects need events. Floor denials by name must have
 `Egress denied: address is not public`; a DNS, policy-store, or allowlist failure
-returning 403 cannot prove the address boundary.
+returning 403 cannot prove the address boundary. A literal IP never reaches the
+address check: `internet` never authorizes literals and no policy may grant a
+private range, so IP-form floor denials may instead carry
+`Egress target outside stored policy`. Repeated copies of one exported event
+count once.
 The verifier permits one second of clock skew. Synchronize clocks and export
 complete logs; missing observations remain unproven. Log verification does not
 replace controlled DNS records and setup evidence for each destination class.

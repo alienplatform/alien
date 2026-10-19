@@ -624,6 +624,17 @@ class After(unittest.IsolatedAsyncioTestCase):
                                 report, [dict(event, **change)], "deployment/resource"
                             )["verdict"],
                         )
+        # A literal IP is refused by policy before the address check can run.
+        event["reason"] = "Egress target outside stored policy"
+        for form, verdict in (("ip", "pass"), ("name", "unproven")):
+            report["cases"][0]["name"] = "floor-vpc-" + form
+            with self.subTest(policy_refusal=form):
+                self.assertEqual(
+                    verdict,
+                    verify_logs.verify(report, [event], "deployment/resource")[
+                        "verdict"
+                    ],
+                )
         report["cases"].append(report["cases"][0])
         self.assertEqual(
             "unproven",

@@ -53,6 +53,45 @@ fn direct_dns_checks_the_reply_and_treats_nxdomain_as_reachability() {
     }
 }
 
+/// A DNS server can record a query and drop the reply, so a direct query that got no
+/// answer escaped as far as the guest can tell and must not prove a denial.
+#[test]
+fn an_unanswered_direct_dns_query_is_not_a_network_denial() {
+    let server = UdpSocket::bind("127.0.0.1:0").unwrap();
+    server
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    let port = server.local_addr().unwrap().port();
+    let task = thread::spawn(move || {
+        let mut packet = [0; 512];
+        let (length, _) = server.recv_from(&mut packet).unwrap();
+        // Hold the socket past the probe's deadline without answering.
+        thread::sleep(Duration::from_secs(6));
+        length
+    });
+    let subject = observe(
+        &Probe::DnsQuery {
+            server: "127.0.0.1".into(),
+            port,
+            host: "nonce.example.invalid".into(),
+        },
+        None,
+    );
+    assert!(
+        task.join().unwrap() > 12,
+        "the server must have received the query"
+    );
+    assert_eq!(subject, Observation::IncompleteAfterConnect);
+    assert_eq!(
+        evaluate(
+            &Expectation::NetworkDenied,
+            &Observation::Connected,
+            &subject
+        ),
+        Verdict::Unproven
+    );
+}
+
 #[test]
 fn tls_sni_is_independent_of_connect_authority_and_certificate_validation_still_succeeds() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));

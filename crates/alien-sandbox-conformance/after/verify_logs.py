@@ -121,11 +121,17 @@ def verify(report, events, audience, identity_map=None):
                 for key in ("bytesUp", "bytesDown", "durationMs")
             ):
                 continue
-            # A floor denial must come from the address check, not policy or storage failure.
+            # A floor denial must come from the address check, not storage failure. A
+            # literal IP never reaches that check: `internet` never authorizes literals,
+            # and a policy cannot grant a private range, so the policy refusal is the
+            # floor for the IP form.
+            floor_reasons = {"Egress denied: address is not public"}
+            if name.endswith("-ip"):
+                floor_reasons.add("Egress target outside stored policy")
             if (
                 name.startswith("floor-")
                 and decision == "deny"
-                and fields.get("reason") != "Egress denied: address is not public"
+                and fields.get("reason") not in floor_reasons
             ):
                 continue
             candidates[-1].append(index)
