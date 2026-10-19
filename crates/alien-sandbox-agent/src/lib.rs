@@ -9,6 +9,7 @@ pub mod pid_namespace;
 #[cfg(unix)]
 pub mod privilege;
 pub mod server;
+pub mod validate;
 
 #[cfg(unix)]
 pub mod image_command;

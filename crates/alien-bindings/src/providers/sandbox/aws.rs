@@ -45,6 +45,21 @@ const SANDBOX_READY_TIMEOUT: std::time::Duration = std::time::Duration::from_mil
 #[cfg(test)]
 const SANDBOX_READY_POLL: std::time::Duration = std::time::Duration::from_millis(5);
 
+/// How long `terminate` waits for a MicroVM to reach `TERMINATED` after AWS accepts the request.
+///
+/// Alien's images declare no terminate hook, so there is no in-guest ceiling to wait out; this
+/// is the same bound Azure's terminate gives its asynchronous delete. A caller waiting forever is
+/// its own outage, and an unconfirmed termination is reported as unconfirmed rather than done.
+#[cfg(not(test))]
+const SANDBOX_TERMINATED_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+#[cfg(not(test))]
+const SANDBOX_TERMINATED_POLL: std::time::Duration = std::time::Duration::from_secs(2);
+
+#[cfg(test)]
+const SANDBOX_TERMINATED_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(40);
+#[cfg(test)]
+const SANDBOX_TERMINATED_POLL: std::time::Duration = std::time::Duration::from_millis(5);
+
 /// Side-effect free, which is what makes it safe to repeat while `run_command` is not.
 const HEALTH_PATH: &str = "/v1/health";
 
@@ -358,7 +373,7 @@ impl AwsSandbox {
     }
 
     /// The sandbox's record if it exists *and* is this binding's own; absent and someone else's
-    /// collapse to `None`, which is what every operation except `terminate` wants.
+    /// collapse to `None`, which is what every operation except `terminate` and `resume` wants.
     async fn owned_microvm(&self, operation: &str, sandbox_id: &str) -> Result<Option<Microvm>> {
         Ok(self
             .fetched_microvm(operation, sandbox_id)
@@ -366,15 +381,18 @@ impl AwsSandbox {
             .filter(|microvm| self.owns(microvm)))
     }
 
-    /// Refuses a sandbox that is absent or not one of this binding's own.
-    async fn ensure_owned(&self, operation: &str, sandbox_id: &str) -> Result<()> {
-        if self.owned_microvm(operation, sandbox_id).await?.is_none() {
-            return Err(AlienError::new(ErrorData::SandboxUnreachable {
-                operation: operation.to_string(),
-                reason: format!("sandbox '{sandbox_id}' does not belong to this sandbox resource"),
-            }));
-        }
-        Ok(())
+    /// The sandbox's record, refusing one that is absent or not one of this binding's own.
+    async fn ensure_owned(&self, operation: &str, sandbox_id: &str) -> Result<Microvm> {
+        self.owned_microvm(operation, sandbox_id)
+            .await?
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::SandboxUnreachable {
+                    operation: operation.to_string(),
+                    reason: format!(
+                        "sandbox '{sandbox_id}' does not belong to this sandbox resource"
+                    ),
+                })
+            })
     }
 
     /// Builds a request to the agent inside one sandbox, authorised and port-scoped.
@@ -501,14 +519,15 @@ impl AwsSandbox {
         // guarantee holds only for whoever won the race. Waited for here rather than in `get`,
         // which reports a sandbox's state and does not promise one.
         if matches!(existing.state, SandboxState::Starting) {
-            self.wait_until_servable(&id).await?;
+            self.wait_until_servable("sandbox.create", &id).await?;
             return Ok(self.instance(id, Some("RUNNING".to_string())));
         }
         Ok(existing)
     }
 
-    /// Blocks until the agent answers, so `create` returns a sandbox that can take work.
-    async fn wait_until_servable(&self, sandbox_id: &str) -> Result<()> {
+    /// Blocks until the agent answers, so `create` and `resume` return a sandbox that can take
+    /// work. `operation` is the verb the caller invoked, which a failure here is reported under.
+    async fn wait_until_servable(&self, operation: &str, sandbox_id: &str) -> Result<()> {
         let deadline = std::time::Instant::now() + SANDBOX_READY_TIMEOUT;
 
         // Only the endpoint's absence is worth waiting on. A refused token mint, a sandbox that is
@@ -516,7 +535,7 @@ impl AwsSandbox {
         // timeout would report a permission problem as a slow boot a minute later.
         let probe = loop {
             let published = self
-                .owned_microvm("sandbox.create", sandbox_id)
+                .owned_microvm(operation, sandbox_id)
                 .await?
                 .is_some_and(|microvm| microvm.endpoint.is_some());
 
@@ -527,7 +546,7 @@ impl AwsSandbox {
             }
             if std::time::Instant::now() >= deadline {
                 return Err(AlienError::new(ErrorData::SandboxUnreachable {
-                    operation: "sandbox.create".to_string(),
+                    operation: operation.to_string(),
                     reason: format!(
                         "MicroVM '{sandbox_id}' published no endpoint within {}s",
                         SANDBOX_READY_TIMEOUT.as_secs()
@@ -537,7 +556,7 @@ impl AwsSandbox {
             tokio::time::sleep(SANDBOX_READY_POLL).await;
         };
 
-        Self::poll_until_healthy(probe, deadline, sandbox_id).await
+        Self::poll_until_healthy(probe, deadline, operation, sandbox_id).await
     }
 
     /// The agent uses a plain-text error-code prefix. Recognize only its explicit self-check
@@ -582,31 +601,42 @@ impl AwsSandbox {
     async fn poll_until_healthy(
         probe: reqwest::RequestBuilder,
         deadline: std::time::Instant,
+        operation: &str,
         sandbox_id: &str,
     ) -> Result<()> {
-        let mut last_seen;
+        let mut last_seen = String::new();
         loop {
             // Cloned rather than rebuilt: the token outlives this wait, so the health poll costs
             // no further describes or mints.
             let request = probe.try_clone().ok_or_else(|| {
                 AlienError::new(ErrorData::SandboxUnreachable {
-                    operation: "sandbox.create".to_string(),
+                    operation: operation.to_string(),
                     reason: "the readiness probe could not be repeated".to_string(),
                 })
             })?;
 
-            match request.send().await {
-                Ok(response) if response.status().is_success() => return Ok(()),
-                Ok(mut response) => {
+            // Bounded by the deadline: a connection the proxy accepts and never answers would
+            // otherwise hold the wait past it, and the caller would hear nothing at all.
+            let sent =
+                tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), request.send())
+                    .await;
+            match sent {
+                Ok(Ok(response)) if response.status().is_success() => return Ok(()),
+                Ok(Ok(mut response)) => {
                     Self::check_egress_refusal(&mut response).await?;
                     last_seen = format!("the endpoint answered {}", response.status());
                 }
-                Err(error) => last_seen = error.to_string(),
+                Ok(Err(error)) => last_seen = error.without_url().to_string(),
+                // Keeps an earlier answer, which says more about the sandbox than the deadline.
+                Err(_) if last_seen.is_empty() => {
+                    last_seen = "the probe got no answer before the deadline".to_string()
+                }
+                Err(_) => {}
             }
 
             if std::time::Instant::now() >= deadline {
                 return Err(AlienError::new(ErrorData::SandboxUnreachable {
-                    operation: "sandbox.create".to_string(),
+                    operation: operation.to_string(),
                     reason: format!(
                         "MicroVM '{sandbox_id}' did not become servable in time: {last_seen}"
                     ),
@@ -735,7 +765,8 @@ impl Sandbox for AwsSandbox {
                 let delivery = manager.create(&microvm_id, policy, expires_at).await?;
                 self.install_egress(&microvm_id, delivery).await?;
             }
-            self.wait_until_servable(&microvm_id).await
+            self.wait_until_servable("sandbox.create", &microvm_id)
+                .await
         }
         .await;
         if let Err(mut error) = ready {
@@ -751,6 +782,15 @@ impl Sandbox for AwsSandbox {
             }
             return Err(match self.microvms.terminate_microvm(&microvm_id).await {
                 Ok(()) => error,
+                // The wait can end on a MicroVM that already ended, which AWS may have reaped.
+                Err(cleanup)
+                    if matches!(
+                        &cleanup.error,
+                        Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+                    ) =>
+                {
+                    error
+                }
                 Err(cleanup) => {
                     warn!(
                         microvm = %microvm_id,
@@ -969,13 +1009,49 @@ impl Sandbox for AwsSandbox {
     }
 
     async fn resume(&self, sandbox_id: &str) -> Result<()> {
-        self.ensure_owned("sandbox.resume", sandbox_id).await?;
+        // An ended MicroVM never serves again, so resuming it cannot succeed and a retryable
+        // answer would invite a retry. AWS drops a terminated MicroVM's record, so absence ends
+        // it too.
+        let ended = |what: &str| {
+            AlienError::new(ErrorData::SandboxCommandFailed {
+                failure: "sandboxTerminated".to_string(),
+                reason: format!("sandbox.resume: MicroVM '{sandbox_id}' {what}"),
+            })
+        };
+        let microvm = match self.fetched_microvm("sandbox.resume", sandbox_id).await? {
+            None => {
+                return Err(ended(
+                    "does not exist: it was terminated and reaped, or never created",
+                ))
+            }
+            Some(microvm) if !self.owns(&microvm) => {
+                return Err(AlienError::new(ErrorData::SandboxUnreachable {
+                    operation: "sandbox.resume".to_string(),
+                    reason: format!(
+                        "sandbox '{sandbox_id}' does not belong to this sandbox resource"
+                    ),
+                }))
+            }
+            Some(microvm) => microvm,
+        };
+        if let Some(state @ ("TERMINATING" | "TERMINATED")) = microvm.state.as_deref() {
+            return Err(ended(&format!("is {state}")));
+        }
 
-        self.microvms.resume_microvm(sandbox_id).await.unreachable(
-            "sandbox.resume",
-            &format!("could not resume MicroVM '{sandbox_id}'"),
-        )?;
-        self.renew_egress(sandbox_id).await
+        // A retry after a resume whose wait gave up finds the MicroVM already running. Asking
+        // AWS to resume it again could be refused for a sandbox that is up.
+        if microvm.state.as_deref() != Some("RUNNING") {
+            self.microvms.resume_microvm(sandbox_id).await.unreachable(
+                "sandbox.resume",
+                &format!("could not resume MicroVM '{sandbox_id}'"),
+            )?;
+        }
+        self.renew_egress(sandbox_id).await?;
+
+        // ResumeMicrovm is accepted while the MicroVM is still SUSPENDED; it takes traffic only
+        // once its /resume hook returns, so a command sent before then hits the proxy's 502. Not
+        // terminated on a failed wait, unlike `create`: the caller holds this sandbox's id.
+        self.wait_until_servable("sandbox.resume", sandbox_id).await
     }
 
     async fn snapshot(&self, _sandbox_id: &str) -> Result<String> {
@@ -986,10 +1062,10 @@ impl Sandbox for AwsSandbox {
     }
 
     /// Idempotent per the trait: a sandbox AWS has already reaped is terminated, not an error.
-    /// Absence and "someone else's" part ways here alone — every other operation needs the
-    /// sandbox to exist, so for them the two are the same refusal.
+    /// Absence and "someone else's" part ways here and in `resume`; every other operation needs
+    /// the sandbox to exist, so for them the two are the same refusal.
     async fn terminate(&self, sandbox_id: &str) -> Result<()> {
-        match self
+        let state = match self
             .fetched_microvm("sandbox.terminate", sandbox_id)
             .await?
         {
@@ -1007,20 +1083,83 @@ impl Sandbox for AwsSandbox {
                     ),
                 }))
             }
-            Some(_) => {}
-        }
+            Some(microvm) => microvm.state,
+        };
 
         let policy_cleanup = match &self.egress_manager {
             Some(manager) => manager.delete(sandbox_id).await,
             None => Ok(()),
         };
-        self.microvms
-            .terminate_microvm(sandbox_id)
-            .await
-            .unreachable(
-                "sandbox.terminate",
-                &format!("could not terminate MicroVM '{sandbox_id}'"),
-            )?;
+
+        // A retry after an unconfirmed terminate finds the request already in flight or done.
+        // Asking AWS again could be refused for a sandbox that is gone or going.
+        if !matches!(state.as_deref(), Some("TERMINATING" | "TERMINATED")) {
+            match self.microvms.terminate_microvm(sandbox_id).await {
+                Ok(()) => {}
+                // Reaped between the read and the request; the poll below confirms it.
+                Err(error)
+                    if matches!(
+                        &error.error,
+                        Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+                    ) => {}
+                Err(error) => {
+                    return Err::<(), _>(error).unreachable(
+                        "sandbox.terminate",
+                        &format!("could not terminate MicroVM '{sandbox_id}'"),
+                    )
+                }
+            }
+        }
+
+        // TerminateMicrovm returns once AWS accepts it, not once the MicroVM is gone. Returning
+        // here would report containment while the code inside is still running. Only `TERMINATED`
+        // or an absent record confirms it. Each read is bounded by the deadline; one that fails
+        // (after the client's own retries) says nothing about the sandbox, so it becomes the
+        // error's source rather than a confirmation.
+        let deadline = std::time::Instant::now() + SANDBOX_TERMINATED_TIMEOUT;
+        let unconfirmed = |last_seen: &str| ErrorData::SandboxUnreachable {
+            operation: "sandbox.terminate".to_string(),
+            reason: format!(
+                "termination of MicroVM '{sandbox_id}' was accepted, but {last_seen}; it may \
+                 still be running"
+            ),
+        };
+        let mut last_state: Option<String> = None;
+        loop {
+            // Checked before each read as well as after it: a sleep that ends past the deadline
+            // would otherwise send a read with no time left, and report that rather than the
+            // state last seen.
+            if let Some(state) = &last_state {
+                if std::time::Instant::now() >= deadline {
+                    return Err(AlienError::new(unconfirmed(&format!(
+                        "after {}s it was still {state}",
+                        SANDBOX_TERMINATED_TIMEOUT.as_secs()
+                    ))));
+                }
+            }
+            let read = tokio::time::timeout_at(
+                tokio::time::Instant::from_std(deadline),
+                self.fetched_microvm("sandbox.terminate", sandbox_id),
+            )
+            .await;
+            let state = match read {
+                Ok(Ok(None)) => break,
+                Ok(Ok(Some(microvm))) => microvm.state,
+                Ok(Err(error)) => {
+                    return Err(error).context(unconfirmed("its record could not be read"))
+                }
+                Err(_) => {
+                    return Err(AlienError::new(unconfirmed(
+                        "its record could not be read before the deadline",
+                    )))
+                }
+            };
+            if state.as_deref() == Some("TERMINATED") {
+                break;
+            }
+            last_state = Some(state.unwrap_or_else(|| "in a state it did not report".to_string()));
+            tokio::time::sleep(SANDBOX_TERMINATED_POLL).await;
+        }
         policy_cleanup
     }
 
@@ -1099,6 +1238,257 @@ mod tests {
             .terminate("already-reaped")
             .await
             .expect("an absent sandbox is already terminated");
+    }
+
+    /// `TerminateMicrovm` returns once AWS accepts it, not once the MicroVM is gone. A caller told
+    /// the sandbox is terminated while its record still says `RUNNING` would treat code that is
+    /// still executing as contained.
+    #[tokio::test]
+    async fn terminate_does_not_report_a_sandbox_gone_while_it_still_runs() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        client
+            .expect_get_microvm()
+            .returning(|id| Ok(owned(id, "RUNNING")));
+        client
+            .expect_terminate_microvm()
+            .times(1)
+            .returning(|_| Ok(()));
+
+        let error = sandbox(client)
+            .terminate("still-running")
+            .await
+            .expect_err("a sandbox whose record still says RUNNING is not terminated");
+
+        assert_eq!(error.code, "SANDBOX_UNREACHABLE", "{error}");
+        assert!(
+            error.to_string().contains("still-running") && error.message.contains("still RUNNING"),
+            "the failure names the sandbox and the state it was last seen in: {error}"
+        );
+    }
+
+    /// The record is read once for ownership and then until it says `TERMINATED`. The read count
+    /// is the assertion that `TERMINATING` is not taken for confirmation: accepting it would end
+    /// the poll one read early.
+    #[tokio::test]
+    async fn terminate_returns_once_the_record_says_terminated() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        let mut reads = 0;
+        client.expect_get_microvm().times(4).returning(move |id| {
+            reads += 1;
+            let state = match reads {
+                1 | 2 => "RUNNING",
+                3 => "TERMINATING",
+                _ => "TERMINATED",
+            };
+            Ok(owned(id, state))
+        });
+        client
+            .expect_terminate_microvm()
+            .times(1)
+            .returning(|_| Ok(()));
+
+        sandbox(client)
+            .terminate("winding-down")
+            .await
+            .expect("a record that reaches TERMINATED confirms the sandbox is gone");
+    }
+
+    /// AWS may reap the record before the poll reads `TERMINATED`; absent after an accepted
+    /// terminate is the sandbox gone, the same answer `terminating_an_absent_sandbox_succeeds`
+    /// pins before one.
+    #[tokio::test]
+    async fn terminate_returns_once_the_record_is_gone() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        let mut reads = 0;
+        client.expect_get_microvm().returning(move |id| {
+            reads += 1;
+            if reads == 1 {
+                return Ok(owned(id, "RUNNING"));
+            }
+            Err(alien_error::AlienError::new(
+                alien_client_core::ErrorData::RemoteResourceNotFound {
+                    resource_type: "Microvm".to_string(),
+                    resource_name: id.to_string(),
+                },
+            ))
+        });
+        client
+            .expect_terminate_microvm()
+            .times(1)
+            .returning(|_| Ok(()));
+
+        sandbox(client)
+            .terminate("reaped-quickly")
+            .await
+            .expect("a record AWS has reaped confirms the sandbox is gone");
+    }
+
+    /// What a retry after an unconfirmed terminate finds: the end state already reached. A second
+    /// TerminateMicrovm for it could be refused, failing the one verb that promises idempotence.
+    #[tokio::test]
+    async fn terminate_of_a_terminated_record_sends_no_second_request() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        client
+            .expect_get_microvm()
+            .returning(|id| Ok(owned(id, "TERMINATED")));
+        client.expect_terminate_microvm().never();
+
+        sandbox(client)
+            .terminate("already-down")
+            .await
+            .expect("a terminated record is the end state terminate wants");
+    }
+
+    /// A request already in flight is waited on rather than repeated.
+    #[tokio::test]
+    async fn terminate_of_a_terminating_record_waits_without_asking_again() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        let mut reads = 0;
+        client.expect_get_microvm().returning(move |id| {
+            reads += 1;
+            Ok(owned(
+                id,
+                if reads == 1 {
+                    "TERMINATING"
+                } else {
+                    "TERMINATED"
+                },
+            ))
+        });
+        client.expect_terminate_microvm().never();
+
+        sandbox(client)
+            .terminate("going-down")
+            .await
+            .expect("the in-flight request reaching TERMINATED confirms it");
+    }
+
+    /// A read that still fails after the client's own retries is reported, not taken for a
+    /// confirmation, and its visibility carries over: what the caller sees is the read's own
+    /// error as the source, not its text copied into a public message.
+    #[tokio::test]
+    async fn terminate_reports_a_failed_read_as_unconfirmed_with_its_source() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        let mut reads = 0;
+        client.expect_get_microvm().returning(move |id| {
+            reads += 1;
+            if reads == 1 {
+                return Ok(owned(id, "RUNNING"));
+            }
+            Err(alien_error::AlienError::new(
+                alien_client_core::ErrorData::RemoteServiceUnavailable {
+                    message: "GetMicrovm was throttled".to_string(),
+                },
+            ))
+        });
+        client
+            .expect_terminate_microvm()
+            .times(1)
+            .returning(|_| Ok(()));
+
+        let error = sandbox(client)
+            .terminate("unreadable-after")
+            .await
+            .expect_err("a record that cannot be read does not confirm termination");
+        assert_eq!(error.code, "SANDBOX_UNREACHABLE", "{error}");
+        assert!(
+            error.message.contains("may still be running") && error.source.is_some(),
+            "the unconfirmed outcome is the message, the failed read its source: {error}"
+        );
+        assert!(
+            !error.message.contains("throttled"),
+            "the read's own text stays in the source, not the public message: {error}"
+        );
+    }
+
+    /// A MicroVM AWS reaped between the read and the request is gone, as terminate wanted; the
+    /// read that follows is what confirms it.
+    #[tokio::test]
+    async fn terminate_treats_a_not_found_request_as_gone() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        let mut reads = 0;
+        client.expect_get_microvm().returning(move |id| {
+            reads += 1;
+            if reads == 1 {
+                return Ok(owned(id, "RUNNING"));
+            }
+            Err(alien_error::AlienError::new(
+                alien_client_core::ErrorData::RemoteResourceNotFound {
+                    resource_type: "Microvm".to_string(),
+                    resource_name: id.to_string(),
+                },
+            ))
+        });
+        client.expect_terminate_microvm().times(1).returning(|id| {
+            Err(alien_error::AlienError::new(
+                alien_client_core::ErrorData::RemoteResourceNotFound {
+                    resource_type: "Microvm".to_string(),
+                    resource_name: id.to_string(),
+                },
+            ))
+        });
+
+        sandbox(client)
+            .terminate("reaped-in-between")
+            .await
+            .expect("a MicroVM already gone is terminated");
+    }
+
+    /// An ended MicroVM is refused before anything is asked of AWS, and as an answer a retry
+    /// cannot change.
+    #[tokio::test]
+    async fn resume_of_an_ended_sandbox_is_refused_without_asking_aws() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        client
+            .expect_get_microvm()
+            .returning(|id| Ok(owned(id, "TERMINATED")));
+        client.expect_resume_microvm().never();
+
+        let error = sandbox(client)
+            .resume("already-ended")
+            .await
+            .expect_err("an ended sandbox cannot be resumed");
+        assert_eq!(error.code, "SANDBOX_COMMAND_FAILED", "{error}");
+        assert!(!error.retryable, "a retry cannot bring it back: {error}");
+    }
+
+    /// AWS drops a terminated MicroVM's record, so absence is how an ended sandbox usually looks.
+    #[tokio::test]
+    async fn resume_of_a_sandbox_aws_no_longer_knows_is_refused_without_asking_aws() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        client.expect_get_microvm().returning(|id| {
+            Err(alien_error::AlienError::new(
+                alien_client_core::ErrorData::RemoteResourceNotFound {
+                    resource_type: "Microvm".to_string(),
+                    resource_name: id.to_string(),
+                },
+            ))
+        });
+        client.expect_resume_microvm().never();
+
+        let error = sandbox(client)
+            .resume("long-gone")
+            .await
+            .expect_err("a sandbox with no record cannot be resumed");
+        assert_eq!(error.code, "SANDBOX_COMMAND_FAILED", "{error}");
+        assert!(!error.retryable, "a retry cannot bring it back: {error}");
+    }
+
+    /// A retry after a resume whose wait gave up finds the MicroVM running; it is waited on, not
+    /// resumed again.
+    #[tokio::test]
+    async fn resume_of_a_running_sandbox_does_not_ask_aws_again() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        client
+            .expect_get_microvm()
+            .returning(|id| Ok(owned(id, "RUNNING")));
+        client.expect_resume_microvm().never();
+
+        let error = sandbox(client)
+            .resume("already-up")
+            .await
+            .expect_err("a running sandbox that publishes no endpoint still cannot be served");
+        assert_eq!(error.code, "SANDBOX_UNREACHABLE", "{error}");
     }
 
     /// Reconnecting must not report a sandbox this call did not make, or a caller runs its
@@ -1208,6 +1598,35 @@ mod tests {
         );
     }
 
+    /// `ResumeMicrovm` is accepted while the MicroVM is still SUSPENDED and stays so until its
+    /// `/resume` hook returns, so the acceptance is not a sandbox that can take a command. Covers
+    /// the failure path only: the success path needs TLS, as
+    /// `a_booting_sandbox_is_never_answered_with_a_second_microvm` explains. The caller holds this
+    /// sandbox's id, so a wait that gives up must not terminate it.
+    #[tokio::test]
+    async fn resume_does_not_return_before_the_sandbox_can_serve() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        client
+            .expect_get_microvm()
+            .returning(|id| Ok(owned(id, "SUSPENDED")));
+        client
+            .expect_resume_microvm()
+            .times(1)
+            .returning(|_| Ok(()));
+        client.expect_terminate_microvm().never();
+
+        let error = sandbox(client)
+            .resume("asleep")
+            .await
+            .expect_err("a resumed sandbox that never publishes an endpoint cannot be served");
+
+        assert_eq!(error.code, "SANDBOX_UNREACHABLE");
+        assert!(
+            error.to_string().contains("sandbox.resume") && error.to_string().contains("asleep"),
+            "the failure names the verb the caller used and the sandbox it waited on: {error}"
+        );
+    }
+
     /// See `capabilities()` for why this tracks `preview_ports`.
     #[tokio::test]
     async fn capabilities_reflect_the_declared_preview_ports() {
@@ -1274,6 +1693,7 @@ mod tests {
         client.expect_create_microvm_auth_token().never();
         client.expect_terminate_microvm().never();
         client.expect_suspend_microvm().never();
+        client.expect_resume_microvm().never();
 
         let sandbox = sandbox_previewing(client, vec![8080]);
 
@@ -1281,6 +1701,7 @@ mod tests {
             sandbox.preview("a-siblings-sandbox", 8080).await.err(),
             sandbox.terminate("a-siblings-sandbox").await.err(),
             sandbox.pause("a-siblings-sandbox").await.err(),
+            sandbox.resume("a-siblings-sandbox").await.err(),
         ] {
             let error = outcome.expect("a sandbox this sandbox does not own is refused");
             assert!(
@@ -1427,7 +1848,7 @@ mod tests {
         let probe = reqwest::Client::new().get(format!("http://{address}{HEALTH_PATH}"));
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
 
-        AwsSandbox::poll_until_healthy(probe, deadline, "mvm-restoring")
+        AwsSandbox::poll_until_healthy(probe, deadline, "sandbox.create", "mvm-restoring")
             .await
             .expect("the wait must outlast generic restore 502 and 503 responses");
         assert_eq!(
@@ -1455,7 +1876,7 @@ mod tests {
         let probe = reqwest::Client::new().get(format!("http://{address}{HEALTH_PATH}"));
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(30);
 
-        let error = AwsSandbox::poll_until_healthy(probe, deadline, "mvm-dead")
+        let error = AwsSandbox::poll_until_healthy(probe, deadline, "sandbox.create", "mvm-dead")
             .await
             .expect_err("a sandbox that never answers must not be reported as ready");
         assert_eq!(error.code, "SANDBOX_UNREACHABLE");
@@ -1463,6 +1884,35 @@ mod tests {
             error.to_string().contains("mvm-dead") && error.to_string().contains("502"),
             "the failure has to name the sandbox and what it last saw: {error}"
         );
+    }
+
+    /// A connection the proxy accepts and never answers must not hold the wait past its deadline.
+    #[tokio::test]
+    async fn the_readiness_poll_is_bounded_by_its_deadline_on_a_silent_connection() {
+        let listener = tokio::net::TcpListener::bind::<std::net::SocketAddr>(
+            "127.0.0.1:0".parse().expect("a loopback address"),
+        )
+        .await
+        .expect("bind");
+        let address = listener.local_addr().expect("address");
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((socket, _)) = listener.accept().await {
+                held.push(socket);
+            }
+        });
+
+        let probe = reqwest::Client::new().get(format!("http://{address}{HEALTH_PATH}"));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(50);
+
+        let error = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            AwsSandbox::poll_until_healthy(probe, deadline, "sandbox.resume", "mvm-silent"),
+        )
+        .await
+        .expect("the wait must end at its own deadline, not hang on the silent connection")
+        .expect_err("a sandbox that never answers is not ready");
+        assert_eq!(error.code, "SANDBOX_UNREACHABLE");
     }
 
     #[tokio::test]

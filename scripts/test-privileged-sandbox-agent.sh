@@ -41,7 +41,7 @@ container_created=true
 # The test driver is external to the supervisor. Its root identity permits transport-mode calls;
 # every command it submits still passes through the agent's unprivileged spawn boundary.
 docker exec -i "$container" python3 - <<'PY'
-import base64,json,os,socket,threading,time,urllib.request
+import base64,json,os,socket,threading,time,urllib.error,urllib.request
 opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 def execute(command,timeout=10000):
@@ -59,6 +59,16 @@ for attempt in range(50):
         if attempt==49: raise
         time.sleep(.1)
 
+# The image build's validate hook, under the restricted supervisor. The command cannot drive it,
+# so a 200 for this caller is the checks having run rather than been skipped.
+validate='http://127.0.0.1:8971/aws/lambda-microvms/runtime/v1/validate'
+out,terminal=execute(['/usr/bin/python3','-c',"import urllib.error,urllib.request\ntry:\n urllib.request.urlopen('"+validate+"',timeout=10); print(200)\nexcept urllib.error.HTTPError as error: print(error.code)\nexcept OSError as error: print(type(error).__name__)"])
+assert out.strip()=='403',('the command must be refused the validate hook',out,terminal)
+try:
+    with opener.open(validate,timeout=20) as response: assert response.status==200
+except urllib.error.HTTPError as error:
+    raise AssertionError(error.code,error.read().decode())
+assert not [name for name in os.listdir('/sandbox') if name.startswith('.validate-')], 'validate must remove its probe file'
 out,terminal=execute(['/bin/sh','-c','id -u; grep "^Cap" /proc/self/status; cat image-uid'])
 assert terminal['code']==0 and out.startswith('60001\n'),(out,terminal)
 assert 'CapEff:\t0000000000000000' in out and 'CapBnd:\t0000000000000000' in out,out

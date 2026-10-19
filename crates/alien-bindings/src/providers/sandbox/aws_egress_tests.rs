@@ -154,6 +154,7 @@ async fn exercise(delivery_status: StatusCode, delivery_body: &str) {
             })
         });
     let pause_state = paused.clone();
+    let terminated_state = terminated.clone();
     api.expect_get_microvm().returning(move |id| {
         Ok(Microvm {
             started_at: Some(crate::sandbox_egress::now_unix().unwrap().into()),
@@ -162,7 +163,9 @@ async fn exercise(delivery_status: StatusCode, delivery_body: &str) {
             endpoint: Some(endpoint.clone()),
             image_arn: Some("image".to_string()),
             state: Some(
-                if pause_state.load(Ordering::SeqCst) {
+                if terminated_state.load(Ordering::SeqCst) > 0 {
+                    "TERMINATED"
+                } else if pause_state.load(Ordering::SeqCst) {
                     "SUSPENDED"
                 } else {
                     "RUNNING"
@@ -594,6 +597,7 @@ async fn aws_egress_health_self_check_refusal_is_not_a_restore_response() {
     let response = AwsSandbox::poll_until_healthy(
         reqwest::Client::new().get(format!("http://{address}{HEALTH_PATH}")),
         std::time::Instant::now() + std::time::Duration::from_secs(5),
+        "sandbox.create",
         "mvm-self-check",
     )
     .await

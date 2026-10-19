@@ -22,7 +22,10 @@ use std::path::{Path, PathBuf};
 
 use alien_sandbox_agent::exec::{stream, ExecIdentity, ExecRequest, Frame};
 use alien_sandbox_agent::files;
+use alien_sandbox_agent::jobs::JobRegistry;
 use alien_sandbox_agent::privilege::{drop_to, restrict_supervisor};
+use alien_sandbox_agent::server::{AgentAuthorization, AgentState};
+use alien_sandbox_agent::validate;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
 use tempfile::TempDir;
@@ -233,6 +236,63 @@ async fn a_working_directory_the_command_cannot_enter_refuses_the_spawn() {
         refused,
         "entering a directory the command cannot use must fail the spawn, not hand back an \
          opaque command failure: {frames:?}"
+    );
+}
+
+/// The agent as the image configures it: root, dropping to the exec identity for every spawn.
+fn agent_state(root: &Path) -> AgentState {
+    AgentState {
+        #[cfg(target_os = "linux")]
+        gateway_egress: None,
+        session_root: root.to_path_buf(),
+        authorization: AgentAuthorization::Transport,
+        exec_identity: exec_identity(),
+        output_cap: 1 << 20,
+        jobs: JobRegistry::new(),
+        agent_binary: PathBuf::from(env!("CARGO_BIN_EXE_alien-sandbox-agent")),
+    }
+}
+
+/// The check the validate hook exists for: a root agent whose probe comes back as the exec uid,
+/// not as root, with the session root written and cleaned through the confined path.
+#[tokio::test]
+#[ignore = "requires running as root, e.g. inside a container"]
+async fn the_validate_hook_passes_on_an_image_shaped_root() {
+    let (_dir, root) = session_root();
+
+    validate::run(&agent_state(&root))
+        .await
+        .expect("a correctly built image validates");
+
+    let left: Vec<_> = std::fs::read_dir(&root).expect("readable").collect();
+    assert!(left.is_empty(), "the probe file must be removed: {left:?}");
+}
+
+/// A session root the exec identity cannot enter is the shape a broken image build produces, and
+/// the identity check has to be what names it: the probe is spawned through the same post-drop
+/// chdir a command gets, so it never runs.
+#[tokio::test]
+#[ignore = "requires running as root, e.g. inside a container"]
+async fn the_validate_hook_fails_by_name_when_the_exec_identity_cannot_enter_the_root() {
+    let (_dir, root) = session_root();
+    let path = std::ffi::CString::new(root.as_os_str().as_encoded_bytes()).expect("no NUL");
+    // SAFETY: a valid NUL-terminated path and uid/gid words. Root-owned and still `0700`, so the
+    // exec identity cannot traverse it.
+    unsafe {
+        assert_eq!(
+            libc::chown(path.as_ptr(), 0, 0),
+            0,
+            "root takes the root back"
+        );
+    }
+
+    let error = validate::run(&agent_state(&root))
+        .await
+        .expect_err("a root the command cannot enter must fail validation");
+
+    assert!(
+        error.to_string().contains("identity check"),
+        "the failure must name the check: {error}"
     );
 }
 

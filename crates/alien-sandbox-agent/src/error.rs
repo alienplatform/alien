@@ -109,6 +109,25 @@ pub enum ErrorData {
         limit: usize,
     },
 
+    /// The image's validate hook found it unable to serve a session.
+    ///
+    /// 500, never 503: the MicroVM service retries a 503 until the hook's timeout, and nothing
+    /// this reports changes by waiting, so a 503 would only delay the same failure and lose the
+    /// reason.
+    #[error(
+        code = "IMAGE_VALIDATION_FAILED",
+        message = "Image validation failed at the {check} check: {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 500
+    )]
+    ValidationFailed {
+        /// Which check failed: `identity` or `file`
+        check: String,
+        /// What it found
+        reason: String,
+    },
+
     /// The caller and the agent do not speak the same protocol version.
     #[error(
         code = "PROTOCOL_VERSION_MISMATCH",

@@ -603,8 +603,14 @@ export interface Sandbox {
    * pause is ended by terminating the sandbox instead and a later `resume` finds nothing.
    */
   pause(sandboxId: string): Promise<void>
-  /** Resumes a paused sandbox. Requires `pauseResume`. */
+  /**
+   * Resumes a paused sandbox. Requires `pauseResume`. Resolves once the sandbox can take a
+   * command; a sandbox that has ended rejects with a non-retryable error.
+   */
   resume(sandboxId: string): Promise<void>
-  /** Destroys a sandbox. Idempotent. */
+  /**
+   * Destroys a sandbox. Idempotent, so a terminate that could not confirm the sandbox is gone
+   * rejects with a retryable error and can be repeated.
+   */
   terminate(sandboxId: string): Promise<void>
 }
