@@ -9,6 +9,8 @@ struct Cloud {
     subnets: Vec<Value>,
     tables: Vec<Value>,
     mutations: usize,
+    /// Lookups by CIDR that do not see a just-created subnet yet.
+    unlisted_lookups: usize,
 }
 fn parse<T: serde::de::DeserializeOwned>(value: Value) -> T {
     serde_json::from_value(value).unwrap()
@@ -41,7 +43,16 @@ fn provider(cloud: &Arc<Mutex<Cloud>>) -> Arc<MockPlatformServiceProvider> {
     ec2.expect_describe_vpcs().returning(|_|Ok(parse(json!({"vpcSet":{"item":[{"vpcId":"vpc-existing","cidrBlock":"10.54.0.0/16","state":"available"}]}}))));
     let c = cloud.clone();
     ec2.expect_describe_subnets().returning(move |request| {
-        let c = c.lock().unwrap();
+        let mut c = c.lock().unwrap();
+        let by_cidr = request
+            .filters
+            .iter()
+            .flatten()
+            .any(|filter| filter.name == "cidr-block");
+        if by_cidr && c.unlisted_lookups > 0 {
+            c.unlisted_lookups -= 1;
+            return Ok(parse(json!({"subnetSet":{"item":[]}})));
+        }
         let subnets: Vec<_> = c
             .subnets
             .iter()
@@ -267,8 +278,25 @@ async fn direct_setup_recovers_lost_checkpoints_and_deletes_only_its_byo_childre
                 .truncate(1);
         }
     }
+    // A runtime refresh does not schedule changes to setup-owned subnets.
+    let runtime = SingleControllerExecutor::builder()
+        .resource(network())
+        .controller(controller.clone())
+        .platform(Platform::Aws)
+        .initial_setup_authority(InitialSetupAuthority::DirectSetup)
+        .with_stack_resource(gateway(), alien_core::ResourceLifecycle::Live)
+        .resource_prefix("test")
+        .resource_lifecycle(alien_core::ResourceLifecycle::Frozen)
+        .setup_run(false)
+        .service_provider(provider(&cloud))
+        .with_test_dependencies()
+        .build()
+        .await
+        .unwrap();
+    assert!(!runtime.needs_update().unwrap());
     let mut execution = executor(&cloud, controller, true).await;
-    assert!(!execution.needs_update().unwrap());
+    // Every setup run schedules a reconcile of the recorded subnets.
+    assert!(execution.needs_update().unwrap());
     assert!(execution.step().await.is_err());
 
     // Running setup again repairs the missing NAT route and associations, one call per step.
@@ -354,4 +382,51 @@ async fn only_a_declared_gateway_schedules_direct_network_setup() {
         .needs_update()
         .unwrap());
     assert_eq!(cloud.lock().unwrap().mutations, 0);
+}
+
+#[tokio::test]
+async fn teardown_keeps_looking_for_a_subnet_whose_create_response_was_lost() {
+    let cloud = Arc::new(Mutex::new(Cloud::default()));
+    {
+        let mut c = cloud.lock().unwrap();
+        for (zone, cidr) in [("a", "10.54.0.0/20"), ("b", "10.54.16.0/20")] {
+            c.subnets.push(json!({"subnetId":format!("subnet-work-{zone}"),"vpcId":"vpc-existing","cidrBlock":cidr,"availabilityZone":format!("us-east-2{zone}"),"availabilityZoneId":format!("use2-az{zone}"),"state":"available"}));
+        }
+        c.tables.push(json!({"routeTableId":"rtb-work","vpcId":"vpc-existing","routeSet":{"item":[local(),{"destinationCidrBlock":"0.0.0.0/0","natGatewayId":"nat-existing","state":"active"}]},"associationSet":{"item":[{"subnetId":"subnet-work-a"},{"subnetId":"subnet-work-b"}]}}));
+    }
+    let mut controller = AwsNetworkController {
+        state: AwsNetworkState::CreatingSandboxNetwork,
+        vpc_id: Some("vpc-existing".into()),
+        private_subnet_ids: vec!["subnet-work-a".into(), "subnet-work-b".into()],
+        is_byo_vpc: true,
+        ..Default::default()
+    };
+    // Step until the first dedicated subnet exists, then lose that step's checkpoint.
+    let checkpoint = loop {
+        let checkpoint: AwsNetworkController = parse(serde_json::to_value(&controller).unwrap());
+        let mut execution = executor(&cloud, controller, true).await;
+        execution.step().await.unwrap();
+        controller = execution
+            .internal_state::<AwsNetworkController>()
+            .unwrap()
+            .clone();
+        if cloud.lock().unwrap().subnets.len() == 3 {
+            break checkpoint;
+        }
+    };
+    assert!(checkpoint.subnet_create_attempt.is_some());
+    // EC2 does not list the new subnet for the first few lookups.
+    cloud.lock().unwrap().unlisted_lookups = 3;
+    let mut execution = executor_with_authority(
+        &cloud,
+        checkpoint,
+        true,
+        InitialSetupAuthority::ImportedHandoff,
+    )
+    .await;
+    execution.delete().unwrap();
+    execution.run_until_terminal().await.unwrap();
+    let c = cloud.lock().unwrap();
+    assert_eq!(c.unlisted_lookups, 0);
+    assert_eq!(c.subnets.len(), 2, "the dedicated subnet was left behind");
 }

@@ -5555,9 +5555,12 @@ impl AwsNetworkController {
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
 
     fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        // Direct setup creates the dedicated subnets when they are first needed, and every later
+        // setup run reconciles them, repairing a removed route or association.
         Ok(
             ctx.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
-                && self.sandbox_network.is_none()
+                && (self.sandbox_network.is_none()
+                    || (self.sandbox_setup.is_some() && ctx.deployment_config.setup_run))
                 && sandbox_setup::required(ctx)?,
         )
     }

@@ -141,13 +141,15 @@ fn network_ready(
     match network.vpc_id {
         Some(vpc_id) if !network.private_subnet_ids.is_empty() => {
             let (subnet_ids, gateway_cidrs) = if matches!(sandbox.egress, SandboxEgress::Internet) {
-                let topology = network.sandbox_network.filter(|topology| {
+                // A running network without the dedicated subnets is one setup is about to
+                // update: an existing deployment that adds its first internet sandbox. Wait for
+                // that update rather than attach the connector to ordinary private subnets.
+                match network.sandbox_network.filter(|topology| {
                     !topology.sandbox_subnet_ids.is_empty() && !topology.gateway_cidrs.is_empty()
-                }).ok_or_else(|| AlienError::new(ErrorData::ResourceConfigInvalid {
-                    message: format!("network '{network_id}' has no verified isolated sandbox and gateway subnets; run setup before enabling internet egress"),
-                    resource_id: Some(sandbox_id.to_string()),
-                }))?;
-                (topology.sandbox_subnet_ids, topology.gateway_cidrs)
+                }) {
+                    Some(topology) => (topology.sandbox_subnet_ids, topology.gateway_cidrs),
+                    None => return Ok(None),
+                }
             } else {
                 (network.private_subnet_ids, Vec::new())
             };
@@ -2273,21 +2275,34 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn internet_refuses_ordinary_private_subnets_before_creating_a_connector() {
+    async fn internet_waits_for_dedicated_subnets_instead_of_using_private_subnets() {
         let cloud = Shared::default();
         let stack = internet_stack();
+        // An existing deployment adding its first internet sandbox: the network still runs
+        // without the dedicated subnets until setup updates it.
         let state = stack_state(Some(ResourceStatus::Running));
         let mut records = BTreeMap::new();
-        let error = loop {
-            match step(&cloud, &stack, &state, &mut records).await {
-                Err(error) => break error,
-                Ok((ScaffoldingProgress::InProgress, _)) => {}
-                other => panic!("internet setup unexpectedly completed: {other:?}"),
-            }
-        };
-        assert!(error.to_string().contains("no verified isolated sandbox"));
+        for _ in 0..10 {
+            let (progress, _) = step(&cloud, &stack, &state, &mut records).await.unwrap();
+            assert_eq!(progress, ScaffoldingProgress::InProgress);
+        }
         assert!(cloud.lock().unwrap().groups.is_empty());
         assert!(cloud.lock().unwrap().connectors.is_empty());
+        // Once the network update records them, the connector uses only the dedicated subnets.
+        let state = internet_state();
+        converge(&cloud, &stack, &state, &mut records).await;
+        let account = cloud.lock().unwrap();
+        assert_eq!(account.connectors.len(), 1);
+        let dedicated = vec!["subnet-isolated-a".into(), "subnet-isolated-b".into()];
+        let expected = SandboxEgressConnector::builder()
+            .resource_prefix(PREFIX)
+            .sandbox_id("agents")
+            .operator_role_arn(OPERATOR_ARN)
+            .private_subnet_ids(&dedicated)
+            .security_group_id("sg-1")
+            .build()
+            .desired_state();
+        assert!(connector_mismatches(&account.connectors[0].1, &expected).is_empty());
     }
 
     #[tokio::test]

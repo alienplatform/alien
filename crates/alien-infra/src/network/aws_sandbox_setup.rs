@@ -12,7 +12,13 @@ pub(crate) struct SandboxNetworkSetup {
     subnets: Vec<SetupSubnet>,
     /// One route-less table and one NAT table, in that order.
     tables: [Option<String>; 2],
+    /// Teardown lookups for a subnet whose create response was lost.
+    #[serde(default)]
+    lost_create_lookups: u32,
 }
+
+/// How many teardown lookups a lost subnet create gets before it is taken as never created.
+const LOST_CREATE_LOOKUPS: u32 = 12;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -215,6 +221,7 @@ impl AwsNetworkController {
                 vpc_id: vpc,
                 nat_id: nat_id.ok_or_else(|| invalid(id, "Workload network has no NAT"))?,
                 tables: [None, None],
+                lost_create_lookups: 0,
                 subnets: blocks
                     .into_iter()
                     .enumerate()
@@ -459,22 +466,30 @@ impl AwsNetworkController {
         // Recover the only in-flight subnet by its exact persisted create token before deletion.
         if let Some(attempt) = self.subnet_create_attempt.clone() {
             if matches!(attempt.subnet_type.as_str(), "Sandbox" | "SandboxGateway") {
-                if let Some(found) = self
+                let found = self
                     .find_subnet_by_create_attempt(ctx, &setup.vpc_id, &attempt, id)
-                    .await?
-                {
-                    let subnet = self
-                        .sandbox_setup
-                        .as_mut()
-                        .expect("recorded")
-                        .subnets
-                        .iter_mut()
-                        .find(|subnet| subnet.cidr == attempt.cidr)
-                        .ok_or_else(|| {
-                            invalid(id, "Lost subnet create has no recorded allocation")
-                        })?;
-                    subnet.id = Some(found);
+                    .await?;
+                let record = self.sandbox_setup.as_mut().expect("recorded");
+                match found {
+                    Some(found) => {
+                        record
+                            .subnets
+                            .iter_mut()
+                            .find(|subnet| subnet.cidr == attempt.cidr)
+                            .ok_or_else(|| {
+                                invalid(id, "Lost subnet create has no recorded allocation")
+                            })?
+                            .id = Some(found);
+                    }
+                    // EC2 may not list a just-accepted subnet yet; look again before
+                    // concluding the create never happened.
+                    None if record.lost_create_lookups < LOST_CREATE_LOOKUPS => {
+                        record.lost_create_lookups += 1;
+                        return Ok(false);
+                    }
+                    None => {}
                 }
+                record.lost_create_lookups = 0;
                 self.subnet_create_attempt = None;
                 return Ok(false);
             }
