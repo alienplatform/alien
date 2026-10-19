@@ -981,3 +981,65 @@ fn queue_batch_rollout_setup_preserves_visibility_and_live_ownership() {
             .any(|resource| resource.resource_type == "AWS::Lambda::Function"));
     }
 }
+
+// The queue already depends on bootstrap management policies. Metadata access
+// must attach separately after queue creation; cfn-lint checks this graph.
+#[test]
+fn frozen_queue_metadata_policy_has_no_bootstrap_cycle() {
+    for enabled in [false, true] {
+        let mut profile = PermissionProfile::new().global(["worker/provision"]);
+        if enabled {
+            profile = profile.resource("jobs", ["queue/batch-metadata"]);
+        }
+        let mut stack = Stack::new("queue-metadata".into())
+            .management(ManagementPermissions::Override(profile))
+            .add(
+                RemoteStackManagement::new("management".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(Queue::new("jobs".into()).build(), ResourceLifecycle::Frozen)
+            .build();
+        stack
+            .resources
+            .get_mut("jobs")
+            .unwrap()
+            .dependencies
+            .push(ResourceRef::new(
+                RemoteStackManagement::RESOURCE_TYPE,
+                "management",
+            ));
+        let (template, _) = render_built_ins_template(
+            &stack,
+            StackSettings::default(),
+            RegistrationMode::OutputsFallback,
+            CloudFormationTarget::Aws,
+            "aws",
+            "queue metadata dependency graph",
+        );
+        let policies: Vec<_> = template
+            .resources
+            .values()
+            .filter(|resource| resource.resource_type == "AWS::IAM::Policy")
+            .collect();
+        assert_eq!(policies.len(), usize::from(enabled));
+        if enabled {
+            let properties = serde_json::to_value(&policies[0].properties).unwrap();
+            assert_eq!(
+                properties["Roles"],
+                serde_json::json!([{"Ref":"ManagementRole"}])
+            );
+            let statements = properties["PolicyDocument"]["Statement"]
+                .as_array()
+                .unwrap();
+            assert_eq!(statements.len(), 1);
+            assert_eq!(
+                statements[0]["Action"],
+                serde_json::json!(["sqs:GetQueueAttributes"])
+            );
+            assert_eq!(
+                statements[0]["Resource"],
+                serde_json::json!({"Fn::GetAtt":["Jobs","Arn"]})
+            );
+        }
+    }
+}

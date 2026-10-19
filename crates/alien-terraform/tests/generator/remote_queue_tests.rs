@@ -1,7 +1,8 @@
 use super::helpers::{assert_terraform_valid, render};
 use alien_core::{
-    AzureServiceBusNamespace, Queue, QueueBatchConfig, RemoteBindings, ResourceLifecycle,
-    ResourceRef, Stack, StackSettings, Worker, WorkerCode, WorkerTrigger,
+    AzureServiceBusNamespace, ManagementPermissions, PermissionProfile, Queue, QueueBatchConfig,
+    RemoteBindings, RemoteStackManagement, ResourceLifecycle, ResourceRef, Stack, StackSettings,
+    Worker, WorkerCode, WorkerTrigger,
 };
 use alien_terraform::TerraformTarget;
 
@@ -145,4 +146,94 @@ fn queue_batch_rollout_setup_validates_for_live_workers() {
             }
         }
     }
+}
+
+#[test]
+fn frozen_queue_metadata_policy_has_no_bootstrap_cycle() {
+    for enabled in [false, true] {
+        let mut profile = PermissionProfile::new().global(["worker/provision"]);
+        if enabled {
+            profile = profile.resource("jobs", ["queue/batch-metadata"]);
+        }
+        let mut stack = Stack::new("queue-metadata".into())
+            .management(ManagementPermissions::Override(profile))
+            .add(
+                RemoteStackManagement::new("management".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(Queue::new("jobs".into()).build(), ResourceLifecycle::Frozen)
+            .build();
+        stack
+            .resources
+            .get_mut("jobs")
+            .unwrap()
+            .dependencies
+            .push(ResourceRef::new(
+                RemoteStackManagement::RESOURCE_TYPE,
+                "management",
+            ));
+        let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
+        assert_terraform_valid(&module, "queue metadata dependency graph");
+        let mut metadata_policies = 0;
+        for (_, contents) in module
+            .files
+            .iter()
+            .filter(|(name, _)| name.ends_with(".tf"))
+        {
+            let body = hcl::parse(contents).unwrap();
+            for block in body.blocks().filter(|block| {
+                block.identifier() == "resource"
+                    && block
+                        .labels()
+                        .get(1)
+                        .is_some_and(|label| label.as_str() == "jobs_batch_metadata")
+            }) {
+                metadata_policies += 1;
+                assert_eq!(block.labels()[0].as_str(), "aws_iam_role_policy");
+                let attribute = |key| block.body().attributes().find(|a| a.key() == key).unwrap();
+                assert_eq!(
+                    attribute("role").expr().to_string(),
+                    "aws_iam_role.management.id"
+                );
+                let hcl::Expression::FuncCall(call) = attribute("policy").expr() else {
+                    panic!("policy must be jsonencode")
+                };
+                assert_eq!(call.name.name.as_str(), "jsonencode");
+                let hcl::Expression::Array(statements) = metadata_field(&call.args[0], "Statement")
+                else {
+                    panic!("statements")
+                };
+                assert_eq!(statements.len(), 1);
+                assert_eq!(
+                    metadata_field(&statements[0], "Action"),
+                    &hcl::Expression::Array(vec![hcl::Expression::String(
+                        "sqs:GetQueueAttributes".into()
+                    )])
+                );
+                let expected: hcl::Body = hcl::parse(r#"resource = ["arn:aws:sqs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:${aws_sqs_queue.jobs.name}"]"#).unwrap();
+                assert_eq!(
+                    metadata_field(&statements[0], "Resource"),
+                    expected.attributes().next().unwrap().expr()
+                );
+            }
+        }
+        assert_eq!(metadata_policies, usize::from(enabled));
+    }
+}
+
+fn metadata_field<'a>(expression: &'a hcl::Expression, name: &str) -> &'a hcl::Expression {
+    let hcl::Expression::Object(fields) = expression else {
+        panic!("expected IAM object")
+    };
+    fields
+        .iter()
+        .find_map(|(key, value)| {
+            let matches = match key {
+                hcl::ObjectKey::Identifier(key) => key.as_str() == name,
+                hcl::ObjectKey::Expression(hcl::Expression::String(key)) => key == name,
+                _ => false,
+            };
+            matches.then_some(value)
+        })
+        .unwrap_or_else(|| panic!("missing IAM field {name}"))
 }

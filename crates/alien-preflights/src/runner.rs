@@ -665,6 +665,14 @@ mod setup_update_authorization_tests {
             ManagementPermissions::Auto,
             ManagementPermissions::Extend(PermissionProfile::new()),
             ManagementPermissions::Override(PermissionProfile::new().global(["worker/provision"])),
+            ManagementPermissions::Override(
+                PermissionProfile::new()
+                    .global(["worker/provision"])
+                    .resource(
+                        "jobs",
+                        ["queue/heartbeat", "queue/management", "queue/provision"],
+                    ),
+            ),
         ] {
             let old = runner
                 .apply_mutations(source(false, management.clone()), &state, &config)
@@ -680,10 +688,8 @@ mod setup_update_authorization_tests {
                 | ManagementPermissions::Override(profile) => profile,
                 _ => panic!("prepared management profile required"),
             };
-            assert_eq!(
-                profile.0["jobs"],
-                vec![PermissionSetReference::from_name("queue/heartbeat")]
-            );
+            assert!(profile.0["jobs"]
+                .contains(&PermissionSetReference::from_name("queue/batch-metadata")));
             assert_eq!(
                 runner
                     .apply_mutations(target.clone(), &state, &config)

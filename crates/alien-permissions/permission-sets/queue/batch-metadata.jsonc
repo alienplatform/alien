@@ -1,0 +1,16 @@
+{
+  "id": "queue/batch-metadata",
+  "description": "Read an explicitly batched queue's visibility prerequisite",
+  "platforms": {
+    "aws": [
+      {
+        "grant": { "actions": ["sqs:GetQueueAttributes"] },
+        "binding": {
+          "resource": {
+            "resources": ["arn:aws:sqs:${awsRegion}:${awsAccountId}:${resourceName}"]
+          }
+        }
+      }
+    ]
+  }
+}

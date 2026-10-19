@@ -175,12 +175,23 @@ fn add_batch_queue_metadata_permissions(stack: &mut Stack, platform: Platform) {
         }
     };
     for queue in queues {
+        // Frozen scoped heartbeat/management grants are omitted by bootstrap
+        // emitters. Only global reads or the post-queue metadata policy count.
         let already_readable = ["*", queue.as_str()].iter().any(|scope| {
             profile.0.get(*scope).is_some_and(|grants| {
-                grants.iter().any(|grant| matches!(grant,
-                    PermissionSetReference::Name(name)
-                    if matches!(name.as_str(), "queue/heartbeat" | "queue/management" | "queue/provision")
-                ))
+                grants.iter().any(|grant| {
+                    let PermissionSetReference::Name(name) = grant else {
+                        return false;
+                    };
+                    if *scope == "*" {
+                        matches!(
+                            name.as_str(),
+                            "queue/heartbeat" | "queue/management" | "queue/provision"
+                        )
+                    } else {
+                        name == "queue/batch-metadata"
+                    }
+                })
             })
         });
         if !already_readable {
@@ -188,7 +199,7 @@ fn add_batch_queue_metadata_permissions(stack: &mut Stack, platform: Platform) {
                 .0
                 .entry(queue)
                 .or_default()
-                .push(PermissionSetReference::from_name("queue/heartbeat"));
+                .push(PermissionSetReference::from_name("queue/batch-metadata"));
         }
     }
 }

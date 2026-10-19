@@ -18,8 +18,8 @@ use crate::{
     template::{CfExpression, CfResource},
 };
 use alien_core::{
-    import::EmitContext, ErrorData, PermissionSetReference, Queue, RemoteBindings, Result, Worker,
-    WorkerTrigger,
+    import::EmitContext, ErrorData, PermissionSetReference, Queue, RemoteBindings,
+    RemoteStackManagement, Result, Worker, WorkerTrigger,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{generators::AwsCloudFormationPermissionsGenerator, BindingTarget};
@@ -133,6 +133,33 @@ fn queue_iam_policies(
                 vec![PermissionSetReference::from_name(definition.permission_set)],
             ));
         }
+    }
+    if ctx.stack.management().profile().is_some_and(|profile| {
+        profile.0.get(ctx.resource_id).is_some_and(|grants| {
+            grants.iter().any(|grant| {
+                matches!(grant, PermissionSetReference::Name(name) if name == "queue/batch-metadata")
+            })
+        })
+    }) {
+        let role_id = ctx
+            .stack
+            .resources()
+            .find_map(|(id, entry)| {
+                (entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE)
+                    .then(|| ctx.name_for(id).map(|label| format!("{label}Role")))
+                    .flatten()
+            })
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::GenericError {
+                    message: "Queue metadata access requires a setup management role".into(),
+                })
+            })?;
+        // This policy depends on the queue, so it must not join the bootstrap
+        // policies that the queue itself depends on.
+        owners.push((
+            role_id,
+            vec![PermissionSetReference::from_name("queue/batch-metadata")],
+        ));
     }
     for (owner_index, (role_id, permission_refs)) in owners.into_iter().enumerate() {
         for (permission_index, permission_ref) in permission_refs.iter().enumerate() {

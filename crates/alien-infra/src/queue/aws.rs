@@ -510,16 +510,18 @@ fn region_from_queue_arn(queue_arn: Option<&str>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{
-        controller_test::{SingleControllerExecutor, SingleControllerExecutorBuilder},
-        MockPlatformServiceProvider, PlatformServiceProvider,
-    };
+    use crate::core::{controller_test::SingleControllerExecutor, MockPlatformServiceProvider};
+    use crate::remote_stack_management::AwsRemoteStackManagementController;
+    use alien_aws_clients::iam::{GetRolePolicyResponse, GetRolePolicyResult, MockIamApi};
     use alien_aws_clients::sqs::{
         CreateQueueResponse, CreateQueueResult, GetQueueAttributesResponse,
         GetQueueAttributesResult, MockSqsApi,
     };
-    use alien_core::{Platform, Queue, ResourceStatus};
-    use std::sync::Arc;
+    use alien_core::{
+        InitialSetupAuthority, Platform, Queue, QueueBatchConfig, RemoteStackManagement,
+        ResourceLifecycle, ResourceStatus, StackSettings, Worker, WorkerCode, WorkerTrigger,
+    };
+    use std::sync::{Arc, Mutex};
 
     fn setup_mock_sqs_for_create_and_delete(queue_url: &str) -> Arc<MockSqsApi> {
         let mut mock = MockSqsApi::new();
@@ -576,5 +578,195 @@ mod tests {
         executor.delete().unwrap();
         executor.run_until_terminal().await.unwrap();
         assert_eq!(executor.status(), ResourceStatus::Deleted);
+    }
+    #[tokio::test]
+    async fn batch_metadata_attaches_after_queue_creation_only_with_setup_authority() {
+        for authority in [
+            InitialSetupAuthority::DirectSetup,
+            InitialSetupAuthority::ImportedHandoff,
+        ] {
+            let queue = Queue::new("jobs".into()).build();
+            let worker = Worker::new("processor".into())
+                .code(WorkerCode::Image {
+                    image: "example/worker:1".into(),
+                })
+                .permissions("default-profile".into())
+                .commands_enabled(false)
+                .trigger(
+                    WorkerTrigger::queue_batch(
+                        &queue,
+                        QueueBatchConfig {
+                            max_messages: 10,
+                            max_window_seconds: 0,
+                        },
+                    )
+                    .unwrap(),
+                )
+                .build();
+            let calls = Arc::new(Mutex::new(Vec::new()));
+            let mut sqs = MockSqsApi::new();
+            let queue_calls = calls.clone();
+            sqs.expect_create_queue()
+                .times(usize::from(authority == InitialSetupAuthority::DirectSetup))
+                .returning(move |_| {
+                    queue_calls.lock().unwrap().push("create");
+                    Ok(CreateQueueResponse {
+                        create_queue_result: CreateQueueResult {
+                            queue_url:
+                                "https://sqs.us-east-1.amazonaws.com/123456789012/physical-jobs"
+                                    .into(),
+                        },
+                    })
+                });
+            let mut iam = MockIamApi::new();
+            let policy_calls = calls.clone();
+            iam.expect_put_role_policy()
+                .times(if authority == InitialSetupAuthority::DirectSetup {
+                    2
+                } else {
+                    0
+                })
+                .returning(move |role, _, document| {
+                    let policy: serde_json::Value = serde_json::from_str(document).unwrap();
+                    let statements = policy["Statement"].as_array().unwrap();
+                    assert_eq!(statements.len(), 1);
+                    assert_eq!(
+                        statements[0]["Resource"],
+                        serde_json::json!(["arn:aws:sqs:us-east-1:123456789012:physical-jobs"])
+                    );
+                    if role == "default-profile-sa" {
+                        assert_eq!(*policy_calls.lock().unwrap(), vec!["create"]);
+                        assert_eq!(
+                            statements[0]["Action"],
+                            serde_json::json!([
+                                "sqs:ReceiveMessage",
+                                "sqs:DeleteMessage",
+                                "sqs:ChangeMessageVisibility",
+                                "sqs:GetQueueAttributes",
+                                "sqs:GetQueueUrl"
+                            ])
+                        );
+                        policy_calls.lock().unwrap().push("workload");
+                    } else {
+                        assert_eq!(role, "test-management");
+                        assert_eq!(*policy_calls.lock().unwrap(), vec!["create", "workload"]);
+                        assert_eq!(
+                            statements[0]["Action"],
+                            serde_json::json!(["sqs:GetQueueAttributes"])
+                        );
+                        policy_calls.lock().unwrap().push("metadata");
+                    }
+                    Ok(())
+                });
+            iam.expect_get_role_policy()
+                .times(usize::from(authority == InitialSetupAuthority::DirectSetup))
+                .returning(|role, name| {
+                    Ok(GetRolePolicyResponse {
+                        get_role_policy_result: GetRolePolicyResult {
+                            role_name: role.into(),
+                            policy_name: name.into(),
+                            policy_document: "{}".into(),
+                        },
+                    })
+                });
+            let sqs = Arc::new(sqs);
+            let iam = Arc::new(iam);
+            let mut provider = MockPlatformServiceProvider::new();
+            provider
+                .expect_get_aws_sqs_client()
+                .returning(move |_| Ok(sqs.clone()));
+            provider
+                .expect_get_aws_iam_client()
+                .returning(move |_| Ok(iam.clone()));
+            let mut settings = StackSettings::default();
+            settings.heartbeats = serde_json::from_value(serde_json::json!("off")).unwrap();
+            let controller = if authority == InitialSetupAuthority::ImportedHandoff {
+                // A persisted setup checkpoint must not authorize another IAM write.
+                AwsQueueController {
+                    state: AwsQueueState::ApplyingResourcePermissions,
+                    queue_url: Some(
+                        "https://sqs.us-east-1.amazonaws.com/123456789012/physical-jobs".into(),
+                    ),
+                    queue_name: Some("physical-jobs".into()),
+                    ..AwsQueueController::default()
+                }
+            } else {
+                AwsQueueController::default()
+            };
+            let mut executor = SingleControllerExecutor::builder()
+                .resource(queue)
+                .resource_prefix("physical")
+                .resource_lifecycle(ResourceLifecycle::Frozen)
+                .controller(controller)
+                .platform(Platform::Aws)
+                .stack_settings(settings)
+                .initial_setup_authority(authority)
+                .with_stack_resource(worker, ResourceLifecycle::Live)
+                .with_dependency(
+                    RemoteStackManagement::new("management".into()).build(),
+                    AwsRemoteStackManagementController::mock_ready("test-management"),
+                )
+                .service_provider(Arc::new(provider))
+                .build()
+                .await
+                .unwrap();
+            if authority == InitialSetupAuthority::DirectSetup {
+                executor.step().await.unwrap();
+                assert_eq!(*calls.lock().unwrap(), vec!["create"]);
+                executor.step().await.unwrap();
+                assert_eq!(
+                    *calls.lock().unwrap(),
+                    vec!["create", "workload", "metadata"]
+                );
+            } else {
+                executor
+                    .step()
+                    .await
+                    .expect_err("handoff cannot mutate setup IAM");
+                assert!(calls.lock().unwrap().is_empty());
+            }
+        }
+    }
+    #[tokio::test]
+    async fn imported_nonbatch_queue_refresh_preserves_identity_without_mutations() {
+        let controller: AwsQueueController = serde_json::from_value(serde_json::json!({
+            "state": "ready",
+            "queueName": "installed-jobs",
+            "queueUrl": "https://sqs.us-east-1.amazonaws.com/123456789012/installed-jobs",
+            "_controllerStateVersion": 1
+        }))
+        .unwrap();
+        let before = serde_json::to_value(&controller).unwrap();
+        let mut sqs = MockSqsApi::new();
+        sqs.expect_get_queue_attributes()
+            .times(2)
+            .returning(|url, request| {
+                assert_eq!(
+                    url,
+                    "https://sqs.us-east-1.amazonaws.com/123456789012/installed-jobs"
+                );
+                assert_eq!(request.attribute_names, Some(vec!["All".to_string()]));
+                Ok(GetQueueAttributesResponse {
+                    get_queue_attributes_result: GetQueueAttributesResult { attributes: vec![] },
+                })
+            });
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(Queue::new("jobs".into()).build())
+            .resource_lifecycle(ResourceLifecycle::Frozen)
+            .controller(controller)
+            .platform(Platform::Aws)
+            .initial_setup_authority(InitialSetupAuthority::ImportedHandoff)
+            .service_provider(setup_mock_provider(Arc::new(sqs)))
+            .build()
+            .await
+            .unwrap();
+        assert!(!executor.needs_update().unwrap());
+        for _ in 0..2 {
+            executor.step().await.unwrap();
+        }
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        let after =
+            serde_json::to_value(executor.internal_state::<AwsQueueController>().unwrap()).unwrap();
+        assert_eq!(before, after);
     }
 }

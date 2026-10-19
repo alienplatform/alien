@@ -10,7 +10,8 @@ use crate::{
     expr,
 };
 use alien_core::{
-    import::EmitContext, ErrorData, Queue, RemoteBindings, Result, Worker, WorkerTrigger,
+    import::EmitContext, ErrorData, PermissionSetReference, Queue, RemoteBindings,
+    RemoteStackManagement, Result, Worker, WorkerTrigger,
 };
 use alien_error::AlienError;
 use alien_permissions::BindingTarget;
@@ -43,6 +44,41 @@ impl TfEmitter for AwsQueueEmitter {
         );
 
         let mut fragment = TfFragment::default().with_resource(q);
+        if ctx.stack.management().profile().is_some_and(|profile| {
+            profile.0.get(ctx.resource_id).is_some_and(|grants| {
+                grants.iter().any(|grant| {
+                    matches!(grant, PermissionSetReference::Name(name) if name == "queue/batch-metadata")
+                })
+            })
+        }) {
+            let role_label = ctx
+                .stack
+                .resources()
+                .find_map(|(id, entry)| {
+                    (entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE)
+                        .then(|| ctx.name_for(id))
+                        .flatten()
+                })
+                .ok_or_else(|| AlienError::new(ErrorData::GenericError {
+                    message: "Queue metadata access requires a setup management role".into(),
+                }))?;
+            let permission = alien_permissions::get_permission_set("queue/batch-metadata")
+                .ok_or_else(|| AlienError::new(ErrorData::GenericError {
+                    message: "Queue batch metadata permission is not registered".into(),
+                }))?;
+            let context = aws_terraform_permission_context()
+                .with_resource_name(format!("${{aws_sqs_queue.{label}.name}}"));
+            // Attach after the queue exists, outside the bootstrap policy graph.
+            emit_iam_role_policy_for_target_with_label(
+                &mut fragment,
+                role_label,
+                permission,
+                &format!("{label}_batch_metadata"),
+                &format!("{label}-batch-metadata"),
+                &context,
+                BindingTarget::Resource,
+            )?;
+        }
         if let Some(definition) =
             alien_core::remote_bindings::remote_binding_for_entry(ctx.resource)
         {
