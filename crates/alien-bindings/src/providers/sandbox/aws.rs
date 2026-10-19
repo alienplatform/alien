@@ -848,7 +848,7 @@ impl Sandbox for AwsSandbox {
         self.create(request).await.map(ResolvedSandbox::created)
     }
 
-    /// Not offered, as on Azure and GCP.
+    /// Not offered, as on Azure.
     ///
     /// Enumerating would mean `lambda:ListMicrovms`, which AWS authorizes against no resource
     /// type — the grant could only be account-wide, on the management profile any stack with a
