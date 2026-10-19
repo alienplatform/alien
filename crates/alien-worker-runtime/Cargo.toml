@@ -76,7 +76,7 @@ port_check = { workspace = true }
 alien-bindings = { workspace = true, features = ["local"] }
 alien-core = { workspace = true }
 alien-commands = { workspace = true, features = ["test-utils"] }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time", "signal"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time", "signal", "test-util"] }
 reqwest = { workspace = true, features = ["json"] }
 regex = { workspace = true }
 anyhow = { workspace = true }

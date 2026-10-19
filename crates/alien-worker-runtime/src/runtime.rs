@@ -16,7 +16,7 @@ use alien_core::{
     ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_SECRETS, ENV_ALIEN_TRANSPORT,
     ENV_ALIEN_WORKER_GRPC_ADDRESS,
 };
-use alien_error::{AlienError, Context};
+use alien_error::{AlienError, Context, IntoAlienError};
 use alien_worker_protocol::{run_grpc_server, ControlGrpcServer, WaitUntilGrpcServer};
 use serde::Deserialize;
 use tokio::{
@@ -325,6 +325,7 @@ async fn run_transport(
     mut shutdown_rx: broadcast::Receiver<()>,
     prestarted_transport: Option<PrestartedTransport>,
 ) -> Result<()> {
+    control_server.supervise_task_cancellation();
     // Own the transport shutdown channel here. This lets every branch that
     // wins the lifecycle race stop intake and await the transport task instead
     // of dropping its JoinHandle (which would detach it in Tokio).
@@ -338,7 +339,7 @@ async fn run_transport(
                 config.transport_port,
                 config.lambda_mode,
                 config.command_timeout,
-                control_server,
+                control_server.clone(),
                 app_http_port,
                 command_push,
                 shutdown_rx,
@@ -348,14 +349,27 @@ async fn run_transport(
 
     // Wait for shutdown, child exit, or transport completion
     tokio::select! {
+        _ = control_server.wait_for_cancelled_task() => {
+            terminate_application(child).await?;
+            control_server.application_stopped();
+            let _ = transport_shutdown_tx.send(());
+            await_transport(&mut transport_handle).await?;
+            Err(AlienError::new(ErrorData::ProcessFailed {
+                exit_code: None,
+                message: "Application stopped after task cancellation".to_string(),
+            }))
+        }
+
         shutdown_result = shutdown_rx.recv() => {
             let _ = transport_shutdown_tx.send(());
             let transport_result = await_transport(&mut transport_handle).await;
             let child_result = handle_shutdown(shutdown_result, wait_until_server, child).await;
+            if child_result.is_ok() { control_server.application_stopped(); }
             transport_result.and(child_result)
         }
 
         child_status = child.wait() => {
+            control_server.application_stopped();
             let child_result = handle_child_exit(child_status);
             let _ = transport_shutdown_tx.send(());
             let transport_result = await_transport(&mut transport_handle).await;
@@ -367,6 +381,7 @@ async fn run_transport(
             // A transport startup failure or unexpected exit must not leave
             // the application child alive after the runtime returns.
             let child_result = graceful_shutdown(wait_until_server, child).await;
+            if child_result.is_ok() { control_server.application_stopped(); }
             transport_result.and(child_result)
         }
     }
@@ -482,7 +497,8 @@ fn spawn_transport(
         TransportType::Lambda => {
             use crate::transports::lambda::LambdaTransport;
 
-            let transport = LambdaTransport::new(lambda_mode, control_server);
+            let transport = LambdaTransport::new(lambda_mode, control_server)
+                .with_command_timeout(command_timeout);
             // Lambda polls the Runtime API and has no native shutdown receiver.
             // Race that owned future against the same internal shutdown signal
             // so run_transport can still join it without detaching/aborting.
@@ -623,6 +639,8 @@ async fn start_application(
     // The runtime owns this subprocess. If its task is cancelled during local
     // startup or process shutdown, dropping the Child must not orphan the app.
     cmd.kill_on_drop(true);
+    #[cfg(unix)]
+    cmd.process_group(0);
     if config.command.len() > 1 {
         cmd.args(&config.command[1..]);
     }
@@ -928,6 +946,38 @@ async fn stream_output(
     }
 }
 
+/// Stop the app and its ordinary subprocesses before deciding delivery failure.
+async fn terminate_application(child: &mut Child) -> Result<()> {
+    #[cfg(unix)]
+    if let Some(pid) = child.id() {
+        let pid = pid as libc::pid_t;
+        // SAFETY: getpgid and killpg take integer IDs and no pointers. Only
+        // signal a group led by our owned child, never the runtime's group.
+        if unsafe { libc::getpgid(pid) } == pid {
+            let result = unsafe { libc::killpg(pid, libc::SIGKILL) };
+            if result != 0 {
+                let error = std::io::Error::last_os_error();
+                if error.raw_os_error() != Some(libc::ESRCH) {
+                    return Err(error)
+                        .into_alien_error()
+                        .context(ErrorData::ProcessFailed {
+                            exit_code: None,
+                            message: "Could not terminate application process group".to_string(),
+                        });
+                }
+            }
+        }
+    }
+    child
+        .kill()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ProcessFailed {
+            exit_code: None,
+            message: "Could not terminate application".to_string(),
+        })
+}
+
 /// Graceful shutdown.
 async fn graceful_shutdown(
     wait_until_server: Arc<WaitUntilGrpcServer>,
@@ -959,9 +1009,7 @@ async fn graceful_shutdown(
 
     // Terminate child
     info!("Terminating application");
-    if let Err(e) = child.kill().await {
-        warn!(error = %e, "Failed to kill application");
-    }
+    terminate_application(child).await?;
 
     // Flush logs
     if let Err(e) = flush_otlp_logs().await {

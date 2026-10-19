@@ -1,14 +1,20 @@
 use std::collections::HashMap;
 use std::process::Command as StdCommand;
 use std::sync::Arc;
+use std::time::Duration;
 
 use alien_core::{
     ENV_ALIEN_COMMANDS_TOKEN, ENV_ALIEN_CURRENT_WORKER_BINDING_NAME, ENV_ALIEN_DEPLOYMENT_ID,
     ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_TRANSPORT, ENV_ALIEN_WORKER_GRPC_ADDRESS,
 };
-use alien_worker_protocol::{ControlGrpcServer, WaitUntilGrpcServer};
+use alien_worker_protocol::{
+    control::{control_service_server::ControlService, Task, WaitForTasksRequest},
+    ControlGrpcServer, WaitUntilGrpcServer,
+};
 use tokio::process::Command;
 use tokio::sync::broadcast;
+use tokio_stream::StreamExt;
+use tonic::Request;
 
 use super::{
     application_runtime_env, command_push_config, run_transport, runtime_only_env,
@@ -64,6 +70,70 @@ async fn assert_port_released(port: u16) {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn cancelled_task_stops_child_before_returning_delivery_failure() {
+    let port = unused_local_port().await;
+    let config = RuntimeConfig::builder()
+        .transport(TransportType::Local)
+        .transport_port(port)
+        .command(vec!["unused".to_string()])
+        .build();
+    let mut child = Command::new("/bin/sleep")
+        .arg("60")
+        .kill_on_drop(true)
+        .spawn()
+        .expect("spawn application");
+    let control = Arc::new(ControlGrpcServer::new());
+    let mut stream = control
+        .wait_for_tasks(Request::new(WaitForTasksRequest {
+            application_id: "test-app".to_string(),
+        }))
+        .await
+        .expect("task subscription")
+        .into_inner();
+    let (_shutdown_tx, shutdown_rx) = broadcast::channel(1);
+    let delivery = tokio::spawn({
+        let control = control.clone();
+        async move {
+            wait_for_listener(port).await;
+            control
+                .send_task(
+                    Task {
+                        task_id: "delivery".to_string(),
+                        payload: None,
+                    },
+                    Duration::ZERO,
+                )
+                .await
+        }
+    });
+    let observed = tokio::spawn(async move {
+        stream.next().await.expect("task sent").expect("delivery");
+    });
+    let error = tokio::time::timeout(
+        Duration::from_secs(5),
+        run_transport(
+            &config,
+            control,
+            None,
+            None,
+            Arc::new(WaitUntilGrpcServer::new()),
+            &mut child,
+            shutdown_rx,
+            None,
+        ),
+    )
+    .await
+    .expect("bounded cancellation")
+    .expect_err("cancelled application fails runtime");
+    assert_eq!(error.code, "PROCESS_FAILED");
+    assert!(child.try_wait().expect("child status").is_some());
+    assert!(delivery.await.expect("delivery waiter").is_err());
+    observed.await.expect("task observer");
+    assert_port_released(port).await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn child_exit_stops_and_joins_transport_listener() {
     let port = unused_local_port().await;
     let config = RuntimeConfig::builder()
@@ -74,6 +144,7 @@ async fn child_exit_stops_and_joins_transport_listener() {
     let temp = tempfile::tempdir().expect("child exit marker directory");
     let exit_marker = temp.path().join("exit");
     let mut child = Command::new("/bin/sh")
+        .process_group(0)
         .args([
             "-c",
             "while [ ! -f \"$1\" ]; do sleep 0.01; done",
@@ -116,6 +187,7 @@ async fn normal_shutdown_stops_listener_and_child_before_returning() {
         .command(vec!["unused".to_string()])
         .build();
     let mut child = Command::new("/bin/sh")
+        .process_group(0)
         .args(["-c", "sleep 60"])
         .spawn()
         .expect("spawn long-lived child");

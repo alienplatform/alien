@@ -218,7 +218,13 @@ async fn handle_request(
 async fn handle_dapr_cron_trigger(path: &str, state: &TransportState) -> Response<Body> {
     let schedule_name = path.trim_start_matches('/').to_string();
     info!(%schedule_name, "Dapr cron trigger received");
-    send_cron_event(schedule_name, Utc::now(), &state.control_server).await
+    send_cron_event(
+        schedule_name,
+        Utc::now(),
+        &state.control_server,
+        state.command_timeout,
+    )
+    .await
 }
 
 /// Handle Azure Timer trigger events
@@ -240,7 +246,13 @@ async fn handle_timer_trigger(request: Request<Body>, state: &TransportState) ->
 
     info!(schedule_name = %schedule_name, "Azure Timer trigger received");
 
-    send_cron_event(schedule_name, schedule_time, &state.control_server).await
+    send_cron_event(
+        schedule_name,
+        schedule_time,
+        &state.control_server,
+        state.command_timeout,
+    )
+    .await
 }
 
 /// Handle Dapr messages (input bindings and pub/sub from Service Bus)
@@ -331,7 +343,8 @@ async fn handle_dapr_storage_message(
                 return (StatusCode::BAD_REQUEST, "Invalid storage event").into_response();
             }
         };
-        let response = send_storage_events(storage_events, &state.control_server).await;
+        let response =
+            send_storage_events(storage_events, &state.control_server, state.command_timeout).await;
         if !response.status().is_success() {
             return response;
         }
@@ -391,7 +404,7 @@ async fn handle_raw_dapr_message(body_bytes: &Bytes, state: &TransportState) -> 
         attempt_count: None,
     };
 
-    if let Err(e) = send_queue_message(&qm, &state.control_server).await {
+    if let Err(e) = send_queue_message(&qm, &state.control_server, state.command_timeout).await {
         error!(error = %e, "Failed to send raw Dapr message to application");
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -446,7 +459,9 @@ async fn handle_azure_storage_cloudevent(
     let event_type = cloud_event.ty().to_string();
 
     match azure_storage_cloudevent_to_storage_events(cloud_event) {
-        Ok(storage_events) => send_storage_events(storage_events, &state.control_server).await,
+        Ok(storage_events) => {
+            send_storage_events(storage_events, &state.control_server, state.command_timeout).await
+        }
         Err(e) => {
             error!(error = %e, event_type = %event_type, "Failed to parse Azure storage CloudEvent");
             (StatusCode::BAD_REQUEST, "Invalid storage event").into_response()

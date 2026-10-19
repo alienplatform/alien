@@ -558,6 +558,7 @@ where
 
 /// Lambda transport state
 struct LambdaState {
+    command_timeout: Duration,
     control_server: Arc<ControlGrpcServer>,
     /// Reused by every invocation so warm invocations keep pooled connections.
     http_client: reqwest::Client,
@@ -565,6 +566,7 @@ struct LambdaState {
 
 /// Lambda transport
 pub struct LambdaTransport {
+    command_timeout: Duration,
     mode: LambdaMode,
     control_server: Arc<ControlGrpcServer>,
 }
@@ -574,7 +576,13 @@ impl LambdaTransport {
         Self {
             mode,
             control_server,
+            command_timeout: Duration::from_secs(300),
         }
+    }
+
+    pub fn with_command_timeout(mut self, timeout: Duration) -> Self {
+        self.command_timeout = timeout;
+        self
     }
 
     /// Run the Lambda transport
@@ -582,6 +590,7 @@ impl LambdaTransport {
         info!(mode = ?self.mode, "Starting Lambda transport");
 
         let state = Arc::new(LambdaState {
+            command_timeout: self.command_timeout,
             control_server: self.control_server,
             // No read timeout: the invocation deadline already bounds each request.
             http_client: forward_client_builder()
@@ -971,7 +980,7 @@ fn s3_record_to_task(
         .unwrap_or_else(|| "unknown".to_string());
 
     Ok(Task {
-        task_id: format!("{}-{}", request_id, storage_event.object_key),
+        task_id: format!("{}-{}", request_id, uuid::Uuid::new_v4()),
         payload: Some(Payload::StorageEvent(StorageEvent {
             bucket: storage_event.bucket_name,
             key: storage_event.object_key,
@@ -1013,7 +1022,7 @@ fn sqs_record_to_task(
     };
 
     Ok(Task {
-        task_id: format!("{}-{}", request_id, queue_msg.id),
+        task_id: format!("{}-{}", request_id, uuid::Uuid::new_v4()),
         payload: Some(Payload::QueueMessage(QueueMessage {
             id: queue_msg.id,
             payload: payload_bytes,
@@ -1026,7 +1035,7 @@ fn sqs_record_to_task(
     })
 }
 
-/// Send an event task with the standard event timeout, logging an error on
+/// Send an event task with the configured Worker timeout, logging an error on
 /// either a non-success result or a transport failure. Shared by the S3,
 /// SQS, and CloudWatch handlers, which differ only in the task built and the
 /// `desc` used in log messages.
@@ -1034,7 +1043,7 @@ async fn send_event_task(state: &LambdaState, task: Task, desc: &str) -> Result<
     let task_id = task.task_id.clone();
     let result = state
         .control_server
-        .send_task(task, super::shared::EVENT_TASK_TIMEOUT)
+        .send_task(task, state.command_timeout)
         .await
         .map_err(|message| {
             AlienError::new(ErrorData::TaskDeliveryFailed {
@@ -1121,6 +1130,8 @@ async fn handle_command(
     state: &LambdaState,
     envelope: &alien_commands::types::Envelope,
 ) -> Result<()> {
+    let budget =
+        super::shared::CommandBudget::from_envelope(state.command_timeout, envelope.deadline);
     let command_id = envelope.command_id.clone();
     let command_name = envelope.command.clone();
 
@@ -1146,7 +1157,7 @@ async fn handle_command(
     };
 
     let task = Task {
-        task_id: command_id.clone(),
+        task_id: uuid::Uuid::new_v4().to_string(),
         payload: Some(Payload::ArcCommand(ArcCommand {
             command_id: command_id.clone(),
             command_name,
@@ -1162,15 +1173,26 @@ async fn handle_command(
         })),
     };
 
-    // Send task and wait for result.
-    // Use 120s timeout (well under Lambda's 180s function timeout) so that if the
-    // app never responds, we still have time to submit an error response.
-    debug!(command_id = %command_id, "Sending command task to application via gRPC");
-    match state
-        .control_server
-        .send_task(task, std::time::Duration::from_secs(120))
+    let Some(timeout) = budget.and_then(super::shared::CommandBudget::remaining) else {
+        submit_response(
+            envelope,
+            CommandResponse::error(
+                "COMMAND_EXPIRED",
+                "Command deadline elapsed before application execution",
+            ),
+        )
         .await
-    {
+        .map_err(|error| {
+            AlienError::new(ErrorData::ResponseDeliveryFailed {
+                request_id: command_id,
+                message: error.to_string(),
+                destination: Some("command response endpoint".to_string()),
+            })
+        })?;
+        return Ok(());
+    };
+    debug!(command_id = %command_id, "Sending command task to application via gRPC");
+    match state.control_server.send_task(task, timeout).await {
         Ok(result) => {
             debug!(
                 command_id = %command_id,
@@ -1275,13 +1297,29 @@ async fn handle_streaming_event(
 ) -> std::result::Result<Response<StreamingBody>, LambdaError> {
     debug!(request_id = %request_id, "Handling Lambda event (streaming)");
     let readiness_budget = invocation_readiness_budget(&event);
+    let task_deadline = tokio::time::Instant::now() + readiness_budget.min(state.command_timeout);
 
     match classify_event(event) {
         ClassifiedEvent::Task(task_event) => {
-            wait_for_task_readiness(state, readiness_budget).await?;
-            dispatch_task_event(state, request_id, task_event)
-                .await
-                .map_err(|error| invocation_failure(error.to_string()))?;
+            wait_for_task_readiness(
+                state,
+                task_deadline.saturating_duration_since(tokio::time::Instant::now()),
+            )
+            .await?;
+            match tokio::time::timeout_at(
+                task_deadline,
+                dispatch_task_event(state, request_id, task_event),
+            )
+            .await
+            {
+                Ok(result) => result.map_err(|error| invocation_failure(error.to_string()))?,
+                Err(_) => {
+                    state.control_server.cancel_application().await;
+                    return Err(invocation_failure(
+                        "Application execution exceeded invocation budget",
+                    ));
+                }
+            }
             Ok(empty_streaming_response())
         }
         ClassifiedEvent::Http(event) => {
@@ -1364,13 +1402,29 @@ async fn handle_buffered_event(
 ) -> std::result::Result<ApiGatewayV2httpResponse, LambdaError> {
     debug!(request_id = %request_id, "Handling Lambda event (buffered)");
     let readiness_budget = invocation_readiness_budget(&event);
+    let task_deadline = tokio::time::Instant::now() + readiness_budget.min(state.command_timeout);
 
     match classify_event(event) {
         ClassifiedEvent::Task(task_event) => {
-            wait_for_task_readiness(state, readiness_budget).await?;
-            dispatch_task_event(state, request_id, task_event)
-                .await
-                .map_err(|error| invocation_failure(error.to_string()))?;
+            wait_for_task_readiness(
+                state,
+                task_deadline.saturating_duration_since(tokio::time::Instant::now()),
+            )
+            .await?;
+            match tokio::time::timeout_at(
+                task_deadline,
+                dispatch_task_event(state, request_id, task_event),
+            )
+            .await
+            {
+                Ok(result) => result.map_err(|error| invocation_failure(error.to_string()))?,
+                Err(_) => {
+                    state.control_server.cancel_application().await;
+                    return Err(invocation_failure(
+                        "Application execution exceeded invocation budget",
+                    ));
+                }
+            }
             Ok(ApiGatewayV2httpResponse {
                 status_code: 200,
                 ..Default::default()
@@ -1534,8 +1588,13 @@ mod tests {
         let s3_event: S3Event = serde_json::from_value(s3_event_json()).expect("parse S3 event");
         let record = s3_event.records.into_iter().next().expect("one record");
 
-        let task = s3_record_to_task("req-1", record).expect("task conversion should succeed");
-        assert_eq!(task.task_id, "req-1-path/to/file.txt");
+        let task =
+            s3_record_to_task("req-1", record.clone()).expect("task conversion should succeed");
+        let redelivery = s3_record_to_task("req-1", record).expect("repeat conversion");
+        assert_ne!(
+            task.task_id, redelivery.task_id,
+            "each delivery needs distinct correlation"
+        );
 
         let Some(Payload::StorageEvent(event)) = task.payload else {
             panic!("expected StorageEvent payload");
@@ -1562,8 +1621,13 @@ mod tests {
             serde_json::from_value(sqs_event_json()).expect("parse SQS event");
         let record = sqs_event.records.into_iter().next().expect("one record");
 
-        let task = sqs_record_to_task("req-1", record).expect("task conversion should succeed");
-        assert_eq!(task.task_id, "req-1-msg-1");
+        let task =
+            sqs_record_to_task("req-1", record.clone()).expect("task conversion should succeed");
+        let redelivery = sqs_record_to_task("req-1", record).expect("repeat conversion");
+        assert_ne!(
+            task.task_id, redelivery.task_id,
+            "each delivery needs distinct correlation"
+        );
 
         let Some(Payload::QueueMessage(message)) = task.payload else {
             panic!("expected QueueMessage payload");
@@ -1607,6 +1671,7 @@ mod tests {
     #[tokio::test]
     async fn unready_http_returns_retryable_sanitized_503_in_both_modes() {
         let state = LambdaState {
+            command_timeout: Duration::from_secs(300),
             control_server: Arc::new(ControlGrpcServer::new()),
             http_client: forward_client_builder().build().unwrap(),
         };
@@ -1653,6 +1718,7 @@ mod tests {
             .await
             .expect("app HTTP server registers");
         let state = LambdaState {
+            command_timeout: Duration::from_secs(300),
             control_server,
             http_client: forward_client_builder().build().unwrap(),
         };
@@ -1749,6 +1815,7 @@ mod tests {
     #[tokio::test]
     async fn event_delivery_failure_is_returned_to_lambda() {
         let state = LambdaState {
+            command_timeout: Duration::from_secs(300),
             control_server: Arc::new(ControlGrpcServer::new()),
             http_client: forward_client_builder().build().unwrap(),
         };

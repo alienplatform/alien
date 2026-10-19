@@ -87,7 +87,9 @@ impl CloudRunTransport {
         let state = TransportState {
             control_server: self.control_server,
             app_http_port: self.app_http_port,
-            command_timeout: self.command_timeout,
+            // Push acknowledgments cannot be extended past Pub/Sub's 600s
+            // deadline. Leave time for response submission and HTTP completion.
+            command_timeout: self.command_timeout.min(Duration::from_secs(565)),
             http_client: create_forward_client(),
             proxy_shutdown: proxy_shutdown.clone(),
         };
@@ -241,7 +243,13 @@ async fn handle_scheduler_event(request: Request<Body>, state: &TransportState) 
 
     info!(job_name = %job_name, "Cloud Scheduler event received");
 
-    send_cron_event(job_name, schedule_time, &state.control_server).await
+    send_cron_event(
+        job_name,
+        schedule_time,
+        &state.control_server,
+        state.command_timeout,
+    )
+    .await
 }
 
 /// Handle CloudEvents (GCS storage events, Pub/Sub messages)
@@ -292,7 +300,9 @@ async fn handle_storage_cloudevent(
     let event_type = cloud_event.ty().to_string();
 
     match storage_cloudevent_to_storage_events(cloud_event) {
-        Ok(storage_events) => send_storage_events(storage_events, &state.control_server).await,
+        Ok(storage_events) => {
+            send_storage_events(storage_events, &state.control_server, state.command_timeout).await
+        }
         Err(e) => {
             error!(error = %e, event_type = %event_type, "Failed to parse storage CloudEvent");
             (StatusCode::BAD_REQUEST, "Invalid storage event").into_response()
@@ -360,7 +370,12 @@ async fn handle_pubsub_push_message(
         push_msg.message.publish_time,
     ) {
         Ok(Some(storage_events)) => {
-            return send_storage_events(storage_events, &state.control_server).await;
+            return send_storage_events(
+                storage_events,
+                &state.control_server,
+                state.command_timeout,
+            )
+            .await;
         }
         Ok(None) => {}
         Err(error) => {
