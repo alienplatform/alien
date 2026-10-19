@@ -49,6 +49,7 @@ use tracing::{debug, error, info, info_span, warn, Instrument};
 use crate::{
     config::LambdaMode,
     error::{ErrorData, Result},
+    transports::shared::forward_client_builder,
 };
 
 /// Lambda extension for wait_until task draining.
@@ -558,6 +559,8 @@ where
 /// Lambda transport state
 struct LambdaState {
     control_server: Arc<ControlGrpcServer>,
+    /// Reused by every invocation so warm invocations keep pooled connections.
+    http_client: reqwest::Client,
 }
 
 /// Lambda transport
@@ -580,6 +583,10 @@ impl LambdaTransport {
 
         let state = Arc::new(LambdaState {
             control_server: self.control_server,
+            // No read timeout: the invocation deadline already bounds each request.
+            http_client: forward_client_builder()
+                .build()
+                .expect("Failed to configure application HTTP forwarding"),
         });
 
         match self.mode {
@@ -789,30 +796,33 @@ async fn run_streaming(
     let svc = lambda_runtime::tower::ServiceBuilder::new()
         .map_request(event_to_request)
         .service(handler)
-        .map_response(|res: Response<StreamingBody>| {
-            let (parts, body) = res.into_parts();
-
-            let cookies: Vec<_> = parts
-                .headers
-                .get_all(SET_COOKIE)
-                .iter()
-                .filter_map(|v| std::str::from_utf8(v.as_bytes()).ok().map(str::to_owned))
-                .collect();
-
-            let mut headers = parts.headers;
-            headers.remove(SET_COOKIE);
-
-            StreamResponse {
-                metadata_prelude: MetadataPrelude {
-                    headers,
-                    status_code: parts.status,
-                    cookies,
-                },
-                stream: BodyStream { body },
-            }
-        });
+        .map_response(into_stream_response);
 
     drive_lambda_runtime(lambda::run(svc), request_done_receiver, "Streaming").await
+}
+
+/// Lambda streams cookies in the response prelude, not as `Set-Cookie` headers.
+fn into_stream_response<B>(res: Response<B>) -> StreamResponse<BodyStream<B>> {
+    let (parts, body) = res.into_parts();
+
+    let cookies: Vec<_> = parts
+        .headers
+        .get_all(SET_COOKIE)
+        .iter()
+        .filter_map(|v| std::str::from_utf8(v.as_bytes()).ok().map(str::to_owned))
+        .collect();
+
+    let mut headers = parts.headers;
+    headers.remove(SET_COOKIE);
+
+    StreamResponse {
+        metadata_prelude: MetadataPrelude {
+            headers,
+            status_code: parts.status,
+            cookies,
+        },
+        stream: BodyStream { body },
+    }
 }
 
 /// Launch Lambda **buffered** runtime.
@@ -1216,10 +1226,10 @@ async fn handle_command(
 /// Forward a Lambda request to the app's local HTTP server. Shared by both
 /// modes; only the response handling (streamed vs buffered) is mode-specific.
 async fn forward_to_app(
+    client: &reqwest::Client,
     app_port: u16,
     event: LambdaRequest,
 ) -> std::result::Result<reqwest::Response, reqwest::Error> {
-    let client = reqwest::Client::new();
     let path_and_query = event
         .uri()
         .path_and_query()
@@ -1302,7 +1312,7 @@ async fn forward_http_request_streaming(
     debug!(request_id = %request_id, method = %method, uri = %uri, app_port = app_port, "Forwarding to app");
 
     // Send request and stream response
-    match forward_to_app(app_port, event).await {
+    match forward_to_app(&state.http_client, app_port, event).await {
         Ok(resp) => {
             let status = resp.status().as_u16();
             let response_headers = resp.headers().clone();
@@ -1400,7 +1410,7 @@ async fn forward_http_request_buffered(
     debug!(request_id = %request_id, method = %method, uri = %uri, app_port = app_port, "Forwarding to app");
 
     // Send request
-    match forward_to_app(app_port, event).await {
+    match forward_to_app(&state.http_client, app_port, event).await {
         Ok(resp) => {
             let status = resp.status().as_u16() as i64;
             // Clone headers before consuming the body
@@ -1438,6 +1448,8 @@ async fn forward_http_request_buffered(
 
 #[cfg(test)]
 mod tests {
+    use alien_worker_protocol::control::control_service_server::ControlService;
+
     use super::*;
 
     #[tokio::test]
@@ -1596,6 +1608,7 @@ mod tests {
     async fn unready_http_returns_retryable_sanitized_503_in_both_modes() {
         let state = LambdaState {
             control_server: Arc::new(ControlGrpcServer::new()),
+            http_client: forward_client_builder().build().unwrap(),
         };
 
         let streaming = forward_http_request_streaming(
@@ -1627,10 +1640,117 @@ mod tests {
         );
     }
 
+    /// Runs an API Gateway v2 / Function URL event through the same parsing and
+    /// classification as a real invocation, with the app registered on `app_port`.
+    async fn http_invocation(method: &str, app_port: u16) -> (LambdaState, LambdaRequest) {
+        let control_server = Arc::new(ControlGrpcServer::new());
+        control_server
+            .register_http_server(tonic::Request::new(
+                alien_worker_protocol::control::RegisterHttpServerRequest {
+                    port: app_port.into(),
+                },
+            ))
+            .await
+            .expect("app HTTP server registers");
+        let state = LambdaState {
+            control_server,
+            http_client: forward_client_builder().build().unwrap(),
+        };
+        let payload = serde_json::json!({
+            "version": "2.0",
+            "routeKey": "$default",
+            "rawPath": "/redirect",
+            "rawQueryString": "keep=query",
+            "headers": {"host": "worker.lambda-url.us-east-1.on.aws"},
+            "requestContext": {
+                "http": {
+                    "method": method,
+                    "path": "/redirect",
+                    "protocol": "HTTP/1.1",
+                    "sourceIp": "127.0.0.1",
+                    "userAgent": "test"
+                },
+                "requestId": "request",
+                "routeKey": "$default",
+                "stage": "$default",
+                "timeEpoch": 0
+            },
+            "body": "original request body",
+            "isBase64Encoded": false
+        });
+        let mut context = lambda_runtime::Context::default();
+        context.request_id = "request".to_string();
+        context.deadline = (SystemTime::now() + Duration::from_secs(30))
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let event = event_to_request(LambdaEvent::new(payload, context));
+        (state, event)
+    }
+
+    #[tokio::test]
+    async fn streaming_invocations_return_application_redirects() {
+        use crate::transports::shared::forwarding_tests::{
+            assert_application_redirects_are_returned, Forwarded,
+        };
+        use futures_util::TryStreamExt;
+
+        assert_application_redirects_are_returned(|method, app_port| async move {
+            let (state, event) = http_invocation(method, app_port).await;
+            let response = handle_streaming_event(&state, "request", event)
+                .await
+                .expect("streaming invocation succeeds");
+            let StreamResponse {
+                metadata_prelude,
+                stream,
+            } = into_stream_response(response);
+            let body: Vec<Bytes> = stream.try_collect().await.expect("body streams");
+            Forwarded {
+                status: metadata_prelude.status_code.as_u16(),
+                location: metadata_prelude
+                    .headers
+                    .get("location")
+                    .map(|v| v.to_str().unwrap().to_string()),
+                cookies: metadata_prelude.cookies,
+                body: body.concat().into(),
+            }
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn buffered_invocations_return_application_redirects() {
+        use crate::transports::shared::forwarding_tests::{
+            assert_application_redirects_are_returned, Forwarded,
+        };
+
+        assert_application_redirects_are_returned(|method, app_port| async move {
+            let (state, event) = http_invocation(method, app_port).await;
+            let response = handle_buffered_event(&state, "request", event)
+                .await
+                .expect("buffered invocation succeeds");
+            let body = match response.body {
+                Some(LambdaBody::Binary(bytes)) => Bytes::from(bytes),
+                other => panic!("unexpected buffered body: {other:?}"),
+            };
+            Forwarded {
+                status: response.status_code as u16,
+                location: response
+                    .headers
+                    .get("location")
+                    .map(|v| v.to_str().unwrap().to_string()),
+                cookies: response.cookies,
+                body,
+            }
+        })
+        .await;
+    }
+
     #[tokio::test]
     async fn event_delivery_failure_is_returned_to_lambda() {
         let state = LambdaState {
             control_server: Arc::new(ControlGrpcServer::new()),
+            http_client: forward_client_builder().build().unwrap(),
         };
 
         let error = send_event_task(&state, Task::default(), "queue message")
