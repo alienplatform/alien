@@ -577,6 +577,11 @@ impl Ec2Client {
                     resource_name: resource.into(),
                 }
             }
+            // A DeleteRoute resent after EC2 already removed the route.
+            "InvalidRoute.NotFound" => ErrorData::RemoteResourceNotFound {
+                resource_type: "Route".into(),
+                resource_name: resource.into(),
+            },
             "InvalidAssociationID.NotFound" => ErrorData::RemoteResourceNotFound {
                 resource_type: "RouteTableAssociation".into(),
                 resource_name: resource.into(),
@@ -5149,6 +5154,30 @@ mod tests {
                     && message.contains("Wait until 2026-10-09T18:11:57.403Z")),
             "{error:?}"
         );
+    }
+
+    /// A resent DeleteRoute whose route is already gone reads as NotFound, not a failure.
+    #[tokio::test]
+    async fn a_missing_route_is_not_found() {
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(POST).body_contains("Action=DeleteRoute");
+                then.status(400).body(
+                    "<Response><Errors><Error><Code>InvalidRoute.NotFound</Code><Message>no route with destination-cidr-block 10.99.0.0/16 in route table rtb-1</Message></Error></Errors><RequestID>1</RequestID></Response>",
+                );
+            })
+            .await;
+        let error = client(&server)
+            .delete_route(
+                DeleteRouteRequest::builder()
+                    .route_table_id("rtb-1".into())
+                    .destination(RouteDestination::Ipv4Cidr("10.99.0.0/16".into()))
+                    .build(),
+            )
+            .await
+            .expect_err("the route is gone");
+        assert_eq!(error.code, "REMOTE_RESOURCE_NOT_FOUND");
     }
 
     /// Field names follow the EC2 API reference for DeleteRoute, ReplaceRoute and

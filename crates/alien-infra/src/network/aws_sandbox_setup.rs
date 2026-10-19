@@ -26,6 +26,9 @@ pub(crate) struct SandboxNetworkSetup {
     /// A refresh could not verify the topology; the next setup run reconciles it.
     #[serde(default)]
     unverified: bool,
+    /// Route and association changes since the topology last verified; see `MAX_TABLE_CHANGES`.
+    #[serde(default)]
+    table_changes: u32,
 }
 
 impl SandboxNetworkSetup {
@@ -36,6 +39,19 @@ impl SandboxNetworkSetup {
 
 /// How many lookups a recorded route table missing from a list gets.
 const LOST_CREATE_LOOKUPS: u32 = 12;
+
+/// Route and association changes allowed before the topology verifies. Building it from scratch
+/// takes at most seven; a count past this means something keeps undoing the repairs.
+const MAX_TABLE_CHANGES: u32 = 16;
+
+/// Where reconciling the dedicated sandbox network got to.
+pub(super) enum SandboxStep {
+    Ready,
+    /// Step again after this delay.
+    Again(Duration),
+}
+
+const AGAIN: SandboxStep = SandboxStep::Again(Duration::from_secs(1));
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -206,10 +222,10 @@ impl AwsNetworkController {
     pub(super) async fn reconcile_sandbox_network(
         &mut self,
         ctx: &ResourceControllerContext<'_>,
-    ) -> Result<bool> {
+    ) -> Result<SandboxStep> {
         let config = ctx.desired_resource_config::<Network>()?;
         if !required(ctx)? {
-            return Ok(true);
+            return Ok(SandboxStep::Ready);
         }
         let direct = ctx.initial_setup_authority == InitialSetupAuthority::DirectSetup;
         // Subnets setup does not own (an import or customer-provided subnets), and any run
@@ -218,7 +234,7 @@ impl AwsNetworkController {
         if self.sandbox_setup.is_none() || !direct {
             if self.sandbox_network.is_some() {
                 self.verify_sandbox_network(ctx).await?;
-                return Ok(true);
+                return Ok(SandboxStep::Ready);
             }
             if !direct {
                 return Err(invalid(
@@ -313,6 +329,7 @@ impl AwsNetworkController {
                 table_lookups: [0, 0],
                 table_tokens: [None, None],
                 unverified: false,
+                table_changes: 0,
                 subnets: blocks
                     .into_iter()
                     .enumerate()
@@ -324,7 +341,7 @@ impl AwsNetworkController {
                     })
                     .collect(),
             });
-            return Ok(false); // Persist allocation before making any cloud object.
+            return Ok(AGAIN); // Persist allocation before making any cloud object.
         }
         let setup = self.sandbox_setup.as_ref().expect("initialized").clone();
         if setup.vpc_id != vpc {
@@ -345,12 +362,16 @@ impl AwsNetworkController {
                     self.sandbox_setup.as_mut().expect("initialized").subnets[i].id =
                         Some(subnet_id);
                 }
-                SubnetProgress::HeldByAnother(holder) => {
-                    return Err(subnet_cidr_held(&subnet.cidr, &holder, id));
+                SubnetProgress::HeldByAnother(held) => {
+                    return Err(subnet_cidr_held(&subnet.cidr, held, id));
                 }
+                SubnetProgress::LookAgain(AwsNetworkHandlerAction::Stay {
+                    suggested_delay: Some(delay),
+                    ..
+                }) => return Ok(SandboxStep::Again(delay)),
                 SubnetProgress::AttemptRecorded | SubnetProgress::LookAgain(_) => {}
             }
-            return Ok(false);
+            return Ok(AGAIN);
         }
         let tables = self.sandbox_setup_tables(ctx, &vpc, id).await?;
         // The gateway subnets' default route follows the workload subnets' NAT gateway.
@@ -403,7 +424,7 @@ impl AwsNetworkController {
                     // the recorded table is missing.
                     if record.table_lookups[index] < LOST_CREATE_LOOKUPS {
                         record.table_lookups[index] += 1;
-                        return Ok(false);
+                        return Ok(AGAIN);
                     }
                     record.table_lookups[index] = 0;
                     return Err(invalid(
@@ -415,7 +436,7 @@ impl AwsNetworkController {
                 // response, while the list still misses the table, returns that same table.
                 let Some(token) = setup.table_tokens[index].clone() else {
                     record.table_tokens[index] = Some(new_create_attempt_token());
-                    return Ok(false);
+                    return Ok(AGAIN);
                 };
                 let response = client
                     .create_route_table(
@@ -440,7 +461,7 @@ impl AwsNetworkController {
                 let record = self.sandbox_setup.as_mut().expect("initialized");
                 record.tables[index] = Some(table_id);
                 record.table_tokens[index] = None;
-                return Ok(false);
+                return Ok(AGAIN);
             };
             let table_id = table.route_table_id.as_ref().expect("validated");
             let routes: Vec<_> = table.route_set.iter().flat_map(|set| &set.items).collect();
@@ -456,6 +477,7 @@ impl AwsNetworkController {
                 }
                 let destination = route_destination(id, table_id, route)?;
                 info!(network_id = %id, route_table_id = %table_id, destination = ?destination, "Removing a route the dedicated sandbox route table must not have");
+                self.count_table_change(id)?;
                 match client
                     .delete_route(
                         DeleteRouteRequest::builder()
@@ -469,15 +491,21 @@ impl AwsNetworkController {
                     Err(error) if is_not_found(&error) => {}
                     Err(error) => return Err(error).context(cloud("DeleteRoute")),
                 }
-                return Ok(false);
+                return Ok(AGAIN);
             }
             if index == 1 {
-                let nat_id = &self.sandbox_setup.as_ref().expect("initialized").nat_id;
+                let nat_id = self
+                    .sandbox_setup
+                    .as_ref()
+                    .expect("initialized")
+                    .nat_id
+                    .clone();
                 let default = routes
                     .iter()
                     .find(|route| route.destination_cidr_block.as_deref() == Some("0.0.0.0/0"));
                 match default {
                     None => {
+                        self.count_table_change(id)?;
                         client
                             .create_route(
                                 CreateRouteRequest::builder()
@@ -488,13 +516,14 @@ impl AwsNetworkController {
                             )
                             .await
                             .context(cloud("CreateRoute"))?;
-                        return Ok(false);
+                        return Ok(AGAIN);
                     }
                     Some(route)
-                        if route.nat_gateway_id.as_ref() == Some(nat_id)
+                        if route.nat_gateway_id.as_ref() == Some(&nat_id)
                             && route.state.as_deref() == Some("active") => {}
                     Some(_) => {
                         info!(network_id = %id, route_table_id = %table_id, nat_id = %nat_id, "Pointing the gateway default route back at the workload NAT gateway");
+                        self.count_table_change(id)?;
                         client
                             .replace_route(
                                 ReplaceRouteRequest::builder()
@@ -505,7 +534,7 @@ impl AwsNetworkController {
                             )
                             .await
                             .context(cloud("ReplaceRoute"))?;
-                        return Ok(false);
+                        return Ok(AGAIN);
                     }
                 }
             }
@@ -535,6 +564,7 @@ impl AwsNetworkController {
                             invalid(id, format!("Subnet '{subnet_id}' association has no ID"))
                         })?;
                     info!(network_id = %id, subnet_id = %subnet_id, route_table_id = %table_id, "Moving a dedicated subnet back to its route table");
+                    self.count_table_change(id)?;
                     match client
                         .replace_route_table_association(
                             ReplaceRouteTableAssociationRequest::builder()
@@ -551,8 +581,9 @@ impl AwsNetworkController {
                             return Err(error).context(cloud("ReplaceRouteTableAssociation"))
                         }
                     }
-                    return Ok(false);
+                    return Ok(AGAIN);
                 }
+                self.count_table_change(id)?;
                 client
                     .associate_route_table(
                         AssociateRouteTableRequest::builder()
@@ -562,7 +593,7 @@ impl AwsNetworkController {
                     )
                     .await
                     .context(cloud("AssociateRouteTable"))?;
-                return Ok(false);
+                return Ok(AGAIN);
             }
         }
         let ids = |gateway| {
@@ -593,8 +624,26 @@ impl AwsNetworkController {
         );
         if let Some(setup) = self.sandbox_setup.as_mut() {
             setup.unverified = false;
+            setup.table_changes = 0;
         }
-        Ok(true)
+        Ok(SandboxStep::Ready)
+    }
+
+    /// Counts one route or association change, refusing once `MAX_TABLE_CHANGES` were made
+    /// without the topology verifying.
+    fn count_table_change(&mut self, id: &str) -> Result<()> {
+        let setup = self.sandbox_setup.as_mut().expect("initialized");
+        if setup.table_changes >= MAX_TABLE_CHANGES {
+            return Err(invalid(
+                id,
+                format!(
+                    "Direct setup changed its sandbox route tables {} times without them verifying; something keeps changing them back",
+                    setup.table_changes
+                ),
+            ));
+        }
+        setup.table_changes += 1;
+        Ok(())
     }
 
     /// Verify the recorded topology read-only. A failed check stays recorded on direct setup's
@@ -727,9 +776,8 @@ impl AwsNetworkController {
                         self.sandbox_setup.as_mut().expect("recorded").subnets[index].id =
                             Some(subnet_id);
                     }
-                    SubnetProgress::HeldByAnother(holder) => {
-                        info!(network_id = %id, cidr = %attempt.cidr, holder = %holder, "Another subnet holds the CIDR, so the lost create made nothing");
-                        self.subnet_create_attempt = None;
+                    SubnetProgress::HeldByAnother(held) => {
+                        info!(network_id = %id, cidr = %attempt.cidr, holder = %held.holder, "Another subnet holds the CIDR, so the lost create made nothing");
                     }
                     SubnetProgress::AttemptRecorded | SubnetProgress::LookAgain(_) => {}
                 }

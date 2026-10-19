@@ -27,6 +27,8 @@ struct Cloud {
     last_subnet: Option<String>,
     /// The VPC was deleted outside Alien.
     vpc_deleted: bool,
+    /// Something outside Alien puts every deleted route straight back.
+    routes_come_back: bool,
 }
 
 fn overlaps(a: &str, b: &str) -> bool {
@@ -198,6 +200,7 @@ fn provider(cloud: &Arc<Mutex<Cloud>>) -> Arc<MockPlatformServiceProvider> {
         });
     let c = cloud.clone();
     ec2.expect_replace_route().returning(move |request| {
+        assert!(request.route_table_id.starts_with("rtb-dedicated-"));
         let mut c = c.lock().unwrap();
         c.mutations += 1;
         let table = c
@@ -216,8 +219,15 @@ fn provider(cloud: &Arc<Mutex<Cloud>>) -> Arc<MockPlatformServiceProvider> {
     });
     let c = cloud.clone();
     ec2.expect_delete_route().returning(move |request| {
+        assert!(
+            request.route_table_id.starts_with("rtb-dedicated-"),
+            "a route of a table setup does not own was deleted"
+        );
         let mut c = c.lock().unwrap();
         c.mutations += 1;
+        if c.routes_come_back {
+            return Ok(());
+        }
         let (key, value) = match request.destination {
             RouteDestination::Ipv4Cidr(cidr) => ("destinationCidrBlock", cidr),
             RouteDestination::Ipv6Cidr(cidr) => ("destinationIpv6CidrBlock", cidr),
@@ -935,7 +945,7 @@ async fn subnet_list_lag_after_a_lost_create_response_creates_no_second_subnet()
 /// gateway default route that is no longer an active route to the workload NAT (here the
 /// workload moved to a new NAT and the old one left a blackhole), extra routes on the connector
 /// table, and a connector subnet associated with another route table. The customer's workload
-/// table keeps its routes.
+/// table keeps its own routes, including ones a dedicated table must not have.
 #[tokio::test]
 async fn setup_repairs_wrong_routes_and_associations_on_its_route_tables() {
     let cloud = workload_cloud();
@@ -954,6 +964,9 @@ async fn setup_repairs_wrong_routes_and_associations_on_its_route_tables() {
             .find(|t| t["routeTableId"] == "rtb-work")
             .unwrap();
         workload["routeSet"]["item"][1]["natGatewayId"] = json!("nat-new");
+
+        // Another table of the customer's keeps routes a dedicated table must not have.
+        c.tables.push(json!({"routeTableId":"rtb-customer-peering","vpcId":"vpc-existing","routeSet":{"item":[local(),{"destinationCidrBlock":"10.98.0.0/16","vpcPeeringConnectionId":"pcx-customer","state":"active"}]},"associationSet":{"item":[]}}));
         let gateway = table_named(&mut c, "test-network-sandbox-gateway-rt");
         let default = gateway["routeSet"]["item"]
             .as_array_mut()
@@ -1014,7 +1027,7 @@ async fn setup_repairs_wrong_routes_and_associations_on_its_route_tables() {
                     *route = json!({"destinationCidrBlock":"0.0.0.0/0","natGatewayId":"nat-new","state":"active"});
                 }
             }
-        } else {
+        } else if name == Some(json!("test-network-sandbox-isolated-rt")) {
             table["routeSet"]["item"] = json!([local()]);
             let associations = table["associationSet"]["item"].as_array_mut().unwrap();
             associations.push(json!({"subnetId":connector}));
@@ -1469,4 +1482,102 @@ async fn teardown_settles_a_lost_create_in_a_vpc_deleted_outside_alien() {
     let state = execution.internal_state::<AwsNetworkController>().unwrap();
     assert_eq!(state.state, AwsNetworkState::Deleted);
     assert!(state.subnet_create_attempt.is_none());
+}
+
+/// The first dedicated subnet's attempt is recorded and its create not yet made.
+async fn controller_before_first_dedicated_create(
+    cloud: &Arc<Mutex<Cloud>>,
+) -> AwsNetworkController {
+    let mut controller = creating_sandbox_network();
+    while controller.subnet_create_attempt.is_none() {
+        let mut execution = executor(cloud, controller, true).await;
+        execution.step().await.unwrap();
+        controller = execution
+            .internal_state::<AwsNetworkController>()
+            .unwrap()
+            .clone();
+    }
+    controller
+}
+
+/// A subnet setup did not create takes the allocated range before the create: the create is
+/// refused with an error that retrying cannot fix, and the attempt is cleared. Once the range
+/// is free again, the next setup run creates the subnet instead of looking for a holder
+/// forever. A subnet that carries our ownership tags but another create token is not ours.
+#[tokio::test]
+async fn a_range_taken_by_another_subnet_fails_setup_without_wedging_it() {
+    for with_our_tags in [false, true] {
+        let cloud = workload_cloud();
+        let controller = controller_before_first_dedicated_create(&cloud).await;
+        let cidr = controller.subnet_create_attempt.clone().unwrap().cidr;
+        let mut tags: Vec<Value> = Vec::new();
+        if with_our_tags {
+            tags = alien_core::standard_resource_tags("test", "network")
+                .into_iter()
+                .map(|(key, value)| json!({"key": key, "value": value}))
+                .collect();
+            tags.push(json!({"key": "CreateAttempt", "value": "another-token"}));
+        }
+        let tag_set = json!({ "item": tags });
+        cloud.lock().unwrap().subnets.push(json!({"subnetId":"subnet-other","vpcId":"vpc-existing","cidrBlock":cidr,"availabilityZone":"us-east-2a","availabilityZoneId":"use2-aza","state":"available","tagSet":tag_set}));
+        let mut controller = controller;
+        let error = loop {
+            let mut execution = executor(&cloud, controller, true).await;
+            let result = execution.step().await;
+            controller = execution
+                .internal_state::<AwsNetworkController>()
+                .unwrap()
+                .clone();
+            if let Err(error) = result {
+                break error;
+            }
+        };
+        assert!(!error.retryable, "{error}");
+        assert!(error.to_string().contains("subnet-other"), "{error}");
+        assert_eq!(
+            controller.subnet_create_attempt, None,
+            "the attempt is cleared"
+        );
+
+        // The other subnet goes away; setup, run again, now converges.
+        cloud
+            .lock()
+            .unwrap()
+            .subnets
+            .retain(|subnet| subnet["subnetId"] != "subnet-other");
+        controller.state = AwsNetworkState::CreatingSandboxNetwork;
+        let ready = set_up(&cloud, controller).await;
+        assert_eq!(ready.sandbox_network.unwrap().sandbox_subnet_ids.len(), 2);
+    }
+}
+
+/// When something outside Alien keeps putting a removed route back, setup stops with a clear
+/// error instead of deleting it forever.
+#[tokio::test]
+async fn setup_stops_repairing_a_route_that_keeps_coming_back() {
+    let cloud = workload_cloud();
+    let controller = set_up(&cloud, creating_sandbox_network()).await;
+    {
+        let mut c = cloud.lock().unwrap();
+        c.routes_come_back = true;
+        table_named(&mut c, "test-network-sandbox-isolated-rt")["routeSet"]["item"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"destinationCidrBlock":"10.99.0.0/16","vpcPeeringConnectionId":"pcx-1","state":"active"}));
+    }
+    let mutations = cloud.lock().unwrap().mutations;
+    let mut execution = executor(&cloud, controller, true).await;
+    execution.update(network()).unwrap();
+    let error = execution
+        .run_until_status(ResourceStatus::Running)
+        .await
+        .expect_err("setup gives up");
+    assert!(
+        format!("{error:?}").contains("something keeps changing them back"),
+        "{error:?}"
+    );
+    assert_eq!(
+        cloud.lock().unwrap().mutations - mutations,
+        MAX_TABLE_CHANGES as usize
+    );
 }
