@@ -1922,3 +1922,15 @@ fn granted_actions(
     }
     granted
 }
+
+/// An internet sandbox's connector routes through the egress gateway that deployment preparation
+/// installs. A stack that reaches the generator without it would reference gateway subnet
+/// variables the module never declares, so it is refused and the sandbox named.
+#[test]
+fn aws_internet_sandbox_without_its_gateway_is_refused() {
+    let (stack, settings) = sandbox_stack("acme-internet", SandboxEgress::Internet);
+    let error = try_render(&stack, TerraformTarget::Aws, settings)
+        .expect_err("an internet sandbox without its gateway must not render");
+    assert_eq!(error.code, "SANDBOX_INTERNET_GATEWAY_MISSING");
+    assert!(error.message.contains("'agents'"), "{}", error.message);
+}

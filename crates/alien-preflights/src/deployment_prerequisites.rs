@@ -44,13 +44,17 @@ impl DeploymentPrerequisiteCheck for SandboxEgressGatewayCheck {
     async fn check(
         &self,
         stack: &Stack,
-        _state: &StackState,
-        _config: &DeploymentConfig,
+        state: &StackState,
+        config: &DeploymentConfig,
     ) -> Result<CheckResult> {
-        if alien_core::sandbox_egress::has_sandbox_gateway(stack) {
+        // On AWS the gateway is a managed Container, which only the managed backend runs.
+        if alien_core::sandbox_egress::has_sandbox_gateway(stack)
+            && (state.platform != Platform::Aws
+                || matches!(config.compute_backend, Some(ComputeBackend::Horizon(_))))
+        {
             return Ok(CheckResult::success());
         }
-        Ok(CheckResult::failed(vec!["Sandbox egress internet requires a prepared gateway on a supported container runtime. Configure a supported compute backend and regenerate the deployment plan.".into()]))
+        Ok(CheckResult::failed(vec!["Sandbox egress internet requires the sandbox egress gateway, a managed Container. Deploy with a managed container backend (computeBackend) and regenerate the deployment plan.".into()]))
     }
 }
 
@@ -1107,6 +1111,42 @@ mod tests {
         assert!(!result.success);
         assert_eq!(result.status, Some(crate::CheckStatus::Failed));
         assert_eq!(result.errors.len(), 1);
+    }
+
+    /// Setup templates are prepared before a compute backend exists, so preparation installs the
+    /// gateway without one. An AWS deployment still needs the managed backend to run it.
+    #[tokio::test]
+    async fn a_prepared_aws_gateway_still_needs_the_managed_backend() {
+        use crate::StackMutation;
+
+        let sandbox = alien_core::Sandbox::new("boxes".into())
+            .code(alien_core::SandboxCode::Image {
+                image: "s3://example/box.zip".into(),
+            })
+            .egress(alien_core::SandboxEgress::Internet)
+            .lifecycle(alien_core::SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build();
+        let stack = Stack::new("test".into())
+            .add(sandbox, ResourceLifecycle::Live)
+            .build();
+        let state = stack_state(Platform::Aws);
+        let mut config = deployment_config();
+        let mutation = crate::mutations::SandboxGatewayMutation;
+        assert!(mutation.should_run(&stack, &state, &config));
+        let prepared = mutation.mutate(stack, &state, &config).await.unwrap();
+        assert!(alien_core::sandbox_egress::has_sandbox_gateway(&prepared));
+
+        let check = SandboxEgressGatewayCheck;
+        let refused = check.check(&prepared, &state, &config).await.unwrap();
+        assert!(!refused.success, "a gateway with no backend to run it");
+        assert_eq!(refused.errors.len(), 1);
+        assert!(refused.errors[0].contains("managed container backend"));
+
+        config.compute_backend = Some(horizon_backend());
+        assert!(check.check(&prepared, &state, &config).await.unwrap().success);
     }
 
     #[tokio::test]

@@ -237,6 +237,9 @@ fn generate_terraform_module_internal(
             platform,
             stack_settings.setup_management,
         )?;
+        if platform == alien_core::Platform::Aws {
+            alien_core::sandbox_egress::require_internet_sandbox_gateway(stack)?;
+        }
     }
     if target.is_kubernetes() {
         // Logical compute pools use the cluster's existing nodes. Cloud fleet
