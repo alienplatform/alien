@@ -11,6 +11,7 @@
 //! on top of `CfRegistry::built_in()`.
 
 mod built_ins;
+mod dependencies;
 mod emitter;
 pub mod emitters;
 mod generator;
