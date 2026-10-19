@@ -363,11 +363,17 @@ async fn hook_ready() -> StatusCode {
 ///
 /// 200 passes the build; any other status fails it with this body as the reason. 503 would mean
 /// "retry until the timeout", and nothing [`validate`] checks changes by waiting, so a failure
-/// is reported at once. Unauthenticated for the same reason as [`hook_ready`]; what it does to
-/// the session is a spawn of this binary and a file it removes again.
+/// is reported at once.
+///
+/// The checks spawn a process and write into the session, so the caller is authorised as
+/// `update_egress` authorises it: under transport, off the guest or in it under a user other than
+/// the command's; under a capability, with one. No capability backend declares this hook.
 async fn hook_validate(
     State(state): State<Arc<AgentState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
 ) -> std::result::Result<StatusCode, ApiError> {
+    authorize_control(&state, peer, &headers, SandboxOperationClass::Execute)?;
     validate::run(&state).await.map_err(|error| {
         tracing::error!(%error, "image validation failed");
         ApiError::from(error)
@@ -379,8 +385,8 @@ async fn hook_validate(
 ///
 /// Enabled because a declared hook that cannot be reached fails the image build. Two MicroVMs
 /// restored from one image differ in `/dev/urandom` while `boot_id` is identical, so entropy
-/// separation comes from the platform and the residue is kernel identity, which userspace cannot
-/// reset. This acknowledges and claims nothing more.
+/// separation comes from the MicroVM service and the residue is kernel identity, which userspace
+/// cannot reset. This acknowledges and claims nothing more.
 async fn hook_lifecycle() -> StatusCode {
     StatusCode::OK
 }

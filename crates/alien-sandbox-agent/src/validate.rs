@@ -15,7 +15,7 @@ use crate::error::{ErrorData, Result};
 use crate::exec::{self, ExecRequest, Frame};
 use crate::files;
 use crate::server::AgentState;
-use alien_error::{AlienError, Context};
+use alien_error::{AlienError, Context, IntoAlienError};
 
 /// First argument that makes the agent binary print its effective `uid gid` and exit.
 ///
@@ -61,9 +61,12 @@ async fn identity(state: &AgentState) -> Result<()> {
     for frame in &frames {
         match frame {
             Frame::Stdout { data, .. } => {
-                let bytes = BASE64
-                    .decode(data)
-                    .map_err(|error| failed("identity", format!("probe output: {error}")))?;
+                let bytes = BASE64.decode(data).into_alien_error().context(
+                    ErrorData::ValidationFailed {
+                        check: "identity".to_string(),
+                        reason: "the probe's output was not valid base64".to_string(),
+                    },
+                )?;
                 stdout.extend(bytes);
             }
             Frame::Stderr { .. } | Frame::Exit { code: 0, .. } => {}
@@ -113,9 +116,17 @@ async fn file(state: &AgentState) -> Result<()> {
     let path = format!("/.validate-{}", Uuid::new_v4().simple());
     let payload: Vec<u8> = (0u8..=255).collect();
 
-    files::write(root, &path, &payload)
+    let written = files::write(root, &path, &payload)
         .await
-        .context(step("writing the probe file"))?;
+        .context(step("writing the probe file"));
+    if written.is_err() {
+        // The open can create the file before the write fails, so it is removed either way. The
+        // write's error is the one reported.
+        let removed = files::remove(root, &path)
+            .await
+            .context(step("removing the probe file"));
+        return written.and(removed);
+    }
 
     let read_back = match files::read(root, &path).await {
         Ok(contents) if contents == payload => Ok(()),
