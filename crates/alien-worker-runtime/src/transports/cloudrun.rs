@@ -22,7 +22,7 @@ use axum::{
 use base64::{engine::general_purpose, Engine as _};
 use chrono::Utc;
 use cloudevents::AttributesReader;
-use http_body_util::BodyExt;
+
 use tokio::net::TcpListener;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
@@ -34,7 +34,7 @@ use super::shared::{
 };
 use crate::error::{ErrorData, Result};
 use crate::events::gcp::{
-    gcs_pubsub_notification_to_storage_events, pubsub_cloudevent_to_queue_messages,
+    gcs_pubsub_notification_to_storage_events, pubsub_cloudevent_to_queue_messages_with_source,
     storage_cloudevent_to_storage_events,
 };
 use alien_error::{Context, IntoAlienError};
@@ -84,7 +84,11 @@ impl CloudRunTransport {
         info!(port = self.port, "Starting Cloud Run transport");
 
         let proxy_shutdown = CancellationToken::new();
+        let collectors =
+            super::queue_batch::QueueCollectors::from_env(self.control_server.clone())?;
         let state = TransportState {
+            received_at: tokio::time::Instant::now(),
+            collector: collectors.clients.clone(),
             control_server: self.control_server,
             app_http_port: self.app_http_port,
             // Push acknowledgments cannot be extended past Pub/Sub's 600s
@@ -116,9 +120,11 @@ impl CloudRunTransport {
             proxy_shutdown,
             self.http_shutdown_grace,
             "cloudrun",
-            || {},
+            || collectors.stop(),
         )
         .await;
+        let collector_result = collectors.join().await;
+        collector_result?;
         server_result
             .into_alien_error()
             .context(ErrorData::TransportStartupFailed {
@@ -134,6 +140,8 @@ impl CloudRunTransport {
 
 #[derive(Clone)]
 struct TransportState {
+    received_at: tokio::time::Instant,
+    collector: std::collections::HashMap<String, super::queue_batch::QueueCollector>,
     control_server: Arc<ControlGrpcServer>,
     app_http_port: Option<u16>,
     command_timeout: Duration,
@@ -141,10 +149,18 @@ struct TransportState {
     proxy_shutdown: CancellationToken,
 }
 
+impl TransportState {
+    fn remaining_timeout(&self) -> Duration {
+        self.command_timeout
+            .saturating_sub(self.received_at.elapsed())
+    }
+}
+
 async fn handle_request(
-    State(state): State<TransportState>,
+    State(mut state): State<TransportState>,
     request: Request<Body>,
 ) -> impl IntoResponse {
+    state.received_at = tokio::time::Instant::now();
     let path = request.uri().path().to_string();
     let method = request.method().clone();
 
@@ -172,11 +188,11 @@ async fn handle_request(
     // Check for Pub/Sub push message (non-CloudEvent format).
     // Pub/Sub push subscriptions send POST requests with a JSON body containing
     // "message" and "subscription" fields, without CloudEvent headers.
-    if method == axum::http::Method::POST && path == "/" {
+    if method == axum::http::Method::POST && (path == "/" || path.starts_with("/__alien/queue/")) {
         // Peek at the body to check for PubSub push format
         let (parts, body) = request.into_parts();
-        let body_bytes = match body.collect().await {
-            Ok(collected) => collected.to_bytes(),
+        let body_bytes = match axum::body::to_bytes(body, 4 * 1024 * 1024).await {
+            Ok(collected) => collected,
             Err(e) => {
                 error!(error = %e, "Failed to read request body");
                 return (StatusCode::BAD_REQUEST, "Failed to read body").into_response();
@@ -189,7 +205,12 @@ async fn handle_request(
                     subscription = ?push_msg.subscription,
                     "Detected Pub/Sub push message"
                 );
-                return handle_pubsub_push_message(push_msg, &state).await;
+                return handle_pubsub_push_message(
+                    push_msg,
+                    &state,
+                    path.strip_prefix("/__alien/queue/"),
+                )
+                .await;
             }
         }
 
@@ -247,7 +268,7 @@ async fn handle_scheduler_event(request: Request<Body>, state: &TransportState) 
         job_name,
         schedule_time,
         &state.control_server,
-        state.command_timeout,
+        state.remaining_timeout(),
     )
     .await
 }
@@ -262,8 +283,8 @@ async fn handle_cloudevent(
 
     // Collect body for CloudEvent parsing
     let (parts, body) = request.into_parts();
-    let body_bytes = match body.collect().await {
-        Ok(collected) => collected.to_bytes(),
+    let body_bytes = match axum::body::to_bytes(body, 4 * 1024 * 1024).await {
+        Ok(collected) => collected,
         Err(e) => {
             error!(error = %e, "Failed to read request body");
             return (StatusCode::BAD_REQUEST, "Failed to read body").into_response();
@@ -285,7 +306,12 @@ async fn handle_cloudevent(
     }
 
     if event_type == "google.cloud.pubsub.topic.v1.messagePublished" {
-        return handle_pubsub_cloudevent(cloud_event, state).await;
+        return handle_pubsub_cloudevent(
+            cloud_event,
+            state,
+            parts.uri.path().strip_prefix("/__alien/queue/"),
+        )
+        .await;
     }
 
     warn!(event_type = %event_type, "Unsupported CloudEvent type");
@@ -301,7 +327,12 @@ async fn handle_storage_cloudevent(
 
     match storage_cloudevent_to_storage_events(cloud_event) {
         Ok(storage_events) => {
-            send_storage_events(storage_events, &state.control_server, state.command_timeout).await
+            send_storage_events(
+                storage_events,
+                &state.control_server,
+                state.remaining_timeout(),
+            )
+            .await
         }
         Err(e) => {
             error!(error = %e, event_type = %event_type, "Failed to parse storage CloudEvent");
@@ -314,11 +345,24 @@ async fn handle_storage_cloudevent(
 async fn handle_pubsub_cloudevent(
     cloud_event: cloudevents::Event,
     state: &TransportState,
+    logical_source: Option<&str>,
 ) -> Response<Body> {
-    match pubsub_cloudevent_to_queue_messages(cloud_event) {
+    match pubsub_cloudevent_to_queue_messages_with_source(cloud_event, |subscription| {
+        logical_source.map(str::to_owned).or_else(|| {
+            state
+                .collector
+                .contains_key(subscription)
+                .then(|| subscription.to_owned())
+        })
+    }) {
         Ok(queue_messages) => {
-            dispatch_queue_messages(queue_messages, &state.control_server, state.command_timeout)
-                .await
+            dispatch_queue_messages(
+                queue_messages,
+                &state.control_server,
+                state.remaining_timeout(),
+                &state.collector,
+            )
+            .await
         }
         Err(e) => {
             error!(error = %e, "Failed to parse Pub/Sub CloudEvent");
@@ -351,6 +395,7 @@ struct PubSubPushMessageData {
 async fn handle_pubsub_push_message(
     push_msg: PubSubPushMessage,
     state: &TransportState,
+    logical_source: Option<&str>,
 ) -> Response<Body> {
     let data = match &push_msg.message.data {
         Some(d) => match general_purpose::STANDARD.decode(d) {
@@ -373,7 +418,7 @@ async fn handle_pubsub_push_message(
             return send_storage_events(
                 storage_events,
                 &state.control_server,
-                state.command_timeout,
+                state.remaining_timeout(),
             )
             .await;
         }
@@ -395,7 +440,10 @@ async fn handle_pubsub_push_message(
         Err(_) => alien_core::MessagePayload::Text(String::from_utf8_lossy(&data).to_string()),
     };
 
-    let source = push_msg.subscription.unwrap_or_default();
+    let source = logical_source
+        .map(str::to_string)
+        .or(push_msg.subscription)
+        .unwrap_or_default();
 
     let qm = alien_core::QueueMessage {
         id: message_id,
@@ -407,5 +455,122 @@ async fn handle_pubsub_push_message(
         attempt_count: None,
     };
 
-    dispatch_queue_messages(vec![qm], &state.control_server, state.command_timeout).await
+    dispatch_queue_messages(
+        vec![qm],
+        &state.control_server,
+        state.remaining_timeout(),
+        &state.collector,
+    )
+    .await
+}
+
+#[cfg(test)]
+mod queue_routing_tests {
+    use super::*;
+    use alien_worker_protocol::control::{
+        control_service_server::ControlService, queue_delivery_outcome::Disposition,
+        send_task_result_request, task::Payload, QueueBatchResult, QueueDeliveryOutcome,
+        SendTaskResultRequest, WaitForTasksRequest,
+    };
+    use std::collections::HashMap;
+    use tokio_stream::StreamExt;
+
+    #[tokio::test]
+    async fn physical_pubsub_names_dispatch_logical_batches_and_wait_for_outcomes() {
+        // Imported subscriptions need not share any naming convention with the
+        // logical queue or with their topic. Exercise both push wire formats.
+        for cloud_event in [false, true] {
+            for path in ["/", "/__alien/queue/jobs"] {
+                let control = Arc::new(ControlGrpcServer::new());
+                let mut tasks = control
+                    .wait_for_tasks(tonic::Request::new(WaitForTasksRequest {
+                        application_id: "worker".into(),
+                    }))
+                    .await
+                    .expect("subscribe")
+                    .into_inner();
+                let subscription = "projects/example/subscriptions/imported-a7d9-sub";
+                let environment = HashMap::from([
+                    ("ALIEN_QUEUE_BATCH_CONFIG".into(), r#"{"jobs":{"maxMessages":1,"maxWindowSeconds":0}}"#.into()),
+                    ("ALIEN_JOBS_BINDING".into(), serde_json::json!({
+                        "service": "pubsub", "topic": "projects/example/topics/generated-b8c2-jobs",
+                        "subscription": subscription,
+                    }).to_string()),
+                ]);
+                let collectors = super::super::queue_batch::QueueCollectors::from_environment(
+                    &environment,
+                    control.clone(),
+                )
+                .expect("source bindings");
+                let state = TransportState {
+                    received_at: tokio::time::Instant::now(),
+                    collector: collectors.clients.clone(),
+                    control_server: control.clone(),
+                    app_http_port: None,
+                    command_timeout: Duration::from_secs(30),
+                    http_client: create_forward_client(),
+                    proxy_shutdown: CancellationToken::new(),
+                };
+                let body = serde_json::json!({"message": {"data": "e30=", "messageId": "provider-id"}, "subscription": subscription});
+                let mut request = Request::builder()
+                    .method("POST")
+                    .uri(path)
+                    .header("content-type", "application/json");
+                if cloud_event {
+                    request = request
+                        .header("ce-specversion", "1.0")
+                        .header("ce-id", "event-id")
+                        .header("ce-type", "google.cloud.pubsub.topic.v1.messagePublished")
+                        .header(
+                            "ce-source",
+                            "//pubsub.googleapis.com/projects/example/topics/generated-b8c2-jobs",
+                        )
+                        .header("ce-time", "2026-01-01T00:00:00Z");
+                }
+                let request = request.body(Body::from(body.to_string())).expect("request");
+                let response = tokio::spawn(async move {
+                    handle_request(State(state), request).await.into_response()
+                });
+                let task = tokio::time::timeout(Duration::from_secs(2), tasks.next())
+                    .await
+                    .expect("batch dispatched")
+                    .expect("stream")
+                    .expect("task");
+                let Some(Payload::QueueBatch(batch)) = task.payload else {
+                    panic!("configured source must dispatch a batch");
+                };
+                assert_eq!(batch.source, "jobs");
+                assert_eq!(batch.deliveries.len(), 1);
+                assert_eq!(
+                    batch.deliveries[0]
+                        .message
+                        .as_ref()
+                        .expect("message")
+                        .source,
+                    "jobs"
+                );
+                assert!(!response.is_finished(), "enqueue must not acknowledge");
+                control
+                    .send_task_result(tonic::Request::new(SendTaskResultRequest {
+                        task_id: task.task_id,
+                        result: Some(send_task_result_request::Result::QueueBatch(
+                            QueueBatchResult {
+                                outcomes: vec![QueueDeliveryOutcome {
+                                    delivery_id: batch.deliveries[0].delivery_id.clone(),
+                                    disposition: Disposition::Success as i32,
+                                }],
+                            },
+                        )),
+                    }))
+                    .await
+                    .expect("result");
+                assert!(response
+                    .await
+                    .expect("request completes")
+                    .status()
+                    .is_success());
+                collectors.join().await.expect("owned collectors stop");
+            }
+        }
+    }
 }

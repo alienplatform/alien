@@ -362,10 +362,11 @@ async fn run_transport(
 
         shutdown_result = shutdown_rx.recv() => {
             let _ = transport_shutdown_tx.send(());
-            let transport_result = await_transport(&mut transport_handle).await;
-            let child_result = handle_shutdown(shutdown_result, wait_until_server, child).await;
-            if child_result.is_ok() { control_server.application_stopped(); }
-            transport_result.and(child_result)
+            // In-flight transport requests may be waiting for application_stopped
+            // after cancellation. Stop the application before joining those requests.
+            handle_shutdown(shutdown_result, wait_until_server, child).await?;
+            control_server.application_stopped();
+            await_transport(&mut transport_handle).await
         }
 
         child_status = child.wait() => {

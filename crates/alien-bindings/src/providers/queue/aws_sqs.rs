@@ -323,9 +323,15 @@ impl Queue for AwsSqsQueue {
         Ok(results)
     }
 
-    async fn renew_lease(&self, _queue: &str, receipt_handle: &str) -> Result<()> {
+    async fn renew_lease(
+        &self,
+        _queue: &str,
+        receipt_handle: &str,
+        duration_seconds: u32,
+    ) -> Result<()> {
+        crate::traits::validate_lease_duration(duration_seconds)?;
         self.client
-            .change_message_visibility(&self.queue_url, receipt_handle, 30)
+            .change_message_visibility(&self.queue_url, receipt_handle, duration_seconds)
             .await
             .context(ErrorData::BindingSetupFailed {
                 binding_type: "queue.sqs".to_string(),

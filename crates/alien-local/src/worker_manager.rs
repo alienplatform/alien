@@ -671,13 +671,21 @@ impl LocalWorkerManager {
         {
             return Ok(());
         }
+        let timeout = alien_worker_runtime::RuntimeConfig::command_timeout_from_env_vars(
+            &runtime.metadata.env_vars,
+        )
+        .into_alien_error()
+        .context(ErrorData::Other {
+            message: "Invalid local Worker timeout".into(),
+        })?;
         let service = crate::trigger_service::LocalTriggerService::new(
             triggers,
             provider,
             self.state_dir.join("workers").join(id),
             runtime.control_server.clone(),
             runtime.shutdown_tx.subscribe(),
-        );
+        )
+        .with_timeout(timeout);
         runtime.trigger_task = Some(tokio::spawn(async move {
             if let Err(error) = service.run().await {
                 tracing::error!(%error, "Local trigger service failed");
@@ -701,10 +709,6 @@ impl LocalWorkerManager {
         };
 
         if let Some(runtime) = runtime {
-            if let Some(trigger_task) = runtime.trigger_task {
-                trigger_task.abort();
-                let _ = trigger_task.await;
-            }
             // Send shutdown signal (triggers wait_until drain, OTLP flush)
             if let Err(e) = runtime.shutdown_tx.send(()) {
                 warn!(
@@ -735,6 +739,14 @@ impl LocalWorkerManager {
                 }
             }
 
+            if let Some(trigger_task) = runtime.trigger_task {
+                trigger_task
+                    .await
+                    .into_alien_error()
+                    .context(ErrorData::Other {
+                        message: "Local trigger shutdown failed".into(),
+                    })?;
+            }
             info!(worker_id = %id, "Worker stopped (metadata preserved for recovery)");
         } else {
             debug!(

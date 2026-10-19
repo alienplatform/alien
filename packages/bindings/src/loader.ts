@@ -137,7 +137,7 @@ export interface RawQueueHandle {
   receive(max: number): Promise<RawQueueMessage[]>
   ack(receipt: string): Promise<void>
   ackBatch(receipts: string[]): Promise<string>
-  renewLease(receipt: string): Promise<void>
+  renewLease(receipt: string, durationSeconds: number): Promise<void>
   nack(receipt: string): Promise<void>
   purge(): Promise<void>
 }

@@ -111,13 +111,13 @@ async def test_queue_batches_preserve_outcomes_and_payloads(tmp_path: Path) -> N
         ("text", "last"),
     ]
     for message in messages:
-        await jobs.renew_lease(message.receipt_handle)
+        await jobs.renew_lease(message.receipt_handle, 30)
     assert await jobs.ack_batch([message.receipt_handle for message in messages]) == [
         {"status": "acknowledged"}, {"status": "acknowledged"}, {"status": "acknowledged"}
     ]
     assert await jobs.receive() == []
     with pytest.raises(AlienError):
-        await jobs.renew_lease(messages[0].receipt_handle)
+        await jobs.renew_lease(messages[0].receipt_handle, 30)
     assert await jobs.ack_batch([]) == []
     assert await jobs.send_batch([]) == []
 

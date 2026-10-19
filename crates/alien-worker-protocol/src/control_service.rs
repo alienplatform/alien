@@ -80,6 +80,8 @@ pub struct TaskResult {
     pub success: bool,
     /// Response data (for successful processing)
     pub response_data: Vec<u8>,
+    /// Per-delivery outcomes, present only for batch tasks.
+    pub queue_batch: Option<crate::control::QueueBatchResult>,
     /// Error code (for failed processing)
     pub error_code: Option<String>,
     /// Error message (for failed processing)
@@ -92,6 +94,7 @@ impl TaskResult {
         Self {
             success: true,
             response_data: data,
+            queue_batch: None,
             error_code: None,
             error_message: None,
         }
@@ -102,6 +105,7 @@ impl TaskResult {
         Self {
             success: false,
             response_data: Vec::new(),
+            queue_batch: None,
             error_code: Some(code.into()),
             error_message: Some(message.into()),
         }
@@ -177,6 +181,14 @@ impl ControlGrpcServer {
                 return;
             }
         }
+    }
+
+    /// Whether the application can currently receive tasks. Unlike registration,
+    /// a live subscription disappears when its transport stream is dropped.
+    pub fn task_application_ready(&self) -> bool {
+        self.task_tx.receiver_count() > 0
+            && !*self.cancelled_tx.borrow()
+            && !*self.stopped_tx.borrow()
     }
 
     /// Send a task to the application and wait for the result.
@@ -398,6 +410,11 @@ impl ControlService for ControlGrpcServer {
                     Ok(TaskResult::error(e.code.clone(), e.message.clone())),
                     desc,
                 )
+            }
+            Some(crate::control::send_task_result_request::Result::QueueBatch(batch)) => {
+                let mut result = TaskResult::success(Vec::new());
+                result.queue_batch = Some(batch);
+                (Ok(result), "queue batch".to_string())
             }
             None => (Err("No result in response".to_string()), "none".to_string()),
         };

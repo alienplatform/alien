@@ -26,16 +26,18 @@ use std::time::Duration;
 
 use alien_bindings::traits::{BindingsProviderApi, MessagePayload, Queue};
 use alien_core::WorkerTrigger;
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_worker_protocol::control::{
     self, CronEvent as ProtoCronEvent, QueueMessage as ProtoQueueMessage,
     StorageEvent as ProtoStorageEvent, Task,
 };
 use alien_worker_protocol::ControlGrpcServer;
+use alien_worker_runtime::transports::queue_batch::{QueueCollector, QueueCollectors};
 use chrono::Utc;
 use prost_types::Timestamp;
 use tokio::sync::broadcast;
 use tokio::task::JoinSet;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 use crate::error::ErrorData;
@@ -48,6 +50,7 @@ type Result<T> = crate::error::Result<T>;
 /// Runs alongside the worker process, managed by the infra controller.
 /// Delivers events to the worker via `control_server.send_task()`.
 pub struct LocalTriggerService {
+    timeout: Duration,
     triggers: Vec<WorkerTrigger>,
     bindings_provider: Arc<LocalBindingsProvider>,
     state_dir: PathBuf,
@@ -64,12 +67,18 @@ impl LocalTriggerService {
         shutdown_rx: broadcast::Receiver<()>,
     ) -> Self {
         Self {
+            timeout: Duration::from_secs(180),
             triggers,
             bindings_provider,
             state_dir,
             control_server,
             shutdown_rx,
         }
+    }
+
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
     }
 
     /// Run the trigger service. Spawns one task per trigger.
@@ -86,20 +95,41 @@ impl LocalTriggerService {
             "Starting local trigger service"
         );
 
+        let configs = self
+            .triggers
+            .iter()
+            .filter_map(|trigger| match trigger {
+                WorkerTrigger::Queue {
+                    queue,
+                    batch: Some(batch),
+                } => Some((queue.id.clone(), batch.clone())),
+                _ => None,
+            })
+            .collect();
+        let collectors = QueueCollectors::new(configs, control_server.clone());
         let mut handles = JoinSet::new();
 
         for trigger in &self.triggers {
             match trigger {
-                WorkerTrigger::Queue { queue } => {
+                WorkerTrigger::Queue { queue, .. } => {
                     let binding_name = queue.id.clone();
                     let provider = self.bindings_provider.clone();
                     let cs = control_server.clone();
                     let mut shutdown = self.shutdown_rx.resubscribe();
+                    let collector = collectors.clients.get(&binding_name).cloned();
+                    let timeout = self.timeout;
 
                     info!(queue = %binding_name, "Starting queue trigger poller");
                     handles.spawn(async move {
-                        if let Err(e) =
-                            poll_queue(&binding_name, &provider, &cs, &mut shutdown).await
+                        if let Err(e) = poll_queue(
+                            &binding_name,
+                            &provider,
+                            &cs,
+                            &mut shutdown,
+                            collector,
+                            timeout,
+                        )
+                        .await
                         {
                             error!(queue = %binding_name, error = %e, "Queue poller error");
                         }
@@ -154,21 +184,41 @@ impl LocalTriggerService {
             }
         }
 
-        // Wait for shutdown signal
-        tokio::select! {
-            _ = self.shutdown_rx.recv() => {},
-            result = handles.join_next() => {
-                return Err(AlienError::new(ErrorData::TriggerServiceError {
-                    trigger_type: "all".to_string(), trigger_id: String::new(),
-                    reason: format!("Trigger task exited unexpectedly: {:?}", result),
-                }));
-            }
-        }
+        // Every exit path joins owned collectors; a failed poller must not
+        // detach already-dispatched application work.
+        let exit = tokio::select! {
+            _ = self.shutdown_rx.recv() => Ok(()),
+            result = handles.join_next() => Err(AlienError::new(ErrorData::TriggerServiceError {
+                trigger_type: "all".to_string(), trigger_id: String::new(),
+                reason: format!("Trigger task exited unexpectedly: {:?}", result),
+            })),
+        };
 
         info!("Shutting down local trigger service");
-        handles.shutdown().await;
+        collectors.stop();
+        if exit.is_ok() {
+            while let Some(joined) = handles.join_next().await {
+                joined
+                    .into_alien_error()
+                    .context(ErrorData::TriggerServiceError {
+                        trigger_type: "all".into(),
+                        trigger_id: String::new(),
+                        reason: "Trigger shutdown failed".into(),
+                    })?;
+            }
+        } else {
+            handles.shutdown().await;
+        }
+        collectors
+            .join()
+            .await
+            .context(ErrorData::TriggerServiceError {
+                trigger_type: "queue".into(),
+                trigger_id: String::new(),
+                reason: "Failed to stop queue collectors".into(),
+            })?;
 
-        Ok(())
+        exit
     }
 }
 
@@ -212,6 +262,8 @@ async fn poll_queue(
     provider: &LocalBindingsProvider,
     control_server: &ControlGrpcServer,
     shutdown: &mut broadcast::Receiver<()>,
+    collector: Option<QueueCollector>,
+    timeout: Duration,
 ) -> Result<()> {
     let queue =
         provider
@@ -223,13 +275,24 @@ async fn poll_queue(
                 reason: "Failed to load queue binding".to_string(),
             })?;
 
+    if let Some(collector) = collector {
+        return poll_batch_queue(
+            binding_name,
+            queue,
+            control_server,
+            shutdown,
+            collector,
+            timeout,
+        )
+        .await;
+    }
     loop {
         tokio::select! {
             _ = shutdown.recv() => {
                 info!(queue = %binding_name, "Queue poller shutting down");
                 return Ok(());
             }
-            result = poll_queue_once(binding_name, &*queue, control_server) => {
+            result = poll_queue_once(binding_name, &*queue, control_server, timeout) => {
                 match result {
                     Ok(0) => {
                         tokio::time::sleep(Duration::from_secs(1)).await;
@@ -247,23 +310,107 @@ async fn poll_queue(
     }
 }
 
+async fn poll_batch_queue(
+    binding_name: &str,
+    queue: Arc<dyn Queue>,
+    control_server: &ControlGrpcServer,
+    shutdown: &mut broadcast::Receiver<()>,
+    collector: QueueCollector,
+    timeout: Duration,
+) -> Result<()> {
+    let mut pending: JoinSet<alien_bindings::error::Result<()>> = JoinSet::new();
+    let stop = CancellationToken::new();
+    let mut interval = tokio::time::interval(Duration::from_millis(100));
+    loop {
+        tokio::select! {
+            _ = shutdown.recv() => {
+                stop.cancel();
+                while let Some(joined) = pending.join_next().await {
+                    joined.into_alien_error().context(ErrorData::TriggerServiceError {
+                        trigger_type: "queue".into(), trigger_id: binding_name.into(), reason: "Delivery shutdown failed".into(),
+                    })?.context(ErrorData::TriggerServiceError {
+                        trigger_type: "queue".into(), trigger_id: binding_name.into(), reason: "Delivery release failed".into(),
+                    })?;
+                }
+                return Ok(());
+            },
+            joined = pending.join_next(), if !pending.is_empty() => {
+                joined.ok_or_else(|| AlienError::new(ErrorData::TriggerServiceError { trigger_type: "queue".into(), trigger_id: binding_name.into(), reason: "Queue task set unexpectedly empty".into() }))?.into_alien_error().context(ErrorData::TriggerServiceError {
+                    trigger_type: "queue".into(), trigger_id: binding_name.into(), reason: "Queue delivery task failed".into(),
+                })?.context(ErrorData::TriggerServiceError {
+                    trigger_type: "queue".into(), trigger_id: binding_name.into(), reason: "Queue completion failed".into(),
+                })?;
+            },
+            _ = interval.tick(), if pending.len() < 100 => {
+                let messages = queue.receive(binding_name, (100 - pending.len()).min(10)).await.context(ErrorData::TriggerServiceError {
+                    trigger_type: "queue".into(), trigger_id: binding_name.into(), reason: "Queue receive failed".into(),
+                })?;
+                for message in messages {
+                    let queue = queue.clone();
+                    let collector = collector.clone();
+                    let source = binding_name.to_string();
+                    let control = control_server.clone();
+                    let stop = stop.clone();
+                    pending.spawn(async move {
+                        queue.renew_lease(&source, &message.receipt_handle, 600).await?;
+                        let success = {
+                        let delivery = collector.deliver(ProtoQueueMessage {
+                            id: uuid::Uuid::new_v4().to_string(), source: source.clone(),
+                            payload: match message.payload { MessagePayload::Json(value) => value.to_string().into_bytes(), MessagePayload::Text(value) => value.into_bytes() },
+                            receipt_handle: message.receipt_handle.clone(), attempt_count: message.attempt,
+                            timestamp: Some(now_timestamp()), attributes: HashMap::new(),
+                        }, tokio::time::Instant::now() + timeout);
+                        tokio::pin!(delivery);
+                        loop {
+                            tokio::select! {
+                                result = &mut delivery => break Some(result),
+                                _ = stop.cancelled() => break None,
+                                _ = tokio::time::sleep(Duration::from_secs(300)) => {
+                                    if let Err(error) = queue.renew_lease(&source, &message.receipt_handle, 600).await {
+                                        control.cancel_application().await;
+                                        return Err(error);
+                                    }
+                                },
+                            }
+                        }
+                        };
+                        if success.is_none() { control.cancel_application().await; }
+                        if success.unwrap_or(false) { queue.ack(&source, &message.receipt_handle).await?; }
+                        else { queue.nack(&source, &message.receipt_handle).await?; }
+                        Ok(())
+                    });
+                }
+            },
+        }
+    }
+}
+
 async fn poll_queue_once(
     binding_name: &str,
     queue: &dyn Queue,
     control_server: &ControlGrpcServer,
+    timeout: Duration,
 ) -> Result<usize> {
-    let messages = queue
-        .receive(binding_name, 10)
-        .await
-        .into_alien_error()
-        .context(ErrorData::TriggerServiceError {
-            trigger_type: "queue".to_string(),
-            trigger_id: binding_name.to_string(),
-            reason: "Failed to receive messages".to_string(),
-        })?;
+    let messages =
+        queue
+            .receive(binding_name, 1)
+            .await
+            .context(ErrorData::TriggerServiceError {
+                trigger_type: "queue".to_string(),
+                trigger_id: binding_name.to_string(),
+                reason: "Failed to receive messages".to_string(),
+            })?;
     let count = messages.len();
 
     for msg in messages {
+        queue
+            .renew_lease(binding_name, &msg.receipt_handle, 600)
+            .await
+            .context(ErrorData::TriggerServiceError {
+                trigger_type: "queue".into(),
+                trigger_id: binding_name.into(),
+                reason: "Failed to establish delivery lease".into(),
+            })?;
         let payload_bytes = match &msg.payload {
             MessagePayload::Json(v) => v.to_string().into_bytes(),
             MessagePayload::Text(s) => s.clone().into_bytes(),
@@ -283,32 +430,31 @@ async fn poll_queue_once(
             })),
         };
 
-        match control_server
-            .send_task(task, Duration::from_secs(300))
-            .await
-        {
-            Ok(result) if result.success => {
-                if let Err(e) = queue.ack(binding_name, &msg.receipt_handle).await {
-                    warn!(queue = %binding_name, error = %e, "Failed to ack after successful handler");
-                }
-                debug!(queue = %binding_name, "Queue message processed and acked");
+        let delivery = control_server.send_task(task, timeout);
+        tokio::pin!(delivery);
+        let result = loop {
+            tokio::select! {
+                result = &mut delivery => break result,
+                _ = tokio::time::sleep(Duration::from_secs(300)) => {
+                    if let Err(error) = queue.renew_lease(binding_name, &msg.receipt_handle, 600).await {
+                        control_server.cancel_application().await;
+                        return Err(error.context(ErrorData::TriggerServiceError {
+                            trigger_type: "queue".into(), trigger_id: binding_name.into(), reason: "Delivery lease renewal failed".into(),
+                        }));
+                    }
+                },
             }
-            Ok(result) => {
-                warn!(
-                    queue = %binding_name,
-                    error_code = ?result.error_code,
-                    error_message = ?result.error_message,
-                    "Queue handler returned error, message will be retried"
-                );
-            }
-            Err(e) => {
-                warn!(
-                    queue = %binding_name,
-                    error = %e,
-                    "Failed to deliver queue message, will be retried"
-                );
-            }
-        }
+        };
+        let completion = if result.is_ok_and(|result| result.success) {
+            queue.ack(binding_name, &msg.receipt_handle).await
+        } else {
+            queue.nack(binding_name, &msg.receipt_handle).await
+        };
+        completion.context(ErrorData::TriggerServiceError {
+            trigger_type: "queue".into(),
+            trigger_id: binding_name.into(),
+            reason: "Queue completion failed".into(),
+        })?;
     }
 
     Ok(count)
@@ -718,6 +864,146 @@ mod tests {
     use futures_util::StreamExt;
     use std::collections::HashSet;
     use tonic::Request;
+
+    #[tokio::test]
+    async fn local_batches_ack_independently_and_release_shutdown_delivery_after_app_stops() {
+        let directory = tempfile::tempdir().expect("queue directory");
+        let queue = Arc::new(
+            alien_bindings::providers::queue::local::LocalQueue::new(
+                directory.path().to_path_buf(),
+            )
+            .await
+            .expect("queue"),
+        );
+        for value in ["complete", "retry"] {
+            queue
+                .send("jobs", MessagePayload::Text(value.into()))
+                .await
+                .expect("send");
+        }
+        let control = Arc::new(ControlGrpcServer::new());
+        control.supervise_task_cancellation();
+        let mut stream = control
+            .wait_for_tasks(Request::new(WaitForTasksRequest::default()))
+            .await
+            .expect("subscribe")
+            .into_inner();
+        let collectors = QueueCollectors::new(
+            HashMap::from([(
+                "jobs".into(),
+                alien_core::QueueBatchConfig {
+                    max_messages: 2,
+                    max_window_seconds: 1,
+                },
+            )]),
+            control.clone(),
+        );
+        let collector = collectors.clients["jobs"].clone();
+        let (shutdown, mut receiver) = broadcast::channel(1);
+        let poll_control = control.clone();
+        let poll_queue = queue.clone();
+        let poller = tokio::spawn(async move {
+            poll_batch_queue(
+                "jobs",
+                poll_queue,
+                &poll_control,
+                &mut receiver,
+                collector,
+                Duration::from_secs(900),
+            )
+            .await
+        });
+        let first = tokio::time::timeout(Duration::from_secs(5), stream.next())
+            .await
+            .expect("full batch")
+            .expect("stream")
+            .expect("task");
+        let Some(control::task::Payload::QueueBatch(batch)) = first.payload else {
+            panic!("typed batch");
+        };
+        assert_eq!(batch.source, "jobs");
+        assert_eq!(batch.deliveries.len(), 2);
+        assert!(queue
+            .receive("jobs", 10)
+            .await
+            .expect("inflight hidden")
+            .is_empty());
+        let outcomes = batch
+            .deliveries
+            .iter()
+            .map(|delivery| control::QueueDeliveryOutcome {
+                delivery_id: delivery.delivery_id.clone(),
+                disposition: if delivery.message.as_ref().expect("message").payload == b"complete" {
+                    1
+                } else {
+                    2
+                },
+            })
+            .collect();
+        control
+            .send_task_result(Request::new(SendTaskResultRequest {
+                task_id: first.task_id,
+                result: Some(send_task_result_request::Result::QueueBatch(
+                    control::QueueBatchResult { outcomes },
+                )),
+            }))
+            .await
+            .expect("partial result");
+        let second = tokio::time::timeout(Duration::from_secs(5), stream.next())
+            .await
+            .expect("undersized retry batch")
+            .expect("stream")
+            .expect("task");
+        let Some(control::task::Payload::QueueBatch(batch)) = second.payload else {
+            panic!("retry batch");
+        };
+        assert_eq!(batch.deliveries.len(), 1);
+        let message = batch.deliveries[0].message.as_ref().expect("message");
+        assert_eq!(message.payload, b"retry");
+        assert_eq!(message.attempt_count, 2);
+        shutdown.send(()).expect("shutdown");
+        tokio::time::timeout(Duration::from_secs(5), control.wait_for_cancelled_task())
+            .await
+            .expect("host cancellation");
+        assert!(
+            !poller.is_finished(),
+            "release must wait for the application stop barrier"
+        );
+        control.application_stopped();
+        tokio::time::timeout(Duration::from_secs(5), poller)
+            .await
+            .expect("bounded shutdown")
+            .expect("poller")
+            .expect("release");
+        collectors.join().await.expect("collectors joined");
+        drop(queue);
+        let reopened = alien_bindings::providers::queue::local::LocalQueue::new(
+            directory.path().to_path_buf(),
+        )
+        .await
+        .expect("restart queue");
+        let surviving = reopened
+            .receive("jobs", 10)
+            .await
+            .expect("restart delivery");
+        assert_eq!(
+            surviving.len(),
+            1,
+            "completed message must stay deleted across restart"
+        );
+        assert!(matches!(&surviving[0].payload, MessagePayload::Text(value) if value == "retry"));
+        assert_eq!(surviving[0].attempt, 3);
+        assert_ne!(surviving[0].receipt_handle, message.receipt_handle);
+        reopened
+            .ack("jobs", &surviving[0].receipt_handle)
+            .await
+            .expect("complete survivor");
+        assert!(reopened
+            .receive("jobs", 10)
+            .await
+            .expect("empty")
+            .is_empty());
+    }
 
     async fn acknowledge(server: &ControlGrpcServer, task: &Task) {
         server

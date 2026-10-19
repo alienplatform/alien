@@ -980,10 +980,17 @@ pub trait Queue: Binding {
         Ok(results)
     }
 
-    /// Renew a current delivery lease. AWS, Pub/Sub and local request 30 seconds;
-    /// Azure renews the queue's configured lock. This is not a uniform duration
-    /// guarantee and cannot revive an expired or superseded delivery.
-    async fn renew_lease(&self, queue: &str, receipt_handle: &str) -> Result<()>;
+    /// Reset the remaining lease to a caller-selected duration (1–600 seconds).
+    /// AWS, Pub/Sub and local replace the remaining duration; selecting less than
+    /// the current remainder intentionally shortens it. Azure instead renews its
+    /// configured queue lock duration, ignoring this duration hint. Renewal cannot
+    /// revive an expired or superseded delivery and is not a uniform-time guarantee.
+    async fn renew_lease(
+        &self,
+        queue: &str,
+        receipt_handle: &str,
+        duration_seconds: u32,
+    ) -> Result<()>;
 
     /// Negative-acknowledge a message: release its lease so it becomes
     /// immediately available for redelivery, without waiting out the
@@ -1566,4 +1573,18 @@ mod tests {
         assert_eq!(parsed.env.get("A").map(String::as_str), Some("b"));
         assert_eq!(parsed.timeout_ms, Some(60_000));
     }
+}
+
+/// Validate the portable renewal request before contacting a provider.
+pub(crate) fn validate_lease_duration(duration_seconds: u32) -> Result<()> {
+    if !(1..=600).contains(&duration_seconds) {
+        return Err(alien_error::AlienError::new(
+            crate::error::ErrorData::InvalidInput {
+                operation_context: "renew queue lease".into(),
+                details: "durationSeconds must be between 1 and 600".into(),
+                field_name: Some("durationSeconds".into()),
+            },
+        ));
+    }
+    Ok(())
 }

@@ -407,14 +407,20 @@ impl Queue for LocalQueue {
             .await
     }
 
-    async fn renew_lease(&self, _queue: &str, receipt_handle: &str) -> Result<()> {
+    async fn renew_lease(
+        &self,
+        _queue: &str,
+        receipt_handle: &str,
+        duration_seconds: u32,
+    ) -> Result<()> {
+        crate::traits::validate_lease_duration(duration_seconds)?;
         let (id, receipt) = Self::parse_receipt_handle(receipt_handle)
             .ok_or_else(|| stale_receipt_error(0, "renew"))?;
         self.store.with_conn(|conn| async move {
             let now = Utc::now().timestamp_millis();
             let updated = conn.execute(
                 "UPDATE messages SET visible_at = ?1 WHERE id = ?2 AND receipt_handle = ?3 AND visible_at > ?4",
-                (now + (LEASE_SECONDS * 1000) as i64, id, receipt.as_str(), now),
+                (now + i64::from(duration_seconds) * 1000, id, receipt.as_str(), now),
             ).await.into_alien_error().context(queue_error("renew", "failed to renew delivery lease".to_string()))?;
             if updated != 1 {
                 return Err(stale_receipt_error(id, "renew"));
@@ -536,7 +542,7 @@ mod tests {
         assert_eq!(first.len(), 1);
         assert_eq!(second.len(), 1);
         queue
-            .renew_lease("q", &first[0].receipt_handle)
+            .renew_lease("q", &first[0].receipt_handle, 30)
             .await
             .expect("renew current delivery");
         assert!(queue
@@ -553,7 +559,7 @@ mod tests {
         assert_eq!(renewed[0].attempt, 2);
         assert_ne!(second[0].receipt_handle, renewed[0].receipt_handle);
         queue
-            .renew_lease("q", &second[0].receipt_handle)
+            .renew_lease("q", &second[0].receipt_handle, 30)
             .await
             .expect_err("superseded lease");
         let outcomes = queue
@@ -573,7 +579,7 @@ mod tests {
             crate::traits::QueueAckResult::Failed { .. }
         ));
         queue
-            .renew_lease("q", &first[0].receipt_handle)
+            .renew_lease("q", &first[0].receipt_handle, 30)
             .await
             .expect_err("deleted delivery");
         queue
@@ -601,6 +607,67 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn explicit_lease_duration_extends_and_can_intentionally_shorten() {
+        let (queue, _dir) = create_test_queue().await;
+        queue
+            .send("q", MessagePayload::Text("work".into()))
+            .await
+            .expect("send");
+        let messages = queue
+            .receive_inner(1, Duration::from_secs(600))
+            .await
+            .expect("long lease");
+        assert_eq!(messages.len(), 1);
+        queue
+            .renew_lease("q", &messages[0].receipt_handle, 600)
+            .await
+            .expect("renew long lease");
+        // Advance the persisted visibility clock, without a wall-clock sleep.
+        queue
+            .store
+            .with_conn(|conn| async move {
+                conn.execute("UPDATE messages SET visible_at = visible_at - 45000", ())
+                    .await
+                    .into_alien_error()
+                    .context(queue_error("test_clock", "Advance visibility clock".into()))?;
+                Ok(())
+            })
+            .await
+            .expect("advance 45 seconds");
+        assert!(queue
+            .receive("q", 1)
+            .await
+            .expect("still leased")
+            .is_empty());
+        queue
+            .renew_lease("q", &messages[0].receipt_handle, 1)
+            .await
+            .expect("explicitly shorten lease");
+        queue
+            .store
+            .with_conn(|conn| async move {
+                conn.execute("UPDATE messages SET visible_at = visible_at - 2000", ())
+                    .await
+                    .into_alien_error()
+                    .context(queue_error("test_clock", "Advance visibility clock".into()))?;
+                Ok(())
+            })
+            .await
+            .expect("advance two seconds");
+        let redelivered = queue
+            .receive("q", 1)
+            .await
+            .expect("shortened lease expired");
+        assert_eq!(redelivered.len(), 1);
+        assert_eq!(redelivered[0].attempt, 2);
+        assert_ne!(messages[0].receipt_handle, redelivered[0].receipt_handle);
+        queue
+            .ack("q", &redelivered[0].receipt_handle)
+            .await
+            .expect("complete");
+    }
+
+    #[tokio::test]
     async fn expired_lease_cannot_be_renewed_before_redelivery() {
         let (queue, _dir) = create_test_queue().await;
         queue
@@ -613,7 +680,7 @@ mod tests {
             .expect("expired delivery");
         assert_eq!(messages.len(), 1);
         queue
-            .renew_lease("q", &messages[0].receipt_handle)
+            .renew_lease("q", &messages[0].receipt_handle, 30)
             .await
             .expect_err("expired lease");
         let redelivered = queue.receive("q", 1).await.expect("redelivery");

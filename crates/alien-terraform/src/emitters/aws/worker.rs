@@ -327,11 +327,11 @@ fn queue_trigger_resources(
     let mut resources = Vec::new();
     let mut index = 0usize;
     for trigger in &function.triggers {
-        let WorkerTrigger::Queue { queue } = trigger else {
+        let WorkerTrigger::Queue { queue, batch } = trigger else {
             continue;
         };
         let queue_label = label_for_ref(ctx, queue)?;
-        resources.push(resource_block(
+        let mut mapping = resource_block(
             "aws_lambda_event_source_mapping",
             &format!("{label}_queue_{index}"),
             [
@@ -343,10 +343,43 @@ fn queue_trigger_resources(
                     "function_name",
                     expr::traversal(["aws_lambda_function", label, "function_name"]),
                 ),
-                attr("batch_size", Expression::Number(hcl::Number::from(1i64))),
+                attr(
+                    "batch_size",
+                    Expression::Number(hcl::Number::from(
+                        batch
+                            .as_ref()
+                            .map_or(1, |batch| i64::from(batch.max_messages)),
+                    )),
+                ),
+                attr(
+                    "maximum_batching_window_in_seconds",
+                    Expression::Number(hcl::Number::from(
+                        batch
+                            .as_ref()
+                            .map_or(0, |batch| i64::from(batch.max_window_seconds)),
+                    )),
+                ),
+                attr(
+                    "function_response_types",
+                    Expression::Array(if batch.is_some() {
+                        vec![Expression::String("ReportBatchItemFailures".to_string())]
+                    } else {
+                        Vec::new()
+                    }),
+                ),
                 attr("enabled", Expression::Bool(true)),
             ],
-        ));
+        );
+        if let Some(capacity) = function.queue_source_maximum_concurrency() {
+            mapping.body.0.push(nested_block(
+                "scaling_config",
+                vec![attr(
+                    "maximum_concurrency",
+                    Expression::Number(hcl::Number::from(capacity)),
+                )],
+            ));
+        }
+        resources.push(mapping);
         index += 1;
     }
     Ok(resources)

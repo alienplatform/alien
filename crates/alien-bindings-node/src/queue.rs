@@ -166,9 +166,9 @@ impl QueueHandle {
 
     /// Renew the delivery lease using the provider's supported duration.
     #[napi]
-    pub async fn renew_lease(&self, receipt: String) -> napi::Result<()> {
+    pub async fn renew_lease(&self, receipt: String, duration_seconds: u32) -> napi::Result<()> {
         self.inner
-            .renew_lease(&receipt)
+            .renew_lease(&receipt, duration_seconds)
             .await
             .map_err(map_alien_error)
     }

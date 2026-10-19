@@ -599,11 +599,12 @@ impl QueueHandle {
         &self,
         py: Python<'py>,
         receipt_handle: String,
+        duration_seconds: u32,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         future_into_py(py, async move {
             inner
-                .renew_lease(&receipt_handle)
+                .renew_lease(&receipt_handle, duration_seconds)
                 .await
                 .map_err(map_alien_error)
         })

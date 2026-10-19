@@ -25,6 +25,11 @@ use alien_worker_protocol::control::{
     SendTaskResultRequest, Task, TaskError, TaskSuccess, WaitForTasksRequest,
 };
 
+pub use alien_worker_protocol::control::{
+    queue_delivery_outcome::Disposition as QueueDisposition, QueueBatch, QueueBatchResult,
+    QueueDelivery, QueueDeliveryOutcome,
+};
+
 /// Storage event delivered to handlers
 #[derive(Debug, Clone)]
 pub struct StorageEvent {
@@ -62,11 +67,18 @@ type QueueHandler =
 type CommandHandler =
     Box<dyn Fn(Vec<u8>) -> Pin<Box<dyn Future<Output = Result<Vec<u8>>> + Send>> + Send + Sync>;
 
+type QueueBatchHandler = Box<
+    dyn Fn(QueueBatch) -> Pin<Box<dyn Future<Output = Result<QueueBatchResult>> + Send>>
+        + Send
+        + Sync,
+>;
+
 /// Registered handlers
 struct Handlers {
     storage: HashMap<String, StorageHandler>,
     cron: HashMap<String, CronHandler>,
     queue: HashMap<String, QueueHandler>,
+    queue_batch: HashMap<String, QueueBatchHandler>,
     command: HashMap<String, CommandHandler>,
 }
 
@@ -76,6 +88,7 @@ impl Default for Handlers {
             storage: HashMap::new(),
             cron: HashMap::new(),
             queue: HashMap::new(),
+            queue_batch: HashMap::new(),
             command: HashMap::new(),
         }
     }
@@ -293,6 +306,19 @@ impl AlienContext {
         info!(queue = %queue, "Registered queue message handler");
     }
 
+    /// Register a typed batch handler. Return exactly one outcome per delivery ID.
+    /// Await registration before starting the task loop.
+    pub async fn on_queue_batch<F, Fut>(&self, queue: &str, handler: F)
+    where
+        F: Fn(QueueBatch) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<QueueBatchResult>> + Send + 'static,
+    {
+        self.handlers.write().await.queue_batch.insert(
+            queue.to_string(),
+            Box::new(move |batch| Box::pin(handler(batch))),
+        );
+    }
+
     /// Registers a command handler for remote command calls.
     ///
     /// # Example
@@ -499,6 +525,21 @@ impl AlienContext {
             debug!(handler_type = "queue", resource = %queue, "Registered handler with Worker runtime");
         }
 
+        for queue in handlers.queue_batch.keys() {
+            client
+                .register_event_handler(RegisterEventHandlerRequest {
+                    handler_type: "queueBatch".to_string(),
+                    resource_name: queue.clone(),
+                })
+                .await
+                .into_alien_error()
+                .context(ErrorData::GrpcCallFailed {
+                    service: "ControlService".to_string(),
+                    method: "RegisterEventHandler".to_string(),
+                    reason: "Failed to register queue batch handler".to_string(),
+                })?;
+        }
+
         // Register command handlers
         for command in handlers.command.keys() {
             let request = tonic::Request::new(RegisterEventHandlerRequest {
@@ -573,6 +614,40 @@ impl AlienContext {
                 )
                 .await
             }
+            Some(TaskPayload::QueueBatch(batch)) => {
+                let handlers = self.handlers.read().await;
+                let result = match handlers
+                    .queue_batch
+                    .get(&batch.source)
+                    .or_else(|| handlers.queue_batch.get("*"))
+                {
+                    Some(handler) => match handler(batch).await {
+                        Ok(result) => TaskResult::QueueBatch(result),
+                        Err(error) => TaskResult::Error(TaskError {
+                            code: "HANDLER_ERROR".into(),
+                            message: error.to_string(),
+                        }),
+                    },
+                    None => TaskResult::Error(TaskError {
+                        code: "HANDLER_NOT_FOUND".into(),
+                        message: "No queue batch handler registered".into(),
+                    }),
+                };
+                self.get_control_client()
+                    .await?
+                    .send_task_result(SendTaskResultRequest {
+                        task_id,
+                        result: Some(result),
+                    })
+                    .await
+                    .into_alien_error()
+                    .context(ErrorData::GrpcCallFailed {
+                        service: "ControlService".into(),
+                        method: "SendTaskResult".into(),
+                        reason: "Failed to send batch outcomes".into(),
+                    })?;
+                return Ok(());
+            }
             Some(TaskPayload::ArcCommand(cmd)) => {
                 self.handle_command(&task_id, &cmd.command_name, cmd.params, &cmd.response_url)
                     .await
@@ -631,8 +706,9 @@ impl AlienContext {
         {
             handler(message).await
         } else {
-            warn!(queue = %queue, "No handler registered for queue message");
-            Ok(())
+            Err(AlienError::new(ErrorData::Other {
+                message: format!("No handler registered for queue '{queue}'"),
+            }))
         }
     }
 
@@ -759,5 +835,49 @@ impl AlienContext {
     /// Gets the current number of registered wait_until tasks.
     pub async fn get_task_count(&self) -> Result<u32> {
         self.wait_until_context.get_task_count().await
+    }
+}
+
+#[cfg(test)]
+mod queue_handler_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[tokio::test]
+    async fn unmatched_queue_fails_and_wildcard_receives_original_source() {
+        let bindings =
+            Bindings::from_env_map(HashMap::from([("ALIEN_PLATFORM".into(), "local".into())]))
+                .expect("bindings");
+        let context = AlienContext::new(
+            Arc::new(WaitUntilContext::new(Some("worker".into()))),
+            Arc::new(bindings),
+        );
+        let message = QueueMessage {
+            id: "message".into(),
+            payload: b"payload".to_vec(),
+            receipt_handle: "receipt".into(),
+            source: "jobs".into(),
+            attempt_count: 1,
+        };
+        context
+            .handle_queue_message("jobs", message.clone())
+            .await
+            .expect_err("unregistered queue must retry");
+        let calls = Arc::new(AtomicUsize::new(0));
+        let count = calls.clone();
+        context.handlers.write().await.queue.insert(
+            "*".into(),
+            Box::new(move |message| {
+                assert_eq!(message.source, "jobs");
+                assert_eq!(message.payload, b"payload");
+                count.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async { Ok(()) })
+            }),
+        );
+        context
+            .handle_queue_message("jobs", message)
+            .await
+            .expect("wildcard handler");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 }

@@ -450,7 +450,8 @@ function makeQueue(handle: () => Promise<RawQueueHandle>): Queue {
         async raw =>
           JSON.parse(await raw.ackBatch(receipts)) as import("./types.js").QueueAckResult[],
       ),
-    renewLease: receipt => guard(handle, raw => raw.renewLease(receipt)),
+    renewLease: (receipt, durationSeconds) =>
+      guard(handle, raw => raw.renewLease(receipt, durationSeconds)),
     nack: receipt => guard(handle, raw => raw.nack(receipt)),
     purge: () => guard(handle, raw => raw.purge()),
   }

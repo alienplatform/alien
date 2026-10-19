@@ -88,11 +88,17 @@ fn visibility_timeout(ctx: &EmitContext<'_>) -> u32 {
         if function.triggers.iter().any(|trigger| {
             matches!(
                 trigger,
-                WorkerTrigger::Queue { queue }
+                WorkerTrigger::Queue { queue, .. }
                     if queue.resource_type == Queue::RESOURCE_TYPE && queue.id == ctx.resource_id
             )
         }) {
-            max_function_timeout = max_function_timeout.max(function.timeout_seconds);
+            max_function_timeout = max_function_timeout.max(
+                function.timeout_seconds.saturating_mul(6).saturating_add(
+                    function
+                        .queue_batch_config(ctx.resource_id)
+                        .map_or(0, |batch| batch.max_window_seconds),
+                ),
+            );
         }
     }
 
@@ -100,7 +106,7 @@ fn visibility_timeout(ctx: &EmitContext<'_>) -> u32 {
         return 30;
     }
 
-    max_function_timeout.saturating_mul(6).clamp(30, 43_200)
+    max_function_timeout.clamp(30, 43_200)
 }
 
 /// IAM policies attaching granted `queue/*` permission sets to the owning

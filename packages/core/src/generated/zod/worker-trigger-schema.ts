@@ -4,13 +4,17 @@
 */
 
 import * as z from "zod";
+import { QueueBatchConfigSchema } from "./queue-batch-config-schema.js";
 import { ResourceRefSchema } from "./resource-ref-schema.js";
 
 /**
  * @description Defines what triggers a worker execution.
  */
 export const WorkerTriggerSchema = z.union([z.object({
-    get "queue"(){
+    get "batch"(){
+                return z.union([QueueBatchConfigSchema, z.null()]).optional()
+              },
+get "queue"(){
                 return ResourceRefSchema.describe("Reference to a resource by its stable id and resource type.")
               },
 "type": z.enum(["queue"])

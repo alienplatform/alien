@@ -251,13 +251,19 @@ impl Queue for GcpPubSubQueue {
         Ok(results)
     }
 
-    async fn renew_lease(&self, _queue: &str, receipt_handle: &str) -> Result<()> {
+    async fn renew_lease(
+        &self,
+        _queue: &str,
+        receipt_handle: &str,
+        duration_seconds: u32,
+    ) -> Result<()> {
+        crate::traits::validate_lease_duration(duration_seconds)?;
         self.client
             .modify_ack_deadline(
                 self.subscription.clone(),
                 ModifyAckDeadlineRequest {
                     ack_ids: vec![receipt_handle.to_string()],
-                    ack_deadline_seconds: 30,
+                    ack_deadline_seconds: duration_seconds as i32,
                 },
             )
             .await

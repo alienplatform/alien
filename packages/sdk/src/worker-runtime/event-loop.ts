@@ -20,6 +20,7 @@ import {
   type CronEvent,
   getCommands,
   getEventHandlers,
+  type QueueDeliveryOutcome,
   type QueueMessageEvent,
   runCommand,
 } from "./registry.js"
@@ -83,6 +84,8 @@ export class EventLoop {
   private readonly endpoint: string
   private readonly service: ReturnType<typeof getControlServiceDefinition>
   private running = false
+  private readonly shutdown = new AbortController()
+  private sendChannel: Channel | undefined
 
   constructor(
     channel: Channel,
@@ -103,8 +106,8 @@ export class EventLoop {
    */
   private async getSendClient(): Promise<GeneratedClient> {
     if (!this.sendClient) {
-      const sendChannel = await createGrpcChannel(this.endpoint)
-      this.sendClient = createClient(this.service, sendChannel)
+      this.sendChannel = await createGrpcChannel(this.endpoint)
+      this.sendClient = createClient(this.service, this.sendChannel)
     }
     return this.sendClient
   }
@@ -145,20 +148,35 @@ export class EventLoop {
    */
   async start(): Promise<void> {
     this.running = true
-    while (this.running) {
-      try {
-        await this.processTasks()
-      } catch (error) {
-        logSystemError(
-          `[alien:event-loop] processTasks threw: error=${formatEventLoopError(error)}`,
-        )
-        await new Promise(resolve => setTimeout(resolve, 1000))
+    try {
+      while (this.running) {
+        try {
+          await this.processTasks()
+        } catch (error) {
+          if (!this.running) break
+          logSystemError(
+            `[alien:event-loop] processTasks threw: error=${formatEventLoopError(error)}`,
+          )
+          await new Promise(resolve => setTimeout(resolve, 1000))
+        }
       }
+    } finally {
+      this.running = false
+      this.sendChannel?.close()
     }
   }
 
+  /** Stop receiving tasks; an active handler finishes before start resolves. */
+  stop(): void {
+    this.running = false
+    this.shutdown.abort()
+  }
+
   private async processTasks(): Promise<void> {
-    const stream = this.client.waitForTasks({ applicationId: this.applicationId })
+    const stream = this.client.waitForTasks(
+      { applicationId: this.applicationId },
+      { signal: this.shutdown.signal },
+    )
     for await (const task of stream) {
       try {
         await this.handleTask(task)
@@ -178,7 +196,9 @@ export class EventLoop {
         return
       }
 
-      let matchedEntry: { handler: (event: unknown) => Promise<void> } | undefined
+      let matchedEntry:
+        | { handler: (event: unknown) => Promise<void> | Promise<QueueDeliveryOutcome[]> }
+        | undefined
       for (const entry of getEventHandlers().values()) {
         const src = entry.registration.source
         if (task.storageEvent && entry.registration.type === "storage") {
@@ -188,6 +208,11 @@ export class EventLoop {
           }
         } else if (task.cronEvent && entry.registration.type === "cron") {
           if (src === "*" || src === task.cronEvent.scheduleName) {
+            matchedEntry = entry
+            break
+          }
+        } else if (task.queueBatch && entry.registration.type === "queueBatch") {
+          if (sourceMatches(src, task.queueBatch.source)) {
             matchedEntry = entry
             break
           }
@@ -211,6 +236,33 @@ export class EventLoop {
         return
       }
 
+      if (task.queueBatch) {
+        const outcomes = await matchedEntry.handler({
+          source: task.queueBatch.source,
+          deliveries: task.queueBatch.deliveries.map(delivery => ({
+            deliveryId: delivery.deliveryId,
+            message: delivery.message ? this.fromProtoQueueMessage(delivery.message) : undefined,
+          })),
+        })
+        // The runtime validates the complete bijection before acknowledging any delivery.
+        const client = await this.getSendClient()
+        await wrapGrpcCall("ControlService", "SendTaskResult", async () => {
+          await client.sendTaskResult(
+            {
+              taskId: task.taskId,
+              queueBatch: {
+                outcomes: (outcomes ?? []).map(outcome => ({
+                  deliveryId: outcome.deliveryId,
+                  disposition:
+                    outcome.disposition === "success" ? 1 : outcome.disposition === "retry" ? 2 : 0,
+                })),
+              },
+            },
+            { signal: AbortSignal.timeout(30_000) },
+          )
+        })
+        return
+      }
       if (task.storageEvent) {
         await matchedEntry.handler(this.fromProtoStorageEvent(task.storageEvent))
       } else if (task.cronEvent) {

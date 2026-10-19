@@ -115,3 +115,46 @@ AWS and Azure scope access to the selected table. Firestore access covers the
 project's documents because IAM cannot isolate collections in the shared
 default database. Raw value limits are 408,576 bytes for DynamoDB, 783,360 bytes
 for Firestore, and 24,576 bytes for Azure/local.
+
+## Worker queue batches
+
+Install the optional `alienplatform[worker]` dependencies and configure the
+Worker's queue trigger with `batch: {maxMessages: 10, maxWindowSeconds: 2}`.
+Register handlers using the logical queue resource ID:
+
+```python
+import asyncio
+from alienplatform import QueueBatch, QueueOutcome, on_queue_batch, run_worker
+
+async def process(batch: QueueBatch) -> list[QueueOutcome]:
+    outcomes = []
+    for delivery in batch.deliveries:
+        # Persist the application's work before returning success.
+        await persist(delivery.message.payload)
+        outcomes.append(QueueOutcome(delivery.delivery_id, "success"))
+    return outcomes
+
+on_queue_batch("jobs", process)
+asyncio.run(run_worker())
+```
+
+Return exactly one `success` or `retry` for each delivery ID. Missing, duplicate,
+unknown, or invalid outcomes reject the batch before acknowledging any item.
+An exception retries the batch. The runtime owns acknowledgment; do not also
+acknowledge these deliveries through a queue binding. `on_queue_message`
+continues to handle triggers without batch configuration. `"*"` matches any
+otherwise unregistered source.
+
+A batch may contain fewer than `maxMessages`. The collection window is a maximum
+wait, not a periodic schedule or a minimum batch size. Messages are unordered and
+may be delivered again, including after an uncertain acknowledgment. Make work
+idempotent. Distinct deliveries can share a provider message ID; use
+`delivery_id` when constructing outcomes. Python handlers execute sequentially
+within each application process; this does not provide a distributed lock.
+
+For applications that explicitly receive through a queue binding,
+`ack_batch(receipts)` returns one result per receipt and is not atomic.
+`renew_lease(receipt, duration_seconds)` requires 1–600 seconds. AWS, GCP, and
+local queues reset the remaining lease, so a smaller value intentionally
+shortens it. Azure renews the queue's configured lock duration; the requested
+value is a validated hint, not an exact duration guarantee.

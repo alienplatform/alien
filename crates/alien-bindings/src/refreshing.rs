@@ -493,10 +493,15 @@ impl Queue for RefreshingQueue {
         self.current().await?.ack_batch(queue, receipts).await
     }
 
-    async fn renew_lease(&self, queue: &str, receipt_handle: &str) -> Result<()> {
+    async fn renew_lease(
+        &self,
+        queue: &str,
+        receipt_handle: &str,
+        duration_seconds: u32,
+    ) -> Result<()> {
         self.current()
             .await?
-            .renew_lease(queue, receipt_handle)
+            .renew_lease(queue, receipt_handle, duration_seconds)
             .await
     }
 

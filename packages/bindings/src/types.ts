@@ -258,8 +258,8 @@ export interface Queue {
   ack(receipt: string): Promise<void>
   /** Complete independently; this is not an atomic operation. */
   ackBatch(receipts: string[]): Promise<QueueAckResult[]>
-  /** Renew the current delivery; providers do not guarantee identical durations. */
-  renewLease(receipt: string): Promise<void>
+  /** Reset remaining lease to 1–600 seconds, which may shorten it. Azure renews its configured lock instead. */
+  renewLease(receipt: string, durationSeconds: number): Promise<void>
   /** Negative-acknowledge a message, making it immediately redeliverable. */
   nack(receipt: string): Promise<void>
   /** Delete every message in the queue. */

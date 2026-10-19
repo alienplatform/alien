@@ -272,9 +272,9 @@ class Queue:
         return json.loads(await (await self._handle.get()).ack_batch(receipts))
 
     @translate_errors
-    async def renew_lease(self, receipt_handle: str) -> None:
-        """Renew a current lease; provider lock durations differ."""
-        await (await self._handle.get()).renew_lease(receipt_handle)
+    async def renew_lease(self, receipt_handle: str, duration_seconds: int) -> None:
+        """Reset remaining lease to 1–600 seconds; Azure renews its configured lock instead."""
+        await (await self._handle.get()).renew_lease(receipt_handle, duration_seconds)
 
     @translate_errors
     async def nack(self, receipt_handle: str) -> None:

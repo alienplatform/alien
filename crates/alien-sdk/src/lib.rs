@@ -115,6 +115,9 @@ pub mod worker {
     //! }
     //! ```
 
-    pub use crate::alien_context::{AlienContext, CronEvent, QueueMessage, StorageEvent};
+    pub use crate::alien_context::{
+        AlienContext, CronEvent, QueueBatch, QueueBatchResult, QueueDelivery, QueueDeliveryOutcome,
+        QueueDisposition, QueueMessage, StorageEvent,
+    };
     pub use crate::wait_until::{DrainConfig, DrainResponse, WaitUntil, WaitUntilContext};
 }

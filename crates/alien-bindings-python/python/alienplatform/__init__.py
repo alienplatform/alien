@@ -40,8 +40,24 @@ from .bindings import (
     worker,
 )
 from .errors import AlienError
+from .worker_runtime import (
+    QueueBatch,
+    QueueDelivery,
+    QueueEvent,
+    QueueOutcome,
+    on_queue_batch,
+    on_queue_message,
+    run_worker,
+)
 
 __all__ = [
+    "QueueBatch",
+    "QueueDelivery",
+    "QueueEvent",
+    "QueueOutcome",
+    "on_queue_batch",
+    "on_queue_message",
+    "run_worker",
     "Ai",
     "AiConnection",
     "Bindings",

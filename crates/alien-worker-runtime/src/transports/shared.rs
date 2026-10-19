@@ -9,9 +9,7 @@ use std::{future::Future, sync::Arc, time::Duration};
 
 use alien_commands::Envelope;
 #[cfg(any(feature = "gcp", feature = "azure"))]
-use alien_worker_protocol::control::{
-    CronEvent, QueueMessage as ProtoQueueMessage, StorageEvent as ProtoStorageEvent,
-};
+use alien_worker_protocol::control::{CronEvent, StorageEvent as ProtoStorageEvent};
 use alien_worker_protocol::{
     control::{self, ArcCommand, Task},
     ControlGrpcServer,
@@ -487,30 +485,37 @@ pub(crate) async fn handle_command(
 
 /// Send a queue message to the application.
 #[cfg(any(feature = "gcp", feature = "azure"))]
+pub(crate) fn queue_message_to_proto(
+    qm: &alien_core::QueueMessage,
+) -> alien_worker_protocol::control::QueueMessage {
+    alien_worker_protocol::control::QueueMessage {
+        id: qm.id.clone(),
+        source: qm.source.clone(),
+        payload: match &qm.payload {
+            alien_core::MessagePayload::Json(value) => value.to_string().into_bytes(),
+            alien_core::MessagePayload::Text(value) => value.as_bytes().to_vec(),
+        },
+        receipt_handle: qm.receipt_handle.clone(),
+        attempt_count: qm.attempt_count.unwrap_or(1),
+        timestamp: Some(Timestamp {
+            seconds: qm.timestamp.timestamp(),
+            nanos: qm.timestamp.timestamp_subsec_nanos() as i32,
+        }),
+        attributes: qm.attributes.clone(),
+    }
+}
+
+#[cfg(any(feature = "gcp", feature = "azure"))]
 pub(crate) async fn send_queue_message(
     qm: &alien_core::QueueMessage,
     control_server: &ControlGrpcServer,
     timeout: Duration,
 ) -> std::result::Result<(), String> {
-    let payload_bytes = match &qm.payload {
-        alien_core::MessagePayload::Json(v) => v.to_string().into_bytes(),
-        alien_core::MessagePayload::Text(s) => s.clone().into_bytes(),
-    };
-
     let task = Task {
         task_id: uuid::Uuid::new_v4().to_string(),
-        payload: Some(control::task::Payload::QueueMessage(ProtoQueueMessage {
-            id: qm.id.clone(),
-            source: qm.source.clone(),
-            payload: payload_bytes,
-            receipt_handle: qm.receipt_handle.clone(),
-            attempt_count: qm.attempt_count.unwrap_or(1),
-            timestamp: Some(Timestamp {
-                seconds: qm.timestamp.timestamp(),
-                nanos: qm.timestamp.timestamp_subsec_nanos() as i32,
-            }),
-            attributes: qm.attributes.clone(),
-        })),
+        payload: Some(control::task::Payload::QueueMessage(
+            queue_message_to_proto(qm),
+        )),
     };
 
     match control_server.send_task(task, timeout).await {
@@ -539,10 +544,23 @@ pub(crate) async fn dispatch_queue_messages(
     queue_messages: Vec<alien_core::QueueMessage>,
     control_server: &ControlGrpcServer,
     command_timeout: Duration,
+    collectors: &std::collections::HashMap<String, super::queue_batch::QueueCollector>,
 ) -> Response<Body> {
+    let deadline = Instant::now() + command_timeout;
     for qm in queue_messages {
         if let Some(envelope) = try_parse_envelope(&qm) {
             process_received_command(&envelope, control_server, command_timeout).await;
+        } else if let Some(collector) = collectors.get(&qm.source) {
+            if !collector
+                .deliver(queue_message_to_proto(&qm), deadline)
+                .await
+            {
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Queue delivery not completed",
+                )
+                    .into_response();
+            }
         } else if let Err(e) = send_queue_message(&qm, control_server, command_timeout).await {
             error!(error = %e, "Failed to send queue message");
             return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to process event").into_response();

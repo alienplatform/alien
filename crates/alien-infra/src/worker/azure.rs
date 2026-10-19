@@ -10,9 +10,9 @@ use alien_azure_clients::long_running_operation::{LongRunningOperation, Operatio
 use alien_azure_clients::models::container_apps::{
     Configuration, ConfigurationActiveRevisionsMode, Container, ContainerApp,
     ContainerAppProperties, ContainerAppPropertiesProvisioningState, ContainerResources,
-    CustomDomain, CustomDomainBindingType, EnvironmentVar, IdentitySettings,
-    IdentitySettingsLifecycle, IngressTransport, RegistryCredentials, Scale, Secret, Template,
-    TrafficWeight,
+    CustomDomain, CustomDomainBindingType, CustomScaleRule, EnvironmentVar, IdentitySettings,
+    IdentitySettingsLifecycle, IngressTransport, RegistryCredentials, Scale, ScaleRule, Secret,
+    Template, TrafficWeight,
 };
 use alien_azure_clients::AzureClientConfig;
 use alien_client_core::ErrorData as CloudClientErrorData;
@@ -706,23 +706,6 @@ impl AzureWorkerController {
             self.update_rbac_wait_required = false;
         }
 
-        // Product limitation: Only allow at most one queue trigger per worker
-        let queue_trigger_count = func_cfg
-            .triggers
-            .iter()
-            .filter(|trigger| matches!(trigger, alien_core::WorkerTrigger::Queue { .. }))
-            .count();
-
-        if queue_trigger_count > 1 {
-            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: format!(
-                    "Worker '{}' has {} queue triggers, but only one queue trigger per worker is currently supported",
-                    func_cfg.id, queue_trigger_count
-                ),
-                resource_id: Some(func_cfg.id.clone()),
-            }));
-        }
-
         // Derive deterministic resource names.
         let container_app_name = get_azure_container_app_name(ctx.resource_prefix, &func_cfg.id);
 
@@ -818,7 +801,7 @@ impl AzureWorkerController {
         let mut cron_index = 0usize;
         for trigger in &func_cfg.triggers {
             let operation = match trigger {
-                alien_core::WorkerTrigger::Queue { queue } => {
+                alien_core::WorkerTrigger::Queue { queue, .. } => {
                     self.create_dapr_service_bus_component(
                         ctx,
                         &container_app_name,
@@ -1578,7 +1561,7 @@ impl AzureWorkerController {
         let mut cron_index = 0usize;
         for trigger in &func_cfg.triggers {
             match trigger {
-                alien_core::WorkerTrigger::Queue { queue } => {
+                alien_core::WorkerTrigger::Queue { queue, .. } => {
                     info!(worker=%func_cfg.id, queue=%queue.id, "Creating Dapr Service Bus component");
                     let operation = match self
                         .create_dapr_service_bus_component(
@@ -2638,7 +2621,7 @@ impl AzureWorkerController {
             let mut cron_index = 0usize;
             for trigger in &current_config.triggers {
                 match trigger {
-                    alien_core::WorkerTrigger::Queue { queue } => {
+                    alien_core::WorkerTrigger::Queue { queue, .. } => {
                         let operation = match self
                             .create_dapr_service_bus_component(
                                 ctx,
@@ -4057,7 +4040,7 @@ impl AzureWorkerController {
         // IMPORTANT: Start with func.environment which includes injected vars from DeploymentConfig
         let complete_env = EnvironmentVariableBuilder::try_new(&func.environment)?
             .add_worker_runtime_env_vars(ctx, &func.id, func.timeout_seconds)?
-            .add_linked_resources(&func.links, ctx, &func.id)
+            .add_linked_resources(&func.runtime_binding_links(), ctx, &func.id)
             .await?
             .add_self_worker_binding(&func.id, self_binding_params.as_ref())?
             .build();
@@ -4274,7 +4257,7 @@ impl AzureWorkerController {
                 principal_id: None,
                 tenant_id: None,
                 type_: ManagedServiceIdentityType::UserAssigned,
-                user_assigned_identities: Some(UserAssignedIdentities(identity_map)),
+                user_assigned_identities: Some(UserAssignedIdentities(Some(identity_map))),
             })
         } else {
             None
@@ -4284,9 +4267,19 @@ impl AzureWorkerController {
         // Dapr handles delivery for queue (Service Bus), storage (blob), and cron triggers.
         let needs_dapr = func.commands_enabled || !func.triggers.is_empty();
         let dapr_config = if needs_dapr {
-            use alien_azure_clients::models::container_apps::{Dapr, DaprAppProtocol};
+            use alien_azure_clients::models::container_apps::{
+                Dapr, DaprAppHealth, DaprAppProtocol,
+            };
 
             Some(Dapr {
+                app_health: Some(DaprAppHealth {
+                    enabled: Some(true),
+                    path: Some("/__alien/health".into()),
+                    probe_interval_seconds: std::num::NonZeroU32::new(1),
+                    probe_timeout_milliseconds: std::num::NonZeroU32::new(1000),
+                    threshold: std::num::NonZeroU32::new(1),
+                }),
+                max_concurrency: Some(100),
                 app_id: Some(container_app_name.to_string()),
                 app_port: Some(8080), // Port that alien-worker-runtime listens on
                 app_protocol: DaprAppProtocol::Http,
@@ -4318,6 +4311,59 @@ impl AzureWorkerController {
             service: None,
         };
 
+        let mut scale_rules = Vec::new();
+        for trigger in &func.triggers {
+            let alien_core::WorkerTrigger::Queue { queue, batch } = trigger else {
+                continue;
+            };
+            let queue_state =
+                ctx.require_dependency::<crate::queue::azure::AzureQueueController>(queue)?;
+            let namespace = queue_state.namespace_name.as_ref().ok_or_else(|| {
+                AlienError::new(ErrorData::DependencyNotReady {
+                    resource_id: func.id.clone(),
+                    dependency_id: queue.id.clone(),
+                })
+            })?;
+            let queue_name = queue_state.queue_name.as_ref().ok_or_else(|| {
+                AlienError::new(ErrorData::DependencyNotReady {
+                    resource_id: func.id.clone(),
+                    dependency_id: queue.id.clone(),
+                })
+            })?;
+            let identity = ctx
+                .require_dependency::<crate::service_account::AzureServiceAccountController>(
+                    &service_account_ref,
+                )?
+                .identity_resource_id
+                .clone()
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::DependencyNotReady {
+                        resource_id: func.id.clone(),
+                        dependency_id: service_account_ref.id.clone(),
+                    })
+                })?;
+            scale_rules.push(ScaleRule {
+                name: Some(format!("queue-{}", scale_rules.len())),
+                custom: Some(CustomScaleRule {
+                    type_: Some("azure-servicebus".to_string()),
+                    identity: Some(identity),
+                    metadata: HashMap::from([
+                        ("namespace".to_string(), namespace.clone()),
+                        ("queueName".to_string(), queue_name.clone()),
+                        (
+                            "messageCount".to_string(),
+                            batch
+                                .as_ref()
+                                .map_or(1, |batch| batch.max_messages)
+                                .to_string(),
+                        ),
+                    ]),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            });
+        }
+
         let template = Template {
             containers: vec![container],
             init_containers: vec![],
@@ -4331,7 +4377,7 @@ impl AzureWorkerController {
                     1
                 }),
                 polling_interval: None,
-                rules: vec![],
+                rules: scale_rules,
             }),
             service_binds: vec![],
             termination_grace_period_seconds: None,
@@ -4339,6 +4385,7 @@ impl AzureWorkerController {
         };
 
         Ok(ContainerApp {
+            kind: None,
             extended_location: None,
             id: None,
             identity: managed_identity,
@@ -4419,6 +4466,11 @@ impl AzureWorkerController {
                 metadata: {
                     let mut metadata = vec![
                         DaprMetadata {
+                            name: Some("route".into()),
+                            value: Some(format!("/__alien/queue/{}", queue_ref.id)),
+                            secret_ref: None,
+                        },
+                        DaprMetadata {
                             name: Some("namespaceName".into()),
                             value: Some(ns_fqdn),
                             secret_ref: None,
@@ -4434,6 +4486,25 @@ impl AzureWorkerController {
                             secret_ref: None,
                         },
                     ];
+
+                    // Dapr renews locks while the callback waits for collection and application work.
+                    // Bound prefetch and callback concurrency to the portable maximum batch size.
+                    for (name, value) in [
+                        ("maxActiveMessages", "100".to_string()),
+                        ("maxConcurrentHandlers", "100".to_string()),
+                        ("lockRenewalInSec", "10".to_string()),
+                        (
+                            "timeoutInSec",
+                            worker_config.timeout_seconds.saturating_add(30).to_string(),
+                        ),
+                        ("maxRetriableErrorsPerSec", "1".to_string()),
+                    ] {
+                        metadata.push(DaprMetadata {
+                            name: Some(name.into()),
+                            value: Some(value),
+                            secret_ref: None,
+                        });
+                    }
 
                     // Add client ID for user-assigned managed identity
                     let service_account_id = format!("{}-sa", worker_config.get_permissions());
@@ -5585,6 +5656,7 @@ mod tests {
         };
 
         ContainerApp {
+            kind: None,
             id: Some(format!(
                 "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/test-rg/providers/Microsoft.App/containerApps/{}",
                 app_name
@@ -5627,6 +5699,7 @@ mod tests {
 
     fn create_in_progress_container_app_response(app_name: &str) -> ContainerApp {
         ContainerApp {
+            kind: None,
             id: Some(format!(
                 "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/test-rg/providers/Microsoft.App/containerApps/{}",
                 app_name
@@ -6297,6 +6370,7 @@ mod tests {
         });
 
         ContainerApp {
+            kind: None,
             id: Some(format!(
                 "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/test-rg/providers/Microsoft.App/containerApps/{}",
                 app_name

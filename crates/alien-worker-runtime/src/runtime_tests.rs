@@ -18,8 +18,8 @@ use tonic::Request;
 
 use super::{
     application_runtime_env, command_push_config, run_transport, runtime_only_env,
-    start_application, RuntimeConfig, TransportType, ENV_ALIEN_BINDINGS_GRPC_ADDRESS,
-    ENV_ALIEN_BINDINGS_MODE,
+    start_application, PrestartedTransport, RuntimeConfig, TransportType,
+    ENV_ALIEN_BINDINGS_GRPC_ADDRESS, ENV_ALIEN_BINDINGS_MODE,
 };
 
 const SUBPROCESS_DRIVER: &str = "ALIEN_TEST_RUNTIME_ENV_SUBPROCESS_DRIVER";
@@ -130,6 +130,55 @@ async fn cancelled_task_stops_child_before_returning_delivery_failure() {
     assert!(delivery.await.expect("delivery waiter").is_err());
     observed.await.expect("task observer");
     assert_port_released(port).await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn shutdown_stops_application_before_joining_cancelled_inflight_transport() {
+    let config = RuntimeConfig::builder()
+        .transport(TransportType::Local)
+        .command(vec!["unused".to_string()])
+        .build();
+    let mut child = Command::new("/bin/sleep")
+        .arg("60")
+        .kill_on_drop(true)
+        .spawn()
+        .expect("spawn application");
+    let control = Arc::new(ControlGrpcServer::new());
+    let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
+    let (transport_shutdown_tx, mut transport_shutdown_rx) = broadcast::channel(1);
+    let transport_control = control.clone();
+    // Model a graceful transport with an in-flight request whose deadline
+    // expires during shutdown: it cannot respond until the application stops.
+    let handle = tokio::spawn(async move {
+        transport_shutdown_rx
+            .recv()
+            .await
+            .expect("transport shutdown");
+        transport_control.cancel_application().await;
+        Ok(())
+    });
+    shutdown_tx.send(()).expect("runtime shutdown receiver");
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        run_transport(
+            &config,
+            control,
+            None,
+            None,
+            Arc::new(WaitUntilGrpcServer::new()),
+            &mut child,
+            shutdown_rx,
+            Some(PrestartedTransport {
+                shutdown_tx: transport_shutdown_tx,
+                handle,
+            }),
+        ),
+    )
+    .await
+    .expect("shutdown must not deadlock")
+    .expect("shutdown succeeds");
+    assert!(child.try_wait().expect("child status").is_some());
 }
 
 #[cfg(unix)]

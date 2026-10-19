@@ -110,6 +110,10 @@ impl TfEmitter for GcpWorkerEmitter {
 
         let mut template_body: Vec<hcl::structure::Structure> = vec![
             attr(
+                "max_instance_request_concurrency",
+                Expression::Number(hcl::Number::from(100)),
+            ),
+            attr(
                 "timeout",
                 Expression::String(format!("{}s", function.timeout_seconds.max(1))),
             ),
@@ -143,12 +147,15 @@ impl TfEmitter for GcpWorkerEmitter {
 
         for (index, trigger) in function.triggers.iter().enumerate() {
             match trigger {
-                WorkerTrigger::Queue { queue } => {
+                WorkerTrigger::Queue { queue, .. } => {
                     let queue_label = label_for_ref(ctx, queue)?;
                     let sub_label = format!("{label}_queue_{index}");
                     let mut push_body: Vec<hcl::structure::Structure> = vec![attr(
                         "push_endpoint",
-                        expr::traversal(["google_cloud_run_v2_service", label, "uri"]),
+                        expr::template(format!(
+                            "${{google_cloud_run_v2_service.{label}.uri}}/__alien/queue/{}",
+                            queue.id
+                        )),
                     )];
                     if let Some(sa) = &service_account {
                         push_body.push(nested(block(

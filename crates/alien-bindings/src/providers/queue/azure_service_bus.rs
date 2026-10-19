@@ -245,7 +245,13 @@ impl Queue for AzureServiceBusQueue {
             })
     }
 
-    async fn renew_lease(&self, _queue: &str, receipt_handle: &str) -> Result<()> {
+    async fn renew_lease(
+        &self,
+        _queue: &str,
+        receipt_handle: &str,
+        duration_seconds: u32,
+    ) -> Result<()> {
+        crate::traits::validate_lease_duration(duration_seconds)?;
         let (message_id, lock_token) = receipt_handle.split_once('\n').ok_or_else(|| {
             alien_error::AlienError::new(ErrorData::BindingSetupFailed {
                 binding_type: "queue.servicebus".to_string(),

@@ -641,23 +641,6 @@ impl AwsWorkerController {
         let cfg = ctx.desired_resource_config::<Worker>()?;
         info!(name=%cfg.id, code=?cfg.code, "Initiating creation");
 
-        // Product limitation: Only allow at most one queue trigger per worker
-        let queue_trigger_count = cfg
-            .triggers
-            .iter()
-            .filter(|trigger| matches!(trigger, alien_core::WorkerTrigger::Queue { .. }))
-            .count();
-
-        if queue_trigger_count > 1 {
-            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: format!(
-                    "Worker '{}' has {} queue triggers, but only one queue trigger per worker is currently supported",
-                    cfg.id, queue_trigger_count
-                ),
-                resource_id: Some(cfg.id.clone()),
-            }));
-        }
-
         // Get the ServiceAccount for this worker's permission profile
         let service_account_id = format!("{}-sa", cfg.get_permissions());
         let service_account_ref = ResourceRef::new(
@@ -2303,27 +2286,10 @@ impl AwsWorkerController {
         let config = ctx.desired_resource_config::<Worker>()?;
         let aws_cfg = ctx.get_aws_config()?;
 
-        // Validation: Only allow at most one queue trigger per worker (non-retriable error)
-        let queue_trigger_count = config
-            .triggers
-            .iter()
-            .filter(|trigger| matches!(trigger, alien_core::WorkerTrigger::Queue { .. }))
-            .count();
-
-        if queue_trigger_count > 1 {
-            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: format!(
-                    "Worker '{}' has {} queue triggers, but only one queue trigger per worker is currently supported",
-                    config.id, queue_trigger_count
-                ),
-                resource_id: Some(config.id.clone()),
-            }));
-        }
-
         // Linear flow principle: Always perform this state. Create mappings for ALL queue triggers
         let mut created_any = false;
         for trigger in &config.triggers {
-            if let alien_core::WorkerTrigger::Queue { queue } = trigger {
+            if let alien_core::WorkerTrigger::Queue { queue, .. } = trigger {
                 info!(worker=%config.id, queue=%queue.id, "Creating SQS event source mapping");
                 self.create_queue_event_source_mapping(ctx, aws_cfg, &config, queue)
                     .await?;
@@ -3761,69 +3727,42 @@ impl AwsWorkerController {
         let current_config = ctx.desired_resource_config::<Worker>()?;
         let previous_config = ctx.previous_resource_config::<Worker>()?;
 
-        // Validation: Only allow at most one queue trigger per worker (non-retriable error)
-        let queue_trigger_count = current_config
-            .triggers
-            .iter()
-            .filter(|trigger| matches!(trigger, alien_core::WorkerTrigger::Queue { .. }))
-            .count();
-
-        if queue_trigger_count > 1 {
-            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: format!(
-                    "Worker '{}' has {} queue triggers, but only one queue trigger per worker is currently supported",
-                    current_config.id, queue_trigger_count
-                ),
-                resource_id: Some(current_config.id.clone()),
-            }));
+        // Reconcile retained queues in place, including capacity-only updates.
+        // Keep all owned IDs until each deletion succeeds so retries retain cleanup ownership.
+        let aws_cfg = ctx.get_aws_config()?;
+        let client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
+        let mut desired_mappings = std::collections::HashSet::new();
+        for trigger in &current_config.triggers {
+            if let alien_core::WorkerTrigger::Queue { queue, .. } = trigger {
+                desired_mappings.insert(
+                    self.create_queue_event_source_mapping(ctx, aws_cfg, &current_config, queue)
+                        .await?,
+                );
+            }
+        }
+        for uuid in self.event_source_mappings.clone() {
+            if desired_mappings.contains(&uuid) {
+                continue;
+            }
+            match client.delete_event_source_mapping(&uuid).await {
+                Ok(_) => {}
+                Err(error)
+                    if matches!(
+                        error.error,
+                        Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+                    ) => {}
+                Err(error) => {
+                    return Err(error.context(ErrorData::CloudPlatformError {
+                        message: format!("Failed to remove queue event source mapping '{uuid}'"),
+                        resource_id: Some(current_config.id.clone()),
+                    }))
+                }
+            }
+            self.event_source_mappings.retain(|owned| owned != &uuid);
         }
 
-        // Check if triggers have changed
         let triggers_changed = current_config.triggers != previous_config.triggers;
-
         if triggers_changed {
-            info!(worker=%current_config.id, "Worker triggers changed, updating event source mappings");
-
-            // For simplicity, we'll delete old mappings and create new ones
-            // In a production system, you might want to do a more sophisticated diff
-            let aws_cfg = ctx.get_aws_config()?;
-            let client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
-
-            // Delete existing mappings
-            for uuid in &self.event_source_mappings.clone() {
-                match client.delete_event_source_mapping(uuid).await {
-                    Ok(_) => {
-                        info!(worker=%current_config.id, uuid=%uuid, "Deleted existing event source mapping");
-                    }
-                    Err(e)
-                        if matches!(
-                            e.error,
-                            Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
-                        ) =>
-                    {
-                        info!(worker=%current_config.id, uuid=%uuid, "Event source mapping was already deleted");
-                    }
-                    Err(e) => {
-                        return Err(e.context(ErrorData::CloudPlatformError {
-                            message: format!(
-                                "Failed to delete existing event source mapping '{}'",
-                                uuid
-                            ),
-                            resource_id: Some(current_config.id.clone()),
-                        }));
-                    }
-                }
-            }
-            self.event_source_mappings.clear();
-
-            // Create new mappings for ALL queue triggers
-            for trigger in &current_config.triggers {
-                if let alien_core::WorkerTrigger::Queue { queue } = trigger {
-                    self.create_queue_event_source_mapping(ctx, aws_cfg, &current_config, queue)
-                        .await?;
-                }
-            }
-
             // Clean up old S3 storage trigger notifications
             for trigger in &previous_config.triggers {
                 if let alien_core::WorkerTrigger::Storage {
@@ -5123,7 +5062,26 @@ impl AwsWorkerController {
         aws_cfg: &alien_aws_clients::AwsClientConfig,
         worker_config: &alien_core::Worker,
         queue_ref: &alien_core::ResourceRef,
-    ) -> Result<()> {
+    ) -> Result<String> {
+        let batch = worker_config.queue_batch_config(&queue_ref.id);
+        if let Some(batch) = batch {
+            batch.validate().context(ErrorData::ResourceConfigInvalid {
+                message: "Invalid queue batch settings".to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })?;
+        }
+        let batch_size = batch.map_or(1, |batch| batch.max_messages as i32);
+        let window = batch.map_or(0, |batch| batch.max_window_seconds as i32);
+        let response_types = if batch.is_some() {
+            vec!["ReportBatchItemFailures".to_string()]
+        } else {
+            Vec::new()
+        };
+        let scaling = alien_aws_clients::lambda::ScalingConfig {
+            maximum_concurrency: worker_config
+                .queue_source_maximum_concurrency()
+                .map(|capacity| capacity as i32),
+        };
         let lambda_client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
 
         // Get queue controller to access outputs
@@ -5203,20 +5161,38 @@ impl AwsWorkerController {
                 if !self.event_source_mappings.contains(&uuid) {
                     self.event_source_mappings.push(uuid.clone());
                 }
+                lambda_client
+                    .update_event_source_mapping(
+                        &uuid,
+                        alien_aws_clients::lambda::UpdateEventSourceMappingRequest::builder()
+                            .batch_size(batch_size)
+                            .maximum_batching_window_in_seconds(window)
+                            .function_response_types(response_types)
+                            .scaling_config(scaling)
+                            .build(),
+                    )
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message: "Failed to reconcile queue event source mapping".to_string(),
+                        resource_id: Some(worker_config.id.clone()),
+                    })?;
                 info!(
                     worker=%worker_config.id,
                     queue_arn=%queue_arn,
                     uuid=%uuid,
                     "SQS event source mapping already exists; treating as created"
                 );
-                return Ok(());
+                return Ok(uuid);
             }
         }
 
         let request = alien_aws_clients::lambda::CreateEventSourceMappingRequest::builder()
             .event_source_arn(queue_arn.clone())
             .function_name(worker_name.clone())
-            .batch_size(1) // Always 1 message per invocation as per design
+            .batch_size(batch_size)
+            .maximum_batching_window_in_seconds(window)
+            .function_response_types(response_types)
+            .scaling_config(scaling)
             .enabled(true)
             .build();
 
@@ -5278,9 +5254,13 @@ impl AwsWorkerController {
                 uuid=%uuid,
                 "Successfully created SQS event source mapping"
             );
+            return Ok(uuid);
         }
 
-        Ok(())
+        Err(AlienError::new(ErrorData::CloudPlatformError {
+            message: "Queue event source mapping response has no UUID".to_string(),
+            resource_id: Some(worker_config.id.clone()),
+        }))
     }
 
     // ─────────────── HELPER METHODS ────────────────────────────
@@ -5341,9 +5321,18 @@ impl AwsWorkerController {
         // Get the worker's own binding params (may be None during initial creation)
         let self_binding_params = self.get_binding_params()?;
 
+        let mut runtime_links = links.to_vec();
+        for link in ctx
+            .desired_resource_config::<Worker>()?
+            .runtime_binding_links()
+        {
+            if !runtime_links.contains(&link) {
+                runtime_links.push(link);
+            }
+        }
         let env_vars = EnvironmentVariableBuilder::try_new(initial_env)?
             .add_worker_runtime_env_vars(ctx, &worker_config.id, worker_config.timeout_seconds)?
-            .add_linked_resources(links, ctx, worker_name_for_error_logging)
+            .add_linked_resources(&runtime_links, ctx, worker_name_for_error_logging)
             .await?
             .add_self_worker_binding(&worker_config.id, self_binding_params.as_ref())?
             .build();
@@ -5418,7 +5407,8 @@ mod tests {
     use alien_aws_clients::ec2::{DescribeNetworkInterfacesResponse, Ec2Client, MockEc2Api};
     use alien_aws_clients::iam::MockIamApi;
     use alien_aws_clients::lambda::{
-        AddPermissionResponse, FunctionConfiguration, GetFunctionResponse, MockLambdaApi,
+        AddPermissionResponse, EventSourceMapping, FunctionConfiguration, GetFunctionResponse,
+        ListEventSourceMappingsResponse, MockLambdaApi,
     };
     use alien_aws_clients::{AwsClientConfig, AwsClientConfigExt as _, AwsCredentialProvider};
     use alien_client_core::ErrorData as CloudClientErrorData;
@@ -5444,6 +5434,127 @@ mod tests {
         AwsWorkerState,
     };
     use alien_core::standard_resource_tags;
+
+    #[tokio::test]
+    async fn queue_mapping_updates_preserve_identity_and_reset_removed_settings() {
+        for mode in 0..3 {
+            let mut worker = function_with_queue_trigger();
+            worker.concurrency_limit = Some(if mode == 1 { 1 } else { 8 });
+            let mut previous = worker.clone();
+            let batch = alien_core::QueueBatchConfig {
+                max_messages: 10,
+                max_window_seconds: 5,
+            };
+            if let alien_core::WorkerTrigger::Queue { batch: target, .. } = &mut worker.triggers[0]
+            {
+                *target = (mode != 1).then_some(batch.clone());
+            }
+            if let alien_core::WorkerTrigger::Queue { batch: target, .. } =
+                &mut previous.triggers[0]
+            {
+                *target = (mode != 0).then_some(batch);
+            }
+            if mode == 2 {
+                previous.concurrency_limit = Some(4);
+            }
+            let mapping = || {
+                serde_json::from_value::<EventSourceMapping>(serde_json::json!({
+                    "UUID": "retained-id",
+                    "EventSourceArn": "arn:aws:sqs:us-east-1:123456789012:imported-a7d9-jobs",
+                    "FunctionArn": "arn:aws:lambda:us-east-1:123456789012:function:test-queue-func",
+                    "State": "Enabled",
+                }))
+                .expect("mapping")
+            };
+            let mut lambda = MockLambdaApi::new();
+            lambda
+                .expect_list_event_source_mappings()
+                .times(1)
+                .withf(|request| {
+                    request.event_source_arn.as_deref()
+                        == Some("arn:aws:sqs:us-east-1:123456789012:imported-a7d9-jobs")
+                })
+                .returning(move |_| {
+                    Ok(ListEventSourceMappingsResponse {
+                        event_source_mappings: Some(vec![mapping()]),
+                        next_marker: None,
+                    })
+                });
+            lambda
+                .expect_update_event_source_mapping()
+                .times(1)
+                .withf(move |id, request| {
+                    id == "retained-id"
+                        && request.batch_size == Some(if mode == 1 { 1 } else { 10 })
+                        && request.maximum_batching_window_in_seconds
+                            == Some(if mode == 1 { 0 } else { 5 })
+                        && request
+                            .function_response_types
+                            .as_ref()
+                            .is_some_and(|types| {
+                                if mode == 1 {
+                                    types.is_empty()
+                                } else {
+                                    types == &["ReportBatchItemFailures"]
+                                }
+                            })
+                        && request.scaling_config.as_ref().is_some_and(|scaling| {
+                            scaling.maximum_concurrency == if mode == 1 { None } else { Some(8) }
+                        })
+                })
+                .returning(move |_, _| Ok(mapping()));
+            lambda
+                .expect_delete_event_source_mapping()
+                .times(1)
+                .withf(|id| id == "removed-id")
+                .returning(move |_| Ok(mapping()));
+            // No create expectation: retained subscriptions must never be replaced.
+            let provider = setup_mock_service_provider(Arc::new(lambda), None, None);
+            let mut controller = AwsWorkerController::mock_ready("test-queue-func");
+            controller.state = AwsWorkerState::UpdateEventSourceMappings;
+            controller.event_source_mappings = vec!["retained-id".into(), "removed-id".into()];
+            let restored = crate::core::deserialize_controller(
+                serialize_controller(&controller).expect("checkpoint"),
+            )
+            .expect("restore");
+            let queue = crate::queue::aws::AwsQueueController {
+                state: crate::queue::aws::AwsQueueState::Ready,
+                queue_name: Some("imported-a7d9-jobs".into()),
+                queue_url: Some(
+                    "https://sqs.us-east-1.amazonaws.com/123456789012/imported-a7d9-jobs".into(),
+                ),
+                ..Default::default()
+            };
+            let mut executor = SingleControllerExecutor::builder()
+                .resource(worker)
+                .previous_resource(previous)
+                .controller(
+                    restored
+                        .as_any()
+                        .downcast_ref::<AwsWorkerController>()
+                        .expect("worker")
+                        .clone(),
+                )
+                .platform(Platform::Aws)
+                .service_provider(provider)
+                .with_test_dependencies()
+                .with_dependency(test_queue(), queue)
+                .build()
+                .await
+                .expect("executor");
+            executor
+                .step()
+                .await
+                .expect("reconcile retained and removed sources");
+            assert_eq!(
+                executor
+                    .internal_state::<AwsWorkerController>()
+                    .expect("controller")
+                    .event_source_mappings,
+                vec!["retained-id"]
+            );
+        }
+    }
 
     fn create_successful_function_response(worker_name: &str) -> FunctionConfiguration {
         FunctionConfiguration {

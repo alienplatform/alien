@@ -107,9 +107,11 @@ impl BoundQueue {
         self.inner.ack_batch(&self.name, receipts).await
     }
 
-    /// Renew a current lease using the provider's supported duration.
-    pub async fn renew_lease(&self, receipt_handle: &str) -> Result<()> {
-        self.inner.renew_lease(&self.name, receipt_handle).await
+    /// Reset remaining lease seconds (1–600); Azure renews its configured lock instead.
+    pub async fn renew_lease(&self, receipt_handle: &str, duration_seconds: u32) -> Result<()> {
+        self.inner
+            .renew_lease(&self.name, receipt_handle, duration_seconds)
+            .await
     }
 
     /// Release a received message for redelivery.

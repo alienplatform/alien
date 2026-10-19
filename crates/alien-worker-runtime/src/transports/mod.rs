@@ -16,3 +16,6 @@ pub mod cloudrun;
 pub mod containerapp;
 pub mod local;
 pub mod shared;
+
+#[doc(hidden)]
+pub mod queue_batch;

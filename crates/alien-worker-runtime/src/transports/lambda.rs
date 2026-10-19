@@ -17,7 +17,7 @@ use std::{
 };
 
 use alien_commands::{runtime::submit_response, types::CommandResponse};
-use alien_error::AlienError;
+use alien_error::{AlienError, Context as _};
 use alien_worker_protocol::{
     control::{task::Payload, ArcCommand, CronEvent, QueueMessage, StorageEvent, Task},
     ControlGrpcServer,
@@ -41,6 +41,7 @@ use lambda_runtime::{
     self as lambda, Error as LambdaError, LambdaEvent, MetadataPrelude, Service, StreamResponse,
 };
 use pin_project_lite::pin_project;
+use prost::Message as _;
 use serde_json::Value;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio_stream::Stream;
@@ -558,6 +559,9 @@ where
 
 /// Lambda transport state
 struct LambdaState {
+    queue_bindings: Option<alien_bindings::Bindings>,
+    queue_sources: std::collections::HashMap<String, String>,
+    queue_batches: std::collections::HashMap<String, alien_core::QueueBatchConfig>,
     command_timeout: Duration,
     control_server: Arc<ControlGrpcServer>,
     /// Reused by every invocation so warm invocations keep pooled connections.
@@ -589,7 +593,16 @@ impl LambdaTransport {
     pub async fn run(self) -> Result<()> {
         info!(mode = ?self.mode, "Starting Lambda transport");
 
+        let (queue_batches, queue_sources) = super::queue_batch::batch_routing_from_env()?;
+        let queue_bindings = Some(alien_bindings::Bindings::from_env().context(
+            ErrorData::Other {
+                message: "Cannot initialize queue bindings".into(),
+            },
+        )?);
         let state = Arc::new(LambdaState {
+            queue_bindings,
+            queue_batches,
+            queue_sources,
             command_timeout: self.command_timeout,
             control_server: self.control_server,
             // No read timeout: the invocation deadline already bounds each request.
@@ -623,6 +636,11 @@ impl LambdaTransport {
 // Service adapters
 // ============================================================================
 
+/// A private marker created only at the trusted Runtime API boundary. HTTP
+/// callers cannot opt into task dispatch through paths, headers, or JSON bodies.
+#[derive(Clone)]
+struct NonHttpInvocation;
+
 /// Convert LambdaEvent<Value> to LambdaRequest by parsing the event payload
 fn event_to_request(event: LambdaEvent<Value>) -> LambdaRequest {
     use lambda_http::aws_lambda_events::apigw::ApiGatewayV2httpRequest;
@@ -642,6 +660,7 @@ fn event_to_request(event: LambdaEvent<Value>) -> LambdaRequest {
     let mut req = LambdaRequest::new(LambdaBody::Text(body_json));
     *req.method_mut() = lambda_http::http::Method::POST;
     *req.uri_mut() = "/__event".parse().unwrap();
+    req.extensions_mut().insert(NonHttpInvocation);
     req.with_lambda_context(event.context)
 }
 
@@ -652,7 +671,7 @@ struct StreamingAdapter {
 }
 
 impl Service<LambdaRequest> for StreamingAdapter {
-    type Response = Response<StreamingBody>;
+    type Response = lambda_runtime::FunctionResponse<Value, BodyStream<StreamingBody>>;
     type Error = LambdaError;
     type Future = BoxFuture<'static, std::result::Result<Self::Response, Self::Error>>;
 
@@ -674,9 +693,16 @@ impl Service<LambdaRequest> for StreamingAdapter {
                     sender: request_done_sender,
                     request_id: request_id.clone(),
                 };
+                if let Some(result) = handle_native_sqs_request(&state, &request_id, &req).await {
+                    return result.map(lambda_runtime::FunctionResponse::BufferedResponse);
+                }
                 handle_streaming_event(&state, &request_id, req)
                     .await
-                    .map(|response| response.map(|body| SignalWhenDropped { body, done }.boxed()))
+                    .map(|response| {
+                        lambda_runtime::FunctionResponse::StreamingResponse(into_stream_response(
+                            response.map(|body| SignalWhenDropped { body, done }.boxed()),
+                        ))
+                    })
             }
             .instrument(span),
         )
@@ -690,7 +716,7 @@ struct BufferedAdapter {
 }
 
 impl Service<LambdaRequest> for BufferedAdapter {
-    type Response = ApiGatewayV2httpResponse;
+    type Response = Value;
     type Error = LambdaError;
     type Future = BoxFuture<'static, std::result::Result<Self::Response, Self::Error>>;
 
@@ -706,7 +732,14 @@ impl Service<LambdaRequest> for BufferedAdapter {
 
         Box::pin(
             async move {
-                let result = handle_buffered_event(&state, &request_id, req).await;
+                let result = match handle_native_sqs_request(&state, &request_id, &req).await {
+                    Some(result) => result,
+                    None => match handle_buffered_event(&state, &request_id, req).await {
+                        Ok(response) => serde_json::to_value(response)
+                            .map_err(|error| invocation_failure(error.to_string())),
+                        Err(error) => Err(error),
+                    },
+                };
 
                 // Signal that the handler has completed
                 if let Err(e) = request_done_sender.send(()) {
@@ -800,12 +833,9 @@ async fn run_streaming(
 ) -> Result<()> {
     info!("run_streaming: Setting up Lambda streaming runtime");
 
-    use lambda_runtime::tower::ServiceExt;
-
     let svc = lambda_runtime::tower::ServiceBuilder::new()
         .map_request(event_to_request)
-        .service(handler)
-        .map_response(into_stream_response);
+        .service(handler);
 
     drive_lambda_runtime(lambda::run(svc), request_done_receiver, "Streaming").await
 }
@@ -913,16 +943,29 @@ fn event_body_bytes(event: &LambdaRequest) -> Vec<u8> {
 /// HTTP forwarding. Classification is identical for buffered and streaming
 /// modes; only response construction differs per mode.
 fn classify_event(event: LambdaRequest) -> ClassifiedEvent {
+    if event.extensions().get::<NonHttpInvocation>().is_none() {
+        return ClassifiedEvent::Http(Box::new(event));
+    }
     let body_bytes = event_body_bytes(&event);
 
     if let Ok(s3_event) = serde_json::from_slice::<S3Event>(&body_bytes) {
-        if !s3_event.records.is_empty() {
+        if !s3_event.records.is_empty()
+            && s3_event
+                .records
+                .iter()
+                .all(|record| record.event_source.as_deref() == Some("aws:s3"))
+        {
             return ClassifiedEvent::Task(TaskEvent::S3(Box::new(s3_event)));
         }
     }
 
     if let Ok(sqs_event) = serde_json::from_slice::<SqsEvent>(&body_bytes) {
-        if !sqs_event.records.is_empty() {
+        if !sqs_event.records.is_empty()
+            && sqs_event
+                .records
+                .iter()
+                .all(|record| record.event_source.as_deref() == Some("aws:sqs"))
+        {
             return ClassifiedEvent::Task(TaskEvent::Sqs(Box::new(sqs_event)));
         }
     }
@@ -1073,6 +1116,230 @@ async fn handle_s3_event(state: &LambdaState, request_id: &str, s3_event: S3Even
         send_event_task(state, task, "storage event").await?;
     }
     Ok(())
+}
+
+/// SQS replies are native Lambda payloads even when HTTP responses use streaming.
+async fn handle_native_sqs_request(
+    state: &LambdaState,
+    request_id: &str,
+    request: &LambdaRequest,
+) -> Option<std::result::Result<Value, LambdaError>> {
+    if request.extensions().get::<NonHttpInvocation>().is_none() {
+        return None;
+    }
+    let event = serde_json::from_slice::<SqsEvent>(request.body().as_ref()).ok()?;
+    if event.records.is_empty()
+        || !event
+            .records
+            .iter()
+            .all(|record| record.event_source.as_deref() == Some("aws:sqs"))
+    {
+        return None;
+    }
+    let deadline = tokio::time::Instant::now()
+        + invocation_readiness_budget(request).min(state.command_timeout);
+    let operation = async {
+        wait_for_task_readiness(
+            state,
+            deadline.saturating_duration_since(tokio::time::Instant::now()),
+        )
+        .await?;
+        let mut failures = Vec::new();
+        let mut deliveries = Vec::new();
+        let mut successful_receipts: std::collections::BTreeMap<String, Vec<String>> =
+            Default::default();
+        for record in event.records {
+            let source = record
+                .event_source_arn
+                .as_deref()
+                .and_then(|arn| arn.rsplit(':').next())
+                .unwrap_or_default();
+            let logical_source = state
+                .queue_sources
+                .get(source)
+                .map(String::as_str)
+                .unwrap_or(source)
+                .to_string();
+            let batch_configured = state.queue_batches.contains_key(&logical_source);
+            let id = record
+                .message_id
+                .clone()
+                .ok_or_else(|| invocation_failure("SQS record missing message ID"))?;
+            let receipt = record.receipt_handle.clone().unwrap_or_default();
+            if let Some(envelope) = record
+                .body
+                .as_deref()
+                .and_then(|body| serde_json::from_str::<alien_commands::types::Envelope>(body).ok())
+                .filter(|envelope| envelope.protocol == alien_commands::PROTOCOL_VERSION)
+            {
+                if handle_command(state, &envelope).await.is_err() {
+                    failures.push(serde_json::json!({"itemIdentifier": id}));
+                } else {
+                    successful_receipts
+                        .entry(logical_source)
+                        .or_default()
+                        .push(receipt);
+                }
+                continue;
+            }
+            let task = sqs_record_to_task(request_id, record)
+                .map_err(|error| invocation_failure(error.to_string()))?;
+            let Some(Payload::QueueMessage(mut message)) = task.payload else {
+                return Err(invocation_failure("Invalid queue task conversion"));
+            };
+            message.source = logical_source.clone();
+            if batch_configured {
+                deliveries.push(alien_worker_protocol::control::QueueDelivery {
+                    delivery_id: task.task_id,
+                    message: Some(message),
+                });
+            } else {
+                let task = Task {
+                    task_id: task.task_id,
+                    payload: Some(Payload::QueueMessage(message)),
+                };
+                if send_event_task(state, task, "queue message").await.is_err() {
+                    failures.push(serde_json::json!({"itemIdentifier": id}));
+                } else {
+                    successful_receipts
+                        .entry(logical_source)
+                        .or_default()
+                        .push(receipt);
+                }
+            }
+        }
+        let mut groups: std::collections::BTreeMap<
+            String,
+            Vec<alien_worker_protocol::control::QueueDelivery>,
+        > = Default::default();
+        for delivery in deliveries {
+            let message = delivery
+                .message
+                .as_ref()
+                .ok_or_else(|| invocation_failure("Missing queue message"))?;
+            groups
+                .entry(message.source.clone())
+                .or_default()
+                .push(delivery);
+        }
+        for (source, deliveries) in groups {
+            let config = &state.queue_batches[&source];
+            let mut remaining = deliveries.into_iter().peekable();
+            while remaining.peek().is_some() {
+                let mut batch = alien_worker_protocol::control::QueueBatch {
+                    source: source.clone(),
+                    deliveries: Vec::new(),
+                };
+                let mut size = source.len() + 64;
+                while let Some(delivery) = remaining.peek() {
+                    let delivery_size = delivery.encoded_len() + 16;
+                    if batch.deliveries.len() >= config.max_messages as usize
+                        || size + delivery_size > super::queue_batch::MAX_BATCH_BYTES
+                    {
+                        if batch.deliveries.is_empty() {
+                            let delivery = remaining
+                                .next()
+                                .ok_or_else(|| invocation_failure("Missing oversized delivery"))?;
+                            let message = delivery
+                                .message
+                                .ok_or_else(|| invocation_failure("Missing oversized message"))?;
+                            failures.push(serde_json::json!({"itemIdentifier": message.id}));
+                        }
+                        break;
+                    }
+                    size += delivery_size;
+                    batch.deliveries.push(
+                        remaining
+                            .next()
+                            .ok_or_else(|| invocation_failure("Missing queued delivery"))?,
+                    );
+                }
+                if batch.deliveries.is_empty() {
+                    continue;
+                }
+                let result = state
+                    .control_server
+                    .send_task(
+                        Task {
+                            task_id: uuid::Uuid::new_v4().to_string(),
+                            payload: Some(Payload::QueueBatch(batch.clone())),
+                        },
+                        deadline.saturating_duration_since(tokio::time::Instant::now()),
+                    )
+                    .await;
+                let dispositions =
+                    result
+                        .ok()
+                        .and_then(|result| result.queue_batch)
+                        .and_then(|result| {
+                            alien_worker_protocol::batch::validate_outcomes(&batch, &result)
+                        });
+                for (index, delivery) in batch.deliveries.iter().enumerate() {
+                    let succeeded = dispositions.as_ref().is_some_and(|outcomes|
+                        outcomes[index] == alien_worker_protocol::control::queue_delivery_outcome::Disposition::Success);
+                    let message = delivery
+                        .message
+                        .as_ref()
+                        .ok_or_else(|| invocation_failure("Missing result message"))?;
+                    if succeeded {
+                        successful_receipts
+                            .entry(source.clone())
+                            .or_default()
+                            .push(message.receipt_handle.clone());
+                    } else {
+                        failures.push(serde_json::json!({"itemIdentifier": message.id}));
+                    }
+                }
+            }
+        }
+        // A legacy mapping ignores batchItemFailures, including during upgrades.
+        // On mixed outcomes, delete only validated successes using their actual
+        // delivery receipts, then fail the invocation. Failed/uncertain receipts
+        // remain retryable regardless of the mapping's response mode.
+        if !failures.is_empty() {
+            for (source, receipts) in successful_receipts {
+                if receipts.iter().any(String::is_empty) {
+                    return Err(invocation_failure("Successful SQS delivery has no receipt"));
+                }
+                let bindings = state.queue_bindings.as_ref().ok_or_else(|| {
+                    invocation_failure("Queue bindings unavailable for completion")
+                })?;
+                let queue = bindings
+                    .queue(&source)
+                    .await
+                    .map_err(|error| invocation_failure(error.to_string()))?;
+                let outcomes = queue
+                    .ack_batch(&receipts)
+                    .await
+                    .map_err(|error| invocation_failure(error.to_string()))?;
+                if outcomes.len() != receipts.len()
+                    || outcomes.iter().any(|outcome| {
+                        !matches!(
+                            outcome,
+                            alien_bindings::traits::QueueAckResult::Acknowledged
+                        )
+                    })
+                {
+                    return Err(invocation_failure(
+                        "Some SQS completion results are uncertain; retry the invocation",
+                    ));
+                }
+            }
+            return Err(invocation_failure(
+                "SQS delivery failed; retry remaining receipts",
+            ));
+        }
+        Ok(serde_json::json!({"batchItemFailures": failures}))
+    };
+    Some(match tokio::time::timeout_at(deadline, operation).await {
+        Ok(result) => result,
+        Err(_) => {
+            state.control_server.cancel_application().await;
+            Err(invocation_failure(
+                "SQS execution exceeded invocation budget",
+            ))
+        }
+    })
 }
 
 async fn handle_sqs_event(
@@ -1649,13 +1916,19 @@ mod tests {
     /// modes; an arbitrary request falls through to HTTP forwarding.
     #[test]
     fn classification_is_shared_between_modes() {
-        let s3_request = LambdaRequest::new(LambdaBody::Text(s3_event_json().to_string()));
+        let s3_request = event_to_request(LambdaEvent::new(
+            s3_event_json(),
+            lambda_runtime::Context::default(),
+        ));
         match classify_event(s3_request) {
             ClassifiedEvent::Task(TaskEvent::S3(event)) => assert_eq!(event.records.len(), 1),
             _ => panic!("S3 payload must classify as an S3 task event"),
         }
 
-        let sqs_request = LambdaRequest::new(LambdaBody::Text(sqs_event_json().to_string()));
+        let sqs_request = event_to_request(LambdaEvent::new(
+            sqs_event_json(),
+            lambda_runtime::Context::default(),
+        ));
         match classify_event(sqs_request) {
             ClassifiedEvent::Task(TaskEvent::Sqs(event)) => assert_eq!(event.records.len(), 1),
             _ => panic!("SQS payload must classify as an SQS task event"),
@@ -1669,8 +1942,246 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn legacy_sqs_failure_remains_invocation_error_in_both_adapters() {
+        for streaming in [false, true] {
+            let control = Arc::new(ControlGrpcServer::new());
+            // Registration alone cannot establish the event source mapping's response mode.
+            control
+                .register_event_handler(tonic::Request::new(
+                    alien_worker_protocol::control::RegisterEventHandlerRequest {
+                        handler_type: "queueBatch".into(),
+                        resource_name: "my-queue".into(),
+                    },
+                ))
+                .await
+                .expect("register");
+            let mut tasks = control
+                .wait_for_tasks(tonic::Request::new(
+                    alien_worker_protocol::control::WaitForTasksRequest {
+                        application_id: "test".into(),
+                    },
+                ))
+                .await
+                .expect("subscribe")
+                .into_inner();
+            let app_control = control.clone();
+            let application = tokio::spawn(async move {
+                let task = tokio_stream::StreamExt::next(&mut tasks)
+                    .await
+                    .expect("task")
+                    .expect("delivery");
+                assert!(matches!(task.payload, Some(Payload::QueueMessage(_))));
+                app_control.send_task_result(tonic::Request::new(alien_worker_protocol::control::SendTaskResultRequest {
+                    task_id: task.task_id,
+                    result: Some(alien_worker_protocol::control::send_task_result_request::Result::Error(alien_worker_protocol::control::TaskError { code: "RETRY".into(), message: "Processing failed".into() })),
+                })).await.expect("result");
+            });
+            let state = Arc::new(LambdaState {
+                queue_bindings: None,
+                queue_sources: Default::default(),
+                queue_batches: Default::default(),
+                command_timeout: Duration::from_secs(30),
+                control_server: control,
+                http_client: forward_client_builder().build().expect("client"),
+            });
+            let (sender, _receiver) = unbounded_channel();
+            let mut context = lambda_runtime::Context::default();
+            context.deadline = (SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock")
+                .as_millis()
+                + 30_000) as u64;
+            let request = event_to_request(LambdaEvent::new(sqs_event_json(), context));
+            if streaming {
+                let mut adapter = StreamingAdapter {
+                    state,
+                    request_done_sender: sender,
+                };
+                assert!(
+                    adapter.call(request).await.is_err(),
+                    "legacy failures must retry, even in streaming mode"
+                );
+            } else {
+                let mut adapter = BufferedAdapter {
+                    state,
+                    request_done_sender: sender,
+                };
+                assert!(
+                    adapter.call(request).await.is_err(),
+                    "legacy mappings ignore failure lists"
+                );
+            }
+            application.await.expect("application");
+        }
+    }
+
+    #[tokio::test]
+    async fn configured_sqs_outcomes_preserve_receipts_in_both_adapters() {
+        for streaming in [false, true] {
+            // 0: all success; 1: mixed; 2: invalid result; 3: uncertain deletion.
+            for scenario in 0..4 {
+                let deletes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+                let calls = deletes.clone();
+                let app = axum::Router::new().fallback(axum::routing::post(move |body: String| {
+                    let calls = calls.clone();
+                    async move {
+                        let form: std::collections::HashMap<String, String> = url::form_urlencoded::parse(body.as_bytes()).into_owned().collect();
+                        assert_eq!(form["Action"], "DeleteMessageBatch");
+                        assert_eq!(form["DeleteMessageBatchRequestEntry.1.ReceiptHandle"], "rh-1");
+                        assert!(!form.contains_key("DeleteMessageBatchRequestEntry.2.ReceiptHandle"));
+                        calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        let entry = if scenario == 3 {
+                            "<BatchResultErrorEntry><Id>0</Id><Code>InternalError</Code><SenderFault>false</SenderFault></BatchResultErrorEntry>"
+                        } else {
+                            "<DeleteMessageBatchResultEntry><Id>0</Id></DeleteMessageBatchResultEntry>"
+                        };
+                        format!("<DeleteMessageBatchResponse><DeleteMessageBatchResult>{entry}</DeleteMessageBatchResult></DeleteMessageBatchResponse>")
+                    }
+                }));
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                    .await
+                    .expect("listen");
+                let endpoint = format!("http://{}", listener.local_addr().expect("address"));
+                let server = tokio::spawn(async move {
+                    axum::serve(listener, app).await.expect("SQS fixture");
+                });
+                let environment = std::collections::HashMap::from([
+                    ("ALIEN_DEPLOYMENT_TYPE".into(), "aws".into()),
+                    ("AWS_ACCOUNT_ID".into(), "123456789012".into()),
+                    ("AWS_REGION".into(), "us-east-1".into()),
+                    ("AWS_ACCESS_KEY_ID".into(), "test-access-key".into()),
+                    ("AWS_SECRET_ACCESS_KEY".into(), "test-secret-key".into()),
+                    ("AWS_SERVICE_OVERRIDES_ENDPOINTS".into(), serde_json::json!({"sqs": endpoint}).to_string()),
+                    ("ALIEN_QUEUE_BATCH_CONFIG".into(), r#"{"jobs":{"maxMessages":10,"maxWindowSeconds":0}}"#.into()),
+                    ("ALIEN_JOBS_BINDING".into(), serde_json::json!({"service":"sqs","queueUrl": format!("{endpoint}/123456789012/run-a7d9-imported-jobs")}).to_string()),
+                ]);
+                let (queue_batches, queue_sources) =
+                    super::super::queue_batch::batch_routing(&environment).expect("source mapping");
+                let control = Arc::new(ControlGrpcServer::new());
+                let mut tasks = control
+                    .wait_for_tasks(tonic::Request::new(
+                        alien_worker_protocol::control::WaitForTasksRequest {
+                            application_id: "test".into(),
+                        },
+                    ))
+                    .await
+                    .expect("subscribe")
+                    .into_inner();
+                let app_control = control.clone();
+                let application = tokio::spawn(async move {
+                    let task = tokio_stream::StreamExt::next(&mut tasks)
+                        .await
+                        .expect("task")
+                        .expect("delivery");
+                    let Some(Payload::QueueBatch(batch)) = task.payload else {
+                        panic!("typed batch");
+                    };
+                    assert_eq!(batch.source, "jobs");
+                    assert_eq!(batch.deliveries.len(), 2);
+                    assert_ne!(
+                        batch.deliveries[0].delivery_id,
+                        batch.deliveries[1].delivery_id
+                    );
+                    for delivery in &batch.deliveries {
+                        assert_eq!(delivery.message.as_ref().expect("message").source, "jobs");
+                    }
+                    let mut outcomes: Vec<_> = batch
+                        .deliveries
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, delivery)| {
+                            alien_worker_protocol::control::QueueDeliveryOutcome {
+                                delivery_id: delivery.delivery_id,
+                                disposition: if scenario == 0 || index == 0 { 1 } else { 2 },
+                            }
+                        })
+                        .collect();
+                    if scenario == 2 {
+                        outcomes[1].delivery_id = outcomes[0].delivery_id.clone();
+                    }
+                    app_control.send_task_result(tonic::Request::new(alien_worker_protocol::control::SendTaskResultRequest {
+                        task_id: task.task_id,
+                        result: Some(alien_worker_protocol::control::send_task_result_request::Result::QueueBatch(alien_worker_protocol::control::QueueBatchResult { outcomes })),
+                    })).await.expect("result");
+                });
+                let state = Arc::new(LambdaState {
+                    queue_bindings: Some(
+                        alien_bindings::Bindings::from_env_map(environment).expect("bindings"),
+                    ),
+                    queue_batches,
+                    queue_sources,
+                    command_timeout: Duration::from_secs(30),
+                    control_server: control,
+                    http_client: forward_client_builder().build().expect("client"),
+                });
+                let (sender, _receiver) = unbounded_channel();
+                let mut context = lambda_runtime::Context::default();
+                context.deadline = (SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .expect("clock")
+                    .as_millis()
+                    + 30_000) as u64;
+                let mut event = sqs_event_json();
+                let mut second = event["Records"][0].clone();
+                second["receiptHandle"] = serde_json::json!("rh-2");
+                event["Records"]
+                    .as_array_mut()
+                    .expect("records")
+                    .push(second);
+                let request = event_to_request(LambdaEvent::new(
+                    serde_json::from_str(
+                        &event
+                            .to_string()
+                            .replace("my-queue", "run-a7d9-imported-jobs"),
+                    )
+                    .expect("event"),
+                    context,
+                ));
+                let response = if streaming {
+                    let mut adapter = StreamingAdapter {
+                        state,
+                        request_done_sender: sender,
+                    };
+                    adapter.call(request).await.map(|response| match response {
+                        lambda_runtime::FunctionResponse::BufferedResponse(value) => value,
+                        _ => panic!("SQS must return raw buffered JSON"),
+                    })
+                } else {
+                    BufferedAdapter {
+                        state,
+                        request_done_sender: sender,
+                    }
+                    .call(request)
+                    .await
+                };
+                if scenario == 0 {
+                    assert_eq!(
+                        response.expect("all deliveries successful"),
+                        serde_json::json!({"batchItemFailures": []})
+                    );
+                } else {
+                    assert!(
+                        response.is_err(),
+                        "mapping response mode must never hide retries"
+                    );
+                }
+                application.await.expect("application");
+                assert_eq!(
+                    deletes.load(std::sync::atomic::Ordering::SeqCst),
+                    usize::from(scenario == 1 || scenario == 3)
+                );
+                server.abort();
+                assert!(server.await.expect_err("fixture stopped").is_cancelled());
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn unready_http_returns_retryable_sanitized_503_in_both_modes() {
         let state = LambdaState {
+            queue_bindings: None,
+            queue_sources: Default::default(),
+            queue_batches: Default::default(),
             command_timeout: Duration::from_secs(300),
             control_server: Arc::new(ControlGrpcServer::new()),
             http_client: forward_client_builder().build().unwrap(),
@@ -1708,6 +2219,21 @@ mod tests {
     /// Runs an API Gateway v2 / Function URL event through the same parsing and
     /// classification as a real invocation, with the app registered on `app_port`.
     async fn http_invocation(method: &str, app_port: u16) -> (LambdaState, LambdaRequest) {
+        http_invocation_with_body(
+            method,
+            app_port,
+            "/redirect",
+            "original request body".into(),
+        )
+        .await
+    }
+
+    async fn http_invocation_with_body(
+        method: &str,
+        app_port: u16,
+        path: &str,
+        body: String,
+    ) -> (LambdaState, LambdaRequest) {
         let control_server = Arc::new(ControlGrpcServer::new());
         control_server
             .register_http_server(tonic::Request::new(
@@ -1718,6 +2244,9 @@ mod tests {
             .await
             .expect("app HTTP server registers");
         let state = LambdaState {
+            queue_bindings: None,
+            queue_sources: Default::default(),
+            queue_batches: Default::default(),
             command_timeout: Duration::from_secs(300),
             control_server,
             http_client: forward_client_builder().build().unwrap(),
@@ -1725,13 +2254,13 @@ mod tests {
         let payload = serde_json::json!({
             "version": "2.0",
             "routeKey": "$default",
-            "rawPath": "/redirect",
+            "rawPath": path,
             "rawQueryString": "keep=query",
             "headers": {"host": "worker.lambda-url.us-east-1.on.aws"},
             "requestContext": {
                 "http": {
                     "method": method,
-                    "path": "/redirect",
+                    "path": path,
                     "protocol": "HTTP/1.1",
                     "sourceIp": "127.0.0.1",
                     "userAgent": "test"
@@ -1741,7 +2270,7 @@ mod tests {
                 "stage": "$default",
                 "timeEpoch": 0
             },
-            "body": "original request body",
+            "body": body,
             "isBase64Encoded": false
         });
         let mut context = lambda_runtime::Context::default();
@@ -1752,6 +2281,166 @@ mod tests {
             .as_millis() as u64;
         let event = event_to_request(LambdaEvent::new(payload, context));
         (state, event)
+    }
+
+    #[tokio::test]
+    async fn adapters_dispatch_s3_without_sqs_interception() {
+        for streaming in [false, true] {
+            let control = Arc::new(ControlGrpcServer::new());
+            let mut tasks = control
+                .wait_for_tasks(tonic::Request::new(
+                    alien_worker_protocol::control::WaitForTasksRequest {
+                        application_id: "storage-app".into(),
+                    },
+                ))
+                .await
+                .expect("subscribe")
+                .into_inner();
+            let app_control = control.clone();
+            let app = tokio::spawn(async move {
+                let task = tokio_stream::StreamExt::next(&mut tasks)
+                    .await
+                    .expect("storage delivery")
+                    .expect("task");
+                let Some(Payload::StorageEvent(event)) = task.payload else {
+                    panic!("S3 must dispatch storage");
+                };
+                assert_eq!(event.bucket, "my-bucket");
+                assert_eq!(event.key, "path/to/file.txt");
+                assert_eq!(event.size, 1024);
+                app_control.send_task_result(tonic::Request::new(alien_worker_protocol::control::SendTaskResultRequest {
+                    task_id: task.task_id, result: Some(alien_worker_protocol::control::send_task_result_request::Result::Success(alien_worker_protocol::control::TaskSuccess { response_data: Vec::new() })),
+                })).await.expect("complete storage task");
+            });
+            let state = Arc::new(LambdaState {
+                queue_bindings: None,
+                queue_sources: Default::default(),
+                queue_batches: Default::default(),
+                command_timeout: Duration::from_secs(30),
+                control_server: control,
+                http_client: forward_client_builder().build().expect("client"),
+            });
+            let mut context = lambda_runtime::Context::default();
+            context.deadline = (SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock")
+                .as_millis()
+                + 30_000) as u64;
+            let request = event_to_request(LambdaEvent::new(s3_event_json(), context));
+            assert!(request.extensions().get::<NonHttpInvocation>().is_some());
+            let (sender, _receiver) = unbounded_channel();
+            if streaming {
+                let response = StreamingAdapter {
+                    state,
+                    request_done_sender: sender,
+                }
+                .call(request)
+                .await
+                .expect("S3 invocation");
+                let lambda_runtime::FunctionResponse::StreamingResponse(response) = response else {
+                    panic!("storage response");
+                };
+                assert_eq!(response.metadata_prelude.status_code.as_u16(), 200);
+            } else {
+                let response = BufferedAdapter {
+                    state,
+                    request_done_sender: sender,
+                }
+                .call(request)
+                .await
+                .expect("S3 invocation");
+                assert_eq!(response["statusCode"], 200);
+            }
+            app.await.expect("storage application");
+        }
+    }
+
+    #[tokio::test]
+    async fn adapters_forward_event_shaped_http_bodies_without_dispatching_tasks() {
+        let envelope = alien_commands::test_utils::test_simple_envelope("command-id", "run");
+        for streaming in [false, true] {
+            for body in [
+                s3_event_json(),
+                sqs_event_json(),
+                serde_json::to_value(&envelope).expect("envelope"),
+            ] {
+                let expected = body.to_string();
+                let observed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+                let calls = observed.clone();
+                let app = axum::Router::new().fallback(axum::routing::any(
+                    move |request: axum::http::Request<axum::body::Body>| {
+                        let expected = expected.clone();
+                        let calls = calls.clone();
+                        async move {
+                            assert_eq!(request.method(), "POST");
+                            assert_eq!(request.uri().path(), "/__event");
+                            assert_eq!(request.uri().query(), Some("keep=query"));
+                            let bytes = axum::body::to_bytes(request.into_body(), 1024 * 1024)
+                                .await
+                                .expect("body");
+                            assert_eq!(bytes.as_ref(), expected.as_bytes());
+                            calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                            (
+                                axum::http::StatusCode::CREATED,
+                                [("x-application", "http-handler")],
+                                "application-response",
+                            )
+                        }
+                    },
+                ));
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                    .await
+                    .expect("listen");
+                let port = listener.local_addr().expect("address").port();
+                let server = tokio::spawn(async move {
+                    axum::serve(listener, app).await.expect("serve HTTP app");
+                });
+                let (state, mut request) =
+                    http_invocation_with_body("POST", port, "/__event", body.to_string()).await;
+                request
+                    .headers_mut()
+                    .insert("x-alien-event", "aws:sqs".parse().expect("header"));
+                assert!(request.extensions().get::<NonHttpInvocation>().is_none());
+                let (sender, _receiver) = unbounded_channel();
+                if streaming {
+                    let response = StreamingAdapter {
+                        state: Arc::new(state),
+                        request_done_sender: sender,
+                    }
+                    .call(request)
+                    .await
+                    .expect("HTTP invocation");
+                    let lambda_runtime::FunctionResponse::StreamingResponse(response) = response
+                    else {
+                        panic!("HTTP must stay streaming");
+                    };
+                    assert_eq!(response.metadata_prelude.status_code.as_u16(), 201);
+                    assert_eq!(
+                        response.metadata_prelude.headers["x-application"],
+                        "http-handler"
+                    );
+                    let bytes: Vec<Bytes> =
+                        futures_util::TryStreamExt::try_collect(response.stream)
+                            .await
+                            .expect("HTTP response body");
+                    assert_eq!(bytes.concat(), b"application-response");
+                } else {
+                    let response = BufferedAdapter {
+                        state: Arc::new(state),
+                        request_done_sender: sender,
+                    }
+                    .call(request)
+                    .await
+                    .expect("HTTP invocation");
+                    assert_eq!(response["statusCode"], 201);
+                    assert_eq!(response["headers"]["x-application"], "http-handler");
+                    assert!(response.get("batchItemFailures").is_none());
+                }
+                assert_eq!(observed.load(std::sync::atomic::Ordering::SeqCst), 1);
+                server.abort();
+                assert!(server.await.expect_err("server stopped").is_cancelled());
+            }
+        }
     }
 
     #[tokio::test]
@@ -1815,6 +2504,9 @@ mod tests {
     #[tokio::test]
     async fn event_delivery_failure_is_returned_to_lambda() {
         let state = LambdaState {
+            queue_bindings: None,
+            queue_sources: Default::default(),
+            queue_batches: Default::default(),
             command_timeout: Duration::from_secs(300),
             control_server: Arc::new(ControlGrpcServer::new()),
             http_client: forward_client_builder().build().unwrap(),

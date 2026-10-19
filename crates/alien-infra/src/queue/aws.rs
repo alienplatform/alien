@@ -348,10 +348,15 @@ impl AwsQueueController {
             if let Some(function) = resource.config.downcast_ref::<Worker>() {
                 // Check if this function has a queue trigger that references our queue
                 for trigger in &function.triggers {
-                    if let WorkerTrigger::Queue { queue } = trigger {
+                    if let WorkerTrigger::Queue { queue, .. } = trigger {
                         if queue.id == queue_config.id {
-                            max_function_timeout =
-                                max_function_timeout.max(function.timeout_seconds);
+                            max_function_timeout = max_function_timeout.max(
+                                function.timeout_seconds.saturating_mul(6).saturating_add(
+                                    function
+                                        .queue_batch_config(&queue_config.id)
+                                        .map_or(0, |batch| batch.max_window_seconds),
+                                ),
+                            );
                             functions_using_queue += 1;
                             info!(
                                 queue=%queue_config.id,
@@ -368,7 +373,7 @@ impl AwsQueueController {
 
         let visibility_timeout = if functions_using_queue > 0 {
             // Apply the QUEUE.md formula: max(30s, min(12h, max_function_timeout * 6))
-            let calculated = max_function_timeout * 6;
+            let calculated = max_function_timeout;
             let min_visibility = 30; // 30 seconds minimum
             let max_visibility = 12 * 60 * 60; // 12 hours maximum
 
