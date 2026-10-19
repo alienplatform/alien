@@ -492,6 +492,9 @@ impl TestConfig {
                 public_subnet_ids: required_csv_env("ALIEN_E2E_AWS_PUBLIC_SUBNET_IDS")?,
                 private_subnet_ids: required_csv_env("ALIEN_E2E_AWS_PRIVATE_SUBNET_IDS")?,
                 security_group_ids: csv_env("ALIEN_E2E_AWS_SECURITY_GROUP_IDS"),
+                sandbox_subnet_ids: vec![],
+                sandbox_gateway_subnet_ids: vec![],
+                sandbox_gateway_subnet_cidrs: vec![],
             }),
             Platform::Gcp => Ok(NetworkSettings::ByoVpcGcp {
                 network_name: required_env("ALIEN_E2E_GCP_NETWORK_NAME")?,

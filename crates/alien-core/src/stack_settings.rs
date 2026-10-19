@@ -127,6 +127,25 @@ pub enum NetworkSettings {
         #[serde(default)]
         #[serde(deserialize_with = "crate::network_ids::deserialize_ids")]
         security_group_ids: Vec<String>,
+        /// Subnets for internet sandboxes' egress connectors, with no route beyond the VPC.
+        /// Direct deploy needs these, the gateway subnets and their CIDRs to run an internet
+        /// sandbox in an existing VPC; it creates no subnets there. Same as the
+        /// `SandboxSubnetIds` setup parameter.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[serde(deserialize_with = "crate::network_ids::deserialize_ids")]
+        sandbox_subnet_ids: Vec<String>,
+        /// Two or three subnets, in different availability zones, whose only default route is
+        /// the private subnets' NAT gateway. The sandbox egress gateway's internal load balancer
+        /// runs in them. Same as the `SandboxGatewaySubnetIds` setup parameter.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[serde(deserialize_with = "crate::network_ids::deserialize_ids")]
+        sandbox_gateway_subnet_ids: Vec<String>,
+        /// The IPv4 CIDRs of `sandbox_gateway_subnet_ids`, in the same order: the only
+        /// destinations sandbox connectors may reach. Same as the `SandboxGatewaySubnetCidrs`
+        /// setup parameter.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[serde(deserialize_with = "crate::network_ids::deserialize_ids")]
+        sandbox_gateway_subnet_cidrs: Vec<String>,
     },
 
     /// Use an existing VPC (GCP).

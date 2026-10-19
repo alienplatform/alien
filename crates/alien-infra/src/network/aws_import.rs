@@ -325,6 +325,9 @@ mod tests {
                 public_subnet_ids: vec!["subnet-public".to_string()],
                 private_subnet_ids: vec!["subnet-private".to_string()],
                 security_group_ids: vec!["sg-123".to_string()],
+                sandbox_subnet_ids: vec![],
+                sandbox_gateway_subnet_ids: vec![],
+                sandbox_gateway_subnet_cidrs: vec![],
             }),
             ..StackSettings::default()
         };
@@ -378,6 +381,9 @@ mod tests {
                 public_subnet_ids: vec!["subnet-pub-a".to_string(), "subnet-pub-b".to_string()],
                 private_subnet_ids: vec!["subnet-priv-a".to_string(), "subnet-priv-b".to_string()],
                 security_group_ids: vec!["sg-123".to_string()],
+                sandbox_subnet_ids: vec![],
+                sandbox_gateway_subnet_ids: vec![],
+                sandbox_gateway_subnet_cidrs: vec![],
             }),
             ..StackSettings::default()
         }
@@ -604,6 +610,9 @@ mod tests {
                 public_subnet_ids: vec!["subnet-public".to_string()],
                 private_subnet_ids: vec!["subnet-private".to_string()],
                 security_group_ids: vec!["sg-123".to_string()],
+                sandbox_subnet_ids: vec![],
+                sandbox_gateway_subnet_ids: vec![],
+                sandbox_gateway_subnet_cidrs: vec![],
             }),
             ..StackSettings::default()
         };
@@ -656,6 +665,9 @@ mod tests {
                 public_subnet_ids: vec![],
                 private_subnet_ids: vec![],
                 security_group_ids: vec![],
+                sandbox_subnet_ids: vec![],
+                sandbox_gateway_subnet_ids: vec![],
+                sandbox_gateway_subnet_cidrs: vec![],
             }),
             ..StackSettings::default()
         };
@@ -723,6 +735,9 @@ mod tests {
                 public_subnet_ids: vec!["subnet-public".to_string()],
                 private_subnet_ids: vec!["subnet-private".to_string()],
                 security_group_ids: vec!["sg-123".to_string()],
+                sandbox_subnet_ids: vec![],
+                sandbox_gateway_subnet_ids: vec![],
+                sandbox_gateway_subnet_cidrs: vec![],
             }),
             ..StackSettings::default()
         };

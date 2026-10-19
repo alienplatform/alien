@@ -484,6 +484,9 @@ mod tests {
                 public_subnet_ids: vec![], // Empty - no public subnets
                 private_subnet_ids: vec!["subnet-1".to_string()],
                 security_group_ids: vec![],
+                sandbox_subnet_ids: vec![],
+                sandbox_gateway_subnet_ids: vec![],
+                sandbox_gateway_subnet_cidrs: vec![],
             }),
         );
         resources.insert(
@@ -509,6 +512,9 @@ mod tests {
                 public_subnet_ids: vec!["subnet-pub-1".to_string()],
                 private_subnet_ids: vec!["subnet-priv-1".to_string()],
                 security_group_ids: vec![],
+                sandbox_subnet_ids: vec![],
+                sandbox_gateway_subnet_ids: vec![],
+                sandbox_gateway_subnet_cidrs: vec![],
             }),
         );
         resources.insert(
@@ -533,6 +539,9 @@ mod tests {
                 public_subnet_ids: vec![], // Empty, but that's OK
                 private_subnet_ids: vec!["subnet-1".to_string()],
                 security_group_ids: vec![],
+                sandbox_subnet_ids: vec![],
+                sandbox_gateway_subnet_ids: vec![],
+                sandbox_gateway_subnet_cidrs: vec![],
             }),
         );
         resources.insert(
@@ -559,6 +568,9 @@ mod tests {
                 public_subnet_ids: vec![],
                 private_subnet_ids: vec!["subnet-1".to_string()],
                 security_group_ids: vec![],
+                sandbox_subnet_ids: vec![],
+                sandbox_gateway_subnet_ids: vec![],
+                sandbox_gateway_subnet_cidrs: vec![],
             }),
         );
 
@@ -580,6 +592,9 @@ mod tests {
                 public_subnet_ids: vec![],
                 private_subnet_ids: vec!["subnet-1".to_string()],
                 security_group_ids: vec![],
+                sandbox_subnet_ids: vec![],
+                sandbox_gateway_subnet_ids: vec![],
+                sandbox_gateway_subnet_cidrs: vec![],
             }),
         );
 

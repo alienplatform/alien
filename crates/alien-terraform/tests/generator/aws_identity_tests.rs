@@ -256,6 +256,9 @@ fn aws_network_byo_vpc_emits_no_resources() {
             public_subnet_ids: vec!["subnet-public-a".to_string()],
             private_subnet_ids: vec!["subnet-private-a".to_string()],
             security_group_ids: vec!["sg-0123456789abcdef0".to_string()],
+            sandbox_subnet_ids: vec![],
+            sandbox_gateway_subnet_ids: vec![],
+            sandbox_gateway_subnet_cidrs: vec![],
         }),
         ..StackSettings::default()
     };
@@ -738,6 +741,9 @@ fn a_deny_sandbox_attaches_to_the_first_of_two_networks() {
         public_subnet_ids: vec!["subnet-public-a".to_string()],
         private_subnet_ids: vec!["subnet-private-a".to_string()],
         security_group_ids: vec!["sg-0network".to_string()],
+        sandbox_subnet_ids: vec![],
+        sandbox_gateway_subnet_ids: vec![],
+        sandbox_gateway_subnet_cidrs: vec![],
     };
     for (first, second, expected) in [
         (created(), brought(), "aws_subnet.first_net_private[*].id"),
@@ -1398,6 +1404,9 @@ fn egress_parity_cases() -> [(NetworkSettings, &'static str, [&'static str; 2]);
                 public_subnet_ids: vec!["subnet-public-a".to_string()],
                 private_subnet_ids: EXISTING_SUBNETS.map(String::from).to_vec(),
                 security_group_ids: vec!["sg-0network".to_string()],
+                sandbox_subnet_ids: vec![],
+                sandbox_gateway_subnet_ids: vec![],
+                sandbox_gateway_subnet_cidrs: vec![],
             },
             "use-existing",
             EXISTING_SUBNETS,

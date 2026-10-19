@@ -196,6 +196,9 @@ mod tests {
                 public_subnet_ids: vec!["subnet-pub-1".to_string(), "subnet-pub-2".to_string()],
                 private_subnet_ids: vec!["subnet-priv-1".to_string(), "subnet-priv-2".to_string()],
                 security_group_ids: vec!["sg-123".to_string()],
+                sandbox_subnet_ids: vec![],
+                sandbox_gateway_subnet_ids: vec![],
+                sandbox_gateway_subnet_cidrs: vec![],
             })
             .build();
 
@@ -205,6 +208,7 @@ mod tests {
                 public_subnet_ids,
                 private_subnet_ids,
                 security_group_ids,
+                ..
             } => {
                 assert_eq!(vpc_id, "vpc-12345");
                 assert_eq!(public_subnet_ids.len(), 2);
@@ -250,6 +254,9 @@ mod tests {
                 public_subnet_ids: vec![],
                 private_subnet_ids: vec![],
                 security_group_ids: vec![],
+                sandbox_subnet_ids: vec![],
+                sandbox_gateway_subnet_ids: vec![],
+                sandbox_gateway_subnet_cidrs: vec![],
             })
             .build();
 

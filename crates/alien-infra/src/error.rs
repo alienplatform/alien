@@ -46,14 +46,15 @@ pub enum ErrorData {
     )]
     SandboxInternetDefaultVpcUnsupported { resource_id: String },
 
-    /// Direct deploy builds an internet sandbox's network only in a VPC it creates.
+    /// Direct deploy runs an internet sandbox in an existing VPC only on subnets the customer
+    /// provides; it creates no subnets there.
     #[error(
-        code = "SANDBOX_INTERNET_DIRECT_EXISTING_VPC_UNSUPPORTED",
-        message = "Sandbox '{resource_id}' uses internet egress, which AWS direct deploy supports only in a VPC it creates. To use an existing VPC, deploy with CloudFormation or Terraform and provide SandboxSubnetIds, SandboxGatewaySubnetIds and SandboxGatewaySubnetCidrs, or let direct deploy create a new VPC.",
+        code = "SANDBOX_INTERNET_EXISTING_VPC_SUBNETS_REQUIRED",
+        message = "Sandbox '{resource_id}' uses internet egress. In an existing VPC, AWS direct deploy needs the sandbox subnets you made for it: set sandbox_subnet_ids, sandbox_gateway_subnet_ids and sandbox_gateway_subnet_cidrs in the byo-vpc-aws network settings (CLI: --sandbox-subnet-ids, --sandbox-gateway-subnet-ids, --sandbox-gateway-subnet-cidrs), or let direct deploy create a new VPC.",
         retryable = "false",
         internal = "false"
     )]
-    SandboxInternetDirectExistingVpcUnsupported { resource_id: String },
+    SandboxInternetExistingVpcSubnetsRequired { resource_id: String },
 
     /// Resource configuration validation failed.
     #[error(

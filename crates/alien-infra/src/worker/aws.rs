@@ -6302,6 +6302,9 @@ mod tests {
                 public_subnet_ids: vec![],
                 private_subnet_ids: vec!["subnet-test".into()],
                 security_group_ids: vec!["sg-test".into()],
+                sandbox_subnet_ids: vec![],
+                sandbox_gateway_subnet_ids: vec![],
+                sandbox_gateway_subnet_cidrs: vec![],
             }),
             ..Default::default()
         }

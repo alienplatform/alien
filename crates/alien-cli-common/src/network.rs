@@ -86,6 +86,21 @@ pub struct NetworkArgs {
     #[arg(long, value_delimiter = ',')]
     pub security_group_ids: Vec<String>,
 
+    /// Comma-separated subnet IDs for internet sandbox connectors, with no route beyond the VPC
+    /// (byo mode, AWS; needed for internet sandboxes)
+    #[arg(long, value_delimiter = ',')]
+    pub sandbox_subnet_ids: Vec<String>,
+
+    /// Comma-separated subnet IDs, two or three, whose default route is the private subnets' NAT
+    /// gateway, for the sandbox egress gateway (byo mode, AWS; needed for internet sandboxes)
+    #[arg(long, value_delimiter = ',')]
+    pub sandbox_gateway_subnet_ids: Vec<String>,
+
+    /// Comma-separated CIDRs of the sandbox gateway subnets, in the same order (byo mode, AWS;
+    /// needed for internet sandboxes)
+    #[arg(long, value_delimiter = ',')]
+    pub sandbox_gateway_subnet_cidrs: Vec<String>,
+
     // -- BYO mode options (GCP) --
     /// Existing VPC network name (byo mode, GCP)
     #[arg(long)]
@@ -200,6 +215,15 @@ fn reject_byo_flags(args: &NetworkArgs, mode: &str) -> std::result::Result<(), S
         (!args.public_subnet_ids.is_empty(), "--public-subnet-ids"),
         (!args.private_subnet_ids.is_empty(), "--private-subnet-ids"),
         (!args.security_group_ids.is_empty(), "--security-group-ids"),
+        (!args.sandbox_subnet_ids.is_empty(), "--sandbox-subnet-ids"),
+        (
+            !args.sandbox_gateway_subnet_ids.is_empty(),
+            "--sandbox-gateway-subnet-ids",
+        ),
+        (
+            !args.sandbox_gateway_subnet_cidrs.is_empty(),
+            "--sandbox-gateway-subnet-cidrs",
+        ),
         (args.network_name.is_some(), "--network-name"),
         (args.subnet_name.is_some(), "--subnet-name"),
         (args.network_region.is_some(), "--network-region"),
@@ -242,6 +266,9 @@ fn parse_byo_settings(
                 public_subnet_ids: args.public_subnet_ids.clone(),
                 private_subnet_ids: args.private_subnet_ids.clone(),
                 security_group_ids: args.security_group_ids.clone(),
+                sandbox_subnet_ids: args.sandbox_subnet_ids.clone(),
+                sandbox_gateway_subnet_ids: args.sandbox_gateway_subnet_ids.clone(),
+                sandbox_gateway_subnet_cidrs: args.sandbox_gateway_subnet_cidrs.clone(),
             }))
         }
         "gcp" => {
@@ -301,6 +328,9 @@ mod tests {
             public_subnet_ids: vec![],
             private_subnet_ids: vec![],
             security_group_ids: vec![],
+            sandbox_subnet_ids: vec![],
+            sandbox_gateway_subnet_ids: vec![],
+            sandbox_gateway_subnet_cidrs: vec![],
             network_name: None,
             subnet_name: None,
             network_region: None,
@@ -378,8 +408,46 @@ mod tests {
                 public_subnet_ids: vec!["subnet-a".to_string()],
                 private_subnet_ids: vec!["subnet-b".to_string()],
                 security_group_ids: vec![],
+                sandbox_subnet_ids: vec![],
+                sandbox_gateway_subnet_ids: vec![],
+                sandbox_gateway_subnet_cidrs: vec![],
             }
         );
+    }
+
+    #[test]
+    fn byo_aws_takes_the_customers_sandbox_subnets() {
+        let mut args = default_args();
+        args.network_mode = NetworkMode::Byo;
+        args.vpc_id = Some("vpc-123".to_string());
+        args.public_subnet_ids = vec!["subnet-a".to_string()];
+        args.private_subnet_ids = vec!["subnet-b".to_string()];
+        args.sandbox_subnet_ids = vec!["subnet-s1".to_string(), "subnet-s2".to_string()];
+        args.sandbox_gateway_subnet_ids = vec!["subnet-g1".to_string(), "subnet-g2".to_string()];
+        args.sandbox_gateway_subnet_cidrs =
+            vec!["10.0.210.0/24".to_string(), "10.0.211.0/24".to_string()];
+        let Some(NetworkSettings::ByoVpcAws {
+            sandbox_subnet_ids,
+            sandbox_gateway_subnet_ids,
+            sandbox_gateway_subnet_cidrs,
+            ..
+        }) = parse_network_settings(&args, "aws").expect("should succeed")
+        else {
+            panic!("expected byo-vpc-aws settings");
+        };
+        assert_eq!(sandbox_subnet_ids, ["subnet-s1", "subnet-s2"]);
+        assert_eq!(sandbox_gateway_subnet_ids, ["subnet-g1", "subnet-g2"]);
+        assert_eq!(
+            sandbox_gateway_subnet_cidrs,
+            ["10.0.210.0/24", "10.0.211.0/24"]
+        );
+
+        args.network_mode = NetworkMode::Create;
+        args.vpc_id = None;
+        args.public_subnet_ids = vec![];
+        args.private_subnet_ids = vec![];
+        let err = parse_network_settings(&args, "aws").unwrap_err();
+        assert!(err.contains("--sandbox-subnet-ids is not valid with --network create"));
     }
 
     #[test]
@@ -466,6 +534,9 @@ mod tests {
             public_subnet_ids: vec!["subnet-public".to_string()],
             private_subnet_ids: vec!["subnet-private".to_string()],
             security_group_ids: vec![],
+            sandbox_subnet_ids: vec![],
+            sandbox_gateway_subnet_ids: vec![],
+            sandbox_gateway_subnet_cidrs: vec![],
         };
 
         validate_network_settings_for_platform(&aws, Platform::Aws)

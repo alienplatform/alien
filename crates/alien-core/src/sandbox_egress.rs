@@ -301,6 +301,9 @@ mod tests {
             public_subnet_ids: vec!["subnet-pub".to_string()],
             private_subnet_ids: vec!["subnet-priv".to_string()],
             security_group_ids: vec![],
+            sandbox_subnet_ids: vec![],
+            sandbox_gateway_subnet_ids: vec![],
+            sandbox_gateway_subnet_cidrs: vec![],
         };
         for (first, second, expected) in [
             (create(), byo_aws(), Created),
@@ -353,6 +356,9 @@ mod tests {
             public_subnet_ids: vec!["subnet-pub".to_string()],
             private_subnet_ids: vec!["subnet-priv".to_string()],
             security_group_ids: vec![],
+            sandbox_subnet_ids: vec![],
+            sandbox_gateway_subnet_ids: vec![],
+            sandbox_gateway_subnet_cidrs: vec![],
         };
         let byo_gcp = || NetworkSettings::ByoVpcGcp {
             network_name: "vpc".to_string(),

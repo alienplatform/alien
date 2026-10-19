@@ -17,6 +17,9 @@ export const NetworkSettingsSchema = z.union([z.object({
     }), z.object({
     "private_subnet_ids": z.array(z.string()).describe("IDs of private subnets"),
 "public_subnet_ids": z.array(z.string()).describe("IDs of public subnets (required for public ingress)"),
+"sandbox_gateway_subnet_cidrs": z.optional(z.array(z.string()).describe("The IPv4 CIDRs of `sandbox_gateway_subnet_ids`, in the same order: the only\ndestinations sandbox connectors may reach. Same as the `SandboxGatewaySubnetCidrs`\nsetup parameter.")),
+"sandbox_gateway_subnet_ids": z.optional(z.array(z.string()).describe("Two or three subnets, in different availability zones, whose only default route is\nthe private subnets' NAT gateway. The sandbox egress gateway's internal load balancer\nruns in them. Same as the `SandboxGatewaySubnetIds` setup parameter.")),
+"sandbox_subnet_ids": z.optional(z.array(z.string()).describe("Subnets for internet sandboxes' egress connectors, with no route beyond the VPC.\nDirect deploy needs these, the gateway subnets and their CIDRs to run an internet\nsandbox in an existing VPC; it creates no subnets there. Same as the\n`SandboxSubnetIds` setup parameter.")),
 "security_group_ids": z.optional(z.array(z.string()).describe("Optional security group IDs to use")),
 "type": z.enum(["byo-vpc-aws"]),
 "vpc_id": z.string().describe("The ID of the existing VPC")

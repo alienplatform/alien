@@ -35,10 +35,10 @@ pub use alien_core::{
 };
 
 // Re-export helper functions
-pub use helpers::{check_deployer_secrets, collect_environment_info};
 pub use helpers::create_aggregated_error_from_stack_state;
 pub use helpers::deployment_headline_error_from_state;
 pub use helpers::deployment_state_error_from_headline;
+pub use helpers::{check_deployer_secrets, collect_environment_info};
 pub use observe::run_observe_pass;
 
 use tracing::{debug, info, warn};
@@ -180,13 +180,13 @@ pub async fn step(
 
     let update = match current.status {
         DeploymentStatus::Pending => {
-            pending::handle_pending(
+            Box::pin(pending::handle_pending(
                 current,
                 require_target_stack()?,
                 config,
                 client_config,
                 service_provider,
-            )
+            ))
             .await?
         }
         DeploymentStatus::PreflightsFailed => {
@@ -204,23 +204,33 @@ pub async fn step(
                 retry_state.status = DeploymentStatus::Pending;
                 retry_state.error = None;
                 retry_state.retry_requested = false;
-                pending::handle_pending(
+                Box::pin(pending::handle_pending(
                     retry_state,
                     require_target_stack()?,
                     config,
                     client_config,
                     service_provider,
-                )
+                ))
                 .await?
             }
         }
         DeploymentStatus::InitialSetup => {
-            initial_setup::handle_initial_setup(current, config, client_config, service_provider)
-                .await?
+            Box::pin(initial_setup::handle_initial_setup(
+                current,
+                config,
+                client_config,
+                service_provider,
+            ))
+            .await?
         }
         DeploymentStatus::Provisioning => {
-            provisioning::handle_provisioning(current, config, client_config, service_provider)
-                .await?
+            Box::pin(provisioning::handle_provisioning(
+                current,
+                config,
+                client_config,
+                service_provider,
+            ))
+            .await?
         }
         DeploymentStatus::WaitingForMachines | DeploymentStatus::WaitingForSecrets => {
             // A prepared target identifies an update. Initial setup can already have
@@ -230,69 +240,111 @@ pub async fn step(
                 .as_ref()
                 .is_some_and(|metadata| metadata.pending_prepared_stack.is_some());
             if has_pending_target {
-                updating::handle_updating(current, config, client_config, service_provider).await?
+                Box::pin(updating::handle_updating(
+                    current,
+                    config,
+                    client_config,
+                    service_provider,
+                ))
+                .await?
             } else {
-                provisioning::handle_provisioning(current, config, client_config, service_provider)
-                    .await?
+                Box::pin(provisioning::handle_provisioning(
+                    current,
+                    config,
+                    client_config,
+                    service_provider,
+                ))
+                .await?
             }
         }
         DeploymentStatus::Running => {
-            running::handle_running(current, config, client_config, service_provider).await?
+            Box::pin(running::handle_running(
+                current,
+                config,
+                client_config,
+                service_provider,
+            ))
+            .await?
         }
         DeploymentStatus::UpdatePending => {
-            updating::handle_update_pending(
+            Box::pin(updating::handle_update_pending(
                 current,
                 require_target_stack()?,
                 config,
                 client_config,
                 service_provider,
-            )
+            ))
             .await?
         }
         DeploymentStatus::Updating => {
-            updating::handle_updating(current, config, client_config, service_provider).await?
+            Box::pin(updating::handle_updating(
+                current,
+                config,
+                client_config,
+                service_provider,
+            ))
+            .await?
         }
         DeploymentStatus::DeletePending => {
-            deleting::handle_delete_pending(current, config, client_config, service_provider)
-                .await?
+            Box::pin(deleting::handle_delete_pending(
+                current,
+                config,
+                client_config,
+                service_provider,
+            ))
+            .await?
         }
         DeploymentStatus::Deleting => {
-            deleting::handle_deleting(current, config, client_config, service_provider).await?
+            Box::pin(deleting::handle_deleting(
+                current,
+                config,
+                client_config,
+                service_provider,
+            ))
+            .await?
         }
-        DeploymentStatus::TeardownRequired => deleting::handle_teardown_required(current).await?,
+        DeploymentStatus::TeardownRequired => {
+            Box::pin(deleting::handle_teardown_required(current)).await?
+        }
         // Failed states - retry failed resources and transition back to active status
         DeploymentStatus::InitialSetupFailed => {
-            initial_setup::handle_initial_setup_failed(
+            Box::pin(initial_setup::handle_initial_setup_failed(
                 current,
                 require_target_stack()?,
                 config,
                 client_config,
                 service_provider,
-            )
+            ))
             .await?
         }
         DeploymentStatus::ProvisioningFailed => {
-            provisioning::handle_provisioning_failed(
+            Box::pin(provisioning::handle_provisioning_failed(
                 current,
                 require_target_stack()?,
                 config,
                 client_config,
                 service_provider,
-            )
+            ))
             .await?
         }
         DeploymentStatus::UpdateFailed => {
-            updating::handle_update_failed(
+            Box::pin(updating::handle_update_failed(
                 current,
                 require_target_stack()?,
                 config,
                 client_config,
                 service_provider,
-            )
+            ))
             .await?
         }
         DeploymentStatus::DeleteFailed => {
-            deleting::handle_delete_failed(current, config, client_config, service_provider).await?
+            Box::pin(deleting::handle_delete_failed(
+                current,
+                config,
+                client_config,
+                service_provider,
+            ))
+            .await?
         }
         DeploymentStatus::TeardownFailed => {
             debug!("Deployment setup teardown failed, no normal deployment action");
@@ -305,7 +357,13 @@ pub async fn step(
             }
         }
         DeploymentStatus::RefreshFailed => {
-            running::handle_refresh_failed(current, config, client_config, service_provider).await?
+            Box::pin(running::handle_refresh_failed(
+                current,
+                config,
+                client_config,
+                service_provider,
+            ))
+            .await?
         }
         DeploymentStatus::Deleted => {
             debug!("Deployment is deleted, no action");

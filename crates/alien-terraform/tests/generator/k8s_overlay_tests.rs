@@ -1034,6 +1034,9 @@ fn eks_declared_network_is_shared_with_cluster_in_every_mode() {
             public_subnet_ids: vec!["subnet-public".to_string()],
             private_subnet_ids: vec!["subnet-private".to_string()],
             security_group_ids: vec!["sg-0123456789abcdef0".to_string()],
+            sandbox_subnet_ids: vec![],
+            sandbox_gateway_subnet_ids: vec![],
+            sandbox_gateway_subnet_cidrs: vec![],
         },
     ] {
         let stack = Stack::new("shared-network".to_string())

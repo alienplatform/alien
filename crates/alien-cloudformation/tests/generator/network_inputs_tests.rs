@@ -78,6 +78,9 @@ fn existing_network_registration_resolves_optional_lists_for_both_network_origin
             public_subnet_ids: vec![],
             private_subnet_ids: vec![],
             security_group_ids: vec![],
+            sandbox_subnet_ids: vec![],
+            sandbox_gateway_subnet_ids: vec![],
+            sandbox_gateway_subnet_cidrs: vec![],
         },
     ] {
         let stack = Stack::new("network-inputs".into())

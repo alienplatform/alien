@@ -37,9 +37,9 @@ pub fn needs_setup_scaffolding(entry: &ResourceEntry) -> bool {
         .always_emits_setup_scaffolding()
 }
 
-/// Refuse, while planning and before setup creates anything, a direct AWS internet sandbox
-/// outside a VPC direct deploy creates. Setup cannot add its dedicated subnets to the default VPC,
-/// and an existing VPC's sandbox subnets are brought through a CloudFormation or Terraform import.
+/// Refuse, while planning and before setup creates anything, a direct AWS internet sandbox that
+/// has no sandbox subnets to run on. Setup adds them only to a VPC it creates: the default VPC
+/// is refused, and an existing VPC needs the customer's sandbox and gateway subnets.
 pub(crate) fn validate_setup_support(
     stack: &Stack,
     platform: Platform,
@@ -56,8 +56,11 @@ pub(crate) fn validate_setup_support(
         Err(SandboxEgressRefusal::DefaultVpc) => {
             |resource_id| ErrorData::SandboxInternetDefaultVpcUnsupported { resource_id }
         }
-        Ok(network) if network.vpc == SandboxEgressVpc::BroughtByCustomer => {
-            |resource_id| ErrorData::SandboxInternetDirectExistingVpcUnsupported { resource_id }
+        Ok(network)
+            if network.vpc == SandboxEgressVpc::BroughtByCustomer
+                && !has_customer_sandbox_subnets(network.entry) =>
+        {
+            |resource_id| ErrorData::SandboxInternetExistingVpcSubnetsRequired { resource_id }
         }
         _ => return Ok(()),
     };
@@ -71,6 +74,25 @@ pub(crate) fn validate_setup_support(
         }
     }
     Ok(())
+}
+
+/// Whether an existing VPC's settings name all of the customer's sandbox subnets. Their routes
+/// and CIDRs are verified against EC2 before the network reports ready.
+fn has_customer_sandbox_subnets(entry: &ResourceEntry) -> bool {
+    matches!(
+        entry
+            .config
+            .downcast_ref::<alien_core::Network>()
+            .map(|network| &network.settings),
+        Some(alien_core::NetworkSettings::ByoVpcAws {
+            sandbox_subnet_ids,
+            sandbox_gateway_subnet_ids,
+            sandbox_gateway_subnet_cidrs,
+            ..
+        }) if !sandbox_subnet_ids.is_empty()
+            && !sandbox_gateway_subnet_ids.is_empty()
+            && !sandbox_gateway_subnet_cidrs.is_empty()
+    )
 }
 
 /// At most one mutating call per resource, so a retry after any failure repeats nothing.
@@ -464,14 +486,39 @@ mod direct_setup_planning_tests {
             public_subnet_ids: vec![],
             private_subnet_ids: vec!["subnet-a".into(), "subnet-b".into()],
             security_group_ids: vec![],
+            sandbox_subnet_ids: vec![],
+            sandbox_gateway_subnet_ids: vec![],
+            sandbox_gateway_subnet_cidrs: vec![],
         }
     }
 
-    /// Direct deploy builds an internet sandbox's network only in a VPC it creates, so planning
-    /// refuses one on the default VPC or an existing VPC before any setup resource is created.
-    /// A created VPC, a deny sandbox and a template import are left to their existing checks.
+    /// An existing VPC with the customer's sandbox subnets, minus the inputs `missing` names.
+    fn existing_vpc_with_sandbox_subnets(missing: &str) -> alien_core::NetworkSettings {
+        let pick = |name: &str, values: &[&str]| -> Vec<String> {
+            if name == missing {
+                vec![]
+            } else {
+                values.iter().map(|value| value.to_string()).collect()
+            }
+        };
+        alien_core::NetworkSettings::ByoVpcAws {
+            vpc_id: "vpc-existing".into(),
+            public_subnet_ids: vec![],
+            private_subnet_ids: vec!["subnet-a".into(), "subnet-b".into()],
+            security_group_ids: vec![],
+            sandbox_subnet_ids: pick("sandbox", &["subnet-s1", "subnet-s2"]),
+            sandbox_gateway_subnet_ids: pick("gateway", &["subnet-g1", "subnet-g2"]),
+            sandbox_gateway_subnet_cidrs: pick("cidrs", &["10.0.210.0/24", "10.0.211.0/24"]),
+        }
+    }
+
+    /// Direct deploy builds an internet sandbox's network only in a VPC it creates or on the
+    /// sandbox subnets a customer provides in an existing one, so planning refuses one on the
+    /// default VPC, or on an existing VPC missing any of those inputs, before any setup
+    /// resource is created. A created VPC, a deny sandbox and a template import are left to
+    /// their existing checks.
     #[test]
-    fn planning_refuses_direct_aws_internet_outside_a_created_vpc() {
+    fn planning_refuses_direct_aws_internet_without_sandbox_subnets() {
         for (authority, egress, settings, refused) in [
             (
                 InitialSetupAuthority::DirectSetup,
@@ -483,7 +530,31 @@ mod direct_setup_planning_tests {
                 InitialSetupAuthority::DirectSetup,
                 SandboxEgress::Internet,
                 existing_vpc(),
-                Some("SANDBOX_INTERNET_DIRECT_EXISTING_VPC_UNSUPPORTED"),
+                Some("SANDBOX_INTERNET_EXISTING_VPC_SUBNETS_REQUIRED"),
+            ),
+            (
+                InitialSetupAuthority::DirectSetup,
+                SandboxEgress::Internet,
+                existing_vpc_with_sandbox_subnets("sandbox"),
+                Some("SANDBOX_INTERNET_EXISTING_VPC_SUBNETS_REQUIRED"),
+            ),
+            (
+                InitialSetupAuthority::DirectSetup,
+                SandboxEgress::Internet,
+                existing_vpc_with_sandbox_subnets("gateway"),
+                Some("SANDBOX_INTERNET_EXISTING_VPC_SUBNETS_REQUIRED"),
+            ),
+            (
+                InitialSetupAuthority::DirectSetup,
+                SandboxEgress::Internet,
+                existing_vpc_with_sandbox_subnets("cidrs"),
+                Some("SANDBOX_INTERNET_EXISTING_VPC_SUBNETS_REQUIRED"),
+            ),
+            (
+                InitialSetupAuthority::DirectSetup,
+                SandboxEgress::Internet,
+                existing_vpc_with_sandbox_subnets(""),
+                None,
             ),
             (
                 InitialSetupAuthority::ImportedHandoff,
@@ -566,8 +637,14 @@ mod direct_setup_planning_tests {
                     .expect("direct internet outside a created VPC must fail while planning");
                 assert_eq!(error.code, code);
                 assert!(error.to_string().contains("subject"));
+                if code == "SANDBOX_INTERNET_EXISTING_VPC_SUBNETS_REQUIRED" {
+                    assert!(
+                        error.to_string().contains("--sandbox-gateway-subnet-cidrs"),
+                        "{error}"
+                    );
+                }
             } else {
-                planned.expect("direct internet in a created VPC is planned");
+                planned.expect("direct internet with sandbox subnets to run on is planned");
             }
         }
     }
