@@ -737,6 +737,7 @@ def main():
     parser.add_argument("--splice-only", action="store_true")
     parser.add_argument("--dns-limit-only", action="store_true")
     parser.add_argument("--replica-failover-only", action="store_true")
+    parser.add_argument("--failover-balancer", choices=["passthrough", "proxy"], default="passthrough")
     args = parser.parse_args()
     if args.range_refresh_only and not args.vault_config:
         parser.error("--range-refresh-only requires --vault-config")
@@ -824,7 +825,8 @@ def main():
         if args.replica_failover_only:
             assert suite.admin("/v1/policies", {"aud": AUD, "sub": SUB, "policy": suite.policy})[0] == 204
             from replica_failover import check_replica_failover
-            check_replica_failover(suite, args.agent_image, containers, networks, docker, PREFIX, output, AUD, SUB, AGENT_UID)
+            check_replica_failover(suite, args.agent_image, containers, networks, docker, PREFIX, output, AUD, SUB, AGENT_UID,
+                                   args.failover_balancer)
             return
         if args.connect_port80_only:
             suite.connect_port80()

@@ -1,13 +1,21 @@
 """Kill one gateway replica behind a load balancer while a sandbox sends steady traffic.
 
-The balancer models a cloud network load balancer: every new connection goes to a random
-registered replica, and a replica is removed only after UNHEALTHY consecutive failed health
-checks INTERVAL seconds apart. Until then, connections sent to the killed replica fail when
-the network gives up on it. Any one sandbox policy check can land there, but egress must stay
+Every new connection goes to a random registered replica, and a replica is removed only after
+UNHEALTHY consecutive failed health checks INTERVAL seconds apart. Until then, connections sent
+to the killed replica fail. Any one sandbox policy check can land there, but egress must stay
 open while the other replica answers, and unlisted destinations must stay denied throughout.
+
+Two balancer models:
+- "passthrough" (default) models a network load balancer such as an AWS NLB or a Kubernetes
+  Service: it rewrites packets and does not terminate TCP, so a connection routed to the killed
+  replica never completes its handshake. The agent must reopen such forwarded connections on a
+  new connection before the client gives up.
+- "proxy" terminates TCP and dials the replica afterwards, so a connection routed to the killed
+  replica is accepted and then closed without an answer when the dial gives up.
 """
 import datetime
 import json
+import os
 import re
 import subprocess
 import threading
@@ -23,6 +31,7 @@ DURATION = 75
 BALANCER_IP = "172.29.91.2"
 AGENT_IP = "172.29.91.3"
 REPLICAS = ["93.184.216.3:3128", "93.184.216.4:3128"]
+KILLED = "93.184.216.4"
 ALLOWED, UNLISTED = "allowed.test", "denied.test"
 
 BALANCER = r'''
@@ -86,6 +95,72 @@ while True:
     threading.Thread(target=handle, args=(client,), daemon=True).start()
 '''
 
+PASSTHROUGH_IMAGE = r'''
+FROM python:3.13-slim
+RUN apt-get update && apt-get install -y --no-install-recommends iptables && rm -rf /var/lib/apt/lists/*
+'''
+
+PASSTHROUGH = r'''
+import json, re, socket, subprocess, sys, threading, time
+targets = sys.argv[1].split(",")
+interval, unhealthy, address = float(sys.argv[2]), int(sys.argv[3]), sys.argv[4]
+registered, failures, lock = set(targets), {target: 0 for target in targets}, threading.Lock()
+output = threading.Lock()
+
+def log(**event):
+    with output:
+        print(json.dumps({"t": time.time(), **event}), flush=True)
+
+def iptables(*args):
+    return subprocess.run(["iptables", "-w", *args], check=True, capture_output=True, text=True).stdout
+
+def routed():
+    # The nat table sees only the first packet of a connection, so each DNAT rule's packet
+    # counter is the number of connections routed to that target.
+    listing = iptables("-t", "nat", "-L", "BALANCE", "-v", "-x", "-n")
+    return {match.group(2): int(match.group(1)) for match in re.finditer(r"^\s*(\d+).*to:(\S+)", listing, re.M)}
+
+def route():
+    # Replace the whole rule set in one transaction; each new connection picks a registered
+    # target uniformly, and established connections keep their target.
+    live, rules = sorted(registered), ["*nat", ":BALANCE - [0:0]"]
+    for index, target in enumerate(live):
+        remaining = len(live) - index
+        pick = f"-m statistic --mode random --probability {1 / remaining:.6f} " if remaining > 1 else ""
+        rules.append(f"-A BALANCE -p tcp {pick}-j DNAT --to-destination {target}")
+    rules.append("COMMIT")
+    subprocess.run(["iptables-restore", "-w", "--noflush"], input="\n".join(rules) + "\n", text=True, check=True)
+
+def health():
+    while True:
+        time.sleep(interval)
+        for target in targets:
+            try:
+                with socket.create_connection((target.split(":")[0], 3129), timeout=interval / 2) as probe:
+                    probe.sendall(b"GET /health HTTP/1.1\r\nHost: balancer\r\nConnection: close\r\n\r\n")
+                    healthy = probe.recv(64).startswith(b"HTTP/1.1 200")
+            except OSError:
+                healthy = False
+            failures[target] = 0 if healthy else failures[target] + 1
+            if failures[target] >= unhealthy and target in registered:
+                with lock:
+                    log(event="routed", counts=routed())
+                    registered.discard(target)
+                    route()
+                log(event="deregistered", target=target)
+
+iptables("-t", "nat", "-N", "BALANCE")
+route()
+iptables("-t", "nat", "-A", "PREROUTING", "-d", address, "-p", "tcp", "--dport", "3128", "-j", "BALANCE")
+iptables("-t", "nat", "-A", "POSTROUTING", "-p", "tcp", "--dport", "3128", "-j", "MASQUERADE")
+threading.Thread(target=health, daemon=True).start()
+log(event="listening", targets=targets)
+while True:
+    time.sleep(0.2)
+    with lock:
+        log(event="routed", counts=routed())
+'''
+
 # Runs as the command UID through the agent's explicit proxy, like an ordinary proxy-aware app.
 LOOP = r'''
 import http.client, json, socket, ssl, sys, time
@@ -136,7 +211,18 @@ def agent_refusals(logs, since):
     return times
 
 
-def analyze(observations, health, balancer, killed_at, refusals):
+def agent_retries(logs, since):
+    """Forwarded connections the agent reopened because no gateway answered an attempt."""
+    count = 0
+    for line in logs.splitlines():
+        line = re.sub(r"\x1b\[[0-9;]*m", "", line)
+        if "gateway connection unanswered; retrying" in line:
+            stamp = datetime.datetime.fromisoformat(line.split()[0].replace("Z", "+00:00")).timestamp()
+            count += stamp >= since
+    return count
+
+
+def analyze(observations, health, balancer, killed_at, refusals, retries):
     def phase(start, end):
         result = {}
         for target in [ALLOWED, UNLISTED]:
@@ -152,6 +238,11 @@ def analyze(observations, health, balancer, killed_at, refusals):
         return result
 
     first, last = observations[0]["startedAt"], observations[-1]["finishedAt"]
+    killed = KILLED + ":3128"
+    routed = [(event["t"], event["counts"][killed]) for event in balancer
+              if event.get("event") == "routed" and killed in event["counts"]]
+    before = [count for stamp, count in routed if stamp <= killed_at]
+    routed_to_killed = max((count for _, count in routed), default=0) - (before[-1] if before else 0)
     # Requests the agent refused at once. A request in flight on the killed replica is also
     # reset at once, so the agent's own log is what proves its readiness gate stayed open.
     gated = [item for item in observations if item["target"] == ALLOWED and item["outcome"] == "refused"
@@ -165,7 +256,17 @@ def analyze(observations, health, balancer, killed_at, refusals):
         "afterKill": phase(killed_at, last + 1),
         "allowedAfterDeregistration": sum(1 for item in observations if deregistered and item["target"] == ALLOWED
                                           and item["outcome"] == "allowed" and item["startedAt"] >= deregistered[0]),
-        "deadReplicaConnections": sum(1 for event in balancer if event.get("event") == "target-failed"),
+        # Proxy model: dials the balancer gave up on. Pass-through model: connections routed
+        # to the killed replica after the kill.
+        "deadReplicaConnections": sum(1 for event in balancer if event.get("event") == "target-failed") + routed_to_killed,
+        # Requests started after the kill that got no gateway answer: a client timeout, or the
+        # agent closing the connection when it gave up on the gateway.
+        "clientFailuresAfterKill": sum(1 for item in observations if item["startedAt"] >= killed_at
+                                       and item["outcome"] in ("timeout", "refused")),
+        "clientTimeoutsAfterKill": sum(1 for item in observations if item["outcome"] == "timeout" and item["startedAt"] >= killed_at),
+        "slowestRequestAfterKillSeconds": round(max((item["finishedAt"] - item["startedAt"] for item in observations
+                                                     if item["startedAt"] >= killed_at), default=0), 3),
+        "agentForwardRetriesAfterKill": retries,
         "clientFastRefusalsAfterKill": len(gated),
         "agentGateRefusalsAfterKill": len(refusals),
         "agentGateClosedSpanSeconds": round(refusals[-1] - refusals[0], 3) if refusals else 0,
@@ -175,17 +276,28 @@ def analyze(observations, health, balancer, killed_at, refusals):
     }
 
 
-def check_replica_failover(suite, image, containers, networks, docker, prefix, output, aud, sub, uid):
+def check_replica_failover(suite, image, containers, networks, docker, prefix, output, aud, sub, uid, model="passthrough"):
     guest = prefix + "-guest"
     docker("network", "create", "--internal", "--subnet", "172.29.91.0/24", guest)
     networks.append(guest)
-    (output / "balancer.py").write_text(BALANCER)
     balancer = prefix + "-balancer"
-    docker("run", "-d", "--name", balancer, "--network", prefix, "--ip", "93.184.216.10",
-           "-v", f"{output / 'balancer.py'}:/balancer.py:ro", "python:3.13-slim",
-           "python", "-u", "/balancer.py", ",".join(REPLICAS), str(INTERVAL), str(UNHEALTHY))
+    if model == "passthrough":
+        balancer_image = prefix + "-passthrough-balancer"
+        subprocess.run(["docker", "build", "-q", "-t", balancer_image, "-"], input=PASSTHROUGH_IMAGE, text=True, check=True,
+                       env={**os.environ, "DOCKER_HOST": "unix:///var/run/docker.sock"}, stdout=subprocess.DEVNULL)
+        (output / "balancer.py").write_text(PASSTHROUGH)
+        options = ["--cap-add", "NET_ADMIN", "--sysctl", "net.ipv4.ip_forward=1"]
+    else:
+        balancer_image = "python:3.13-slim"
+        (output / "balancer.py").write_text(BALANCER)
+        options = []
+    # Attach both networks before the balancer starts: the pass-through rules name its guest address.
+    docker("create", "--name", balancer, "--network", prefix, "--ip", "93.184.216.10", *options,
+           "-v", f"{output / 'balancer.py'}:/balancer.py:ro", balancer_image,
+           "python", "-u", "/balancer.py", ",".join(REPLICAS), str(INTERVAL), str(UNHEALTHY), BALANCER_IP)
     containers.append(balancer)
     docker("network", "connect", "--ip", BALANCER_IP, guest, balancer)
+    docker("start", balancer)
     agent = prefix + "-agent"
     docker("run", "-d", "--name", agent, "--network", guest, "--ip", AGENT_IP, *AGENT_CAP_ARGS,
            "-v", f"{output / 'origin/ca.pem'}:/fixture-ca.pem:ro", image)
@@ -247,8 +359,10 @@ def check_replica_failover(suite, image, containers, networks, docker, prefix, o
     (output / "observations.jsonl").write_text("".join(json.dumps(item) + "\n" for item in observations))
     (output / "health.jsonl").write_text("".join(json.dumps(item) + "\n" for item in health))
     (output / "balancer.jsonl").write_text("".join(json.dumps(item) + "\n" for item in events))
-    refusals = agent_refusals(docker("logs", agent), killed_at)
-    report = analyze(observations, health, events, killed_at, refusals)
+    agent_logs = docker("logs", agent)
+    report = analyze(observations, health, events, killed_at, agent_refusals(agent_logs, killed_at),
+                     agent_retries(agent_logs, killed_at))
+    report["balancer"] = model
     (output / "replica-failover.json").write_text(json.dumps(report, indent=2))
     print(json.dumps(report, indent=2), flush=True)
 
@@ -266,3 +380,7 @@ def check_replica_failover(suite, image, containers, networks, docker, prefix, o
         assert report["agentNotReadyHealthSamplesAfterKill"] == 0, report
     suite.record("sandbox egress stays open while the other replica answers", stays_open)
 
+    if model == "passthrough":
+        def reopened():
+            assert report["clientFailuresAfterKill"] == 0, report
+        suite.record("forwarded connections routed to the dead replica are reopened", reopened)
