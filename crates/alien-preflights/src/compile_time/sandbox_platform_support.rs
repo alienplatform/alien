@@ -29,9 +29,11 @@ impl CompileTimeCheck for SandboxPlatformSupportCheck {
             .resources()
             .filter_map(|(_, entry)| entry.config.downcast_ref::<Sandbox>())
             .filter_map(|sandbox| {
-                // Runtime bindings may carry an explicitly configured gateway, but these
+                // AWS and Azure host the gateway behind a private load balancer; the other
                 // deployment backends cannot yet create and publish one.
-                if sandbox.egress == SandboxEgress::Internet && platform != Platform::Aws {
+                if sandbox.egress == SandboxEgress::Internet
+                    && !matches!(platform, Platform::Aws | Platform::Azure)
+                {
                     return Some(format!(
                         "Sandbox '{}': SANDBOX_EGRESS_GATEWAY_UNAVAILABLE: {platform} does not yet \
                          provide gateway hosting for egress internet",
@@ -150,6 +152,27 @@ mod tests {
                 "{platform} enforces ceilings: {:?}",
                 result.errors
             );
+        }
+    }
+
+    /// Internet egress is planned only where a gateway can be hosted.
+    #[tokio::test]
+    async fn internet_egress_is_planned_only_where_the_gateway_is_hosted() {
+        let stack = stack_with(sandbox("agent", None, SandboxEgress::Internet));
+        for (platform, hosted) in [
+            (Platform::Aws, true),
+            (Platform::Azure, true),
+            (Platform::Gcp, false),
+            (Platform::Kubernetes, false),
+        ] {
+            let result = SandboxPlatformSupportCheck
+                .check(&stack, platform)
+                .await
+                .expect("check runs");
+            assert_eq!(result.success, hosted, "{platform}: {:?}", result.errors);
+            if !hosted {
+                assert!(result.errors.join(" ").contains("SANDBOX_EGRESS_GATEWAY_UNAVAILABLE"));
+            }
         }
     }
 
