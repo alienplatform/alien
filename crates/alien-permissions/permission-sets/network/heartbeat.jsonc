@@ -49,7 +49,11 @@
             "Microsoft.Network/virtualNetworks/subnets/read",
             "Microsoft.Network/networkSecurityGroups/read",
             "Microsoft.Network/publicIPAddresses/read",
-            "Microsoft.Network/loadBalancers/read"
+            "Microsoft.Network/natGateways/read",
+            "Microsoft.Network/loadBalancers/read",
+            // Which subnet each sandbox group's VNet connection uses; metadata only. Kept in
+            // this stack-scoped set so existing sandbox role definitions render unchanged.
+            "Microsoft.App/sandboxGroups/vnetConnections/read"
           ],
           "dataActions": []
         },

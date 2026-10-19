@@ -23,13 +23,13 @@ use crate::{
     expr,
 };
 use alien_core::{
-    import::EmitContext, ErrorData, PermissionProfile, PermissionSet, PermissionSetReference,
-    RemoteBindings, Result, Sandbox,
+    ErrorData, Network, PermissionProfile, PermissionSet, PermissionSetReference, RemoteBindings,
+    Result, Sandbox, SandboxEgress, import::EmitContext,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{
-    generators::{AzureRoleDefinitionRef, AzureRuntimePermissionsGenerator},
     BindingTarget,
+    generators::{AzureRoleDefinitionRef, AzureRuntimePermissionsGenerator},
 };
 use hcl::expr::Expression;
 use std::collections::HashSet;
@@ -69,7 +69,7 @@ fn sandbox_group_expression(resource_id: &str) -> String {
 
 impl TfEmitter for AzureSandboxEmitter {
     fn emit(&self, ctx: &EmitContext<'_>) -> Result<TfFragment> {
-        let _ = downcast::<Sandbox>(ctx, Sandbox::RESOURCE_TYPE)?;
+        let sandbox = downcast::<Sandbox>(ctx, Sandbox::RESOURCE_TYPE)?;
         let label = required_label(ctx)?;
         let mut fragment = TfFragment::default();
 
@@ -100,6 +100,63 @@ impl TfEmitter for AzureSandboxEmitter {
                 attr("schema_validation_enabled", Expression::Bool(false)),
             ],
         ));
+
+        if sandbox.egress == SandboxEgress::Internet {
+            let network = ctx
+                .stack
+                .resources()
+                .find_map(|(id, entry)| {
+                    (entry.config.resource_type() == Network::RESOURCE_TYPE).then_some(id)
+                })
+                .and_then(|id| ctx.name_for(id))
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::OperationNotSupported {
+                        operation: "Azure sandbox network setup".to_string(),
+                        reason: "every Azure sandbox requires a deployment network".to_string(),
+                    })
+                })?;
+            let subnet = super::sandbox_network::subnet_label(network, label);
+            fragment.resource_blocks.push(resource_block(
+                "azapi_resource",
+                &format!("{label}_vnet"),
+                [
+                    attr(
+                        "type",
+                        Expression::String(
+                            "Microsoft.App/sandboxGroups/vnetConnections@2026-02-01-preview"
+                                .to_string(),
+                        ),
+                    ),
+                    attr("name", Expression::String("default".to_string())),
+                    attr(
+                        "parent_id",
+                        expr::traversal(["azapi_resource", label, "id"]),
+                    ),
+                    attr("location", expr::raw("var.azure_location")),
+                    attr(
+                        "body",
+                        expr::object([(
+                            "properties",
+                            expr::object([(
+                                "subnetId",
+                                expr::traversal(["azurerm_subnet", &subnet, "id"]),
+                            )]),
+                        )]),
+                    ),
+                    attr("schema_validation_enabled", Expression::Bool(false)),
+                    attr(
+                        "depends_on",
+                        Expression::Array(vec![
+                            expr::traversal(["azurerm_subnet_nat_gateway_association", &subnet]),
+                            expr::traversal([
+                                "azurerm_subnet_network_security_group_association",
+                                &subnet,
+                            ]),
+                        ]),
+                    ),
+                ],
+            ));
+        }
 
         emit_remote_access(ctx, label, &mut fragment)?;
         emit_image_management(ctx, label, &mut fragment)?;
@@ -674,9 +731,9 @@ fn remote_bindings_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::bindings::{AzureSandboxBinding, BindingValue};
     use alien_core::SandboxCode;
     use alien_core::SandboxEgress;
+    use alien_core::bindings::{AzureSandboxBinding, BindingValue};
     use alien_core::{ResourceLifecycle, SandboxLifecyclePolicy, Stack, StackSettings};
     use hcl::eval::Evaluate;
     use indexmap::IndexMap;

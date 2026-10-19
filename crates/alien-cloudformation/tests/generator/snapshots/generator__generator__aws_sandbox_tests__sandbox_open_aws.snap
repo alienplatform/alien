@@ -4,8 +4,6 @@ expression: yaml
 ---
 AWSTemplateFormatVersion: 2010-09-09
 Description: sandbox_open_aws
-Transform:
-- AWS::LanguageExtensions
 Metadata:
   AWS::CloudFormation::Interface:
     ParameterGroups:
@@ -67,6 +65,8 @@ Parameters:
     Type: String
     Description: ARN of the management identity allowed to assume setup-created roles.
     Default: ''
+    AllowedPattern: ^[^"\\\x00-\x1F]*$
+    ConstraintDescription: must not contain double quotes, backslashes or control characters
   ManagingAccountId:
     Type: String
     Description: AWS account ID for the management account that hosts application container images.
@@ -83,6 +83,8 @@ Parameters:
     Type: String
     Description: Only used with create-new. CIDR for the new VPC; leave unset for the generated default.
     Default: ''
+    AllowedPattern: ^[^"\\\x00-\x1F]*$
+    ConstraintDescription: must not contain double quotes, backslashes or control characters
   AvailabilityZones:
     Type: Number
     Description: Only used with create-new. Number of availability zones for the new VPC.
@@ -95,18 +97,26 @@ Parameters:
     Type: String
     Description: Only used with use-existing. Existing VPC ID.
     Default: ''
+    AllowedPattern: ^[^"\\\x00-\x1F]*$
+    ConstraintDescription: must not contain double quotes, backslashes or control characters
   PublicSubnetIds:
     Type: CommaDelimitedList
     Description: Only used with use-existing. Existing public subnet IDs.
     Default: ''
+    AllowedPattern: ^[^"\\\x00-\x1F]*$
+    ConstraintDescription: each entry must not contain double quotes, backslashes or control characters
   PrivateSubnetIds:
     Type: CommaDelimitedList
     Description: Only used with use-existing. Existing private subnet IDs.
     Default: ''
+    AllowedPattern: ^[^"\\\x00-\x1F]*$
+    ConstraintDescription: each entry must not contain double quotes, backslashes or control characters
   SecurityGroupIds:
     Type: CommaDelimitedList
     Description: Only used with use-existing. Existing security group IDs.
     Default: ''
+    AllowedPattern: ^[^"\\\x00-\x1F]*$
+    ConstraintDescription: each entry must not contain double quotes, backslashes or control characters
   EndpointAccess:
     Type: String
     Description: Who can reach this deployment's endpoints. Private access requires AWS managed containers and cannot change after setup.

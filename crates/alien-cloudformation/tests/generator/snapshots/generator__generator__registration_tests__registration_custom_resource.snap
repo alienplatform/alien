@@ -4,8 +4,6 @@ expression: yaml
 ---
 AWSTemplateFormatVersion: 2010-09-09
 Description: registration custom resource
-Transform:
-- AWS::LanguageExtensions
 Metadata:
   AWS::CloudFormation::Interface:
     ParameterGroups:
@@ -43,6 +41,8 @@ Parameters:
     Type: String
     Description: ARN of the management identity allowed to assume setup-created roles.
     Default: ''
+    AllowedPattern: ^[^"\\\x00-\x1F]*$
+    ConstraintDescription: must not contain double quotes, backslashes or control characters
   ManagingAccountId:
     Type: String
     Description: AWS account ID for the management account that hosts application container images.

@@ -729,6 +729,14 @@ impl SingleControllerExecutor {
         &self.stack_state
     }
 
+    /// Records another resource in the saved stack state only, as one a deletion is still
+    /// working through after the desired stack dropped it.
+    pub fn insert_saved_resource(&mut self, resource_id: &str, state: StackResourceState) {
+        self.stack_state
+            .resources
+            .insert(resource_id.to_string(), state);
+    }
+
     /// Gets a reference to the controller internal state.
     /// Attempts to downcast the controller to a specific type for typed access.
     /// Returns None if the controller is not of the expected type.

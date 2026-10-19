@@ -4,8 +4,6 @@ expression: yaml
 ---
 AWSTemplateFormatVersion: 2010-09-09
 Description: aws_function_public
-Transform:
-- AWS::LanguageExtensions
 Metadata:
   AWS::CloudFormation::Interface:
     ParameterGroups:
@@ -48,6 +46,8 @@ Parameters:
     Type: String
     Description: ARN of the management identity allowed to assume setup-created roles.
     Default: ''
+    AllowedPattern: ^[^"\\\x00-\x1F]*$
+    ConstraintDescription: must not contain double quotes, backslashes or control characters
   ManagingAccountId:
     Type: String
     Description: AWS account ID for the management account that hosts application container images.
@@ -64,6 +64,8 @@ Parameters:
     Type: String
     Description: Optional custom domain. Leave unset to use the deployment-managed endpoint.
     Default: ''
+    AllowedPattern: ^[^"\\\x00-\x1F]*$
+    ConstraintDescription: must not contain double quotes, backslashes or control characters
   HostedZoneId:
     Type: String
     Description: Route 53 hosted zone ID for the custom domain. Not needed for the auto-generated domain.
@@ -72,7 +74,8 @@ Parameters:
     Type: String
     Description: ACM certificate ARN for the custom domain. Required when DomainName is set.
     Default: ''
-    AllowedPattern: ^$|^arn:aws(-[a-z]+)?:acm:[a-z0-9-]+:[0-9]{12}:certificate/.+$
+    AllowedPattern: ^$|^arn:aws[a-z-]*:acm:[a-z0-9-]+:[0-9]{12}:certificate/[^"\\\x00-\x1F]+$
+    ConstraintDescription: must be empty or an ACM certificate ARN
   EndpointAccess:
     Type: String
     Description: Who can reach this deployment's endpoints. Private access requires AWS managed containers and cannot change after setup.
@@ -149,37 +152,36 @@ Outputs:
     Description: Setup fingerprint algorithm version.
   DeploymentManagementConfig:
     Value:
-      Fn::ToJsonString:
-        platform: aws
-        managingRoleArn:
-          Ref: ManagingRoleArn
+      Fn::Join:
+      - ''
+      - - '{"platform":"aws","managingRoleArn":"'
+        - Ref: ManagingRoleArn
+        - '"}'
     Description: Deployment registration management configuration JSON.
   DeploymentStackSettings:
     Value:
-      Fn::ToJsonString:
-        deploymentModel: push
-        endpointAccess:
-          Ref: EndpointAccess
-        updates:
-          Ref: UpdatesMode
-        telemetry:
-          Ref: TelemetryMode
-        heartbeats:
-          Ref: HeartbeatsMode
-        network:
-          Ref: AWS::NoValue
-        domains:
-          Fn::If:
+      Fn::Join:
+      - ''
+      - - '{"deploymentModel":"push","endpointAccess":"'
+        - Ref: EndpointAccess
+        - '","updates":"'
+        - Ref: UpdatesMode
+        - '","telemetry":"'
+        - Ref: TelemetryMode
+        - '","heartbeats":"'
+        - Ref: HeartbeatsMode
+        - '","network":null,"domains":'
+        - Fn::If:
           - HasDomainName
-          - customDomains:
-              public-api:
-                domain:
-                  Ref: DomainName
-                certificate:
-                  aws:
-                    certificateArn:
-                      Ref: CertificateArn
-          - Ref: AWS::NoValue
+          - Fn::Join:
+            - ''
+            - - '{"customDomains":{"public-api":{"domain":"'
+              - Ref: DomainName
+              - '","certificate":{"aws":{"certificateArn":"'
+              - Ref: CertificateArn
+              - '"}}}}}'
+          - 'null'
+        - '}'
     Description: Deployment registration settings JSON.
   DeploymentResources:
     Value: '[]'

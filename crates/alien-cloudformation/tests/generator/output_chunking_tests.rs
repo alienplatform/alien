@@ -8,10 +8,11 @@
 
 use super::helpers::{many_sample_resources, sample_registry, sample_stack};
 use alien_cloudformation::{
-    generate_cloudformation_template, to_yaml, CfExpression, CfOutput, CloudFormationOptions,
+    generate_cloudformation_template, to_yaml, CfTemplate, CloudFormationOptions,
     CloudFormationTarget, RegistrationMode,
 };
 use alien_core::{ResourceLifecycle, Stack, StackSettings, ToolchainConfig, Worker, WorkerCode};
+use std::collections::HashMap;
 
 const OUTPUT_RESOURCES: &str = "DeploymentResources";
 
@@ -54,7 +55,7 @@ fn outputs_fallback_chunks_large_resource_payload() {
 
     let resource_count = chunk_keys
         .iter()
-        .map(|key| chunked_output_item_count(&template.outputs[key]))
+        .map(|key| chunked_output_item_count(&template, key))
         .sum::<usize>();
     assert_eq!(resource_count, 80);
 
@@ -131,12 +132,11 @@ fn source_function_returns_typed_error() {
     );
 }
 
-fn chunked_output_item_count(output: &CfOutput) -> usize {
-    let CfExpression::Object(value) = &output.value else {
-        panic!("resource chunk output should use Fn::ToJsonString");
-    };
-    let Some(CfExpression::List(items)) = value.get("Fn::ToJsonString") else {
-        panic!("resource chunk output should serialize a list");
-    };
-    items.len()
+fn chunked_output_item_count(template: &CfTemplate, key: &str) -> usize {
+    let template = serde_json::to_value(template).expect("template serializes");
+    let chunk = super::helpers::output_json(&template, key, &HashMap::new());
+    chunk
+        .as_array()
+        .unwrap_or_else(|| panic!("resource chunk output should be a JSON array: {chunk}"))
+        .len()
 }

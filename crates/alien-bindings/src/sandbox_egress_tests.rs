@@ -146,6 +146,12 @@ impl Drop for Harness {
     }
 }
 impl Harness {
+    pub(crate) fn lose_policy_state(&self) {
+        self.state.policies.lock().unwrap().clear();
+    }
+    pub(crate) fn refuse_writes(&self, refuse: bool) {
+        self.state.refuse.store(refuse, Ordering::SeqCst);
+    }
     pub(crate) fn policy(&self, id: &str) -> Option<EgressPolicy> {
         self.state
             .policies
@@ -176,7 +182,7 @@ impl Harness {
             )
             .unwrap();
         let response = reqwest::Client::new()
-            .put(format!("{}/v1/policies", self.manager.admin_url))
+            .put(self.manager.admin_url.join("v1/policies").unwrap())
             .bearer_auth(grant)
             .json(&serde_json::json!({"record":record}))
             .send()
@@ -242,7 +248,7 @@ impl Harness {
             self.config.clone(),
             self.vault.clone(),
             self.manager.gateway.clone(),
-            self.manager.admin_url.clone(),
+            self.manager.admin_url.to_string(),
         )
         .unwrap()
     }
@@ -626,7 +632,7 @@ async fn linked_container_resolves_both_gateway_ports_without_storing_an_address
     )
     .unwrap();
     assert_eq!(manager.gateway, "proxy.internal:3128");
-    assert_eq!(manager.admin_url, "http://admin.internal:3129/");
+    assert_eq!(manager.admin_url.as_str(), "http://admin.internal:3129/");
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&manager.bootstrap_payload()).unwrap()["gateway"],
         "proxy.internal:3128"
@@ -652,10 +658,7 @@ async fn linked_container_resolves_both_gateway_ports_without_storing_an_address
 #[tokio::test]
 async fn replicated_writes_reach_every_ready_replica_or_fail() {
     let h = Harness::new().await;
-    let port = reqwest::Url::parse(&h.manager.admin_url)
-        .unwrap()
-        .port()
-        .unwrap();
+    let port = h.manager.admin_url.port().unwrap();
     let second = Arc::new(AdminState {
         public: h.state.public,
         policies: StdMutex::new(Default::default()),
@@ -684,7 +687,7 @@ async fn replicated_writes_reach_every_ready_replica_or_fail() {
         config,
         h.vault.clone(),
         h.manager.gateway.clone(),
-        h.manager.admin_url.clone(),
+        h.manager.admin_url.to_string(),
     )
     .unwrap();
     let first: std::net::SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();

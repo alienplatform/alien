@@ -167,9 +167,13 @@ pub struct CreateSandbox {
     /// Outbound policy, applied from the moment the sandbox starts. Absent leaves the data
     /// plane's own default, which is open.
     pub egress: Option<EgressPolicy>,
+    /// Group VNet connection used for every outbound flow. Absent uses the provider network.
+    pub customer_vnet_connection_name: Option<String>,
     /// Idle seconds after which the sandbox pauses itself, sent as the data plane's
     /// `autoSuspendPolicy`. Absent leaves its own policy rather than asserting one.
     pub idle_pause_seconds: Option<u32>,
+    /// Metadata for lifecycle management outside the guest.
+    pub labels: BTreeMap<String, String>,
 }
 
 /// The create body.
@@ -201,6 +205,10 @@ fn create_body(request: &CreateSandbox) -> serde_json::Value {
         body["egressPolicy"] = serde_json::json!(egress);
     }
 
+    if let Some(connection) = &request.customer_vnet_connection_name {
+        body["customerVnetConnectionName"] = serde_json::json!(connection);
+    }
+
     // `Memory` is the SDK's own default for `auto_suspend_mode`, and the mode a session wants:
     // what `Disk` does differently is not documented, so the default stands rather than a guess.
     if let Some(seconds) = request.idle_pause_seconds {
@@ -209,6 +217,9 @@ fn create_body(request: &CreateSandbox) -> serde_json::Value {
         });
     }
 
+    if !request.labels.is_empty() {
+        body["labels"] = serde_json::json!(request.labels);
+    }
     body
 }
 
@@ -216,8 +227,14 @@ fn create_body(request: &CreateSandbox) -> serde_json::Value {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Sandbox {
+    /// Provider metadata used to recover the gateway identity on reconnect.
+    #[serde(default)]
+    pub labels: BTreeMap<String, String>,
     /// Sandbox id within its group
     pub id: String,
+    /// VNet connection Azure actually attached, absent for the provider-managed network.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vnet_connection_name: Option<String>,
     /// The policy the sandbox is actually running under, which is the only way to tell that the
     /// one that was asked for took effect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -307,6 +324,21 @@ fn disk_image_body(request: &CreateDiskImage) -> serde_json::Value {
     body
 }
 
+/// Sandbox metadata returned by the group list operation.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListedSandbox {
+    /// Immutable platform-assigned session id.
+    pub id: String,
+    /// Platform creation timestamp, unaffected by suspend/resume.
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    /// Control-plane metadata, including the requested expiry deadline.
+    #[serde(default)]
+    pub labels: BTreeMap<String, String>,
+    /// Platform lifecycle state, including in-flight deletion.
+    pub state: String,
+}
+
 /// Result of a shell command.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -327,6 +359,9 @@ pub struct ExecResult {
 pub trait SandboxDataPlaneApi: Send + Sync + std::fmt::Debug {
     /// Creates a sandbox from a disk image.
     async fn create_sandbox(&self, group: &str, request: CreateSandbox) -> Result<Sandbox>;
+
+    /// Lists sandbox lifecycle metadata in a group; does not execute or read guest files.
+    async fn list_sandboxes(&self, group: &str) -> Result<Vec<ListedSandbox>>;
 
     /// Reads a sandbox. A 404 is how deletion is confirmed.
     async fn get_sandbox(&self, group: &str, sandbox_id: &str) -> Result<Sandbox>;
@@ -596,13 +631,77 @@ impl SandboxDataPlaneApi for AzureSandboxDataPlaneClient {
         let signed = self.base.sign_request(request, &token).await?;
         // The create body carries the caller's environment variables, and a failure echoes the
         // request into the error chain, which is serialized into durable state. Sent once: the
-        // id is server-minted, so a re-send mints an orphan sandbox nothing can find or reap.
+        // id is server-minted, so a re-send can create an extra sandbox the caller did not request.
         let response = alien_client_core::redact_request_body(
             self.base
                 .execute_request_once(signed, "CreateSandbox", group)
                 .await,
         )?;
         Self::parse(response, "CreateSandbox").await
+    }
+
+    async fn list_sandboxes(&self, group: &str) -> Result<Vec<ListedSandbox>> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Page {
+            Array(Vec<ListedSandbox>),
+            Envelope {
+                value: Vec<ListedSandbox>,
+                #[serde(rename = "nextLink")]
+                next_link: Option<String>,
+            },
+        }
+        let token = self
+            .token_cache
+            .get_bearer_token_with_scope(ADC_SCOPE)
+            .await?;
+        let initial = self.base.build_url(
+            &format!("{}/sandboxes", self.group_path(group)),
+            Some(vec![("api-version", API_VERSION.into())]),
+        );
+        let refused = || {
+            alien_error::AlienError::new(ErrorData::GenericError {
+                message: "Azure sandbox pagination left the group scope or repeated a page"
+                    .to_string(),
+            })
+        };
+        let original = reqwest::Url::parse(&initial).map_err(|_| refused())?;
+        let mut url = original.clone();
+        let mut visited = std::collections::HashSet::new();
+        let mut sessions = Vec::new();
+        loop {
+            // Never forward the bearer credential to a continuation outside this group.
+            if url.origin() != original.origin()
+                || url.path() != original.path()
+                || !url.username().is_empty()
+                || url.password().is_some()
+                || !visited.insert(url.to_string())
+            {
+                return Err(refused());
+            }
+            let request = AzureRequestBuilder::new(Method::GET, url.to_string()).build()?;
+            let signed = self.base.sign_request(request, &token).await?;
+            let response = self
+                .base
+                .execute_request(signed, "ListSandboxes", group)
+                .await?;
+            match Self::parse::<Page>(response, "ListSandboxes").await? {
+                Page::Array(items) => {
+                    sessions.extend(items);
+                    break;
+                }
+                Page::Envelope { value, next_link } => {
+                    sessions.extend(value);
+                    match next_link {
+                        Some(next) if !next.is_empty() => {
+                            url = original.join(&next).map_err(|_| refused())?
+                        }
+                        _ => break,
+                    }
+                }
+            }
+        }
+        Ok(sessions)
     }
 
     async fn get_sandbox(&self, group: &str, sandbox_id: &str) -> Result<Sandbox> {
@@ -949,9 +1048,100 @@ mod tests {
         )
     }
 
+    #[tokio::test]
+    async fn create_transmits_network_and_identity_and_reads_effective_metadata() {
+        let server = MockServer::start_async().await;
+        let path = format!(
+            "/subscriptions/{}/resourceGroups/rg/sandboxGroups/grp/sandboxes",
+            AzureClientConfig::mock().subscription_id,
+        );
+        let response = serde_json::json!({
+            "id":"vendor-id", "vnetConnectionName":"default", "state":"Running",
+            "labels":{"alien-egress-identity":"test-identity", "alienExpiresAtMs":"12345"}
+        });
+        let create = server.mock_async(|when, then| {
+            when.method(httpmock::Method::PUT).path(&path)
+                .query_param("api-version", API_VERSION)
+                .json_body_partial(r#"{"customerVnetConnectionName":"default","labels":{"alien-egress-identity":"test-identity","alienExpiresAtMs":"12345"}}"#);
+            then.status(200).json_body(response.clone());
+        }).await;
+        let get = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path(format!("{path}/vendor-id"));
+                then.status(200).json_body(response);
+            })
+            .await;
+        let client = client_against(&server);
+        let created = client
+            .create_sandbox(
+                "grp",
+                CreateSandbox {
+                    disk_image: "ubuntu".into(),
+                    customer_vnet_connection_name: Some("default".into()),
+                    labels: BTreeMap::from([
+                        ("alien-egress-identity".into(), "test-identity".into()),
+                        ("alienExpiresAtMs".into(), "12345".into()),
+                    ]),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let effective = client.get_sandbox("grp", &created.id).await.unwrap();
+        assert_eq!(effective, created);
+        assert_eq!(effective.vnet_connection_name.as_deref(), Some("default"));
+        assert_eq!(effective.labels["alien-egress-identity"], "test-identity");
+        assert_eq!(effective.labels["alienExpiresAtMs"], "12345");
+        create.assert_async().await;
+        get.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn sandbox_listing_follows_pages_and_refuses_foreign_continuations() {
+        let server = MockServer::start_async().await;
+        let path = format!(
+            "/subscriptions/{}/resourceGroups/rg/sandboxGroups/grp/sandboxes",
+            AzureClientConfig::mock().subscription_id
+        );
+        let second = server.mock_async(|when, then| {
+            when.method(httpmock::Method::GET).path(&path).query_param("page", "2");
+            then.status(200).json_body(serde_json::json!([{"id":"two","createdAt":"2026-01-01T00:00:00Z","state":"Stopped"}]));
+        }).await;
+        let first = server.mock_async(|when, then| {
+            when.method(httpmock::Method::GET).path(&path).query_param("api-version", API_VERSION);
+            then.status(200).json_body(serde_json::json!({"value":[{"id":"one","createdAt":"2026-01-01T00:00:00Z","state":"Running"}],"nextLink":format!("{}{path}?page=2",server.base_url())}));
+        }).await;
+        let listed = client_against(&server)
+            .list_sandboxes("grp")
+            .await
+            .expect("all pages");
+        assert_eq!(
+            listed.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+            ["one", "two"]
+        );
+        first.assert_async().await;
+        second.assert_async().await;
+        first.delete_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path(&path)
+                    .query_param("api-version", API_VERSION);
+                then.status(200).json_body(
+                    serde_json::json!({"value":[],"nextLink":"https://example.invalid/steal"}),
+                );
+            })
+            .await;
+        client_against(&server)
+            .list_sandboxes("grp")
+            .await
+            .expect_err("foreign origin refused before request");
+    }
+
     /// A create is delivered once, however the data plane answers.
     ///
-    /// A second delivery mints an orphan sandbox no enumeration verb can find. Reads keep their
+    /// A second delivery can mint an extra sandbox the caller did not request. Reads keep their
     /// retry — repeating one is free.
     #[tokio::test]
     async fn a_create_is_never_re_sent_where_a_read_is() {
@@ -974,6 +1164,8 @@ mod tests {
                     environment: Default::default(),
                     egress: None,
                     idle_pause_seconds: None,
+                    customer_vnet_connection_name: None,
+                    labels: BTreeMap::new(),
                 },
             )
             .await
@@ -1238,6 +1430,8 @@ mod tests {
                 traffic_inspection: Some("Full".to_string()),
             }),
             idle_pause_seconds: None,
+            customer_vnet_connection_name: None,
+            labels: BTreeMap::new(),
         });
 
         assert_eq!(body["environment"]["TOKEN"], "t");

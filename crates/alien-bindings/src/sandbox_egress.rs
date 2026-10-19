@@ -42,7 +42,7 @@ pub struct SandboxEgressManager {
     config: SandboxEgressGateway,
     vault: Arc<dyn Vault>,
     gateway: String,
-    admin_url: String,
+    admin_url: reqwest::Url,
     admin: reqwest::Client,
     /// Stands in for DNS so tests can name several replicas on one host.
     #[cfg(test)]
@@ -92,6 +92,8 @@ impl SandboxEgressManager {
         gateway: String,
         admin_url: String,
     ) -> Result<Self> {
+        let admin_url = reqwest::Url::parse(&admin_url)
+            .map_err(|_| unavailable("invalid gateway admin URL"))?;
         let mut client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .timeout(std::time::Duration::from_secs(10));
@@ -112,6 +114,14 @@ impl SandboxEgressManager {
             #[cfg(test)]
             replica_addresses: None,
         })
+    }
+    /// Proxy authority, without credentials, for native proxy environments and network rules.
+    pub(crate) fn gateway_authority(&self) -> &str {
+        &self.gateway
+    }
+    /// Admin authority exposed by the same Container link; requests still require admin tokens.
+    pub(crate) fn gateway_admin_authority(&self) -> &str {
+        &self.admin_url[url::Position::BeforeHost..url::Position::AfterPort]
     }
     /// Nonsecret launch metadata. AWS injects its own sandbox id alongside this payload.
     pub fn bootstrap_payload(&self) -> String {
@@ -255,7 +265,7 @@ impl SandboxEgressManager {
     /// write, so no replica keeps serving a policy the caller believes was replaced.
     async fn write_targets(&self) -> Result<Vec<String>> {
         let Some(replicas) = &self.config.replicas else {
-            return Ok(vec![self.admin_url.trim_end_matches('/').to_string()]);
+            return Ok(vec![self.admin_url.as_str().trim_end_matches('/').to_string()]);
         };
         #[cfg(test)]
         let resolved = self.replica_addresses.clone();
@@ -278,9 +288,7 @@ impl SandboxEgressManager {
                 replicas.count
             )));
         }
-        let scheme = reqwest::Url::parse(&self.admin_url)
-            .map(|url| url.scheme().to_string())
-            .unwrap_or_else(|_| "http".into());
+        let scheme = self.admin_url.scheme();
         Ok(addresses
             .into_iter()
             .map(|address| format!("{scheme}://{address}"))
@@ -304,7 +312,7 @@ impl SandboxEgressManager {
             .admin
             .get(format!(
                 "{}/v1/policies/record",
-                self.admin_url.trim_end_matches('/')
+                self.admin_url.as_str().trim_end_matches('/')
             ))
             .query(&[("aud", self.config.audience.as_str()), ("sub", id)])
             .bearer_auth(authorization)

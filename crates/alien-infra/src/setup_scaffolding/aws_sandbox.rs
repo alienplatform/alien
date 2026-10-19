@@ -440,6 +440,12 @@ pub(super) async fn teardown(
         match microvms.delete_microvm_image(image).await {
             Ok(()) => {}
             Err(error) if is_not_found(&error) => {}
+            // An image that is still settling refuses deletion for a while. It stays recorded,
+            // and setup teardown asks again within its step budget.
+            Err(error) if is_conflict(&error) => {
+                info!(sandbox_id = %resource_id, image = %image, "MicroVM image cannot be deleted in its current state yet");
+                return Ok(ScaffoldingProgress::InProgress);
+            }
             Err(error) => {
                 return Err(error).context(ErrorData::CloudPlatformError {
                     message: format!("Failed to delete sandbox MicroVM image '{image}'"),

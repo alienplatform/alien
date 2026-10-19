@@ -52,6 +52,21 @@ pub struct SandboxGroupProperties {
     pub provisioning_state: Option<String>,
 }
 
+/// Setup-owned network connection observed through ARM.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SandboxVnetConnection {
+    pub id: String,
+    pub properties: SandboxVnetConnectionProperties,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SandboxVnetConnectionProperties {
+    pub subnet_id: String,
+    pub provisioning_state: Option<String>,
+}
+
 #[cfg_attr(feature = "test-utils", automock)]
 #[async_trait]
 pub trait SandboxGroupsApi: Send + Sync + std::fmt::Debug {
@@ -65,6 +80,13 @@ pub trait SandboxGroupsApi: Send + Sync + std::fmt::Debug {
 
     /// Reads a sandbox group. A 404 surfaces as an error, which is how deletion is confirmed.
     async fn get_sandbox_group(&self, resource_group: &str, name: &str) -> Result<SandboxGroup>;
+
+    /// Reads the setup-owned default connection without accessing sandbox contents.
+    async fn get_default_vnet_connection(
+        &self,
+        resource_group: &str,
+        name: &str,
+    ) -> Result<SandboxVnetConnection>;
 
     /// Issues a delete. Returns before the group is gone — Azure deletes asynchronously, so the
     /// caller confirms by polling `get_sandbox_group` to 404 rather than trusting this.
@@ -190,6 +212,31 @@ impl SandboxGroupsApi for AzureSandboxGroupsClient {
         Self::parse(response, "GetSandboxGroup", name).await
     }
 
+    async fn get_default_vnet_connection(
+        &self,
+        resource_group: &str,
+        name: &str,
+    ) -> Result<SandboxVnetConnection> {
+        let bearer_token = self
+            .token_cache
+            .get_bearer_token_with_scope(ARM_SCOPE)
+            .await?;
+        let path = format!(
+            "{}/vnetConnections/default",
+            self.group_path(resource_group, name)
+        );
+        let url = self
+            .base
+            .build_url(&path, Some(vec![("api-version", API_VERSION.into())]));
+        let request = AzureRequestBuilder::new(Method::GET, url).build()?;
+        let signed = self.base.sign_request(request, &bearer_token).await?;
+        let response = self
+            .base
+            .execute_request(signed, "GetSandboxVnetConnection", name)
+            .await?;
+        Self::parse(response, "GetSandboxVnetConnection", name).await
+    }
+
     async fn delete_sandbox_group(&self, resource_group: &str, name: &str) -> Result<()> {
         let bearer_token = self
             .token_cache
@@ -216,6 +263,47 @@ impl SandboxGroupsApi for AzureSandboxGroupsClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::azure::AzureClientConfigExt;
+
+    #[tokio::test]
+    async fn reads_default_connection_with_the_pinned_arm_version() {
+        let server = httpmock::MockServer::start_async().await;
+        let config = crate::AzureClientConfig::mock();
+        let path = format!(
+            "/subscriptions/{}/resourceGroups/rg/providers/Microsoft.App/sandboxGroups/group/vnetConnections/default",
+            config.subscription_id
+        );
+        let expected = server.mock_async(|when, then| {
+            when.method(httpmock::Method::GET).path(&path).query_param("api-version", API_VERSION);
+            then.status(200).json_body(serde_json::json!({"id":path, "properties":{
+                "subnetId":"/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Network/virtualNetworks/vnet/subnets/sandbox",
+                "provisioningState":"Succeeded"
+            }}));
+        }).await;
+        let client = AzureSandboxGroupsClient {
+            base: AzureClientBase::with_client_config(
+                reqwest::Client::new(),
+                server.base_url(),
+                config.clone(),
+            ),
+            token_cache: AzureTokenCache::new(config),
+        };
+        let connection = client
+            .get_default_vnet_connection("rg", "group")
+            .await
+            .unwrap();
+        assert!(
+            connection
+                .properties
+                .subnet_id
+                .ends_with("/subnets/sandbox")
+        );
+        assert_eq!(
+            connection.properties.provisioning_state.as_deref(),
+            Some("Succeeded")
+        );
+        expected.assert_async().await;
+    }
 
     #[test]
     fn a_group_deserializes_from_an_arm_response() {

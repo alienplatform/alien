@@ -222,7 +222,7 @@ fn aws_custom_domain_registers_the_public_container_resource_id() {
     let yaml = render_built_ins(
         &stack,
         StackSettings::default(),
-        RegistrationMode::OutputsFallback,
+        super::helpers::custom_resource_registration(),
         "container custom domain",
     );
     let template: serde_json::Value = serde_yaml::from_str(&yaml).expect("template");
@@ -231,7 +231,7 @@ fn aws_custom_domain_registers_the_public_container_resource_id() {
         "one endpoint needs no selector"
     );
     let domains: alien_cloudformation::CfExpression = serde_json::from_value(
-        template["Outputs"]["DeploymentStackSettings"]["Value"]["Fn::ToJsonString"]["domains"]
+        template["Resources"]["DeploymentRegistration"]["Properties"]["StackSettings"]["domains"]
             .clone(),
     )
     .expect("registration domains");
@@ -248,6 +248,30 @@ fn aws_custom_domain_registers_the_public_container_resource_id() {
                 "certificate": {"aws": {"certificateArn": {"Ref": "CertificateArn"}}}}}
         })
     );
+
+    // The Outputs registration carries the same settings as JSON text.
+    let yaml = render_built_ins(
+        &stack,
+        StackSettings::default(),
+        RegistrationMode::OutputsFallback,
+        "container custom domain, outputs registration",
+    );
+    let template: serde_json::Value = serde_yaml::from_str(&yaml).expect("template");
+    for (has_domain, expected) in [
+        (
+            true,
+            serde_json::json!({"customDomains": {"gateway": {"domain": "${DomainName}",
+                "certificate": {"aws": {"certificateArn": "${CertificateArn}"}}}}}),
+        ),
+        (false, serde_json::Value::Null),
+    ] {
+        let settings = super::helpers::output_json(
+            &template,
+            "DeploymentStackSettings",
+            &std::collections::HashMap::from([("HasDomainName", has_domain)]),
+        );
+        assert_eq!(settings["domains"], expected, "HasDomainName={has_domain}");
+    }
 }
 
 #[test]
@@ -282,7 +306,7 @@ fn aws_custom_domain_selection_registers_exactly_one_public_resource() {
     let yaml = render_built_ins(
         &stack,
         StackSettings::default(),
-        RegistrationMode::OutputsFallback,
+        super::helpers::custom_resource_registration(),
         "custom domain resource selection",
     );
     let template: serde_json::Value = serde_yaml::from_str(&yaml).expect("template");
@@ -291,7 +315,7 @@ fn aws_custom_domain_selection_registers_exactly_one_public_resource() {
         serde_json::json!(["api", "web"])
     );
     let domains: alien_cloudformation::CfExpression = serde_json::from_value(
-        template["Outputs"]["DeploymentStackSettings"]["Value"]["Fn::ToJsonString"]["domains"]
+        template["Resources"]["DeploymentRegistration"]["Properties"]["StackSettings"]["domains"]
             .clone(),
     )
     .expect("registration domains");
@@ -314,6 +338,39 @@ fn aws_custom_domain_selection_registers_exactly_one_public_resource() {
         let domains = settings.custom_domains.expect("custom domains");
         assert_eq!(domains.len(), 1);
         assert!(domains.contains_key(resource_id));
+    }
+
+    // The Outputs registration carries the same selection as JSON text.
+    let yaml = render_built_ins(
+        &stack,
+        StackSettings::default(),
+        RegistrationMode::OutputsFallback,
+        "custom domain resource selection, outputs registration",
+    );
+    let template: serde_json::Value = serde_yaml::from_str(&yaml).expect("template");
+    for (selected_api, resource_id) in [(true, "api"), (false, "web")] {
+        let settings = super::helpers::output_json(
+            &template,
+            "DeploymentStackSettings",
+            &std::collections::HashMap::from([
+                ("HasDomainName", true),
+                ("CustomDomainResource0", selected_api),
+            ]),
+        );
+        assert_eq!(
+            settings["domains"],
+            serde_json::json!({"customDomains": {resource_id: {"domain": "${DomainName}",
+                "certificate": {"aws": {"certificateArn": "${CertificateArn}"}}}}}),
+            "selected {resource_id}"
+        );
+        let domains: alien_core::DomainSettings =
+            serde_json::from_value(settings["domains"].clone())
+                .expect("registered domain settings must deserialize without null entries");
+        assert_eq!(
+            domains.custom_domains.expect("custom domains").len(),
+            1,
+            "selected {resource_id}"
+        );
     }
     let settings: StackSettings = serde_json::from_value(serde_json::json!({"domains": {"customDomains": {
         "api": {"domain": "api.example.com", "certificate": {"aws": {"certificateArn": "certificate-api"}}},
