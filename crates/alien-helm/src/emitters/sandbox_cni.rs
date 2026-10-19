@@ -4,11 +4,11 @@
 //! subject pods in the sandbox runtime class. It does not certify every node, address
 //! family, or CNI exception for traffic to the host.
 //!
-//! The probe must create pods, which Kubernetes RBAC cannot restrict by content. A
-//! ValidatingAdmissionPolicy, created before the probe's account and bound to it alone,
-//! admits only token-less, volume-less pods of the pinned probe image under the probe's
-//! own names, and the probe refuses to start unless that policy demonstrably rejects a
-//! pod that asks for a token. The admission policy API needs Kubernetes 1.30 or later;
+//! The probe must create pods and NetworkPolicies, which Kubernetes RBAC cannot restrict
+//! by content. Two ValidatingAdmissionPolicies, created before the probe's account and
+//! bound to it alone, admit only the probe's own token-less, unprivileged pods of the
+//! pinned image and its two deny-all policies over those pods. The probe refuses to start
+//! unless each policy demonstrably rejects a request it should. The admission policy API needs Kubernetes 1.30 or later;
 //! an older API server refuses the install.
 
 /// Digest-pinned probe image (python:3.13-slim, multi-architecture index).
@@ -38,6 +38,11 @@ pub(crate) fn template() -> String {
         .map(|role| format!("{{{{ printf \"%s-{role}\" $name | quote }}}}"))
         .collect::<Vec<_>>()
         .join(", ");
+    let role_list = PROBE_ROLES
+        .iter()
+        .map(|role| format!("'{role}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
     format!(
         r#"{{{{- $name := printf "%s-sandbox-cni" (include "deployment.fullname" . | trunc 51 | trimSuffix "-") -}}}}
 {{{{- $cluster := printf "%s-%s" $name (sha256sum (printf "%s/%s" .Release.Namespace .Release.Name) | trunc 8) -}}}}
@@ -63,6 +68,8 @@ spec:
   validations:
     - expression: {{{{ printf "object.metadata.name.startsWith('%s-')" $name | quote }}}}
       message: probe pods use the probe's own names
+    - expression: {{{{ printf "has(object.metadata.labels) && size(object.metadata.labels) == 2 && 'alien.dev/cni-probe' in object.metadata.labels && object.metadata.labels['alien.dev/cni-probe'] == '%s' && 'alien.dev/cni-role' in object.metadata.labels && object.metadata.labels['alien.dev/cni-role'] in [%s]" $name "{role_list}" | quote }}}}
+      message: probe pods carry exactly the probe labels
     - expression: "object.spec.serviceAccountName == 'default' && has(object.spec.automountServiceAccountToken) && object.spec.automountServiceAccountToken == false"
       message: probe pods carry no service account token
     - expression: "!has(object.spec.volumes) || size(object.spec.volumes) == 0"
@@ -77,6 +84,10 @@ spec:
       message: probe pods run as the unprivileged probe user with the default seccomp profile
     - expression: "object.spec.containers.all(c, has(c.securityContext) && has(c.securityContext.allowPrivilegeEscalation) && c.securityContext.allowPrivilegeEscalation == false && has(c.securityContext.capabilities) && has(c.securityContext.capabilities.drop) && 'ALL' in c.securityContext.capabilities.drop && !has(c.securityContext.capabilities.add) && (!has(c.securityContext.runAsUser) || c.securityContext.runAsUser == 65534) && (!has(c.securityContext.runAsNonRoot) || c.securityContext.runAsNonRoot == true) && (!has(c.securityContext.seccompProfile) || c.securityContext.seccompProfile.type == 'RuntimeDefault') && (!has(c.securityContext.procMount) || c.securityContext.procMount == 'Default'))"
       message: probe containers drop every capability and cannot escalate
+    - expression: "(!has(object.spec.nodeName) || object.spec.nodeName == '') && has(object.spec.securityContext) && !has(object.spec.securityContext.seLinuxOptions) && !has(object.spec.securityContext.appArmorProfile) && (!has(object.spec.securityContext.runAsGroup) || object.spec.securityContext.runAsGroup != 0) && (!has(object.spec.securityContext.supplementalGroups) || !(0 in object.spec.securityContext.supplementalGroups))"
+      message: probe pods choose no node, SELinux or AppArmor profile, and no root group
+    - expression: "object.spec.containers.all(c, (!has(c.ports) || c.ports.all(p, !has(p.hostPort) || p.hostPort == 0)) && has(c.securityContext) && !has(c.securityContext.seLinuxOptions) && !has(c.securityContext.appArmorProfile) && (!has(c.securityContext.runAsGroup) || c.securityContext.runAsGroup != 0))"
+      message: probe containers use no host ports, SELinux or AppArmor profile, and no root group
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding
@@ -88,6 +99,52 @@ metadata:
     helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
 spec:
   policyName: {{{{ $cluster }}}}
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: {{{{ .Release.Namespace }}}}
+---
+# NetworkPolicy creation cannot be scoped by RBAC either. Policies are additive, so an
+# allow rule selecting sandbox or gateway pods would outlive the hook: admit only the
+# probe's two deny-all policies over the probe's own pods.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{{{ $cluster }}}}-policies
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-12"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [networking.k8s.io]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [networkpolicies]
+  matchConditions:
+    - name: probe-account
+      expression: {{{{ printf "request.userInfo.username == 'system:serviceaccount:%s:%s'" .Release.Namespace $name | quote }}}}
+  validations:
+    - expression: {{{{ printf "object.metadata.name in ['%s', '%s-ingress']" $name $name | quote }}}}
+      message: probe NetworkPolicies use the probe's own names
+    - expression: {{{{ printf "!has(object.spec.podSelector.matchExpressions) && has(object.spec.podSelector.matchLabels) && size(object.spec.podSelector.matchLabels) == 2 && 'alien.dev/cni-probe' in object.spec.podSelector.matchLabels && object.spec.podSelector.matchLabels['alien.dev/cni-probe'] == '%s' && 'alien.dev/cni-role' in object.spec.podSelector.matchLabels && object.spec.podSelector.matchLabels['alien.dev/cni-role'] in ['denied', 'listener']" $name | quote }}}}
+      message: probe NetworkPolicies select only probe pods
+    - expression: "(!has(object.spec.ingress) || size(object.spec.ingress) == 0) && (!has(object.spec.egress) || size(object.spec.egress) == 0)"
+      message: probe NetworkPolicies only deny
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{{{ $cluster }}}}-policies
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-12"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  policyName: {{{{ $cluster }}}}-policies
   validationActions: [Deny]
   matchResources:
     namespaceSelector:
@@ -200,6 +257,8 @@ spec:
               value: {image}
             - name: PROBE_RUNTIME_CLASS
               value: {runtime_class}
+            - name: PROBE_ADMISSION_POLICY
+              value: {{{{ $cluster | quote }}}}
           command:
             - python3
             - -B

@@ -122,20 +122,31 @@ def main():
             time.sleep(1)
         raise RuntimeError(f"{role} probe deadline: refusing unproven NetworkPolicy enforcement")
 
-    # Pod creation is confined by an admission policy for this account. Refuse to run
-    # unless it rejects a pod that asks for a service account token.
+    # Pod and NetworkPolicy creation are confined by admission policies for this account.
+    # Refuse to run unless each one rejects a request it must reject, with its own message.
+    admission = os.environ["PROBE_ADMISSION_POLICY"]
+
+    def require_denied(path, body, policy, message):
+        while True:
+            try:
+                request("POST", path + "?dryRun=All", body)
+            except urllib.error.HTTPError as error:
+                text = error.read().decode(errors="replace")
+                if f"ValidatingAdmissionPolicy '{policy}'" in text and message in text:
+                    return
+                raise RuntimeError(f"unexpected admission answer {error.code}: {text[:512]}")
+            if time.monotonic() > deadline - 180:
+                raise RuntimeError(f"admission policy {policy} is not enforced; refusing to run")
+            time.sleep(1)
+
     escalation = pod_spec("admission-check", "pass")
     escalation["spec"]["automountServiceAccountToken"] = True
-    while True:
-        try:
-            request("POST", pods + "?dryRun=All", escalation)
-        except urllib.error.HTTPError as error:
-            if error.code in (400, 403, 422):
-                break
-            raise
-        if time.monotonic() > deadline - 180:
-            raise RuntimeError("The probe admission policy is not enforced; refusing to create pods")
-        time.sleep(1)
+    require_denied(pods, escalation, admission, "probe pods carry no service account token")
+    require_denied(policies, {
+        "apiVersion": "networking.k8s.io/v1", "kind": "NetworkPolicy",
+        "metadata": {"name": prefix + "-admission-check"},
+        "spec": {"podSelector": {}, "policyTypes": ["Ingress"], "ingress": [{}]},
+    }, admission + "-policies", "probe NetworkPolicies use the probe's own names")
 
     try:
         # The server and positive control have no policy. Only the subject is denied.

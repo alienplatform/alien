@@ -451,8 +451,11 @@ async fn kubernetes_internet_sandbox_installs_a_hosted_gateway() {
     }
     let admission = documents
         .iter()
-        .find(|doc| doc["kind"] == "ValidatingAdmissionPolicy")
-        .expect("probe admission policy");
+        .find(|doc| {
+            doc["kind"] == "ValidatingAdmissionPolicy"
+                && doc["spec"]["matchConstraints"]["resourceRules"][0]["resources"][0] == "pods"
+        })
+        .expect("probe pod admission policy");
     let condition = admission["spec"]["matchConditions"][0]["expression"]
         .as_str()
         .unwrap();
@@ -466,9 +469,51 @@ async fn kubernetes_internet_sandbox_installs_a_hosted_gateway() {
         "allowPrivilegeEscalation == false",
         "seccompProfile.type == 'RuntimeDefault'",
         "runAsUser == 65534",
+        // Gateway or sandbox labels would join a Service or a policy selector.
+        "size(object.metadata.labels) == 2",
+        "p.hostPort == 0",
+        "!has(object.spec.securityContext.seLinuxOptions)",
+        "!has(c.securityContext.appArmorProfile)",
+        "runAsGroup != 0",
+        "object.spec.nodeName == ''",
     ] {
         assert!(rules.contains(required), "{required}: {rules}");
     }
+    // NetworkPolicy creation is confined too: only the probe's two names, a selector of
+    // exactly the probe labels, and no allow rules.
+    let policies = documents
+        .iter()
+        .find(|doc| {
+            doc["kind"] == "ValidatingAdmissionPolicy"
+                && doc["spec"]["matchConstraints"]["resourceRules"][0]["resources"][0]
+                    == "networkpolicies"
+        })
+        .expect("probe NetworkPolicy admission policy");
+    assert_eq!(
+        policies["spec"]["matchConditions"][0]["expression"],
+        admission["spec"]["matchConditions"][0]["expression"]
+    );
+    let policy_rules = policies["spec"]["validations"]
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .filter_map(|rule| rule["expression"].as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    for required in [
+        format!("object.metadata.name in ['{probe_name}', '{probe_name}-ingress']"),
+        "size(object.spec.podSelector.matchLabels) == 2".to_string(),
+        format!("matchLabels['alien.dev/cni-probe'] == '{probe_name}'"),
+        "size(object.spec.ingress) == 0".to_string(),
+        "size(object.spec.egress) == 0".to_string(),
+    ] {
+        assert!(policy_rules.contains(&required), "{required}: {policy_rules}");
+    }
+    assert!(documents
+        .iter()
+        .any(|doc| doc["kind"] == "ValidatingAdmissionPolicyBinding"
+            && doc["spec"]["policyName"] == policies["metadata"]["name"]
+            && doc["spec"]["validationActions"] == serde_yaml::Value::from(vec!["Deny"])));
     assert!(documents
         .iter()
         .any(|doc| doc["kind"] == "ValidatingAdmissionPolicyBinding"
