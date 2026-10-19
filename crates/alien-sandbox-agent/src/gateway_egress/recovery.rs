@@ -1,11 +1,11 @@
 //! The agent retains one signed record in supervisor memory, outside command environments.
-use super::{failed, invalid, read_header, GatewayEgress, Result, TIMEOUT};
-use alien_error::{Context, IntoAlienError};
+use super::{failed, invalid, read_header, ErrorData, GatewayEgress, Result, TIMEOUT};
+use alien_error::{AlienError, Context, IntoAlienError};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use serde::Deserialize;
 use std::{
     sync::{atomic::Ordering, Arc},
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::{
     io::{AsyncWriteExt, BufReader},
@@ -89,56 +89,133 @@ impl GatewayEgress {
         .context(failed("policy recovery timeout"))?
     }
     pub(super) async fn check_policy(&self) -> Result<()> {
-        match self.policy_request(None).await? {
-            200 => Ok(()),
-            403 => {
+        match self.policy_check().await {
+            PolicyCheck::Accepted => Ok(()),
+            PolicyCheck::Rejected(error) | PolicyCheck::Unanswered(error) => Err(error),
+        }
+    }
+    async fn policy_check(&self) -> PolicyCheck {
+        match self.policy_request(None).await {
+            Ok(200) => PolicyCheck::Accepted,
+            Ok(403) => {
                 self.awaiting_delivery.store(true, Ordering::Release);
-                Err(alien_error::AlienError::new(
-                    crate::error::ErrorData::EgressPathUnexpected,
-                ))
+                PolicyCheck::answer(403)
             }
-            404 => {
-                let record = self
-                    .policy
-                    .read()
-                    .map_err(|_| invalid("policy lock poisoned"))?
+            Ok(404) => self.reregister().await,
+            Ok(status) => PolicyCheck::answer(status),
+            Err(error) => PolicyCheck::Unanswered(error),
+        }
+    }
+    /// The gateway lost this sandbox's state; restore it from the retained signed record.
+    async fn reregister(&self) -> PolicyCheck {
+        let record = match self
+            .policy
+            .read()
+            .map_err(|_| invalid("policy lock poisoned"))
+            .and_then(|policy| {
+                policy
                     .clone()
-                    .ok_or_else(|| invalid("policy delivery pending"))?;
-                let status = self.policy_request(Some(record)).await?;
-                if matches!(status, 204 | 409) && self.policy_request(None).await? == 200 {
-                    Ok(())
-                } else {
-                    Err(alien_error::AlienError::new(
-                        crate::error::ErrorData::EgressPathUnexpected,
-                    ))
-                }
-            }
-            _ => Err(alien_error::AlienError::new(
-                crate::error::ErrorData::EgressPathUnexpected,
-            )),
+                    .ok_or_else(|| invalid("policy delivery pending"))
+            }) {
+            Ok(record) => record,
+            Err(error) => return PolicyCheck::Rejected(error),
+        };
+        match self.policy_request(Some(record)).await {
+            Ok(204 | 409) => {}
+            Ok(status) => return PolicyCheck::answer(status),
+            Err(error) => return PolicyCheck::Unanswered(error),
+        }
+        match self.policy_request(None).await {
+            Ok(200) => PolicyCheck::Accepted,
+            Ok(status) => PolicyCheck::answer(status),
+            Err(error) => PolicyCheck::Unanswered(error),
         }
     }
     pub(super) async fn monitor_policy(self: Arc<Self>) {
-        let mut interval = tokio::time::interval(Duration::from_secs(5));
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        self.monitor_policy_with(MonitorTiming::PRODUCTION).await
+    }
+    async fn monitor_policy_with(self: Arc<Self>, timing: MonitorTiming) {
+        // Start of the current run of checks that no gateway answered.
+        let mut unanswered_since: Option<Instant> = None;
         loop {
-            interval.tick().await;
-            let _update = self.update_lock.lock().await;
-            if self.awaiting_delivery.load(Ordering::Acquire)
-                || !self.path_verified.load(Ordering::Acquire)
-                || !self.current_token().is_ok_and(|token| !token.is_empty())
+            let started = Instant::now();
+            let mut retry = false;
             {
-                continue;
-            }
-            match self.check_policy().await {
-                Ok(()) => self.ready.store(true, Ordering::Release),
-                Err(error) => {
-                    self.ready.store(false, Ordering::Release);
-                    tracing::warn!(code=%error.code, "gateway policy check failed");
+                let _update = self.update_lock.lock().await;
+                if self.awaiting_delivery.load(Ordering::Acquire)
+                    || !self.path_verified.load(Ordering::Acquire)
+                    || !self.current_token().is_ok_and(|token| !token.is_empty())
+                {
+                    unanswered_since = None;
+                } else {
+                    match self.policy_check().await {
+                        PolicyCheck::Accepted => {
+                            unanswered_since = None;
+                            self.ready.store(true, Ordering::Release);
+                        }
+                        PolicyCheck::Rejected(error) => {
+                            unanswered_since = None;
+                            self.ready.store(false, Ordering::Release);
+                            tracing::warn!(code=%error.code, "gateway policy check failed");
+                        }
+                        PolicyCheck::Unanswered(error) => {
+                            let since = *unanswered_since.get_or_insert(started);
+                            if since.elapsed() < timing.grace {
+                                retry = true;
+                                tracing::warn!(code=%error.code, "gateway policy check unanswered; retrying on a new connection");
+                            } else if self.ready.swap(false, Ordering::AcqRel) {
+                                tracing::warn!(code=%error.code, "gateway policy check failed");
+                            }
+                        }
+                    }
                 }
             }
+            tokio::time::sleep(if retry { timing.retry } else { timing.period }).await;
         }
     }
+}
+
+/// Result of one gateway policy check. Only a status a gateway sent is an answer.
+enum PolicyCheck {
+    Accepted,
+    /// A gateway refused this sandbox: token rejected, tombstoned, or state not restorable.
+    Rejected(AlienError<ErrorData>),
+    /// No gateway answered: the connection failed, timed out or closed before a status, or the
+    /// replica reported itself unavailable (5xx).
+    Unanswered(AlienError<ErrorData>),
+}
+
+impl PolicyCheck {
+    fn answer(status: u16) -> Self {
+        let error = AlienError::new(ErrorData::EgressPathUnexpected);
+        if (500..600).contains(&status) {
+            Self::Unanswered(error)
+        } else {
+            Self::Rejected(error)
+        }
+    }
+}
+
+struct MonitorTiming {
+    period: Duration,
+    retry: Duration,
+    grace: Duration,
+}
+
+impl MonitorTiming {
+    /// Gateway replicas sit behind a load balancer that keeps sending some new connections to a
+    /// replica that died until its health check removes it, which takes tens of seconds. A
+    /// check that no gateway answers is therefore retried promptly on a new connection, which
+    /// the load balancer can send to a live replica. Egress closes only when checks stay
+    /// unanswered for `grace`; an attempt against a dead replica typically costs `TIMEOUT`, so
+    /// that allows about ten independent attempts. A gateway answer refusing the sandbox closes
+    /// egress immediately, and keeping readiness during the grace grants nothing: every
+    /// forwarded connection is still authorized by a gateway.
+    const PRODUCTION: Self = Self {
+        period: Duration::from_secs(5),
+        retry: Duration::from_millis(500),
+        grace: Duration::from_secs(60),
+    };
 }
 
 #[cfg(test)]
@@ -283,5 +360,146 @@ mod tests {
         server.await.unwrap();
         agent.token.write().unwrap().clear();
         assert!(agent.update(None, record(6)).await.is_err());
+    }
+
+    /// Answer one gateway request, reading its body when present.
+    async fn answer(socket: tokio::net::TcpStream, status: u16) -> String {
+        let mut socket = BufReader::new(socket);
+        let header = String::from_utf8(read_header(&mut socket).await.unwrap()).unwrap();
+        if let Some(length) = header
+            .lines()
+            .find_map(|line| line.strip_prefix("Content-Length: "))
+        {
+            let mut body = vec![0; length.parse().unwrap()];
+            socket.read_exact(&mut body).await.unwrap();
+        }
+        socket
+            .write_all(format!("HTTP/1.1 {status} Test\r\nContent-Length: 0\r\n\r\n").as_bytes())
+            .await
+            .unwrap();
+        header
+    }
+
+    async fn wait_closed(agent: &GatewayEgress) {
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while agent.ready.load(Ordering::Acquire) {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("egress stayed open after the gateway refused the sandbox");
+        assert!(agent.ensure_ready().is_err());
+    }
+
+    #[tokio::test]
+    async fn unanswered_check_retries_on_a_new_connection_without_closing_egress() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let agent = Arc::new(agent(listener.local_addr().unwrap()));
+        agent.ready.store(true, Ordering::Release);
+        let started = Instant::now();
+        let monitor = tokio::spawn(agent.clone().monitor_policy());
+        // A replica that died behind the load balancer: the connection closes with no status.
+        drop(listener.accept().await.unwrap());
+        let (socket, _) = listener.accept().await.unwrap();
+        assert!(
+            agent.ensure_ready().is_ok(),
+            "one unanswered check closed egress"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "the retry waited for the regular check period"
+        );
+        assert!(answer(socket, 200).await.starts_with("GET /health "));
+        // An answered check returns to the regular period and egress stays open.
+        assert!(
+            tokio::time::timeout(Duration::from_secs(2), listener.accept())
+                .await
+                .is_err()
+        );
+        assert!(agent.ensure_ready().is_ok());
+        monitor.abort();
+    }
+
+    #[tokio::test]
+    async fn gateway_refusal_closes_egress_immediately_even_while_retrying() {
+        // (unanswered connections first, gateway answers, token rejected)
+        for (unanswered, statuses, rejected) in [
+            (0, vec![403], true),
+            (1, vec![403], true),
+            (1, vec![404, 403], false),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let agent = Arc::new(agent(listener.local_addr().unwrap()));
+            agent.ready.store(true, Ordering::Release);
+            let monitor = tokio::spawn(agent.clone().monitor_policy());
+            for _ in 0..unanswered {
+                drop(listener.accept().await.unwrap());
+            }
+            for status in statuses {
+                let (socket, _) = listener.accept().await.unwrap();
+                answer(socket, status).await;
+            }
+            wait_closed(&agent).await;
+            assert_eq!(agent.awaiting_delivery.load(Ordering::Acquire), rejected);
+            monitor.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn persistent_unreachability_closes_egress_after_the_grace_and_reopens_on_answer() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let agent = Arc::new(agent(listener.local_addr().unwrap()));
+        agent.ready.store(true, Ordering::Release);
+        let reachable = Arc::new(AtomicBool::new(false));
+        let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let server = tokio::spawn({
+            let (reachable, attempts) = (reachable.clone(), attempts.clone());
+            async move {
+                loop {
+                    let (socket, _) = listener.accept().await.unwrap();
+                    attempts.fetch_add(1, Ordering::AcqRel);
+                    if reachable.load(Ordering::Acquire) {
+                        answer(socket, 200).await;
+                    }
+                }
+            }
+        });
+        let grace = Duration::from_millis(300);
+        let started = Instant::now();
+        let monitor = tokio::spawn(agent.clone().monitor_policy_with(MonitorTiming {
+            period: Duration::from_millis(100),
+            retry: Duration::from_millis(10),
+            grace,
+        }));
+        while agent.ready.load(Ordering::Acquire) {
+            assert!(
+                started.elapsed() < Duration::from_secs(2),
+                "egress never closed"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let closed = started.elapsed();
+        assert!(closed >= grace, "closed after {closed:?}, before the grace");
+        assert!(
+            closed < grace * 2,
+            "closed after {closed:?}, well past the grace"
+        );
+        assert!(
+            attempts.load(Ordering::Acquire) >= 5,
+            "unanswered checks were not retried"
+        );
+        assert!(agent.ensure_ready().is_err());
+        assert!(!agent.awaiting_delivery.load(Ordering::Acquire));
+        reachable.store(true, Ordering::Release);
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !agent.ready.load(Ordering::Acquire) {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("egress did not reopen once a gateway answered");
+        assert!(agent.ensure_ready().is_ok());
+        monitor.abort();
+        server.abort();
     }
 }
