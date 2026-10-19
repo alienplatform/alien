@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use alien_core::{
     sandbox_egress::{has_sandbox_gateway, SANDBOX_EGRESS_GATEWAY_ID},
     Build, Container, Daemon, DeploymentConfig, ResourceRef, Sandbox, SandboxEgress, Stack,
-    StackState, Vault, Worker, SECRETS_VAULT_ID,
+    StackState, Vault, Worker,
 };
 use async_trait::async_trait;
 
@@ -28,7 +28,7 @@ impl StackMutation for SandboxGatewayLinksMutation {
     async fn mutate(
         &self,
         mut stack: Stack,
-        _state: &StackState,
+        state: &StackState,
         _config: &DeploymentConfig,
     ) -> Result<Stack> {
         let sandbox_ids: BTreeSet<String> = stack
@@ -42,7 +42,10 @@ impl StackMutation for SandboxGatewayLinksMutation {
             })
             .collect();
         let gateway = ResourceRef::new(Container::RESOURCE_TYPE, SANDBOX_EGRESS_GATEWAY_ID);
-        let vault = ResourceRef::new(Vault::RESOURCE_TYPE, SECRETS_VAULT_ID);
+        let vault = ResourceRef::new(
+            Vault::RESOURCE_TYPE,
+            alien_core::sandbox_egress::sandbox_egress_vault_id(state.platform),
+        );
         let owner = alien_core::sandbox_egress::sandbox_egress_key_owner(&stack).map(str::to_owned);
         for id in &sandbox_ids {
             let entry = stack
@@ -117,8 +120,8 @@ impl StackMutation for SandboxGatewayLinksMutation {
                 if !links.contains(&gateway) {
                     links.push(gateway.clone());
                 }
-                // Loading the SDK needs the vault descriptor. Secret access remains
-                // governed by the separately derived permission profile.
+                // Loading the signing key needs the vault descriptor. Secret access remains
+                // governed by the separately derived exact-entry permission profile.
                 if !links.contains(&vault) {
                     links.push(vault.clone());
                 }

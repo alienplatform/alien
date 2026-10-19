@@ -2,8 +2,8 @@
 
 use alien_core::{
     permissions::{PermissionProfile, PermissionSet, PermissionSetReference},
-    sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID,
-    Build, Container, Daemon, ResourceRef, Stack, Vault, Worker, SECRETS_VAULT_ID,
+    sandbox_egress::{sandbox_egress_vault_id, SANDBOX_EGRESS_GATEWAY_ID},
+    Build, Container, Daemon, Platform, ResourceRef, Stack, Vault, Worker, SECRETS_VAULT_ID,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 
@@ -21,7 +21,12 @@ fn invalid(message: impl Into<String>) -> ErrorData {
 /// installed before the values exist. Explicit profile entries prevent resource-link defaults
 /// from granting access to the whole vault. The gateway's profile is dedicated to that
 /// container.
-pub(crate) fn configure_gateway_permissions(stack: &mut Stack) -> Result<()> {
+///
+/// On AWS the entries live in the secrets vault, which an explicit deny hides from other
+/// workloads. Azure has no user-assignable deny and its Workers read the whole secrets vault,
+/// so the entries live in a dedicated vault that only these exact grants reach.
+pub(crate) fn configure_gateway_permissions(stack: &mut Stack, platform: Platform) -> Result<()> {
+    let vault_id = sandbox_egress_vault_id(platform);
     let Some(gateway) = stack
         .resources
         .get(SANDBOX_EGRESS_GATEWAY_ID)
@@ -61,7 +66,7 @@ pub(crate) fn configure_gateway_permissions(stack: &mut Stack) -> Result<()> {
     }
     let mut gateway_profile = PermissionProfile::new();
     for link in &gateway.links {
-        if *link.resource_type() != Vault::RESOURCE_TYPE || link.id() != SECRETS_VAULT_ID {
+        if *link.resource_type() != Vault::RESOURCE_TYPE || link.id() != vault_id {
             return Err(AlienError::new(invalid(
                 "The sandbox gateway may link only its config vault",
             )));
@@ -69,7 +74,7 @@ pub(crate) fn configure_gateway_permissions(stack: &mut Stack) -> Result<()> {
     }
 
     gateway_profile.0.insert(
-        SECRETS_VAULT_ID.into(),
+        vault_id.into(),
         vec![PermissionSetReference::from_inline(exact_read(
             "sandbox-egress-gateway-config",
         )?)],
@@ -95,7 +100,7 @@ pub(crate) fn configure_gateway_permissions(stack: &mut Stack) -> Result<()> {
         .config
         .downcast_mut::<Container>()
         .unwrap();
-    let vault = ResourceRef::new(Vault::RESOURCE_TYPE, SECRETS_VAULT_ID);
+    let vault = ResourceRef::new(Vault::RESOURCE_TYPE, vault_id);
     if !gateway.links.contains(&vault) {
         gateway.links.push(vault);
     }
@@ -115,12 +120,30 @@ pub(crate) fn configure_gateway_permissions(stack: &mut Stack) -> Result<()> {
             (target == "*" || sandboxes.contains(target))
                 && sets.iter().any(grants_sandbox_management)
         }) {
-            let grants = profile.0.entry(SECRETS_VAULT_ID.into()).or_default();
+            let grants = profile.0.entry(vault_id.into()).or_default();
             let set = exact_read("sandbox-egress-signing-key")?;
             if !grants.iter().any(|existing| existing.id() == set.id) {
                 grants.push(PermissionSetReference::from_inline(set));
             }
         }
+    }
+    if platform == Platform::Azure {
+        // A stack-wide vault grant is a resource-group role, which would also cover the
+        // dedicated vault. Azure cannot carve the vault out of it.
+        for (name, profile) in &stack.permissions.profiles {
+            if super::secrets_vault::has_stack_wide_vault_grant(profile)
+                || profile.0.get(vault_id).is_some_and(|sets| {
+                    sets.iter()
+                        .any(|set| !set.id().starts_with("vault/sandbox-egress-"))
+                })
+            {
+                return Err(AlienError::new(invalid(format!(
+                    "Permission profile '{name}' grants vault access that would include the sandbox gateway vault; grant vault access per vault instead"
+                ))));
+            }
+        }
+        // Controllers write the signing key and gateway configuration.
+        super::secrets_vault::add_vault_permissions_to_management(stack, vault_id, true, false)?;
     }
     Ok(())
 }

@@ -16,6 +16,20 @@ use crate::{
 /// Reserved resource id of the deployment's sandbox egress gateway Container.
 pub const SANDBOX_EGRESS_GATEWAY_ID: &str = "sandbox-egress-gateway";
 
+/// Reserved resource id of the Azure Key Vault that holds only the gateway configuration and
+/// the policy signing key. Azure Workers read the whole app secrets vault for their own
+/// secrets, and Azure RBAC has no user-assignable deny that could hide entries there.
+pub const SANDBOX_EGRESS_VAULT_ID: &str = "sandbox-egress-vault";
+
+/// Vault that holds the gateway configuration and signing key on `platform`. AWS keeps them
+/// in the deployment secrets vault behind exact grants and an explicit deny.
+pub fn sandbox_egress_vault_id(platform: crate::Platform) -> &'static str {
+    match platform {
+        crate::Platform::Azure => SANDBOX_EGRESS_VAULT_ID,
+        _ => crate::SECRETS_VAULT_ID,
+    }
+}
+
 /// Whether preflight installed the managed gateway for this deployment.
 pub fn has_sandbox_gateway(stack: &Stack) -> bool {
     stack

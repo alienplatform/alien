@@ -3,10 +3,10 @@
 use std::collections::BTreeSet;
 
 use alien_core::{
-    sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID, Build, Container, ContainerCode, ContainerEgress,
-    ContainerSecurity, ContainerSecurityProfile, Daemon, DeploymentConfig, HealthCheck, Platform,
-    Resource, ResourceEntry, ResourceLifecycle, ResourceSpec, Sandbox, SandboxEgress, Stack,
-    StackState, Worker,
+    sandbox_egress::{SANDBOX_EGRESS_GATEWAY_ID, SANDBOX_EGRESS_VAULT_ID},
+    Build, Container, ContainerCode, ContainerEgress, ContainerSecurity, ContainerSecurityProfile,
+    Daemon, DeploymentConfig, HealthCheck, Platform, Resource, ResourceEntry, ResourceLifecycle,
+    ResourceSpec, Sandbox, SandboxEgress, Stack, StackState, Vault, Worker,
 };
 use alien_error::AlienError;
 use async_trait::async_trait;
@@ -43,7 +43,7 @@ impl StackMutation for SandboxGatewayMutation {
     async fn mutate(
         &self,
         mut stack: Stack,
-        _state: &StackState,
+        state: &StackState,
         _config: &DeploymentConfig,
     ) -> Result<Stack> {
         let invalid = |message: String| {
@@ -146,6 +146,37 @@ impl StackMutation for SandboxGatewayMutation {
                     remote_access: false,
                 },
             );
+        }
+        if state.platform == Platform::Azure {
+            match stack.resources.get(SANDBOX_EGRESS_VAULT_ID) {
+                Some(existing)
+                    if existing.config.downcast_ref::<Vault>().is_some()
+                        && existing.lifecycle == ResourceLifecycle::Frozen
+                        && existing.enabled_when.is_none()
+                        && !existing.remote_access => {}
+                Some(_) => {
+                    return Err(AlienError::new(ErrorData::StackMutationFailed {
+                        mutation_name: "SandboxGatewayMutation".into(),
+                        message: "The reserved sandbox gateway vault id is already in use".into(),
+                        resource_id: Some(SANDBOX_EGRESS_VAULT_ID.into()),
+                    }));
+                }
+                None => {
+                    // Setup creates it; nothing but the gateway and sandbox managers is granted.
+                    stack.resources.insert(
+                        SANDBOX_EGRESS_VAULT_ID.into(),
+                        ResourceEntry {
+                            config: Resource::new(
+                                Vault::new(SANDBOX_EGRESS_VAULT_ID.into()).build(),
+                            ),
+                            lifecycle: ResourceLifecycle::Frozen,
+                            dependencies: Vec::new(),
+                            enabled_when: None,
+                            remote_access: false,
+                        },
+                    );
+                }
+            }
         }
         Ok(stack)
     }

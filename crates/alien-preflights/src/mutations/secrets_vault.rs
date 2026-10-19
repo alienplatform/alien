@@ -144,7 +144,10 @@ impl StackMutation for SecretsVaultMutation {
         }
 
         if matches!(stack_state.platform, Platform::Aws | Platform::Azure) {
-            super::sandbox_gateway_permissions::configure_gateway_permissions(&mut stack)?;
+            super::sandbox_gateway_permissions::configure_gateway_permissions(
+                &mut stack,
+                stack_state.platform,
+            )?;
         }
 
         Ok(stack)
@@ -320,7 +323,7 @@ fn validate_workload_vault_grants(stack: &Stack) -> Result<()> {
     Ok(())
 }
 
-fn has_stack_wide_vault_grant(profile: &PermissionProfile) -> bool {
+pub(super) fn has_stack_wide_vault_grant(profile: &PermissionProfile) -> bool {
     profile.0.get("*").is_some_and(|permissions| {
         permissions.iter().any(|permission| {
             let canonical = match permission {
@@ -784,7 +787,7 @@ fn add_vault_read_permissions_to_profiles(
 /// Author explicit vault data permissions into the management profile for this vault.
 /// The generator treats these like any other management grant; the preflight is
 /// the permission author.
-fn add_vault_permissions_to_management(
+pub(super) fn add_vault_permissions_to_management(
     stack: &mut Stack,
     vault_name: &str,
     needs_read: bool,

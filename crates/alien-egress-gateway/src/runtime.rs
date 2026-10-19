@@ -134,8 +134,18 @@ impl LiveGateway {
 }
 
 pub async fn read_vault_config(bindings: &Bindings) -> Result<String> {
+    // Azure deployments link a dedicated gateway vault; AWS uses the secrets vault.
+    let vault = if std::env::var_os(alien_core::bindings::binding_env_var_name(
+        alien_core::sandbox_egress::SANDBOX_EGRESS_VAULT_ID,
+    ))
+    .is_some()
+    {
+        alien_core::sandbox_egress::SANDBOX_EGRESS_VAULT_ID
+    } else {
+        alien_core::SECRETS_VAULT_ID
+    };
     bindings
-        .vault("secrets")
+        .vault(vault)
         .await
         .context(unavailable("load config vault"))?
         .get_secret("sandbox-egress-gateway-config")

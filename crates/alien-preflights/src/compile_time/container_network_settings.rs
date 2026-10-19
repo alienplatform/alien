@@ -224,12 +224,10 @@ mod tests {
         }})).unwrap();
         let check = ContainerNetworkSettingsCheck;
         let invalid = check.check(&stack, Platform::Local).await.unwrap();
-        assert!(
-            invalid
-                .errors
-                .iter()
-                .any(|error| error.contains("restricted"))
-        );
+        assert!(invalid
+            .errors
+            .iter()
+            .any(|error| error.contains("restricted")));
         stack
             .resources
             .get_mut("api")
@@ -320,15 +318,13 @@ mod tests {
             .downcast_mut::<Container>()
             .unwrap()
             .cluster = Some("other".into());
-        assert!(
-            check
-                .check(&automatic, Platform::Aws)
-                .await
-                .unwrap()
-                .errors
-                .iter()
-                .any(|error| error.contains("different compute cluster"))
-        );
+        assert!(check
+            .check(&automatic, Platform::Aws)
+            .await
+            .unwrap()
+            .errors
+            .iter()
+            .any(|error| error.contains("different compute cluster")));
         let previous = stack.clone();
         let mut changed = stack.clone();
         changed
@@ -392,12 +388,10 @@ mod tests {
             let result = check.check(&many, Platform::Aws).await.unwrap();
             assert_eq!(result.success, index != 4, "{index}: {result:?}");
             if index == 4 {
-                assert!(
-                    result
-                        .errors
-                        .iter()
-                        .any(|error| error.contains("five security group slots"))
-                );
+                assert!(result
+                    .errors
+                    .iter()
+                    .any(|error| error.contains("five security group slots")));
             }
         }
         stack

@@ -894,57 +894,17 @@ async fn internet_sandbox_key_dependencies_respect_setup_ownership() {
 }
 
 /// Azure runs the same managed gateway as AWS: preparation installs it, the plan-time gate
-/// passes only with the managed backend, and every vault grant is a single Key Vault secret.
+/// passes only with the managed backend, and its material lives in a dedicated Key Vault that
+/// only exact single-secret grants reach. Workers keep their whole-vault read on the app
+/// secrets vault, which no longer holds anything of the gateway's.
 #[tokio::test]
 async fn azure_internet_sandbox_prepares_the_gateway_with_exact_secret_grants() {
+    use alien_core::sandbox_egress::SANDBOX_EGRESS_VAULT_ID;
     use alien_permissions::{
         generators::AzureRuntimePermissionsGenerator, BindingTarget, PermissionContext,
     };
 
-    let sandbox = Sandbox::new("box".into())
-        .code(SandboxCode::Image {
-            image: "example.invalid/sandbox:1".into(),
-        })
-        .egress(SandboxEgress::Internet)
-        .lifecycle(SandboxLifecyclePolicy {
-            max_lifetime_seconds: None,
-            idle_pause_seconds: None,
-        })
-        .build();
-    let manager = Worker::new("manager".into())
-        .code(WorkerCode::Image {
-            image: "example.invalid/manager:1".into(),
-        })
-        .permissions("execution".into())
-        .link(&sandbox)
-        .build();
-    let stack = Stack::new("sandbox-manager".into())
-        .add(sandbox, ResourceLifecycle::Frozen)
-        .add(manager, ResourceLifecycle::Live)
-        .permission(
-            "execution",
-            PermissionProfile::new().resource(
-                "box",
-                [alien_core::permissions::PermissionSetReference::from_name(
-                    "sandbox/management",
-                )],
-            ),
-        )
-        .build();
-    let config = |backend: Option<ComputeBackend>| {
-        DeploymentConfig::builder()
-            .stack_settings(StackSettings::default())
-            .environment_variables(empty_env_snapshot())
-            .maybe_compute_backend(backend)
-            .allow_frozen_changes(false)
-            .external_bindings(ExternalBindings::default())
-            .build()
-    };
-    let managed = config(Some(ComputeBackend::Horizon(HorizonConfig {
-        url: "https://example.invalid".into(),
-        horizon_machine_image: None,
-        clusters: Default::default(),
-    })));
+    let (stack, managed, unmanaged) = azure_gateway_fixture(None);
     let state = StackState::new(Platform::Azure);
     let prepared = PreflightRunner::new()
         .apply_mutations(stack, &state, &managed)
@@ -955,6 +915,15 @@ async fn azure_internet_sandbox_prepares_the_gateway_with_exact_secret_grants() 
         .config
         .downcast_ref::<Container>()
         .expect("Azure preparation installs the gateway Container");
+    let vault = &prepared.resources[SANDBOX_EGRESS_VAULT_ID];
+    assert!(vault.config.downcast_ref::<Vault>().is_some());
+    assert_eq!(
+        vault.lifecycle,
+        ResourceLifecycle::Frozen,
+        "setup creates the vault"
+    );
+    let gateway_vault = ResourceRef::new(Vault::RESOURCE_TYPE, SANDBOX_EGRESS_VAULT_ID);
+    assert_eq!(gateway.links, vec![gateway_vault.clone()]);
     let manager = prepared.resources["manager"]
         .config
         .downcast_ref::<Worker>()
@@ -969,21 +938,21 @@ async fn azure_internet_sandbox_prepares_the_gateway_with_exact_secret_grants() 
         .await
         .unwrap();
     assert!(checks.success, "{checks:?}");
-    let unmanaged = PreflightRunner::new()
-        .run_deployment_prerequisite_checks(&prepared, &state, &config(None))
+    let refused = PreflightRunner::new()
+        .run_deployment_prerequisite_checks(&prepared, &state, &unmanaged)
         .await
         .unwrap();
-    assert!(!unmanaged.success, "the gateway needs the managed backend");
+    assert!(!refused.success, "the gateway needs the managed backend");
 
-    // Grants resolve to exactly one secret in the deployment's Key Vault.
+    // Every grant resolves to exactly one secret in the dedicated vault.
     let context = PermissionContext::new()
         .with_stack_prefix("alien-test")
-        .with_resource_name("alien-test-vault")
+        .with_resource_name("alien-test-gwvault")
         .with_subscription_id("00000000-0000-0000-0000-000000000000")
         .with_resource_group("alien-test-rg");
-    let vault_scope = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/alien-test-rg/providers/Microsoft.KeyVault/vaults/alien-test-vault";
-    let scopes = |profile: &str| -> Vec<(String, String)> {
-        prepared.permissions.profiles[profile].0[SECRETS_VAULT_ID]
+    let vault_scope = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/alien-test-rg/providers/Microsoft.KeyVault/vaults/alien-test-gwvault";
+    let roles = |profile: &str| -> Vec<(String, String)> {
+        prepared.permissions.profiles[profile].0[SANDBOX_EGRESS_VAULT_ID]
             .iter()
             .flat_map(|reference| {
                 let set = match reference {
@@ -1001,17 +970,106 @@ async fn azure_internet_sandbox_prepares_the_gateway_with_exact_secret_grants() 
             .collect()
     };
     assert_eq!(
-        scopes(&gateway.permissions),
+        roles(&gateway.permissions),
         vec![(
             "Key Vault Secrets User".to_string(),
             format!("{vault_scope}/secrets/sandbox-egress-gateway-config")
         )]
     );
     assert_eq!(
-        scopes("execution"),
+        roles("execution"),
         vec![(
             "Key Vault Secrets User".to_string(),
             format!("{vault_scope}/secrets/sandbox-egress-signing-key")
         )]
     );
+    // No other workload profile has any grant on the dedicated vault or stack-wide.
+    for (name, profile) in &prepared.permissions.profiles {
+        assert!(
+            !profile.0.contains_key("*"),
+            "profile '{name}' must not hold stack-wide grants"
+        );
+        if name != &gateway.permissions && name != "execution" {
+            assert!(
+                !profile.0.contains_key(SANDBOX_EGRESS_VAULT_ID),
+                "profile '{name}' must have no role on the gateway vault"
+            );
+        }
+    }
+    // The Worker's own app-secret delivery is unchanged.
+    assert!(
+        prepared.permissions.profiles["execution"].0[SECRETS_VAULT_ID]
+            .iter()
+            .any(|set| set.id() == "vault/data-read")
+    );
+    assert!(!prepared.permissions.profiles[&gateway.permissions]
+        .0
+        .contains_key(SECRETS_VAULT_ID));
+}
+
+/// A stack-wide vault grant is a resource-group role on Azure, which would also reach the
+/// dedicated gateway vault, so preparation refuses it instead of exposing the gateway.
+#[tokio::test]
+async fn azure_internet_sandbox_refuses_stack_wide_vault_grants() {
+    let (stack, managed, _) = azure_gateway_fixture(Some("vault/data-read"));
+    let error = PreflightRunner::new()
+        .apply_mutations(stack, &StackState::new(Platform::Azure), &managed)
+        .await
+        .expect_err("a resource-group vault role would cover the gateway vault");
+    assert!(
+        format!("{error:?}").contains("sandbox gateway vault"),
+        "{error:?}"
+    );
+}
+
+fn azure_gateway_fixture(stack_wide: Option<&str>) -> (Stack, DeploymentConfig, DeploymentConfig) {
+    let sandbox = Sandbox::new("box".into())
+        .code(SandboxCode::Image {
+            image: "example.invalid/sandbox:1".into(),
+        })
+        .egress(SandboxEgress::Internet)
+        .lifecycle(SandboxLifecyclePolicy {
+            max_lifetime_seconds: None,
+            idle_pause_seconds: None,
+        })
+        .build();
+    let manager = Worker::new("manager".into())
+        .code(WorkerCode::Image {
+            image: "example.invalid/manager:1".into(),
+        })
+        .permissions("execution".into())
+        .link(&sandbox)
+        .build();
+    let mut profile = PermissionProfile::new().resource(
+        "box",
+        [alien_core::permissions::PermissionSetReference::from_name(
+            "sandbox/management",
+        )],
+    );
+    if let Some(set) = stack_wide {
+        profile = profile.global([set]);
+    }
+    let stack = Stack::new("sandbox-manager".into())
+        .add(sandbox, ResourceLifecycle::Frozen)
+        .add(manager, ResourceLifecycle::Live)
+        .permission("execution", profile)
+        .build();
+    let config = |backend: Option<ComputeBackend>| {
+        DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .maybe_compute_backend(backend)
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build()
+    };
+    (
+        stack,
+        config(Some(ComputeBackend::Horizon(HorizonConfig {
+            url: "https://example.invalid".into(),
+            horizon_machine_image: None,
+            clusters: Default::default(),
+        }))),
+        config(None),
+    )
 }

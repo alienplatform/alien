@@ -6,7 +6,7 @@ use crate::core::state_utils::StackResourceStateExt;
 use alien_bindings::BindingsProviderApi;
 use alien_bindings::Vault;
 use alien_error::{AlienError, Context};
-use base64::{Engine, engine::general_purpose::STANDARD};
+use base64::{engine::general_purpose::STANDARD, Engine};
 use ed25519_compact::{KeyPair, SecretKey};
 use serde::{Deserialize, Serialize};
 
@@ -197,35 +197,30 @@ mod tests {
 pub(crate) async fn deployment_vault(
     ctx: &crate::core::ResourceControllerContext<'_>,
 ) -> Result<std::sync::Arc<dyn Vault>> {
+    let vault_id = alien_core::sandbox_egress::sandbox_egress_vault_id(ctx.platform);
     let missing = || {
         AlienError::new(ErrorData::DependencyNotReady {
             resource_id: ctx.desired_config.id().to_string(),
-            dependency_id: alien_core::SECRETS_VAULT_ID.into(),
+            dependency_id: vault_id.into(),
         })
     };
-    let state = ctx
-        .state
-        .resources
-        .get(alien_core::SECRETS_VAULT_ID)
-        .ok_or_else(missing)?;
+    let state = ctx.state.resources.get(vault_id).ok_or_else(missing)?;
     let controller = state.get_internal_controller()?.ok_or_else(missing)?;
     let params = controller.get_binding_params()?.ok_or_else(missing)?;
     let provider = alien_bindings::BindingsProvider::new(
         ctx.client_config.clone(),
-        [(alien_core::SECRETS_VAULT_ID.into(), params)]
-            .into_iter()
-            .collect(),
+        [(vault_id.into(), params)].into_iter().collect(),
     )
     .context(ErrorData::ResourceConfigInvalid {
-        message: "Failed to resolve the deployment secrets vault".into(),
-        resource_id: Some(alien_core::SECRETS_VAULT_ID.into()),
+        message: "Failed to resolve the sandbox gateway vault".into(),
+        resource_id: Some(vault_id.into()),
     })?;
     provider
-        .load_vault(alien_core::SECRETS_VAULT_ID)
+        .load_vault(vault_id)
         .await
         .context(ErrorData::ResourceConfigInvalid {
-            message: "Failed to load the deployment secrets vault".into(),
-            resource_id: Some(alien_core::SECRETS_VAULT_ID.into()),
+            message: "Failed to load the sandbox gateway vault".into(),
+            resource_id: Some(vault_id.into()),
         })
 }
 

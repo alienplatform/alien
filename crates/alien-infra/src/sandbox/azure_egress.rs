@@ -3,11 +3,11 @@
 use alien_core::{import::data::AzureSandboxNetwork, sandbox_egress};
 use alien_error::{AlienError, Context};
 
-use super::{AzureSandboxController, egress};
+use super::{egress, AzureSandboxController};
 use crate::{
+    core::{state_utils::StackResourceStateExt, ResourceControllerContext},
+    network::{validate_azure_sandbox_network, AzureNetworkController},
     ErrorData, Result,
-    core::{ResourceControllerContext, state_utils::StackResourceStateExt},
-    network::{AzureNetworkController, validate_azure_sandbox_network},
 };
 
 pub(super) async fn initialize_key(
@@ -35,7 +35,7 @@ pub(super) async fn initialize_key(
         container: sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.into(),
         audience: format!("{}/{}", ctx.resource_prefix, config.id),
         signing_key: SandboxEgressSigningKey {
-            vault: alien_core::SECRETS_VAULT_ID.into(),
+            vault: sandbox_egress::SANDBOX_EGRESS_VAULT_ID.into(),
             key: egress::SIGNING_KEY.into(),
         },
         kid: key.kid,
