@@ -555,7 +555,7 @@ export interface Sandbox {
    */
   updateEgress(sandboxId: string, egress: EgressPolicy): Promise<void>
   /**
-   * Lists this binding's sandboxes. Not offered on AWS, Azure or GCP — those raise rather than
+   * Lists this binding's sandboxes. Not offered on AWS or Azure, which raise rather than
    * enumerate. Reach a sandbox whose id you hold with `get`.
    */
   list(): Promise<SandboxInstance[]>

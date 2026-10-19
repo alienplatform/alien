@@ -67,7 +67,11 @@ impl CfEmitter for AwsNetworkEmitter {
                     (
                         "gatewayCidrs",
                         if created {
-                            created_sandbox_subnet_values(prefix, "SandboxGatewaySubnet", Some("CidrBlock"))
+                            created_sandbox_subnet_values(
+                                prefix,
+                                "SandboxGatewaySubnet",
+                                Some("CidrBlock"),
+                            )
                         } else {
                             CfExpression::ref_("SandboxGatewaySubnetCidrs")
                         },
@@ -424,6 +428,10 @@ fn created_network_resources(ctx: &EmitContext<'_>) -> Result<Vec<CfResource>> {
         CfExpression::list([CfExpression::object([
             ("IpProtocol", CfExpression::from("-1")),
             ("CidrIp", CfExpression::from("0.0.0.0/0")),
+            (
+                "Description",
+                CfExpression::from("Outbound workload traffic"),
+            ),
         ])]),
     );
     security_group
@@ -561,6 +569,10 @@ pub(crate) fn gateway_egress_rules(ctx: &EmitContext<'_>) -> Result<CfExpression
             ("FromPort", CfExpression::Integer(3128)),
             ("ToPort", CfExpression::Integer(3129)),
             ("CidrIp", cidr),
+            (
+                "Description",
+                CfExpression::from("Sandbox gateway proxy traffic"),
+            ),
         ])
     };
     let supplied = CfExpression::list([

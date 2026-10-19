@@ -1,4 +1,4 @@
-use std::{convert::Infallible, sync::Arc, time::Duration};
+use std::{convert::Infallible, future::Future, sync::Arc, time::Duration};
 
 #[cfg(all(feature = "gcp", feature = "azure"))]
 use alien_worker_protocol::ControlGrpcServer;
@@ -39,8 +39,46 @@ impl Drop for Server {
     }
 }
 
-#[tokio::test]
-async fn redirects_preserve_status_location_cookies_body_and_never_replay() {
+/// What a transport handed back to its caller for one forwarded request.
+pub(crate) struct Forwarded {
+    pub status: u16,
+    pub location: Option<String>,
+    pub cookies: Vec<String>,
+    pub body: Bytes,
+}
+
+impl Forwarded {
+    async fn from_response(response: Response<Body>) -> Self {
+        let status = response.status().as_u16();
+        let location = response
+            .headers()
+            .get("location")
+            .map(|v| v.to_str().unwrap().to_string());
+        let cookies = response
+            .headers()
+            .get_all("set-cookie")
+            .iter()
+            .map(|v| v.to_str().unwrap().to_string())
+            .collect();
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        Self {
+            status,
+            location,
+            cookies,
+            body,
+        }
+    }
+}
+
+/// Every redirect status, with a relative and an external Location, for GET and POST.
+/// `forward(method, app_port)` must send `method /redirect?keep=query` with the body
+/// `original request body` through the transport under test to the app on `app_port`.
+/// The transport must hand the redirect back unchanged and never contact its target.
+pub(crate) async fn assert_application_redirects_are_returned<F, Fut>(forward: F)
+where
+    F: Fn(&'static str, u16) -> Fut,
+    Fut: Future<Output = Forwarded>,
+{
     let (destination_tx, mut destination_rx) = mpsc::unbounded_channel();
     let destination = Server::start(Router::new().fallback(any(move || {
         let tx = destination_tx.clone();
@@ -84,43 +122,23 @@ async fn redirects_preserve_status_location_cookies_body_and_never_replay() {
                         }
                     })))
                     .await;
-                let response = timeout(
-                    Duration::from_secs(5),
-                    forward_http_request(
-                        &create_forward_client(),
-                        Request::builder()
-                            .method(method)
-                            .uri("/redirect?keep=query")
-                            .body(Body::from("original request body"))
-                            .unwrap(),
-                        app.port,
-                        CancellationToken::new(),
-                    ),
-                )
-                .await
-                .expect("forward request completes");
-                let actual_status = response.status().as_u16();
-                let actual_location = response.headers().get("location").cloned();
-                let cookies: Vec<_> = response
-                    .headers()
-                    .get_all("set-cookie")
-                    .iter()
-                    .map(|v| v.to_str().unwrap().to_string())
-                    .collect();
-                let body = response.into_body().collect().await.unwrap().to_bytes();
+                let forwarded = timeout(Duration::from_secs(5), forward(method, app.port))
+                    .await
+                    .expect("forward request completes");
                 let (seen_method, seen_uri, seen_body) = seen_rx.try_recv().unwrap();
                 assert_eq!(seen_method, method);
                 assert_eq!(seen_uri, "/redirect?keep=query");
                 assert_eq!(seen_body, "original request body");
                 let replayed = seen_rx.try_recv().is_ok() || destination_rx.try_recv().is_ok();
-                if actual_status != status
-                    || actual_location.as_ref().map(|v| v.as_bytes()) != Some(location.as_bytes())
-                    || cookies != ["first=one; HttpOnly", "second=two; SameSite=Lax"]
-                    || body != "application redirect body"
+                if forwarded.status != status
+                    || forwarded.location.as_deref() != Some(location.as_str())
+                    || forwarded.cookies != ["first=one; HttpOnly", "second=two; SameSite=Lax"]
+                    || forwarded.body != "application redirect body"
                     || replayed
                 {
                     failures.push(format!(
-                        "{method} {status} {location}: status={actual_status}, replayed={replayed}"
+                        "{method} {status} {location}: status={}, location={:?}, cookies={:?}, replayed={replayed}",
+                        forwarded.status, forwarded.location, forwarded.cookies
                     ));
                 }
             }
@@ -130,6 +148,29 @@ async fn redirects_preserve_status_location_cookies_body_and_never_replay() {
         failures.is_empty(),
         "redirect forwarding failures: {failures:#?}"
     );
+}
+
+#[tokio::test]
+async fn redirects_preserve_status_location_cookies_body_and_never_replay() {
+    let client = create_forward_client();
+    assert_application_redirects_are_returned(|method, app_port| {
+        let client = client.clone();
+        async move {
+            let response = forward_http_request(
+                &client,
+                Request::builder()
+                    .method(method)
+                    .uri("/redirect?keep=query")
+                    .body(Body::from("original request body"))
+                    .unwrap(),
+                app_port,
+                CancellationToken::new(),
+            )
+            .await;
+            Forwarded::from_response(response).await
+        }
+    })
+    .await;
 }
 
 #[tokio::test]

@@ -16,6 +16,10 @@
             "rds:DeleteDBInstance",
             "rds:ModifyDBInstance",
             "rds:CreateDBSubnetGroup",
+            "rds:CreateDBClusterParameterGroup",
+            "rds:ModifyDBClusterParameterGroup",
+            "rds:DescribeDBClusterParameterGroups",
+            "rds:DeleteDBClusterParameterGroup",
             "rds:DeleteDBSubnetGroup",
             "rds:DescribeDBClusters",
             "rds:DescribeDBInstances",
@@ -29,14 +33,16 @@
             "resources": [
               "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-*",
               "arn:aws:rds:${awsRegion}:${awsAccountId}:db:${stackPrefix}-*",
-              "arn:aws:rds:${awsRegion}:${awsAccountId}:subgrp:${stackPrefix}-*"
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:subgrp:${stackPrefix}-*",
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster-pg:${stackPrefix}-*"
             ]
           },
           "resource": {
             "resources": [
               "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-${resourceName}",
               "arn:aws:rds:${awsRegion}:${awsAccountId}:db:${stackPrefix}-${resourceName}-*",
-              "arn:aws:rds:${awsRegion}:${awsAccountId}:subgrp:${stackPrefix}-${resourceName}-*"
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:subgrp:${stackPrefix}-${resourceName}-*",
+              "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster-pg:${stackPrefix}-${resourceName}-*"
             ]
           }
         }
