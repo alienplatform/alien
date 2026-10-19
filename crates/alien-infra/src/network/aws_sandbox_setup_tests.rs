@@ -1552,7 +1552,7 @@ async fn a_range_taken_by_another_subnet_fails_setup_without_wedging_it() {
 }
 
 /// When something outside Alien keeps putting a removed route back, setup stops with a clear
-/// error instead of deleting it forever.
+/// error instead of deleting it forever. Once that stops, retrying setup repairs the route.
 #[tokio::test]
 async fn setup_stops_repairing_a_route_that_keeps_coming_back() {
     let cloud = workload_cloud();
@@ -1579,5 +1579,26 @@ async fn setup_stops_repairing_a_route_that_keeps_coming_back() {
     assert_eq!(
         cloud.lock().unwrap().mutations - mutations,
         MAX_TABLE_CHANGES as usize
+    );
+
+    let mut controller = execution
+        .internal_state::<AwsNetworkController>()
+        .unwrap()
+        .clone();
+    cloud.lock().unwrap().routes_come_back = false;
+    controller.state = AwsNetworkState::UpdatingSandboxNetwork;
+    let mut execution = executor(&cloud, controller, true).await;
+    execution
+        .run_until_status(ResourceStatus::Running)
+        .await
+        .expect("a retried setup repairs the route");
+    let routes = table_named(
+        &mut cloud.lock().unwrap(),
+        "test-network-sandbox-isolated-rt",
+    )["routeSet"]["item"]
+        .clone();
+    assert!(
+        !routes.to_string().contains("pcx-1"),
+        "the peering route is removed: {routes}"
     );
 }

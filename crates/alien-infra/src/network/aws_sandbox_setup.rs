@@ -26,7 +26,8 @@ pub(crate) struct SandboxNetworkSetup {
     /// A refresh could not verify the topology; the next setup run reconciles it.
     #[serde(default)]
     unverified: bool,
-    /// Route and association changes since the topology last verified; see `MAX_TABLE_CHANGES`.
+    /// Route and association changes in this setup run that the topology has not yet verified;
+    /// see `MAX_TABLE_CHANGES`.
     #[serde(default)]
     table_changes: u32,
 }
@@ -630,15 +631,16 @@ impl AwsNetworkController {
     }
 
     /// Counts one route or association change, refusing once `MAX_TABLE_CHANGES` were made
-    /// without the topology verifying.
+    /// without the topology verifying. Refusing ends this setup run and resets the count, so a
+    /// later run, after whatever kept undoing the repairs stops, gets the full budget again.
     fn count_table_change(&mut self, id: &str) -> Result<()> {
         let setup = self.sandbox_setup.as_mut().expect("initialized");
         if setup.table_changes >= MAX_TABLE_CHANGES {
+            let changes = std::mem::take(&mut setup.table_changes);
             return Err(invalid(
                 id,
                 format!(
-                    "Direct setup changed its sandbox route tables {} times without them verifying; something keeps changing them back",
-                    setup.table_changes
+                    "Direct setup changed its sandbox route tables {changes} times without them verifying; something keeps changing them back"
                 ),
             ));
         }
