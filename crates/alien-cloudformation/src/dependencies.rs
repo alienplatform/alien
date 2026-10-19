@@ -129,8 +129,10 @@ fn collect_references(expression: &CfExpression, references: &mut IndexSet<Strin
                     _ => return,
                 };
                 for name in substitution_names(template) {
+                    // A variable map entry overrides the whole placeholder, `Bucket.Arn` included.
                     if !variables.is_some_and(|variables| variables.contains_key(name)) {
-                        references.insert(name.to_string());
+                        let logical_id = name.split_once('.').map_or(name, |(id, _)| id);
+                        references.insert(logical_id.to_string());
                     }
                 }
                 for value in variables.into_iter().flat_map(IndexMap::values) {
@@ -155,7 +157,7 @@ fn collect_references(expression: &CfExpression, references: &mut IndexSet<Strin
     }
 }
 
-/// The logical ids an `Fn::Sub` template substitutes: `${Name}` and `${Name.Attribute}`, not
+/// The placeholders an `Fn::Sub` template substitutes: `${Name}` and `${Name.Attribute}`, not
 /// the `${!Literal}` escape.
 fn substitution_names(mut template: &str) -> Vec<&str> {
     let mut names = Vec::new();
@@ -166,10 +168,7 @@ fn substitution_names(mut template: &str) -> Vec<&str> {
         };
         let name = &variable[..end];
         if !name.starts_with('!') {
-            names.push(
-                name.split_once('.')
-                    .map_or(name, |(logical_id, _)| logical_id),
-            );
+            names.push(name);
         }
         template = &variable[end + 1..];
     }
@@ -214,6 +213,20 @@ mod tests {
             dependencies["Policy"].iter().collect::<Vec<_>>(),
             ["Key", "Role", "Bucket"]
         );
+    }
+
+    #[test]
+    fn a_sub_variable_overriding_a_dotted_placeholder_is_not_a_reference() {
+        let template = template(&[(
+            "Bucket",
+            &[],
+            CfExpression::sub_with(
+                "${Bucket.Arn}/*",
+                [("Bucket.Arn", CfExpression::sub("arn:aws:s3:::example"))],
+            ),
+        )]);
+        assert!(resource_dependencies(&template)["Bucket"].is_empty());
+        assert_eq!(find_cycle(&resource_dependencies(&template)), None);
     }
 
     #[test]
