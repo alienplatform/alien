@@ -113,6 +113,20 @@ pub fn declared_failure_domain_spread(stack: &Stack, pool_id: &str) -> Option<u8
         .find_map(|cluster| cluster.failure_domain_spread.get(pool_id).copied())
 }
 
+/// Spread an installed pool was created with. Without an explicit choice an installed
+/// pool keeps its zones, so a release that declares a different spread must not be
+/// checked against it.
+fn installed_failure_domain_spread(
+    previous_state: Option<&StackState>,
+    pool_id: &str,
+) -> Option<u8> {
+    previous_state?
+        .resources
+        .values()
+        .filter_map(|resource| resource.config.downcast_ref::<crate::ComputeCluster>())
+        .find_map(|cluster| cluster.failure_domain_spread.get(pool_id).copied())
+}
+
 /// Compute a deterministic deployment-time plan.
 pub fn plan_compute(
     stack: &Stack,
@@ -279,7 +293,8 @@ pub fn plan_compute_with_state(
             &sizing,
             &group.scale,
             default_failure_domains(
-                declared_failure_domain_spread(stack, &pool_id),
+                installed_failure_domain_spread(previous_state, &pool_id)
+                    .or_else(|| declared_failure_domain_spread(stack, &pool_id)),
                 group.requires_failure_domain,
             ),
             group.generated,
@@ -2528,5 +2543,103 @@ mod tests {
             .unwrap()
             .persistent_storage = None;
         assert_eq!(spread(&undeclared_stateless, Platform::Aws), None);
+    }
+
+    /// An installed pool keeps its zones when the deployment makes no failure-domain
+    /// choice, so a release that now declares a wider spread must not fail the installed
+    /// fleet's machine count against it.
+    #[test]
+    fn installed_pool_is_planned_with_its_installed_spread() {
+        let mut stack = stack_with_container();
+        let container = stack.resources.get_mut("api").unwrap();
+        let container = container.config.downcast_mut::<Container>().unwrap();
+        container.stateful = true;
+        container.replicas = Some(1);
+        container.cluster = Some("compute".to_string());
+        container.pool = Some("stateful".to_string());
+        container.persistent_storage = Some(crate::PersistentStorage {
+            encryption_key: None,
+            size: "20Gi".to_string(),
+            mount_path: "/data".to_string(),
+            backups: Default::default(),
+        });
+        let cluster_with_spread = |spread: u8| {
+            let mut cluster = ComputeCluster::new("compute".to_string())
+                .capacity_group(CapacityGroup {
+                    group_id: "stateful".to_string(),
+                    instance_type: None,
+                    profile: None,
+                    min_size: 1,
+                    max_size: 4,
+                    scale_policy: Some(CapacityGroupScalePolicy::Fixed {
+                        machines: ComputeChoiceRange {
+                            min: 1,
+                            max: 4,
+                            default: 2,
+                        },
+                    }),
+                    nested_virtualization: None,
+                })
+                .build();
+            cluster
+                .failure_domain_spread
+                .insert("stateful".to_string(), spread);
+            cluster
+        };
+        stack.resources.insert(
+            "compute".to_string(),
+            ResourceEntry {
+                config: Resource::new(cluster_with_spread(2)),
+                lifecycle: ResourceLifecycle::Frozen,
+                dependencies: Vec::new(),
+                remote_access: false,
+                enabled_when: None,
+            },
+        );
+        let mut installed = StackState::new(Platform::Aws);
+        installed.resources.insert(
+            "compute".to_string(),
+            crate::StackResourceState::new_pending(
+                "compute-cluster".into(),
+                Resource::new(cluster_with_spread(1)),
+                None,
+                vec![],
+            ),
+        );
+        let one_machine: ComputeSettings = serde_json::from_value(serde_json::json!({
+            "pools": { "stateful": { "mode": "fixed", "machines": 1 } }
+        }))
+        .unwrap();
+
+        let plan = plan_compute_with_state(
+            &stack,
+            Platform::Aws,
+            Some(&one_machine),
+            Some(&installed),
+        )
+        .expect("plan should build");
+        let pool = &plan.pools[0];
+        assert!(pool.errors.is_empty(), "{:?}", pool.errors);
+        assert_eq!(
+            pool.selected
+                .failure_domains()
+                .map(|selection| selection.spread),
+            Some(1)
+        );
+
+        let fresh =
+            plan_compute(&stack, Platform::Aws, Some(&one_machine)).expect("plan should build");
+        assert_eq!(
+            fresh.pools[0]
+                .selected
+                .failure_domains()
+                .map(|selection| selection.spread),
+            Some(2),
+            "a fresh install still takes the release's spread"
+        );
+        assert!(
+            !fresh.pools[0].errors.is_empty(),
+            "one machine cannot span two zones"
+        );
     }
 }
