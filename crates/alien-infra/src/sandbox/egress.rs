@@ -244,6 +244,44 @@ pub(crate) fn internet_sandbox_ids(stack: &alien_core::Stack) -> Vec<String> {
     ids
 }
 
+/// Whether an internet sandbox other than `sandbox_id` is still declared or not yet deleted.
+/// Those keep using the shared signing key and gateway configuration.
+#[cfg(feature = "aws")]
+pub(crate) fn other_internet_sandbox_remains(
+    ctx: &crate::core::ResourceControllerContext<'_>,
+    sandbox_id: &str,
+) -> bool {
+    internet_sandbox_ids(ctx.desired_stack)
+        .iter()
+        .any(|id| id != sandbox_id)
+        || ctx.state.resources.iter().any(|(id, resource)| {
+            id != sandbox_id
+                && resource.status != alien_core::ResourceStatus::Deleted
+                && resource
+                    .config
+                    .downcast_ref::<alien_core::Sandbox>()
+                    .is_some_and(|sandbox| {
+                        matches!(sandbox.egress, alien_core::SandboxEgress::Internet)
+                    })
+        })
+}
+
+/// Removes the shared egress signing key and gateway configuration from the deployment's own
+/// vault. Only the sandbox controllers write these entries; an absent entry is already done.
+#[cfg(feature = "aws")]
+pub(crate) async fn delete_shared_secrets(vault: &dyn Vault) -> Result<()> {
+    for name in [GATEWAY_CONFIG, SIGNING_KEY] {
+        vault
+            .delete_secret(name)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to delete the sandbox egress vault entry '{name}'"),
+                resource_id: Some(alien_core::SECRETS_VAULT_ID.into()),
+            })?;
+    }
+    Ok(())
+}
+
 #[cfg(feature = "aws")]
 pub(crate) async fn validate_aws_network(
     ctx: &crate::core::ResourceControllerContext<'_>,
