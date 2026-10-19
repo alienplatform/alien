@@ -5720,76 +5720,109 @@ mod tests {
 
     #[tokio::test]
     async fn batch_enable_checks_setup_owned_queue_before_worker_mutation() {
-        let mut worker = function_with_queue_trigger();
-        let previous = worker.clone();
-        worker.triggers = vec![alien_core::WorkerTrigger::queue_batch(
-            &test_queue(),
-            alien_core::QueueBatchConfig {
-                max_messages: 8,
-                max_window_seconds: 5,
-            },
-        )
-        .unwrap()];
-        worker.code = alien_core::WorkerCode::Image {
-            image: "registry.example.com/worker:new".into(),
-        };
-        let required = worker.timeout_seconds * 6 + 5;
-        let mut sqs = alien_aws_clients::sqs::MockSqsApi::new();
-        sqs.expect_get_queue_attributes()
-            .times(1)
-            .returning(move |_, _| {
-                Ok(alien_aws_clients::sqs::GetQueueAttributesResponse {
-                    get_queue_attributes_result: alien_aws_clients::sqs::GetQueueAttributesResult {
-                        attributes: vec![alien_aws_clients::sqs::Attribute {
-                            name: "VisibilityTimeout".into(),
-                            value: (required - 5).to_string(),
-                        }],
-                    },
-                })
-            });
-        // No SetQueueAttributes or Lambda mutation is authorized for this failed opt-in.
-        let sqs = Arc::new(sqs);
-        let mut provider = setup_mock_service_provider(Arc::new(MockLambdaApi::new()), None, None);
-        Arc::get_mut(&mut provider)
-            .unwrap()
-            .expect_get_aws_sqs_client()
-            .returning(move |_| Ok(sqs.clone()));
-        let controller = AwsWorkerController {
-            state: AwsWorkerState::UpdateCodeStart,
-            ..AwsWorkerController::mock_ready("test-queue-func")
-        };
-        let restored = serde_json::from_value::<AwsWorkerController>(
-            serde_json::to_value(controller).unwrap(),
-        )
-        .unwrap();
-        let mut executor = SingleControllerExecutor::builder()
-            .resource(worker)
-            .previous_resource(previous)
-            .controller(restored)
-            .platform(Platform::Aws)
-            .service_provider(provider)
-            .with_test_dependencies()
-            .with_dependency(
-                test_queue(),
-                crate::queue::aws::AwsQueueController {
-                    state: crate::queue::aws::AwsQueueState::Ready,
-                    queue_name: Some("physical-jobs".into()),
-                    queue_url: Some(
-                        "https://sqs.us-east-1.amazonaws.com/123456789012/physical-jobs".into(),
-                    ),
-                    ..Default::default()
+        for setup_applied in [false, true] {
+            let mut worker = function_with_queue_trigger();
+            let previous = worker.clone();
+            worker.triggers = vec![alien_core::WorkerTrigger::queue_batch(
+                &test_queue(),
+                alien_core::QueueBatchConfig {
+                    max_messages: 8,
+                    max_window_seconds: 5,
                 },
             )
-            .dependency_lifecycle("test-queue", alien_core::ResourceLifecycle::Frozen)
-            .build()
-            .await
+            .unwrap()];
+            worker.code = alien_core::WorkerCode::Image {
+                image: "registry.example.com/worker:new".into(),
+            };
+            let required = worker.timeout_seconds * 6 + 5;
+            let mut sqs = alien_aws_clients::sqs::MockSqsApi::new();
+            sqs.expect_get_queue_attributes()
+                .times(1)
+                .returning(move |_, _| {
+                    Ok(alien_aws_clients::sqs::GetQueueAttributesResponse {
+                        get_queue_attributes_result:
+                            alien_aws_clients::sqs::GetQueueAttributesResult {
+                                attributes: vec![alien_aws_clients::sqs::Attribute {
+                                    name: "VisibilityTimeout".into(),
+                                    value: (if setup_applied {
+                                        required + 30
+                                    } else {
+                                        required - 5
+                                    })
+                                    .to_string(),
+                                }],
+                            },
+                    })
+                });
+            // Frozen queues are never written; sufficient installed visibility permits only the Worker update.
+            let mut lambda = MockLambdaApi::new();
+            lambda
+                .expect_update_function_code()
+                .times(usize::from(setup_applied))
+                .returning(|_, request| {
+                    assert_eq!(
+                        request.image_uri.as_deref(),
+                        Some("registry.example.com/worker:new")
+                    );
+                    Ok(create_successful_function_response("test-queue-func"))
+                });
+            let sqs = Arc::new(sqs);
+            let mut provider = setup_mock_service_provider(Arc::new(lambda), None, None);
+            Arc::get_mut(&mut provider)
+                .unwrap()
+                .expect_get_aws_sqs_client()
+                .returning(move |_| Ok(sqs.clone()));
+            let controller = AwsWorkerController {
+                state: AwsWorkerState::UpdateCodeStart,
+                ..AwsWorkerController::mock_ready("test-queue-func")
+            };
+            let restored = serde_json::from_value::<AwsWorkerController>(
+                serde_json::to_value(controller).unwrap(),
+            )
             .unwrap();
-        let error = executor
-            .step()
-            .await
-            .expect_err("setup must increase visibility first");
-        assert!(error.to_string().contains("setup-owned"), "{error}");
-        assert!(error.to_string().contains(&required.to_string()), "{error}");
+            let mut executor = SingleControllerExecutor::builder()
+                .resource(worker)
+                .previous_resource(previous)
+                .controller(restored)
+                .platform(Platform::Aws)
+                .service_provider(provider)
+                .with_test_dependencies()
+                .with_dependency(
+                    test_queue(),
+                    crate::queue::aws::AwsQueueController {
+                        state: crate::queue::aws::AwsQueueState::Ready,
+                        queue_name: Some("physical-jobs".into()),
+                        queue_url: Some(
+                            "https://sqs.us-east-1.amazonaws.com/123456789012/physical-jobs".into(),
+                        ),
+                        ..Default::default()
+                    },
+                )
+                .dependency_lifecycle("test-queue", alien_core::ResourceLifecycle::Frozen)
+                .build()
+                .await
+                .unwrap();
+            if setup_applied {
+                executor
+                    .step()
+                    .await
+                    .expect("setup-updated Frozen queue permits code update");
+                assert_eq!(
+                    executor
+                        .internal_state::<AwsWorkerController>()
+                        .unwrap()
+                        .state,
+                    AwsWorkerState::UpdateCodeWaitForActive
+                );
+            } else {
+                let error = executor
+                    .step()
+                    .await
+                    .expect_err("setup must increase visibility first");
+                assert!(error.to_string().contains("setup-owned"), "{error}");
+                assert!(error.to_string().contains(&required.to_string()), "{error}");
+            }
+        }
     }
 
     #[tokio::test]
