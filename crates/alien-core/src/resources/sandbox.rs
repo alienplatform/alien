@@ -2190,6 +2190,49 @@ mod tests {
         }
     }
 
+    /// A zero lifetime is a sandbox that may not run at all. The Kubernetes API server refuses an
+    /// `activeDeadlineSeconds` below 1 when the pod is created, so planning refuses it on every
+    /// platform, with or without limits declared.
+    #[test]
+    fn a_zero_lifetime_is_refused_while_planning() {
+        let with_limits = sandbox_with(SandboxEgress::None, vec![]);
+        let mut without_limits = with_limits.clone();
+        without_limits.limits = None;
+
+        for (declared, mut sandbox) in [("with", with_limits), ("without", without_limits)] {
+            sandbox.lifecycle.max_lifetime_seconds = Some(0);
+            for platform in [Platform::Aws, Platform::Kubernetes, Platform::Gcp] {
+                let error = sandbox
+                    .validate_for_platform(platform)
+                    .expect_err("a zero lifetime is refused");
+                assert_eq!(
+                    error.code, "SANDBOX_LIMIT_INVALID",
+                    "{platform} {declared} limits"
+                );
+                assert!(
+                    error.to_string().contains("maxLifetimeSeconds"),
+                    "{platform} {declared} limits"
+                );
+            }
+
+            // Where the field is unsupported, that is the answer, not the value.
+            for platform in [Platform::Azure, Platform::Local] {
+                let error = sandbox
+                    .validate_for_platform(platform)
+                    .expect_err("a lifetime is refused where nothing applies it");
+                assert_eq!(
+                    error.code, "SANDBOX_CAPABILITY_UNSUPPORTED",
+                    "{platform} {declared} limits"
+                );
+            }
+
+            sandbox.lifecycle.max_lifetime_seconds = Some(1);
+            sandbox
+                .validate_for_platform(Platform::Kubernetes)
+                .expect("one second is the API server's floor");
+        }
+    }
+
     /// An image Azure can take neither as a catalog name nor as a registry image is refused while
     /// planning, not at the first sandbox.
     #[test]
