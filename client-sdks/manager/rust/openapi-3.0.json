@@ -12439,6 +12439,11 @@
               }
             ]
           },
+          "image": {
+            "type": "string",
+            "description": "Image this replica runs.",
+            "nullable": true
+          },
           "ip": {
             "type": "string",
             "nullable": true

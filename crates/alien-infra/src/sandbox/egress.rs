@@ -321,6 +321,17 @@ fn is_access_denied(error: &AlienError<alien_bindings::ErrorData>) -> bool {
     found
 }
 
+/// Whether the target stack still declares this sandbox. One it does not is being deleted,
+/// with the deployment or on its own: its binding stays withdrawn, and it neither validates the
+/// network nor publishes the gateway configuration. The target stack of a deleted deployment
+/// declares no network, so either would fail and block the deletion.
+#[cfg(feature = "aws")]
+pub(crate) fn is_declared(ctx: &crate::core::ResourceControllerContext<'_>) -> bool {
+    ctx.desired_stack
+        .resources
+        .contains_key(ctx.desired_config.id())
+}
+
 #[cfg(feature = "aws")]
 pub(crate) async fn validate_aws_network(
     ctx: &crate::core::ResourceControllerContext<'_>,

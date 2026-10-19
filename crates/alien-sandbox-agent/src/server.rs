@@ -26,6 +26,7 @@ use crate::exec::{self, ExecIdentity, ExecRequest, Frame, FRAME_CHANNEL_DEPTH};
 use crate::files;
 use crate::jobs::{JobOutcome, JobRegistry, JobSnapshot};
 use crate::paths::resolve_within_root;
+use crate::validate;
 use alien_core::sandbox_capability::{SandboxOperationClass, SandboxSessionIdentity};
 use alien_core::sandbox_capability_token;
 use alien_error::AlienError;
@@ -89,6 +90,8 @@ pub struct AgentState {
     /// Gateway forwarding and readiness; absent only for legacy images.
     #[cfg(target_os = "linux")]
     pub gateway_egress: Option<Arc<crate::gateway_egress::GatewayEgress>>,
+    /// The agent's own executable, which the validate hook runs as the exec identity
+    pub agent_binary: PathBuf,
 }
 
 /// Liveness, the version the agent speaks, and the container it runs in.
@@ -242,7 +245,10 @@ pub fn router(state: Arc<AgentState>) -> Router {
     let router = Router::new()
         .route("/v1/health", get(health))
         .route(&hook_path("ready"), get(hook_ready).post(hook_ready))
-        .route(&hook_path("validate"), get(hook_ready).post(hook_ready))
+        .route(
+            &hook_path("validate"),
+            get(hook_validate).post(hook_validate),
+        )
         .route(
             &hook_path("resume"),
             get(resume_egress_hook).post(resume_egress_hook),
@@ -341,7 +347,7 @@ fn container_boot_id() -> std::io::Result<String> {
     Ok("dev-build-no-boot-id".to_string())
 }
 
-/// The image's readiness and validation hooks.
+/// The image's readiness hook.
 ///
 /// AWS snapshots the MicroVM once this answers 200, and every later MicroVM boots from that
 /// snapshot — 503 means "not yet". Reaching this handler *is* the readiness signal: the router
@@ -353,12 +359,34 @@ async fn hook_ready() -> StatusCode {
     StatusCode::OK
 }
 
+/// The image's validation hook, called on a MicroVM run from the finished snapshot.
+///
+/// 200 passes the build; any other status fails it with this body as the reason. 503 would mean
+/// "retry until the timeout", and nothing [`validate`] checks changes by waiting, so a failure
+/// is reported at once.
+///
+/// The checks spawn a process and write into the session, so the caller is authorised as
+/// `update_egress` authorises it: under transport, off the guest or in it under a user other than
+/// the command's; under a capability, with one. No capability backend declares this hook.
+async fn hook_validate(
+    State(state): State<Arc<AgentState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> std::result::Result<StatusCode, ApiError> {
+    authorize_control(&state, peer, &headers, SandboxOperationClass::Execute)?;
+    validate::run(&state).await.map_err(|error| {
+        tracing::error!(%error, "image validation failed");
+        ApiError::from(error)
+    })?;
+    Ok(StatusCode::OK)
+}
+
 /// The run / resume / suspend / terminate hooks.
 ///
 /// Enabled because a declared hook that cannot be reached fails the image build. Two MicroVMs
 /// restored from one image differ in `/dev/urandom` while `boot_id` is identical, so entropy
-/// separation comes from the platform and the residue is kernel identity, which userspace cannot
-/// reset. This acknowledges and claims nothing more.
+/// separation comes from the MicroVM service and the residue is kernel identity, which userspace
+/// cannot reset. This acknowledges and claims nothing more.
 async fn hook_lifecycle() -> StatusCode {
     StatusCode::OK
 }

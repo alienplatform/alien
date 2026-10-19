@@ -16,7 +16,7 @@ use crate::ui::{
 use alien_cli_common::network::{self, NetworkArgs};
 use alien_core::{is_valid_resource_prefix, ComputeClusterOutputs, RESOURCE_PREFIX_ERROR_MESSAGE};
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_manager_api::types::{DeleteDeploymentAction, DeploymentResponse};
+use alien_manager_api::types::{DeleteDeploymentAction, DeploymentResponse, Platform};
 use alien_manager_api::SdkResultExt as ManagerSdkResultExt;
 use alien_platform_api::types::{
     CreateDeploymentTokenId, CreateDeploymentTokenRequest, CreateDeploymentTokenWorkspace,
@@ -327,11 +327,17 @@ pub enum DeploymentsCmd {
         /// Deployment ID, or <deployment-group-name>/<deployment-name>
         id: String,
 
-        /// Remove only the deployment record, without cleaning up its resources. Use when the
-        /// resources are already gone (for example, the CloudFormation stack or Helm release was
-        /// deleted) and the deployment is stuck.
-        #[arg(long)]
-        forget: bool,
+        /// Force-delete: remove Alien's record without touching your cloud, so the deployment
+        /// group accepts new deployments again. For a deployment whose stack is already gone or
+        /// whose cleanup keeps failing. Takes the deployment's name as confirmation; nothing is
+        /// sent unless it matches. Cannot be combined with --yes.
+        #[arg(
+            long,
+            alias = "forget",
+            value_name = "DEPLOYMENT_NAME",
+            conflicts_with = "yes"
+        )]
+        force: Option<String>,
 
         /// Skip confirmation prompt
         #[arg(long)]
@@ -431,7 +437,10 @@ pub(crate) fn parse_resource_prefix(value: &str) -> std::result::Result<String, 
 }
 
 pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Result<()> {
-    if let DeploymentsCmd::Delete { yes, .. } = &args.cmd {
+    if let DeploymentsCmd::Delete {
+        force: None, yes, ..
+    } = &args.cmd
+    {
         delete_confirmation_mode(*yes)?;
     }
 
@@ -641,11 +650,10 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
             )
             .await
         }
-        DeploymentsCmd::Delete { id, forget, yes } => {
-            let action = if forget {
-                DeleteDeploymentAction::Forget
-            } else {
-                DeleteDeploymentAction::Cleanup
+        DeploymentsCmd::Delete { id, force, yes } => {
+            let request = match force {
+                Some(confirmed_name) => DeleteRequest::Force { confirmed_name },
+                None => DeleteRequest::Cleanup { yes },
             };
             #[cfg(feature = "platform")]
             if ctx.is_platform() {
@@ -656,13 +664,12 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
                 return delete_deployment_task(
                     &resolved.manager.client,
                     &String::from(resolved.detail.id),
-                    action,
-                    yes,
+                    request,
                 )
                 .await;
             }
             let manager = resolve_manager_client(&ctx, None, true).await?;
-            delete_deployment_task(&manager, &id, action, yes).await
+            delete_deployment_task(&manager, &id, request).await
         }
         DeploymentsCmd::Retry { id, json } => {
             #[cfg(feature = "platform")]
@@ -1691,15 +1698,22 @@ fn observed_rollout_state(resource: &ObservedRolloutResource) -> &'static str {
     }
 }
 
+/// How `alien deployments delete` was asked to delete.
+#[derive(Debug)]
+enum DeleteRequest {
+    /// Clean up the deployment's resources, then its record.
+    Cleanup { yes: bool },
+    /// Drop the record only. `confirmed_name` is what the user typed after `--force`; it must
+    /// equal the deployment's name before anything is sent.
+    Force { confirmed_name: String },
+}
+
 async fn delete_deployment_task(
     client: &alien_manager_api::Client,
     reference: &str,
-    action: DeleteDeploymentAction,
-    yes: bool,
+    request: DeleteRequest,
 ) -> Result<()> {
-    let confirmation_mode = delete_confirmation_mode(yes)?;
     let deployment = resolve_deployment_reference(client, reference).await?;
-    let forget = matches!(action, DeleteDeploymentAction::Forget);
     let runtime_metadata: Option<alien_core::RuntimeMetadata> = deployment
         .runtime_metadata
         .as_ref()
@@ -1709,39 +1723,52 @@ async fn delete_deployment_task(
         .context(ErrorData::ConfigurationError {
             message: "Failed to deserialize runtime_metadata".to_string(),
         })?;
+    let kept_secrets = kept_deployer_secrets(runtime_metadata.as_ref());
 
-    println!(
-        "{}",
-        contextual_heading(
-            if forget {
-                "Forgetting deployment"
-            } else {
-                "Deleting deployment"
-            },
-            &deployment.name,
-            &[]
-        )
-    );
-    println!("{} {}", dim_label("ID"), deployment.id);
-    println!("{} {}", dim_label("Status"), deployment.status);
-    if forget {
-        println!(
-            "{}",
-            dim_label(
-                "Only the deployment record is removed. Any resources still running are left in place."
-            )
-        );
-    }
-
-    let question = if forget {
-        "Are you sure you want to forget this deployment?"
-    } else {
-        "Are you sure you want to delete this deployment?"
+    let action = match request {
+        DeleteRequest::Cleanup { yes } => {
+            let confirmation_mode = delete_confirmation_mode(yes)?;
+            println!(
+                "{}",
+                contextual_heading("Deleting deployment", &deployment.name, &[])
+            );
+            println!("{} {}", dim_label("ID"), deployment.id);
+            println!("{} {}", dim_label("Status"), deployment.status);
+            if matches!(confirmation_mode, ConfirmationMode::Prompt)
+                && !prompt_confirm("Are you sure you want to delete this deployment?", false)?
+            {
+                println!("{}", dim_label("Deletion cancelled."));
+                return Ok(());
+            }
+            DeleteDeploymentAction::Cleanup
+        }
+        DeleteRequest::Force { confirmed_name } => {
+            if confirmed_name != deployment.name {
+                return Err(AlienError::new(ErrorData::ValidationError {
+                    field: "force".to_string(),
+                    message: format!(
+                        "'{confirmed_name}' is not this deployment's name. Force-deleting is irreversible and leaves everything in your cloud in place; to confirm, re-run with `--force {}`.",
+                        deployment.name
+                    ),
+                }));
+            }
+            println!(
+                "{}",
+                contextual_heading("Force-deleting deployment", &deployment.name, &[])
+            );
+            println!("{} {}", dim_label("ID"), deployment.id);
+            println!("{} {}", dim_label("Status"), deployment.status);
+            println!(
+                "{}",
+                dim_label(
+                    "Only Alien's record is removed. Nothing in your cloud is deleted; still yours to remove if it exists:"
+                )
+            );
+            println!("  - {}", force_delete_leftovers(&deployment));
+            print_kept_deployer_secrets(&kept_secrets);
+            DeleteDeploymentAction::Forget
+        }
     };
-    if matches!(confirmation_mode, ConfirmationMode::Prompt) && !prompt_confirm(question, false)? {
-        println!("{}", dim_label("Deletion cancelled."));
-        return Ok(());
-    }
 
     let accepted = client
         .delete_deployment()
@@ -1760,17 +1787,49 @@ async fn delete_deployment_task(
     // The server says what it accepted, e.g. that runtime cleanup is done but the setup (a
     // CloudFormation stack) still has to be deleted, which a fixed message would hide.
     println!("{}", success_line(&format!("{}.", accepted.message)));
-    // A forgotten deployment has no record left to read.
-    if !forget {
-        print_kept_deployer_secrets(&kept_deployer_secrets(runtime_metadata.as_ref()));
-        println!(
-            "{} {}",
+    match action {
+        DeleteDeploymentAction::Cleanup => {
+            print_kept_deployer_secrets(&kept_secrets);
+            println!(
+                "{} {}",
+                dim_label("Next"),
+                command(&format!("alien deployments get {}", deployment.id))
+            );
+        }
+        // A force-deleted deployment has no record left to read; its group is free again.
+        DeleteDeploymentAction::Forget | DeleteDeploymentAction::Detach => println!(
+            "{} `alien deploy` can register a new deployment named '{}' in this group.",
             dim_label("Next"),
-            command(&format!("alien deployments get {}", deployment.id))
-        );
+            deployment.name
+        ),
     }
 
     Ok(())
+}
+
+/// What a force-delete leaves in the customer's cloud: Alien removes only its own record, so
+/// whatever the deployment created there stays until the user deletes it.
+fn force_delete_leftovers(deployment: &DeploymentResponse) -> String {
+    let prefix = deployment
+        .stack_state
+        .as_ref()
+        .and_then(|state| state.get("resourcePrefix"))
+        .and_then(serde_json::Value::as_str)
+        .map(|prefix| format!(" (resource prefix '{prefix}')"))
+        .unwrap_or_default();
+    match deployment.platform {
+        Platform::Aws => format!(
+            "the CloudFormation stack{prefix}, with its MicroVM image and the IAM roles whose trust policy names Alien's managing role"
+        ),
+        Platform::Kubernetes => format!("the Helm release{prefix} and the resources it created"),
+        Platform::Gcp | Platform::Azure => format!(
+            "every {} resource the deployment created{prefix}",
+            deployment.platform
+        ),
+        Platform::Machines | Platform::Local | Platform::Test => {
+            "any workers still running on the deployment's machines".to_string()
+        }
+    }
 }
 
 async fn retry_deployment_task(
@@ -3419,26 +3478,71 @@ mod tests {
         )
     }
 
-    #[tokio::test]
-    async fn delete_forget_asks_the_server_to_drop_only_the_record() {
-        let parsed = DeploymentsArgs::try_parse_from([
-            "deployments",
-            "delete",
-            "dep_1",
-            "--forget",
-            "--yes",
-        ])
-        .expect("--forget parses");
-        let DeploymentsCmd::Delete { id, forget, yes } = parsed.cmd else {
+    /// The `(id, force, yes)` a `deployments delete` command line parses to.
+    fn parse_delete(
+        args: &[&str],
+    ) -> std::result::Result<(String, Option<String>, bool), clap::Error> {
+        let parsed = DeploymentsArgs::try_parse_from(["deployments", "delete"].iter().chain(args))?;
+        let DeploymentsCmd::Delete { id, force, yes } = parsed.cmd else {
             panic!("expected the delete subcommand");
         };
-        assert!(forget && yes);
+        Ok((id, force, yes))
+    }
 
+    #[test]
+    fn force_takes_the_deployment_name_and_refuses_yes() {
+        assert_eq!(
+            parse_delete(&["dep_1", "--force", "example"]).expect("--force <name> parses"),
+            ("dep_1".to_string(), Some("example".to_string()), false)
+        );
+        // The released spelling still works, under the same confirmation.
+        assert_eq!(
+            parse_delete(&["dep_1", "--forget", "example"]).expect("--forget <name> parses"),
+            ("dep_1".to_string(), Some("example".to_string()), false)
+        );
+        // A bare --force is not a confirmation, and --yes cannot stand in for the name.
+        parse_delete(&["dep_1", "--force"]).expect_err("--force needs the deployment name");
+        parse_delete(&["dep_1", "--force", "--yes"])
+            .expect_err("--force --yes must not read --yes as the name");
+        parse_delete(&["dep_1", "--force", "example", "--yes"])
+            .expect_err("--yes has no meaning with --force");
+    }
+
+    #[tokio::test]
+    async fn force_with_the_wrong_name_sends_nothing() {
         let (client, bodies) = fake_delete_manager().await;
-        delete_deployment_task(&client, &id, DeleteDeploymentAction::Forget, yes)
-            .await
-            .expect("forget should be accepted");
-        delete_deployment_task(&client, &id, DeleteDeploymentAction::Cleanup, yes)
+
+        let error = delete_deployment_task(
+            &client,
+            "dep_1",
+            DeleteRequest::Force {
+                confirmed_name: "exampel".to_string(),
+            },
+        )
+        .await
+        .expect_err("a name that does not match must refuse");
+
+        assert!(
+            error.to_string().contains("--force example"),
+            "the refusal names the deployment: {error}"
+        );
+        assert!(bodies.lock().expect("bodies lock").is_empty());
+    }
+
+    #[tokio::test]
+    async fn force_with_the_name_asks_the_server_to_drop_only_the_record() {
+        let (client, bodies) = fake_delete_manager().await;
+
+        delete_deployment_task(
+            &client,
+            "dep_1",
+            DeleteRequest::Force {
+                confirmed_name: "example".to_string(),
+            },
+        )
+        .await
+        .expect("force should be accepted");
+        delete_deployment_task(&client, "dep_1", DeleteRequest::Cleanup { yes: true })
             .await
             .expect("cleanup should be accepted");
 
@@ -3448,6 +3552,23 @@ mod tests {
                 serde_json::json!({ "action": "forget" }),
                 serde_json::json!({ "action": "cleanup" }),
             ]
+        );
+    }
+
+    #[test]
+    fn force_leftovers_name_the_customer_stack() {
+        let mut deployment = deployment_with_releases(Some("rel_a"), Some("rel_a"));
+        deployment.stack_state = Some(serde_json::json!({
+            "platform": "aws",
+            "resourcePrefix": "k44e9b72",
+            "resources": {},
+        }));
+
+        let leftovers = force_delete_leftovers(&deployment);
+
+        assert_eq!(
+            leftovers,
+            "the CloudFormation stack (resource prefix 'k44e9b72'), with its MicroVM image and the IAM roles whose trust policy names Alien's managing role"
         );
     }
 

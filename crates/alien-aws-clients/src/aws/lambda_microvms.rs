@@ -184,6 +184,10 @@ pub struct MicrovmImageBuildHooks {
     pub ready: String,
     /// Ceiling on the in-image ready hook
     pub ready_timeout_in_seconds: u32,
+    /// `ENABLED` / `DISABLED`
+    pub validate: String,
+    /// Ceiling on the validate hook, called on a MicroVM run from the finished snapshot
+    pub validate_timeout_in_seconds: u32,
 }
 
 /// Session-lifecycle hooks baked into a MicroVM image.
@@ -622,11 +626,31 @@ fn classify(error: &AlienError<ErrorData>, operation: &str) -> ErrorData {
     // tell "no such MicroVM" from "the call failed", and `GenericError` carries no status to
     // recover it from. Matching the body text would classify a 500 whose message happens to
     // mention 404 as an absent session.
-    if let Some(ErrorData::HttpResponseError { http_status, .. }) = &error.error {
+    if let Some(ErrorData::HttpResponseError {
+        http_status,
+        http_response_text,
+        ..
+    }) = &error.error
+    {
         if *http_status == 404 {
             return ErrorData::RemoteResourceNotFound {
                 resource_type: "Microvm".to_string(),
                 resource_name: operation.to_string(),
+            };
+        }
+        // The service refuses a change to an image that is still settling with a 400
+        // ValidationException, "Cannot delete MicroVM image in its current state". It clears
+        // without any change on the caller's side, so it is a conflict to wait out, not an
+        // invalid request.
+        if matches!(*http_status, 400 | 409)
+            && http_response_text
+                .as_deref()
+                .is_some_and(|text| text.contains("in its current state"))
+        {
+            return ErrorData::RemoteResourceConflict {
+                resource_type: "Microvm".to_string(),
+                resource_name: operation.to_string(),
+                message: format!("Lambda MicroVMs {operation}: the resource is still settling"),
             };
         }
     }
@@ -1033,6 +1057,68 @@ mod tests {
         assert!(unavailable.hits_async().await > 0);
     }
 
+    /// The refusal AWS returned live when teardown deleted an image that was still settling.
+    /// It has to reach callers as a conflict they can wait out; as a generic failure it ended
+    /// teardown even though the same delete succeeded moments later.
+    #[tokio::test]
+    async fn an_image_delete_refused_in_its_current_state_is_a_conflict() {
+        let server = MockServer::start_async().await;
+        let refused = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::DELETE)
+                    .path(format!("/{API_VERSION}/microvm-images/test-image"));
+                then.status(400)
+                    .header("x-amzn-ErrorType", "ValidationException")
+                    .json_body(serde_json::json!({
+                        "message": "Cannot delete MicroVM image in its current state: arn:aws:lambda:us-east-1:111122223333:microvm-image:test-image"
+                    }));
+            })
+            .await;
+        let client = LambdaMicrovmsClient::new(
+            Client::new(),
+            AwsCredentialProvider::from_config_sync(AwsClientConfig {
+                account_id: "111122223333".to_string(),
+                region: "us-east-1".to_string(),
+                credentials: AwsCredentials::AccessKeys {
+                    access_key_id: "test".to_string(),
+                    secret_access_key: "test".to_string(),
+                    session_token: None,
+                },
+                service_overrides: Some(ServiceOverrides {
+                    endpoints: HashMap::from([("lambda".to_string(), server.base_url())]),
+                }),
+            }),
+        );
+
+        let error = client
+            .delete_microvm_image("test-image")
+            .await
+            .expect_err("the service refused the delete");
+
+        assert!(
+            matches!(error.error, Some(ErrorData::RemoteResourceConflict { .. })),
+            "expected a conflict, got {error:?}"
+        );
+        assert!(refused.hits_async().await >= 1);
+    }
+
+    /// Only the settling refusal is a conflict; any other validation failure stays generic.
+    #[test]
+    fn another_validation_failure_is_not_a_conflict() {
+        let error = AlienError::new(ErrorData::HttpResponseError {
+            message: "DeleteMicrovmImage failed".to_string(),
+            url: "https://lambda.example.invalid/microvm-images/test-image".to_string(),
+            http_status: 400,
+            http_request_text: None,
+            http_response_text: Some("{\"message\":\"Invalid image identifier\"}".to_string()),
+        });
+
+        assert_eq!(
+            AlienError::new(classify(&error, "DeleteMicrovmImage")).code,
+            "GENERIC_ERROR"
+        );
+    }
+
     /// The declared ceiling has to reach the wire: Lambda is what terminates the MicroVM when it
     /// elapses, so a value we accept and drop would leave a sandbox running past a limit its
     /// stack declared — the shape of claim this resource exists to keep.
@@ -1141,6 +1227,8 @@ mod tests {
                     .microvm_image_hooks(MicrovmImageBuildHooks {
                         ready: "ENABLED".to_string(),
                         ready_timeout_in_seconds: 120,
+                        validate: "ENABLED".to_string(),
+                        validate_timeout_in_seconds: 30,
                     })
                     .microvm_hooks(MicrovmLifecycleHooks {
                         run: "ENABLED".to_string(),
@@ -1175,6 +1263,11 @@ mod tests {
         assert_eq!(
             body["hooks"]["microvmImageHooks"]["readyTimeoutInSeconds"],
             120
+        );
+        assert_eq!(body["hooks"]["microvmImageHooks"]["validate"], "ENABLED");
+        assert_eq!(
+            body["hooks"]["microvmImageHooks"]["validateTimeoutInSeconds"],
+            30
         );
         assert_eq!(body["hooks"]["microvmHooks"]["resumeTimeoutInSeconds"], 30);
         assert_eq!(
@@ -1214,6 +1307,8 @@ mod tests {
                     .microvm_image_hooks(MicrovmImageBuildHooks {
                         ready: "ENABLED".to_string(),
                         ready_timeout_in_seconds: 120,
+                        validate: "ENABLED".to_string(),
+                        validate_timeout_in_seconds: 30,
                     })
                     .build(),
             )
@@ -1562,7 +1657,8 @@ mod live_image_create {
                 "hooks" => {
                     body["hooks"] = serde_json::json!({
                         "port": 8971,
-                        "microvmImageHooks": { "ready": "ENABLED", "readyTimeoutInSeconds": 120 },
+                        "microvmImageHooks": { "ready": "ENABLED", "readyTimeoutInSeconds": 120,
+                                               "validate": "ENABLED", "validateTimeoutInSeconds": 30 },
                         "microvmHooks": { "run": "ENABLED", "runTimeoutInSeconds": 30,
                                           "resume": "ENABLED", "resumeTimeoutInSeconds": 30 }
                     })
@@ -1910,10 +2006,14 @@ mod live_deny {
         );
     }
 
-    /// Reclaims everything a guard run leaves on the probe image: its sessions, then its versions.
+    /// Reclaims everything a guard run leaves on the probe image: its sessions, then every version
+    /// but one.
     ///
-    /// A MicroVM the run did not terminate bills for hours and no stack delete reaches it, and a
-    /// surviving version holds the image open so the delete that follows cannot remove it.
+    /// A MicroVM the run did not terminate bills for hours and no stack delete reaches it. The
+    /// last version is left for the stack delete: AWS refuses to delete an image's last version
+    /// on its own ("This is the last version. Please delete the entire image"), and deleting the
+    /// image removes it, the same way the sandbox controller tears an image down.
+    /// `the_probe_image_is_gone` then checks that the stack delete really removed the image.
     #[tokio::test]
     #[ignore]
     async fn reclaim_the_probe_image() {
@@ -1938,11 +2038,12 @@ mod live_deny {
         let mut stranded = Vec::new();
         let mut terminating = Vec::new();
         let mut undeleted = Vec::new();
-        for version in client
+        let versions = client
             .list_microvm_image_versions(&image)
             .await
-            .expect("ListMicrovmImageVersions")
-        {
+            .expect("ListMicrovmImageVersions");
+        let last = versions.len().saturating_sub(1);
+        for (index, version) in versions.into_iter().enumerate() {
             let version = version.image_version.expect("a version identifier");
             for microvm in client
                 .list_microvms(&image, &version)
@@ -1987,6 +2088,10 @@ mod live_deny {
                 }
             }
 
+            if index == last {
+                continue;
+            }
+
             // Best-effort for the same reason termination is: a version that refuses to delete
             // would otherwise abandon every version after it, and abort before the report below
             // naming what is still billing.
@@ -2015,24 +2120,23 @@ mod live_deny {
         );
         assert!(
             undeleted.is_empty(),
-            "image versions the reclaim could not delete hold the image open, so the stack \
-             delete cannot remove it: {undeleted:?}"
+            "image versions the reclaim could not delete: {undeleted:?}"
         );
         let left = client
             .list_microvm_image_versions(&image)
             .await
             .expect("ListMicrovmImageVersions");
         assert!(
-            left.is_empty(),
-            "the probe image still holds versions, so the stack delete cannot remove it: {left:?}"
+            left.len() <= 1,
+            "the probe image still holds more than the one version its delete removes: {left:?}"
         );
     }
 
     /// The probe image is gone once its stack is.
     ///
-    /// Asserted rather than assumed: a delete on a `CREATED` image is accepted and removes
-    /// nothing while its versions survive (`delete_images_versions_first`), so a teardown can
-    /// report success over an image that is still there.
+    /// Asserted rather than assumed: a stack can reach `DELETE_COMPLETE` over an image whose
+    /// delete was accepted and never carried out, so a teardown could otherwise report success
+    /// over an image that is still there.
     #[tokio::test]
     #[ignore]
     async fn the_probe_image_is_gone() {

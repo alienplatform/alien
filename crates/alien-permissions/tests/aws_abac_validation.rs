@@ -1037,9 +1037,9 @@ fn sandbox_actions_with_no_resource_type_are_granted_on_every_resource() {
 /// `lambda:ListMicrovms` is authorized against no resource type, so it can only be granted on
 /// every resource in the account — and `sandbox/management` sits in the wildcard management
 /// profile of every deployment holding a sandbox. No sandbox operation needs it: a session is
-/// reached by id and proved to be this sandbox's by its own `imageArn`, and Lambda terminates a
-/// MicroVM nobody reaches. Nothing else asserts its absence, so a later edit could restore it
-/// with everything green.
+/// reached by id and proved to be this sandbox's by its own `imageArn`, and AWS ends a MicroVM
+/// nobody reaches after eight hours at the latest. Nothing else asserts its absence, so a later
+/// edit could restore it with everything green.
 #[test]
 fn no_sandbox_set_can_enumerate_sessions() {
     let mut inspected = 0;

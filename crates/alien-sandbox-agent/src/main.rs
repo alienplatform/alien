@@ -15,6 +15,7 @@ use alien_sandbox_agent::error::{ErrorData, Result};
 use alien_sandbox_agent::exec::ExecIdentity;
 use alien_sandbox_agent::jobs::JobRegistry;
 use alien_sandbox_agent::server::{router, AgentAuthorization, AgentState};
+use alien_sandbox_agent::validate;
 use axum::serve::{Listener, ListenerExt};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
@@ -56,6 +57,16 @@ fn main() -> Result<()> {
             },
         );
     }
+
+    // Before anything reads the environment: the validate hook runs this binary as the exec
+    // identity through the same spawn path as a command, which hands it no environment at all.
+    if std::env::args().nth(1).as_deref() == Some(validate::IDENTITY_ARGUMENT) {
+        // SAFETY: both are always-successful getters with no arguments.
+        let (uid, gid) = unsafe { (libc::geteuid(), libc::getegid()) };
+        println!("{uid} {gid}");
+        return Ok(());
+    }
+
     tracing_subscriber::fmt::init();
 
     let state = Arc::new(load_state()?);
@@ -320,6 +331,11 @@ fn load_state() -> Result<AgentState> {
     let (agent_uid, agent_gid) = (u32::MAX, u32::MAX);
     enforce_exec_identity(isolation, exec_identity, agent_uid, agent_gid)?;
 
+    let agent_binary = std::env::current_exe().into_alien_error().context(failed(
+        "locate the agent binary",
+        "the validate hook needs the path of this executable".to_string(),
+    ))?;
+
     Ok(AgentState {
         session_root,
         authorization: load_authorization()?,
@@ -330,6 +346,7 @@ fn load_state() -> Result<AgentState> {
         gateway_egress: alien_sandbox_agent::gateway_egress::GatewayEgress::from_env(
             exec_identity,
         )?,
+        agent_binary,
     })
 }
 

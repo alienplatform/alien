@@ -10,6 +10,7 @@ export const ManagedRuntimeUnitStatusSchema = z.object({
     get "cpu"(){
                 return z.union([MetricSampleSchema, z.null()]).optional()
               },
+"image": z.string().describe("Image this replica runs.").nullish(),
 "ip": z.string().nullish(),
 "machineId": z.string().nullish(),
 get "memory"(){
