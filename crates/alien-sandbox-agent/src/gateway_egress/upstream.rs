@@ -24,10 +24,11 @@ const CONNECT_TIMEOUT: Duration = Duration::from_millis(300);
 /// every attempt fails for 1 forwarded connection in 4096. With `CONNECT_TIMEOUT`, a forwarded
 /// connection still waits less for the gateway than the single 5 s connect it used before.
 const ATTEMPTS: u32 = 12;
-/// The gateway answers a CONNECT after dialing the destination within its own 5 s budget. This
-/// is longer, so a slow destination gets the gateway's answer rather than an agent timeout. An
-/// expired answer wait is not repeated: the replica may be alive and still dialing.
-const ANSWER_TIMEOUT: Duration = Duration::from_secs(10);
+/// The gateway answers a CONNECT after resolving the destination (up to 5 s) and dialing it
+/// (up to 5 s). This exceeds both together, so a slow destination gets the gateway's answer
+/// rather than an agent timeout. An expired answer wait is not repeated: the replica may be
+/// alive and still dialing.
+const ANSWER_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Why one attempt failed.
 enum Failure {
@@ -126,7 +127,11 @@ where
                 tracing::warn!(attempt = number, code = %error.code, "gateway connection unanswered; retrying on a new connection");
                 number += 1;
             }
-            Err(Failure::Unanswered(error) | Failure::Final(error)) => return Err(error),
+            Err(Failure::Unanswered(error)) => {
+                tracing::warn!(attempts = ATTEMPTS, code = %error.code, "gateway connection unanswered; giving up");
+                return Err(error);
+            }
+            Err(Failure::Final(error)) => return Err(error),
         }
     }
 }
@@ -318,6 +323,31 @@ mod tests {
             forwarder.await.unwrap().unwrap();
             assert_no_more_connections(&gateway).await;
         }
+    }
+
+    #[tokio::test]
+    async fn answer_after_the_gateways_full_resolve_and_dial_budget_is_relayed() {
+        let Fixture {
+            gateway,
+            mut client,
+            forwarder,
+        } = fixture().await;
+        client
+            .write_all(b"CONNECT slow.test:443 HTTP/1.1\r\nHost: slow.test:443\r\n\r\n")
+            .await
+            .unwrap();
+        let mut slow = next_gateway_connection(&gateway).await;
+        read_header(&mut slow).await.unwrap();
+        // The gateway may spend 5 s resolving and 5 s dialing before it answers.
+        tokio::time::sleep(Duration::from_millis(10_500)).await;
+        let answer = b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
+        slow.write_all(answer).await.unwrap();
+        drop(slow);
+
+        assert_eq!(read_until_closed(&mut client).await, answer);
+        drop(client);
+        forwarder.await.unwrap().unwrap();
+        assert_no_more_connections(&gateway).await;
     }
 
     #[tokio::test]

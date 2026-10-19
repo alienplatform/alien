@@ -211,18 +211,17 @@ def agent_refusals(logs, since):
     return times
 
 
-def agent_retries(logs, since):
-    """Forwarded connections the agent reopened because no gateway answered an attempt."""
+def agent_log_count(logs, since, message):
     count = 0
     for line in logs.splitlines():
         line = re.sub(r"\x1b\[[0-9;]*m", "", line)
-        if "gateway connection unanswered; retrying" in line:
+        if message in line:
             stamp = datetime.datetime.fromisoformat(line.split()[0].replace("Z", "+00:00")).timestamp()
             count += stamp >= since
     return count
 
 
-def analyze(observations, health, balancer, killed_at, refusals, retries):
+def analyze(observations, health, balancer, killed_at, refusals, retries, give_ups):
     def phase(start, end):
         result = {}
         for target in [ALLOWED, UNLISTED]:
@@ -266,7 +265,10 @@ def analyze(observations, health, balancer, killed_at, refusals, retries):
         "clientTimeoutsAfterKill": sum(1 for item in observations if item["outcome"] == "timeout" and item["startedAt"] >= killed_at),
         "slowestRequestAfterKillSeconds": round(max((item["finishedAt"] - item["startedAt"] for item in observations
                                                      if item["startedAt"] >= killed_at), default=0), 3),
+        # Attempts the agent repeated on a new connection, and forwarded connections where every
+        # attempt went unanswered. With one of two replicas dead, the latter is about 1 in 4096.
         "agentForwardRetriesAfterKill": retries,
+        "agentForwardGiveUpsAfterKill": give_ups,
         "clientFastRefusalsAfterKill": len(gated),
         "agentGateRefusalsAfterKill": len(refusals),
         "agentGateClosedSpanSeconds": round(refusals[-1] - refusals[0], 3) if refusals else 0,
@@ -361,7 +363,8 @@ def check_replica_failover(suite, image, containers, networks, docker, prefix, o
     (output / "balancer.jsonl").write_text("".join(json.dumps(item) + "\n" for item in events))
     agent_logs = docker("logs", agent)
     report = analyze(observations, health, events, killed_at, agent_refusals(agent_logs, killed_at),
-                     agent_retries(agent_logs, killed_at))
+                     agent_log_count(agent_logs, killed_at, "gateway connection unanswered; retrying"),
+                     agent_log_count(agent_logs, killed_at, "gateway connection unanswered; giving up"))
     report["balancer"] = model
     (output / "replica-failover.json").write_text(json.dumps(report, indent=2))
     print(json.dumps(report, indent=2), flush=True)
@@ -382,5 +385,7 @@ def check_replica_failover(suite, image, containers, networks, docker, prefix, o
 
     if model == "passthrough":
         def reopened():
-            assert report["clientFailuresAfterKill"] == 0, report
+            # The only client-visible failures allowed are connections whose every attempt the
+            # balancer routed to the dead replica.
+            assert report["clientFailuresAfterKill"] <= report["agentForwardGiveUpsAfterKill"], report
         suite.record("forwarded connections routed to the dead replica are reopened", reopened)
