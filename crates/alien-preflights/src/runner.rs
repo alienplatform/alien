@@ -670,7 +670,12 @@ mod setup_update_authorization_tests {
                     .global(["worker/provision"])
                     .resource(
                         "jobs",
-                        ["queue/heartbeat", "queue/management", "queue/provision"],
+                        [
+                            "queue/heartbeat",
+                            "queue/management",
+                            "queue/provision",
+                            "queue/data-read",
+                        ],
                     ),
             ),
         ] {
@@ -740,7 +745,14 @@ mod setup_update_authorization_tests {
                 .expect("nonoptin remains unchanged");
         }
         // Existing canonical grants cover the prerequisite without changing IAM.
-        for grant in ["queue/heartbeat", "queue/management", "queue/provision"] {
+        for grant in [
+            "queue/heartbeat",
+            "queue/management",
+            "queue/provision",
+            "queue/data-read",
+            "queue/data-write",
+            "queue/publish",
+        ] {
             let management = ManagementPermissions::Override(
                 PermissionProfile::new().global([grant, "worker/provision"]),
             );

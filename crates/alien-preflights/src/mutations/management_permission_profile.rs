@@ -186,7 +186,12 @@ fn add_batch_queue_metadata_permissions(stack: &mut Stack, platform: Platform) {
                     if *scope == "*" {
                         matches!(
                             name.as_str(),
-                            "queue/heartbeat" | "queue/management" | "queue/provision"
+                            "queue/heartbeat"
+                                | "queue/management"
+                                | "queue/provision"
+                                | "queue/data-read"
+                                | "queue/data-write"
+                                | "queue/publish"
                         )
                     } else {
                         name == "queue/batch-metadata"
