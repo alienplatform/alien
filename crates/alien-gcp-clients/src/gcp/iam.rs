@@ -120,6 +120,13 @@ pub trait IamApi: Send + Sync + Debug {
         service_account_name: String,
         request: GenerateAccessTokenRequest,
     ) -> Result<GenerateAccessTokenResponse>;
+
+    /// Generate a Google-issued OIDC assertion for a specific audience.
+    async fn generate_id_token(
+        &self,
+        service_account_name: String,
+        request: GenerateIdTokenRequest,
+    ) -> Result<GenerateIdTokenResponse>;
 }
 
 // --- IAM Client ---
@@ -461,6 +468,24 @@ impl IamApi for IamClient {
             )
             .await
     }
+
+    async fn generate_id_token(
+        &self,
+        service_account_name: String,
+        request: GenerateIdTokenRequest,
+    ) -> Result<GenerateIdTokenResponse> {
+        let encoded_name = urlencoding::encode(&service_account_name);
+        let path = format!("projects/-/serviceAccounts/{encoded_name}:generateIdToken");
+        self.credentials_base
+            .execute_request(
+                Method::POST,
+                &path,
+                None,
+                Some(request),
+                &service_account_name,
+            )
+            .await
+    }
 }
 
 // --- Data Structures ---
@@ -695,4 +720,28 @@ pub struct GenerateAccessTokenResponse {
 
     /// The expiration time of the access token in RFC3339 format.
     pub expire_time: String,
+}
+
+/// Request a Google-issued identity assertion without adding email claims.
+/// https://cloud.google.com/iam/docs/reference/credentials/rest/v1/projects.serviceAccounts/generateIdToken
+#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct GenerateIdTokenRequest {
+    /// Exact recipient of the assertion.
+    pub audience: String,
+}
+
+/// Short-lived Google-issued identity assertion. Never log the token.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GenerateIdTokenResponse {
+    pub token: String,
+}
+
+impl Debug for GenerateIdTokenResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GenerateIdTokenResponse")
+            .field("token", &"[REDACTED]")
+            .finish()
+    }
 }
