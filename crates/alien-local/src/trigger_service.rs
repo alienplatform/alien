@@ -878,6 +878,7 @@ mod tests {
         inner: alien_bindings::providers::queue::local::LocalQueue,
         fail_receive: std::sync::atomic::AtomicBool,
         fail_ack: std::sync::atomic::AtomicBool,
+        completed: tokio::sync::Notify,
     }
 
     impl alien_bindings::traits::Binding for RecoveringQueue {}
@@ -930,7 +931,9 @@ mod tests {
                     },
                 ));
             }
-            self.inner.ack(queue, receipt).await
+            self.inner.ack(queue, receipt).await?;
+            self.completed.notify_one();
+            Ok(())
         }
         async fn renew_lease(
             &self,
@@ -959,6 +962,7 @@ mod tests {
             .expect("queue"),
             fail_receive: std::sync::atomic::AtomicBool::new(true),
             fail_ack: std::sync::atomic::AtomicBool::new(true),
+            completed: tokio::sync::Notify::new(),
         });
         queue
             .send("jobs", MessagePayload::Text("retryable".into()))
@@ -1029,7 +1033,12 @@ mod tests {
                 .await
                 .expect("result");
         }
-        // Joining lets the final completion finish before inspecting persisted state.
+        // Submitting the application result does not confirm the queue ACK. Shutdown
+        // may still cancel that delivery and release it for retry, so observe the
+        // persisted completion before testing the recovered poller's shutdown.
+        tokio::time::timeout(Duration::from_secs(5), queue.completed.notified())
+            .await
+            .expect("recovered delivery was durably acknowledged");
         shutdown.send(()).expect("shutdown");
         poller.await.expect("poller").expect("clean shutdown");
         collectors.join().await.expect("collectors");
