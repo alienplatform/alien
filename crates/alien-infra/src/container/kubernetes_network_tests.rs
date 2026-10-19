@@ -386,3 +386,21 @@ async fn live_policy_client_round_trip() {
         .await
         .unwrap();
 }
+
+#[test]
+fn node_local_dns_is_reachable_only_from_inside_the_cluster() {
+    let in_cluster = "search ns.svc.cluster.local svc.cluster.local cluster.local\nnameserver 169.254.20.10\noptions ndots:5\n";
+    let rule = resolver_rule(Some(in_cluster)).expect("cluster resolver rule");
+    let peers = rule.to.unwrap();
+    assert_eq!(peers.len(), 1);
+    assert_eq!(peers[0].ip_block.as_ref().unwrap().cidr, "169.254.20.10/32");
+    assert!(peers[0].ip_block.as_ref().unwrap().except.is_none());
+    assert_eq!(
+        rule.ports.unwrap(),
+        vec![port(53, "UDP"), port(53, "TCP")],
+        "only DNS, never other traffic to the resolver"
+    );
+    // A controller outside the cluster reads the host's resolvers, not the cluster's.
+    assert!(resolver_rule(Some("nameserver 10.0.0.2\nsearch corp.example\n")).is_none());
+    assert!(resolver_rule(None).is_none());
+}

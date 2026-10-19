@@ -316,6 +316,14 @@ async fn kubernetes_internet_sandbox_installs_a_hosted_gateway() {
     assert_eq!(gateway.egress, Some(ContainerEgress::Internet));
     // The controller injects the gateway's configuration; the pod never reads the vault.
     assert!(gateway.links.is_empty(), "{:?}", gateway.links);
+    // Replicas receive traffic only after copying the stored policies.
+    assert_eq!(
+        gateway.kubernetes_readiness_probe,
+        Some(alien_core::KubernetesHttpProbe {
+            path: "/health".into(),
+            port: 3129,
+        })
+    );
 
     let chart = render(&prepared, StackSettings::default());
     assert_helm_valid(&chart, "kubernetes internet sandbox");

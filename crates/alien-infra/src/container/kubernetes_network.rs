@@ -183,6 +183,39 @@ fn build_policy(
     }
 }
 
+/// Clusters with NodeLocal DNSCache point pods at a link-local resolver, which the public
+/// rule excludes and the kube-dns selector does not match. Read in the controller's pod,
+/// the resolver list is the cluster's own: allow DNS to exactly those addresses. Outside
+/// the cluster (no `svc.` search entry) the host's resolvers are not cluster resolvers.
+fn resolver_rule(resolv_conf: Option<&str>) -> Option<NetworkPolicyEgressRule> {
+    let resolv_conf = resolv_conf?;
+    let in_cluster = resolv_conf
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("search"))
+        .flat_map(str::split_whitespace)
+        .any(|entry| entry.starts_with("svc."));
+    let resolvers: BTreeSet<std::net::Ipv4Addr> = resolv_conf
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("nameserver"))
+        .filter_map(|address| address.trim().parse().ok())
+        .collect();
+    (in_cluster && !resolvers.is_empty()).then(|| NetworkPolicyEgressRule {
+        to: Some(
+            resolvers
+                .into_iter()
+                .map(|address| NetworkPolicyPeer {
+                    ip_block: Some(IPBlock {
+                        cidr: format!("{address}/32"),
+                        except: None,
+                    }),
+                    ..Default::default()
+                })
+                .collect(),
+        ),
+        ports: Some(vec![port(53, "UDP"), port(53, "TCP")]),
+    })
+}
+
 fn require_owner(
     policy: &NetworkPolicy,
     ctx: &ResourceControllerContext<'_>,
@@ -213,7 +246,10 @@ impl KubernetesContainerController {
         namespace: &str,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<()> {
-        if config.ports.is_empty() && config.egress.is_none() {
+        // Only Containers that declare egress (on Kubernetes, the managed sandbox gateway)
+        // get a NetworkPolicy. Others keep the cluster's default reachability, including
+        // operator tunnels to their ports.
+        if config.egress.is_none() {
             return self.delete_network_policy(namespace, &config.id, ctx).await;
         }
         let name = workload.to_string();
@@ -234,6 +270,13 @@ impl KubernetesContainerController {
                 .and_then(|peer| peer.ip_block.as_mut())
             {
                 block.except.get_or_insert_default().extend(excluded);
+            }
+            if let Some(rule) =
+                resolver_rule(std::fs::read_to_string("/etc/resolv.conf").ok().as_deref())
+            {
+                if let Some(rules) = desired.spec.as_mut().and_then(|spec| spec.egress.as_mut()) {
+                    rules.push(rule);
+                }
             }
         }
         let existing = match client.get_network_policy(namespace, &name).await {

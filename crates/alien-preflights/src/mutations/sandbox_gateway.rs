@@ -43,7 +43,7 @@ impl StackMutation for SandboxGatewayMutation {
     async fn mutate(
         &self,
         mut stack: Stack,
-        _state: &StackState,
+        state: &StackState,
         _config: &DeploymentConfig,
     ) -> Result<Stack> {
         let invalid = |message: String| {
@@ -114,6 +114,14 @@ impl StackMutation for SandboxGatewayMutation {
             })
             .commands_enabled(false)
             .build();
+        let mut gateway = gateway;
+        if state.platform == Platform::Kubernetes {
+            // A replica joins the Services only once it has copied the stored policies.
+            gateway.kubernetes_readiness_probe = Some(alien_core::KubernetesHttpProbe {
+                path: "/health".into(),
+                port: 3129,
+            });
+        }
         gateway
             .validate_network_settings()
             .map_err(|error| invalid(error.to_string()))?;
