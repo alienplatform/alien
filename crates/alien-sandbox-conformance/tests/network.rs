@@ -274,3 +274,53 @@ fn host_mismatch_reaches_the_listener_unchanged() {
         .unwrap()
         .contains("\r\nHost: other.example.invalid\r\n"));
 }
+
+/// A listener that receives the subject's whole request and then withholds the response
+/// (or closes without one) was reached, so the subject's failure must not count as a network denial.
+#[test]
+fn a_reached_listener_that_stalls_or_hangs_up_is_not_a_network_denial() {
+    for close in [false, true] {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(10)))
+                .unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                let mut byte = [0];
+                socket.read_exact(&mut byte).unwrap();
+                request.push(byte[0]);
+            }
+            if close {
+                // Python reports this as RemoteDisconnected, a ConnectionResetError.
+                drop(socket);
+            } else {
+                // Outlast the probe's own deadline while holding the connection open.
+                thread::sleep(Duration::from_secs(7));
+            }
+            request
+        });
+        let subject = observe(&http(format!("http://{address}/")), None);
+        let request = server.join().unwrap();
+        assert!(
+            request.starts_with(b"GET / HTTP/1.1\r\n"),
+            "the listener must have received the request for this case to mean anything"
+        );
+        assert_eq!(
+            subject,
+            Observation::IncompleteAfterConnect,
+            "close={close}"
+        );
+        assert_eq!(
+            evaluate(
+                &Expectation::NetworkDenied,
+                &Observation::Connected,
+                &subject
+            ),
+            Verdict::Unproven,
+            "close={close}"
+        );
+    }
+}

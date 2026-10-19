@@ -17,6 +17,10 @@ import urllib.parse
 TIMEOUT = 5
 MAX_BODY = 1024 * 1024
 
+# Set once the first TCP connection completes. A deadline, reset or route error after
+# that point means the network carried the traffic, so it cannot count as a denial.
+CONNECTED = False
+
 
 def deadline(_signum, _frame):
     raise TimeoutError()
@@ -73,6 +77,8 @@ def http_probe(probe):
 
     target = (proxy.hostname, proxy.port or 80) if proxy else (host, port)
     connection = socket.create_connection(target, timeout=TIMEOUT)
+    global CONNECTED
+    CONNECTED = True
     try:
         proxy_auth = ""
         if proxy and proxy.username is not None:
@@ -106,6 +112,10 @@ def http_probe(probe):
         connection.close()
 
 
+def network_failure(outcome):
+    return {"outcome": "incompleteAfterConnect" if CONNECTED else outcome}
+
+
 def observe(probe):
     try:
         if probe["kind"] == "tcp":
@@ -120,18 +130,18 @@ def observe(probe):
             return http_probe(probe)
         raise ValueError("unknown probe kind")
     except TimeoutError:
-        return {"outcome": "timeout"}
+        return network_failure("timeout")
     except socket.gaierror:
         return {"outcome": "dnsFailed"}
     except ssl.SSLError:
         return {"outcome": "tlsFailed"}
     except (ConnectionRefusedError, ConnectionResetError, BrokenPipeError):
-        return {"outcome": "refused"}
+        return network_failure("refused")
     except http.client.HTTPException:
         return {"outcome": "protocolFailed"}
     except OSError as error:
         if error.errno in (errno.ENETUNREACH, errno.EHOSTUNREACH, errno.EACCES, errno.EPERM):
-            return {"outcome": "unreachable"}
+            return network_failure("unreachable")
         raise
 
 

@@ -68,15 +68,18 @@ pub enum Observation {
         /// Proxy response status.
         status: u16,
     },
-    /// A socket deadline elapsed.
+    /// A socket deadline elapsed before a TCP connection was established.
     Timeout,
-    /// The peer refused or reset a connection.
+    /// The peer refused or reset a connection before it was established.
     Refused,
+    /// A TCP connection was established, then the exchange timed out, was reset or lost
+    /// its route. The network carried the traffic, so this is not evidence of a denial.
+    IncompleteAfterConnect,
     /// DNS did not resolve. This alone is not evidence of policy enforcement.
     DnsFailed,
     /// TLS failed. This alone is not evidence of policy enforcement.
     TlsFailed,
-    /// A route was unavailable.
+    /// A route was unavailable before a TCP connection was established.
     Unreachable,
     /// Invalid HTTP or a response exceeding the probe's bound.
     ProtocolFailed,

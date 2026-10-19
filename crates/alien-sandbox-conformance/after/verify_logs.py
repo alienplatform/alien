@@ -35,7 +35,26 @@ def validate_identity_map(identity_map, report, audience):
     return subjects
 
 
+def unique_events(events):
+    """Drop repeated copies of one gateway event.
+
+    Overlapping exports can deliver the same record twice, and each copy must not
+    prove a separate connection. The gateway emits no event ID, but each record
+    carries a nanosecond timestamp, byte counts and a duration, so two distinct
+    connections do not produce identical fields.
+    """
+    seen = set()
+    unique = []
+    for event in events:
+        key = json.dumps(event.get("fields", event), sort_keys=True)
+        if key not in seen:
+            seen.add(key)
+            unique.append(event)
+    return unique
+
+
 def verify(report, events, audience, identity_map=None):
+    events = unique_events(events)
     subjects = (
         validate_identity_map(identity_map, report, audience)
         if identity_map is not None

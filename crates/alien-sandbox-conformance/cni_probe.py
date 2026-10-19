@@ -11,6 +11,33 @@ import time
 import uuid
 
 
+def listener_script(body, port=8080):
+    """An HTTP listener reachable on the pod's primary address in any IP family.
+
+    A dual-stack socket serves IPv4 (as mapped addresses) and IPv6 pods; a pod
+    without IPv6 cannot create one, so that case falls back to IPv4.
+    """
+    return (
+        "import socket\n"
+        "from http.server import BaseHTTPRequestHandler, HTTPServer\n"
+        "class Handler(BaseHTTPRequestHandler):\n"
+        " def do_GET(self):\n"
+        "  self.send_response(200); self.end_headers()\n"
+        f"  self.wfile.write({body!r})\n"
+        " def log_message(self, *args): pass\n"
+        "class DualStack(HTTPServer):\n"
+        " address_family = socket.AF_INET6\n"
+        " def server_bind(self):\n"
+        "  self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)\n"
+        "  super().server_bind()\n"
+        "try:\n"
+        f" server = DualStack(('::', {port}), Handler)\n"
+        "except OSError:\n"
+        f" server = HTTPServer(('0.0.0.0', {port}), Handler)\n"
+        "server.serve_forever()\n"
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--kubeconfig", required=True)
@@ -34,15 +61,7 @@ def main():
     kubectl("create", "namespace", namespace)
     try:
         body = b"alien-network-policy-control\n"
-        server = (
-            "from http.server import BaseHTTPRequestHandler, HTTPServer\n"
-            "class Handler(BaseHTTPRequestHandler):\n"
-            " def do_GET(self):\n"
-            "  self.send_response(200); self.end_headers()\n"
-            f"  self.wfile.write({body!r})\n"
-            " def log_message(self, *args): pass\n"
-            "HTTPServer(('0.0.0.0',8080),Handler).serve_forever()\n"
-        )
+        server = listener_script(body)
         resources = []
         for role in ["listener", "control", "denied"]:
             container = {

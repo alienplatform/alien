@@ -534,6 +534,45 @@ class After(unittest.IsolatedAsyncioTestCase):
                 )["verdict"],
             )
 
+    def test_a_repeated_export_of_one_event_proves_only_one_connection(self):
+        cases = [
+            {
+                "name": "connection-" + str(index),
+                "subject": {
+                    "sandboxId": "sandbox",
+                    "startedAt": 100,
+                    "finishedAt": 101,
+                    "probe": run.http("https://allowed.test/"),
+                    "observation": {"outcome": "response"},
+                },
+            }
+            for index in range(2)
+        ]
+        event = {
+            "message": "egress connection",
+            "aud": "deployment/resource",
+            "sub": "sandbox",
+            "host": "allowed.test",
+            "port": 443,
+            "decision": "allow",
+            "bytesUp": 1,
+            "bytesDown": 1,
+            "durationMs": 1,
+            "ts": datetime.fromtimestamp(100.5, UTC).isoformat(),
+        }
+        report = {"revision": "test", "cases": cases}
+        for repeated in ([event, dict(event)], [{"fields": event}, {"fields": dict(event)}]):
+            self.assertEqual(
+                "unproven",
+                verify_logs.verify(report, repeated, "deployment/resource")["verdict"],
+            )
+        # The control: two distinct events for the two connections still pass.
+        second = dict(event, ts=datetime.fromtimestamp(100.6, UTC).isoformat())
+        self.assertEqual(
+            "pass",
+            verify_logs.verify(report, [event, second], "deployment/resource")["verdict"],
+        )
+
     def test_connection_log_requires_distinct_scoped_current_events(self):
         observation = {
             "sandboxId": "sandbox",

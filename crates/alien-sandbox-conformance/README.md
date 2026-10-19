@@ -28,6 +28,9 @@ policy. Live qualification additionally needs deployed subject/control
 sandboxes, controlled public and private listeners, authoritative DNS query
 logs, gateway connection logs, and the deployment's independently read NAT IP.
 DNS resolution failure alone cannot prove that a query did not escape.
+A timeout, reset or route error after the TCP connection is established is
+reported as `incompleteAfterConnect`: the network carried the traffic, so it
+never proves a denial.
 The `dnsQuery` probe sends an A query directly to a numeric `server` and `port`,
 with a unique `host` under a controlled zone. It bypasses the configured resolver
 and proxy, checks the reply's source, transaction, question and authoritative flag, and treats even
