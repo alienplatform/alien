@@ -1352,6 +1352,9 @@ pub trait Sandbox: Binding {
 
     /// Fetches a sandbox, creating it if absent, and reports which it did.
     ///
+    /// A sandbox that has terminated counts as absent: the call creates a fresh one, which may
+    /// carry a different id, so a caller stores the id it gets back rather than the one it sent.
+    ///
     /// Answer `created` from the path taken, never from a timestamp: the clocks are the provider's,
     /// not ours. No backend offers an atomic create-if-absent, so two callers naming one id can
     /// both be told they created it; a caller that cannot tolerate its setup running twice needs

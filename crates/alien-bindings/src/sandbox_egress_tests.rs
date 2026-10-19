@@ -154,6 +154,15 @@ impl Harness {
             .get(id)
             .and_then(|row| row.1.clone())
     }
+    /// True once the gateway holds a deletion tombstone for `id`.
+    pub(crate) fn tombstoned(&self, id: &str) -> bool {
+        self.state
+            .policies
+            .lock()
+            .unwrap()
+            .get(id)
+            .is_some_and(|row| row.1.is_none())
+    }
     pub(crate) async fn recover_after_total_loss(&self, record: &str) {
         self.state.policies.lock().unwrap().clear();
         let claims = verify_record(&self.state, record);

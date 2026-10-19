@@ -766,6 +766,14 @@ impl Sandbox for AwsSandbox {
                     ),
                 })
             })?;
+        // A terminated MicroVM never runs again, so a policy written for it governs nothing and
+        // would re-create the gateway record its end should have removed.
+        if sandbox.state == SandboxState::Terminated {
+            return Err(AlienError::new(ErrorData::SandboxCommandFailed {
+                failure: "sandboxTerminated".to_string(),
+                reason: format!("sandbox '{sandbox_id}' has terminated"),
+            }));
+        }
         manager.update(sandbox_id, &policy).await?;
         if sandbox.state == SandboxState::Running {
             // Keep the live identity unchanged while refreshing the agent's copy for
@@ -786,20 +794,33 @@ impl Sandbox for AwsSandbox {
         // than a fresh one would.
         refuse_unsupported_create_fields(&request, "sandbox.getOrCreate")?;
         if let Some(id) = request.sandbox_id.as_deref() {
-            if let Some(existing) = self.fetch(id, "sandbox.getOrCreate").await? {
-                if let Some(policy) = request.egress.clone() {
-                    self.update_egress(id, policy).await?;
+            match self.fetch(id, "sandbox.getOrCreate").await? {
+                // A MicroVM that is terminating or terminated never serves again, so the id is
+                // answered with a fresh sandbox, as on GCP and Azure. Lambda ends a MicroVM at its
+                // maximum lifetime without anyone calling `terminate`, so the gateway can still
+                // hold this id's policy; it is removed here, as `terminate` would have.
+                Some(existing) if existing.state == SandboxState::Terminated => {
+                    if let Some(manager) = &self.egress_manager {
+                        manager.delete(id).await?;
+                    }
                 }
-                // Reaching a sandbox someone else started still has to mean what `create` means,
-                // or the guarantee holds only for whoever won the race. Waited for here rather
-                // than in `get`, which reports a sandbox's state and does not promise one.
-                if matches!(existing.state, SandboxState::Starting) {
-                    self.wait_until_servable(id).await?;
-                    return Ok(ResolvedSandbox::found(
-                        self.instance(id.to_string(), Some("RUNNING".to_string())),
-                    ));
+                Some(existing) => {
+                    if let Some(policy) = request.egress.clone() {
+                        self.update_egress(id, policy).await?;
+                    }
+                    // Reaching a sandbox someone else started still has to mean what `create`
+                    // means, or the guarantee holds only for whoever won the race. Waited for
+                    // here rather than in `get`, which reports a sandbox's state and does not
+                    // promise one.
+                    if matches!(existing.state, SandboxState::Starting) {
+                        self.wait_until_servable(id).await?;
+                        return Ok(ResolvedSandbox::found(
+                            self.instance(id.to_string(), Some("RUNNING".to_string())),
+                        ));
+                    }
+                    return Ok(ResolvedSandbox::found(existing));
                 }
-                return Ok(ResolvedSandbox::found(existing));
+                None => {}
             }
         }
 
@@ -1083,6 +1104,30 @@ mod tests {
             !resolved.created,
             "the sandbox was already running, so this call did not create it"
         );
+    }
+
+    /// A paused sandbox is still the caller's: only a terminated one is replaced, so this is
+    /// handed back as found, not replaced and not resumed.
+    #[tokio::test]
+    async fn reconnecting_to_a_paused_sandbox_reports_found() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        client
+            .expect_get_microvm()
+            .returning(|id| Ok(owned(id, "SUSPENDED")));
+        client.expect_run_microvm().never();
+        client.expect_resume_microvm().never();
+
+        let resolved = sandbox(client)
+            .get_or_create(CreateSandboxRequest {
+                sandbox_id: Some("asleep".to_string()),
+                ..Default::default()
+            })
+            .await
+            .expect("a paused sandbox is handed back");
+
+        assert_eq!(resolved.sandbox.sandbox_id, "asleep");
+        assert_eq!(resolved.sandbox.state, SandboxState::Paused);
+        assert!(!resolved.created);
     }
 
     /// The reconnect read is `get_or_create`'s, not `get`'s. Naming the helper it happens to
