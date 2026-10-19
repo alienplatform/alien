@@ -143,7 +143,12 @@ where
 }
 
 fn suppress_known_cfn_lint_false_positives(mut result: LinterRun) -> LinterRun {
-    if !matches!(result.status, LinterStatus::Failed(_)) {
+    // Only a finished run can be suppressed: cfn-lint reported findings on stdout
+    // and wrote nothing to stderr. An empty or stderr-only run is a crash.
+    if !matches!(result.status, LinterStatus::Failed(_))
+        || result.stdout.trim().is_empty()
+        || !result.stderr.trim().is_empty()
+    {
         return result;
     }
     let remaining = without_kept_setup_parameter_warnings(&result.stdout);
@@ -341,6 +346,25 @@ W2001 Parameter NetworkMode not used.\n/tmp/template.yaml:20:3\n\n";
             )),
             LinterStatus::Failed(Some(4))
         );
+    }
+
+    #[test]
+    fn a_lint_run_that_did_not_finish_is_never_suppressed() {
+        let failed = |stdout: &str, stderr: &str| {
+            suppress_known_cfn_lint_false_positives(LinterRun {
+                tool: "cfn-lint".to_string(),
+                command: "cfn-lint template.yaml".to_string(),
+                status: LinterStatus::Failed(Some(1)),
+                stdout: stdout.to_string(),
+                stderr: stderr.to_string(),
+            })
+            .status
+        };
+        let kept = "W2001 Parameter NetworkMode not used.\n/tmp/template.yaml:20:3\n\n";
+        let crash = "Traceback (most recent call last):\nValueError: bad template\n";
+        assert_eq!(failed("", ""), LinterStatus::Failed(Some(1)));
+        assert_eq!(failed("", crash), LinterStatus::Failed(Some(1)));
+        assert_eq!(failed(kept, crash), LinterStatus::Failed(Some(1)));
     }
 
     #[test]
