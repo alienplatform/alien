@@ -4,8 +4,6 @@ expression: yaml
 ---
 AWSTemplateFormatVersion: 2010-09-09
 Description: BYO Bucket
-Transform:
-- AWS::LanguageExtensions
 Metadata:
   AWS::CloudFormation::Interface:
     ParameterGroups:
@@ -172,38 +170,30 @@ Outputs:
     Description: Setup fingerprint algorithm version.
   DeploymentManagementConfig:
     Value:
-      Fn::ToJsonString:
-        platform: aws
-        managingRoleArn:
-          Ref: ManagingRoleArn
+      Fn::Join:
+      - ''
+      - - '{"platform":"aws","managingRoleArn":"'
+        - Ref: ManagingRoleArn
+        - '"}'
     Description: Deployment registration management configuration JSON.
   DeploymentStackSettings:
-    Value:
-      Fn::ToJsonString:
-        deploymentModel: push
-        updates: approval-required
-        telemetry: "off"
-        heartbeats: "on"
+    Value: '{"deploymentModel":"push","updates":"approval-required","telemetry":"off","heartbeats":"on"}'
     Description: Deployment registration settings JSON.
   DeploymentResources:
     Value:
-      Fn::ToJsonString:
-      - id: exports
-        type: storage
-        importData:
-          bucketName:
-            Ref: Exports
-          bucketArn:
-            Fn::GetAtt:
-            - Exports
-            - Arn
-      - id: access
-        type: resource-access
-        importData:
-          roleName:
-            Ref: AccessRole
-          roleArn:
-            Fn::GetAtt:
-            - AccessRole
-            - Arn
+      Fn::Join:
+      - ''
+      - - '[{"id":"exports","type":"storage","importData":{"bucketName":"'
+        - Ref: Exports
+        - '","bucketArn":"'
+        - Fn::GetAtt:
+          - Exports
+          - Arn
+        - '"}},{"id":"access","type":"resource-access","importData":{"roleName":"'
+        - Ref: AccessRole
+        - '","roleArn":"'
+        - Fn::GetAtt:
+          - AccessRole
+          - Arn
+        - '"}}]'
     Description: Deployment registration resources JSON.

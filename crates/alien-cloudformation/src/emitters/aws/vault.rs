@@ -45,7 +45,7 @@ impl CfEmitter for AwsVaultEmitter {
         );
         policy.properties.insert(
             "PolicyName".to_string(),
-            CfExpression::sub(format!(
+            CfExpression::from(format!(
                 "management-{}-vault-policy",
                 sanitize_policy_name_segment(vault.id())
             )),

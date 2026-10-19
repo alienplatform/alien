@@ -248,7 +248,7 @@ fn eks_target_preserves_configured_kubernetes_exposure() {
     let yaml = render_built_ins_target(
         &stack,
         settings,
-        RegistrationMode::OutputsFallback,
+        super::helpers::custom_resource_registration(),
         CloudFormationTarget::Eks,
         "kubernetes",
         "eks managed cluster no tls exposure",

@@ -4,8 +4,6 @@ expression: yaml
 ---
 AWSTemplateFormatVersion: 2010-09-09
 Description: aws_artifact_registry
-Transform:
-- AWS::LanguageExtensions
 Metadata:
   AWS::CloudFormation::Interface:
     ParameterGroups:
@@ -87,17 +85,7 @@ Resources:
       EncryptionConfiguration:
         EncryptionType: AES256
       LifecyclePolicy:
-        LifecyclePolicyText:
-          Fn::ToJsonString:
-            rules:
-            - rulePriority: 1
-              description: Retain the 100 most recent images
-              selection:
-                tagStatus: any
-                countType: imageCountMoreThan
-                countNumber: 100
-              action:
-                type: expire
+        LifecyclePolicyText: '{"rules":[{"rulePriority":1,"description":"Retain the 100 most recent images","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":100},"action":{"type":"expire"}}]}'
       Tags:
       - Key: managed-by
         Value: setup
@@ -251,48 +239,47 @@ Outputs:
     Description: Setup fingerprint algorithm version.
   DeploymentManagementConfig:
     Value:
-      Fn::ToJsonString:
-        platform: aws
-        managingRoleArn:
-          Ref: ManagingRoleArn
+      Fn::Join:
+      - ''
+      - - '{"platform":"aws","managingRoleArn":"'
+        - Ref: ManagingRoleArn
+        - '"}'
     Description: Deployment registration management configuration JSON.
   DeploymentStackSettings:
     Value:
-      Fn::ToJsonString:
-        deploymentModel: push
-        endpointAccess:
-          Ref: EndpointAccess
-        updates:
-          Ref: UpdatesMode
-        telemetry:
-          Ref: TelemetryMode
-        heartbeats:
-          Ref: HeartbeatsMode
-        network:
-          Ref: AWS::NoValue
+      Fn::Join:
+      - ''
+      - - '{"deploymentModel":"push","endpointAccess":"'
+        - Ref: EndpointAccess
+        - '","updates":"'
+        - Ref: UpdatesMode
+        - '","telemetry":"'
+        - Ref: TelemetryMode
+        - '","heartbeats":"'
+        - Ref: HeartbeatsMode
+        - '","network":null}'
     Description: Deployment registration settings JSON.
   DeploymentResources:
     Value:
-      Fn::ToJsonString:
-      - id: registry
-        type: artifact-registry
-        importData:
-          accountId:
-            Ref: AWS::AccountId
-          region:
-            Ref: AWS::Region
-          registryId:
-            Fn::Sub: ${AWS::AccountId}:${AWS::Region}
-          registryEndpoint:
-            Fn::Sub: ${AWS::AccountId}.dkr.ecr.${AWS::Region}.${AWS::URLSuffix}
-          repositoryPrefix:
-            Fn::Sub: ${AWS::StackName}-registry
-          pullRoleArn:
-            Fn::GetAtt:
-            - RegistryPullRole
-            - Arn
-          pushRoleArn:
-            Fn::GetAtt:
-            - RegistryPushRole
-            - Arn
+      Fn::Join:
+      - ''
+      - - '[{"id":"registry","type":"artifact-registry","importData":{"accountId":"'
+        - Ref: AWS::AccountId
+        - '","region":"'
+        - Ref: AWS::Region
+        - '","registryId":"'
+        - Fn::Sub: ${AWS::AccountId}:${AWS::Region}
+        - '","registryEndpoint":"'
+        - Fn::Sub: ${AWS::AccountId}.dkr.ecr.${AWS::Region}.${AWS::URLSuffix}
+        - '","repositoryPrefix":"'
+        - Fn::Sub: ${AWS::StackName}-registry
+        - '","pullRoleArn":"'
+        - Fn::GetAtt:
+          - RegistryPullRole
+          - Arn
+        - '","pushRoleArn":"'
+        - Fn::GetAtt:
+          - RegistryPushRole
+          - Arn
+        - '"}}]'
     Description: Deployment registration resources JSON.

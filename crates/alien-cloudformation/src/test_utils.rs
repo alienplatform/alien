@@ -65,6 +65,11 @@ pub fn cfn_lint(template_yaml: &str) -> LinterRun {
         let dir = tempfile::tempdir().map_err(|error| error.to_string())?;
         let path = dir.path().join("template.yaml");
         write_file(&path, template_yaml)?;
+        // W2001 (unused parameter): setup templates declare some parameters, such as
+        // `ManagingAccountId` and `NetworkMode`, even for stacks that never read them,
+        // so the parameter list an installed stack was created with stays valid on
+        // updates. cfn-lint did not report this while templates used the
+        // AWS::LanguageExtensions transform.
         run_command(
             "cfn-lint",
             [
@@ -73,6 +78,8 @@ pub fn cfn_lint(template_yaml: &str) -> LinterRun {
                 OsStr::new("W3005"),
                 OsStr::new("-i"),
                 OsStr::new("W1030"),
+                OsStr::new("-i"),
+                OsStr::new("W2001"),
             ],
         )
         .map(suppress_known_cfn_lint_false_positives)

@@ -205,7 +205,8 @@ pub fn resolve(
                     .filter_map(|item| resolve(item, conditions, Declined::Removed))
                     .map(|item| match item {
                         CfExpression::String(text) => text,
-                        other => panic!("Fn::Join element should be a string: {other:?}"),
+                        other => placeholder(&other)
+                            .unwrap_or_else(|| panic!("Fn::Join element should be a string: {other:?}")),
                     })
                     .collect::<Vec<_>>();
                 return Some(CfExpression::String(parts.join(delimiter)));
@@ -248,6 +249,24 @@ pub fn resolve(
                 .collect(),
         )),
         other => Some(other.clone()),
+    }
+}
+
+/// Text standing in for a deploy-time string inside `Fn::Join`: `Ref: Name` is
+/// `${Name}` and `Fn::GetAtt: [Id, Attr]` is `${Id.Attr}`.
+fn placeholder(expression: &CfExpression) -> Option<String> {
+    let CfExpression::Object(fields) = expression else {
+        return None;
+    };
+    match (fields.get("Ref"), fields.get("Fn::GetAtt")) {
+        (Some(CfExpression::String(name)), None) => Some(format!("${{{name}}}")),
+        (None, Some(CfExpression::List(target))) => match &target[..] {
+            [CfExpression::String(id), CfExpression::String(attribute)] => {
+                Some(format!("${{{id}.{attribute}}}"))
+            }
+            _ => None,
+        },
+        _ => None,
     }
 }
 
@@ -407,5 +426,95 @@ impl CfEmitter for SampleEmitter {
             ("bucketName", CfExpression::ref_(logical_id)),
             ("bucketArn", CfExpression::get_att(logical_id, "Arn")),
         ]))
+    }
+}
+
+/// Evaluates a JSON-text output the way CloudFormation does and parses the text.
+///
+/// Outputs are built from core intrinsics (see `json_text`), so this follows
+/// `Fn::Join`, `Fn::If`, `Fn::Sub` and `AWS::NoValue` (a dropped `Fn::Join`
+/// element). A deploy-time value it cannot know renders as a placeholder:
+/// `Ref: Name` as `"${Name}"` and `Fn::GetAtt: [Id, Attr]` as `"${Id.Attr}"`.
+pub fn output_json(
+    template: &serde_json::Value,
+    output: &str,
+    conditions: &HashMap<&str, bool>,
+) -> serde_json::Value {
+    let text = evaluate_text(&template["Outputs"][output]["Value"], conditions)
+        .unwrap_or_else(|| panic!("output '{output}' should resolve"));
+    let serde_json::Value::String(text) = text else {
+        panic!("output '{output}' should resolve to text: {text}");
+    };
+    serde_json::from_str(&text)
+        .unwrap_or_else(|error| panic!("output '{output}' is not valid JSON ({error}): {text}"))
+}
+
+fn evaluate_text(
+    value: &serde_json::Value,
+    conditions: &HashMap<&str, bool>,
+) -> Option<serde_json::Value> {
+    use serde_json::Value;
+    let eval = |value: &Value| evaluate_text(value, conditions);
+    let text = |value: &Value| match evaluate_text(value, conditions) {
+        Some(Value::String(text)) => text,
+        other => panic!("expected text, got {other:?} from {value}"),
+    };
+    match value {
+        Value::Object(fields) => {
+            if let Some(name) = fields.get("Ref") {
+                let name = name.as_str().expect("Ref name");
+                return (name != "AWS::NoValue").then(|| Value::String(format!("${{{name}}}")));
+            }
+            if let Some(Value::Array(target)) = fields.get("Fn::GetAtt") {
+                return Some(Value::String(format!(
+                    "${{{}.{}}}",
+                    target[0].as_str().expect("logical id"),
+                    target[1].as_str().expect("attribute")
+                )));
+            }
+            if let Some(Value::Array(arguments)) = fields.get("Fn::If") {
+                let condition = arguments[0].as_str().expect("condition name");
+                let answer = *conditions
+                    .get(condition)
+                    .unwrap_or_else(|| panic!("no answer supplied for condition '{condition}'"));
+                return eval(&arguments[if answer { 1 } else { 2 }]);
+            }
+            if let Some(Value::Array(arguments)) = fields.get("Fn::Join") {
+                let delimiter = arguments[0].as_str().expect("Fn::Join delimiter");
+                let items = match eval(&arguments[1]) {
+                    Some(Value::Array(items)) => items,
+                    // A list parameter: its single placeholder stands for the whole list.
+                    Some(Value::String(item)) => vec![Value::String(item)],
+                    other => panic!("Fn::Join takes a list: {other:?}"),
+                };
+                let items: Vec<String> = items.iter().map(&text).collect();
+                return Some(Value::String(items.join(delimiter)));
+            }
+            if let Some(sub) = fields.get("Fn::Sub") {
+                return Some(Value::String(match sub {
+                    Value::String(template) => template.clone(),
+                    Value::Array(arguments) => {
+                        let mut template = arguments[0].as_str().expect("template").to_string();
+                        for (name, value) in arguments[1].as_object().expect("variables") {
+                            template = template.replace(&format!("${{{name}}}"), &text(value));
+                        }
+                        template
+                    }
+                    other => panic!("malformed Fn::Sub: {other}"),
+                }));
+            }
+            assert!(
+                !fields.keys().any(|key| key.starts_with("Fn::")),
+                "unsupported expression in a JSON-text output: {value}"
+            );
+            Some(Value::Object(
+                fields
+                    .iter()
+                    .filter_map(|(key, value)| eval(value).map(|value| (key.clone(), value)))
+                    .collect(),
+            ))
+        }
+        Value::Array(items) => Some(Value::Array(items.iter().filter_map(eval).collect())),
+        other => Some(other.clone()),
     }
 }

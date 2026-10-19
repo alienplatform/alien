@@ -4,8 +4,6 @@ expression: yaml
 ---
 AWSTemplateFormatVersion: 2010-09-09
 Description: aws email config set only
-Transform:
-- AWS::LanguageExtensions
 Metadata:
   AWS::CloudFormation::Interface:
     ParameterGroups:
@@ -110,33 +108,31 @@ Outputs:
     Description: Setup fingerprint algorithm version.
   DeploymentManagementConfig:
     Value:
-      Fn::ToJsonString:
-        platform: aws
-        managingRoleArn:
-          Ref: ManagingRoleArn
+      Fn::Join:
+      - ''
+      - - '{"platform":"aws","managingRoleArn":"'
+        - Ref: ManagingRoleArn
+        - '"}'
     Description: Deployment registration management configuration JSON.
   DeploymentStackSettings:
     Value:
-      Fn::ToJsonString:
-        deploymentModel: push
-        endpointAccess:
-          Ref: EndpointAccess
-        updates:
-          Ref: UpdatesMode
-        telemetry:
-          Ref: TelemetryMode
-        heartbeats:
-          Ref: HeartbeatsMode
-        network:
-          Ref: AWS::NoValue
+      Fn::Join:
+      - ''
+      - - '{"deploymentModel":"push","endpointAccess":"'
+        - Ref: EndpointAccess
+        - '","updates":"'
+        - Ref: UpdatesMode
+        - '","telemetry":"'
+        - Ref: TelemetryMode
+        - '","heartbeats":"'
+        - Ref: HeartbeatsMode
+        - '","network":null}'
     Description: Deployment registration settings JSON.
   DeploymentResources:
     Value:
-      Fn::ToJsonString:
-      - id: mailer
-        type: email
-        importData:
-          configurationSet:
-            Ref: MailerConfigSet
-          domains: {}
+      Fn::Join:
+      - ''
+      - - '[{"id":"mailer","type":"email","importData":{"configurationSet":"'
+        - Ref: MailerConfigSet
+        - '","domains":{}}}]'
     Description: Deployment registration resources JSON.

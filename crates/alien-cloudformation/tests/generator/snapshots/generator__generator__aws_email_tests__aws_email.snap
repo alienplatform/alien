@@ -4,8 +4,6 @@ expression: yaml
 ---
 AWSTemplateFormatVersion: 2010-09-09
 Description: aws email
-Transform:
-- AWS::LanguageExtensions
 Metadata:
   AWS::CloudFormation::Interface:
     ParameterGroups:
@@ -496,119 +494,103 @@ Outputs:
     Description: Setup fingerprint algorithm version.
   DeploymentManagementConfig:
     Value:
-      Fn::ToJsonString:
-        platform: aws
-        managingRoleArn:
-          Ref: ManagingRoleArn
+      Fn::Join:
+      - ''
+      - - '{"platform":"aws","managingRoleArn":"'
+        - Ref: ManagingRoleArn
+        - '"}'
     Description: Deployment registration management configuration JSON.
   DeploymentStackSettings:
     Value:
-      Fn::ToJsonString:
-        deploymentModel: push
-        endpointAccess:
-          Ref: EndpointAccess
-        updates:
-          Ref: UpdatesMode
-        telemetry:
-          Ref: TelemetryMode
-        heartbeats:
-          Ref: HeartbeatsMode
-        network:
-          Ref: AWS::NoValue
+      Fn::Join:
+      - ''
+      - - '{"deploymentModel":"push","endpointAccess":"'
+        - Ref: EndpointAccess
+        - '","updates":"'
+        - Ref: UpdatesMode
+        - '","telemetry":"'
+        - Ref: TelemetryMode
+        - '","heartbeats":"'
+        - Ref: HeartbeatsMode
+        - '","network":null}'
     Description: Deployment registration settings JSON.
   DeploymentResources:
     Value:
-      Fn::ToJsonString:
-      - id: management
-        type: remote-stack-management
-        importData:
-          roleName:
-            Ref: ManagementRole
-          roleArn:
-            Fn::GetAtt:
-            - ManagementRole
-            - Arn
-          managementPermissionsApplied: true
-      - id: mailbox
-        type: storage
-        importData:
-          bucketName:
-            Ref: Mailbox
-          bucketArn:
-            Fn::GetAtt:
-            - Mailbox
-            - Arn
-      - id: mail-events
-        type: queue
-        importData:
-          queueName:
-            Fn::GetAtt:
-            - MailEvents
-            - QueueName
-          queueUrl:
-            Ref: MailEvents
-          queueArn:
-            Fn::GetAtt:
-            - MailEvents
-            - Arn
-      - id: mailer
-        type: email
-        importData:
-          configurationSet:
-            Ref: MailerConfigSet
-          domains:
-            mail.example.com:
-              dkimTokens:
-              - name:
-                  Fn::GetAtt:
-                  - MailerIdentity0
-                  - DkimDNSTokenName1
-                value:
-                  Fn::GetAtt:
-                  - MailerIdentity0
-                  - DkimDNSTokenValue1
-              - name:
-                  Fn::GetAtt:
-                  - MailerIdentity0
-                  - DkimDNSTokenName2
-                value:
-                  Fn::GetAtt:
-                  - MailerIdentity0
-                  - DkimDNSTokenValue2
-              - name:
-                  Fn::GetAtt:
-                  - MailerIdentity0
-                  - DkimDNSTokenName3
-                value:
-                  Fn::GetAtt:
-                  - MailerIdentity0
-                  - DkimDNSTokenValue3
-            mail.example.org:
-              dkimTokens:
-              - name:
-                  Fn::GetAtt:
-                  - MailerIdentity1
-                  - DkimDNSTokenName1
-                value:
-                  Fn::GetAtt:
-                  - MailerIdentity1
-                  - DkimDNSTokenValue1
-              - name:
-                  Fn::GetAtt:
-                  - MailerIdentity1
-                  - DkimDNSTokenName2
-                value:
-                  Fn::GetAtt:
-                  - MailerIdentity1
-                  - DkimDNSTokenValue2
-              - name:
-                  Fn::GetAtt:
-                  - MailerIdentity1
-                  - DkimDNSTokenName3
-                value:
-                  Fn::GetAtt:
-                  - MailerIdentity1
-                  - DkimDNSTokenValue3
-          ruleSetName:
-            Ref: MailerRuleSet
+      Fn::Join:
+      - ''
+      - - '[{"id":"management","type":"remote-stack-management","importData":{"roleName":"'
+        - Ref: ManagementRole
+        - '","roleArn":"'
+        - Fn::GetAtt:
+          - ManagementRole
+          - Arn
+        - '","managementPermissionsApplied":true}},{"id":"mailbox","type":"storage","importData":{"bucketName":"'
+        - Ref: Mailbox
+        - '","bucketArn":"'
+        - Fn::GetAtt:
+          - Mailbox
+          - Arn
+        - '"}},{"id":"mail-events","type":"queue","importData":{"queueName":"'
+        - Fn::GetAtt:
+          - MailEvents
+          - QueueName
+        - '","queueUrl":"'
+        - Ref: MailEvents
+        - '","queueArn":"'
+        - Fn::GetAtt:
+          - MailEvents
+          - Arn
+        - '"}},{"id":"mailer","type":"email","importData":{"configurationSet":"'
+        - Ref: MailerConfigSet
+        - '","domains":{"mail.example.com":{"dkimTokens":[{"name":"'
+        - Fn::GetAtt:
+          - MailerIdentity0
+          - DkimDNSTokenName1
+        - '","value":"'
+        - Fn::GetAtt:
+          - MailerIdentity0
+          - DkimDNSTokenValue1
+        - '"},{"name":"'
+        - Fn::GetAtt:
+          - MailerIdentity0
+          - DkimDNSTokenName2
+        - '","value":"'
+        - Fn::GetAtt:
+          - MailerIdentity0
+          - DkimDNSTokenValue2
+        - '"},{"name":"'
+        - Fn::GetAtt:
+          - MailerIdentity0
+          - DkimDNSTokenName3
+        - '","value":"'
+        - Fn::GetAtt:
+          - MailerIdentity0
+          - DkimDNSTokenValue3
+        - '"}]},"mail.example.org":{"dkimTokens":[{"name":"'
+        - Fn::GetAtt:
+          - MailerIdentity1
+          - DkimDNSTokenName1
+        - '","value":"'
+        - Fn::GetAtt:
+          - MailerIdentity1
+          - DkimDNSTokenValue1
+        - '"},{"name":"'
+        - Fn::GetAtt:
+          - MailerIdentity1
+          - DkimDNSTokenName2
+        - '","value":"'
+        - Fn::GetAtt:
+          - MailerIdentity1
+          - DkimDNSTokenValue2
+        - '"},{"name":"'
+        - Fn::GetAtt:
+          - MailerIdentity1
+          - DkimDNSTokenName3
+        - '","value":"'
+        - Fn::GetAtt:
+          - MailerIdentity1
+          - DkimDNSTokenValue3
+        - '"}]}},"ruleSetName":"'
+        - Ref: MailerRuleSet
+        - '"}}]'
     Description: Deployment registration resources JSON.

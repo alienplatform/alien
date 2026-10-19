@@ -4,8 +4,6 @@ expression: yaml
 ---
 AWSTemplateFormatVersion: 2010-09-09
 Description: aws opensearch serverless
-Transform:
-- AWS::LanguageExtensions
 Metadata:
   AWS::CloudFormation::Interface:
     ParameterGroups:
@@ -297,63 +295,58 @@ Outputs:
     Description: Setup fingerprint algorithm version.
   DeploymentManagementConfig:
     Value:
-      Fn::ToJsonString:
-        platform: aws
-        managingRoleArn:
-          Ref: ManagingRoleArn
+      Fn::Join:
+      - ''
+      - - '{"platform":"aws","managingRoleArn":"'
+        - Ref: ManagingRoleArn
+        - '"}'
     Description: Deployment registration management configuration JSON.
   DeploymentStackSettings:
     Value:
-      Fn::ToJsonString:
-        deploymentModel: push
-        endpointAccess:
-          Ref: EndpointAccess
-        updates:
-          Ref: UpdatesMode
-        telemetry:
-          Ref: TelemetryMode
-        heartbeats:
-          Ref: HeartbeatsMode
-        network:
-          Ref: AWS::NoValue
+      Fn::Join:
+      - ''
+      - - '{"deploymentModel":"push","endpointAccess":"'
+        - Ref: EndpointAccess
+        - '","updates":"'
+        - Ref: UpdatesMode
+        - '","telemetry":"'
+        - Ref: TelemetryMode
+        - '","heartbeats":"'
+        - Ref: HeartbeatsMode
+        - '","network":null}'
     Description: Deployment registration settings JSON.
   DeploymentResources:
     Value:
-      Fn::ToJsonString:
-      - id: execution-sa
-        type: service-account
-        importData:
-          roleName:
-            Ref: ExecutionSaRole
-          roleArn:
-            Fn::GetAtt:
-            - ExecutionSaRole
-            - Arn
-          stackPermissionsApplied: true
-      - id: articles
-        type: experimental/aws-opensearch
-        importData:
-          collectionName:
-            Fn::Join:
-            - '-'
-            - - articles
-              - Fn::Select:
-                - 0
-                - Fn::Split:
-                  - '-'
-                  - Fn::Select:
-                    - 2
-                    - Fn::Split:
-                      - /
-                      - Ref: AWS::StackId
-          collectionId:
-            Ref: Articles
-          collectionArn:
-            Fn::GetAtt:
-            - Articles
-            - Arn
-          endpoint:
-            Fn::GetAtt:
-            - Articles
-            - CollectionEndpoint
+      Fn::Join:
+      - ''
+      - - '[{"id":"execution-sa","type":"service-account","importData":{"roleName":"'
+        - Ref: ExecutionSaRole
+        - '","roleArn":"'
+        - Fn::GetAtt:
+          - ExecutionSaRole
+          - Arn
+        - '","stackPermissionsApplied":true}},{"id":"articles","type":"experimental/aws-opensearch","importData":{"collectionName":"'
+        - Fn::Join:
+          - '-'
+          - - articles
+            - Fn::Select:
+              - 0
+              - Fn::Split:
+                - '-'
+                - Fn::Select:
+                  - 2
+                  - Fn::Split:
+                    - /
+                    - Ref: AWS::StackId
+        - '","collectionId":"'
+        - Ref: Articles
+        - '","collectionArn":"'
+        - Fn::GetAtt:
+          - Articles
+          - Arn
+        - '","endpoint":"'
+        - Fn::GetAtt:
+          - Articles
+          - CollectionEndpoint
+        - '"}}]'
     Description: Deployment registration resources JSON.

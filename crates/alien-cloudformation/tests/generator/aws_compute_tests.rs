@@ -222,7 +222,7 @@ fn aws_custom_domain_registers_the_public_container_resource_id() {
     let yaml = render_built_ins(
         &stack,
         StackSettings::default(),
-        RegistrationMode::OutputsFallback,
+        super::helpers::custom_resource_registration(),
         "container custom domain",
     );
     let template: serde_json::Value = serde_yaml::from_str(&yaml).expect("template");
@@ -231,7 +231,7 @@ fn aws_custom_domain_registers_the_public_container_resource_id() {
         "one endpoint needs no selector"
     );
     let domains: alien_cloudformation::CfExpression = serde_json::from_value(
-        template["Outputs"]["DeploymentStackSettings"]["Value"]["Fn::ToJsonString"]["domains"]
+        template["Resources"]["DeploymentRegistration"]["Properties"]["StackSettings"]["domains"]
             .clone(),
     )
     .expect("registration domains");
@@ -282,7 +282,7 @@ fn aws_custom_domain_selection_registers_exactly_one_public_resource() {
     let yaml = render_built_ins(
         &stack,
         StackSettings::default(),
-        RegistrationMode::OutputsFallback,
+        super::helpers::custom_resource_registration(),
         "custom domain resource selection",
     );
     let template: serde_json::Value = serde_yaml::from_str(&yaml).expect("template");
@@ -291,7 +291,7 @@ fn aws_custom_domain_selection_registers_exactly_one_public_resource() {
         serde_json::json!(["api", "web"])
     );
     let domains: alien_cloudformation::CfExpression = serde_json::from_value(
-        template["Outputs"]["DeploymentStackSettings"]["Value"]["Fn::ToJsonString"]["domains"]
+        template["Resources"]["DeploymentRegistration"]["Properties"]["StackSettings"]["domains"]
             .clone(),
     )
     .expect("registration domains");

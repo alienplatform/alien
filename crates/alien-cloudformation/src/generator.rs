@@ -3,6 +3,7 @@ use crate::{
     inline_policy::{
         consolidate_role_inline_policies, expression_references, validate_role_policy_limits,
     },
+    json_text::lower_json_strings,
     registry::CfRegistry,
     template::{
         CfExpression, CfMapping, CfOutput, CfParameter, CfResource, CfRule, CfRuleAssertion,
@@ -24,7 +25,6 @@ use serde_json::{json, Value};
 use std::collections::HashSet;
 
 const TEMPLATE_VERSION: &str = "2010-09-09";
-const LANGUAGE_EXTENSIONS_TRANSFORM: &str = "AWS::LanguageExtensions";
 
 const PARAM_TOKEN: &str = "Token";
 const PARAM_MANAGING_ROLE_ARN: &str = "ManagingRoleArn";
@@ -71,7 +71,6 @@ const OUTPUT_RESOURCES_CHUNK_BYTES: usize = 3_500;
 const STANDARD_OUTPUT_COUNT: usize = 12;
 const CLOUDFORMATION_MAX_OUTPUTS: usize = 200;
 /// `Fn::Sub` variable carrying one registration entry's JSON text.
-const ENTRY_JSON_SUB_VARIABLE: &str = "entry";
 const MAPPING_REGIONAL_CUSTOM_RESOURCE_SERVICE_TOKENS: &str = "RegionalCustomResourceServiceTokens";
 const MAPPING_SERVICE_TOKEN_KEY: &str = "ServiceToken";
 const RULE_SUPPORTED_AWS_REGION: &str = "SupportedAwsRegion";
@@ -340,7 +339,7 @@ pub fn generate_cloudformation_template_with_profile(
                 base
             }
         }),
-        transform: vec![LANGUAGE_EXTENSIONS_TRANSFORM.to_string()],
+        transform: Vec::new(),
         metadata: IndexMap::new(),
         parameters: IndexMap::new(),
         mappings: IndexMap::new(),
@@ -595,6 +594,7 @@ pub fn generate_cloudformation_template_with_profile(
         )?;
     }
 
+    lower_json_strings(&mut template)?;
     validate_role_policy_limits(&template)?;
     Ok(template)
 }
@@ -1899,10 +1899,22 @@ fn add_standard_conditions(
     }
     let has_created_network = stack_has_created_network(stack, settings.setup_management);
     if !target.is_kubernetes() && alien_core::sandbox_egress::has_sandbox_gateway(stack) {
-        template.conditions.insert("SandboxGatewayHasThirdSubnet".into(), CfExpression::equals(
-            CfExpression::object([("Fn::Length", CfExpression::ref_("SandboxGatewaySubnetCidrs"))]),
-            CfExpression::Integer(3),
-        ));
+        // The list has at least two entries (setup rules require both). It has a third
+        // when it differs from its first two.
+        let cidrs = || CfExpression::ref_("SandboxGatewaySubnetCidrs");
+        let select = |index: i64| {
+            CfExpression::object([(
+                "Fn::Select",
+                CfExpression::list([CfExpression::Integer(index), cidrs()]),
+            )])
+        };
+        template.conditions.insert(
+            "SandboxGatewayHasThirdSubnet".into(),
+            CfExpression::not(CfExpression::equals(
+                CfExpression::join(",", cidrs()),
+                CfExpression::join(",", CfExpression::list([select(0), select(1)])),
+            )),
+        );
     }
     if has_dynamic_aws_network_settings(settings.network.as_ref()) || has_created_network {
         template.conditions.insert(
@@ -2601,25 +2613,11 @@ impl RegistrationEntry {
     /// The entry's JSON text for the Outputs fallback, gated so a declined entry
     /// resolves to `AWS::NoValue`.
     ///
-    /// `Fn::ToJsonString` sits *inside* the gate on purpose. Wrapping the gate
-    /// instead — `ToJsonString(Fn::If(..))` — serializes a declined entry as the
-    /// literal `null`, which is the bug this construction exists to avoid.
-    ///
-    /// The `Fn::Sub` around it only launders the type. CloudFormation resolves a
-    /// bare `Fn::ToJsonString` inside `Fn::Join` correctly, but cfn-lint does not
-    /// infer that it returns a string and fails the template with E6101, and the
-    /// only way to silence that is a template-wide suppression that would also
-    /// mask real E6101s. Substitution is a single pass, so JSON containing a
-    /// literal `${...}` passes through untouched.
+    /// The JSON text sits *inside* the gate on purpose. Gating the value before
+    /// rendering it serializes a declined entry as the literal `null`, which is the
+    /// bug this construction exists to avoid.
     fn outputs_element(&self) -> CfExpression {
-        let json_text = CfExpression::sub_with(
-            format!("${{{ENTRY_JSON_SUB_VARIABLE}}}"),
-            [(
-                ENTRY_JSON_SUB_VARIABLE,
-                CfExpression::to_json_string(self.entry.clone()),
-            )],
-        );
-        self.gated(json_text)
+        self.gated(CfExpression::to_json_string(self.entry.clone()))
     }
 }
 

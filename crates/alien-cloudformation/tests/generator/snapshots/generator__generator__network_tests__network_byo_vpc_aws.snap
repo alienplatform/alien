@@ -4,8 +4,6 @@ expression: yaml
 ---
 AWSTemplateFormatVersion: 2010-09-09
 Description: byo vpc aws
-Transform:
-- AWS::LanguageExtensions
 Metadata:
   AWS::CloudFormation::Interface:
     ParameterGroups:
@@ -197,66 +195,95 @@ Outputs:
     Description: Setup fingerprint algorithm version.
   DeploymentManagementConfig:
     Value:
-      Fn::ToJsonString:
-        platform: aws
-        managingRoleArn:
-          Ref: ManagingRoleArn
+      Fn::Join:
+      - ''
+      - - '{"platform":"aws","managingRoleArn":"'
+        - Ref: ManagingRoleArn
+        - '"}'
     Description: Deployment registration management configuration JSON.
   DeploymentStackSettings:
     Value:
-      Fn::ToJsonString:
-        deploymentModel: push
-        endpointAccess:
-          Ref: EndpointAccess
-        updates:
-          Ref: UpdatesMode
-        telemetry:
-          Ref: TelemetryMode
-        heartbeats:
-          Ref: HeartbeatsMode
-        network:
-          Fn::If:
+      Fn::Join:
+      - ''
+      - - '{"deploymentModel":"push","endpointAccess":"'
+        - Ref: EndpointAccess
+        - '","updates":"'
+        - Ref: UpdatesMode
+        - '","telemetry":"'
+        - Ref: TelemetryMode
+        - '","heartbeats":"'
+        - Ref: HeartbeatsMode
+        - '","network":'
+        - Fn::If:
           - NetworkModeCreate
-          - type: create
-            cidr:
-              Fn::If:
-              - HasVpcCidr
-              - Ref: VpcCidr
-              - Ref: AWS::NoValue
-            availability_zones:
-              Ref: AvailabilityZones
-          - Fn::If:
-            - NetworkModeUseExisting
-            - type: byo-vpc-aws
-              vpc_id:
-                Ref: VpcId
-              public_subnet_ids:
-                Fn::If:
-                - HasPublicSubnetIds
-                - Ref: PublicSubnetIds
-                - []
-              private_subnet_ids:
-                Fn::If:
-                - HasPrivateSubnetIds
-                - Ref: PrivateSubnetIds
-                - []
-              security_group_ids:
-                Fn::If:
-                - HasSecurityGroupIds
-                - Ref: SecurityGroupIds
-                - []
-            - type: use-default
+          - Fn::Join:
+            - ''
+            - - '{"type":"create","cidr":'
+              - Fn::If:
+                - HasVpcCidr
+                - Fn::Join:
+                  - ''
+                  - - '"'
+                    - Ref: VpcCidr
+                    - '"'
+                - 'null'
+              - ',"availability_zones":"'
+              - Ref: AvailabilityZones
+              - '"}'
+          - Fn::Join:
+            - ''
+            - - Fn::If:
+                - NetworkModeUseExisting
+                - Fn::Join:
+                  - ''
+                  - - '{"type":"byo-vpc-aws","vpc_id":"'
+                    - Ref: VpcId
+                    - '","public_subnet_ids":'
+                    - Fn::If:
+                      - HasPublicSubnetIds
+                      - Fn::Join:
+                        - ''
+                        - - '["'
+                          - Fn::Join:
+                            - '","'
+                            - Ref: PublicSubnetIds
+                          - '"]'
+                      - '[]'
+                    - ',"private_subnet_ids":'
+                    - Fn::If:
+                      - HasPrivateSubnetIds
+                      - Fn::Join:
+                        - ''
+                        - - '["'
+                          - Fn::Join:
+                            - '","'
+                            - Ref: PrivateSubnetIds
+                          - '"]'
+                      - '[]'
+                    - ',"security_group_ids":'
+                    - Fn::If:
+                      - HasSecurityGroupIds
+                      - Fn::Join:
+                        - ''
+                        - - '["'
+                          - Fn::Join:
+                            - '","'
+                            - Ref: SecurityGroupIds
+                          - '"]'
+                      - '[]'
+                    - '}'
+                - '{"type":"use-default"}'
+        - '}'
     Description: Deployment registration settings JSON.
   DeploymentResources:
     Value:
-      Fn::ToJsonString:
-      - id: logs-bucket
-        type: sample-resource
-        importData:
-          bucketName:
-            Ref: LogsBucket
-          bucketArn:
-            Fn::GetAtt:
-            - LogsBucket
-            - Arn
+      Fn::Join:
+      - ''
+      - - '[{"id":"logs-bucket","type":"sample-resource","importData":{"bucketName":"'
+        - Ref: LogsBucket
+        - '","bucketArn":"'
+        - Fn::GetAtt:
+          - LogsBucket
+          - Arn
+        - '"}}]'
     Description: Deployment registration resources JSON.
