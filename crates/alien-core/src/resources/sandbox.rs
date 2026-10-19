@@ -789,23 +789,33 @@ impl Sandbox {
         }
 
         // Read before the limits, like the image, because a lifetime is declared whether or not
-        // any limits are. The ceiling is Lambda's, and it rejects the run rather than clamping, so
-        // a value outside it would pass planning, render into the package, and fail at the first
-        // sandbox. Kubernetes takes the same field with no such bound, which is why this sits
-        // under the AWS gate rather than on the type.
-        if platform == Platform::Aws {
-            if let Some(seconds) = self.lifecycle.max_lifetime_seconds {
-                if !(1..=AWS_MAX_LIFETIME_SECONDS).contains(&seconds) {
-                    return Err(AlienError::new(ErrorData::SandboxLimitInvalid {
-                        resource_id: self.id.clone(),
-                        field: "maxLifetimeSeconds".to_string(),
-                        value: seconds.to_string(),
-                        reason: format!(
-                            "AWS runs a MicroVM for between 1 and \
-                             {AWS_MAX_LIFETIME_SECONDS} seconds"
-                        ),
-                    }));
-                }
+        // any limits are.
+        if let Some(seconds) = self.lifecycle.max_lifetime_seconds {
+            // First, so a platform with no deadline says so before any complaint about the value.
+            capabilities.require(SandboxCapability::SandboxLifetime, platform)?;
+
+            if seconds == 0 {
+                return Err(AlienError::new(ErrorData::SandboxLimitInvalid {
+                    resource_id: self.id.clone(),
+                    field: "maxLifetimeSeconds".to_string(),
+                    value: "0".to_string(),
+                    reason: "a sandbox must be allowed to run for at least 1 second".to_string(),
+                }));
+            }
+
+            // The ceiling is Lambda's, and it rejects the run rather than clamping, so a value
+            // above it would pass planning, render into the package, and fail at the first
+            // sandbox. Kubernetes takes the same field with no such ceiling, which is why this
+            // sits under the AWS gate rather than on the type.
+            if platform == Platform::Aws && seconds > AWS_MAX_LIFETIME_SECONDS {
+                return Err(AlienError::new(ErrorData::SandboxLimitInvalid {
+                    resource_id: self.id.clone(),
+                    field: "maxLifetimeSeconds".to_string(),
+                    value: seconds.to_string(),
+                    reason: format!(
+                        "AWS runs a MicroVM for between 1 and {AWS_MAX_LIFETIME_SECONDS} seconds"
+                    ),
+                }));
             }
         }
 
@@ -2156,9 +2166,9 @@ mod tests {
         }
     }
 
-    /// Lambda rejects a run outside 1–28,800 rather than clamping it, so a value beyond that
+    /// Lambda rejects a run above 28,800 seconds rather than clamping it, so a value beyond that
     /// would pass planning, render into the package, and fail at the first sandbox. Kubernetes
-    /// takes the same field with no such bound, so the check is AWS's alone. The lifetime is a
+    /// takes the same field with no such ceiling, so the check is AWS's alone. The lifetime is a
     /// lifecycle field, so a sandbox that declares no limits is held to it too.
     #[test]
     fn a_lifetime_aws_would_reject_is_refused_while_planning() {
@@ -2167,20 +2177,20 @@ mod tests {
         without_limits.limits = None;
 
         for (declared, mut sandbox) in [("with", with_limits), ("without", without_limits)] {
-            for seconds in [0, 28_801, 30_000, 100_000] {
+            for seconds in [28_801, 30_000, 100_000] {
                 sandbox.lifecycle.max_lifetime_seconds = Some(seconds);
                 let error = sandbox
                     .validate_for_platform(Platform::Aws)
-                    .expect_err("a lifetime outside what AWS runs is refused");
+                    .expect_err("a lifetime above what AWS runs is refused");
                 assert_eq!(
                     error.code, "SANDBOX_LIMIT_INVALID",
                     "{seconds}s {declared} limits"
                 );
 
-                // Kubernetes has no such ceiling, so the same declaration is fine there.
+                // Kubernetes' ceiling is far higher, so the same declaration is fine there.
                 sandbox
                     .validate_for_platform(Platform::Kubernetes)
-                    .expect("the kubelet takes any activeDeadlineSeconds");
+                    .expect("Kubernetes takes an activeDeadlineSeconds above 28,800");
             }
 
             sandbox.lifecycle.max_lifetime_seconds = Some(28_800);
