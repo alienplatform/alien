@@ -14,9 +14,9 @@ use alien_cloudformation::{
 use alien_core::{
     import::EmitContext, sandbox_egress::has_sandbox_gateway, AwsManagementConfig, ComputeCluster,
     Container, ContainerCode, DeploymentConfig, EnvironmentVariablesSnapshot, ExternalBindings,
-    ManagementConfig, Network, NetworkSettings, PermissionProfile, Platform, ResourceDefinition,
-    ResourceLifecycle, ResourceSpec, Result, Sandbox, SandboxCode, SandboxEgress,
-    SandboxLifecyclePolicy, Stack, StackSettings, StackState,
+    ManagementConfig, Network, NetworkSettings, PermissionProfile, Platform, ResourceLifecycle,
+    ResourceSpec, Result, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy, Stack,
+    StackSettings, StackState,
 };
 use alien_preflights::runner::PreflightRunner;
 
@@ -247,5 +247,130 @@ async fn a_legacy_sandbox_setup_template_has_no_gateway() {
                 "{shape:?} {egress:?}: legacy egress must not install the gateway"
             );
         }
+    }
+}
+
+/// Evaluates a condition the way CloudFormation does on create and update. Only the functions
+/// the gateway condition uses are supported; `Fn::Select` past the end of a list is the error
+/// CloudFormation fails the operation with.
+fn evaluate_condition(
+    expression: &serde_json::Value,
+    lists: &std::collections::HashMap<&str, Vec<&str>>,
+) -> std::result::Result<serde_json::Value, String> {
+    use serde_json::Value;
+    let eval = |value: &Value| evaluate_condition(value, lists);
+    let Value::Object(fields) = expression else {
+        return Ok(expression.clone());
+    };
+    let (function, arguments) = fields.iter().next().expect("intrinsic");
+    let arguments = |count: usize| -> Vec<Value> {
+        let items = match arguments {
+            Value::Array(items) => items.clone(),
+            other => vec![other.clone()],
+        };
+        assert_eq!(items.len(), count, "{function} arguments: {items:?}");
+        items
+    };
+    let text = |value: Value| match value {
+        Value::String(text) => text,
+        other => panic!("expected text, got {other}"),
+    };
+    Ok(match function.as_str() {
+        "Ref" => {
+            let name = fields["Ref"].as_str().expect("Ref name");
+            Value::from(lists[name].clone())
+        }
+        "Fn::And" => Value::Bool(
+            match &fields["Fn::And"] {
+                Value::Array(items) => items.clone(),
+                other => panic!("Fn::And takes a list: {other}"),
+            }
+            .iter()
+            .map(|item| eval(item).map(|value| value.as_bool().expect("condition")))
+            .collect::<std::result::Result<Vec<_>, _>>()?
+            .into_iter()
+            .all(|value| value),
+        ),
+        "Fn::Not" => Value::Bool(!eval(&arguments(1)[0])?.as_bool().expect("condition")),
+        "Fn::Equals" => {
+            let [left, right] = &arguments(2)[..] else {
+                unreachable!()
+            };
+            Value::Bool(eval(left)? == eval(right)?)
+        }
+        "Fn::Join" => {
+            let [delimiter, items] = &arguments(2)[..] else {
+                unreachable!()
+            };
+            let Value::Array(items) = eval(items)? else {
+                panic!("Fn::Join takes a list")
+            };
+            let items = items
+                .iter()
+                .map(|item| eval(item).map(text))
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            Value::String(items.join(delimiter.as_str().expect("delimiter")))
+        }
+        "Fn::Split" => {
+            let [delimiter, source] = &arguments(2)[..] else {
+                unreachable!()
+            };
+            text(eval(source)?)
+                .split(delimiter.as_str().expect("delimiter"))
+                .map(Value::from)
+                .collect()
+        }
+        "Fn::Select" => {
+            let [index, items] = &arguments(2)[..] else {
+                unreachable!()
+            };
+            let index = index.as_u64().expect("index") as usize;
+            let Value::Array(items) = eval(items)? else {
+                panic!("Fn::Select takes a list")
+            };
+            items.get(index).cloned().ok_or_else(|| {
+                format!("Fn::Select cannot select nonexistent value at index {index}")
+            })?
+        }
+        other => panic!("unsupported condition function {other}"),
+    })
+}
+
+/// `SandboxGatewayHasThirdSubnet` is evaluated on every create and update, including create-new
+/// installs that leave the gateway CIDRs empty. It must resolve for any list and be true only for
+/// exactly three entries, which is when the template adds the third subnet's proxy rule.
+#[tokio::test]
+async fn the_third_gateway_subnet_condition_resolves_for_any_cidr_list() {
+    let settings = settings();
+    let prepared = prepare_for_setup_template(
+        stack(Shape::SandboxOnly, SandboxEgress::Internet),
+        &settings,
+    )
+    .await;
+    let template = render(&prepared, settings, "third gateway subnet condition")
+        .expect("internet sandbox template renders");
+    let condition = serde_json::to_value(&template.conditions["SandboxGatewayHasThirdSubnet"])
+        .expect("condition serializes");
+
+    // A cleared CommaDelimitedList parameter resolves to one empty entry.
+    for (cidrs, expected) in [
+        (vec![""], false),
+        (vec!["10.0.10.0/24"], false),
+        (vec!["10.0.10.0/24", "10.0.11.0/24"], false),
+        (vec!["10.0.10.0/24", "10.0.11.0/24", "10.0.12.0/24"], true),
+        (
+            vec![
+                "10.0.10.0/24",
+                "10.0.11.0/24",
+                "10.0.12.0/24",
+                "10.0.13.0/24",
+            ],
+            false,
+        ),
+    ] {
+        let lists = std::collections::HashMap::from([("SandboxGatewaySubnetCidrs", cidrs.clone())]);
+        let value = evaluate_condition(&condition, &lists)
+            .unwrap_or_else(|error| panic!("{cidrs:?}: the condition must resolve: {error}"));
+        assert_eq!(value, serde_json::Value::Bool(expected), "{cidrs:?}");
     }
 }
