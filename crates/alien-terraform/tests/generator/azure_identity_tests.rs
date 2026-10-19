@@ -284,8 +284,9 @@ fn azure_management_grant_at_another_resource_group_gets_its_own_role() {
             .as_array_mut()
             .expect("network/heartbeat has Azure grants")
         {
-            entry["binding"]["stack"]["scope"] =
-                serde_json::json!(format!("/subscriptions/${{subscriptionId}}/resourceGroups/{group}"));
+            entry["binding"]["stack"]["scope"] = serde_json::json!(format!(
+                "/subscriptions/${{subscriptionId}}/resourceGroups/{group}"
+            ));
         }
         serde_json::from_value::<alien_core::permissions::PermissionSet>(value)
             .expect("permission set deserializes")
@@ -611,4 +612,80 @@ fn azure_provider_tracks_partial_creates_and_protects_detached_keys() {
     );
     snapshot_module("azure_partial_create_with_retained_key", &module);
     assert_terraform_valid(&module, "azure_provider_partial_create_with_retained_key");
+}
+
+/// A single-secret Key Vault grant becomes a role assignment on that secret; a vault-wide grant
+/// stays on the vault. Widening the secret grant to the vault would let its holder read every
+/// entry, which is what the dedicated sandbox gateway vault exists to prevent.
+#[test]
+fn azure_vault_grants_keep_their_secret_scope() {
+    use alien_core::permissions::{PermissionSet, PermissionSetReference};
+    let exact: PermissionSet = serde_json::from_value(serde_json::json!({
+        "id": "vault/sandbox-egress-signing-key-read",
+        "description": "Read only the sandbox-egress-signing-key vault entry",
+        "platforms": {"azure": [{
+            "grant": {"predefinedRoles": ["Key Vault Secrets User"]},
+            "binding": {"resource": {"scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.KeyVault/vaults/${resourceName}/secrets/sandbox-egress-signing-key"}}
+        }]}
+    }))
+    .unwrap();
+    let stack = Stack::new("acme-vault-scope".to_string())
+        .add(resource_group(), ResourceLifecycle::Frozen)
+        .add(
+            alien_core::Vault::new("gw".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            ServiceAccount::new("execution-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            ServiceAccount::new("reader-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .permission(
+            "execution",
+            PermissionProfile::new().resource("gw", [PermissionSetReference::from_inline(exact)]),
+        )
+        .permission(
+            "reader",
+            PermissionProfile::new().resource("gw", ["vault/data-read"]),
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+    let rendered = module
+        .iter()
+        .map(|(_, contents)| contents.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let assignments: Vec<&str> = rendered
+        .split("resource \"azurerm_role_assignment\"")
+        .skip(1)
+        .filter(|block| block.contains("azurerm_key_vault.gw"))
+        .collect();
+    let scope_of = |principal: &str| -> Vec<String> {
+        assignments
+            .iter()
+            .filter(|block| {
+                block.contains(&format!(
+                    "azurerm_user_assigned_identity.{principal}_sa.principal_id"
+                ))
+            })
+            .filter_map(|block| {
+                block
+                    .lines()
+                    .find(|line| line.trim_start().starts_with("scope"))
+            })
+            .map(|line| line.split_once('=').unwrap().1.trim().to_string())
+            .collect()
+    };
+    assert_eq!(
+        scope_of("execution"),
+        vec!["\"${azurerm_key_vault.gw.id}/secrets/sandbox-egress-signing-key\"".to_string()]
+    );
+    assert_eq!(
+        scope_of("reader"),
+        vec!["azurerm_key_vault.gw.id".to_string()]
+    );
+    assert_terraform_valid(&module, "azure_vault_secret_scope");
 }

@@ -198,6 +198,7 @@ fn emit_vault_permissions(
                     vault_label,
                     &profile_name,
                     binding_index,
+                    &binding.scope,
                     &binding.role_name,
                     role_definition_id,
                     principal_id_expr.clone(),
@@ -266,6 +267,7 @@ fn emit_vault_permissions(
                 vault_label,
                 "management",
                 binding_index,
+                &binding.scope,
                 &binding.role_name,
                 role_definition_id,
                 principal_id_expr.clone(),
@@ -276,30 +278,57 @@ fn emit_vault_permissions(
     Ok(())
 }
 
+/// The part of a resource-bound grant scope below the vault, such as `/secrets/<name>` for a
+/// single-secret grant; empty for a vault-wide grant.
+fn scope_below_vault(scope: &str) -> Result<&str> {
+    const VAULTS: &str = "/providers/Microsoft.KeyVault/vaults/";
+    let Some(start) = scope.find(VAULTS) else {
+        return Err(AlienError::new(alien_core::ErrorData::GenericError {
+            message: format!("Azure vault grant scope '{scope}' does not name a Key Vault"),
+        }));
+    };
+    let rest = &scope[start + VAULTS.len()..];
+    Ok(rest.find('/').map_or("", |slash| &rest[slash..]))
+}
+
+#[allow(clippy::too_many_arguments)]
 fn emit_role_assignment(
     fragment: &mut TfFragment,
     vault_label: &str,
     principal_label: &str,
     binding_index: usize,
+    scope: &str,
     role_name: &str,
     role_definition_id: Expression,
     principal_id_expr: Expression,
 ) -> Result<()> {
     let role_label = sanitize_role_label(role_name);
+    // A single-secret grant keeps its secret path; Azure accepts it before the secret exists.
+    let below = scope_below_vault(scope)?;
+    let (label_suffix, scope_expr) = if below.is_empty() {
+        (
+            String::new(),
+            expr::traversal(["azurerm_key_vault", vault_label, "id"]),
+        )
+    } else {
+        (
+            format!("_{}", sanitize_role_label(below.trim_start_matches('/'))),
+            expr::template(format!("${{azurerm_key_vault.{vault_label}.id}}{below}")),
+        )
+    };
     let assignment = resource_block(
         "azurerm_role_assignment",
-        &format!("{vault_label}_{role_label}_{principal_label}_assignment_{binding_index}"),
+        &format!(
+            "{vault_label}_{role_label}_{principal_label}{label_suffix}_assignment_{binding_index}"
+        ),
         [
             attr(
                 "name",
                 expr::raw(&format!(
-                    "uuidv5(\"oid\", \"deployment:azure:vault-role-assign:${{azurerm_key_vault.{vault_label}.id}}:{role_label}:{principal_label}:{binding_index}\")"
+                    "uuidv5(\"oid\", \"deployment:azure:vault-role-assign:${{azurerm_key_vault.{vault_label}.id}}{below}:{role_label}:{principal_label}:{binding_index}\")"
                 )),
             ),
-            attr(
-                "scope",
-                expr::traversal(["azurerm_key_vault", vault_label, "id"]),
-            ),
+            attr("scope", scope_expr),
             attr(
                 "role_definition_id",
                 role_definition_id,
