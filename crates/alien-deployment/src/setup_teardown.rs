@@ -912,6 +912,76 @@ mod tests {
         teardown_after_a_lost_record(ResourceLifecycle::Frozen, microvms_provider(microvms)).await;
     }
 
+    /// Live AWS refused the first image delete of a setup teardown with "Cannot delete MicroVM
+    /// image in its current state" and accepted the same call on the next run. Teardown waits
+    /// that out within its step budget instead of failing, and keeps the image recorded until
+    /// the delete succeeds.
+    #[tokio::test(start_paused = true)]
+    async fn an_image_still_settling_is_deleted_on_a_later_teardown_step() {
+        let attempts = Arc::new(Mutex::new(0_usize));
+        let mut microvms = alien_aws_clients::lambda_microvms::MockLambdaMicrovmsApi::new();
+        let seen = attempts.clone();
+        microvms
+            .expect_delete_microvm_image()
+            .withf(|image| image == SANDBOX_IMAGE)
+            .times(2)
+            .returning(move |image| {
+                let mut seen = seen.lock().unwrap();
+                *seen += 1;
+                if *seen == 1 {
+                    Err(AlienError::new(
+                        alien_aws_clients::ErrorData::RemoteResourceConflict {
+                            resource_type: "Microvm".to_string(),
+                            resource_name: image.to_string(),
+                            message: "Cannot delete MicroVM image in its current state".to_string(),
+                        },
+                    ))
+                } else {
+                    Ok(())
+                }
+            });
+        let mut provider = microvms_provider(microvms);
+        let mut iam = MockIamApi::new();
+        iam.expect_delete_role_policy()
+            .withf(|role, policy| role == BUILD_ROLE && policy == "sandbox-image-build")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        iam.expect_delete_role()
+            .withf(|role| role == BUILD_ROLE)
+            .times(1)
+            .returning(|_| Ok(()));
+        let iam = Arc::new(iam);
+        provider
+            .expect_get_aws_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        let mut state = teardown_required(InitialSetupAuthority::DirectSetup);
+        state.runtime_metadata.as_mut().unwrap().setup_scaffolding = BTreeMap::from([(
+            "agents".to_string(),
+            SetupScaffolding::AwsSandbox {
+                build_role_name: BUILD_ROLE.to_string(),
+                egress: None,
+                image_arn: Some(SANDBOX_IMAGE.to_string()),
+            },
+        )]);
+        let transport = RecordingTransport::default();
+
+        run(&mut state, provider, &transport)
+            .await
+            .expect("a settling image does not fail teardown");
+
+        assert_eq!(state.status, DeploymentStatus::Deleted);
+        assert_eq!(*attempts.lock().unwrap(), 2);
+        assert!(state.runtime_metadata.unwrap().setup_scaffolding.is_empty());
+        let checkpoints = transport.checkpoints.lock().unwrap();
+        assert!(
+            matches!(
+                &checkpoints[0].runtime_metadata.as_ref().unwrap().setup_scaffolding["agents"],
+                SetupScaffolding::AwsSandbox { image_arn: Some(image), .. } if image == SANDBOX_IMAGE
+            ),
+            "the refused image stays recorded until its delete succeeds"
+        );
+    }
+
     fn microvms_provider(
         microvms: alien_aws_clients::lambda_microvms::MockLambdaMicrovmsApi,
     ) -> MockPlatformServiceProvider {

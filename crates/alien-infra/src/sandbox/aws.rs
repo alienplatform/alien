@@ -44,6 +44,9 @@ const ARCHITECTURE: &str = "ARM_64";
 /// build, so hitting it means the image is wedged, not slow.
 const BUILD_POLL_INTERVAL: Duration = Duration::from_secs(10);
 const BUILD_MAX_POLLS: u32 = 90;
+/// How many times a delete refused while the image settles is retried, at
+/// `BUILD_POLL_INTERVAL`, before the delete fails: ten minutes.
+const IMAGE_DELETE_MAX_POLLS: u32 = 60;
 
 /// A version a roll replaced, and when it stopped serving.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -912,6 +915,19 @@ impl AwsSandboxController {
             Ok(()) => {}
             Err(error) if is_remote_resource_absent(&error) => {
                 debug!(sandbox_id = %config.id, image = %image_identifier, "MicroVM image already gone");
+            }
+            // An image that is still settling refuses deletion for a while; ask again, bounded.
+            Err(error)
+                if matches!(
+                    error.error,
+                    Some(CloudClientErrorData::RemoteResourceConflict { .. })
+                ) =>
+            {
+                info!(sandbox_id = %config.id, image = %image_identifier, "MicroVM image cannot be deleted in its current state yet");
+                return Ok(HandlerAction::Stay {
+                    max_times: Some(IMAGE_DELETE_MAX_POLLS),
+                    suggested_delay: Some(BUILD_POLL_INTERVAL),
+                });
             }
             Err(error) => {
                 return Err(error).context(ErrorData::CloudPlatformError {
@@ -3509,6 +3525,64 @@ mod tests {
             .expect("delete flow should succeed");
         assert_eq!(executor.status(), ResourceStatus::Deleted);
         assert!(executor.outputs().is_none());
+    }
+
+    fn settling_refusal() -> alien_error::AlienError<CloudClientErrorData> {
+        alien_error::AlienError::new(CloudClientErrorData::RemoteResourceConflict {
+            resource_type: "Microvm".to_string(),
+            resource_name: "DeleteMicrovmImage".to_string(),
+            message: "Cannot delete MicroVM image in its current state".to_string(),
+        })
+    }
+
+    /// AWS refuses to delete an image that is still settling and accepts the same call shortly
+    /// after. The first refusal must not fail the delete.
+    #[tokio::test]
+    async fn a_delete_refused_while_the_image_settles_is_asked_again() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        let calls = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let seen = calls.clone();
+        client
+            .expect_delete_microvm_image()
+            .withf(|identifier| identifier == IMAGE_ARN)
+            .times(2)
+            .returning(move |_| {
+                if seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                    Err(settling_refusal())
+                } else {
+                    Ok(())
+                }
+            });
+
+        let mut executor = executor(ready_controller(), client).await;
+        executor.delete().expect("transition to delete");
+        executor
+            .run_until_terminal()
+            .await
+            .expect("the second delete succeeds");
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    /// The wait is bounded: an image that never leaves its state fails the delete.
+    #[tokio::test]
+    async fn an_image_that_never_settles_fails_the_delete_within_its_poll_budget() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        client
+            .expect_delete_microvm_image()
+            .times(IMAGE_DELETE_MAX_POLLS as usize)
+            .returning(|_| Err(settling_refusal()));
+
+        let mut executor = executor(ready_controller(), client).await;
+        executor.delete().expect("transition to delete");
+        let error = executor
+            .run_until_terminal()
+            .await
+            .expect_err("an image that never settles fails the delete");
+        assert!(
+            matches!(error.error, Some(ErrorData::PollingTimeout { .. })),
+            "the delete fails on its poll budget: {error:?}"
+        );
     }
 
     /// A sandbox whose create failed before the image existed still issues the delete, against
