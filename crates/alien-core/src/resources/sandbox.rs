@@ -788,6 +788,27 @@ impl Sandbox {
             self.azure_image()?;
         }
 
+        // Read before the limits, like the image, because a lifetime is declared whether or not
+        // any limits are. The ceiling is Lambda's, and it rejects the run rather than clamping, so
+        // a value outside it would pass planning, render into the package, and fail at the first
+        // sandbox. Kubernetes takes the same field with no such bound, which is why this sits
+        // under the AWS gate rather than on the type.
+        if platform == Platform::Aws {
+            if let Some(seconds) = self.lifecycle.max_lifetime_seconds {
+                if !(1..=AWS_MAX_LIFETIME_SECONDS).contains(&seconds) {
+                    return Err(AlienError::new(ErrorData::SandboxLimitInvalid {
+                        resource_id: self.id.clone(),
+                        field: "maxLifetimeSeconds".to_string(),
+                        value: seconds.to_string(),
+                        reason: format!(
+                            "AWS runs a MicroVM for between 1 and \
+                             {AWS_MAX_LIFETIME_SECONDS} seconds"
+                        ),
+                    }));
+                }
+            }
+        }
+
         let Some(limits) = self.limits.as_ref() else {
             // Nothing declared, so nothing to enforce and nothing to reject.
             return self.validate_capabilities(&capabilities, platform);
@@ -821,24 +842,6 @@ impl Sandbox {
             // Refused here rather than at emit so a customer sees it while planning, and so both
             // package formats inherit the same answer.
             self.microvm_tier()?;
-
-            // The ceiling is Lambda's, and it rejects the run rather than clamping — so a value
-            // outside it would pass planning, render into the package, and fail at the first
-            // sandbox. Kubernetes takes the same field with no such bound, which is why this
-            // sits under the AWS gate rather than on the type.
-            if let Some(seconds) = self.lifecycle.max_lifetime_seconds {
-                if !(1..=AWS_MAX_LIFETIME_SECONDS).contains(&seconds) {
-                    return Err(AlienError::new(ErrorData::SandboxLimitInvalid {
-                        resource_id: self.id.clone(),
-                        field: "maxLifetimeSeconds".to_string(),
-                        value: seconds.to_string(),
-                        reason: format!(
-                            "AWS runs a MicroVM for between 1 and \
-                             {AWS_MAX_LIFETIME_SECONDS} seconds"
-                        ),
-                    }));
-                }
-            }
         }
 
         self.validate_capabilities(&capabilities, platform)
