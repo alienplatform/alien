@@ -59,11 +59,13 @@ impl GatewayEgress {
         *current = Some(record);
         Ok(())
     }
-    /// Every gateway request goes through here. A status below 500 is an answer from a gateway,
-    /// so it ends any run of unanswered checks.
+    /// Every gateway request goes through here. Only a gateway accepting this sandbox's identity
+    /// and policy (`GET /health` answered 200) ends a run of unanswered checks. A 404 does not:
+    /// if re-registration then gets no answer, the sandbox still has no working gateway.
     pub(super) async fn policy_request(&self, record: Option<String>) -> Result<u16> {
+        let health = record.is_none();
         let status = self.send_policy_request(record).await?;
-        if status < 500 {
+        if health && status == 200 {
             *self.unanswered_since() = None;
         }
         Ok(status)
@@ -103,7 +105,10 @@ impl GatewayEgress {
             PolicyCheck::Rejected(error) | PolicyCheck::Unanswered(error) => Err(error),
         }
     }
-    /// Start of the current run of checks that no gateway answered. Callers hold `update_lock`.
+    /// Start of the current run of checks without a gateway acceptance. The monitor and the
+    /// lifecycle checks (delivery, Resume, Run) hold `update_lock`. `start` checks without it, but
+    /// it finishes before the agent serves requests, and the monitor it spawns skips checks until
+    /// a token is delivered, so no other check can interleave with it.
     fn unanswered_since(&self) -> std::sync::MutexGuard<'_, Option<Instant>> {
         self.unanswered_since
             .lock()
@@ -439,6 +444,8 @@ mod tests {
             (0, vec![403], true),
             (1, vec![403], true),
             (1, vec![404, 403], false),
+            (0, vec![409], false),
+            (0, vec![400], false),
         ] {
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let agent = Arc::new(agent(listener.local_addr().unwrap()));
@@ -559,6 +566,96 @@ mod tests {
             "closed {:?} after an answered refresh, before a new grace",
             answered.elapsed()
         );
+        monitor.abort();
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn unavailable_replica_is_retried_without_closing_egress() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let agent = Arc::new(agent(listener.local_addr().unwrap()));
+        agent.ready.store(true, Ordering::Release);
+        let started = Instant::now();
+        let monitor = tokio::spawn(agent.clone().monitor_policy());
+        let (socket, _) = listener.accept().await.unwrap();
+        answer(socket, 503).await;
+        let (socket, _) = listener.accept().await.unwrap();
+        assert!(agent.ensure_ready().is_ok(), "a 503 closed egress");
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "a 503 was not retried"
+        );
+        answer(socket, 200).await;
+        assert!(!agent.awaiting_delivery.load(Ordering::Acquire));
+        monitor.abort();
+    }
+
+    #[tokio::test]
+    async fn lost_state_with_unanswered_reregistration_closes_after_the_grace() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let agent = Arc::new(agent(listener.local_addr().unwrap()));
+        agent.ready.store(true, Ordering::Release);
+        let accepting = Arc::new(AtomicBool::new(false));
+        let registrations = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let server = tokio::spawn({
+            let (accepting, registrations) = (accepting.clone(), registrations.clone());
+            async move {
+                loop {
+                    let (socket, _) = listener.accept().await.unwrap();
+                    let mut socket = BufReader::new(socket);
+                    let header =
+                        String::from_utf8(read_header(&mut socket).await.unwrap()).unwrap();
+                    if header.starts_with("PUT ") {
+                        // The replica cannot apply the record and closes without a status.
+                        registrations.fetch_add(1, Ordering::AcqRel);
+                        continue;
+                    }
+                    let status = if accepting.load(Ordering::Acquire) {
+                        200
+                    } else {
+                        404
+                    };
+                    socket
+                        .write_all(
+                            format!("HTTP/1.1 {status} Test\r\nContent-Length: 0\r\n\r\n")
+                                .as_bytes(),
+                        )
+                        .await
+                        .unwrap();
+                }
+            }
+        });
+        let grace = Duration::from_millis(300);
+        let started = Instant::now();
+        let monitor = tokio::spawn(agent.clone().monitor_policy_with(MonitorTiming {
+            period: Duration::from_millis(100),
+            retry: Duration::from_millis(10),
+            grace,
+        }));
+        while agent.ready.load(Ordering::Acquire) {
+            assert!(
+                started.elapsed() < Duration::from_secs(2),
+                "egress never closed while re-registration went unanswered"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let closed = started.elapsed();
+        assert!(closed >= grace, "closed after {closed:?}, before the grace");
+        assert!(
+            closed < grace * 2,
+            "closed after {closed:?}, well past the grace"
+        );
+        assert!(registrations.load(Ordering::Acquire) >= 3);
+        assert!(!agent.awaiting_delivery.load(Ordering::Acquire));
+        accepting.store(true, Ordering::Release);
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !agent.ready.load(Ordering::Acquire) {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("egress did not reopen once a gateway accepted");
+        assert!(agent.ensure_ready().is_ok());
         monitor.abort();
         server.abort();
     }
