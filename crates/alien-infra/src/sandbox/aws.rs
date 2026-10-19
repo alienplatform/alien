@@ -2501,7 +2501,15 @@ mod tests {
                     && request
                         .hooks
                         .as_ref()
-                        .is_some_and(|hooks| hooks.port == AWS_MICROVM.port)
+                        .is_some_and(|hooks| {
+                            hooks.port == AWS_MICROVM.port
+                                // The image build fails a broken agent here rather than at the
+                                // first session, and a roll that dropped it would say nothing.
+                                && hooks.microvm_image_hooks.as_ref().is_some_and(|build| {
+                                    build.validate == "ENABLED"
+                                        && build.validate_timeout_in_seconds == 30
+                                })
+                        })
                     && request
                         .environment_variables
                         .get("ALIEN_SANDBOX_PORT")
