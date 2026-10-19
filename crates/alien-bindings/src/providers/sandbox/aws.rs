@@ -443,6 +443,14 @@ impl AwsSandbox {
     }
 }
 
+/// Whether `error` is an operation refusing a sandbox because it has terminated.
+fn is_sandbox_terminated(error: &AlienError<ErrorData>) -> bool {
+    matches!(
+        &error.error,
+        Some(ErrorData::SandboxCommandFailed { failure, .. }) if failure == "sandboxTerminated"
+    )
+}
+
 /// Maps a MicroVM lifecycle state onto the binding's.
 fn sandbox_state(state: Option<&str>) -> SandboxState {
     match state {
@@ -477,6 +485,26 @@ impl AwsSandbox {
         })?;
 
         Ok(Some(self.instance(microvm_id, microvm.state)))
+    }
+
+    /// Hands back a live sandbox `get_or_create` found, applying the requested policy first.
+    async fn reconnect(
+        &self,
+        existing: SandboxInstance,
+        egress: Option<alien_core::EgressPolicy>,
+    ) -> Result<SandboxInstance> {
+        let id = existing.sandbox_id.clone();
+        if let Some(policy) = egress {
+            self.update_egress(&id, policy).await?;
+        }
+        // Reaching a sandbox someone else started still has to mean what `create` means, or the
+        // guarantee holds only for whoever won the race. Waited for here rather than in `get`,
+        // which reports a sandbox's state and does not promise one.
+        if matches!(existing.state, SandboxState::Starting) {
+            self.wait_until_servable(&id).await?;
+            return Ok(self.instance(id, Some("RUNNING".to_string())));
+        }
+        Ok(existing)
     }
 
     /// Blocks until the agent answers, so `create` returns a sandbox that can take work.
@@ -794,33 +822,26 @@ impl Sandbox for AwsSandbox {
         // than a fresh one would.
         refuse_unsupported_create_fields(&request, "sandbox.getOrCreate")?;
         if let Some(id) = request.sandbox_id.as_deref() {
-            match self.fetch(id, "sandbox.getOrCreate").await? {
-                // A MicroVM that is terminating or terminated never serves again, so the id is
-                // answered with a fresh sandbox, as on GCP and Azure. Lambda ends a MicroVM at its
-                // maximum lifetime without anyone calling `terminate`, so the gateway can still
-                // hold this id's policy; it is removed here, as `terminate` would have.
-                Some(existing) if existing.state == SandboxState::Terminated => {
-                    if let Some(manager) = &self.egress_manager {
-                        manager.delete(id).await?;
-                    }
+            // A MicroVM that is terminating or terminated never serves again, so the id is
+            // answered with a fresh sandbox, as on GCP and Azure. It can also end between the read
+            // here and the one `update_egress` makes, which refuses it as `sandboxTerminated`; that
+            // is the same answer reached a moment later.
+            let terminated = match self.fetch(id, "sandbox.getOrCreate").await? {
+                Some(existing) if existing.state == SandboxState::Terminated => true,
+                Some(existing) => match self.reconnect(existing, request.egress.clone()).await {
+                    Ok(found) => return Ok(ResolvedSandbox::found(found)),
+                    Err(error) if is_sandbox_terminated(&error) => true,
+                    Err(error) => return Err(error),
+                },
+                None => false,
+            };
+            // Lambda ends a MicroVM at its maximum lifetime without anyone calling `terminate`,
+            // so the gateway can still hold this id's policy; it is removed here, as `terminate`
+            // would have.
+            if terminated {
+                if let Some(manager) = &self.egress_manager {
+                    manager.delete(id).await?;
                 }
-                Some(existing) => {
-                    if let Some(policy) = request.egress.clone() {
-                        self.update_egress(id, policy).await?;
-                    }
-                    // Reaching a sandbox someone else started still has to mean what `create`
-                    // means, or the guarantee holds only for whoever won the race. Waited for
-                    // here rather than in `get`, which reports a sandbox's state and does not
-                    // promise one.
-                    if matches!(existing.state, SandboxState::Starting) {
-                        self.wait_until_servable(id).await?;
-                        return Ok(ResolvedSandbox::found(
-                            self.instance(id.to_string(), Some("RUNNING".to_string())),
-                        ));
-                    }
-                    return Ok(ResolvedSandbox::found(existing));
-                }
-                None => {}
             }
         }
 

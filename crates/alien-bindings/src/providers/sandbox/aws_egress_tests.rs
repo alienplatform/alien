@@ -387,9 +387,12 @@ fn microvm(id: &str, state: &str, endpoint: Option<String>) -> Microvm {
 /// id back made the caller's first command fail with the proxy's 502; `getOrCreate` must answer
 /// it with a fresh sandbox under the requested policy, as GCP and Azure do, and must not leave
 /// the dead id's policy live on the gateway — nothing called `terminate` for it.
+///
+/// The `RUNNING` case is a sandbox that ends between `getOrCreate`'s read and the one its policy
+/// update makes: the same answer, reached a moment later.
 #[tokio::test]
 async fn aws_get_or_create_replaces_a_terminated_sandbox_and_removes_its_policy() {
-    for dead_state in ["TERMINATED", "TERMINATING"] {
+    for dead_state in ["TERMINATED", "TERMINATING", "RUNNING"] {
         let harness = Harness::new().await;
         // The policy the dead sandbox's own create installed, still on the gateway.
         harness
@@ -422,9 +425,16 @@ async fn aws_get_or_create_replaces_a_terminated_sandbox_and_removes_its_policy(
         let (endpoint, agent_client, server) = serve_agent(agent);
 
         let mut api = MockLambdaMicrovmsApi::new();
+        let reads = Arc::new(AtomicUsize::new(0));
         api.expect_get_microvm().returning(move |id| {
             Ok(if id == "mvm-dead" {
-                microvm(id, dead_state, None)
+                // The first read sees `dead_state`; any later one sees the MicroVM gone.
+                let state = if reads.fetch_add(1, Ordering::SeqCst) == 0 {
+                    dead_state
+                } else {
+                    "TERMINATED"
+                };
+                microvm(id, state, None)
             } else {
                 microvm(id, "RUNNING", Some(endpoint.clone()))
             })
@@ -471,7 +481,7 @@ async fn aws_get_or_create_replaces_a_terminated_sandbox_and_removes_its_policy(
 
         assert!(
             resolved.created,
-            "a {dead_state} sandbox must be replaced, not handed back"
+            "a {dead_state} sandbox that ends must be replaced, not handed back"
         );
         assert_eq!(resolved.sandbox.sandbox_id, "mvm-fresh");
         assert_eq!(resolved.sandbox.state, SandboxState::Running);
