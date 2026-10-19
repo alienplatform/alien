@@ -565,6 +565,7 @@ impl StackExecutor {
         let initial_setup_authority = config.initial_setup_authority;
         let platform = client_config.platform();
         let base_platform = deployment_config.base_platform;
+        crate::setup_scaffolding::validate_setup_support(stack, platform, initial_setup_authority)?;
 
         let mut graph = DiGraph::<String, ()>::new();
         let mut resource_map = HashMap::new();
@@ -1561,29 +1562,29 @@ impl StackExecutor {
     /// without planning structural changes. Logical Kubernetes compute pools are
     /// initialized here because cloud setup engines do not provision them.
     pub async fn continue_imported(&self, mut state: StackState) -> Result<StepResult> {
-        // Setup also registers each Live resource it renders scaffolding for (today a Live
-        // sandbox) as Provisioning with controller state, for the runtime controller to finish.
-        // Any other record outside the lifecycle filter didn't come from setup.
-        let left_for_runtime = |resource_id: &str, imported: &StackResourceState| {
-            self.desired_stack
-                .resources
-                .get(resource_id)
-                .is_some_and(|entry| {
-                    ownership_policy_for_resource_type(entry.config.resource_type().as_ref())
-                        .emits_setup_scaffolding(entry.lifecycle)
-                        && imported.status == ResourceStatus::Provisioning
-                        && imported.has_internal_state()
-                })
-        };
-        if let Some(resource_id) = state
-            .resources
-            .iter()
-            .find(|(resource_id, imported)| {
-                !self.resources.contains_key(*resource_id)
-                    && !left_for_runtime(resource_id, imported)
-            })
-            .map(|(resource_id, _)| resource_id)
-        {
+        // Setup can register scaffolding for a Live resource, but must not hand
+        // runtime an already built resource that setup owns. A Provisioning status
+        // alone cannot distinguish those two cases.
+        for (resource_id, imported) in &state.resources {
+            if self.resources.contains_key(resource_id) {
+                continue;
+            }
+            let emits_scaffolding =
+                self.desired_stack
+                    .resources
+                    .get(resource_id)
+                    .is_some_and(|entry| {
+                        ownership_policy_for_resource_type(entry.config.resource_type().as_ref())
+                            .emits_setup_scaffolding(entry.lifecycle)
+                    });
+            if emits_scaffolding
+                && imported.status == ResourceStatus::Provisioning
+                && imported
+                    .get_internal_controller()?
+                    .is_some_and(|controller| controller.has_runtime_setup_inputs())
+            {
+                continue;
+            }
             return Err(AlienError::new(ErrorData::ImportedSetupStateInvalid {
                 message: format!(
                     "Imported setup contains unexpected resource '{}'; regenerate and rerun setup",

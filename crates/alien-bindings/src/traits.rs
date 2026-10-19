@@ -369,6 +369,19 @@ pub trait ArtifactRegistry: Binding {
         self.create_repository(project_id).await
     }
 
+    /// Optional namespace whose sandbox repositories are cached on demand.
+    fn sandbox_repository_prefix(&self) -> Option<String> {
+        None
+    }
+
+    /// Creates a project sandbox repository, preserving the normal destination unless configured.
+    async fn create_sandbox_project_repository(
+        &self,
+        project_id: &str,
+    ) -> Result<RepositoryResponse> {
+        self.create_project_repository(project_id).await
+    }
+
     /// Gets repository details. `repo_id` is the routable name returned by
     /// [`Self::create_repository`]; implementations MUST NOT re-apply
     /// prefixing.
@@ -1338,6 +1351,9 @@ pub trait Sandbox: Binding {
     async fn get(&self, sandbox_id: &str) -> Result<Option<SandboxInstance>>;
 
     /// Fetches a sandbox, creating it if absent, and reports which it did.
+    ///
+    /// A sandbox that has terminated counts as absent: the call creates a fresh one, which may
+    /// carry a different id, so a caller stores the id it gets back rather than the one it sent.
     ///
     /// Answer `created` from the path taken, never from a timestamp: the clocks are the provider's,
     /// not ours. No backend offers an atomic create-if-absent, so two callers naming one id can

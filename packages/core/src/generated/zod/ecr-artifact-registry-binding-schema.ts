@@ -18,6 +18,9 @@ get "pushRoleArn"(){
               },
 get "repositoryPrefix"(){
                 return BindingValueStringSchema.describe("Represents a value that can be either a concrete value, a template expression,\nor a reference to a Kubernetes Secret")
+              },
+get "sandboxRepositoryPrefix"(){
+                return z.union([BindingValueStringSchema, z.null()]).optional()
               }
     }).describe("AWS ECR (Elastic Container Registry) binding configuration")
 

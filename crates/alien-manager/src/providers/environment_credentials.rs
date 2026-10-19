@@ -72,8 +72,12 @@ impl EnvironmentCredentialResolver {
                 deployment.environment_info.as_ref(),
             )
             .await
-            .context(GenericError {
-                message: "Failed to resolve remote access from stack state".to_string(),
+            .context(crate::error::ErrorData::CredentialMaterializationFailed {
+                platform: deployment.platform,
+                purpose: "resolve remote access from stack state".to_string(),
+            })
+            .map_err(|error| {
+                super::credential_errors::classify_credential_error(error.into_generic())
             })
     }
 }

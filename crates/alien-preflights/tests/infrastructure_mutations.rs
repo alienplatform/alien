@@ -1,7 +1,12 @@
+use alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID;
 use alien_core::{
     AwsManagementConfig, AzureManagementConfig, DeploymentConfig, EnvironmentVariablesSnapshot,
     ExternalBindings, ManagementConfig, PermissionsConfig, Platform, Queue, RemoteStackManagement,
     ResourceLifecycle, ResourceRef, Stack, StackSettings, StackState, Storage, Worker, WorkerCode,
+};
+use alien_core::{
+    ComputeBackend, Container, ContainerCode, HorizonConfig, PermissionProfile, ResourceSpec,
+    Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy, Vault, SECRETS_VAULT_ID,
 };
 use alien_preflights::{runner::PreflightRunner, PreflightRegistry, StackMutation};
 use async_trait::async_trait;
@@ -397,7 +402,9 @@ async fn an_azure_sandbox_only_stack_depends_only_on_resources_it_defines() {
         .await
         .expect("mutations apply");
     assert!(
-        !sandbox_only.resources.contains_key("default-resource-group"),
+        !sandbox_only
+            .resources
+            .contains_key("default-resource-group"),
         "unexpected resources: {:?}",
         sandbox_only.resources.keys().collect::<Vec<_>>()
     );
@@ -681,5 +688,207 @@ async fn test_mutation_ordering() {
             rg_pos < sa_pos,
             "Resource group should come before service activations"
         );
+    }
+}
+
+/// Named and exact inline management grants may read the signing key; execute-only grants,
+/// including an inline set that reuses the management ID, may not.
+#[tokio::test]
+async fn sandbox_consumers_get_signing_access_only_with_management_permissions() {
+    // The last case keeps the management ID but carries only execute permissions.
+    for (permission, inline, contents, signs) in [
+        ("sandbox/execute", false, "sandbox/execute", false),
+        ("sandbox/execute", true, "sandbox/execute", false),
+        ("sandbox/management", false, "sandbox/management", true),
+        ("sandbox/management", true, "sandbox/management", true),
+        ("sandbox/management", true, "sandbox/execute", false),
+    ] {
+        let reference = if inline {
+            let mut set = alien_permissions::get_permission_set(contents)
+                .unwrap()
+                .clone();
+            set.id = permission.into();
+            alien_core::permissions::PermissionSetReference::from_inline(set)
+        } else {
+            alien_core::permissions::PermissionSetReference::from_name(permission)
+        };
+        let sandbox = Sandbox::new("box".into())
+            .code(SandboxCode::Image {
+                image: "example.invalid/sandbox:1".into(),
+            })
+            .egress(SandboxEgress::Internet)
+            .lifecycle(SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build();
+        let worker = Container::new("executor".into())
+            .code(ContainerCode::Image {
+                image: "example.invalid/executor:1".into(),
+            })
+            .cpu(ResourceSpec {
+                min: "0.25".into(),
+                desired: "0.25".into(),
+            })
+            .memory(ResourceSpec {
+                min: "256Mi".into(),
+                desired: "256Mi".into(),
+            })
+            .permissions("execution".into())
+            .link(&sandbox)
+            .build();
+        let stack = Stack::new("sandbox-executor".into())
+            .add(sandbox, ResourceLifecycle::Frozen)
+            .add(worker, ResourceLifecycle::Live)
+            .permission(
+                "execution",
+                PermissionProfile::new().resource("box", [reference]),
+            )
+            .build();
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .compute_backend(ComputeBackend::Horizon(HorizonConfig {
+                url: "https://example.invalid".into(),
+                horizon_machine_image: None,
+                clusters: Default::default(),
+            }))
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+        let state = StackState::new(Platform::Aws);
+        let prepared = PreflightRunner::new()
+            .apply_mutations(stack, &state, &config)
+            .await
+            .expect("prepare execute-only consumer");
+        for pass in [
+            prepared.clone(),
+            PreflightRunner::new()
+                .apply_mutations(prepared, &state, &config)
+                .await
+                .expect("prepare again without widening permissions"),
+        ] {
+            let worker = pass.resources["executor"]
+                .config
+                .downcast_ref::<Container>()
+                .unwrap();
+            assert!(
+                worker
+                    .links
+                    .contains(&ResourceRef::new(Vault::RESOURCE_TYPE, SECRETS_VAULT_ID)),
+                "the SDK must be able to load the vault descriptor"
+            );
+            assert!(worker
+                .links
+                .iter()
+                .any(|link| link.id() == SANDBOX_EGRESS_GATEWAY_ID));
+            let profile = &pass.permissions.profiles["execution"];
+            assert_eq!(
+                profile.0["box"]
+                    .iter()
+                    .map(|set| set.id())
+                    .collect::<Vec<_>>(),
+                vec![permission]
+            );
+            assert_eq!(
+                profile.0[SECRETS_VAULT_ID]
+                    .iter()
+                    .map(|set| set.id())
+                    .collect::<Vec<_>>(),
+                if signs {
+                    vec![
+                        "vault/sandbox-egress-signing-key-read",
+                        "vault/protect-sandbox-gateway-config",
+                    ]
+                } else {
+                    vec!["vault/protect-sandbox-gateway-config"]
+                },
+                "permission={permission}, inline={inline}, contents={contents}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn internet_sandbox_key_dependencies_respect_setup_ownership() {
+    for (first, last, owner) in [
+        (ResourceLifecycle::Live, ResourceLifecycle::Frozen, "z-last"),
+        (
+            ResourceLifecycle::Frozen,
+            ResourceLifecycle::Live,
+            "a-first",
+        ),
+        (
+            ResourceLifecycle::Frozen,
+            ResourceLifecycle::Frozen,
+            "a-first",
+        ),
+        (ResourceLifecycle::Live, ResourceLifecycle::Live, "a-first"),
+    ] {
+        let mut stack = Stack::new("key-ownership".into());
+        for (id, lifecycle) in [("a-first", first), ("z-last", last)] {
+            let sandbox = Sandbox::new(id.into())
+                .code(SandboxCode::Image {
+                    image: "example.invalid/sandbox:1".into(),
+                })
+                .egress(SandboxEgress::Internet)
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build();
+            stack = stack.add(sandbox, lifecycle);
+        }
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .compute_backend(ComputeBackend::Horizon(HorizonConfig {
+                url: "https://example.invalid".into(),
+                horizon_machine_image: None,
+                clusters: Default::default(),
+            }))
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+        let state = StackState::new(Platform::Aws);
+        let prepared = PreflightRunner::new()
+            .apply_mutations(stack.build(), &state, &config)
+            .await
+            .unwrap();
+        for stack in [
+            prepared.clone(),
+            PreflightRunner::new()
+                .apply_mutations(prepared, &state, &config)
+                .await
+                .unwrap(),
+        ] {
+            assert_eq!(
+                alien_core::sandbox_egress::sandbox_egress_key_owner(&stack),
+                Some(owner),
+                "runtime and setup must agree on the publisher"
+            );
+            for id in ["a-first", "z-last"] {
+                let dependencies = &stack.resources[id].dependencies;
+                let sandbox_dependencies: Vec<_> = dependencies
+                    .iter()
+                    .filter(|dependency| *dependency.resource_type() == Sandbox::RESOURCE_TYPE)
+                    .map(|dependency| dependency.id())
+                    .collect();
+                assert_eq!(
+                    sandbox_dependencies,
+                    if id == owner { vec![] } else { vec![owner] },
+                    "{first:?}/{last:?}: {id}"
+                );
+                for dependency in dependencies {
+                    if stack.resources[id].lifecycle == ResourceLifecycle::Frozen {
+                        assert_ne!(
+                            stack.resources[dependency.id()].lifecycle,
+                            ResourceLifecycle::Live,
+                            "setup cannot wait for runtime work"
+                        );
+                    }
+                }
+            }
+        }
     }
 }

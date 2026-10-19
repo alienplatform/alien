@@ -11,6 +11,7 @@ use utoipa::OpenApi;
 
 #[derive(OpenApi)]
 #[openapi(components(schemas(
+    CredentialRetry,
     Worker,
     WorkerCode,
     WorkerOutputs,
@@ -233,6 +234,7 @@ use utoipa::OpenApi;
     AwsKeyImportData,
     AwsVaultImportData,
     AwsNetworkImportData,
+    AwsSandboxNetwork,
     AwsServiceAccountImportData,
     AwsRemoteStackManagementImportData,
     AwsRemoteBindingsImportData,

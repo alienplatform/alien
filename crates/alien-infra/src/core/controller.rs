@@ -756,6 +756,14 @@ pub trait ResourceController: Send + Sync + Debug {
         false
     }
 
+    /// Whether this controller has the setup inputs for a runtime-owned resource.
+    /// Inputs remain valid when setup resumes with unfinished runtime work. A built
+    /// setup-owned resource must return false even while waiting for configuration;
+    /// Provisioning alone does not establish runtime ownership.
+    fn has_runtime_setup_inputs(&self) -> bool {
+        false
+    }
+
     /// Derives the high-level ResourceStatus from the internal state.
     fn get_status(&self) -> ResourceStatus;
 

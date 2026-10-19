@@ -1,7 +1,9 @@
 //! Tests for resource update flows and config changes.
 
 use super::helpers::*;
-use crate::core::{MockPlatformServiceProvider, StackExecutor, StackStateExt};
+use crate::core::{
+    MockPlatformServiceProvider, StackExecutor, StackResourceStateExt, StackStateExt,
+};
 use crate::error::Result;
 use alien_core::{
     ClientConfig, ComputeCluster, ComputePoolSelection, ComputeSettings, Container, ContainerCode,
@@ -252,24 +254,39 @@ fn import_aws_sandbox(
 #[cfg(feature = "aws")]
 #[tokio::test]
 async fn imported_continuation_leaves_a_registered_live_sandbox_to_runtime() -> Result<()> {
-    let sandbox = live_sandbox_entry();
-    let imported = import_aws_sandbox(&sandbox, None);
-    let (stack, state) = imported_beside_storage(("agents", sandbox), imported).await?;
+    for runtime_built_image in [false, true] {
+        let sandbox = live_sandbox_entry();
+        let mut imported = import_aws_sandbox(&sandbox, None);
+        if runtime_built_image {
+            // A resumed setup can carry runtime-owned work that already built the
+            // image. Its build inputs still establish ownership, unlike an image
+            // supplied by setup's built-image registration.
+            let internal = imported.internal_state.as_mut().unwrap();
+            internal["state"] = serde_json::json!("initializingEgressKey");
+            internal["imageIdentifier"] = serde_json::json!("agents");
+            internal["imageArn"] =
+                serde_json::json!("arn:aws:lambda:us-east-2:123456789012:microvm-image:agents");
+            internal["activeVersion"] = serde_json::json!("1");
+            imported.outputs = imported.get_internal_controller()?.unwrap().get_outputs();
+        }
+        let original = imported.internal_state.clone();
+        let (stack, state) = imported_beside_storage(("agents", sandbox), imported).await?;
+        let continued = new_imported_setup_executor(&stack)?
+            .continue_imported(state)
+            .await?
+            .next_state;
+        assert_eq!(
+            continued.resources["assets"].status,
+            ResourceStatus::Running
+        );
+        assert_eq!(
+            continued.resources["agents"].status,
+            ResourceStatus::Provisioning,
+            "initial setup must neither refuse nor advance the Live sandbox"
+        );
+        assert_eq!(continued.resources["agents"].internal_state, original);
+    }
 
-    let continued = new_imported_setup_executor(&stack)?
-        .continue_imported(state)
-        .await?
-        .next_state;
-
-    assert_eq!(
-        continued.resources["assets"].status,
-        ResourceStatus::Running
-    );
-    assert_eq!(
-        continued.resources["agents"].status,
-        ResourceStatus::Provisioning,
-        "initial setup must neither refuse nor advance the Live sandbox"
-    );
     Ok(())
 }
 
@@ -278,24 +295,127 @@ async fn imported_continuation_leaves_a_registered_live_sandbox_to_runtime() -> 
 #[cfg(feature = "aws")]
 #[tokio::test]
 async fn imported_continuation_refuses_a_live_sandbox_registered_as_built() -> Result<()> {
-    let sandbox = live_sandbox_entry();
-    let imported = import_aws_sandbox(
-        &sandbox,
-        Some((
-            "agents",
-            "arn:aws:lambda:us-east-2:123456789012:microvm-image:agents",
-            "1",
-        )),
-    );
-    let (stack, state) = imported_beside_storage(("agents", sandbox), imported).await?;
+    for egress in [
+        alien_core::SandboxEgress::Allow,
+        alien_core::SandboxEgress::Internet,
+    ] {
+        let mut sandbox = live_sandbox_entry();
+        sandbox
+            .config
+            .downcast_mut::<alien_core::Sandbox>()
+            .unwrap()
+            .egress = egress;
+        let imported = import_aws_sandbox(
+            &sandbox,
+            Some((
+                "agents",
+                "arn:aws:lambda:us-east-2:123456789012:microvm-image:agents",
+                "1",
+            )),
+        );
+        let (stack, state) = imported_beside_storage(("agents", sandbox), imported).await?;
+        let error = new_imported_setup_executor(&stack)?
+            .continue_imported(state)
+            .await
+            .expect_err("a Live sandbox setup claims to have built must fail the handoff");
+        assert!(error.message.contains("unexpected resource 'agents'"));
+        assert_eq!(error.code, "IMPORTED_SETUP_STATE_INVALID");
+    }
 
-    let error = new_imported_setup_executor(&stack)?
-        .continue_imported(state)
-        .await
-        .expect_err("a Live sandbox setup claims to have built must fail the handoff");
+    Ok(())
+}
 
-    assert!(error.message.contains("unexpected resource 'agents'"));
-    assert_eq!(error.code, "IMPORTED_SETUP_STATE_INVALID");
+/// Other cloud setup registrations still leave their runtime-owned image/template
+/// untouched while setup finishes its Frozen resources.
+#[cfg(any(feature = "gcp", feature = "azure"))]
+#[tokio::test]
+async fn imported_continuation_leaves_cloud_sandbox_builds_to_runtime() -> Result<()> {
+    for (platform, data) in [
+        #[cfg(feature = "gcp")]
+        (Platform::Gcp, serde_json::json!({"region": "us-central1"})),
+        #[cfg(feature = "azure")]
+        (
+            Platform::Azure,
+            serde_json::json!({
+                "sandboxGroup": "test-agents", "region": "eastus", "resourceGroup": "test-group"
+            }),
+        ),
+    ] {
+        let sandbox = entry(
+            Resource::new(
+                alien_core::Sandbox::new("agents".to_string())
+                    .code(alien_core::SandboxCode::Image {
+                        image: "docker.io/library/python:3.12".into(),
+                    })
+                    .egress(alien_core::SandboxEgress::Internet)
+                    .lifecycle(alien_core::SandboxLifecyclePolicy {
+                        max_lifetime_seconds: None,
+                        idle_pause_seconds: None,
+                    })
+                    .build(),
+            ),
+            ResourceLifecycle::Live,
+        );
+        let imported = crate::import::ImporterRegistry::built_in()
+            .run(
+                &alien_core::Sandbox::RESOURCE_TYPE,
+                platform,
+                data,
+                &alien_core::import::ImportContext {
+                    resource_id: "agents",
+                    platform,
+                    region: "test-region",
+                    stack_settings: &alien_core::StackSettings::default(),
+                    management_config: None,
+                    resource: &sandbox,
+                },
+            )
+            .expect("cloud scaffolding imports");
+        assert_eq!(imported.status, ResourceStatus::Provisioning);
+        for in_flight in [false, true] {
+            let mut imported = imported.clone();
+            if in_flight {
+                let internal = imported.internal_state.as_mut().unwrap();
+                match platform {
+                    #[cfg(feature = "gcp")]
+                    Platform::Gcp => {
+                        internal["state"] = serde_json::json!("awaitingTemplateOperation");
+                        internal["pendingOperation"] = serde_json::json!("operations/test-build");
+                        internal["engine"] = serde_json::json!("test-engine");
+                        internal["projectId"] = serde_json::json!("test-project");
+                    }
+                    #[cfg(feature = "azure")]
+                    Platform::Azure => {
+                        internal["pendingDiskImage"] = serde_json::json!({
+                            "reference": "docker.io/library/python:3.12", "id": "test-image",
+                            "startedAt": "2026-10-01T00:00:00Z"
+                        });
+                        internal["builtDiskImages"] = serde_json::json!(true);
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            let original = imported.internal_state.clone();
+            let (stack, state) =
+                imported_beside_storage(("agents", sandbox.clone()), imported).await?;
+            let continued = new_imported_setup_executor(&stack)?
+                .continue_imported(state)
+                .await?
+                .next_state;
+            assert_eq!(
+                continued.resources["assets"].status,
+                ResourceStatus::Running
+            );
+            assert_eq!(
+                continued.resources["agents"].status,
+                ResourceStatus::Provisioning
+            );
+            assert_eq!(
+                continued.resources["agents"].internal_state, original,
+                "setup must not start a runtime-owned build for {platform:?}"
+            );
+        }
+    }
     Ok(())
 }
 

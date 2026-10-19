@@ -306,7 +306,7 @@ fn a_declared_private_base_is_the_only_repository_a_live_build_pulls() {
             &serde_json::json!({
                 "Sid": "PullSandboxBaseImage",
                 "Effect": "Allow",
-                "Action": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"],
+                "Action": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer", "ecr:BatchImportUpstreamImage", "ecr:GetImageCopyStatus"],
                 "Resource": {
                     "Fn::Sub":
                         "arn:${AWS::Partition}:ecr:${AWS::Region}:123456789012:repository/acme/agents-base"
@@ -603,10 +603,8 @@ fn a_deny_sandbox_attaches_to_the_first_of_two_networks() {
                 ResourceLifecycle::Live,
             )
             .build();
-        let chosen =
-            alien_core::sandbox_egress::sandbox_egress_network(&stack, &SandboxEgress::None)
-                .expect("both networks are attachable")
-                .expect("deny attaches to a network");
+        let chosen = alien_core::sandbox_egress::sandbox_egress_network(&stack)
+            .expect("both networks are attachable");
         assert_eq!(chosen.id, "first-net");
 
         let (template, _yaml) = render_built_ins_template(
@@ -1893,6 +1891,7 @@ fn the_emitted_registration_matches_the_direct_seed() {
         ))
         .unwrap_or_else(|error| panic!("{case}: the importer must accept it: {error}"));
         let direct = AwsSandboxImportData::runtime_built(
+            &stack,
             &sandbox,
             alien_core::sandbox_build_role::sandbox_build_role_arn(
                 PARITY_PARTITION,

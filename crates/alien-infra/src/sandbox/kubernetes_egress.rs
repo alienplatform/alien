@@ -22,7 +22,8 @@ pub(super) async fn configure(
     }
     let vault = egress::deployment_vault(ctx).await?;
     let ids = egress::internet_sandbox_ids(ctx.desired_stack);
-    let owner = ids.first() == Some(&sandbox.id);
+    let owner = alien_core::sandbox_egress::sandbox_egress_key_owner(ctx.desired_stack)
+        == Some(sandbox.id.as_str());
     let key = if owner {
         egress::ensure_signing_key(vault.as_ref()).await?
     } else {

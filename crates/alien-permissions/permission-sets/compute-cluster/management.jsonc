@@ -408,30 +408,6 @@
           }
         }
       },
-      // OTLP auth headers are stored as stack-prefixed secrets.
-      {
-        "grant": {
-          "actions": [
-            "secretsmanager:DescribeSecret",
-            "secretsmanager:CreateSecret",
-            "secretsmanager:TagResource",
-            "secretsmanager:UpdateSecret",
-            "secretsmanager:DeleteSecret"
-          ]
-        },
-        "binding": {
-          "stack": {
-            "resources": [
-              "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-secrets-ALIEN_OTLP_*"
-            ]
-          },
-          "resource": {
-            "resources": [
-              "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-secrets-ALIEN_OTLP_*"
-            ]
-          }
-        }
-      },
       // Read profile metadata in this account: generated profile names need not
       // carry the stack prefix. The backing role is inspected within PassRole's scope.
       {

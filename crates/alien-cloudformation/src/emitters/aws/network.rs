@@ -17,7 +17,7 @@ use crate::{
     },
     template::{CfExpression, CfResource},
 };
-use alien_core::{import::EmitContext, ErrorData, Network, NetworkSettings, Result};
+use alien_core::{import::EmitContext, ErrorData, Network, NetworkSettings, Result, Sandbox};
 use alien_error::AlienError;
 
 const CONDITION_NETWORK_MODE_CREATE: &str = "NetworkModeCreate";
@@ -43,81 +43,145 @@ impl CfEmitter for AwsNetworkEmitter {
 
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<CfExpression> {
         let network = resource_config::<Network>(ctx, Network::RESOURCE_TYPE)?;
+        let prefix = required_logical_id(ctx)?;
+        let network_import = |fields: Vec<(&str, CfExpression)>, created: bool| {
+            let sandbox_network = has_sandboxes(ctx).then(|| {
+                CfExpression::object([
+                    (
+                        "sandboxSubnetIds",
+                        if created {
+                            created_sandbox_subnet_values(prefix, "SandboxSubnet", None)
+                        } else {
+                            CfExpression::ref_("SandboxSubnetIds")
+                        },
+                    ),
+                    (
+                        "gatewaySubnetIds",
+                        if created {
+                            created_sandbox_subnet_values(prefix, "SandboxGatewaySubnet", None)
+                        } else {
+                            CfExpression::ref_("SandboxGatewaySubnetIds")
+                        },
+                    ),
+                    ("sandboxCidrs", CfExpression::list([])),
+                    (
+                        "gatewayCidrs",
+                        if created {
+                            created_sandbox_subnet_values(
+                                prefix,
+                                "SandboxGatewaySubnet",
+                                Some("CidrBlock"),
+                            )
+                        } else {
+                            CfExpression::ref_("SandboxGatewaySubnetCidrs")
+                        },
+                    ),
+                    ("workloadCidrs", CfExpression::list([])),
+                    ("vpcCidrs", CfExpression::list([])),
+                ])
+            });
+            CfExpression::object(
+                fields
+                    .into_iter()
+                    .chain(sandbox_network.map(|network| ("sandboxNetwork", network))),
+            )
+        };
         let import_data = match &network.settings {
-            NetworkSettings::UseDefault => CfExpression::object([
-                ("publicSubnetIds", CfExpression::list([])),
-                ("privateSubnetIds", CfExpression::list([])),
-                ("availabilityZones", CfExpression::list([])),
-                ("isByoVpc", CfExpression::from(true)),
-            ]),
-            NetworkSettings::ByoVpcAws { .. } => CfExpression::object([
-                ("vpcId", CfExpression::ref_("VpcId")),
-                (
-                    "publicSubnetIds",
-                    list_parameter_value(PARAM_PUBLIC_SUBNET_IDS),
-                ),
-                (
-                    "privateSubnetIds",
-                    list_parameter_value(PARAM_PRIVATE_SUBNET_IDS),
-                ),
-                ("securityGroupId", existing_security_group_id()),
-                ("availabilityZones", CfExpression::list([])),
-                ("isByoVpc", CfExpression::from(true)),
-            ]),
+            NetworkSettings::UseDefault => network_import(
+                vec![
+                    ("publicSubnetIds", CfExpression::list([])),
+                    ("privateSubnetIds", CfExpression::list([])),
+                    ("availabilityZones", CfExpression::list([])),
+                    ("isByoVpc", CfExpression::from(true)),
+                ],
+                false,
+            ),
+            NetworkSettings::ByoVpcAws { .. } => network_import(
+                vec![
+                    ("vpcId", CfExpression::ref_("VpcId")),
+                    (
+                        "publicSubnetIds",
+                        list_parameter_value(PARAM_PUBLIC_SUBNET_IDS),
+                    ),
+                    (
+                        "privateSubnetIds",
+                        list_parameter_value(PARAM_PRIVATE_SUBNET_IDS),
+                    ),
+                    ("securityGroupId", existing_security_group_id()),
+                    ("availabilityZones", CfExpression::list([])),
+                    ("isByoVpc", CfExpression::from(true)),
+                ],
+                false,
+            ),
             NetworkSettings::Create { .. } => {
                 let prefix = required_logical_id(ctx)?;
                 CfExpression::if_(
                     CONDITION_NETWORK_MODE_CREATE,
-                    CfExpression::object([
-                        ("vpcId", CfExpression::ref_(network_id(prefix, "Vpc"))),
-                        (
-                            "cidrBlock",
-                            CfExpression::get_att(network_id(prefix, "Vpc"), "CidrBlock"),
-                        ),
-                        (
-                            "internetGatewayId",
-                            CfExpression::ref_(network_id(prefix, "InternetGateway")),
-                        ),
-                        (
-                            "natGatewayId",
-                            CfExpression::ref_(network_id(prefix, "NatGateway")),
-                        ),
-                        (
-                            "eipAllocationId",
-                            CfExpression::get_att(network_id(prefix, "NatEip"), "AllocationId"),
-                        ),
-                        ("publicSubnetIds", subnet_refs(prefix, "PublicSubnet")),
-                        ("privateSubnetIds", subnet_refs(prefix, "PrivateSubnet")),
-                        (
-                            "publicRouteTableId",
-                            CfExpression::ref_(network_id(prefix, "PublicRouteTable")),
-                        ),
-                        (
-                            "privateRouteTableId",
-                            CfExpression::ref_(network_id(prefix, "PrivateRouteTable")),
-                        ),
-                        (
-                            "securityGroupId",
-                            CfExpression::get_att(network_id(prefix, "SecurityGroup"), "GroupId"),
-                        ),
-                        ("availabilityZones", availability_zone_names(ctx)),
-                        ("isByoVpc", CfExpression::from(false)),
-                    ]),
+                    network_import(
+                        vec![
+                            ("vpcId", CfExpression::ref_(network_id(prefix, "Vpc"))),
+                            (
+                                "cidrBlock",
+                                CfExpression::get_att(network_id(prefix, "Vpc"), "CidrBlock"),
+                            ),
+                            (
+                                "internetGatewayId",
+                                CfExpression::ref_(network_id(prefix, "InternetGateway")),
+                            ),
+                            (
+                                "natGatewayId",
+                                CfExpression::ref_(network_id(prefix, "NatGateway")),
+                            ),
+                            (
+                                "eipAllocationId",
+                                CfExpression::get_att(network_id(prefix, "NatEip"), "AllocationId"),
+                            ),
+                            (
+                                "egressPublicIps",
+                                CfExpression::list([CfExpression::ref_(network_id(
+                                    prefix, "NatEip",
+                                ))]),
+                            ),
+                            ("publicSubnetIds", subnet_refs(prefix, "PublicSubnet")),
+                            ("privateSubnetIds", subnet_refs(prefix, "PrivateSubnet")),
+                            (
+                                "publicRouteTableId",
+                                CfExpression::ref_(network_id(prefix, "PublicRouteTable")),
+                            ),
+                            (
+                                "privateRouteTableId",
+                                CfExpression::ref_(network_id(prefix, "PrivateRouteTable")),
+                            ),
+                            (
+                                "securityGroupId",
+                                CfExpression::get_att(
+                                    network_id(prefix, "SecurityGroup"),
+                                    "GroupId",
+                                ),
+                            ),
+                            ("availabilityZones", availability_zone_names(ctx)),
+                            ("isByoVpc", CfExpression::from(false)),
+                        ],
+                        true,
+                    ),
                     {
-                        let byo = CfExpression::object([
-                            ("vpcId", CfExpression::ref_("VpcId")),
-                            (
-                                "publicSubnetIds",
-                                list_parameter_value(PARAM_PUBLIC_SUBNET_IDS),
-                            ),
-                            (
-                                "privateSubnetIds",
-                                list_parameter_value(PARAM_PRIVATE_SUBNET_IDS),
-                            ),
-                            ("securityGroupId", existing_security_group_id()),
-                            ("availabilityZones", CfExpression::list([])),
-                            ("isByoVpc", CfExpression::from(true)),
-                        ]);
+                        let byo = network_import(
+                            vec![
+                                ("vpcId", CfExpression::ref_("VpcId")),
+                                (
+                                    "publicSubnetIds",
+                                    list_parameter_value(PARAM_PUBLIC_SUBNET_IDS),
+                                ),
+                                (
+                                    "privateSubnetIds",
+                                    list_parameter_value(PARAM_PRIVATE_SUBNET_IDS),
+                                ),
+                                ("securityGroupId", existing_security_group_id()),
+                                ("availabilityZones", CfExpression::list([])),
+                                ("isByoVpc", CfExpression::from(true)),
+                            ],
+                            false,
+                        );
                         if ctx.targets_kubernetes
                             || alien_core::restricts_network_mode(ctx.stack, false)
                         {
@@ -126,12 +190,15 @@ impl CfEmitter for AwsNetworkEmitter {
                             CfExpression::if_(
                                 "NetworkModeUseExisting",
                                 byo,
-                                CfExpression::object([
-                                    ("publicSubnetIds", CfExpression::list([])),
-                                    ("privateSubnetIds", CfExpression::list([])),
-                                    ("availabilityZones", CfExpression::list([])),
-                                    ("isByoVpc", CfExpression::from(true)),
-                                ]),
+                                network_import(
+                                    vec![
+                                        ("publicSubnetIds", CfExpression::list([])),
+                                        ("privateSubnetIds", CfExpression::list([])),
+                                        ("availabilityZones", CfExpression::list([])),
+                                        ("isByoVpc", CfExpression::from(true)),
+                                    ],
+                                    false,
+                                ),
                             )
                         }
                     },
@@ -214,9 +281,10 @@ fn created_network_resources(ctx: &EmitContext<'_>) -> Result<Vec<CfResource>> {
         public_subnet
             .properties
             .insert(zone_property.to_string(), select(index, zones.clone()));
-        public_subnet
-            .properties
-            .insert("CidrBlock".to_string(), select(index, cidr_blocks(&vpc_id)));
+        public_subnet.properties.insert(
+            "CidrBlock".to_string(),
+            select(index, cidr_blocks(&vpc_id, 6)),
+        );
         public_subnet
             .properties
             .insert("MapPublicIpOnLaunch".to_string(), CfExpression::from(true));
@@ -238,7 +306,7 @@ fn created_network_resources(ctx: &EmitContext<'_>) -> Result<Vec<CfResource>> {
             .insert(zone_property.to_string(), select(index, zones.clone()));
         private_subnet.properties.insert(
             "CidrBlock".to_string(),
-            select(index + 3, cidr_blocks(&vpc_id)),
+            select(index + 3, cidr_blocks(&vpc_id, 6)),
         );
         private_subnet
             .properties
@@ -360,12 +428,85 @@ fn created_network_resources(ctx: &EmitContext<'_>) -> Result<Vec<CfResource>> {
         CfExpression::list([CfExpression::object([
             ("IpProtocol", CfExpression::from("-1")),
             ("CidrIp", CfExpression::from("0.0.0.0/0")),
+            (
+                "Description",
+                CfExpression::from("Outbound workload traffic"),
+            ),
         ])]),
     );
     security_group
         .properties
         .insert("Tags".to_string(), tags(ctx));
     resources.push(security_group);
+
+    if has_sandboxes(ctx) {
+        // Connector subnets have only local VPC routes. The internal NLB has dedicated
+        // gateway subnets; gateway tasks share the private compute subnets and NAT.
+        for (kind, offset) in [("Sandbox", 6), ("SandboxGateway", 9)] {
+            if kind == "SandboxGateway" && !needs_gateway(ctx) {
+                continue;
+            }
+            let route_table_id = format!("{prefix}{kind}RouteTable");
+            let mut route_table =
+                CfResource::new(route_table_id.clone(), "AWS::EC2::RouteTable".to_string());
+            route_table
+                .properties
+                .insert("VpcId".to_string(), CfExpression::ref_(&vpc_id));
+            route_table.properties.insert("Tags".to_string(), tags(ctx));
+            resources.push(route_table);
+            if kind == "SandboxGateway" {
+                let mut route = CfResource::new(
+                    format!("{prefix}{kind}DefaultRoute"),
+                    "AWS::EC2::Route".to_string(),
+                );
+                route.properties.insert(
+                    "RouteTableId".to_string(),
+                    CfExpression::ref_(&route_table_id),
+                );
+                route.properties.insert(
+                    "DestinationCidrBlock".to_string(),
+                    CfExpression::from("0.0.0.0/0"),
+                );
+                route
+                    .properties
+                    .insert("NatGatewayId".to_string(), CfExpression::ref_(&nat_id));
+                resources.push(route);
+            }
+            for index in 0..3usize {
+                let subnet_id = format!("{prefix}{kind}Subnet{}", index + 1);
+                let mut subnet = CfResource::new(subnet_id.clone(), "AWS::EC2::Subnet".to_string());
+                subnet.condition = az_condition(index).map(str::to_string);
+                subnet
+                    .properties
+                    .insert("VpcId".to_string(), CfExpression::ref_(&vpc_id));
+                subnet
+                    .properties
+                    .insert(zone_property.to_string(), select(index, zones.clone()));
+                subnet.properties.insert(
+                    "CidrBlock".to_string(),
+                    select(index + offset, cidr_blocks(&vpc_id, 12)),
+                );
+                subnet
+                    .properties
+                    .insert("MapPublicIpOnLaunch".to_string(), CfExpression::from(false));
+                subnet.properties.insert("Tags".to_string(), tags(ctx));
+                resources.push(subnet);
+                let mut association = CfResource::new(
+                    format!("{subnet_id}RouteTableAssociation"),
+                    "AWS::EC2::SubnetRouteTableAssociation".to_string(),
+                );
+                association.condition = az_condition(index).map(str::to_string);
+                association
+                    .properties
+                    .insert("SubnetId".to_string(), CfExpression::ref_(&subnet_id));
+                association.properties.insert(
+                    "RouteTableId".to_string(),
+                    CfExpression::ref_(&route_table_id),
+                );
+                resources.push(association);
+            }
+        }
+    }
 
     for resource in &mut resources {
         if resource.condition.is_none() {
@@ -380,13 +521,122 @@ fn network_id(prefix: &str, suffix: &str) -> String {
     format!("{prefix}{suffix}")
 }
 
-fn cidr_blocks(vpc_id: &str) -> CfExpression {
+fn cidr_blocks(vpc_id: &str, count: i64) -> CfExpression {
     CfExpression::object([(
         "Fn::Cidr",
         CfExpression::list([
             CfExpression::get_att(vpc_id, "CidrBlock"),
-            CfExpression::Integer(6),
+            CfExpression::Integer(count),
             CfExpression::Integer(8),
         ]),
     )])
+}
+
+// AWS::NoValue becomes JSON null inside Fn::ToJsonString. Select the complete
+// list so setup registration receives only the two or three real subnet values.
+fn created_sandbox_subnet_values(
+    prefix: &str,
+    suffix: &str,
+    attribute: Option<&str>,
+) -> CfExpression {
+    let value = |zone| {
+        let id = format!("{prefix}{suffix}{zone}");
+        match attribute {
+            Some(attribute) => CfExpression::get_att(id, attribute),
+            None => CfExpression::ref_(id),
+        }
+    };
+    CfExpression::if_(
+        "NetworkCreateUseAz3",
+        CfExpression::list([value(1), value(2), value(3)]),
+        CfExpression::list([value(1), value(2)]),
+    )
+}
+
+/// BYO setup supplies exact subnet CIDRs for the Frozen connector group; runtime
+/// cross-checks them against EC2 before publishing internet sandbox bindings.
+pub(crate) fn gateway_egress_rules(ctx: &EmitContext<'_>) -> Result<CfExpression> {
+    let network =
+        alien_core::sandbox_egress::sandbox_egress_network(ctx.stack).map_err(|error| {
+            AlienError::new(ErrorData::OperationNotSupported {
+                operation: "sandbox gateway security group".into(),
+                reason: error.to_string(),
+            })
+        })?;
+    let rule = |cidr| {
+        CfExpression::object([
+            ("IpProtocol", CfExpression::from("tcp")),
+            ("FromPort", CfExpression::Integer(3128)),
+            ("ToPort", CfExpression::Integer(3129)),
+            ("CidrIp", cidr),
+            (
+                "Description",
+                CfExpression::from("Sandbox gateway proxy traffic"),
+            ),
+        ])
+    };
+    let supplied = CfExpression::list([
+        rule(select(0, CfExpression::ref_("SandboxGatewaySubnetCidrs"))),
+        rule(select(1, CfExpression::ref_("SandboxGatewaySubnetCidrs"))),
+        CfExpression::if_(
+            "SandboxGatewayHasThirdSubnet",
+            rule(select(2, CfExpression::ref_("SandboxGatewaySubnetCidrs"))),
+            CfExpression::no_value(),
+        ),
+    ]);
+    if matches!(
+        network.vpc,
+        alien_core::sandbox_egress::SandboxEgressVpc::BroughtByCustomer
+    ) {
+        return Ok(supplied);
+    }
+    let prefix = ctx.name_for(network.id).ok_or_else(|| {
+        AlienError::new(ErrorData::GenericError {
+            message: format!("network '{}' has no generated name", network.id),
+        })
+    })?;
+    let created = CfExpression::list([
+        rule(CfExpression::get_att(
+            format!("{prefix}SandboxGatewaySubnet1"),
+            "CidrBlock",
+        )),
+        rule(CfExpression::get_att(
+            format!("{prefix}SandboxGatewaySubnet2"),
+            "CidrBlock",
+        )),
+        CfExpression::if_(
+            "NetworkCreateUseAz3",
+            rule(CfExpression::get_att(
+                format!("{prefix}SandboxGatewaySubnet3"),
+                "CidrBlock",
+            )),
+            CfExpression::no_value(),
+        ),
+    ]);
+    Ok(CfExpression::if_(
+        CONDITION_NETWORK_MODE_CREATE,
+        created,
+        supplied,
+    ))
+}
+
+pub(crate) fn needs_gateway(ctx: &EmitContext<'_>) -> bool {
+    alien_core::sandbox_egress::has_sandbox_gateway(ctx.stack)
+}
+
+fn has_sandboxes(ctx: &EmitContext<'_>) -> bool {
+    !ctx.targets_kubernetes
+        && ctx
+            .stack
+            .resources()
+            .find(|(_, entry)| entry.config.downcast_ref::<Network>().is_some())
+            .is_some_and(|(id, _)| id == ctx.resource_id)
+        && ctx.stack.resources().any(|(_, entry)| {
+            entry
+                .config
+                .downcast_ref::<Sandbox>()
+                .is_some_and(|sandbox| {
+                    matches!(sandbox.egress, alien_core::SandboxEgress::Internet)
+                })
+        })
 }

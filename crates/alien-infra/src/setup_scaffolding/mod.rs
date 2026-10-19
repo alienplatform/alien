@@ -37,6 +37,42 @@ pub fn needs_setup_scaffolding(entry: &ResourceEntry) -> bool {
         .always_emits_setup_scaffolding()
 }
 
+/// Refuse, while planning and before setup creates anything, a direct AWS internet sandbox
+/// outside a VPC direct deploy creates. Setup cannot add its dedicated subnets to the default VPC,
+/// and an existing VPC's sandbox subnets are brought through a CloudFormation or Terraform import.
+pub(crate) fn validate_setup_support(
+    stack: &Stack,
+    platform: Platform,
+    authority: alien_core::InitialSetupAuthority,
+) -> Result<()> {
+    use alien_core::sandbox_egress::{
+        sandbox_egress_network, SandboxEgressRefusal, SandboxEgressVpc,
+    };
+
+    if platform != Platform::Aws || authority != alien_core::InitialSetupAuthority::DirectSetup {
+        return Ok(());
+    }
+    let refusal: fn(String) -> ErrorData = match sandbox_egress_network(stack) {
+        Err(SandboxEgressRefusal::DefaultVpc) => {
+            |resource_id| ErrorData::SandboxInternetDefaultVpcUnsupported { resource_id }
+        }
+        Ok(network) if network.vpc == SandboxEgressVpc::BroughtByCustomer => {
+            |resource_id| ErrorData::SandboxInternetDirectExistingVpcUnsupported { resource_id }
+        }
+        _ => return Ok(()),
+    };
+    for (resource_id, entry) in stack.resources() {
+        if entry
+            .config
+            .downcast_ref::<alien_core::Sandbox>()
+            .is_some_and(|sandbox| matches!(sandbox.egress, alien_core::SandboxEgress::Internet))
+        {
+            return Err(AlienError::new(refusal(resource_id.clone())));
+        }
+    }
+    Ok(())
+}
+
 /// At most one mutating call per resource, so a retry after any failure repeats nothing.
 pub async fn reconcile(
     ctx: &SetupScaffoldingContext<'_>,
@@ -195,7 +231,7 @@ pub fn seeds(
     scaffolded(stack, stack_state.platform)
         .map(|(_, _, scaffolded)| match scaffolded {
             #[cfg(feature = "aws")]
-            Scaffolded::AwsSandbox(sandbox) => aws_sandbox::seed(ctx, sandbox, records),
+            Scaffolded::AwsSandbox(sandbox) => aws_sandbox::seed(ctx, stack, sandbox, records),
             #[cfg(not(feature = "aws"))]
             Scaffolded::AwsSandbox(_) => Err(aws_not_built()),
         })
@@ -346,4 +382,193 @@ pub async fn teardown(
         }
     }
     Ok(progress)
+}
+
+#[cfg(all(test, feature = "aws"))]
+mod direct_setup_planning_tests {
+    use super::*;
+    use crate::StackExecutor;
+    use alien_aws_clients::AwsClientConfigExt;
+    use alien_core::{
+        InitialSetupAuthority, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy,
+    };
+
+    #[test]
+    fn planning_accepts_direct_aws_internet_and_legacy_egress() {
+        for (authority, value) in [
+            (
+                InitialSetupAuthority::DirectSetup,
+                serde_json::json!("internet"),
+            ),
+            (
+                InitialSetupAuthority::ImportedHandoff,
+                serde_json::json!("internet"),
+            ),
+            (
+                InitialSetupAuthority::DirectSetup,
+                serde_json::json!({"mode":"allow"}),
+            ),
+            (
+                InitialSetupAuthority::DirectSetup,
+                serde_json::json!({"mode":"deny"}),
+            ),
+            (
+                InitialSetupAuthority::DirectSetup,
+                serde_json::json!({"mode":"allowDomains","domains":["example.com"]}),
+            ),
+        ] {
+            let sandbox = Sandbox::new("subject".into())
+                .code(SandboxCode::Image {
+                    image: "s3://example/bundle.zip".into(),
+                })
+                .egress(serde_json::from_value::<SandboxEgress>(value).unwrap())
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build();
+            let stack = Stack::new("example".into())
+                .add(sandbox, ResourceLifecycle::Live)
+                .build();
+            let config = alien_core::DeploymentConfig::builder()
+                .stack_settings(StackSettings::default())
+                .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                    variables: vec![],
+                    hash: String::new(),
+                    created_at: String::new(),
+                })
+                .external_bindings(alien_core::ExternalBindings::default())
+                .allow_frozen_changes(false)
+                .build();
+            let planned = StackExecutor::builder(
+                &stack,
+                ClientConfig::Aws(Box::new(alien_aws_clients::AwsClientConfig::mock())),
+            )
+            .deployment_config(&config)
+            .initial_setup_authority(authority)
+            .lifecycle_filter(vec![ResourceLifecycle::Frozen])
+            .service_provider(std::sync::Arc::new(
+                crate::MockPlatformServiceProvider::new(),
+            ))
+            .build();
+            planned
+                .unwrap()
+                .plan(&StackState::new(Platform::Aws))
+                .unwrap();
+        }
+    }
+
+    fn existing_vpc() -> alien_core::NetworkSettings {
+        alien_core::NetworkSettings::ByoVpcAws {
+            vpc_id: "vpc-existing".into(),
+            public_subnet_ids: vec![],
+            private_subnet_ids: vec!["subnet-a".into(), "subnet-b".into()],
+            security_group_ids: vec![],
+        }
+    }
+
+    /// Direct deploy builds an internet sandbox's network only in a VPC it creates, so planning
+    /// refuses one on the default VPC or an existing VPC before any setup resource is created.
+    /// A created VPC, a deny sandbox and a template import are left to their existing checks.
+    #[test]
+    fn planning_refuses_direct_aws_internet_outside_a_created_vpc() {
+        for (authority, egress, settings, refused) in [
+            (
+                InitialSetupAuthority::DirectSetup,
+                SandboxEgress::Internet,
+                alien_core::NetworkSettings::UseDefault,
+                Some("SANDBOX_INTERNET_DEFAULT_VPC_UNSUPPORTED"),
+            ),
+            (
+                InitialSetupAuthority::DirectSetup,
+                SandboxEgress::Internet,
+                existing_vpc(),
+                Some("SANDBOX_INTERNET_DIRECT_EXISTING_VPC_UNSUPPORTED"),
+            ),
+            (
+                InitialSetupAuthority::ImportedHandoff,
+                SandboxEgress::Internet,
+                existing_vpc(),
+                None,
+            ),
+            (
+                InitialSetupAuthority::DirectSetup,
+                serde_json::from_value(serde_json::json!({"mode":"deny"})).unwrap(),
+                existing_vpc(),
+                None,
+            ),
+            (
+                InitialSetupAuthority::DirectSetup,
+                SandboxEgress::Internet,
+                alien_core::NetworkSettings::Create {
+                    cidr: None,
+                    availability_zones: 2,
+                },
+                None,
+            ),
+            (
+                InitialSetupAuthority::ImportedHandoff,
+                SandboxEgress::Internet,
+                alien_core::NetworkSettings::UseDefault,
+                None,
+            ),
+            (
+                InitialSetupAuthority::DirectSetup,
+                serde_json::from_value(serde_json::json!({"mode":"deny"})).unwrap(),
+                alien_core::NetworkSettings::UseDefault,
+                None,
+            ),
+        ] {
+            let sandbox = Sandbox::new("subject".into())
+                .code(SandboxCode::Image {
+                    image: "s3://example/bundle.zip".into(),
+                })
+                .egress(egress)
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build();
+            let stack = Stack::new("example".into())
+                .add(
+                    alien_core::Network::new("network".into())
+                        .settings(settings)
+                        .build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .add(sandbox, ResourceLifecycle::Live)
+                .build();
+            let config = alien_core::DeploymentConfig::builder()
+                .stack_settings(StackSettings::default())
+                .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                    variables: vec![],
+                    hash: String::new(),
+                    created_at: String::new(),
+                })
+                .external_bindings(alien_core::ExternalBindings::default())
+                .allow_frozen_changes(false)
+                .build();
+            // The provider has no expectations: any cloud call would panic.
+            let planned = StackExecutor::builder(
+                &stack,
+                ClientConfig::Aws(Box::new(alien_aws_clients::AwsClientConfig::mock())),
+            )
+            .deployment_config(&config)
+            .initial_setup_authority(authority)
+            .lifecycle_filter(vec![ResourceLifecycle::Frozen])
+            .service_provider(std::sync::Arc::new(
+                crate::MockPlatformServiceProvider::new(),
+            ))
+            .build();
+            if let Some(code) = refused {
+                let error = planned
+                    .err()
+                    .expect("direct internet outside a created VPC must fail while planning");
+                assert_eq!(error.code, code);
+                assert!(error.to_string().contains("subject"));
+            } else {
+                planned.expect("direct internet in a created VPC is planned");
+            }
+        }
+    }
 }

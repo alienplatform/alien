@@ -1,10 +1,12 @@
 //! Signing material stays in the deployment vault; controllers retain only public data.
 
+#[cfg(any(feature = "aws", feature = "kubernetes"))]
 use crate::core::state_utils::StackResourceStateExt;
+#[cfg(any(feature = "aws", feature = "kubernetes"))]
 use alien_bindings::BindingsProviderApi;
 use alien_bindings::Vault;
 use alien_error::{AlienError, Context};
-use base64::{engine::general_purpose::STANDARD, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD};
 use ed25519_compact::{KeyPair, SecretKey};
 use serde::{Deserialize, Serialize};
 
@@ -35,7 +37,7 @@ fn invalid_key() -> ErrorData {
     }
 }
 
-/// Called only by the first internet Sandbox in resource-id order. Other Sandbox
+/// Called only by the setup-aware shared-key owner. Other Sandbox
 /// controllers depend on that owner, so initialization has exactly one writer.
 /// A retry reads the accepted write instead of rotating the deployment's key.
 pub(crate) async fn ensure_signing_key(vault: &dyn Vault) -> Result<GatewayPublicKey> {
@@ -191,6 +193,7 @@ mod tests {
     }
 }
 
+#[cfg(any(feature = "aws", feature = "kubernetes"))]
 pub(crate) async fn deployment_vault(
     ctx: &crate::core::ResourceControllerContext<'_>,
 ) -> Result<std::sync::Arc<dyn Vault>> {
@@ -241,12 +244,108 @@ pub(crate) fn internet_sandbox_ids(stack: &alien_core::Stack) -> Vec<String> {
     ids
 }
 
-/// Only the first internet Sandbox publishes this entry. The replica secret stays in the
-/// vault and never enters controller state, bindings, logs or generated packages.
-pub(crate) async fn publish_gateway_config(
-    vault: &dyn Vault,
-    mut value: serde_json::Value,
+#[cfg(feature = "aws")]
+pub(crate) async fn validate_aws_network(
+    ctx: &crate::core::ResourceControllerContext<'_>,
+) -> Result<alien_core::import::data::AwsSandboxNetwork> {
+    let network_id = alien_core::sandbox_egress::sandbox_egress_network(ctx.desired_stack)
+        .map_err(|error| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: error.to_string(),
+                resource_id: Some(ctx.desired_config.id().into()),
+            })
+        })?
+        .id;
+    let network = ctx
+        .state
+        .resources
+        .get(network_id)
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::DependencyNotReady {
+                resource_id: ctx.desired_config.id().into(),
+                dependency_id: network_id.into(),
+            })
+        })?
+        .get_internal_controller_typed::<crate::network::AwsNetworkController>()?;
+    let declared = network.sandbox_network.as_ref().ok_or_else(|| {
+        AlienError::new(ErrorData::ResourceConfigInvalid {
+            message: "Sandbox setup must provide dedicated connector and gateway subnet IDs".into(),
+            resource_id: Some(network_id.into()),
+        })
+    })?;
+    let vpc_id = network.vpc_id.as_deref().ok_or_else(|| {
+        AlienError::new(ErrorData::DependencyNotReady {
+            resource_id: ctx.desired_config.id().into(),
+            dependency_id: network_id.into(),
+        })
+    })?;
+    let client = ctx
+        .service_provider
+        .get_aws_ec2_client(ctx.get_aws_config()?)
+        .await?;
+    crate::network::validate_aws_sandbox_network(
+        client.as_ref(),
+        network_id,
+        vpc_id,
+        declared,
+        &network.private_subnet_ids,
+    )
+    .await
+}
+
+#[cfg(feature = "aws")]
+pub(crate) async fn publish_aws_config(
+    ctx: &crate::core::ResourceControllerContext<'_>,
+    key: &GatewayPublicKey,
 ) -> Result<()> {
+    let facts = validate_aws_network(ctx).await?;
+    let ids = internet_sandbox_ids(ctx.desired_stack);
+    if alien_core::sandbox_egress::sandbox_egress_key_owner(ctx.desired_stack)
+        != Some(ctx.desired_config.id())
+    {
+        return Ok(());
+    }
+    let mut denied: Vec<String> = [
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "100.64.0.0/10",
+        "169.254.0.0/16",
+        "127.0.0.0/8",
+        "0.0.0.0/8",
+        "224.0.0.0/4",
+        "240.0.0.0/4",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect();
+    denied.extend(facts.vpc_cidrs.iter().cloned());
+    for (_, entry) in ctx.desired_stack.resources() {
+        if let Some(cluster) = entry.config.downcast_ref::<alien_core::ComputeCluster>() {
+            denied.push(cluster.container_cidr().to_string());
+        }
+    }
+    denied.sort();
+    denied.dedup();
+    let audiences: Vec<_> = ids
+        .iter()
+        .map(|id| format!("{}/{id}", ctx.resource_prefix))
+        .collect();
+    let value = serde_json::json!({
+        "listen": "0.0.0.0:3128", "admin": "0.0.0.0:3129",
+        "audiences": audiences, "defaultPolicies": {}, "keys": [key],
+        "deniedRanges": denied,
+        "peers": {"dns": format!("{}.svc", alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID), "port": 3129},
+        "credentials": []
+    });
+    let vault = deployment_vault(ctx).await?;
+    publish_gateway_config(vault.as_ref(), value).await
+}
+
+/// Only the shared-key owner publishes this entry. The replica secret stays in the
+/// vault and never enters controller state, bindings, logs or generated packages.
+#[cfg(any(feature = "aws", feature = "kubernetes", test))]
+pub(crate) async fn publish_gateway_config(vault: &dyn Vault, mut value: serde_json::Value) -> Result<()> {
     let invalid = || {
         AlienError::new(ErrorData::ResourceConfigInvalid {
             message: "The sandbox gateway configuration must be an object with a valid 32-byte base64 replicaSecret".into(),

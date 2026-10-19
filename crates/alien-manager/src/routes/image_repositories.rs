@@ -23,6 +23,8 @@ use crate::error::ErrorData;
 pub struct ProvisionImageRepositoryRequest {
     pub project_id: String,
     pub platform: Platform,
+    #[serde(default)]
+    pub sandbox: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -66,7 +68,14 @@ async fn provision_image_repository(
             .into_response();
     }
 
-    match provision(&state, &request.project_id, request.platform).await {
+    match provision(
+        &state,
+        &request.project_id,
+        request.platform,
+        request.sandbox,
+    )
+    .await
+    {
         Ok(repository) => Json(ProvisionImageRepositoryResponse { repository }).into_response(),
         Err(e) => e.into_response(),
     }
@@ -76,6 +85,7 @@ async fn provision(
     state: &AppState,
     project_id: &str,
     platform: Platform,
+    sandbox: bool,
 ) -> crate::error::Result<String> {
     if project_id.is_empty() || project_id.contains('/') {
         return Err(ErrorData::bad_request(
@@ -106,9 +116,11 @@ async fn provision(
         .load_artifact_registry(&route.binding_name)
         .await
         .context(failed())?;
-    let repository = registry
-        .create_project_repository(project_id)
-        .await
-        .context(failed())?;
+    let repository = if sandbox {
+        registry.create_sandbox_project_repository(project_id).await
+    } else {
+        registry.create_project_repository(project_id).await
+    }
+    .context(failed())?;
     Ok(repository.name)
 }

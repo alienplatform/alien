@@ -546,6 +546,7 @@ Resources:
       SecurityGroupEgress:
       - IpProtocol: '-1'
         CidrIp: 0.0.0.0/0
+        Description: Outbound workload traffic
       Tags:
       - Key: managed-by
         Value: setup
@@ -658,6 +659,8 @@ Outputs:
               Fn::GetAtt:
               - DefaultNetworkNatEip
               - AllocationId
+            egressPublicIps:
+            - Ref: DefaultNetworkNatEip
             publicSubnetIds:
             - Ref: DefaultNetworkPublicSubnet1
             - Fn::If:

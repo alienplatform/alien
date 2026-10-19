@@ -1125,18 +1125,11 @@ async fn resolve_binding(
         .await
     {
         Ok(source) => source,
-        Err(error) => {
-            return error
-                .context(ErrorData::RemoteCredentialHandoffFailed {
-                    deployment_id: deployment.id.clone(),
-                    platform: deployment.platform,
-                })
-                .into_response()
-        }
+        Err(error) => return remote_credential_error_response(error.into_generic(), &deployment),
     };
     let lease = match materialize_remote_binding_lease(resolved, scope).await {
         Ok(materialized) => materialized,
-        Err(error) => return error.into_response(),
+        Err(error) => return remote_credential_error_response(error.into_generic(), &deployment),
     };
 
     let now = Utc::now();
@@ -2027,6 +2020,23 @@ fn remote_sandbox_binding(
             deployment.platform
         ))),
     }
+}
+
+fn remote_credential_error_response(error: AlienError, deployment: &DeploymentRecord) -> Response {
+    let error = crate::providers::credential_errors::classify_credential_error(error);
+    tracing::warn!(deployment_id = %deployment.id, error_code = %error.code, error = %error,
+        "Remote binding credential resolution failed");
+    // Sanitizing an internal cause must not erase the retry decision used by
+    // clients to fall back to a still-valid cached credential lease.
+    let retryable = error.retryable;
+    let mut safe_error = error.into_external();
+    safe_error.retryable = retryable;
+    safe_error
+        .context(ErrorData::RemoteCredentialHandoffFailed {
+            deployment_id: deployment.id.clone(),
+            platform: deployment.platform,
+        })
+        .into_response()
 }
 
 #[cfg(test)]

@@ -52,6 +52,8 @@ impl Agent {
         let keys = KeyPair::from_seed(Seed::new([3u8; 32]));
 
         let state = Arc::new(AgentState {
+            #[cfg(target_os = "linux")]
+            gateway_egress: None,
             session_root: root.clone(),
             authorization: AgentAuthorization::Capability {
                 public_key: keys.pk,
@@ -433,6 +435,8 @@ async fn transport_authorization_needs_no_capability() {
     let root = dir.path().canonicalize().expect("canonical root");
 
     let state = Arc::new(AgentState {
+        #[cfg(target_os = "linux")]
+        gateway_egress: None,
         session_root: root.clone(),
         authorization: AgentAuthorization::Transport,
         // Not the test's own uid: the agent and the code it runs are different users in a real
@@ -482,6 +486,8 @@ async fn transport_authorization_refuses_the_code_the_agent_runs() {
     let root = dir.path().canonicalize().expect("canonical root");
 
     let state = Arc::new(AgentState {
+        #[cfg(target_os = "linux")]
+        gateway_egress: None,
         session_root: root.clone(),
         authorization: AgentAuthorization::Transport,
         exec_identity: test_identity(),
@@ -747,6 +753,8 @@ async fn the_envelope_refuses_the_code_the_agent_runs_under_transport() {
     let root = dir.path().canonicalize().expect("canonical root");
 
     let state = Arc::new(AgentState {
+        #[cfg(target_os = "linux")]
+        gateway_egress: None,
         session_root: root.clone(),
         authorization: AgentAuthorization::Transport,
         exec_identity: test_identity(),

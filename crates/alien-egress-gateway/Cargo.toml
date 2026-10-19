@@ -1,0 +1,52 @@
+[package]
+name = "alien-egress-gateway"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+
+[features]
+default = []
+aws = ["alien-bindings/aws"]
+cloud = ["alien-bindings/aws", "alien-bindings/gcp", "alien-bindings/azure", "alien-bindings/kubernetes"]
+local = ["alien-bindings/local"]
+
+[dependencies]
+axum = { workspace = true, features = ["tokio", "http1", "json", "query"] }
+alien-core = { workspace = true }
+alien-error = { workspace = true }
+alien-bindings = { workspace = true }
+base64 = { workspace = true }
+bytes = { workspace = true }
+chrono = { workspace = true }
+ed25519-compact = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["json", "env-filter"] }
+url = { workspace = true }
+hickory-resolver = { workspace = true }
+hmac = { workspace = true }
+futures-util = { workspace = true }
+tokio-util = { workspace = true, features = ["io-util"] }
+reqwest = { workspace = true, features = ["json", "stream"] }
+httparse = "1.10"
+ipnet = { version = "2.12", features = ["serde"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+rcgen = { version = "0.14", features = ["pem", "x509-parser"] }
+webpki-roots = "1"
+http = { workspace = true }
+hyper = { workspace = true, features = ["http1", "client", "server"] }
+hyper-util = { workspace = true, features = ["tokio"] }
+http-body-util = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+proptest = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
+async-trait = { workspace = true }
+tempfile = { workspace = true }

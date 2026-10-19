@@ -530,7 +530,7 @@ fn a_live_sandbox_module_keeps_the_build_role_and_drops_the_image() {
             &serde_json::json!({
                 "Sid": "PullSandboxBaseImage",
                 "Effect": "Allow",
-                "Action": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"],
+                "Action": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer", "ecr:BatchImportUpstreamImage", "ecr:GetImageCopyStatus"],
                 "Resource": "arn:${data.aws_partition.current.partition}:ecr:\
                              ${data.aws_region.current.region}:123456789012:repository/acme/agents-base"
             }),
@@ -761,10 +761,8 @@ fn a_deny_sandbox_attaches_to_the_first_of_two_networks() {
                 ResourceLifecycle::Live,
             )
             .build();
-        let chosen =
-            alien_core::sandbox_egress::sandbox_egress_network(&stack, &SandboxEgress::None)
-                .expect("both networks are attachable")
-                .expect("deny attaches to a network");
+        let chosen = alien_core::sandbox_egress::sandbox_egress_network(&stack)
+            .expect("both networks are attachable");
         assert_eq!(chosen.id, "first-net");
 
         let module = render(
@@ -1360,6 +1358,7 @@ fn the_emitted_registration_matches_the_direct_seed() {
             serde_json::from_value(evaluate_registration(&sandbox_file, import_data))
                 .unwrap_or_else(|error| panic!("{case}: the importer must accept it: {error}"));
         let direct = alien_core::import::data::AwsSandboxImportData::runtime_built(
+            &stack,
             &sandbox,
             alien_core::sandbox_build_role::sandbox_build_role_arn(
                 PARITY_PARTITION,
@@ -1922,4 +1921,16 @@ fn granted_actions(
         }
     }
     granted
+}
+
+/// An internet sandbox's connector routes through the egress gateway that deployment preparation
+/// installs. A stack that reaches the generator without it would reference gateway subnet
+/// variables the module never declares, so it is refused and the sandbox named.
+#[test]
+fn aws_internet_sandbox_without_its_gateway_is_refused() {
+    let (stack, settings) = sandbox_stack("acme-internet", SandboxEgress::Internet);
+    let error = try_render(&stack, TerraformTarget::Aws, settings)
+        .expect_err("an internet sandbox without its gateway must not render");
+    assert_eq!(error.code, "SANDBOX_INTERNET_GATEWAY_MISSING");
+    assert!(error.message.contains("'agents'"), "{}", error.message);
 }

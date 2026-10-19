@@ -131,7 +131,7 @@ const MICROVM_TIERS: &[MicrovmTier] = &[
     },
 ];
 
-pub use super::sandbox_policy::EgressPolicy;
+pub use super::sandbox_policy::{is_public_ipv4, EgressPolicy};
 
 /// Outbound policy. Only the new Internet value opts into gateway enforcement.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -575,8 +575,8 @@ pub struct SandboxPrivilegedSupervisor {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[builder(start_fn = new)]
 pub struct Sandbox {
-    /// Identifier for the sandbox. Must contain only alphanumeric characters, hyphens, and
-    /// underscores ([A-Za-z0-9-_]). Maximum 64 characters.
+    /// Identifier for the sandbox. Must be DNS-compatible: lowercase letters, digits and hyphens,
+    /// starting and ending with a letter or digit, with no consecutive hyphens.
     #[builder(start_fn)]
     pub id: String,
     /// Runtime network links authored by preflight, not parent lifecycle dependencies.
@@ -636,11 +636,11 @@ pub fn restricts_network_mode(stack: &crate::Stack, targets_kubernetes: bool) ->
 /// [`restricts_network_mode`] instead:
 /// this one answers for the declaration, which on a Kubernetes target is not what gets emitted.
 pub fn stack_needs_named_subnets_at_setup(stack: &crate::Stack) -> bool {
-    stack.resources().any(|(_resource_id, resource)| {
-        resource
+    stack.resources().any(|(_, entry)| {
+        entry
             .config
             .downcast_ref::<Sandbox>()
-            .is_some_and(|sandbox| !matches!(sandbox.cloud_egress(), SandboxEgress::Allow))
+            .is_some_and(|sandbox| crate::sandbox_egress::sandbox_needs_connector(stack, sandbox))
     })
 }
 
@@ -788,6 +788,27 @@ impl Sandbox {
             self.azure_image()?;
         }
 
+        // Read before the limits, like the image, because a lifetime is declared whether or not
+        // any limits are. The ceiling is Lambda's, and it rejects the run rather than clamping, so
+        // a value outside it would pass planning, render into the package, and fail at the first
+        // sandbox. Kubernetes takes the same field with no such bound, which is why this sits
+        // under the AWS gate rather than on the type.
+        if platform == Platform::Aws {
+            if let Some(seconds) = self.lifecycle.max_lifetime_seconds {
+                if !(1..=AWS_MAX_LIFETIME_SECONDS).contains(&seconds) {
+                    return Err(AlienError::new(ErrorData::SandboxLimitInvalid {
+                        resource_id: self.id.clone(),
+                        field: "maxLifetimeSeconds".to_string(),
+                        value: seconds.to_string(),
+                        reason: format!(
+                            "AWS runs a MicroVM for between 1 and \
+                             {AWS_MAX_LIFETIME_SECONDS} seconds"
+                        ),
+                    }));
+                }
+            }
+        }
+
         let Some(limits) = self.limits.as_ref() else {
             // Nothing declared, so nothing to enforce and nothing to reject.
             return self.validate_capabilities(&capabilities, platform);
@@ -821,24 +842,6 @@ impl Sandbox {
             // Refused here rather than at emit so a customer sees it while planning, and so both
             // package formats inherit the same answer.
             self.microvm_tier()?;
-
-            // The ceiling is Lambda's, and it rejects the run rather than clamping — so a value
-            // outside it would pass planning, render into the package, and fail at the first
-            // sandbox. Kubernetes takes the same field with no such bound, which is why this
-            // sits under the AWS gate rather than on the type.
-            if let Some(seconds) = self.lifecycle.max_lifetime_seconds {
-                if !(1..=AWS_MAX_LIFETIME_SECONDS).contains(&seconds) {
-                    return Err(AlienError::new(ErrorData::SandboxLimitInvalid {
-                        resource_id: self.id.clone(),
-                        field: "maxLifetimeSeconds".to_string(),
-                        value: seconds.to_string(),
-                        reason: format!(
-                            "AWS runs a MicroVM for between 1 and \
-                             {AWS_MAX_LIFETIME_SECONDS} seconds"
-                        ),
-                    }));
-                }
-            }
         }
 
         self.validate_capabilities(&capabilities, platform)
@@ -2155,28 +2158,36 @@ mod tests {
 
     /// Lambda rejects a run outside 1–28,800 rather than clamping it, so a value beyond that
     /// would pass planning, render into the package, and fail at the first sandbox. Kubernetes
-    /// takes the same field with no such bound, so the check is AWS's alone.
+    /// takes the same field with no such bound, so the check is AWS's alone. The lifetime is a
+    /// lifecycle field, so a sandbox that declares no limits is held to it too.
     #[test]
     fn a_lifetime_aws_would_reject_is_refused_while_planning() {
-        let mut sandbox = sandbox_with(SandboxEgress::None, vec![]);
+        let with_limits = sandbox_with(SandboxEgress::None, vec![]);
+        let mut without_limits = with_limits.clone();
+        without_limits.limits = None;
 
-        for seconds in [0, 28_801, 100_000] {
-            sandbox.lifecycle.max_lifetime_seconds = Some(seconds);
-            let error = sandbox
-                .validate_for_platform(Platform::Aws)
-                .expect_err("a lifetime outside what AWS runs is refused");
-            assert_eq!(error.code, "SANDBOX_LIMIT_INVALID", "{seconds}s");
+        for (declared, mut sandbox) in [("with", with_limits), ("without", without_limits)] {
+            for seconds in [0, 28_801, 30_000, 100_000] {
+                sandbox.lifecycle.max_lifetime_seconds = Some(seconds);
+                let error = sandbox
+                    .validate_for_platform(Platform::Aws)
+                    .expect_err("a lifetime outside what AWS runs is refused");
+                assert_eq!(
+                    error.code, "SANDBOX_LIMIT_INVALID",
+                    "{seconds}s {declared} limits"
+                );
 
-            // Kubernetes has no such ceiling, so the same declaration is fine there.
+                // Kubernetes has no such ceiling, so the same declaration is fine there.
+                sandbox
+                    .validate_for_platform(Platform::Kubernetes)
+                    .expect("the kubelet takes any activeDeadlineSeconds");
+            }
+
+            sandbox.lifecycle.max_lifetime_seconds = Some(28_800);
             sandbox
-                .validate_for_platform(Platform::Kubernetes)
-                .expect("the kubelet takes any activeDeadlineSeconds");
+                .validate_for_platform(Platform::Aws)
+                .expect("the ceiling itself is allowed");
         }
-
-        sandbox.lifecycle.max_lifetime_seconds = Some(28_800);
-        sandbox
-            .validate_for_platform(Platform::Aws)
-            .expect("the ceiling itself is allowed");
     }
 
     /// An image Azure can take neither as a catalog name nor as a registry image is refused while

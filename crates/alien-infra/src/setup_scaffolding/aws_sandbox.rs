@@ -156,8 +156,7 @@ pub(super) async fn reconcile(
         let SetupScaffolding::AwsSandbox { egress, .. } = records
             .get_mut(&sandbox.id)
             .unwrap_or_else(|| unreachable!("recorded above"));
-        if aws_sandbox_egress::reconcile(ctx, aws, &sandbox.id, network_id, stack_state, egress)
-            .await?
+        if aws_sandbox_egress::reconcile(ctx, aws, sandbox, network_id, stack_state, egress).await?
             == ScaffoldingProgress::InProgress
         {
             return Ok(ScaffoldingProgress::InProgress);
@@ -360,6 +359,7 @@ pub(super) fn setup_inputs(
 /// and the connector it recorded.
 pub(super) fn seed(
     ctx: &SetupScaffoldingContext<'_>,
+    stack: &Stack,
     sandbox: &Sandbox,
     records: &BTreeMap<String, SetupScaffolding>,
 ) -> Result<ScaffoldingSeed> {
@@ -372,6 +372,7 @@ pub(super) fn seed(
         _ => None,
     };
     let import_data = AwsSandboxImportData::runtime_built(
+        stack,
         sandbox,
         sandbox_build_role_arn(
             aws_partition(&aws.region),

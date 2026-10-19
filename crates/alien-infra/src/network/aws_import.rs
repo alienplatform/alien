@@ -63,7 +63,9 @@ impl ResourceImporter for AwsNetworkImporter {
             internet_gateway_id: data.internet_gateway_id,
             nat_gateway_id: data.nat_gateway_id,
             eip_allocation_id: data.eip_allocation_id,
+            egress_public_ips: data.egress_public_ips,
             sandbox_network: data.sandbox_network,
+            sandbox_setup: None,
             public_subnet_ids: data.public_subnet_ids,
             private_subnet_ids: data.private_subnet_ids,
             public_route_table_id: data.public_route_table_id,
@@ -89,6 +91,7 @@ impl ResourceImporter for AwsNetworkImporter {
             extra_eip_allocation_ids: Vec::new(),
             wait_for_delete_dependencies_iterations: 0,
             wait_for_retained_delete_iterations: 0,
+            delete_removed_something: false,
             _internal_stay_count: None,
         };
         if needs_default_vpc_discovery || needs_subnet_domain_discovery {
@@ -257,6 +260,7 @@ mod tests {
             internet_gateway_id: None,
             nat_gateway_id: None,
             eip_allocation_id: None,
+            egress_public_ips: Vec::new(),
             sandbox_network: None,
             public_subnet_ids: Vec::new(),
             private_subnet_ids: Vec::new(),
@@ -448,6 +452,7 @@ mod tests {
         let mut changed = named_network_data(false);
         changed.security_group_id = Some("sg-replaced".to_string());
         changed.nat_gateway_id = Some("nat-replaced".to_string());
+        changed.egress_public_ips = vec!["203.0.113.20".to_string()];
         let sandbox_network = alien_core::import::data::AwsSandboxNetwork {
             sandbox_subnet_ids: vec!["subnet-isolated".into()],
             gateway_subnet_ids: vec!["subnet-gateway".into()],
@@ -466,6 +471,12 @@ mod tests {
         assert_eq!(internal["natGatewayId"], "nat-replaced");
         let controller: AwsNetworkController = serde_json::from_value(internal.clone()).unwrap();
         assert_eq!(controller.sandbox_network, Some(sandbox_network));
+        let outputs = serde_json::to_value(merged.outputs.expect("ready network outputs"))
+            .expect("serialize network outputs");
+        assert_eq!(
+            outputs["egressPublicIps"],
+            serde_json::json!(["203.0.113.20"])
+        );
         assert_eq!(
             internal["subnetsByFailureDomain"],
             serde_json::to_value(discovered_map()).unwrap()

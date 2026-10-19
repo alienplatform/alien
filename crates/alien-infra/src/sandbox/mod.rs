@@ -1,5 +1,6 @@
 //! Sandbox resource controllers.
 
+#[cfg(any(feature = "aws", feature = "local", feature = "kubernetes"))]
 pub(crate) mod egress;
 
 #[cfg(feature = "aws")]

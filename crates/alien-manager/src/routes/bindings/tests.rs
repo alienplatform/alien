@@ -1560,3 +1560,27 @@ async fn readable_desired_release_after_a_failed_update_is_checked_for_sandboxes
         "a desired release that adds a remote sandbox may share the identity"
     );
 }
+
+#[tokio::test]
+async fn internal_credential_responses_preserve_retryability_without_exposing_payloads() {
+    let deployment = deployment(StackState::new(Platform::Aws));
+    for (status, retryable) in [(503, true), (403, false)] {
+        let error = AlienError::new(alien_aws_clients::ErrorData::HttpResponseError {
+            message: "synthetic-private-payload".to_string(),
+            url: "http://localhost/token".to_string(),
+            http_status: status,
+            http_request_text: Some("synthetic-secret".to_string()),
+            http_response_text: None,
+        })
+        .into_generic();
+        let response = remote_credential_error_response(error, &deployment);
+        let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["retryable"], retryable);
+        assert_eq!(body["code"], "REMOTE_CREDENTIAL_HANDOFF_FAILED");
+        assert!(!body.to_string().contains("synthetic-private-payload"));
+        assert!(!body.to_string().contains("synthetic-secret"));
+    }
+}
