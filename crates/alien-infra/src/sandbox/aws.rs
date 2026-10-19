@@ -1668,6 +1668,7 @@ mod tests {
     #[cfg(feature = "local")]
     async fn delete_internet_sandbox_with_shared_secrets(
         other: Option<Sandbox>,
+        saved_status: Option<ResourceStatus>,
     ) -> Vec<&'static str> {
         use crate::{LocalVaultController, LocalVaultState};
         use alien_bindings::{providers::vault::LocalVault, Vault as _};
@@ -1703,10 +1704,25 @@ mod tests {
                     ..Default::default()
                 },
             );
+        let saved = other.clone();
         if let Some(other) = other {
             builder = builder.with_stack_resource(other, ResourceLifecycle::Live);
         }
         let mut executor = builder.build().await.unwrap();
+        // A sibling the teardown has dropped from the desired stack but not yet deleted.
+        if let (Some(other), Some(status)) = (saved, saved_status) {
+            executor.remove_desired_resource(&other.id);
+            let id = other.id.clone();
+            executor.insert_saved_resource(
+                &id,
+                alien_core::StackResourceState::builder()
+                    .resource_type(Sandbox::RESOURCE_TYPE.to_string())
+                    .status(status)
+                    .config(alien_core::Resource::new(other))
+                    .lifecycle(ResourceLifecycle::Live)
+                    .build(),
+            );
+        }
         executor.delete().expect("transition to delete");
         executor
             .run_until_terminal()
@@ -1738,24 +1754,59 @@ mod tests {
     #[tokio::test]
     async fn the_last_internet_sandbox_deletes_the_shared_egress_secrets() {
         assert_eq!(
-            delete_internet_sandbox_with_shared_secrets(None).await,
+            delete_internet_sandbox_with_shared_secrets(None, None).await,
             Vec::<&str>::new()
         );
     }
 
-    /// Another internet sandbox and the gateway still sign and read with them.
-    #[cfg(feature = "local")]
-    #[tokio::test]
-    async fn the_shared_egress_secrets_stay_while_another_internet_sandbox_remains() {
+    fn other_internet_sandbox() -> Sandbox {
         let mut other = sandbox();
         other.id = "workers".into();
         other.egress = SandboxEgress::Internet;
+        other
+    }
+
+    /// Another declared internet sandbox and the gateway still sign and read with them.
+    #[cfg(feature = "local")]
+    #[tokio::test]
+    async fn the_shared_egress_secrets_stay_while_another_internet_sandbox_is_declared() {
         assert_eq!(
-            delete_internet_sandbox_with_shared_secrets(Some(other)).await,
+            delete_internet_sandbox_with_shared_secrets(Some(other_internet_sandbox()), None).await,
             vec![
                 super::super::egress::SIGNING_KEY,
                 super::super::egress::GATEWAY_CONFIG
             ]
+        );
+    }
+
+    /// In a full teardown the desired stack is empty; a sibling still being deleted keeps them.
+    #[cfg(feature = "local")]
+    #[tokio::test]
+    async fn the_shared_egress_secrets_stay_while_another_internet_sandbox_is_still_deleting() {
+        assert_eq!(
+            delete_internet_sandbox_with_shared_secrets(
+                Some(other_internet_sandbox()),
+                Some(ResourceStatus::Deleting)
+            )
+            .await,
+            vec![
+                super::super::egress::SIGNING_KEY,
+                super::super::egress::GATEWAY_CONFIG
+            ]
+        );
+    }
+
+    /// Once the sibling is deleted, the last internet sandbox removes them.
+    #[cfg(feature = "local")]
+    #[tokio::test]
+    async fn the_shared_egress_secrets_go_once_every_other_internet_sandbox_is_deleted() {
+        assert_eq!(
+            delete_internet_sandbox_with_shared_secrets(
+                Some(other_internet_sandbox()),
+                Some(ResourceStatus::Deleted)
+            )
+            .await,
+            Vec::<&str>::new()
         );
     }
 
