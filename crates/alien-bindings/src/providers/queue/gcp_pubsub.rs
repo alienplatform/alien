@@ -1,8 +1,8 @@
 use super::{batch_end, encode_batch};
 use crate::error::{ErrorData, Result};
-use crate::traits::QueueSendResult;
 use crate::traits::{
-    Binding, MessagePayload, Queue, QueueMessage, MAX_BATCH_SIZE, MAX_MESSAGE_BYTES,
+    Binding, MessagePayload, Queue, QueueAckResult, QueueMessage, QueueSendResult, MAX_BATCH_SIZE,
+    MAX_MESSAGE_BYTES,
 };
 use alien_error::{Context, IntoAlienError};
 use alien_gcp_clients::pubsub::{
@@ -221,6 +221,46 @@ impl Queue for GcpPubSubQueue {
             .context(ErrorData::BindingSetupFailed {
                 binding_type: "queue.pubsub".to_string(),
                 reason: "Failed to acknowledge message".to_string(),
+            })
+    }
+
+    async fn ack_batch(&self, _queue: &str, receipts: &[String]) -> Result<Vec<QueueAckResult>> {
+        let mut results = Vec::with_capacity(receipts.len());
+        for chunk in receipts.chunks(100) {
+            let outcome = match self
+                .client
+                .acknowledge(
+                    self.subscription.clone(),
+                    AcknowledgeRequest {
+                        ack_ids: chunk.to_vec(),
+                    },
+                )
+                .await
+            {
+                Ok(_) => QueueAckResult::Acknowledged,
+                Err(error) => QueueAckResult::Failed {
+                    code: error.code.clone(),
+                    message: error.to_string(),
+                },
+            };
+            results.extend(std::iter::repeat_n(outcome, chunk.len()));
+        }
+        Ok(results)
+    }
+
+    async fn renew_lease(&self, _queue: &str, receipt_handle: &str) -> Result<()> {
+        self.client
+            .modify_ack_deadline(
+                self.subscription.clone(),
+                ModifyAckDeadlineRequest {
+                    ack_ids: vec![receipt_handle.to_string()],
+                    ack_deadline_seconds: 30,
+                },
+            )
+            .await
+            .context(ErrorData::BindingSetupFailed {
+                binding_type: "queue.pubsub".to_string(),
+                reason: "Failed to renew delivery lease".to_string(),
             })
     }
 

@@ -267,6 +267,16 @@ class Queue:
         await (await self._handle.get()).ack(receipt_handle)
 
     @translate_errors
+    async def ack_batch(self, receipts: list[str]) -> list[dict[str, str]]:
+        """Complete independently, in input order. A failed result can be uncertain."""
+        return json.loads(await (await self._handle.get()).ack_batch(receipts))
+
+    @translate_errors
+    async def renew_lease(self, receipt_handle: str) -> None:
+        """Renew a current lease; provider lock durations differ."""
+        await (await self._handle.get()).renew_lease(receipt_handle)
+
+    @translate_errors
     async def nack(self, receipt_handle: str) -> None:
         await (await self._handle.get()).nack(receipt_handle)
 

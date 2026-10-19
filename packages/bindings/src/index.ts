@@ -73,6 +73,7 @@ export type {
   PostgresTlsOptions,
   PresignedRequest,
   Queue,
+  QueueAckResult,
   QueueMessage,
   QueueSendResult,
   RemoteQueue,

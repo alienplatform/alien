@@ -109,6 +109,8 @@ function fakeAddon(): { addon: NativeAddon; constructions: unknown[] } {
     sendText: async () => {},
     receive: async () => [],
     ack: async () => {},
+    ackBatch: async () => "[]",
+    renewLease: async () => {},
     nack: async () => {},
     purge: async () => {},
   }
@@ -509,6 +511,8 @@ describe("createFactories method mapping", () => {
       sendText: async () => {},
       receive: async () => [],
       ack: async () => {},
+      ackBatch: async () => "[]",
+      renewLease: async () => {},
       nack: async () => {},
       purge: async () => {},
     }

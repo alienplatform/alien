@@ -99,6 +99,19 @@ impl BoundQueue {
         self.inner.ack(&self.name, receipt_handle).await
     }
 
+    /// Complete receipts independently, returning an outcome for each input.
+    pub async fn ack_batch(
+        &self,
+        receipts: &[String],
+    ) -> Result<Vec<crate::traits::QueueAckResult>> {
+        self.inner.ack_batch(&self.name, receipts).await
+    }
+
+    /// Renew a current lease using the provider's supported duration.
+    pub async fn renew_lease(&self, receipt_handle: &str) -> Result<()> {
+        self.inner.renew_lease(&self.name, receipt_handle).await
+    }
+
     /// Release a received message for redelivery.
     pub async fn nack(&self, receipt_handle: &str) -> Result<()> {
         self.inner.nack(&self.name, receipt_handle).await

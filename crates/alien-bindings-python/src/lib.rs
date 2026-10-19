@@ -583,6 +583,31 @@ impl QueueHandle {
             inner.ack(&receipt_handle).await.map_err(map_alien_error)
         })
     }
+    fn ack_batch<'py>(
+        &self,
+        py: Python<'py>,
+        receipts: Vec<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        future_into_py(py, async move {
+            let results = inner.ack_batch(&receipts).await.map_err(map_alien_error)?;
+            serde_json::to_string(&results)
+                .map_err(|error| PyValueError::new_err(error.to_string()))
+        })
+    }
+    fn renew_lease<'py>(
+        &self,
+        py: Python<'py>,
+        receipt_handle: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        future_into_py(py, async move {
+            inner
+                .renew_lease(&receipt_handle)
+                .await
+                .map_err(map_alien_error)
+        })
+    }
     fn nack<'py>(&self, py: Python<'py>, receipt_handle: String) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         future_into_py(py, async move {

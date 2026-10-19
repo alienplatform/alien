@@ -916,13 +916,9 @@ pub const MAX_MESSAGE_BYTES: usize = 65_536; // 64 KiB
 /// - Reasonable processing latency per batch
 pub const MAX_BATCH_SIZE: usize = 10;
 
-/// Fixed lease duration in seconds
-///
-/// Messages are leased for exactly 30 seconds after delivery:
-/// - Long enough for most processing tasks
-/// - Short enough to enable fast retry on failures
-/// - Eliminates complexity of dynamic lease management
-/// - Consistent across all platforms
+/// Default requested lease duration in seconds for local and Pub/Sub delivery.
+/// Provider configuration and elapsed request time affect the actual lease;
+/// Azure uses its configured queue lock duration.
 pub const LEASE_SECONDS: u64 = 30;
 
 /// Outcome for one input message, in the same order as the batch inputs.
@@ -936,6 +932,16 @@ pub enum QueueSendResult {
     Rejected { code: String, message: String },
     /// Acceptance could not be established (for example a network timeout).
     Unknown { code: String, message: String },
+}
+
+/// Outcome of one acknowledgment, in input order. Operations are not atomic.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "camelCase")]
+pub enum QueueAckResult {
+    /// The provider confirmed completion.
+    Acknowledged,
+    /// Completion was not confirmed; it may have succeeded before a transport failure.
+    Failed { code: String, message: String },
 }
 
 /// A trait for queue bindings providing minimal, portable queue operations.
@@ -957,6 +963,27 @@ pub trait Queue: Binding {
 
     /// Acknowledge a message using its receipt handle (idempotent)
     async fn ack(&self, queue: &str, receipt_handle: &str) -> Result<()>;
+
+    /// Acknowledge receipts independently, returning one outcome per input.
+    /// A transport failure can leave completion uncertain. No automatic retries.
+    async fn ack_batch(&self, queue: &str, receipts: &[String]) -> Result<Vec<QueueAckResult>> {
+        let mut results = Vec::with_capacity(receipts.len());
+        for receipt in receipts {
+            results.push(match self.ack(queue, receipt).await {
+                Ok(()) => QueueAckResult::Acknowledged,
+                Err(error) => QueueAckResult::Failed {
+                    code: error.code.clone(),
+                    message: error.to_string(),
+                },
+            });
+        }
+        Ok(results)
+    }
+
+    /// Renew a current delivery lease. AWS, Pub/Sub and local request 30 seconds;
+    /// Azure renews the queue's configured lock. This is not a uniform duration
+    /// guarantee and cannot revive an expired or superseded delivery.
+    async fn renew_lease(&self, queue: &str, receipt_handle: &str) -> Result<()>;
 
     /// Negative-acknowledge a message: release its lease so it becomes
     /// immediately available for redelivery, without waiting out the

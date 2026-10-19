@@ -149,6 +149,30 @@ impl QueueHandle {
         inner.ack(&receipt).await.map_err(map_alien_error)
     }
 
+    /// Complete receipts independently, returning one outcome per input.
+    #[napi]
+    pub async fn ack_batch(&self, receipts: Vec<String>) -> napi::Result<String> {
+        let results = self
+            .inner
+            .ack_batch(&receipts)
+            .await
+            .map_err(map_alien_error)?;
+        serde_json::to_string(&results).map_err(|error| {
+            map_alien_error(AlienError::new(ErrorData::SerializationFailed {
+                message: error.to_string(),
+            }))
+        })
+    }
+
+    /// Renew the delivery lease using the provider's supported duration.
+    #[napi]
+    pub async fn renew_lease(&self, receipt: String) -> napi::Result<()> {
+        self.inner
+            .renew_lease(&receipt)
+            .await
+            .map_err(map_alien_error)
+    }
+
     /// Negative-acknowledge a message, making it immediately redeliverable.
     #[napi]
     pub async fn nack(&self, receipt: String) -> napi::Result<()> {
