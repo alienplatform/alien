@@ -24,7 +24,7 @@ pub(crate) fn template(stack: &Stack) -> Result<Option<String>> {
     // The operator excludes node and pod ranges from gateway egress, which needs the node
     // list even when node heartbeat collection (and its ClusterRole) is turned off.
     let mut template = String::from(
-        r#"{{- $nodes := printf "%s-egress-nodes-%s" (include "deployment.fullname" . | trunc 40 | trimSuffix "-") (sha256sum .Release.Namespace | trunc 8) -}}
+        r#"{{- $nodes := printf "%s-egress-nodes-%s" (include "deployment.fullname" . | trunc 40 | trimSuffix "-") (sha256sum (printf "%s/%s" .Release.Namespace .Release.Name) | trunc 8) -}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:

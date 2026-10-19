@@ -374,6 +374,26 @@ async fn kubernetes_internet_sandbox_installs_a_hosted_gateway() {
         "the operator must list nodes to exclude node and pod ranges: {node_readers:?}"
     );
 
+    // Two releases in one namespace must not claim the same node-read role names.
+    let cluster_scoped = |release: &str| -> Vec<String> {
+        let rendered = super::test_utils::helm_template_for_release(&chart.files, None, release);
+        rendered.assert_ok(release);
+        serde_yaml::Deserializer::from_str(&rendered.stdout)
+            .map(|document| serde_yaml::Value::deserialize(document).unwrap())
+            .filter(|doc| matches!(doc["kind"].as_str(), Some("ClusterRole" | "ClusterRoleBinding")))
+            .filter_map(|doc| doc["metadata"]["name"].as_str().map(str::to_string))
+            .filter(|name| name.contains("-egress-nodes-"))
+            .collect()
+    };
+    let shared = "release-names-sharing-the-first-forty-chars";
+    let first = cluster_scoped(&format!("{shared}-one"));
+    let second = cluster_scoped(&format!("{shared}-two"));
+    assert!(!first.is_empty());
+    assert!(
+        first.iter().all(|name| !second.contains(name)),
+        "{first:?} {second:?}"
+    );
+
     let probe = documents
         .iter()
         .find(|doc| {
