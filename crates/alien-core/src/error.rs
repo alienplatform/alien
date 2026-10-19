@@ -7,6 +7,16 @@ use crate::{Platform, ResourceType};
 #[derive(Debug, Clone, AlienErrorData, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ErrorData {
+    /// Federation metadata cannot safely identify the intended trust or target.
+    #[error(
+        code = "GCP_FEDERATION_INVALID",
+        message = "Invalid GCP federation field '{field}': {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    GcpFederationInvalid { field: String, reason: String },
+
     /// The image's command identity cannot be resolved safely.
     #[error(
         code = "SANDBOX_IMAGE_USER_INVALID",

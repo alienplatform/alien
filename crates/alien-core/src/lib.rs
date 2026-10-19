@@ -103,6 +103,9 @@ pub use external_bindings::*;
 mod client_config;
 pub use client_config::*;
 
+mod gcp_federation;
+pub use gcp_federation::*;
+
 mod deployment;
 pub use deployment::*;
 
