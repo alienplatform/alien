@@ -783,7 +783,8 @@ mod tests {
     #[derive(Debug)]
     struct LostClaimTransport {
         retryable: bool,
-        checkpoints: AtomicUsize,
+        /// Status and heartbeat flag of every refused checkpoint.
+        checkpoints: Mutex<Vec<(DeploymentStatus, bool)>>,
         renewals: AtomicUsize,
     }
 
@@ -791,7 +792,7 @@ mod tests {
         fn new(retryable: bool) -> Self {
             Self {
                 retryable,
-                checkpoints: AtomicUsize::new(0),
+                checkpoints: Mutex::new(Vec::new()),
                 renewals: AtomicUsize::new(0),
             }
         }
@@ -821,14 +822,17 @@ mod tests {
         async fn reconcile_step(
             &self,
             _deployment_id: &str,
-            _state: &DeploymentState,
+            state: &DeploymentState,
             _config: &DeploymentConfig,
-            _update_heartbeat: bool,
+            update_heartbeat: bool,
             _suggested_delay_ms: Option<u64>,
             _heartbeats: Vec<alien_core::ResourceHeartbeat>,
             _observed_inventory_batches: Vec<alien_core::ObservedInventoryBatch>,
         ) -> std::result::Result<StepReconcileResult, alien_error::AlienError> {
-            self.checkpoints.fetch_add(1, Ordering::SeqCst);
+            self.checkpoints
+                .lock()
+                .expect("checkpoints lock poisoned")
+                .push((state.status, update_heartbeat));
             Err(self.refusal())
         }
     }
@@ -844,6 +848,14 @@ mod tests {
             state.status = DeploymentStatus::Running;
             state.current_release = state.target_release.take();
             state.stack_state = Some(StackState::new(Platform::Test));
+            // An empty prepared stack passes its health check, so the step is a
+            // healthy heartbeat and the refused checkpoint is the heartbeat's own.
+            let mut prepared_stack = test_stack();
+            prepared_stack.resources.clear();
+            state.runtime_metadata = Some(alien_core::RuntimeMetadata {
+                prepared_stack: Some(prepared_stack),
+                ..Default::default()
+            });
             let mut config = test_config();
             let policy = RunnerPolicy {
                 max_steps: 1,
@@ -865,9 +877,19 @@ mod tests {
             .await
             .expect_err("a lost claim must stop the runner");
             let held = started.elapsed();
-            let checkpoints = transport.checkpoints.load(Ordering::SeqCst);
+            let checkpoints = transport
+                .checkpoints
+                .lock()
+                .expect("checkpoints lock poisoned")
+                .clone();
             let renewals = transport.renewals.load(Ordering::SeqCst);
 
+            assert!(
+                checkpoints
+                    .iter()
+                    .all(|checkpoint| *checkpoint == (DeploymentStatus::Running, true)),
+                "every refused checkpoint is the healthy heartbeat: {checkpoints:?}"
+            );
             assert_eq!(error.retryable, retryable);
             if retryable {
                 // Renewals at 60, 120 and 180 s fail inside the deadline; the
@@ -875,12 +897,12 @@ mod tests {
                 assert_eq!(error.code, "DEPLOYMENT_LEASE_LOST");
                 assert_eq!(held, LEASE_RENEW_INTERVAL * 4);
                 assert_eq!(renewals, 4);
-                assert!(checkpoints > 1, "the refused checkpoint is retried");
+                assert!(checkpoints.len() > 1, "the refused checkpoint is retried");
             } else {
                 assert_eq!(error.code, "DEPLOYMENT_CHECKPOINT_FAILED");
                 assert!(held < LEASE_RENEW_INTERVAL, "stopped after {held:?}");
                 assert_eq!(renewals, 0);
-                assert_eq!(checkpoints, 1);
+                assert_eq!(checkpoints.len(), 1);
             }
         }
     }
