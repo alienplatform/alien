@@ -28,9 +28,7 @@
     "gcp": [
       {
         "grant": {
-          "permissions": [
-            "serviceusage.services.enable"
-          ]
+          "permissions": ["serviceusage.services.enable"]
         },
         "binding": {
           "stack": { "scope": "projects/${projectName}" },
