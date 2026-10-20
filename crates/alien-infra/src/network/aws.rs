@@ -316,6 +316,10 @@ const CREATE_LOOKUP_FIRST_DELAY: Duration = Duration::from_secs(1);
 fn create_lookup_delay(lookup: u32) -> Duration {
     CREATE_LOOKUP_FIRST_DELAY * 2u32.pow(lookup.saturating_sub(1))
 }
+/// Reads that look for the subnet holding a CIDR a create was refused for, before the step fails
+/// with the attempt still recorded, and the delay between them.
+const TAKEN_CIDR_MAX_LOOKUPS: u32 = 24;
+const TAKEN_CIDR_LOOKUP_DELAY: Duration = Duration::from_secs(5);
 /// Create calls for one object before the create gives up. The lookups between failed creates
 /// succeed, which resets the executor's retry count, so without this bound a create that keeps
 /// failing would repeat forever.
@@ -1195,6 +1199,33 @@ enum SubnetProgress {
     AttemptRecorded,
     /// The recorded attempt found nothing yet; look again after this wait before creating.
     LookAgain(AwsNetworkHandlerAction),
+    /// EC2 refused the create because another subnet, not the attempt's own, holds an
+    /// overlapping CIDR. Subnets of a VPC never overlap, so the attempt made nothing and is
+    /// cleared: a later run creates under a new attempt once the range is free.
+    HeldByAnother(CidrHeld),
+}
+
+/// Another subnet holds the range a create needs.
+struct CidrHeld {
+    holder: String,
+    /// EC2's refusal, when the step that found the holder made the create.
+    refusal: Option<AlienError<CloudClientErrorData>>,
+}
+
+/// The error for a subnet CIDR that another subnet already holds. Retrying cannot help until
+/// someone frees the range, so it is not retryable.
+fn subnet_cidr_held(cidr: &str, held: CidrHeld, resource_id: &str) -> AlienError<ErrorData> {
+    let data = ErrorData::ResourceConfigInvalid {
+        message: format!(
+            "Subnet {cidr} overlaps existing subnet '{}'; free that range or choose another",
+            held.holder
+        ),
+        resource_id: Some(resource_id.to_string()),
+    };
+    match held.refusal {
+        Some(refusal) => refusal.context(data),
+        None => AlienError::new(data),
+    }
 }
 
 /// A `create_subnet` call that may have created a subnet whose ID is not recorded yet.
@@ -1205,6 +1236,10 @@ pub(crate) struct SubnetCreateAttempt {
     pub(crate) cidr: String,
     /// `Public` or `Private`.
     pub(crate) subnet_type: String,
+    /// EC2 refused a create because a subnet holds the CIDR, but no read showed that subnet
+    /// yet. Only reads settle the attempt from then on; another create would be refused too.
+    #[serde(default)]
+    pub(crate) cidr_taken: bool,
 }
 
 impl AwsNetworkController {
@@ -1491,6 +1526,70 @@ impl AwsNetworkController {
             .filter_map(|subnet| subnet.subnet_id)
             .collect::<Vec<_>>())
         .and_then(|ids| single_create_attempt_match(ids, "subnet", &attempt.token, resource_id))
+    }
+
+    /// The subnet whose CIDR overlaps `attempt`'s in `vpc_id`, if a read shows one, and whether
+    /// it is the attempt's own subnet. EC2 refuses a create whose CIDR overlaps any subnet of
+    /// the VPC, not only an equal one.
+    async fn find_subnet_holding_cidr(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        vpc_id: &str,
+        attempt: &SubnetCreateAttempt,
+        resource_id: &str,
+    ) -> Result<Option<(String, bool)>> {
+        let client = ctx
+            .service_provider
+            .get_aws_ec2_client(ctx.get_aws_config()?)
+            .await?;
+        let wanted = sandbox_setup::range(&attempt.cidr).ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: format!("Invalid subnet CIDR '{}'", attempt.cidr),
+                resource_id: Some(resource_id.to_string()),
+            })
+        })?;
+        let mut next_token = None;
+        loop {
+            let response = client
+                .describe_subnets(DescribeSubnetsRequest {
+                    filters: Some(vec![Filter {
+                        name: "vpc-id".to_string(),
+                        values: vec![vpc_id.to_string()],
+                    }]),
+                    next_token,
+                    ..Default::default()
+                })
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to look up the subnet holding {}", attempt.cidr),
+                    resource_id: Some(resource_id.to_string()),
+                })?;
+            let holder = response
+                .subnet_set
+                .into_iter()
+                .flat_map(|set| set.items)
+                .find(|subnet| {
+                    subnet
+                        .cidr_block
+                        .as_deref()
+                        .and_then(sandbox_setup::range)
+                        .is_some_and(|(start, end)| start <= wanted.1 && wanted.0 <= end)
+                });
+            if let Some(subnet) = holder {
+                let ours = subnet.cidr_block.as_deref() == Some(attempt.cidr.as_str())
+                    && has_create_attempt_tags(
+                        subnet.tag_set.as_ref(),
+                        ctx.resource_prefix,
+                        resource_id,
+                        &attempt.token,
+                    );
+                return Ok(subnet.subnet_id.map(|id| (id, ours)));
+            }
+            next_token = response.next_token.filter(|token| !token.is_empty());
+            if next_token.is_none() {
+                return Ok(None);
+            }
+        }
     }
 
     /// Find the internet gateway the `create_internet_gateway` call with this token made.
@@ -2275,6 +2374,51 @@ impl AwsNetworkController {
         let aws_cfg = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
 
+        // A subnet holds the CIDR: wait until a read shows which one.
+        if let Some(attempt) = self
+            .subnet_create_attempt
+            .clone()
+            .filter(|attempt| attempt.cidr == cidr && attempt.cidr_taken)
+        {
+            return match self
+                .find_subnet_holding_cidr(ctx, vpc_id, &attempt, resource_id)
+                .await?
+            {
+                Some((subnet_id, true)) => {
+                    info!(subnet_id = %subnet_id, cidr = %cidr, "Found the subnet an earlier attempt created");
+                    self.subnet_create_attempt = None;
+                    self.wait_for_create_lookup_iterations = 0;
+                    self.wait_for_repeated_create_iterations = 0;
+                    Ok(SubnetProgress::Created(subnet_id))
+                }
+                Some((holder, false)) => {
+                    self.subnet_create_attempt = None;
+                    self.wait_for_create_lookup_iterations = 0;
+                    Ok(SubnetProgress::HeldByAnother(CidrHeld {
+                        holder,
+                        refusal: None,
+                    }))
+                }
+                None if self.wait_for_create_lookup_iterations < TAKEN_CIDR_MAX_LOOKUPS => {
+                    self.wait_for_create_lookup_iterations += 1;
+                    Ok(SubnetProgress::LookAgain(AwsNetworkHandlerAction::Stay {
+                        max_times: None,
+                        suggested_delay: Some(TAKEN_CIDR_LOOKUP_DELAY),
+                    }))
+                }
+                None => {
+                    // The attempt stays recorded, so a retry keeps looking.
+                    self.wait_for_create_lookup_iterations = 0;
+                    Err(AlienError::new(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Subnet {cidr} is taken, but no read shows the subnet holding it"
+                        ),
+                        resource_id: Some(resource_id.to_string()),
+                    }))
+                }
+            };
+        }
+
         // A recorded attempt for this CIDR means `create_subnet` was called and its response
         // may have been lost. Only the subnet carrying that attempt's token is ours.
         if let Some(attempt) = self
@@ -2307,6 +2451,7 @@ impl AwsNetworkController {
                     token: new_create_attempt_token(),
                     cidr: cidr.to_string(),
                     subnet_type: subnet_type.to_string(),
+                    cidr_taken: false,
                 });
                 return Ok(SubnetProgress::AttemptRecorded);
             }
@@ -2335,21 +2480,38 @@ impl AwsNetworkController {
             .await;
         let response = match created {
             Ok(response) => response,
-            // The CIDR is taken. If the earlier lookup missed our own subnet (eventual
-            // consistency), it is visible by now; anything else is a real conflict.
+            // The CIDR is taken, and EC2 never lets two subnets of a VPC share one, so exactly
+            // one subnet holds it. EC2 has no idempotency token for this call: after a lost
+            // response the repeated create lands here, and a read may still miss the subnet the
+            // first call made. Only reads settle the attempt from here on.
             Err(error) if is_conflict(&error) => {
-                if let Some(subnet_id) = self
-                    .find_subnet_by_create_attempt(ctx, vpc_id, &attempt, resource_id)
+                self.wait_for_create_lookup_iterations = 0;
+                match self
+                    .find_subnet_holding_cidr(ctx, vpc_id, &attempt, resource_id)
                     .await?
                 {
-                    info!(subnet_id = %subnet_id, cidr = %cidr, "Found the subnet an earlier attempt created");
-                    self.subnet_create_attempt = None;
-                    self.wait_for_repeated_create_iterations = 0;
-                    return Ok(SubnetProgress::Created(subnet_id));
+                    Some((subnet_id, true)) => {
+                        info!(subnet_id = %subnet_id, cidr = %cidr, "Found the subnet an earlier attempt created");
+                        self.subnet_create_attempt = None;
+                        self.wait_for_repeated_create_iterations = 0;
+                        return Ok(SubnetProgress::Created(subnet_id));
+                    }
+                    Some((holder, false)) => {
+                        self.subnet_create_attempt = None;
+                        return Ok(SubnetProgress::HeldByAnother(CidrHeld {
+                            holder,
+                            refusal: Some(error),
+                        }));
+                    }
+                    None => {}
                 }
-                return Err(error.context(ErrorData::CloudPlatformError {
-                    message: format!("Subnet {cidr} conflicts with an existing subnet"),
-                    resource_id: Some(resource_id.to_string()),
+                debug!(cidr = %cidr, error = %error, "Subnet CIDR is taken but no read shows its holder yet");
+                if let Some(attempt) = self.subnet_create_attempt.as_mut() {
+                    attempt.cidr_taken = true;
+                }
+                return Ok(SubnetProgress::LookAgain(AwsNetworkHandlerAction::Stay {
+                    max_times: None,
+                    suggested_delay: Some(TAKEN_CIDR_LOOKUP_DELAY),
                 }));
             }
             Err(error) => {
@@ -3512,6 +3674,9 @@ impl AwsNetworkController {
                 SubnetProgress::Created(subnet_id) => subnet_id,
                 SubnetProgress::AttemptRecorded => return Ok(Self::subnet_attempt_recorded()),
                 SubnetProgress::LookAgain(wait) => return Ok(wait),
+                SubnetProgress::HeldByAnother(held) => {
+                    return Err(subnet_cidr_held(cidr, held, &config.id))
+                }
             };
             self.public_subnet_ids.push(subnet_id.clone());
             self.subnets_by_failure_domain
@@ -3542,6 +3707,9 @@ impl AwsNetworkController {
                 SubnetProgress::Created(subnet_id) => subnet_id,
                 SubnetProgress::AttemptRecorded => return Ok(Self::subnet_attempt_recorded()),
                 SubnetProgress::LookAgain(wait) => return Ok(wait),
+                SubnetProgress::HeldByAnother(held) => {
+                    return Err(subnet_cidr_held(cidr, held, &config.id))
+                }
             };
             self.private_subnet_ids.push(subnet_id.clone());
             self.subnets_by_failure_domain
@@ -4466,17 +4634,16 @@ impl AwsNetworkController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
-        if self.reconcile_sandbox_network(ctx).await? {
-            Ok(HandlerAction::Continue {
+        Ok(match self.reconcile_sandbox_network(ctx).await? {
+            sandbox_setup::SandboxStep::Ready => HandlerAction::Continue {
                 state: Ready,
                 suggested_delay: None,
-            })
-        } else {
-            Ok(HandlerAction::Stay {
+            },
+            sandbox_setup::SandboxStep::Again(delay) => HandlerAction::Stay {
                 max_times: None,
-                suggested_delay: Some(Duration::from_secs(1)),
-            })
-        }
+                suggested_delay: Some(delay),
+            },
+        })
     }
 
     #[handler(state = UpdatingSandboxNetwork, on_failure = UpdateFailed, status = ResourceStatus::Updating)]
@@ -4484,17 +4651,16 @@ impl AwsNetworkController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
-        if self.reconcile_sandbox_network(ctx).await? {
-            Ok(HandlerAction::Continue {
+        Ok(match self.reconcile_sandbox_network(ctx).await? {
+            sandbox_setup::SandboxStep::Ready => HandlerAction::Continue {
                 state: Ready,
                 suggested_delay: None,
-            })
-        } else {
-            Ok(HandlerAction::Stay {
+            },
+            sandbox_setup::SandboxStep::Again(delay) => HandlerAction::Stay {
                 max_times: None,
-                suggested_delay: Some(Duration::from_secs(1)),
-            })
-        }
+                suggested_delay: Some(delay),
+            },
+        })
     }
 
     // ─────────────── READY STATE ────────────────────────────────
@@ -4507,34 +4673,8 @@ impl AwsNetworkController {
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Network>()?;
 
-        if let Some(declared) = &self.sandbox_network {
-            let vpc_id = self.vpc_id.as_deref().ok_or_else(|| {
-                AlienError::new(ErrorData::ResourceConfigInvalid {
-                    message: "Sandbox network setup is missing the VPC ID".into(),
-                    resource_id: Some(config.id.clone()),
-                })
-            })?;
-            let client = ctx
-                .service_provider
-                .get_aws_ec2_client(ctx.get_aws_config()?)
-                .await?;
-            // A failed check stays recorded so the next direct setup run repairs it.
-            if let Some(setup) = self.sandbox_setup.as_mut() {
-                setup.set_unverified(true);
-            }
-            self.sandbox_network = Some(
-                super::validate_aws_sandbox_network(
-                    client.as_ref(),
-                    &config.id,
-                    vpc_id,
-                    declared,
-                    &self.private_subnet_ids,
-                )
-                .await?,
-            );
-            if let Some(setup) = self.sandbox_setup.as_mut() {
-                setup.set_unverified(false);
-            }
+        if self.sandbox_network.is_some() {
+            self.verify_sandbox_network(ctx).await?;
         }
 
         // For BYO-VPC, we don't need to verify - preflights already validated
@@ -6795,6 +6935,7 @@ mod controller_state_tests {
             token: "attempt-1".to_string(),
             cidr: "10.0.0.0/20".to_string(),
             subnet_type: "Public".to_string(),
+            cidr_taken: false,
         });
         controller
     }
@@ -6852,7 +6993,7 @@ mod controller_state_tests {
     async fn subnet_from_another_create_attempt_is_not_adopted() {
         let mut ec2 = MockEc2Api::new();
         // Same VPC, CIDR and ownership tags, but another controller's token. Looked up before
-        // the create (a few times, the token finding nothing) and again after its conflict.
+        // the create (a few times, the token finding nothing) and once after its conflict.
         ec2.expect_describe_subnets()
             .times(CREATE_LOOKUP_MAX_POLLS as usize + 2)
             .returning(|_| {
@@ -6887,18 +7028,17 @@ mod controller_state_tests {
         .await;
 
         wait_out_create_lookups(&mut executor).await;
-        executor
+        let error = executor
             .step()
             .await
-            .expect_err("AWS refuses the conflicting subnet");
+            .expect_err("another attempt's subnet holds the CIDR");
+        assert!(!error.retryable, "{error}");
         let state = controller(&executor);
         assert!(state.public_subnet_ids.is_empty());
-        let attempt = state
-            .subnet_create_attempt
-            .as_ref()
-            .expect("the attempt stays recorded");
-        assert_eq!(attempt.token, "attempt-1", "the token is never rotated");
-        assert_eq!(Some(&attempt.token), new_token.lock().unwrap().as_ref());
+        // The refused attempt made nothing, so it is cleared: a later run creates under a
+        // new token once the range is free.
+        assert_eq!(state.subnet_create_attempt, None);
+        assert_eq!(new_token.lock().unwrap().as_deref(), Some("attempt-1"));
     }
 
     #[tokio::test]

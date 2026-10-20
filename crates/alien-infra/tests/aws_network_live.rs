@@ -17,7 +17,8 @@
 //! cargo test -p alien-infra --all-features --test aws_network_live -- --ignored --nocapture --test-threads=1
 //! ```
 //!
-//! Only resources tagged `deployment=<scenario prefix>` are ever deleted by the sweep.
+//! Only resources tagged `deployment=<scenario prefix>` are ever deleted by the sweep. Scenario
+//! prefixes start with `alnet`, or with `ALIEN_AWS_NETWORK_LIVE_PREFIX` when it is set.
 
 #![cfg(all(feature = "aws", feature = "test-utils"))]
 
@@ -30,8 +31,10 @@ use std::time::{Duration, Instant};
 use alien_aws_clients::ec2::*;
 use alien_client_core::{ErrorData as ClientErrorData, Result as ClientResult};
 use alien_core::{
-    standard_resource_tags, AwsClientConfig, AwsCredentials, ClientConfig, Network,
-    NetworkSettings, Platform, ResourceStatus, ALIEN_STACK_TAG_KEY,
+    sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID, standard_resource_tags, AwsClientConfig,
+    AwsCredentials, ClientConfig, Container, ContainerCode, InitialSetupAuthority, Network,
+    NetworkSettings, Platform, ResourceLifecycle, ResourceSpec, ResourceStatus,
+    ALIEN_STACK_TAG_KEY,
 };
 use alien_error::AlienError;
 use alien_infra::controller_test::SingleControllerExecutor;
@@ -229,8 +232,10 @@ faulty_ec2_api! {
     delete_route_table(route_table_id: &str) -> ();
     create_route(request: CreateRouteRequest) -> ();
     delete_route(request: DeleteRouteRequest) -> ();
+    replace_route(request: ReplaceRouteRequest) -> ();
     associate_route_table(request: AssociateRouteTableRequest) -> AssociateRouteTableResponse;
     disassociate_route_table(association_id: &str) -> ();
+    replace_route_table_association(request: ReplaceRouteTableAssociationRequest) -> ReplaceRouteTableAssociationResponse;
     describe_security_groups(request: DescribeSecurityGroupsRequest) -> DescribeSecurityGroupsResponse;
     describe_network_interfaces(request: DescribeNetworkInterfacesRequest) -> DescribeNetworkInterfacesResponse;
     create_network_interface(request: CreateNetworkInterfaceRequest) -> CreateNetworkInterfaceResponse;
@@ -329,9 +334,21 @@ struct Live {
 
 impl Live {
     async fn new(scenario: &str, cidr: &str) -> Self {
+        Self::build(scenario, cidr, false).await
+    }
+
+    /// A network whose stack has an internet sandbox gateway, run by direct setup: setup adds
+    /// the dedicated sandbox subnets and route tables.
+    async fn with_internet_sandbox(scenario: &str, cidr: &str) -> Self {
+        Self::build(scenario, cidr, true).await
+    }
+
+    async fn build(scenario: &str, cidr: &str, internet_sandbox: bool) -> Self {
         let config = aws_config();
         let suffix = &uuid::Uuid::new_v4().simple().to_string()[..6];
-        let prefix = format!("alnet-{scenario}-{suffix}");
+        let base =
+            std::env::var("ALIEN_AWS_NETWORK_LIVE_PREFIX").unwrap_or_else(|_| "alnet".to_string());
+        let prefix = format!("{base}-{scenario}-{suffix}");
         let real = live_ec2(config.clone());
         let quotas = live_quotas(config.clone());
         let faulty = Arc::new(FaultyEc2::new(real.clone()));
@@ -351,16 +368,19 @@ impl Live {
                 availability_zones: 2,
             })
             .build();
-        let executor = SingleControllerExecutor::builder()
+        let mut builder = SingleControllerExecutor::builder()
             .resource(network)
             .controller(AwsNetworkController::default())
             .platform(Platform::Aws)
             .client_config(ClientConfig::Aws(Box::new(config)))
             .service_provider(Arc::new(provider))
-            .resource_prefix(prefix.clone())
-            .build()
-            .await
-            .expect("executor builds");
+            .resource_prefix(prefix.clone());
+        if internet_sandbox {
+            builder = builder
+                .initial_setup_authority(InitialSetupAuthority::DirectSetup)
+                .with_stack_resource(sandbox_gateway(), ResourceLifecycle::Live);
+        }
+        let executor = builder.build().await.expect("executor builds");
         println!("== scenario {scenario}: prefix {prefix}, cidr {cidr}");
         Self {
             prefix,
@@ -764,7 +784,14 @@ where
     F: FnOnce(Live) -> Fut,
     Fut: Future<Output = Live>,
 {
-    let live = Live::new(name, cidr).await;
+    run_scenario(name, Live::new(name, cidr).await, body).await;
+}
+
+async fn run_scenario<F, Fut>(name: &str, live: Live, body: F)
+where
+    F: FnOnce(Live) -> Fut,
+    Fut: Future<Output = Live>,
+{
     let prefix = live.prefix.clone();
     let real = live.real.clone();
     let started = live.started;
@@ -1459,6 +1486,212 @@ async fn delete_resumes_retained_children_after_real_permission_restoration() {
         assert!(resumed.faulty.calls("delete_security_group").len() >= 2);
         assert_nothing_left(&resumed).await;
         resumed
+    })
+    .await;
+}
+
+/// The stack resource that makes direct setup add the dedicated sandbox network.
+fn sandbox_gateway() -> Container {
+    Container::new(SANDBOX_EGRESS_GATEWAY_ID.into())
+        .code(ContainerCode::Image {
+            image: "example.invalid/gateway:1".into(),
+        })
+        .cpu(ResourceSpec {
+            min: "0.25".into(),
+            desired: "0.25".into(),
+        })
+        .memory(ResourceSpec {
+            min: "512Mi".into(),
+            desired: "512Mi".into(),
+        })
+        .permissions("gateway".into())
+        .build()
+}
+
+/// The VPC's route tables, all pages.
+async fn route_tables(ec2: &dyn Ec2Api, vpc_id: &str) -> Vec<RouteTable> {
+    ec2.describe_route_tables(
+        DescribeRouteTablesRequest::builder()
+            .filters(vec![Filter {
+                name: "vpc-id".into(),
+                values: vec![vpc_id.into()],
+            }])
+            .build(),
+    )
+    .await
+    .expect("route tables")
+    .route_table_set
+    .map(|set| set.items)
+    .unwrap_or_default()
+}
+
+fn named<'a>(tables: &'a [RouteTable], name: &str) -> &'a RouteTable {
+    tables
+        .iter()
+        .find(|table| tagged(table.tag_set.as_ref(), "Name", name))
+        .unwrap_or_else(|| panic!("route table {name}"))
+}
+
+fn table_id(table: &RouteTable) -> String {
+    table.route_table_id.clone().expect("route table ID")
+}
+
+/// 10. Direct setup adds the dedicated sandbox subnets to the VPC it created, with a lost
+/// `CreateSubnet` response on the first of them. A later setup run repairs drift on its route
+/// tables through the real EC2 calls: an extra route on the connector table, a gateway default
+/// route pointing at the internet gateway instead of the NAT, and a connector subnet moved to
+/// the workload route table. Teardown removes everything.
+#[tokio::test]
+#[ignore = "creates billed AWS resources; needs ALIEN_AWS_NETWORK_LIVE_TEST=1"]
+async fn direct_sandbox_network_survives_a_lost_subnet_create_and_repairs_route_drift() {
+    let live = Live::with_internet_sandbox("sbx", "10.237.0.0/16").await;
+    run_scenario("sbx", live, |mut live| async move {
+        // The network's own four subnets come first; the fifth create is the first dedicated one.
+        live.faulty.inject("create_subnet", 5, Fault::LoseResponse);
+        live.create_to_running().await;
+        let controller = live.controller();
+        let topology = &controller["sandboxNetwork"];
+        let connectors: Vec<String> =
+            serde_json::from_value(topology["sandboxSubnetIds"].clone()).unwrap();
+        let gateways: Vec<String> =
+            serde_json::from_value(topology["gatewaySubnetIds"].clone()).unwrap();
+        assert_eq!((connectors.len(), gateways.len()), (2, 2), "{controller}");
+        let created = live.inventory().await;
+        assert_eq!(created.subnets.len(), 8, "{created:?}");
+        assert_eq!(created.route_tables.len(), 4, "{created:?}");
+        let creates = live.faulty.calls("create_subnet");
+        assert!(
+            creates.len() <= 9,
+            "at most one repeated create: {creates:?}"
+        );
+
+        let real = live.real.clone();
+        let vpc = controller["vpcId"].as_str().unwrap().to_string();
+        let nat = controller["natGatewayId"].as_str().unwrap().to_string();
+        let igw = controller["internetGatewayId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let workload = controller["privateRouteTableId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let isolated_name = format!("{}-{NETWORK_ID}-sandbox-isolated-rt", live.prefix);
+        let gateway_name = format!("{}-{NETWORK_ID}-sandbox-gateway-rt", live.prefix);
+        let tables = route_tables(real.as_ref(), &vpc).await;
+        let isolated = table_id(named(&tables, &isolated_name));
+        let gateway = table_id(named(&tables, &gateway_name));
+        let moved = named(&tables, &isolated_name)
+            .association_set
+            .iter()
+            .flat_map(|set| &set.items)
+            .find(|association| association.subnet_id.as_ref() == Some(&connectors[0]))
+            .and_then(|association| association.route_table_association_id.clone())
+            .expect("connector association");
+
+        // Drift, made directly in EC2.
+        real.create_route(
+            CreateRouteRequest::builder()
+                .route_table_id(isolated.clone())
+                .destination_cidr_block("10.99.0.0/16".into())
+                .gateway_id(igw.clone())
+                .build(),
+        )
+        .await
+        .expect("extra connector route");
+        real.delete_route(
+            DeleteRouteRequest::builder()
+                .route_table_id(gateway.clone())
+                .destination(RouteDestination::Ipv4Cidr("0.0.0.0/0".into()))
+                .build(),
+        )
+        .await
+        .expect("delete gateway default route");
+        real.create_route(
+            CreateRouteRequest::builder()
+                .route_table_id(gateway.clone())
+                .destination_cidr_block("0.0.0.0/0".into())
+                .gateway_id(igw.clone())
+                .build(),
+        )
+        .await
+        .expect("gateway default route to the internet gateway");
+        real.replace_route_table_association(
+            ReplaceRouteTableAssociationRequest::builder()
+                .association_id(moved)
+                .route_table_id(workload.clone())
+                .build(),
+        )
+        .await
+        .expect("move a connector subnet to the workload table");
+
+        // The refresh refuses the drift; the next setup run repairs it.
+        let refused = live
+            .drive("refresh", Duration::from_secs(1), |_| false)
+            .await
+            .expect_err("the refresh refuses the drift");
+        assert!(refused.to_string().contains("not allowed"), "{refused}");
+        live.executor
+            .update(
+                Network::new(NETWORK_ID.to_string())
+                    .settings(NetworkSettings::Create {
+                        cidr: Some("10.237.0.0/16".to_string()),
+                        availability_zones: 2,
+                    })
+                    .build(),
+            )
+            .expect("update transition");
+        let errors = live
+            .drive_retrying("repair", Duration::from_secs(5), |live| {
+                live.executor.status() == ResourceStatus::Running
+            })
+            .await;
+        assert!(errors.is_empty(), "{errors:?}");
+        for operation in [
+            "delete_route",
+            "replace_route",
+            "replace_route_table_association",
+        ] {
+            let calls = live.faulty.calls(operation);
+            assert_eq!(calls.len(), 1, "{operation}: {calls:?}");
+            assert_eq!(calls[0].outcome, "ok", "{operation}: {calls:?}");
+        }
+
+        let tables = route_tables(real.as_ref(), &vpc).await;
+        let isolated_table = named(&tables, &isolated_name);
+        let routes: Vec<_> = isolated_table
+            .route_set
+            .iter()
+            .flat_map(|set| &set.items)
+            .collect();
+        assert!(
+            routes
+                .iter()
+                .all(|route| route.gateway_id.as_deref() == Some("local")),
+            "{routes:?}"
+        );
+        let defaults: Vec<_> = named(&tables, &gateway_name)
+            .route_set
+            .iter()
+            .flat_map(|set| &set.items)
+            .filter(|route| route.destination_cidr_block.as_deref() == Some("0.0.0.0/0"))
+            .collect();
+        assert_eq!(defaults.len(), 1, "{defaults:?}");
+        assert_eq!(defaults[0].nat_gateway_id.as_deref(), Some(nat.as_str()));
+        for connector in &connectors {
+            assert!(
+                isolated_table
+                    .association_set
+                    .iter()
+                    .flat_map(|set| &set.items)
+                    .any(|association| association.subnet_id.as_ref() == Some(connector)),
+                "{connector} is back on the connector table"
+            );
+        }
+
+        live.delete_to_deleted().await;
+        assert_nothing_left(&live).await;
+        live
     })
     .await;
 }
