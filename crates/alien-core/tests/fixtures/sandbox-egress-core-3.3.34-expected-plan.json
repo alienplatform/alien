@@ -1,6 +1,6 @@
 {
   "frozenDigest": "025af180b70120287846c100514227266a4c41f5f317a1fb9ee5fb14fb4bbdb5",
-  "liveDigest": "d7034b186402f9df7f1f92e7be90e93faca1ae8fc758a8e8abcdf1ffa949af40",
+  "liveDigest": "56ef32098efd1c19c6b8f33efb33c373bb2855f078043d955bd1cdf678a0ee58",
   "plans": {
     "denied": {
       "cloudEgress": {
@@ -26,7 +26,7 @@
               {
                 "Action": ["s3:GetObject"],
                 "Effect": "Allow",
-                "Resource": "arn:aws:s3:::compatibility-bundles/sandbox-bundle/*",
+                "Resource": "arn:aws:s3:::setup-granted-store/sandbox-bundle/*",
                 "Sid": "ReadSandboxBundlePrefix"
               }
             ],
@@ -57,7 +57,7 @@
               {
                 "Action": ["s3:GetObject"],
                 "Effect": "Allow",
-                "Resource": "arn:aws:s3:::compatibility-bundles/sandbox-bundle/*",
+                "Resource": "arn:aws:s3:::setup-granted-store/sandbox-bundle/*",
                 "Sid": "ReadSandboxBundlePrefix"
               }
             ],
@@ -92,7 +92,7 @@
               {
                 "Action": ["s3:GetObject"],
                 "Effect": "Allow",
-                "Resource": "arn:aws:s3:::compatibility-bundles/sandbox-bundle/*",
+                "Resource": "arn:aws:s3:::setup-granted-store/sandbox-bundle/*",
                 "Sid": "ReadSandboxBundlePrefix"
               }
             ],
