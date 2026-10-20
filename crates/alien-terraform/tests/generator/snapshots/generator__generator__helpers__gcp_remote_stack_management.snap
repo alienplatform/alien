@@ -133,7 +133,7 @@ variable "gcp_region" {
 
 variable "deployment_id" {
   type        = string
-  description = "Immutable deployment ID returned by registration before cloud setup."
+  description = "Immutable deployment ID reserved by the management service before setup."
 }
 
 variable "managing_oidc_issuer" {
@@ -381,7 +381,7 @@ resource "google_iam_workload_identity_pool_provider" "management_manager" {
 resource "google_service_account_iam_member" "management_manager" {
   service_account_id = google_service_account.management.id
   role               = "roles/iam.workloadIdentityUser"
-  member             = "principal://iam.googleapis.com/${google_iam_workload_identity_pool.management_manager.name}/subject/${urlencode(var.managing_oidc_subject)}"
+  member             = "principal://iam.googleapis.com/${google_iam_workload_identity_pool.management_manager.name}/subject/${var.managing_oidc_subject}"
   depends_on = [
     google_iam_workload_identity_pool_provider.management_manager
   ]
@@ -406,7 +406,7 @@ resource "terraform_data" "deployment_registration" {
     name                        = var.name
     resource_prefix             = local.resource_prefix
     setup_target                = ""
-    setup_import_format_version = 1
+    setup_import_format_version = 2
     setup_fingerprint           = ""
     setup_fingerprint_version   = 0
     management_url              = var.management_url
@@ -457,7 +457,7 @@ output "deployment_setup_target" {
 }
 
 output "deployment_setup_import_format_version" {
-  value       = 1
+  value       = 2
   description = "Setup registration payload format version."
 }
 

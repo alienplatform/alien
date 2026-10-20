@@ -127,9 +127,15 @@ variable "gcp_region" {
   default     = "us-central1"
 }
 
+variable "deployment_id" {
+  type        = string
+  description = "Immutable deployment ID reserved by the management service before setup."
+  default     = ""
+}
+
 variable "managing_service_account_email" {
   type        = string
-  description = "Email of the management service account allowed to impersonate setup-created identities."
+  description = "Management service account metadata; federation controls remote access."
   default     = ""
 }
 
@@ -222,7 +228,7 @@ resource "terraform_data" "deployment_registration" {
     name                        = var.name
     resource_prefix             = local.resource_prefix
     setup_target                = ""
-    setup_import_format_version = 1
+    setup_import_format_version = 2
     setup_fingerprint           = ""
     setup_fingerprint_version   = 0
     management_url              = var.management_url
@@ -264,7 +270,7 @@ output "deployment_setup_target" {
 }
 
 output "deployment_setup_import_format_version" {
-  value       = 1
+  value       = 2
   description = "Setup registration payload format version."
 }
 
@@ -323,7 +329,7 @@ GCP settings:
 
 - `gcp_project`: target GCP project ID.
 - `gcp_region`: target GCP region.
-- `managing_service_account_email`: management service account allowed to impersonate setup-created identities.
+- `managing_service_account_email`: management service account metadata.
 - `gcp_manage_custom_roles`: whether this module creates project custom roles.
 - `gcp_custom_role_prefix`: custom role ID prefix when roles are managed outside this module.
 
