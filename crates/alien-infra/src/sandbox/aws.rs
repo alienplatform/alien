@@ -18,7 +18,9 @@ use std::time::Duration;
 
 use tracing::{debug, info};
 
-use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
+use crate::core::{
+    state_utils::StackResourceStateExt, ResourceControllerContext, ResourcePermissionsHelper,
+};
 use crate::error::{ErrorData, Result};
 use alien_aws_clients::lambda_microvms::{
     CreateMicrovmImageRequest, MicrovmCodeArtifact, MicrovmCpuConfiguration, MicrovmImageBuild,
@@ -65,9 +67,14 @@ pub struct AwsSandboxController {
     /// Bound installed with the parent and published to runtime bindings.
     #[serde(default)]
     pub(crate) egress: Option<alien_core::bindings::SandboxEgressBinding>,
-    /// Public signing material; the private key remains only in the secrets vault.
+    /// Public signing material; the private key remains only in the secrets vault and is never
+    /// read back. Other internet sandboxes take the key from the owner's copy of this field.
     #[serde(default)]
     pub(crate) egress_public_key: Option<super::egress::GatewayPublicKey>,
+    /// Digest of the gateway configuration this owner last published, without the replica
+    /// secret. An unchanged configuration is not read or rewritten.
+    #[serde(default)]
+    pub(crate) egress_config_digest: Option<String>,
     /// Resource default retained independently of the gateway metadata.
     #[serde(default)]
     pub(crate) default_policy: Option<alien_core::EgressPolicy>,
@@ -135,6 +142,64 @@ pub struct AwsSandboxController {
     /// Session lifetime ceiling for the binding, captured from the declaration.
     #[serde(default)]
     pub(crate) max_lifetime_seconds: Option<u32>,
+}
+
+/// The signing key's public half as the owner sandbox recorded it. Every other internet sandbox
+/// depends on the owner, so the owner has initialized it first; the vault is not read.
+fn owner_egress_public_key(
+    ctx: &ResourceControllerContext<'_>,
+    owner: &str,
+) -> Result<super::egress::GatewayPublicKey> {
+    let not_ready = || {
+        AlienError::new(ErrorData::DependencyNotReady {
+            resource_id: ctx.desired_config.id().to_string(),
+            dependency_id: owner.to_string(),
+        })
+    };
+    let state = ctx
+        .state
+        .resources
+        .get(owner)
+        .filter(|state| state.internal_state.is_some())
+        .ok_or_else(not_ready)?;
+    state
+        .get_internal_controller_typed::<AwsSandboxController>()?
+        .egress_public_key
+        .ok_or_else(not_ready)
+}
+
+/// A key another internet sandbox of this deployment already recorded, for an owner that has
+/// none: one added with a lower id than the previous owner, or one whose state was replaced.
+/// Adopting it keeps every sandbox and the gateway on the key the vault holds.
+fn recorded_egress_public_key(
+    ctx: &ResourceControllerContext<'_>,
+) -> Result<Option<super::egress::GatewayPublicKey>> {
+    let mut peers: Vec<_> = ctx
+        .state
+        .resources
+        .iter()
+        .filter(|(id, resource)| {
+            id.as_str() != ctx.desired_config.id()
+                && resource.status != ResourceStatus::Deleted
+                && resource.internal_state.is_some()
+                && resource
+                    .config
+                    .downcast_ref::<Sandbox>()
+                    .is_some_and(|sandbox| {
+                        matches!(sandbox.egress, alien_core::SandboxEgress::Internet)
+                    })
+        })
+        .collect();
+    peers.sort_by(|(left, _), (right, _)| left.cmp(right));
+    for (_, peer) in peers {
+        if let Some(key) = peer
+            .get_internal_controller_typed::<AwsSandboxController>()?
+            .egress_public_key
+        {
+            return Ok(Some(key));
+        }
+    }
+    Ok(None)
 }
 
 #[controller]
@@ -471,16 +536,23 @@ impl AwsSandboxController {
         if alien_core::sandbox_egress::has_sandbox_gateway(ctx.desired_stack)
             && ids.iter().any(|id| id == ctx.desired_config.id())
         {
-            let vault = super::egress::deployment_vault(ctx).await?;
-            self.egress_public_key = Some(
-                if alien_core::sandbox_egress::sandbox_egress_key_owner(ctx.desired_stack)
-                    == Some(ctx.desired_config.id())
-                {
-                    super::egress::ensure_signing_key(vault.as_ref()).await?
-                } else {
-                    super::egress::read_signing_public_key(vault.as_ref()).await?
-                },
-            );
+            let owner = alien_core::sandbox_egress::sandbox_egress_key_owner(ctx.desired_stack)
+                .unwrap_or_default();
+            if owner == ctx.desired_config.id() {
+                // Keep the key this deployment already uses, whichever sandbox recorded it;
+                // only a deployment with none writes one. The private key is never read.
+                if self.egress_public_key.is_none() {
+                    self.egress_public_key = match recorded_egress_public_key(ctx)? {
+                        Some(key) => Some(key),
+                        None => {
+                            let vault = super::egress::deployment_vault(ctx).await?;
+                            Some(super::egress::create_signing_key(vault.as_ref()).await?)
+                        }
+                    };
+                }
+            } else {
+                self.egress_public_key = Some(owner_egress_public_key(ctx, owner)?);
+            }
             let key = self
                 .egress_public_key
                 .as_ref()
@@ -500,6 +572,7 @@ impl AwsSandboxController {
             ));
         } else {
             self.egress_public_key = None;
+            self.egress_config_digest = None;
             self.egress_network_verified = false;
             self.egress = Some(config.into());
         }
@@ -517,7 +590,8 @@ impl AwsSandboxController {
         if let Some(key) = &self.egress_public_key {
             self.egress_network_verified = false;
             if super::egress::is_declared(ctx) {
-                super::egress::publish_aws_config(ctx, key).await?;
+                super::egress::publish_aws_config(ctx, key, &mut self.egress_config_digest)
+                    .await?;
                 self.egress_network_verified = true;
             }
         }
@@ -640,7 +714,8 @@ impl AwsSandboxController {
         if let Some(key) = &self.egress_public_key {
             self.egress_network_verified = false;
             if super::egress::is_declared(ctx) {
-                super::egress::publish_aws_config(ctx, key).await?;
+                super::egress::publish_aws_config(ctx, key, &mut self.egress_config_digest)
+                    .await?;
                 self.egress_network_verified = true;
             }
         }
@@ -980,6 +1055,7 @@ impl AwsSandboxController {
             info!(sandbox_id = %config.id, "Deleted the deployment's sandbox egress key and gateway configuration");
         }
         self.egress_public_key = None;
+        self.egress_config_digest = None;
         Ok(HandlerAction::Continue {
             state: Deleted,
             suggested_delay: None,
@@ -1615,13 +1691,70 @@ mod tests {
     const DENY_CONNECTOR_ARN: &str =
         "arn:aws:lambda:us-east-1:123456789012:network-connector:nc-deny123";
 
-    /// The setup-owned image creates the key while the earlier Live image is still pending.
+    /// An internet sandbox with its secrets vault, stepped once from `InitializingEgressKey`.
+    #[cfg(feature = "local")]
+    async fn step_egress_key(
+        subject: Sandbox,
+        lifecycle: alien_core::ResourceLifecycle,
+        controller: AwsSandboxController,
+        other: (Sandbox, alien_core::ResourceLifecycle, Option<AwsSandboxController>),
+        directory: &std::path::Path,
+    ) -> Result<AwsSandboxController> {
+        use crate::{LocalVaultController, LocalVaultState};
+        use alien_core::{ClientConfig, Vault, SECRETS_VAULT_ID};
+
+        let (other, other_lifecycle, other_state) = other;
+        let other_id = other.id.clone();
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(subject)
+            .resource_lifecycle(lifecycle)
+            .controller(AwsSandboxController {
+                state: AwsSandboxState::InitializingEgressKey,
+                ..controller
+            })
+            .platform(Platform::Aws)
+            .client_config(ClientConfig::Local {
+                state_directory: directory.to_string_lossy().into_owned(),
+            })
+            .with_stack_resource(other.clone(), other_lifecycle)
+            .with_dependency(
+                Vault::new(SECRETS_VAULT_ID.into()).build(),
+                LocalVaultController {
+                    state: LocalVaultState::Ready,
+                    vault_path: Some(directory.to_string_lossy().into_owned()),
+                    ..Default::default()
+                },
+            )
+            .build()
+            .await
+            .unwrap();
+        if let Some(other_state) = other_state {
+            let mut saved = alien_core::StackResourceState::builder()
+                .resource_type(Sandbox::RESOURCE_TYPE.to_string())
+                .status(ResourceStatus::Running)
+                .config(alien_core::Resource::new(other))
+                .lifecycle(other_lifecycle)
+                .build();
+            saved
+                .set_internal_controller(Some(Box::new(other_state)))
+                .unwrap();
+            executor.insert_saved_resource(&other_id, saved);
+        }
+        executor.step().await?;
+        Ok(executor
+            .internal_state::<AwsSandboxController>()
+            .unwrap()
+            .clone())
+    }
+
+    /// The setup-owned sandbox owns the key. It writes the key once and keeps the public half in
+    /// its state; a later pass keeps that key, and the Live sandbox takes it from the owner's
+    /// state. Nothing reads the private key back.
     #[cfg(feature = "local")]
     #[tokio::test]
-    async fn frozen_sandbox_initializes_the_key_before_the_live_sandbox() {
-        use crate::{LocalVaultController, LocalVaultState};
+    async fn the_owner_writes_the_key_once_and_others_take_it_from_its_state() {
         use alien_bindings::{providers::vault::LocalVault, Vault as _};
-        use alien_core::{ClientConfig, ResourceLifecycle, Vault, SECRETS_VAULT_ID};
+        use alien_core::ResourceLifecycle::{Frozen, Live};
 
         let directory = tempfile::tempdir().unwrap();
         let vault = LocalVault::new("secrets".into(), directory.path().into());
@@ -1630,68 +1763,219 @@ mod tests {
         frozen.egress = SandboxEgress::Internet;
         let mut live = frozen.clone();
         live.id = "a-live".into();
-        let mut accepted = None;
-        for (current, lifecycle, other, other_lifecycle) in [
-            (
-                frozen.clone(),
-                ResourceLifecycle::Frozen,
-                live.clone(),
-                ResourceLifecycle::Live,
-            ),
-            (
-                live,
-                ResourceLifecycle::Live,
-                frozen,
-                ResourceLifecycle::Frozen,
-            ),
-        ] {
-            let mut executor = SingleControllerExecutor::builder()
-                .resource(current)
-                .resource_lifecycle(lifecycle)
-                .controller(AwsSandboxController {
-                    state: AwsSandboxState::InitializingEgressKey,
-                    ..Default::default()
-                })
-                .platform(Platform::Aws)
-                .client_config(ClientConfig::Local {
-                    state_directory: directory.path().to_string_lossy().into_owned(),
-                })
-                .with_stack_resource(other, other_lifecycle)
-                .with_dependency(
-                    Vault::new(SECRETS_VAULT_ID.into()).build(),
-                    LocalVaultController {
-                        state: LocalVaultState::Ready,
-                        vault_path: Some(directory.path().to_string_lossy().into_owned()),
-                        ..Default::default()
-                    },
-                )
-                .build()
+
+        let owner = step_egress_key(
+            frozen.clone(),
+            Frozen,
+            AwsSandboxController::default(),
+            (live.clone(), Live, None),
+            directory.path(),
+        )
+        .await
+        .expect("the owner writes the key");
+        assert_eq!(owner.state, AwsSandboxState::PublishingEgressConfig);
+        let key = owner.egress_public_key.clone().expect("public key recorded");
+        let stored = vault
+            .get_secret(super::super::egress::SIGNING_KEY)
+            .await
+            .unwrap();
+        assert_eq!(
+            super::super::egress::read_signing_public_key(&vault)
                 .await
-                .unwrap();
-            executor
-                .step()
-                .await
-                .expect("shared key initialization advances");
-            let controller = executor.internal_state::<AwsSandboxController>().unwrap();
-            assert_eq!(controller.state, AwsSandboxState::PublishingEgressConfig);
-            let public_key = controller
-                .egress_public_key
-                .clone()
-                .expect("public key published");
-            let stored = vault
+                .unwrap(),
+            key,
+            "the recorded public key belongs to the stored private key"
+        );
+        alien_bindings::sandbox_egress_token::EgressTokenIssuer::from_vault_json(&stored, &key.kid)
+            .unwrap();
+
+        let again = step_egress_key(
+            frozen.clone(),
+            Frozen,
+            owner.clone(),
+            (live.clone(), Live, None),
+            directory.path(),
+        )
+        .await
+        .expect("a later owner pass keeps its key");
+        assert_eq!(again.egress_public_key.as_ref(), Some(&key));
+        assert!(
+            vault
                 .get_secret(super::super::egress::SIGNING_KEY)
                 .await
-                .unwrap();
-            if let Some((expected_public, expected_stored)) = &accepted {
-                assert_eq!(&public_key, expected_public);
-                assert!(
-                    &stored == expected_stored,
-                    "Live initialization must not rotate the key"
-                );
-            } else {
-                accepted = Some((public_key, stored));
-            }
-        }
+                .unwrap()
+                == stored,
+            "a later pass must not rotate the key"
+        );
+
+        let other = step_egress_key(
+            live.clone(),
+            Live,
+            AwsSandboxController::default(),
+            (frozen.clone(), Frozen, Some(owner)),
+            directory.path(),
+        )
+        .await
+        .expect("the Live sandbox takes the owner's key");
+        assert_eq!(other.egress_public_key.as_ref(), Some(&key));
+        assert!(
+            vault
+                .get_secret(super::super::egress::SIGNING_KEY)
+                .await
+                .unwrap()
+                == stored
+        );
+
+        let error = step_egress_key(
+            live,
+            Live,
+            AwsSandboxController::default(),
+            (frozen, Frozen, None),
+            directory.path(),
+        )
+        .await
+        .expect_err("without the owner's state there is no key to take");
+        assert_eq!(error.code, "DEPENDENCY_NOT_READY", "{error:?}");
+    }
+
+    /// A sandbox that becomes the owner without a key of its own, such as one added with a lower
+    /// id, adopts the key another sandbox recorded instead of writing a new one.
+    #[cfg(feature = "local")]
+    #[tokio::test]
+    async fn a_new_owner_adopts_the_recorded_key() {
+        use alien_bindings::{providers::vault::LocalVault, Vault as _};
+        use alien_core::ResourceLifecycle::Live;
+
+        let directory = tempfile::tempdir().unwrap();
+        let vault = LocalVault::new("secrets".into(), directory.path().into());
+        let mut previous = sandbox();
+        previous.id = "b-previous".into();
+        previous.egress = SandboxEgress::Internet;
+        let mut added = previous.clone();
+        added.id = "a-added".into();
+
+        let first = step_egress_key(
+            previous.clone(),
+            Live,
+            AwsSandboxController::default(),
+            (
+                Sandbox {
+                    id: "c-other".into(),
+                    ..previous.clone()
+                },
+                Live,
+                None,
+            ),
+            directory.path(),
+        )
+        .await
+        .expect("the first owner writes the key");
+        let key = first.egress_public_key.clone().unwrap();
+        let stored = vault
+            .get_secret(super::super::egress::SIGNING_KEY)
+            .await
+            .unwrap();
+
+        let owner = step_egress_key(
+            added,
+            Live,
+            AwsSandboxController::default(),
+            (previous, Live, Some(first)),
+            directory.path(),
+        )
+        .await
+        .expect("the new owner adopts the key");
+        assert_eq!(owner.egress_public_key.as_ref(), Some(&key));
+        assert!(
+            vault
+                .get_secret(super::super::egress::SIGNING_KEY)
+                .await
+                .unwrap()
+                == stored,
+            "adopting must not rotate the key"
+        );
+    }
+
+    /// The owner initializes the key against real SSM wire calls through a management identity
+    /// that may write the vault but not read it, as setup now grants. The key must still be
+    /// created, with one PutParameter and no GetParameter.
+    #[tokio::test]
+    async fn the_owner_initializes_the_key_without_reading_the_vault() {
+        use crate::{AwsVaultController, AwsVaultState};
+        use alien_core::{
+            AwsClientConfig, AwsCredentials, AwsServiceOverrides, ClientConfig, ResourceLifecycle,
+            Vault, SECRETS_VAULT_ID,
+        };
+        use httpmock::{Method::POST, MockServer};
+        use std::collections::HashMap;
+
+        let server = MockServer::start_async().await;
+        let read = server
+            .mock_async(|when, then| {
+                when.method(POST).header("x-amz-target", "AmazonSSM.GetParameter");
+                then.status(400).json_body(serde_json::json!({
+                    "__type": "AccessDeniedException",
+                    "message": "User: arn:aws:sts::123456789012:assumed-role/test-management/session is not authorized to perform: ssm:GetParameter with an explicit deny"
+                }));
+            })
+            .await;
+        let write = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .header("x-amz-target", "AmazonSSM.PutParameter")
+                    .body_contains("test-secrets-sandbox-egress-signing-key")
+                    .body_contains("\"Overwrite\":true");
+                then.status(200)
+                    .json_body(serde_json::json!({"Version": 1, "Tier": "Standard"}));
+            })
+            .await;
+        let mut subject = sandbox();
+        subject.egress = SandboxEgress::Internet;
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(subject)
+            .resource_lifecycle(ResourceLifecycle::Live)
+            .controller(AwsSandboxController {
+                state: AwsSandboxState::InitializingEgressKey,
+                ..Default::default()
+            })
+            .platform(Platform::Aws)
+            .client_config(ClientConfig::Aws(Box::new(AwsClientConfig {
+                account_id: "123456789012".to_string(),
+                region: "us-east-1".to_string(),
+                credentials: AwsCredentials::AccessKeys {
+                    access_key_id: "test".to_string(),
+                    secret_access_key: "test".to_string(),
+                    session_token: None,
+                },
+                service_overrides: Some(AwsServiceOverrides {
+                    endpoints: HashMap::from([("ssm".to_string(), server.base_url())]),
+                }),
+            })))
+            .with_dependency(
+                Vault::new(SECRETS_VAULT_ID.into()).build(),
+                AwsVaultController {
+                    state: AwsVaultState::Ready,
+                    account_id: Some("123456789012".to_string()),
+                    region: Some("us-east-1".to_string()),
+                    vault_prefix: Some("test-secrets".to_string()),
+                    ..Default::default()
+                },
+            )
+            .build()
+            .await
+            .unwrap();
+
+        executor
+            .step()
+            .await
+            .expect("the key is initialized without a read");
+
+        let controller = executor.internal_state::<AwsSandboxController>().unwrap();
+        assert_eq!(controller.state, AwsSandboxState::PublishingEgressConfig);
+        let key = controller.egress_public_key.as_ref().expect("public key");
+        assert!(!key.kid.is_empty());
+        assert_eq!(read.hits_async().await, 0, "the private key must not be read");
+        assert_eq!(write.hits_async().await, 1);
     }
 
     /// Deletes a Frozen internet sandbox that holds the deployment's egress key, next to an

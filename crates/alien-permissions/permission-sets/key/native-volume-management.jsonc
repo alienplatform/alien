@@ -1,0 +1,52 @@
+{
+  // The managing identity creates, grows, restores and deletes EBS volumes encrypted with the
+  // selected key; the node that attaches a volume decrypts its data key (key/native-volume).
+  // Creating a volume, including one restored from a snapshot, needs no kms:Decrypt by the
+  // caller, so this set grants none: the managing identity cannot decrypt with the key.
+  "id": "key/native-volume-management",
+  "description": "Allows creating EBS volumes encrypted with the selected key through EC2, without decrypting with it",
+  "platforms": {
+    "aws": [
+      {
+        "label": "encrypt-through-ec2",
+        "grant": {
+          "actions": [
+            "kms:DescribeKey",
+            "kms:GenerateDataKeyWithoutPlaintext",
+            "kms:ReEncryptFrom",
+            "kms:ReEncryptTo"
+          ]
+        },
+        "binding": {
+          "resource": {
+            "resources": ["${resourceName}"],
+            "condition": {
+              "StringEquals": {
+                "kms:ViaService": "ec2.${awsRegion}.amazonaws.com"
+              }
+            }
+          }
+        }
+      },
+      {
+        "label": "grant-to-ebs",
+        "grant": {
+          "actions": ["kms:CreateGrant"]
+        },
+        "binding": {
+          "resource": {
+            "resources": ["${resourceName}"],
+            "condition": {
+              "Bool": {
+                "kms:GrantIsForAWSResource": "true"
+              },
+              "StringEquals": {
+                "kms:ViaService": "ec2.${awsRegion}.amazonaws.com"
+              }
+            }
+          }
+        }
+      }
+    ]
+  }
+}

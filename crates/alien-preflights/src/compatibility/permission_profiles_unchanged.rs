@@ -2,10 +2,12 @@ use crate::compatibility::narrowing::{management_narrowed, profile_narrowed};
 use crate::error::Result;
 use crate::mutations::management_permission_profile::{
     GATE_DERIVED_GLOBAL_SUFFIXES, KEY_AVAILABILITY_PERMISSION_SET_ID,
+    NATIVE_VOLUME_MANAGEMENT_PERMISSION_SET_ID, SANDBOX_SIGNING_KEY_GUARD_ID,
 };
+use crate::mutations::sandbox_gateway_permissions::GATEWAY_CONFIG_READ_ID;
 use crate::{CheckResult, StackCompatibilityCheck};
 use alien_core::permissions::{ManagementPermissions, PermissionProfile, PermissionSetReference};
-use alien_core::{Key, Stack};
+use alien_core::{Key, Stack, SECRETS_VAULT_ID};
 use alien_permissions::{MANAGEMENT_ROLE_GUARD, SANDBOX_SETUP_ROLES_GUARD};
 use std::collections::HashSet;
 
@@ -173,6 +175,13 @@ fn management_differs_outside_gates(
 ///   when setup reports that it installed it (`availabilityProbe` in the key's import data), so a
 ///   setup that predates it keeps its metadata-only health check until setup is rerun. Only the
 ///   canonical reference in that key's own scope.
+/// - the AWS sandbox signing-key Deny: a Deny only narrows, and preparation replaces any
+///   grant with its id by the canonical one. Stack scope only.
+/// - `key/native-volume-management` on a Key whose installed scope holds `key/native-volume`:
+///   the same EC2 key use without `kms:Decrypt`, so the installed role already covers it.
+/// - the exact gateway-configuration read on the secrets vault, where the installed profile
+///   already holds `vault/data-read` on that vault: the installed role reads the whole vault,
+///   so the runtime keeps every read it needs until setup narrows it.
 ///
 /// Anything else still reads as drift, and a grant the old profile held may not leave.
 fn without_added_migration_grants(
@@ -208,9 +217,45 @@ fn without_added_migration_grants(
             }
         }
     };
+    let strip_id = |profile: &mut PermissionProfile, scope: &str, id: &str| {
+        if old_scope(scope).is_some_and(|grants| grants.iter().any(|grant| grant.id() == id)) {
+            return;
+        }
+        if let Some(grants) = profile.0.get_mut(scope) {
+            grants.retain(|grant| grant.id() != id);
+            if grants.is_empty() && old_scope(scope).is_none() {
+                profile.0.shift_remove(scope);
+            }
+        }
+    };
+    let installed_reads_secrets = old_scope(SECRETS_VAULT_ID).is_some_and(|grants| {
+        grants
+            .iter()
+            .any(|grant| grant == &PermissionSetReference::from_name("vault/data-read"))
+    });
+    let installed_volume_use = PermissionSetReference::from_name("key/native-volume");
+    let volume_management =
+        PermissionSetReference::from_name(NATIVE_VOLUME_MANAGEMENT_PERMISSION_SET_ID);
+    let keys_with_installed_volume_use: Vec<&String> = old_profile
+        .map(|profile| {
+            profile
+                .0
+                .iter()
+                .filter(|(_, grants)| grants.contains(&installed_volume_use))
+                .map(|(scope, _)| scope)
+                .collect()
+        })
+        .unwrap_or_default();
     let without = |profile: &PermissionProfile| {
         let mut profile = profile.clone();
         strip(&mut profile, "*", &added_guards);
+        strip_id(&mut profile, "*", SANDBOX_SIGNING_KEY_GUARD_ID);
+        if installed_reads_secrets {
+            strip_id(&mut profile, SECRETS_VAULT_ID, GATEWAY_CONFIG_READ_ID);
+        }
+        for scope in &keys_with_installed_volume_use {
+            strip(&mut profile, scope, std::slice::from_ref(&volume_management));
+        }
         for key in &keys_gaining_availability {
             strip(&mut profile, key, std::slice::from_ref(&key_availability));
         }
@@ -396,12 +441,95 @@ fn check_permission_profiles(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mutations::management_permission_profile::ManagementPermissionProfileMutation;
+    use crate::mutations::management_permission_profile::{
+        sandbox_signing_key_guard, ManagementPermissionProfileMutation,
+    };
+    use crate::mutations::sandbox_gateway_permissions::management_gateway_config_read;
     use crate::StackMutation;
     use alien_core::permissions::PermissionsConfig;
     use alien_core::{Email, Kv, ResourceLifecycle};
     use alien_core::{Platform, StackState};
     use indexmap::IndexMap;
+
+    /// The management profile an AWS internet-sandbox stack was prepared with before management
+    /// stopped reading the secrets vault, and the one it is prepared with now.
+    fn secrets_vault_management(installed: bool) -> ManagementPermissions {
+        let global = vec![PermissionSetReference::from_name("sandbox/management")];
+        let profile = if installed {
+            PermissionProfile::new()
+                .global(global)
+                .resource(SECRETS_VAULT_ID, ["vault/data-read", "vault/data-write"])
+        } else {
+            let mut global = global;
+            global.push(sandbox_signing_key_guard().unwrap());
+            let mut profile = PermissionProfile::new().global(global);
+            profile.0.insert(
+                SECRETS_VAULT_ID.to_string(),
+                vec![
+                    PermissionSetReference::from_name("vault/data-write"),
+                    management_gateway_config_read().unwrap(),
+                ],
+            );
+            profile
+        };
+        ManagementPermissions::Extend(profile)
+    }
+
+    /// An installed setup granted management `vault/data-read` on the whole secrets vault. The
+    /// new preparation keeps only the gateway configuration read and adds a Deny on the
+    /// signing key: both are within what the installed role allows, so the update runs before
+    /// setup is rerun.
+    #[tokio::test]
+    async fn narrowing_the_secrets_vault_read_does_not_need_setup() {
+        assert!(
+            update_passes(
+                secrets_vault_management(true),
+                secrets_vault_management(false)
+            )
+            .await
+        );
+    }
+
+    /// Management's volume-key grant moves from `key/native-volume` to the same EC2 use
+    /// without `kms:Decrypt`. The installed role covers it, so the update runs before setup;
+    /// adding it where no volume key was installed still needs setup.
+    #[tokio::test]
+    async fn the_volume_key_grant_narrows_without_setup() {
+        let profile = |sets: &[&str]| {
+            ManagementPermissions::Extend(
+                PermissionProfile::new()
+                    .resource("cell-key", sets.iter().map(|set| set.to_string())),
+            )
+        };
+        assert!(
+            update_passes(
+                profile(&["key/management", "key/native-volume"]),
+                profile(&["key/management", NATIVE_VOLUME_MANAGEMENT_PERMISSION_SET_ID]),
+            )
+            .await
+        );
+        assert!(
+            !update_passes(
+                profile(&["key/management"]),
+                profile(&["key/management", NATIVE_VOLUME_MANAGEMENT_PERMISSION_SET_ID]),
+            )
+            .await
+        );
+    }
+
+    /// Without an installed `vault/data-read`, the gateway configuration read is a new grant
+    /// the installed role does not have, so the update still waits for setup.
+    #[tokio::test]
+    async fn a_gateway_configuration_read_the_installed_role_lacks_needs_setup() {
+        let mut installed = secrets_vault_management(true);
+        if let ManagementPermissions::Extend(profile) = &mut installed {
+            profile.0.insert(
+                SECRETS_VAULT_ID.to_string(),
+                vec![PermissionSetReference::from_name("vault/data-write")],
+            );
+        }
+        assert!(!update_passes(installed, secrets_vault_management(false)).await);
+    }
 
     fn guarded_sandbox_stack(management: ManagementPermissions) -> Stack {
         Stack::new("s".to_string())

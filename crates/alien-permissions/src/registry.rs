@@ -167,6 +167,22 @@ pub fn permission_set_reaches_a_sandbox(
     reaches_on_aws || reaches_on_azure || reaches_on_gcp
 }
 
+/// Whether `permission_set` allows reading or writing S3 object contents on AWS. Only those
+/// requests make S3 use a bucket's KMS key on the caller's behalf, so only their holders need the
+/// key: bucket configuration, health checks and object deletion use no key material.
+pub fn permission_set_uses_aws_object_data(
+    permission_set: &alien_core::permissions::PermissionSet,
+) -> bool {
+    permission_set
+        .platforms
+        .aws
+        .iter()
+        .flatten()
+        .filter(|entry| entry.effect.is_allow())
+        .flat_map(|entry| entry.grant.actions.iter().flatten())
+        .any(|action| matches!(action.as_str(), "s3:GetObject" | "s3:PutObject" | "s3:*"))
+}
+
 /// Predefined GCP roles that carry `aiplatform.sandboxEnvironments.execute`, read off the live
 /// role definitions rather than inferred from the names. It is also why `sandbox/remote-execute`
 /// renders a custom role instead of naming one of them.
