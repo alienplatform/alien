@@ -7,7 +7,7 @@
 use crate::error::{ErrorData, Result};
 use crate::resource::{ResourceDefinition, ResourceOutputsDefinition, ResourceRef};
 use crate::stack_settings::NetworkSettings;
-use crate::ResourceType;
+use crate::{ResourceType, Stack};
 use alien_error::AlienError;
 use bon::Builder;
 use serde::{Deserialize, Serialize};
@@ -38,6 +38,20 @@ impl Network {
     /// Returns the network's unique identifier.
     pub fn id(&self) -> &str {
         &self.id
+    }
+
+    /// Settings for generating setup from a stack whose `StackSettings.network` is empty.
+    ///
+    /// The NetworkMutation preflight then adds a create-new network for the resources that need
+    /// one. Setup builds that network, so it must offer the same inputs as when create-new is
+    /// passed as the settings. A network declared any other way (the default VPC, an existing VPC)
+    /// stays fixed, so this returns `None` for it.
+    pub fn preflight_settings(stack: &Stack) -> Option<NetworkSettings> {
+        stack
+            .resources()
+            .find_map(|(_, entry)| entry.config.downcast_ref::<Network>())
+            .filter(|network| matches!(network.settings, NetworkSettings::Create { .. }))
+            .map(|network| network.settings.clone())
     }
 }
 

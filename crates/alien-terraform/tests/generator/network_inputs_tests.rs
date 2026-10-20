@@ -3,7 +3,7 @@
 use alien_core::{Network, NetworkSettings, ResourceLifecycle, Stack, StackSettings};
 use alien_terraform::TerraformTarget;
 
-use super::helpers::{render, test_utils};
+use super::helpers::{assert_terraform_valid, render, test_utils};
 
 #[test]
 fn mocked_network_plans_normalize_empty_ids_in_registration() {
@@ -133,4 +133,53 @@ run "network_{index}" {{
             "network ID normalization plans (static existing network: {is_static})"
         ));
     }
+}
+
+/// With no network settings, the network preflight adds `default-network` for resources that need
+/// a VPC. The module builds that network, so it must declare the variables the network reads.
+#[test]
+fn network_added_by_the_preflight_declares_its_variables() {
+    let stack = Stack::new("auto-network".into())
+        .add(
+            Network::new("default-network".into())
+                .settings(NetworkSettings::Create {
+                    cidr: None,
+                    availability_zones: 2,
+                })
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+
+    let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
+
+    assert_terraform_valid(&module, "network added by the preflight");
+}
+
+/// A network the stack declares itself stays fixed when no settings are given. Offering a
+/// `network_mode` choice here would default to create-new, so an install with default inputs would
+/// build a new VPC instead of using the declared default VPC.
+#[test]
+fn network_declared_by_the_stack_stays_fixed() {
+    let stack = Stack::new("declared-network".into())
+        .add(
+            Network::new("default-network".into())
+                .settings(NetworkSettings::UseDefault)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+
+    let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
+
+    assert_terraform_valid(&module, "network declared by the stack");
+    let variables = module
+        .iter()
+        .find(|(path, _)| path.ends_with("variables.tf"))
+        .map(|(_, content)| content.to_string())
+        .expect("module declares variables");
+    assert!(
+        !variables.contains("variable \"network_mode\""),
+        "a declared network is not offered as a choice"
+    );
 }

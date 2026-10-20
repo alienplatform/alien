@@ -515,9 +515,7 @@
             "pubsub.subscriptions.delete",
             "iam.serviceAccounts.actAs",
             "pubsub.subscriptions.get",
-            "pubsub.subscriptions.update",
-            "iam.serviceAccounts.getIamPolicy",
-            "iam.serviceAccounts.setIamPolicy"
+            "pubsub.subscriptions.update"
           ]
         },
         // This permission set covers Cloud Run, Pub/Sub, IAM, and related

@@ -32,7 +32,12 @@ variable "resource_prefix" {
 
 variable "name" {
   type        = string
-  description = "Human-readable application name shown in setup and cloud IAM review metadata."
+  description = "Deployment name, unique within the deployment group: 2-100 lowercase letters, numbers, and single hyphens. Shown in setup and cloud IAM review metadata."
+
+  validation {
+    condition     = length(var.name) >= 2 && length(var.name) <= 100 && can(regex("^[a-z0-9]+(-[a-z0-9]+)*$", var.name)) && !startswith(var.name, "ag-")
+    error_message = "name must be 2-100 characters of lowercase letters, numbers, and single hyphens; start and end with a letter or number; and not start with \"ag-\"."
+  }
 }
 
 variable "token" {
@@ -263,7 +268,7 @@ This module creates setup-owned infrastructure, grants the management access nee
 Required:
 
 - `token`: install token from the setup page.
-- `name`: deployment name to include in the registration metadata.
+- `name`: deployment name to include in the registration metadata: lowercase letters, numbers, and single hyphens.
 
 Common optional settings:
 
