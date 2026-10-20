@@ -207,8 +207,6 @@ resource "google_project_iam_custom_role" "gcp_role_manage_cloud_run_services" {
   stage       = "GA"
   permissions = [
     "iam.serviceAccounts.actAs",
-    "iam.serviceAccounts.getIamPolicy",
-    "iam.serviceAccounts.setIamPolicy",
     "pubsub.subscriptions.create",
     "pubsub.subscriptions.delete",
     "pubsub.subscriptions.get",

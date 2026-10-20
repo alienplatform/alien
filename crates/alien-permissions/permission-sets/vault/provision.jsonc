@@ -52,22 +52,6 @@
             "scope": "projects/${projectName}"
           }
         }
-      },
-      {
-        "grant": {
-          "permissions": [
-            "resourcemanager.projects.getIamPolicy",
-            "resourcemanager.projects.setIamPolicy"
-          ]
-        },
-        "binding": {
-          "stack": {
-            "scope": "projects/${projectName}"
-          },
-          "resource": {
-            "scope": "projects/${projectName}"
-          }
-        }
       }
     ],
     "azure": [

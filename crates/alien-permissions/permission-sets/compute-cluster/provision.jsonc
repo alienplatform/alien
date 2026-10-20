@@ -460,9 +460,7 @@
           "permissions": [
             "secretmanager.secrets.get",
             "secretmanager.secrets.delete",
-            "secretmanager.versions.add",
-            "secretmanager.secrets.getIamPolicy",
-            "secretmanager.secrets.setIamPolicy"
+            "secretmanager.versions.add"
           ]
         },
         "binding": {

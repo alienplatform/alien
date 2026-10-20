@@ -29,9 +29,7 @@
       {
         "grant": {
           "permissions": [
-            "serviceusage.services.enable",
-            "resourcemanager.projects.getIamPolicy",
-            "resourcemanager.projects.setIamPolicy"
+            "serviceusage.services.enable"
           ]
         },
         "binding": {

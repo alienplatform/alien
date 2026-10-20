@@ -555,8 +555,9 @@
       },
       // OTLP auth headers are stored as stack-prefixed Secret Manager
       // secrets for compute host boot. Management owns the fleet lifecycle,
-      // so it must also own these secret versions and the per-secret IAM
-      // grant to the compute node service account.
+      // so it must also own these secret versions. It gets no secret IAM
+      // permission: with it, management could grant itself read on any
+      // `<prefix>-*` secret, including the deployment secrets vault.
       // Creating a secret is authorized on the parent project. This cannot
       // restrict the requested secret id; creation is an indirect trust limit.
       {
@@ -571,9 +572,7 @@
           "permissions": [
             "secretmanager.secrets.get",
             "secretmanager.secrets.delete",
-            "secretmanager.versions.add",
-            "secretmanager.secrets.getIamPolicy",
-            "secretmanager.secrets.setIamPolicy"
+            "secretmanager.versions.add"
           ]
         },
         "binding": {
