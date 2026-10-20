@@ -206,7 +206,8 @@ pub async fn handle_deleting(
 /// Where a destroy goes when the runtime never started, or `None` when runtime cleanup has work.
 /// It has none while the management identity has no outputs and no Live resource, synced secrets
 /// vault or Frozen runtime-cleanup type came up. An empty first deployment with no setup
-/// metadata can be deleted directly. Fails closed on a missing inventory or lifecycle.
+/// metadata can be deleted directly. A pre-federation GCP deployment skips runtime cleanup
+/// when it has nothing that needs it. Fails closed on a missing inventory or lifecycle.
 pub fn destroy_without_runtime(current: &DeploymentState) -> Option<DeploymentStatus> {
     let destroying = match current.status {
         DeploymentStatus::DeletePending | DeploymentStatus::Deleting => true,
@@ -235,15 +236,23 @@ pub fn destroy_without_runtime(current: &DeploymentState) -> Option<DeploymentSt
     {
         return Some(DeploymentStatus::Deleted);
     }
-    let metadata = current.runtime_metadata.as_ref()?;
-    if metadata.initial_setup_authority != alien_core::InitialSetupAuthority::DirectSetup {
+    // A GCP deployment installed before federation (protocol 1) keeps no target trust the
+    // manager can use, so its runtime cleanup can never run. When nothing it owns needs
+    // runtime cleanup, its setup-owned resources go straight to setup teardown, which uses
+    // the deployer's own credentials.
+    let pre_federation_gcp = current.platform == Platform::Gcp
+        && current.protocol_version < alien_core::GCP_FEDERATION_DEPLOYMENT_PROTOCOL_VERSION;
+    let metadata = current.runtime_metadata.as_ref();
+    if !pre_federation_gcp
+        && metadata?.initial_setup_authority != alien_core::InitialSetupAuthority::DirectSetup
+    {
         return None;
     }
     for (resource_id, resource) in &stack_state.resources {
         let lifecycle = resource.lifecycle?;
         let resource_type = resource.config.resource_type();
         if resource_type == alien_core::RemoteStackManagement::RESOURCE_TYPE {
-            if resource.outputs.is_some() {
+            if resource.outputs.is_some() && !pre_federation_gcp {
                 return None;
             }
             continue;
@@ -270,7 +279,7 @@ pub fn destroy_without_runtime(current: &DeploymentState) -> Option<DeploymentSt
     }
     Some(
         if has_remaining_setup_resources(stack_state)
-            || crate::setup_teardown::has_setup_scaffolding(Some(metadata), current.platform)
+            || crate::setup_teardown::has_setup_scaffolding(metadata, current.platform)
         {
             DeploymentStatus::TeardownRequired
         } else {
@@ -1081,6 +1090,74 @@ mod tests {
         }
     }
 
+    /// An installed GCP deployment at `protocol_version` whose Live storage is `live_status`.
+    fn installed_gcp(
+        protocol_version: u32,
+        authority: alien_core::InitialSetupAuthority,
+        live_status: ResourceStatus,
+    ) -> DeploymentState {
+        let mut state = after_setup_failed(authority, true, live_status);
+        state.platform = Platform::Gcp;
+        state.protocol_version = protocol_version;
+        let stack_state = state.stack_state.as_mut().unwrap();
+        stack_state.platform = Platform::Gcp;
+        stack_state.resources.insert(
+            "data".to_string(),
+            resource_state(
+                Resource::new(Storage::new("data".to_string()).build()),
+                ResourceLifecycle::Frozen,
+                ResourceStatus::Running,
+            ),
+        );
+        state
+    }
+
+    /// A GCP deployment installed before federation has no target trust the manager can use,
+    /// so runtime cleanup can never run. With nothing that needs it, its setup-owned resources
+    /// go to setup teardown, however setup was run.
+    #[test]
+    fn a_pre_federation_gcp_destroy_without_runtime_work_goes_to_setup_teardown() {
+        for authority in [
+            alien_core::InitialSetupAuthority::DirectSetup,
+            alien_core::InitialSetupAuthority::ImportedHandoff,
+        ] {
+            let state = installed_gcp(1, authority, ResourceStatus::Pending);
+            assert_eq!(
+                super::destroy_without_runtime(&state),
+                Some(DeploymentStatus::TeardownRequired),
+                "{authority:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn other_installed_deployments_keep_their_runtime_cleanup() {
+        let direct = alien_core::InitialSetupAuthority::DirectSetup;
+        for (case, state) in [
+            (
+                "a pre-federation GCP deployment with a provisioned Live resource",
+                installed_gcp(1, direct, ResourceStatus::Running),
+            ),
+            (
+                "a federated GCP deployment",
+                installed_gcp(
+                    alien_core::GCP_FEDERATION_DEPLOYMENT_PROTOCOL_VERSION,
+                    direct,
+                    ResourceStatus::Pending,
+                ),
+            ),
+            (
+                "an AWS deployment at protocol 1",
+                DeploymentState {
+                    platform: Platform::Aws,
+                    ..installed_gcp(1, direct, ResourceStatus::Pending)
+                },
+            ),
+        ] {
+            assert_eq!(super::destroy_without_runtime(&state), None, "{case}");
+        }
+    }
+
     /// A rejected first deploy has an empty inventory and no successful setup metadata.
     /// Destroy must not ask for credentials belonging to an identity it never created.
     #[test]
@@ -1113,7 +1190,9 @@ mod tests {
                     environment_info: None,
                     runtime_metadata: metadata,
                     retry_requested: false,
-                    protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                    protocol_version: alien_core::deployment_protocol_version_for_platform(
+                        platform, None,
+                    ),
                 };
                 for (status, retry_requested) in [
                     (DeploymentStatus::DeletePending, false),
