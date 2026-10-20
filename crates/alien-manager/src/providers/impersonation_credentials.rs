@@ -372,8 +372,17 @@ async fn management_role_arn(
     binding: &str,
     platform: Platform,
 ) -> Result<Option<String>, AlienError> {
-    let Ok(service_account) = bindings_provider.load_service_account(binding).await else {
-        return Ok(None);
+    let service_account = match bindings_provider.load_service_account(binding).await {
+        Ok(service_account) => service_account,
+        Err(error) if error.code == "BINDING_NOT_CONFIGURED" => return Ok(None),
+        Err(error) => {
+            return Err(error)
+                .context(ErrorData::CredentialMaterializationFailed {
+                    platform,
+                    purpose: format!("load the {binding} service account"),
+                })
+                .map_err(|error| classify_credential_error(error.into_generic()));
+        }
     };
     let info = service_account
         .get_info()
@@ -1195,6 +1204,51 @@ mod tests {
             management.assert_async().await;
             customer.assert_async().await;
         }
+    }
+
+    /// A previous binding that is present but unusable reports why, rather than reading as a
+    /// role the manager does not hold.
+    #[tokio::test]
+    async fn a_broken_previous_binding_reports_its_own_error() {
+        let base_config = ClientConfig::Aws(Box::new(AwsClientConfig {
+            account_id: "123456789012".to_string(),
+            region: "us-east-2".to_string(),
+            credentials: AwsCredentials::AccessKeys {
+                access_key_id: "AKIAMANAGER".to_string(),
+                secret_access_key: "secret".to_string(),
+                session_token: None,
+            },
+            service_overrides: None,
+        }));
+        let bindings = HashMap::from([
+            (
+                "management".to_string(),
+                serde_json::to_value(ServiceAccountBinding::aws_iam(
+                    "manager-management",
+                    AWS_MANAGEMENT_ROLE,
+                ))
+                .unwrap(),
+            ),
+            (
+                PREVIOUS_MANAGEMENT_BINDING.to_string(),
+                serde_json::json!({ "service": "awsiam" }),
+            ),
+        ]);
+        let provider: Arc<dyn BindingsProviderApi> =
+            Arc::new(BindingsProvider::new(base_config, bindings).unwrap());
+
+        let error = impersonate_management_sa_trusted_by(
+            &*provider,
+            Platform::Aws,
+            "deployment",
+            Some(&ManagementConfig::Aws(alien_core::AwsManagementConfig {
+                managing_role_arn: AWS_PREVIOUS_MANAGEMENT_ROLE.to_string(),
+            })),
+        )
+        .await
+        .expect_err("the previous binding cannot be parsed");
+
+        assert_eq!(error.code, "CREDENTIAL_MATERIALIZATION_FAILED", "{error:?}");
     }
 
     /// A stack trusting a role the manager holds no binding for is refused before any AssumeRole.
