@@ -778,6 +778,160 @@ mod tests {
         }
     }
 
+    /// Refuses every checkpoint and renewal the way a manager answers once the
+    /// execution claim the runner holds is gone.
+    #[derive(Debug)]
+    struct LostClaimTransport {
+        retryable: bool,
+        /// Status and heartbeat flag of every refused checkpoint.
+        checkpoints: Mutex<Vec<(DeploymentStatus, bool)>>,
+        renewals: AtomicUsize,
+    }
+
+    impl LostClaimTransport {
+        fn new(retryable: bool) -> Self {
+            Self {
+                retryable,
+                checkpoints: Mutex::new(Vec::new()),
+                renewals: AtomicUsize::new(0),
+            }
+        }
+
+        fn refusal(&self) -> alien_error::AlienError {
+            let mut error = alien_error::AlienError::new(alien_error::GenericError {
+                message: "The execution attempt is no longer live.".to_string(),
+            });
+            error.code = "DEPLOYMENT_UPDATE_CLAIM_LOST".to_string();
+            error.retryable = self.retryable;
+            error.internal = false;
+            error.http_status_code = Some(409);
+            error
+        }
+    }
+
+    #[async_trait]
+    impl DeploymentLoopTransport for LostClaimTransport {
+        async fn renew_lease(
+            &self,
+            _deployment_id: &str,
+        ) -> std::result::Result<(), alien_error::AlienError> {
+            self.renewals.fetch_add(1, Ordering::SeqCst);
+            Err(self.refusal())
+        }
+
+        async fn reconcile_step(
+            &self,
+            _deployment_id: &str,
+            state: &DeploymentState,
+            _config: &DeploymentConfig,
+            update_heartbeat: bool,
+            _suggested_delay_ms: Option<u64>,
+            _heartbeats: Vec<alien_core::ResourceHeartbeat>,
+            _observed_inventory_batches: Vec<alien_core::ObservedInventoryBatch>,
+        ) -> std::result::Result<StepReconcileResult, alien_error::AlienError> {
+            self.checkpoints
+                .lock()
+                .expect("checkpoints lock poisoned")
+                .push((state.status, update_heartbeat));
+            Err(self.refusal())
+        }
+    }
+
+    /// A heartbeat whose claim was already settled: the step runs, and every
+    /// checkpoint and renewal after it is refused. A retryable refusal keeps the
+    /// deployment until the lease deadline; a final one stops at the first refusal.
+    #[tokio::test(start_paused = true)]
+    async fn lost_claim_holds_the_deployment_only_while_the_refusal_is_retryable() {
+        for retryable in [true, false] {
+            let transport = LostClaimTransport::new(retryable);
+            let mut state = test_state();
+            state.status = DeploymentStatus::Running;
+            state.current_release = state.target_release.take();
+            state.stack_state = Some(StackState::new(Platform::Test));
+            // An empty prepared stack passes its health check, so the step is a
+            // healthy heartbeat and the refused checkpoint is the heartbeat's own.
+            let mut prepared_stack = test_stack();
+            prepared_stack.resources.clear();
+            state.runtime_metadata = Some(alien_core::RuntimeMetadata {
+                prepared_stack: Some(prepared_stack),
+                ..Default::default()
+            });
+            let mut config = test_config();
+            let policy = RunnerPolicy {
+                max_steps: 1,
+                operation: LoopOperation::Deploy,
+                delay_strategy: DelayStrategy::Inline,
+            };
+
+            let started = tokio::time::Instant::now();
+            let error = run_running_refresh_step_loop(
+                &mut state,
+                &mut config,
+                &ClientConfig::Test,
+                "dep_test",
+                &policy,
+                &transport,
+                None,
+                None,
+            )
+            .await
+            .expect_err("a lost claim must stop the runner");
+            let held = started.elapsed();
+            let checkpoints = transport
+                .checkpoints
+                .lock()
+                .expect("checkpoints lock poisoned")
+                .clone();
+            let renewals = transport.renewals.load(Ordering::SeqCst);
+
+            assert!(
+                checkpoints
+                    .iter()
+                    .all(|checkpoint| *checkpoint == (DeploymentStatus::Running, true)),
+                "every refused checkpoint is the healthy heartbeat: {checkpoints:?}"
+            );
+            assert_eq!(error.retryable, retryable);
+            if retryable {
+                // Renewals at 60, 120 and 180 s fail inside the deadline; the
+                // one at 240 s is past it and cancels the step loop.
+                assert_eq!(error.code, "DEPLOYMENT_LEASE_LOST");
+                assert_eq!(held, LEASE_RENEW_INTERVAL * 4);
+                assert_eq!(renewals, 4);
+                assert!(checkpoints.len() > 1, "the refused checkpoint is retried");
+            } else {
+                assert_eq!(error.code, "DEPLOYMENT_CHECKPOINT_FAILED");
+                assert!(held < LEASE_RENEW_INTERVAL, "stopped after {held:?}");
+                assert_eq!(renewals, 0);
+                assert_eq!(checkpoints.len(), 1);
+            }
+        }
+    }
+
+    /// A renewal refused as final cancels the operation at the renewal that
+    /// learned it, not at the lease deadline.
+    #[tokio::test(start_paused = true)]
+    async fn lease_wrapper_cancels_at_the_first_final_renewal_refusal() {
+        for (retryable, renewals, held) in [
+            (true, 4, LEASE_RENEW_INTERVAL * 4),
+            (false, 1, LEASE_RENEW_INTERVAL),
+        ] {
+            let transport = LostClaimTransport::new(retryable);
+            let started = tokio::time::Instant::now();
+
+            let error = run_with_lease_renewal("dep_test", &transport, async {
+                tokio::time::sleep(MINIMUM_CONFIRMED_LEASE * 2).await;
+                Ok(())
+            })
+            .await
+            .expect_err("a lost claim must cancel the operation");
+
+            assert_eq!(error.code, "DEPLOYMENT_LEASE_LOST");
+            assert_eq!(error.retryable, retryable);
+            assert_eq!(started.elapsed(), held, "retryable={retryable}");
+            assert_eq!(transport.renewals.load(Ordering::SeqCst), renewals);
+        }
+    }
+
     #[tokio::test(start_paused = true)]
     async fn lease_wrapper_renews_while_operation_is_in_flight() {
         let transport = CountingRenewalTransport::default();

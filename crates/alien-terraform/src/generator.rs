@@ -251,6 +251,9 @@ fn generate_terraform_module_internal(
             }
         }
     }
+    if stack_settings.network.is_none() {
+        stack_settings.network = Network::preflight_settings(stack);
+    }
     if target.is_kubernetes()
         && matches!(
             target.cloud_platform(),
@@ -478,12 +481,8 @@ fn generate_terraform_module_internal(
     let needs_azure_management_inputs =
         matches!(target.cloud_platform(), alien_core::Platform::Azure)
             && (has_remote_management || has_remote_bindings);
-    let deployment_name_default = options
-        .display_name
-        .as_deref()
-        .filter(|name| !name.trim().is_empty())
-        .unwrap_or_else(|| stack.id())
-        .to_string();
+    let deployment_name_default =
+        default_deployment_name(options.display_name.as_deref(), stack.id());
 
     let mut files: IndexMap<String, String> = IndexMap::new();
     files.insert(
@@ -1877,13 +1876,10 @@ fn variables_body(
 
     blocks.push(nested(resource_prefix_variable_block()));
 
-    blocks.push(nested(variable_block(
-        "name",
-        "Human-readable application name shown in setup and cloud IAM review metadata.",
+    blocks.push(nested(deployment_name_variable_block(
         registration
             .is_some()
-            .then(|| Expression::String(deployment_name_default.to_string())),
-        false,
+            .then(|| deployment_name_default.to_string()),
     )));
     blocks.push(nested(variable_block(
         "token",
@@ -2295,6 +2291,97 @@ fn variables_body(
     }
 
     Ok(Body::from(blocks))
+}
+
+const DEPLOYMENT_NAME_MIN_LEN: usize = 2;
+const DEPLOYMENT_NAME_MAX_LEN: usize = 100;
+/// Names with this prefix are reserved and rejected at registration.
+const DEPLOYMENT_NAME_RESERVED_PREFIX: &str = "ag-";
+/// Used when neither the display name nor the stack id yields a valid name.
+const DEPLOYMENT_NAME_FALLBACK: &str = "deployment";
+
+/// Whether `name` is accepted as a deployment name at registration: 2-100
+/// lowercase letters and digits in groups joined by single hyphens, without
+/// the reserved prefix. Mirrors the `name` variable's validation block.
+fn is_valid_deployment_name(name: &str) -> bool {
+    (DEPLOYMENT_NAME_MIN_LEN..=DEPLOYMENT_NAME_MAX_LEN).contains(&name.len())
+        && !name.starts_with(DEPLOYMENT_NAME_RESERVED_PREFIX)
+        && name.split('-').all(|group| {
+            !group.is_empty()
+                && group
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+        })
+}
+
+/// Lowercases ASCII letters and digits and joins the groups between any other
+/// characters with single hyphens, e.g. `"Acme Analytics"` -> `"acme-analytics"`.
+fn slugify_deployment_name(value: &str) -> String {
+    let mut slug = String::new();
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch.to_ascii_lowercase());
+        } else if !slug.is_empty() && !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    // The slug is ASCII, so truncating by bytes cannot split a character.
+    slug.truncate(DEPLOYMENT_NAME_MAX_LEN);
+    slug.trim_end_matches('-').to_string()
+}
+
+/// Default for the `name` variable of a self-registering module. The display
+/// name is a human label ("Acme Analytics") while registration needs a
+/// deployment name, so the default is the display name's slug, then the stack
+/// id's slug.
+fn default_deployment_name(display_name: Option<&str>, stack_id: &str) -> String {
+    [display_name, Some(stack_id)]
+        .into_iter()
+        .flatten()
+        .map(slugify_deployment_name)
+        .find(|name| is_valid_deployment_name(name))
+        .unwrap_or_else(|| DEPLOYMENT_NAME_FALLBACK.to_string())
+}
+
+/// The `name` variable is the deployment name sent at registration. Validating
+/// it here fails `terraform plan` before any infrastructure is created, instead
+/// of failing registration after apply.
+fn deployment_name_variable_block(default: Option<String>) -> Block {
+    let mut body = vec![
+        attr("type", expr::raw("string")),
+        attr(
+            "description",
+            Expression::String(
+                "Deployment name, unique within the deployment group: 2-100 lowercase letters, numbers, and single hyphens. Shown in setup and cloud IAM review metadata."
+                    .to_string(),
+            ),
+        ),
+    ];
+    if let Some(default) = default {
+        body.push(attr("default", Expression::String(default)));
+    }
+    body.push(nested(block(
+        "validation",
+        [
+            attr(
+                "condition",
+                expr::raw(format!(
+                    "length(var.name) >= {DEPLOYMENT_NAME_MIN_LEN} && length(var.name) <= {DEPLOYMENT_NAME_MAX_LEN} && can(regex(\"^[a-z0-9]+(-[a-z0-9]+)*$\", var.name)) && !startswith(var.name, \"{DEPLOYMENT_NAME_RESERVED_PREFIX}\")"
+                )),
+            ),
+            attr(
+                "error_message",
+                Expression::String(format!(
+                    "name must be {DEPLOYMENT_NAME_MIN_LEN}-{DEPLOYMENT_NAME_MAX_LEN} characters of lowercase letters, numbers, and single hyphens; start and end with a letter or number; and not start with \"{DEPLOYMENT_NAME_RESERVED_PREFIX}\"."
+                )),
+            ),
+        ],
+    )));
+    Block {
+        identifier: Identifier::sanitized("variable"),
+        labels: vec![BlockLabel::String("name".to_string())],
+        body: Body::from(body),
+    }
 }
 
 fn resource_prefix_variable_block() -> Block {
@@ -4344,8 +4431,13 @@ fn readme_md(
         )
     };
 
+    let deployment_name_default = default_deployment_name(display_name, stack.id());
     let display_name = display_name.unwrap_or_else(|| stack.id());
-    let mut input_sections = vec![readme_required_inputs(registration.is_some())];
+    let mut input_sections = vec![readme_required_inputs(
+        registration
+            .is_some()
+            .then_some(deployment_name_default.as_str()),
+    )];
     let setup_only = stack_settings.setup_management != alien_core::SetupManagement::Automatic
         && stack
             .resources
@@ -4442,11 +4534,12 @@ Use your organization's normal backend and approval workflow. A typical local re
     )
 }
 
-fn readme_required_inputs(has_registration: bool) -> String {
-    let name = if has_registration {
-        "- `name`: optional display name. Defaults to the package name."
-    } else {
-        "- `name`: deployment name to include in the registration metadata."
+fn readme_required_inputs(deployment_name_default: Option<&str>) -> String {
+    let name = match deployment_name_default {
+        Some(default) => format!(
+            "- `name`: optional deployment name: lowercase letters, numbers, and single hyphens. Defaults to `{default}`."
+        ),
+        None => "- `name`: deployment name to include in the registration metadata: lowercase letters, numbers, and single hyphens.".to_string(),
     };
     format!("Required:\n\n- `token`: install token from the setup page.\n{name}")
 }

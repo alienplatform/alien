@@ -4,7 +4,7 @@ use alien_aws_clients::ssm::{
     DescribeParametersRequest, GetParameterRequest, ParameterStringFilter, PutParameterRequest,
     SsmApi, SsmClient,
 };
-use alien_error::{Context, ContextError};
+use alien_error::{AlienError, Context, ContextError};
 use async_trait::async_trait;
 use std::sync::Arc;
 
@@ -129,6 +129,41 @@ impl crate::traits::Vault for AwsParameterStoreVault {
             })?;
 
         Ok(())
+    }
+
+    /// Create a secret only if no parameter by its name exists (`Overwrite: false`).
+    async fn create_secret(&self, secret_name: &str, value: &str) -> Result<()> {
+        let full_name = self.full_parameter_name(secret_name);
+
+        let request = PutParameterRequest::builder()
+            .name(full_name.clone())
+            .value(value.to_string())
+            .parameter_type("SecureString".to_string())
+            .description(format!(
+                "Secret managed by deployment vault {}",
+                self.vault_prefix
+            ))
+            .overwrite(false)
+            .build();
+
+        match self.client.put_parameter(request).await {
+            Ok(_) => Ok(()),
+            Err(error)
+                if matches!(
+                    error.error,
+                    Some(alien_client_core::ErrorData::RemoteResourceConflict { .. })
+                ) =>
+            {
+                Err(AlienError::new(ErrorData::VaultSecretAlreadyExists {
+                    vault: self.vault_prefix.clone(),
+                    secret_name: secret_name.to_string(),
+                }))
+            }
+            Err(error) => Err(error).context(ErrorData::CloudPlatformError {
+                message: format!("Failed to create parameter '{}'", full_name),
+                resource_id: None,
+            }),
+        }
     }
 
     /// Delete a secret.

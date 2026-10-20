@@ -14,6 +14,13 @@ pub struct EcrArtifactRegistryBinding {
     /// Configure cache rules before enabling this; workers keep using `repositoryPrefix`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sandbox_repository_prefix: Option<BindingValue<String>>,
+    /// Repository prefixes this registry used before `repositoryPrefix`. Images already released
+    /// under them stay readable and keep their cross-account grants; nothing new is written there.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub legacy_repository_prefixes: Vec<String>,
+    /// Sandbox namespaces this registry used before `sandboxRepositoryPrefix`, read the same way.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub legacy_sandbox_repository_prefixes: Vec<String>,
     /// ARN of the IAM role for pull permissions (optional — omit for single-account)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pull_role_arn: Option<BindingValue<String>>,
@@ -92,6 +99,8 @@ impl ArtifactRegistryBinding {
     ) -> Self {
         Self::Ecr(EcrArtifactRegistryBinding {
             sandbox_repository_prefix: None,
+            legacy_repository_prefixes: Vec::new(),
+            legacy_sandbox_repository_prefixes: Vec::new(),
             repository_prefix: repository_prefix.into(),
             pull_role_arn: pull_role_arn.map(|v| v.into()),
             push_role_arn: push_role_arn.map(|v| v.into()),

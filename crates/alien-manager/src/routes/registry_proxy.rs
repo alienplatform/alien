@@ -83,6 +83,9 @@ pub struct RegistryRoutingTable {
     /// Routes sorted by prefix length descending (longest prefix match wins).
     routes: Vec<RegistryRoute>,
     sandbox_prefixes: Vec<String>,
+    /// Prefixes a registry used before its current one. Their routes serve reads of images
+    /// already released under them and are never a platform's push destination.
+    legacy_prefixes: Vec<String>,
 }
 
 impl RegistryRoutingTable {
@@ -92,16 +95,45 @@ impl RegistryRoutingTable {
 
     /// Register additional sandbox namespaces without changing the default push destination.
     pub fn with_sandbox_routes(
-        mut routes: Vec<RegistryRoute>,
+        routes: Vec<RegistryRoute>,
         sandbox_prefixes: Vec<String>,
     ) -> Result<Self, String> {
+        Self::with_legacy_routes(routes, sandbox_prefixes, Vec::new())
+    }
+
+    /// Also register read-only routes for prefixes a registry used before its current one, so
+    /// images released under them keep resolving after a rename.
+    pub fn with_legacy_routes(
+        mut routes: Vec<RegistryRoute>,
+        sandbox_prefixes: Vec<String>,
+        legacy_prefixes: Vec<String>,
+    ) -> Result<Self, String> {
         Self::validate_unique_prefixes(&routes)?;
+        if let Some(missing) = legacy_prefixes
+            .iter()
+            .find(|prefix| !routes.iter().any(|route| &route.prefix == *prefix))
+        {
+            return Err(format!(
+                "Legacy artifact registry prefix '{missing}' has no route"
+            ));
+        }
         // Sort by prefix length descending for longest-prefix match.
         routes.sort_by(|a, b| b.prefix.len().cmp(&a.prefix.len()));
         Ok(Self {
             routes,
             sandbox_prefixes,
+            legacy_prefixes,
         })
+    }
+
+    /// Whether `repo_name` resolves to a legacy route, which serves reads only.
+    pub fn is_legacy_repo(&self, repo_name: &str) -> bool {
+        self.resolve(repo_name)
+            .is_some_and(|route| self.is_legacy_route(route))
+    }
+
+    fn is_legacy_route(&self, route: &RegistryRoute) -> bool {
+        self.legacy_prefixes.contains(&route.prefix)
     }
 
     /// Find the registry route that matches the given repo name.
@@ -134,7 +166,9 @@ impl RegistryRoutingTable {
         self.routes
             .iter()
             .find(|route| {
-                route.platform == platform && self.sandbox_prefixes.contains(&route.prefix)
+                route.platform == platform
+                    && self.sandbox_prefixes.contains(&route.prefix)
+                    && !self.is_legacy_route(route)
             })
             .map(|route| route.prefix.as_str())
     }
@@ -152,17 +186,18 @@ impl RegistryRoutingTable {
     /// route registered as `Platform::Local`) and nodes pull them through this
     /// manager with the deployment's token.
     pub fn route_for_platform(&self, platform: Platform) -> Option<&RegistryRoute> {
-        if let Some(route) = self
-            .routes
-            .iter()
-            .find(|r| r.platform == platform && !self.sandbox_prefixes.contains(&r.prefix))
-        {
+        if let Some(route) = self.routes.iter().find(|r| {
+            r.platform == platform
+                && !self.sandbox_prefixes.contains(&r.prefix)
+                && !self.is_legacy_route(r)
+        }) {
             return Some(route);
         }
         match platform {
-            Platform::Kubernetes | Platform::Machines => {
-                self.routes.iter().find(|r| r.platform == Platform::Local)
-            }
+            Platform::Kubernetes | Platform::Machines => self
+                .routes
+                .iter()
+                .find(|r| r.platform == Platform::Local && !self.is_legacy_route(r)),
             _ => None,
         }
     }
@@ -175,7 +210,11 @@ impl RegistryRoutingTable {
         let mut platforms: Vec<Platform> = self
             .routes
             .iter()
-            .filter(|r| r.platform != Platform::Local && !self.sandbox_prefixes.contains(&r.prefix))
+            .filter(|r| {
+                r.platform != Platform::Local
+                    && !self.sandbox_prefixes.contains(&r.prefix)
+                    && !self.is_legacy_route(r)
+            })
             .map(|r| r.platform)
             .collect();
         platforms.dedup();
@@ -226,6 +265,9 @@ impl RegistryRoutingTable {
 fn project_id_after_prefix<'a>(repo_name: &'a str, prefix: &str) -> Option<&'a str> {
     let suffix = if prefix.is_empty() {
         repo_name
+    } else if prefix.ends_with('/') {
+        // A prefix that ends in its own separator, such as a local `artifacts/` route.
+        repo_name.strip_prefix(prefix)?
     } else {
         let rest = repo_name.strip_prefix(prefix)?;
         let first = rest.chars().next()?;
@@ -1371,6 +1413,7 @@ async fn require_push_auth(
     subject: &Subject,
     repo_name: &str,
 ) -> Result<(), RegistryRefusal> {
+    refuse_legacy_push(&state.registry_routing_table, repo_name)?;
     let project = repository_project(state, subject, repo_name).await?;
     if state.authz.can_push_image(subject, &project, repo_name) {
         Ok(())
@@ -1381,6 +1424,22 @@ async fn require_push_auth(
             "Caller cannot push images to this project.",
         ))
     }
+}
+
+/// A legacy prefix holds only images released before the registry was renamed. Writing there
+/// would publish an image nothing current names, so every push goes to the current prefix.
+fn refuse_legacy_push(
+    routes: &RegistryRoutingTable,
+    repo_name: &str,
+) -> Result<(), RegistryRefusal> {
+    if routes.is_legacy_repo(repo_name) {
+        return Err(RegistryRefusal::new(
+            StatusCode::FORBIDDEN,
+            "DENIED",
+            "Repository is under a legacy prefix, which is read-only; push under the current prefix.",
+        ));
+    }
+    Ok(())
 }
 
 /// Credentials that exist to provision or push images pull nothing. They are refused before
@@ -2992,6 +3051,86 @@ mod tests {
             project_id_after_prefix("cloud-project/artifacts/prj_123", "cloud-project/artifacts",),
             Some("prj_123")
         );
+    }
+
+    #[test]
+    fn a_renamed_registry_reads_old_names_but_writes_only_new_ones() {
+        let table = RegistryRoutingTable::with_legacy_routes(
+            vec![
+                registry_route("artifacts", Platform::Aws, "artifacts"),
+                registry_route("acme-artifacts", Platform::Aws, "artifacts"),
+                registry_route("sandbox-cache/artifacts", Platform::Aws, "artifacts"),
+                registry_route("sandbox-acme/acme-artifacts", Platform::Aws, "artifacts"),
+                registry_route("primary-artifacts", Platform::Local, "artifact-registry"),
+                registry_route(
+                    "acme-primary-artifacts",
+                    Platform::Local,
+                    "artifact-registry",
+                ),
+            ],
+            vec![
+                "sandbox-cache/artifacts".to_string(),
+                "sandbox-acme/acme-artifacts".to_string(),
+            ],
+            vec![
+                "acme-artifacts".to_string(),
+                "sandbox-acme/acme-artifacts".to_string(),
+                "acme-primary-artifacts".to_string(),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(table.prefix_for_platform(Platform::Aws), Some("artifacts"));
+        assert_eq!(
+            table.sandbox_prefix_for_platform(Platform::Aws),
+            Some("sandbox-cache/artifacts")
+        );
+        assert_eq!(
+            table.prefix_for_platform(Platform::Kubernetes),
+            Some("primary-artifacts")
+        );
+        assert_eq!(table.configured_platforms(), vec![Platform::Aws]);
+
+        for (old, new) in [
+            ("acme-artifacts-prj_a", "artifacts-prj_a"),
+            (
+                "sandbox-acme/acme-artifacts-prj_a",
+                "sandbox-cache/artifacts-prj_a",
+            ),
+            ("acme-primary-artifacts-prj_a", "primary-artifacts-prj_a"),
+        ] {
+            assert_eq!(table.project_id_for_repo(old), Some("prj_a"), "{old}");
+            assert_eq!(table.project_id_for_repo(new), Some("prj_a"), "{new}");
+            assert!(refuse_legacy_push(&table, old).is_err(), "{old}");
+            assert!(refuse_legacy_push(&table, new).is_ok(), "{new}");
+        }
+    }
+
+    #[test]
+    fn a_legacy_prefix_without_a_route_is_refused_at_construction() {
+        let result = RegistryRoutingTable::with_legacy_routes(
+            vec![registry_route("artifacts", Platform::Aws, "artifacts")],
+            Vec::new(),
+            vec!["acme-artifacts".to_string()],
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn a_route_ending_in_its_separator_names_the_project_after_it() {
+        assert_eq!(
+            project_id_after_prefix("artifacts/prj_a", "artifacts/"),
+            Some("prj_a")
+        );
+        assert_eq!(
+            project_id_after_prefix("artifacts/prj_a/worker", "artifacts/"),
+            Some("prj_a")
+        );
+        assert_eq!(
+            project_id_after_prefix("artifacts-prj_a", "artifacts/"),
+            None
+        );
+        assert_eq!(project_id_after_prefix("artifacts/", "artifacts/"), None);
     }
 
     #[test]

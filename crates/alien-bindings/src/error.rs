@@ -560,6 +560,21 @@ pub enum ErrorData {
         secret_name: String,
     },
 
+    /// A create-only write found a secret by this name already in the vault.
+    #[error(
+        code = "VAULT_SECRET_ALREADY_EXISTS",
+        message = "Secret '{secret_name}' already exists in vault '{vault}'",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    VaultSecretAlreadyExists {
+        /// Vault the secret was written to (prefix, name or URL).
+        vault: String,
+        /// Secret name in the vault's own namespace.
+        secret_name: String,
+    },
+
     /// Cloud platform API error.
     #[error(
         code = "CLOUD_PLATFORM_ERROR",

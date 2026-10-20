@@ -84,9 +84,29 @@ impl EgressTokenIssuer {
         })
     }
 
-    /// Loads the JSON value stored in the deployment's management-only vault.
-    /// Its privateKey field is standard base64 of an Ed25519 PKCS#8 DER document.
+    /// The key id tokens from this issuer carry.
+    pub fn kid(&self) -> &str {
+        &self.kid
+    }
+
+    /// Loads the JSON value stored in the deployment's management-only vault, requiring the key
+    /// id `expected_kid`. Its privateKey field is standard base64 of an Ed25519 PKCS#8 DER
+    /// document.
     pub fn from_vault_json(value: &str, expected_kid: &str) -> Result<Self> {
+        let issuer = Self::from_vault_document(value)?;
+        if issuer.kid != expected_kid {
+            return Err(invalid(
+                "vault signing key id differs from the gateway binding",
+            ));
+        }
+        Ok(issuer)
+    }
+
+    /// Loads the JSON value stored in the deployment's management-only vault, with the key id it
+    /// records. The vault holds the key the gateway configuration trusts, so a workload signing
+    /// with it needs no key id of its own: one copied into its binding goes stale when the key
+    /// changes.
+    pub fn from_vault_document(value: &str) -> Result<Self> {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase", deny_unknown_fields)]
         struct StoredKey {
@@ -95,8 +115,7 @@ impl EgressTokenIssuer {
         }
         let stored: StoredKey = serde_json::from_str(value)
             .map_err(|_| invalid("invalid signing-key vault document"))?;
-        if stored.kid != expected_kid
-            || stored.kid.is_empty()
+        if stored.kid.is_empty()
             || stored.kid.len() > 256
             || stored.kid.chars().any(char::is_control)
         {

@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::config::ManagerConfig;
+use alien_core::Platform;
 
 // ── Defaults ────────────────────────────────────────────────────────────────
 
@@ -214,10 +215,38 @@ pub struct CommandsSection {
 pub struct ImpersonationSection {
     /// AWS impersonation identity (IAM role for STS AssumeRole).
     pub aws: Option<ServiceAccountBinding>,
+    /// The AWS identity used before `aws`. Customer roles trust one managing role by ARN, so
+    /// deployments whose stacks were set up against this one are still reached through it.
+    pub previous_aws: Option<ServiceAccountBinding>,
     /// GCP impersonation identity (service account for token exchange).
     pub gcp: Option<ServiceAccountBinding>,
     /// Azure impersonation identity (managed identity or service principal).
     pub azure: Option<ServiceAccountBinding>,
+}
+
+impl ImpersonationSection {
+    /// The service account bindings a platform's target bindings provider holds, by name.
+    pub fn target_bindings(
+        &self,
+        platform: Platform,
+    ) -> Vec<(&'static str, &ServiceAccountBinding)> {
+        let (current, previous) = match platform {
+            Platform::Aws => (self.aws.as_ref(), self.previous_aws.as_ref()),
+            Platform::Gcp => (self.gcp.as_ref(), None),
+            Platform::Azure => (self.azure.as_ref(), None),
+            _ => (None, None),
+        };
+        current
+            .map(|binding| ("management", binding))
+            .into_iter()
+            .chain(previous.map(|binding| {
+                (
+                    crate::providers::impersonation_credentials::PREVIOUS_MANAGEMENT_BINDING,
+                    binding,
+                )
+            }))
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -408,6 +437,12 @@ impl ManagerTomlConfig {
 # roleName = "alien-management"
 # roleArn = "arn:aws:iam::123:role/alien-management"
 #
+# After moving to a new AWS role, keep the old one for stacks that still trust it:
+# [impersonation.previous-aws]
+# service = "awsiam"
+# roleName = "old-management"
+# roleArn = "arn:aws:iam::123:role/old-management"
+#
 # [impersonation.gcp]
 # service = "gcpserviceaccount"
 # email = "alien-management@project.iam.gserviceaccount.com"
@@ -426,6 +461,53 @@ impl ManagerTomlConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A manager that moved its AWS role holds the previous one under the binding the resolver
+    /// reaches older stacks through.
+    #[test]
+    fn a_previous_aws_identity_becomes_the_previous_management_binding() {
+        let config: ManagerTomlConfig = toml::from_str(
+            r#"
+[impersonation.aws]
+service = "awsiam"
+roleName = "new-management"
+roleArn = "arn:aws:iam::123456789012:role/new-management"
+
+[impersonation.previous-aws]
+service = "awsiam"
+roleName = "old-management"
+roleArn = "arn:aws:iam::123456789012:role/old-management"
+"#,
+        )
+        .expect("parse");
+        let names = |platform| {
+            config
+                .impersonation
+                .target_bindings(platform)
+                .into_iter()
+                .map(|(name, binding)| {
+                    (
+                        name,
+                        serde_json::to_value(binding).unwrap()["roleArn"].clone(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            names(Platform::Aws),
+            vec![
+                (
+                    "management",
+                    "arn:aws:iam::123456789012:role/new-management".into()
+                ),
+                (
+                    crate::providers::impersonation_credentials::PREVIOUS_MANAGEMENT_BINDING,
+                    "arn:aws:iam::123456789012:role/old-management".into()
+                ),
+            ]
+        );
+        assert!(names(Platform::Gcp).is_empty());
+    }
 
     #[test]
     fn default_config_round_trips_through_toml() {
