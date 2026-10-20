@@ -9497,6 +9497,11 @@
               }
             ]
           },
+          "publicSubdomain": {
+            "type": "string",
+            "description": "Subdomain to request under the generated domain, used by stores that assign one.",
+            "nullable": true
+          },
           "resourcePrefix": {
             "type": "string",
             "description": "Stable prefix for resources owned by this deployment.",

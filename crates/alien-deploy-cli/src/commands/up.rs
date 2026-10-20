@@ -224,6 +224,9 @@ pub struct UpArgs {
 struct DeployConfigFile {
     /// Deployment name.
     name: Option<String>,
+    /// Subdomain to request under the project's generated domain. The manager
+    /// validates it when the deployment is created.
+    public_subdomain: Option<String>,
     /// Target platform: aws, gcp, azure, kubernetes, machines, or local.
     platform: Option<String>,
     /// Base cloud platform when `platform = "kubernetes"`.
@@ -2637,6 +2640,66 @@ mod tests {
         assert!(config.external_bindings.has("storage"));
     }
 
+    #[tokio::test]
+    async fn deploy_config_public_subdomain_is_requested_on_initialize() {
+        let server = MockServer::start_async().await;
+        let base_url = server.base_url();
+        let resolve = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET).path("/v1/resolve");
+                then.status(200)
+                    .json_body(serde_json::json!({"managerUrl": base_url}));
+            })
+            .await;
+        // Answer only an initialize request that carries the subdomain, and
+        // stop there so nothing is tracked or deployed.
+        let initialize = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .path("/v1/initialize")
+                    .json_body_partial(r#"{"name":"subdomain-app","publicSubdomain":"eu-prod"}"#);
+                then.status(409).json_body(serde_json::json!({
+                    "code": "STOP_AFTER_INITIALIZE",
+                    "message": "stop after initialize",
+                    "retryable": false,
+                    "internal": false
+                }));
+            })
+            .await;
+        let mut file = tempfile::NamedTempFile::new().expect("temp config should be created");
+        writeln!(
+            file,
+            r#"
+name = "subdomain-app"
+publicSubdomain = "eu-prod"
+platform = "aws"
+"#
+        )
+        .expect("config should be written");
+
+        let args = UpArgs::parse_from([
+            "deploy",
+            "--config",
+            file.path().to_str().expect("temp path should be UTF-8"),
+            "--base-url",
+            &base_url,
+            "--manager-url",
+            &base_url,
+            "--token",
+            "test-subdomain-token",
+        ]);
+        let error = up_command(args, None)
+            .await
+            .expect_err("the mock stops the command after initialize");
+
+        assert!(
+            error.to_string().contains("stop after initialize"),
+            "{error:?}"
+        );
+        resolve.assert_async().await;
+        initialize.assert_async().await;
+    }
+
     #[test]
     fn deploy_config_file_accepts_public_endpoints() {
         let mut file = tempfile::NamedTempFile::new().expect("temp config should be created");
@@ -3642,6 +3705,9 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
         &stack_settings,
         stack_input_values,
         setup_item,
+        deploy_config
+            .as_ref()
+            .and_then(|config| config.public_subdomain.as_deref()),
     )
     .await?;
     let deployment_id = init.deployment_id;
@@ -6007,9 +6073,11 @@ async fn initialize_deployment(
     stack_settings: &StackSettings,
     input_values: HashMap<String, serde_json::Value>,
     setup_item: Option<SetupItem>,
+    public_subdomain: Option<&str>,
 ) -> Result<InitResult> {
     let body = alien_manager_api::types::InitializeRequest {
         name: Some(name.to_string()),
+        public_subdomain: public_subdomain.map(str::to_string),
         // Helm needs the runtime prefix before it creates workload identities.
         // Register the same prefix with the manager so its StackState and the
         // chart agree even before the Operator's first sync.

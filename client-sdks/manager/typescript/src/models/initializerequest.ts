@@ -29,6 +29,10 @@ export type InitializeRequest = {
   permission?: string | null | undefined;
   platform?: PlatformEnum | null | undefined;
   /**
+   * Subdomain to request under the generated domain, used by stores that assign one.
+   */
+  publicSubdomain?: string | null | undefined;
+  /**
    * Stable prefix for resources owned by this deployment.
    */
   resourcePrefix?: string | null | undefined;
@@ -55,6 +59,7 @@ export type InitializeRequest$Outbound = {
   name?: string | null | undefined;
   permission?: string | null | undefined;
   platform?: string | null | undefined;
+  publicSubdomain?: string | null | undefined;
   resourcePrefix?: string | null | undefined;
   scope?: string | null | undefined;
   setupItem?: string | null | undefined;
@@ -73,6 +78,7 @@ export const InitializeRequest$outboundSchema: z.ZodType<
   name: z.nullable(z.string()).optional(),
   permission: z.nullable(z.string()).optional(),
   platform: z.nullable(PlatformEnum$outboundSchema).optional(),
+  publicSubdomain: z.nullable(z.string()).optional(),
   resourcePrefix: z.nullable(z.string()).optional(),
   scope: z.nullable(z.string()).optional(),
   setupItem: z.nullable(z.string()).optional(),

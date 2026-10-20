@@ -262,6 +262,9 @@ pub struct InitializeRequest {
     /// Stable prefix for resources owned by this deployment.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resource_prefix: Option<String>,
+    /// Subdomain to request under the generated domain, used by stores that assign one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub public_subdomain: Option<String>,
     pub platform: Option<Platform>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
@@ -3401,7 +3404,7 @@ async fn initialize(
                         stack_settings: settings,
                         stack_state,
                         environment_variables,
-                        public_subdomain: None,
+                        public_subdomain: req.public_subdomain,
                         input_values,
                         setup_item: req.setup_item,
                         deployment_token: dep_token,
