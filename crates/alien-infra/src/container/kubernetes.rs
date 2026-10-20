@@ -124,31 +124,8 @@ fn gateway_mounts_config(config: &Container) -> bool {
             if alien_core::sandbox_egress::gateway_image_reads_config_files(image))
 }
 
-/// Pod template annotation carrying the gateway settings a running replica cannot refresh.
-const GATEWAY_RESTART_SETTINGS_ANNOTATION: &str = "alien.dev/egress-gateway-restart-settings";
-
-/// A mounted configuration changes without the pod template, but a running replica refuses a
-/// change to its peers. The template carries them, so such a change restarts the pods, as any
-/// configuration change did when it was in the pod's environment.
-fn with_gateway_restart_settings(
-    config: &Container,
-    namespace: &str,
-    ctx: &ResourceControllerContext<'_>,
-    annotations: Option<BTreeMap<String, String>>,
-) -> Result<Option<BTreeMap<String, String>>> {
-    if !gateway_mounts_config(config) {
-        return Ok(annotations);
-    }
-    let mut annotations = annotations.unwrap_or_default();
-    annotations.insert(
-        GATEWAY_RESTART_SETTINGS_ANNOTATION.to_string(),
-        serde_json::json!({
-            "peers": crate::sandbox::kubernetes_egress::gateway_peers(ctx, namespace)?
-        })
-        .to_string(),
-    );
-    Ok(Some(annotations))
-}
+/// Environment entry holding the gateway settings a running replica cannot refresh.
+const GATEWAY_RESTART_SETTINGS_ENV: &str = "ALIEN_EGRESS_GATEWAY_RESTART_SETTINGS";
 
 fn first_declared_container_port(config: &Container) -> Option<u16> {
     config.ports.first().map(|port| port.port)
@@ -2209,6 +2186,23 @@ impl KubernetesContainerController {
             // once and never read here; the configuration is mounted from the vault as well.
             let vault = crate::sandbox::egress::deployment_vault(ctx).await?;
             crate::sandbox::egress::create_replica_secret(vault.as_ref()).await?;
+            // A mounted configuration changes without the pods, but a running replica refuses
+            // a change to its peers. Keeping them in the pod's environment Secret makes such a
+            // change drift there, which restarts the pods, as any configuration change did
+            // when the whole configuration was in the environment.
+            let namespace = self.namespace.as_deref().ok_or_else(|| {
+                AlienError::new(ErrorData::ResourceControllerConfigError {
+                    resource_id: config.id.clone(),
+                    message: "The sandbox gateway namespace is not known yet".to_string(),
+                })
+            })?;
+            secrets.insert(
+                GATEWAY_RESTART_SETTINGS_ENV.to_string(),
+                serde_json::json!({
+                    "peers": crate::sandbox::kubernetes_egress::gateway_peers(ctx, namespace)?
+                })
+                .to_string(),
+            );
         } else if config.id == alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID {
             // An image from before mounted configuration files gets its configuration, which
             // embeds the replica secret, in its environment.
@@ -2270,12 +2264,7 @@ impl KubernetesContainerController {
                 ctx,
             )
             .await?;
-        let pod_annotations = with_gateway_restart_settings(
-            config,
-            namespace,
-            ctx,
-            pod_template_annotations(env_secret_plan, &config.environment)?,
-        )?;
+        let pod_annotations = pod_template_annotations(env_secret_plan, &config.environment)?;
 
         let deployment = Deployment {
             metadata: ObjectMeta {
@@ -2330,12 +2319,7 @@ impl KubernetesContainerController {
                 ctx,
             )
             .await?;
-        let pod_annotations = with_gateway_restart_settings(
-            config,
-            namespace,
-            ctx,
-            pod_template_annotations(env_secret_plan, &config.environment)?,
-        )?;
+        let pod_annotations = pod_template_annotations(env_secret_plan, &config.environment)?;
 
         // Build volume claim templates for persistent storage
         let mut volume_claim_templates = Vec::new();
@@ -3234,8 +3218,48 @@ mod tests {
             .await
             .expect("the replica secret is created without a read");
         assert!(!environment.contains_key("ALIEN_EGRESS_GATEWAY_CONFIG"));
+        // The settings a running replica cannot refresh stay in its environment Secret, whose
+        // drift restarts the pods.
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&environment[GATEWAY_RESTART_SETTINGS_ENV])
+                .unwrap(),
+            serde_json::json!({"peers": {"dns": "sandbox-egress-gateway-peers.test-ns.svc.corp.example", "port": 3129}})
+        );
         assert_eq!(replica_secret.hits_async().await, 1);
         assert_eq!(reads.hits_async().await, 0);
+        // The Ready pass compares them with what the pods got: a new peer address (a changed
+        // cluster domain) is drift, and drift restarts the pods.
+        let mut applied = EnvSecretRotationTracker::default();
+        applied.record(
+            environment_secret_plan_with_additional_secrets(
+                "sandbox-egress-gateway",
+                "gateway",
+                &[],
+                &environment,
+            )
+            .as_ref(),
+        );
+        assert!(!applied.drifted_with_additional_secrets(
+            "sandbox-egress-gateway",
+            "gateway",
+            &[],
+            &environment
+        ));
+        let mut moved = environment.clone();
+        moved.insert(
+            GATEWAY_RESTART_SETTINGS_ENV.to_string(),
+            serde_json::json!({"peers": {
+                "dns": "sandbox-egress-gateway-peers.test-ns.svc.other.example",
+                "port": 3129
+            }})
+            .to_string(),
+        );
+        assert!(applied.drifted_with_additional_secrets(
+            "sandbox-egress-gateway",
+            "gateway",
+            &[],
+            &moved
+        ));
 
         let pod = controller
             .build_deployment(
@@ -3316,24 +3340,6 @@ mod tests {
         assert!(!environment
             .iter()
             .any(|variable| variable.name == "ALIEN_EGRESS_GATEWAY_CONFIG"));
-        // The settings a running replica cannot refresh are in the pod template, so a change to
-        // them restarts the pods.
-        let template = controller
-            .build_deployment(&gateway, "gateway", "test-ns", "gateway-sa", None, None, &ctx)
-            .await
-            .unwrap()
-            .spec
-            .unwrap()
-            .template;
-        let annotation: serde_json::Value = serde_json::from_str(
-            &template.metadata.unwrap().annotations.unwrap()[GATEWAY_RESTART_SETTINGS_ANNOTATION],
-        )
-        .unwrap();
-        assert_eq!(
-            annotation,
-            serde_json::json!({"peers": {"dns": "sandbox-egress-gateway-peers.test-ns.svc.corp.example", "port": 3129}})
-        );
-
         // The pinned image from before: configuration in the environment, read by the controller.
         let earlier = gateway_container(
             "ghcr.io/alienplatform/alien-egress-gateway@sha256:8538880f99141888e54bedc7d290194dfee5bfe11910266b309dde53de2601b0",
