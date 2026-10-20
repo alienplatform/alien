@@ -15,13 +15,24 @@ use alien_aws_clients::secrets_manager::{
 };
 #[cfg(feature = "aws")]
 use alien_client_core::ErrorData as CloudError;
-#[cfg(feature = "aws")]
+#[cfg(any(feature = "aws", feature = "azure", feature = "kubernetes"))]
 use sha2::{Digest, Sha256};
 
 use crate::{ErrorData, Result};
 
 pub(crate) const SIGNING_KEY: &str = "sandbox-egress-signing-key";
 pub(crate) const GATEWAY_CONFIG: &str = "sandbox-egress-gateway-config";
+/// The secrets-vault entry holding the gateway's replica secret on Azure and Kubernetes. Its
+/// writer never reads it back; only the gateway does. AWS keeps it in Secrets Manager instead.
+#[cfg(any(feature = "azure", feature = "kubernetes"))]
+pub(crate) const REPLICA_SECRET: &str = alien_core::sandbox_egress::SANDBOX_EGRESS_REPLICA_SECRET;
+/// Where a Kubernetes gateway pod mounts the Secret holding its configuration. The file is the
+/// Secret's `value` key, which the kubelet keeps current.
+#[cfg(feature = "kubernetes")]
+pub(crate) const KUBERNETES_CONFIG_DIR: &str = "/etc/alien/egress-gateway/config";
+/// Where a Kubernetes gateway pod mounts the Secret holding its replica secret.
+#[cfg(feature = "kubernetes")]
+pub(crate) const KUBERNETES_REPLICA_SECRET_DIR: &str = "/etc/alien/egress-gateway/replica-secret";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -71,17 +82,11 @@ fn new_signing_key() -> Result<(String, GatewayPublicKey)> {
 /// policy is signed with it, and the managing identity cannot recover its public half without
 /// reading the private key, so a caller that lost the public half fails here instead of
 /// rotating the deployment's key.
-#[cfg(feature = "aws")]
+#[cfg(any(feature = "aws", feature = "azure", feature = "kubernetes"))]
 pub(crate) async fn create_signing_key(vault: &dyn Vault) -> Result<GatewayPublicKey> {
-    let (value, public) = new_signing_key()?;
-    match vault.create_secret(SIGNING_KEY, &value).await {
-        Ok(()) => Ok(public),
-        Err(error)
-            if matches!(
-                error.error,
-                Some(alien_bindings::ErrorData::VaultSecretAlreadyExists { .. })
-            ) =>
-        {
+    match try_create_signing_key(vault).await? {
+        Some(public) => Ok(public),
+        None => {
             Err(AlienError::new(ErrorData::ResourceConfigInvalid {
                 message: format!(
                     "The deployment's sandbox egress signing key '{SIGNING_KEY}' already exists, but \
@@ -94,6 +99,24 @@ pub(crate) async fn create_signing_key(vault: &dyn Vault) -> Result<GatewayPubli
                 resource_id: Some(alien_core::SECRETS_VAULT_ID.into()),
             }))
         }
+    }
+}
+
+/// Writes a new signing key unless the vault already holds one, and returns its public half; an
+/// existing key is left unchanged and answered with `None`. Nothing is read.
+#[cfg(any(feature = "aws", feature = "azure", feature = "kubernetes"))]
+pub(crate) async fn try_create_signing_key(vault: &dyn Vault) -> Result<Option<GatewayPublicKey>> {
+    let (value, public) = new_signing_key()?;
+    match vault.create_secret(SIGNING_KEY, &value).await {
+        Ok(()) => Ok(Some(public)),
+        Err(error)
+            if matches!(
+                error.error,
+                Some(alien_bindings::ErrorData::VaultSecretAlreadyExists { .. })
+            ) =>
+        {
+            Ok(None)
+        }
         Err(error) => Err(error).context(ErrorData::ResourceConfigInvalid {
             message: "Failed to initialize the sandbox egress signing key".into(),
             resource_id: Some(alien_core::SECRETS_VAULT_ID.into()),
@@ -101,35 +124,8 @@ pub(crate) async fn create_signing_key(vault: &dyn Vault) -> Result<GatewayPubli
     }
 }
 
-/// Called only by the setup-aware shared-key owner. Other Sandbox
-/// controllers depend on that owner, so initialization has exactly one writer.
-/// A retry reads the accepted write instead of rotating the deployment's key. AWS uses
-/// [`create_signing_key`] instead, which never reads the private key.
-pub(crate) async fn ensure_signing_key(vault: &dyn Vault) -> Result<GatewayPublicKey> {
-    match vault.get_secret(SIGNING_KEY).await {
-        Ok(value) => public_key(&value),
-        Err(error)
-            if matches!(
-                error.error,
-                Some(alien_bindings::ErrorData::VaultSecretNotFound { .. })
-            ) =>
-        {
-            let (value, public) = new_signing_key()?;
-            vault.set_secret(SIGNING_KEY, &value).await.context(
-                ErrorData::ResourceConfigInvalid {
-                    message: "Failed to initialize the sandbox egress signing key".into(),
-                    resource_id: Some(alien_core::SECRETS_VAULT_ID.into()),
-                },
-            )?;
-            Ok(public)
-        }
-        Err(error) => Err(error).context(ErrorData::ResourceConfigInvalid {
-            message: "Failed to read the sandbox egress signing key".into(),
-            resource_id: Some(alien_core::SECRETS_VAULT_ID.into()),
-        }),
-    }
-}
-
+/// Reads the private key to derive its public half. Only Kubernetes calls it, once, for a
+/// deployment whose key predates the public half being kept in controller state.
 pub(crate) async fn read_signing_public_key(vault: &dyn Vault) -> Result<GatewayPublicKey> {
     let value = vault
         .get_secret(SIGNING_KEY)
@@ -165,61 +161,55 @@ mod tests {
     use super::*;
     use alien_bindings::providers::vault::LocalVault;
 
-    /// The safety net under re-registration: an existing signing key is never replaced.
-    #[cfg(feature = "aws")]
+    /// The safety net under re-registration: an existing signing key is never replaced, and the
+    /// key the vault holds stays the one its recorded public half belongs to.
+    #[cfg(any(feature = "aws", feature = "azure", feature = "kubernetes"))]
     #[tokio::test]
     async fn an_existing_signing_key_is_never_replaced() {
         let directory = tempfile::tempdir().unwrap();
         let vault = LocalVault::new("secrets".into(), directory.path().into());
 
-        create_signing_key(&vault).await.expect("a new deployment gets a key");
+        let key = create_signing_key(&vault)
+            .await
+            .expect("a new deployment gets a key");
         let in_use = vault.get_secret(SIGNING_KEY).await.unwrap();
+        assert_eq!(read_signing_public_key(&vault).await.unwrap(), key);
+        assert_eq!(try_create_signing_key(&vault).await.unwrap(), None);
         let error = create_signing_key(&vault)
             .await
             .expect_err("an existing key must not be replaced");
         assert!(error.message.contains("is not replaced"), "{}", error.message);
         assert_eq!(vault.get_secret(SIGNING_KEY).await.unwrap(), in_use);
-    }
-
-    #[tokio::test]
-    async fn resumed_initialization_keeps_the_original_signing_key() {
-        let directory = tempfile::tempdir().unwrap();
-        let vault = LocalVault::new("secrets".into(), directory.path().into());
-        let first = ensure_signing_key(&vault).await.unwrap();
-        let before = vault.get_secret(SIGNING_KEY).await.unwrap();
-        let version = vault.secret_presence(SIGNING_KEY).await.unwrap();
-        assert_eq!(ensure_signing_key(&vault).await.unwrap(), first);
-        assert_eq!(read_signing_public_key(&vault).await.unwrap(), first);
-        assert_eq!(vault.get_secret(SIGNING_KEY).await.unwrap(), before);
-        assert_eq!(vault.secret_presence(SIGNING_KEY).await.unwrap(), version);
-        alien_bindings::sandbox_egress_token::EgressTokenIssuer::from_vault_json(
-            &before, &first.kid,
-        )
-        .unwrap();
-        let public = serde_json::to_string(&first).unwrap();
-        let stored: StoredSigningKey = serde_json::from_str(&before).unwrap();
+        alien_bindings::sandbox_egress_token::EgressTokenIssuer::from_vault_json(&in_use, &key.kid)
+            .unwrap();
+        let public = serde_json::to_string(&key).unwrap();
+        let stored: StoredSigningKey = serde_json::from_str(&in_use).unwrap();
         assert!(!public.contains(&stored.private_key));
         assert!(!public.contains("privateKey"));
     }
 
     #[tokio::test]
-    async fn corrupt_key_fails_without_overwriting_or_echoing_the_secret() {
+    async fn corrupt_key_fails_without_echoing_the_secret() {
         let directory = tempfile::tempdir().unwrap();
         let vault = LocalVault::new("secrets".into(), directory.path().into());
         let secret = r#"{"kid":"one","privateKey":"test-secret-not-a-key"}"#;
         vault.set_secret(SIGNING_KEY, secret).await.unwrap();
-        let error = ensure_signing_key(&vault).await.unwrap_err();
+        let error = read_signing_public_key(&vault).await.unwrap_err();
         assert!(!format!("{error:?}").contains("test-secret-not-a-key"));
         assert_eq!(vault.get_secret(SIGNING_KEY).await.unwrap(), secret);
     }
 
+    /// The embedded path, for gateways that still embed their secret: a change keeps the secret,
+    /// an unchanged configuration is not written again.
+    #[cfg(any(feature = "aws", feature = "kubernetes"))]
     #[tokio::test]
     async fn gateway_replica_secret_survives_retry_and_audience_changes() {
         let directory = tempfile::tempdir().unwrap();
         let vault = LocalVault::new("secrets".into(), directory.path().into());
         let config =
             serde_json::json!({"audiences":["first"],"peers":{"dns":"gateway.svc","port":3129}});
-        publish_gateway_config(&vault, config.clone())
+        let mut published = None;
+        publish_changed_gateway_config(&vault, config.clone(), &mut published)
             .await
             .unwrap();
         let initial = vault.get_secret(GATEWAY_CONFIG).await.unwrap();
@@ -232,15 +222,19 @@ mod tests {
             32
         );
         let version = vault.secret_presence(GATEWAY_CONFIG).await.unwrap();
-        publish_gateway_config(&vault, config).await.unwrap();
+        // A retry that lost its digest reads the entry and writes nothing new.
+        publish_changed_gateway_config(&vault, config, &mut None)
+            .await
+            .unwrap();
         assert_eq!(vault.get_secret(GATEWAY_CONFIG).await.unwrap(), initial);
         assert_eq!(
             vault.secret_presence(GATEWAY_CONFIG).await.unwrap(),
             version
         );
-        publish_gateway_config(
+        publish_changed_gateway_config(
             &vault,
             serde_json::json!({"audiences":["first","second"],"peers":{"dns":"gateway.svc","port":3129}}),
+            &mut published,
         )
         .await
         .unwrap();
@@ -250,15 +244,17 @@ mod tests {
         assert_eq!(changed["audiences"], serde_json::json!(["first", "second"]));
     }
 
+    #[cfg(any(feature = "aws", feature = "kubernetes"))]
     #[tokio::test]
     async fn corrupt_replica_secret_fails_without_rotation_or_disclosure() {
         let directory = tempfile::tempdir().unwrap();
         let vault = LocalVault::new("secrets".into(), directory.path().into());
         let invalid = r#"{"replicaSecret":"private-invalid-fixture"}"#;
         vault.set_secret(GATEWAY_CONFIG, invalid).await.unwrap();
-        let error = publish_gateway_config(&vault, serde_json::json!({"audiences":[]}))
-            .await
-            .unwrap_err();
+        let error =
+            publish_changed_gateway_config(&vault, serde_json::json!({"audiences":[]}), &mut None)
+                .await
+                .unwrap_err();
         assert!(!format!("{error:?}").contains("private-invalid-fixture"));
         assert_eq!(vault.get_secret(GATEWAY_CONFIG).await.unwrap(), invalid);
     }
@@ -393,7 +389,7 @@ pub(crate) async fn delete_shared_secrets(vault: &dyn Vault, vault_name: &str) -
     Ok(())
 }
 
-#[cfg(feature = "aws")]
+#[cfg(any(feature = "aws", feature = "kubernetes"))]
 fn is_access_denied(error: &AlienError<alien_bindings::ErrorData>) -> bool {
     let denied = |code: &str, status: Option<u16>| {
         code == "REMOTE_ACCESS_DENIED" || matches!(status, Some(401 | 403))
@@ -486,11 +482,16 @@ pub(crate) async fn publish_aws_config(
     // A sandbox that does not own the entry publishes nothing and forgets its digest: the owner
     // may rewrite the entry, so the digest says nothing about what is stored if this sandbox
     // becomes the owner again.
-    let Some(mut value) = gateway_config(ctx, key, &facts.vpc_cidrs) else {
+    let Some(value) = gateway_config(ctx, key, &facts.vpc_cidrs) else {
         *published = None;
         return Ok(());
     };
-    if !*replica_secret_ready && gateway_reads_replica_secret_source(ctx) {
+    if !*replica_secret_ready
+        && gateway_runs(
+            ctx,
+            alien_core::sandbox_egress::gateway_image_reads_replica_secret_source,
+        )
+    {
         *replica_secret_ready = ensure_aws_replica_secret(ctx).await?;
     }
     let vault = deployment_vault(ctx).await?;
@@ -500,22 +501,15 @@ pub(crate) async fn publish_aws_config(
         }
         return publish_changed_gateway_config(vault.as_ref(), value, published).await;
     }
-    value["replicaSecretSource"] = serde_json::json!({
-        "awsSecretsManager": {"secretId": replica_secret_name(ctx.resource_prefix)}
-    });
-    let digest = config_digest(&value);
-    if published.as_deref() == Some(digest.as_str()) {
-        return Ok(());
-    }
-    vault
-        .set_secret(GATEWAY_CONFIG, &value.to_string())
-        .await
-        .context(ErrorData::ResourceConfigInvalid {
-            message: "Failed to publish the sandbox gateway configuration".into(),
-            resource_id: Some(alien_core::SECRETS_VAULT_ID.into()),
-        })?;
-    *published = Some(digest);
-    Ok(())
+    write_sourced_config(
+        vault.as_ref(),
+        value,
+        serde_json::json!({
+            "awsSecretsManager": {"secretId": replica_secret_name(ctx.resource_prefix)}
+        }),
+        published,
+    )
+    .await
 }
 
 /// `{resource prefix}-sandbox-egress-replica-secret`.
@@ -527,22 +521,22 @@ pub(crate) fn replica_secret_name(resource_prefix: &str) -> String {
     )
 }
 
-/// Whether every gateway replica runs, or will start on, an image that reads its replica secret
-/// from a source. A running gateway is judged by the image it runs, with no roll in progress. A
-/// gateway that has never run has no replica holding an embedded secret, so the image it is
-/// starting on decides; before it is in the state at all, the desired stack's image does. A
-/// fresh install therefore never needs the stored configuration, which the managing identity
-/// may not read.
-#[cfg(feature = "aws")]
-fn gateway_reads_replica_secret_source(ctx: &crate::core::ResourceControllerContext<'_>) -> bool {
+/// Whether every gateway replica runs, or will start on, an image `capable` accepts. A running
+/// gateway is judged by the image it runs, with no roll in progress. A gateway that has never
+/// run has no replica holding an embedded secret, so the image it is starting on decides; before
+/// it is in the state at all, the desired stack's image does. A fresh install therefore never
+/// needs the stored configuration, which the managing identity does not read.
+#[cfg(any(feature = "aws", feature = "kubernetes"))]
+pub(crate) fn gateway_runs(
+    ctx: &crate::core::ResourceControllerContext<'_>,
+    capable: fn(&str) -> bool,
+) -> bool {
     use alien_core::ResourceStatus::{Pending, ProvisionFailed, Provisioning, Running};
-    let reads_source = |config: &alien_core::Resource| {
+    let accepts = |config: &alien_core::Resource| {
         config
             .downcast_ref::<alien_core::Container>()
             .is_some_and(|gateway| match &gateway.code {
-                alien_core::ContainerCode::Image { image } => {
-                    alien_core::sandbox_egress::gateway_image_reads_replica_secret_source(image)
-                }
+                alien_core::ContainerCode::Image { image } => capable(image),
                 _ => false,
             })
     };
@@ -554,20 +548,20 @@ fn gateway_reads_replica_secret_source(ctx: &crate::core::ResourceControllerCont
                 Running | Pending | Provisioning | ProvisionFailed
             ) =>
         {
-            reads_source(&state.config)
+            accepts(&state.config)
         }
         Some(_) => false,
         None => ctx
             .desired_stack
             .resources
             .get(id)
-            .is_some_and(|entry| reads_source(&entry.config)),
+            .is_some_and(|entry| accepts(&entry.config)),
     }
 }
 
 /// Whether the gateway has not been created yet: no replica holds a replica secret.
-#[cfg(feature = "aws")]
-fn gateway_not_created(ctx: &crate::core::ResourceControllerContext<'_>) -> bool {
+#[cfg(any(feature = "aws", feature = "kubernetes"))]
+pub(crate) fn gateway_not_created(ctx: &crate::core::ResourceControllerContext<'_>) -> bool {
     ctx.state
         .resources
         .get(alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID)
@@ -660,9 +654,9 @@ pub(crate) async fn delete_aws_replica_secret(
 
 /// The first configuration of a gateway that has not been created and embeds its replica
 /// secret: no replica holds a secret yet, so it carries a new one and is written without reading
-/// the stored entry, which setup forbids the managing identity to read. A later change to it
-/// needs that read ([`publish_gateway_config`]) until the gateway reads its secret from a source.
-#[cfg(feature = "aws")]
+/// the stored entry. A later change to it needs that read ([`publish_changed_gateway_config`])
+/// until the gateway reads its secret from a source.
+#[cfg(any(feature = "aws", feature = "kubernetes"))]
 pub(crate) async fn publish_new_gateway_config(
     vault: &dyn Vault,
     mut value: serde_json::Value,
@@ -699,9 +693,9 @@ pub(crate) async fn publish_new_gateway_config(
 
 /// Publishes `value`, carrying the replica secret the stored configuration embeds, unless its
 /// digest equals `published`, then records the new digest. Only a changed configuration touches
-/// the vault. When setup has removed the managing identity's read, the change is deferred, never
+/// the vault. When the managing identity may not read the entry, the change is deferred, never
 /// failed: see the comment below.
-#[cfg(feature = "aws")]
+#[cfg(any(feature = "aws", feature = "kubernetes"))]
 pub(crate) async fn publish_changed_gateway_config(
     vault: &dyn Vault,
     value: serde_json::Value,
@@ -717,7 +711,7 @@ pub(crate) async fn publish_changed_gateway_config(
         StoredConfig::ReadDenied => {
             // Setup removed the managing identity's read while the gateway still embeds its
             // replica secret. Failing here would keep this sandbox from Running, and the gateway
-            // rolls to an image that reads its secret from the source only after that: a
+            // rolls to an image that reads its secret from a source only after that: a
             // deadlock. So the change waits. The gateway keeps serving the last configuration
             // it loaded, and once it runs a source-reading image the next pass publishes the
             // current configuration without a read. The digest stays unchanged so that pass
@@ -725,7 +719,7 @@ pub(crate) async fn publish_changed_gateway_config(
             tracing::warn!(
                 reason = "gateway config deferred",
                 "Deferred the sandbox gateway configuration change until the gateway reads its \
-                 replica secret from Secrets Manager; it keeps serving its current configuration"
+                 replica secret from a source; it keeps serving its current configuration"
             );
             return Ok(());
         }
@@ -735,24 +729,222 @@ pub(crate) async fn publish_changed_gateway_config(
     Ok(())
 }
 
-/// Digest of a gateway configuration as this controller renders it, before the replica secret
-/// is added. It identifies what was published without holding anything secret.
-#[cfg(feature = "aws")]
+/// Publishes `value` naming the replica secret `source`, without reading anything, unless its
+/// digest equals `published`. The gateway reads the secret with its own access; the configuration
+/// carries none.
+#[cfg(any(feature = "aws", feature = "azure", feature = "kubernetes"))]
+pub(crate) async fn write_sourced_config(
+    vault: &dyn Vault,
+    mut value: serde_json::Value,
+    source: serde_json::Value,
+    published: &mut Option<String>,
+) -> Result<()> {
+    value
+        .as_object_mut()
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "The sandbox gateway configuration must be an object".into(),
+                resource_id: Some(alien_core::SECRETS_VAULT_ID.into()),
+            })
+        })?
+        .insert("replicaSecretSource".into(), source);
+    let digest = config_digest(&value);
+    if published.as_deref() == Some(digest.as_str()) {
+        return Ok(());
+    }
+    vault
+        .set_secret(GATEWAY_CONFIG, &value.to_string())
+        .await
+        .context(ErrorData::ResourceConfigInvalid {
+            message: "Failed to publish the sandbox gateway configuration".into(),
+            resource_id: Some(alien_core::SECRETS_VAULT_ID.into()),
+        })?;
+    *published = Some(digest);
+    Ok(())
+}
+
+/// Writes the gateway's replica secret to the secrets vault once, with a value its writer never
+/// reads back; an existing one is kept. Every replica must read the same value, so it is never
+/// replaced.
+#[cfg(any(feature = "azure", feature = "kubernetes"))]
+pub(crate) async fn create_replica_secret(vault: &dyn Vault) -> Result<()> {
+    // 44 printable characters; the gateway keys on the SHA-256 of the stored string.
+    let value = STANDARD.encode(ed25519_compact::Seed::generate().as_ref());
+    match vault.create_secret(REPLICA_SECRET, &value).await {
+        Ok(()) => Ok(()),
+        Err(error)
+            if matches!(
+                error.error,
+                Some(alien_bindings::ErrorData::VaultSecretAlreadyExists { .. })
+            ) =>
+        {
+            Ok(())
+        }
+        Err(error) => Err(error).context(ErrorData::ResourceConfigInvalid {
+            message: "Failed to create the sandbox gateway replica secret".into(),
+            resource_id: Some(alien_core::SECRETS_VAULT_ID.into()),
+        }),
+    }
+}
+
+/// Digest of a gateway configuration as this controller renders it, without any embedded
+/// replica secret. It identifies what was published without holding anything secret.
+#[cfg(any(feature = "aws", feature = "azure", feature = "kubernetes"))]
 fn config_digest(value: &serde_json::Value) -> String {
     format!("{:x}", Sha256::digest(value.to_string().as_bytes()))
 }
 
+/// Publishes the Azure gateway configuration. No Azure gateway has ever embedded its replica
+/// secret, so the configuration always names the vault entry the gateway reads, which the owner
+/// writes once and never reads. Nothing in the vault is read.
 #[cfg(feature = "azure")]
-pub(crate) async fn publish_config(
+pub(crate) async fn publish_azure_config(
     ctx: &crate::core::ResourceControllerContext<'_>,
     key: &GatewayPublicKey,
     vpc_cidrs: &[String],
+    published: &mut Option<String>,
+    replica_secret_ready: &mut bool,
 ) -> Result<()> {
     let Some(value) = gateway_config(ctx, key, vpc_cidrs) else {
+        *published = None;
         return Ok(());
     };
     let vault = deployment_vault(ctx).await?;
-    publish_gateway_config(vault.as_ref(), value).await
+    if !*replica_secret_ready {
+        create_replica_secret(vault.as_ref()).await?;
+        *replica_secret_ready = true;
+    }
+    write_sourced_config(
+        vault.as_ref(),
+        value,
+        serde_json::json!({"vault": {"binding": alien_core::SECRETS_VAULT_ID, "key": REPLICA_SECRET}}),
+        published,
+    )
+    .await
+}
+
+/// A sandbox controller that keeps the deployment signing key's public half in its state.
+#[cfg(any(feature = "aws", feature = "azure", feature = "kubernetes"))]
+pub(crate) trait RecordsEgressKey:
+    crate::core::ResourceController + serde::de::DeserializeOwned + 'static
+{
+    fn egress_public_key(&self) -> Option<&GatewayPublicKey>;
+}
+
+/// The signing key's public half as the owner sandbox recorded it. Every other internet sandbox
+/// depends on the owner, so the owner has initialized it first; the vault is not read.
+#[cfg(any(feature = "aws", feature = "azure", feature = "kubernetes"))]
+pub(crate) fn owner_public_key<C: RecordsEgressKey>(
+    ctx: &crate::core::ResourceControllerContext<'_>,
+    owner: &str,
+) -> Result<GatewayPublicKey> {
+    let not_ready = || {
+        AlienError::new(ErrorData::DependencyNotReady {
+            resource_id: ctx.desired_config.id().to_string(),
+            dependency_id: owner.to_string(),
+        })
+    };
+    let state = ctx
+        .state
+        .resources
+        .get(owner)
+        .filter(|state| state.internal_state.is_some())
+        .ok_or_else(not_ready)?;
+    state
+        .get_internal_controller_typed::<C>()?
+        .egress_public_key()
+        .cloned()
+        .ok_or_else(not_ready)
+}
+
+/// A key another internet sandbox of this deployment already recorded, for an owner that has
+/// none: one added with a lower id than the previous owner, or one whose state was replaced.
+/// Adopting it keeps every sandbox and the gateway on the key the vault holds.
+#[cfg(any(feature = "aws", feature = "azure", feature = "kubernetes"))]
+pub(crate) fn recorded_public_key<C: RecordsEgressKey>(
+    ctx: &crate::core::ResourceControllerContext<'_>,
+) -> Result<Option<GatewayPublicKey>> {
+    let mut peers: Vec<_> = ctx
+        .state
+        .resources
+        .iter()
+        .filter(|(id, resource)| {
+            id.as_str() != ctx.desired_config.id()
+                && resource.status != alien_core::ResourceStatus::Deleted
+                && resource.internal_state.is_some()
+                && resource
+                    .config
+                    .downcast_ref::<alien_core::Sandbox>()
+                    .is_some_and(|sandbox| {
+                        matches!(sandbox.egress, alien_core::SandboxEgress::Internet)
+                    })
+        })
+        .collect();
+    peers.sort_by(|(left, _), (right, _)| left.cmp(right));
+    for (_, peer) in peers {
+        if let Some(key) = peer
+            .get_internal_controller_typed::<C>()?
+            .egress_public_key()
+        {
+            return Ok(Some(key.clone()));
+        }
+    }
+    Ok(None)
+}
+
+/// The name of the Kubernetes Secret that holds `entry` of the deployment secrets vault, which
+/// must live in `namespace` for a pod there to mount it.
+#[cfg(feature = "kubernetes")]
+pub(crate) fn kubernetes_vault_secret_name(
+    ctx: &crate::core::ResourceControllerContext<'_>,
+    namespace: &str,
+    entry: &str,
+) -> Result<String> {
+    let missing = || {
+        AlienError::new(ErrorData::DependencyNotReady {
+            resource_id: ctx.desired_config.id().to_string(),
+            dependency_id: alien_core::SECRETS_VAULT_ID.into(),
+        })
+    };
+    let invalid = |message: &str| {
+        AlienError::new(ErrorData::ResourceConfigInvalid {
+            message: message.into(),
+            resource_id: Some(alien_core::SECRETS_VAULT_ID.into()),
+        })
+    };
+    let params = ctx
+        .state
+        .resources
+        .get(alien_core::SECRETS_VAULT_ID)
+        .ok_or_else(missing)?
+        .get_internal_controller()?
+        .ok_or_else(missing)?
+        .get_binding_params()?
+        .ok_or_else(missing)?;
+    let binding: alien_core::bindings::VaultBinding = serde_json::from_value(params)
+        .map_err(|_| invalid("The deployment secrets vault binding is not a vault binding"))?;
+    let alien_core::bindings::VaultBinding::KubernetesSecret(binding) = binding else {
+        return Err(invalid(
+            "The Kubernetes sandbox gateway needs the deployment secrets vault in Kubernetes Secrets",
+        ));
+    };
+    let (
+        alien_core::bindings::BindingValue::Value(vault_namespace),
+        alien_core::bindings::BindingValue::Value(prefix),
+    ) = (&binding.namespace, &binding.vault_prefix)
+    else {
+        return Err(invalid(
+            "The deployment secrets vault binding must name its namespace and prefix",
+        ));
+    };
+    if vault_namespace != namespace {
+        return Err(invalid(
+            "The sandbox gateway can mount only Secrets of its own namespace, and the deployment secrets vault is in another one",
+        ));
+    }
+    Ok(alien_core::vault_naming::kubernetes_secret_name(
+        prefix, entry,
+    ))
 }
 
 /// The configuration the shared-key owner publishes, without the replica secret. Other
@@ -805,17 +997,16 @@ fn gateway_config(
 }
 
 /// The stored gateway configuration, as the managing identity can see it.
-#[cfg(any(feature = "aws", feature = "azure", feature = "kubernetes", test))]
+#[cfg(any(feature = "aws", feature = "kubernetes"))]
 enum StoredConfig {
     Present(String),
     Missing,
-    /// Setup removed the managing identity's read: the gateway reads its replica secret from
-    /// its source once it runs an image that can.
-    #[cfg(feature = "aws")]
+    /// The managing identity may not read it: the gateway reads its replica secret from a
+    /// source once it runs an image that can.
     ReadDenied,
 }
 
-#[cfg(any(feature = "aws", feature = "azure", feature = "kubernetes", test))]
+#[cfg(any(feature = "aws", feature = "kubernetes"))]
 async fn read_stored_config(vault: &dyn Vault) -> Result<StoredConfig> {
     match vault.get_secret(GATEWAY_CONFIG).await {
         Ok(current) => Ok(StoredConfig::Present(current)),
@@ -827,7 +1018,6 @@ async fn read_stored_config(vault: &dyn Vault) -> Result<StoredConfig> {
         {
             Ok(StoredConfig::Missing)
         }
-        #[cfg(feature = "aws")]
         Err(error) if is_access_denied(&error) => Ok(StoredConfig::ReadDenied),
         Err(error) => Err(error).context(ErrorData::ResourceConfigInvalid {
             message: "Failed to read the sandbox gateway configuration".into(),
@@ -836,30 +1026,9 @@ async fn read_stored_config(vault: &dyn Vault) -> Result<StoredConfig> {
     }
 }
 
-/// Only the shared-key owner publishes this entry. The replica secret stays in the
-/// vault and never enters controller state, bindings, logs or generated packages.
-#[cfg(any(feature = "aws", feature = "azure", feature = "kubernetes", test))]
-pub(crate) async fn publish_gateway_config(
-    vault: &dyn Vault,
-    value: serde_json::Value,
-) -> Result<()> {
-    let current = match read_stored_config(vault).await? {
-        StoredConfig::Present(current) => Some(current),
-        StoredConfig::Missing => None,
-        #[cfg(feature = "aws")]
-        StoredConfig::ReadDenied => {
-            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: "The sandbox gateway configuration can no longer be read to carry its replica secret forward. Roll the sandbox gateway to an image that reads its replica secret from Secrets Manager; the configuration cannot change until then.".into(),
-                resource_id: Some(alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.into()),
-            }))
-        }
-    };
-    write_embedded_config(vault, value, current).await
-}
-
 /// Writes `value` with the replica secret the stored configuration `current` embeds, or a new
 /// one when nothing is stored.
-#[cfg(any(feature = "aws", feature = "azure", feature = "kubernetes", test))]
+#[cfg(any(feature = "aws", feature = "kubernetes"))]
 async fn write_embedded_config(
     vault: &dyn Vault,
     mut value: serde_json::Value,

@@ -1,6 +1,7 @@
 //! Atomic configuration snapshots with a bounded last-good window.
 use std::{
     net::SocketAddr,
+    path::PathBuf,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, RwLock,
@@ -32,8 +33,20 @@ use crate::{
     store::PolicyStore,
 };
 
+/// Where a refreshing gateway reads its configuration.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ConfigSource {
+    /// The `sandbox-egress-gateway-config` entry of the `secrets` vault binding, read with the
+    /// gateway's own identity.
+    Vault,
+    /// A file someone else keeps current, such as a Kubernetes Secret the kubelet mounts into the
+    /// pod and updates in place. The gateway needs no identity to read it.
+    File(PathBuf),
+}
+
 /// One consistent config/key/policy-store snapshot per request.
 pub struct LiveGateway {
+    source: ConfigSource,
     stopping: AtomicBool,
     current: RwLock<(Arc<Gateway>, Option<Instant>)>,
     accepted: Arc<AtomicU64>,
@@ -44,12 +57,20 @@ pub struct LiveGateway {
 }
 
 impl LiveGateway {
+    /// A gateway that refreshes from the `secrets` vault binding.
     pub fn new(gateway: Gateway) -> Self {
-        Self::with_deadline(gateway, Some(Instant::now()))
+        Self::refreshing(gateway, ConfigSource::Vault)
     }
 
-    fn with_deadline(gateway: Gateway, loaded: Option<Instant>) -> Self {
+    /// A gateway that refreshes from `source`, serving its last good configuration for at most
+    /// [`MAX_CONFIG_AGE`] while the source cannot be read.
+    pub fn refreshing(gateway: Gateway, source: ConfigSource) -> Self {
+        Self::with_deadline(gateway, source, Some(Instant::now()))
+    }
+
+    fn with_deadline(gateway: Gateway, source: ConfigSource, loaded: Option<Instant>) -> Self {
         Self {
+            source,
             stopping: AtomicBool::new(false),
             connections: gateway.connections.clone(),
             policies: gateway.policies.clone(),
@@ -62,7 +83,7 @@ impl LiveGateway {
 
     /// Explicit local configuration has no refresh source or stale deadline.
     pub fn static_config(gateway: Gateway) -> Self {
-        Self::with_deadline(gateway, None)
+        Self::with_deadline(gateway, ConfigSource::Vault, None)
     }
 
     pub fn stop(&self) {
@@ -82,7 +103,7 @@ impl LiveGateway {
     /// Poll only the rendered public config entry, never the signing-key entry.
     pub async fn refresh(&self, bindings: &Arc<Bindings>) -> Result<()> {
         let result = tokio::time::timeout(Duration::from_secs(10), async {
-            let encoded = read_vault_config(bindings).await?;
+            let encoded = read_config(bindings, &self.source).await?;
             let (previous_secrets, previous_sourced) = {
                 let current = self
                     .current
@@ -151,6 +172,17 @@ impl LiveGateway {
             }
             Err(error) => Err(error),
         }
+    }
+}
+
+/// Reads the configuration from `source`.
+pub async fn read_config(bindings: &Bindings, source: &ConfigSource) -> Result<String> {
+    match source {
+        ConfigSource::Vault => read_vault_config(bindings).await,
+        ConfigSource::File(path) => tokio::fs::read_to_string(path)
+            .await
+            .into_alien_error()
+            .context(unavailable("read gateway config file")),
     }
 }
 
@@ -320,6 +352,11 @@ async fn read_replica_secret(
         crate::config::ReplicaSecretSource::AwsSecretsManager { secret_id } => {
             read_aws_secret(secret_id).await
         }
+        // Not trimmed: the stored string is the key material, byte for byte.
+        crate::config::ReplicaSecretSource::File { path } => tokio::fs::read_to_string(path)
+            .await
+            .into_alien_error()
+            .context(unavailable("read replica secret file")),
     }
 }
 
