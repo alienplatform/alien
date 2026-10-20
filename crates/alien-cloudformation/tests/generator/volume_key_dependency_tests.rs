@@ -1,11 +1,11 @@
 use alien_cloudformation::{
-    CfEmitter, CfExpression, CfRegistry, CfResource, CloudFormationOptions, CloudFormationTarget,
-    RegistrationMode, generate_cloudformation_template, to_yaml,
+    generate_cloudformation_template, to_yaml, CfEmitter, CfExpression, CfRegistry, CfResource,
+    CloudFormationOptions, CloudFormationTarget, RegistrationMode,
 };
 use alien_core::{
-    ComputeCluster, Container, ContainerCode, Key, NetworkSettings, PermissionProfile,
-    PermissionsConfig, PersistentStorage, Platform, ResourceLifecycle, ResourceRef, ResourceSpec,
-    Result, ServiceAccount, Stack, StackSettings, import::EmitContext,
+    import::EmitContext, ComputeCluster, Container, ContainerCode, Key, NetworkSettings,
+    PermissionProfile, PermissionsConfig, PersistentStorage, Platform, ResourceLifecycle,
+    ResourceRef, ResourceSpec, Result, ServiceAccount, Stack, StackSettings,
 };
 
 // A compute extension emits its identity separately from its volume-key grant.

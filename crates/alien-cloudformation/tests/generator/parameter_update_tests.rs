@@ -68,11 +68,16 @@ fn references(value: &Value, name: &str) -> bool {
             fields.get("Ref").and_then(Value::as_str) == Some(name)
                 || match fields.get("Fn::Sub") {
                     Some(Value::String(template)) => template.contains(&format!("${{{name}}}")),
-                    Some(Value::Array(arguments)) => arguments.first().is_some_and(|template| {
-                        template
-                            .as_str()
-                            .is_some_and(|template| template.contains(&format!("${{{name}}}")))
-                    }) || arguments.iter().skip(1).any(|value| references(value, name)),
+                    Some(Value::Array(arguments)) => {
+                        arguments.first().is_some_and(|template| {
+                            template
+                                .as_str()
+                                .is_some_and(|template| template.contains(&format!("${{{name}}}")))
+                        }) || arguments
+                            .iter()
+                            .skip(1)
+                            .any(|value| references(value, name))
+                    }
                     _ => false,
                 }
                 || fields.values().any(|value| references(value, name))
@@ -232,11 +237,26 @@ fn every_parameter_stays_live_for_updates_that_reuse_the_template() {
             Some(_) => json!({ "Ref": name }),
             None => json!(format!("${{{name}}}")),
         };
-        assert_eq!(compute["pools"]["stateful"]["machines"], live("ComputeStatefulMachines"));
-        assert_eq!(compute["pools"]["stateful"]["machine"], live("ComputeStatefulMachine"));
-        assert_eq!(compute["pools"]["general"]["min"], live("ComputeGeneralMin"));
-        assert_eq!(compute["pools"]["general"]["max"], live("ComputeGeneralMax"));
-        assert_eq!(compute["pools"]["general"]["machine"], live("ComputeGeneralMachine"));
+        assert_eq!(
+            compute["pools"]["stateful"]["machines"],
+            live("ComputeStatefulMachines")
+        );
+        assert_eq!(
+            compute["pools"]["stateful"]["machine"],
+            live("ComputeStatefulMachine")
+        );
+        assert_eq!(
+            compute["pools"]["general"]["min"],
+            live("ComputeGeneralMin")
+        );
+        assert_eq!(
+            compute["pools"]["general"]["max"],
+            live("ComputeGeneralMax")
+        );
+        assert_eq!(
+            compute["pools"]["general"]["machine"],
+            live("ComputeGeneralMachine")
+        );
 
         let yaml = to_yaml(&template).expect("template should serialize");
         alien_cloudformation::test_utils::cfn_lint(&yaml).assert_ok("parameter updates");

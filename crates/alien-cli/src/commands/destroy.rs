@@ -947,7 +947,7 @@ mod tests {
             "deploymentProtocolVersion": 1,
             "projectId": "proj_test",
             "workspaceId": "ws_test",
-            "retryRequested": false,
+            "retryRequested": false,"updateBlocked":false,
             "createdAt": "2026-10-05T00:00:00Z"
         })
     }
@@ -1021,7 +1021,7 @@ mod tests {
                 "teardown-required"
             };
             Json(
-                serde_json::json!({ "id": ID, "name": "example", "platform": "test", "status": status, "deploymentGroupId": "dg_0000000000000000000000000000", "deploymentProtocolVersion": 1, "projectId": PROJECT, "workspaceId": "ws_000000000000000000000000", "managerId":"mgr_0000000000000000000000000000", "purpose":"application", "releaseChannel":"stable", "stackSettings":{}, "updatedAt":"2026-01-01T00:00:00Z", "retryRequested": false, "createdAt": "2026-01-01T00:00:00Z" }),
+                serde_json::json!({ "id": ID, "name": "example", "platform": "test", "status": status, "deploymentGroupId": "dg_0000000000000000000000000000", "deploymentProtocolVersion": 1, "projectId": PROJECT, "workspaceId": "ws_000000000000000000000000", "managerId":"mgr_0000000000000000000000000000", "purpose":"application", "releaseChannel":"stable", "stackSettings":{}, "updatedAt":"2026-01-01T00:00:00Z", "retryRequested": false,"updateBlocked":false, "createdAt": "2026-01-01T00:00:00Z" }),
             ).into_response()
         }
         async fn request_delete(
@@ -1134,7 +1134,7 @@ mod tests {
         type Recorded = Arc<Mutex<Calls>>;
 
         fn record(id: &str, status: &str) -> serde_json::Value {
-            serde_json::json!({ "id": id, "name": "example", "platform": "test", "status": status, "deploymentGroupId": "dg_0000000000000000000000000000", "deploymentProtocolVersion": 1, "projectId": PROJECT, "workspaceId": "ws_000000000000000000000000", "managerId":"mgr_0000000000000000000000000000", "purpose":"application", "releaseChannel":"stable", "stackSettings":{}, "updatedAt":"2026-01-01T00:00:00Z", "retryRequested": false, "createdAt": "2026-01-01T00:00:00Z" })
+            serde_json::json!({ "id": id, "name": "example", "platform": "test", "status": status, "deploymentGroupId": "dg_0000000000000000000000000000", "deploymentProtocolVersion": 1, "projectId": PROJECT, "workspaceId": "ws_000000000000000000000000", "managerId":"mgr_0000000000000000000000000000", "purpose":"application", "releaseChannel":"stable", "stackSettings":{}, "updatedAt":"2026-01-01T00:00:00Z", "retryRequested": false,"updateBlocked":false, "createdAt": "2026-01-01T00:00:00Z" })
         }
         async fn deployment(
             State(state): State<Recorded>,
@@ -1312,7 +1312,7 @@ mod tests {
     const MANAGER_PLACEHOLDER_PROJECT: &str = "prj_standalone000000000000000000";
 
     fn manager_record(id: &str, name: &str) -> serde_json::Value {
-        serde_json::json!({ "id": id, "name": name, "platform": "test", "status": "running", "deploymentGroupId": "dg_test", "deploymentProtocolVersion": 1, "projectId": MANAGER_PLACEHOLDER_PROJECT, "workspaceId": "ws_standalone00000000000000", "retryRequested": false, "createdAt": "2026-01-01T00:00:00Z" })
+        serde_json::json!({ "id": id, "name": name, "platform": "test", "status": "running", "deploymentGroupId": "dg_test", "deploymentProtocolVersion": 1, "projectId": MANAGER_PLACEHOLDER_PROJECT, "workspaceId": "ws_standalone00000000000000", "retryRequested": false,"updateBlocked":false, "createdAt": "2026-01-01T00:00:00Z" })
     }
 
     #[tokio::test]
@@ -1494,7 +1494,7 @@ mod tests {
     /// `owning_project`; the manager reports its placeholder project.
     #[cfg(feature = "platform")]
     async fn platform_with_manager(owning_project: &'static str) -> ExecutionMode {
-        let deployment_json = move || serde_json::json!({ "id": PLATFORM_DEPLOYMENT, "name": "prod", "platform": "test", "status": "running", "deploymentGroupId": "dg_0000000000000000000000000000", "deploymentProtocolVersion": 1, "projectId": owning_project, "workspaceId": "ws_000000000000000000000000", "managerId":"mgr_0000000000000000000000000000", "purpose":"application", "releaseChannel":"stable", "stackSettings":{}, "updatedAt":"2026-01-01T00:00:00Z", "retryRequested": false, "createdAt": "2026-01-01T00:00:00Z" });
+        let deployment_json = move || serde_json::json!({ "id": PLATFORM_DEPLOYMENT, "name": "prod", "platform": "test", "status": "running", "deploymentGroupId": "dg_0000000000000000000000000000", "deploymentProtocolVersion": 1, "projectId": owning_project, "workspaceId": "ws_000000000000000000000000", "managerId":"mgr_0000000000000000000000000000", "purpose":"application", "releaseChannel":"stable", "stackSettings":{}, "updatedAt":"2026-01-01T00:00:00Z", "retryRequested": false,"updateBlocked":false, "createdAt": "2026-01-01T00:00:00Z" });
 
         let manager_app = Router::new().route(
             "/v1/deployments/{id}",

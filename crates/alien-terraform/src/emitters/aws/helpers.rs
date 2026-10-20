@@ -176,6 +176,33 @@ pub fn service_assume_role_policy(services: &[&str]) -> Expression {
 }
 
 /// `jsonencode(...)` HCL function call.
+/// The trust statement that lets the managing role assume a setup-created role.
+///
+/// With `var.management_external_id` set, the caller must also send it as
+/// `sts:ExternalId`, so the managing role, which many customers trust, cannot
+/// be pointed at this customer's role on behalf of someone else. With it empty
+/// the statement is exactly the trust modules had before the variable existed.
+pub fn managing_role_trust_statement() -> Expression {
+    expr::object([
+        ("Sid", Expression::String("AllowManagingRole".to_string())),
+        ("Effect", Expression::String("Allow".to_string())),
+        (
+            "Principal",
+            expr::object([("AWS", expr::raw("var.managing_role_arn"))]),
+        ),
+        ("Action", Expression::String("sts:AssumeRole".to_string())),
+        (
+            "Condition",
+            expr::object([(
+                "StringEquals",
+                expr::raw(
+                    r#"merge({ "aws:PrincipalArn" = var.managing_role_arn }, var.management_external_id == "" ? {} : { "sts:ExternalId" = var.management_external_id })"#,
+                ),
+            )]),
+        ),
+    ])
+}
+
 pub fn jsonencode(value: Expression) -> Expression {
     Expression::FuncCall(Box::new(
         hcl::expr::FuncCall::builder(hcl::Identifier::sanitized("jsonencode"))
