@@ -159,6 +159,7 @@ async fn gcp_management_holds_no_iam_write_that_reaches_the_secrets_vault() {
     let sets = prepared_management(
         Platform::Gcp,
         ManagementConfig::Gcp(GcpManagementConfig {
+            federation_trust: None,
             service_account_email: "manager@vendor.iam.gserviceaccount.com".to_string(),
         }),
     )

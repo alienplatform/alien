@@ -40,6 +40,7 @@ async fn prepare(stack: Stack, platform: Platform) -> Stack {
         .expect("template preflights pass");
     let management = match platform {
         Platform::Gcp => ManagementConfig::Gcp(GcpManagementConfig {
+            federation_trust: None,
             service_account_email: "manager@vendor-project.iam.gserviceaccount.com".to_string(),
         }),
         Platform::Azure => ManagementConfig::Azure(AzureManagementConfig {
