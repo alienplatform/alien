@@ -5,6 +5,10 @@ use std::collections::HashMap;
 pub const ENV_ALIEN_CURRENT_WORKER_BINDING_NAME: &str = "ALIEN_CURRENT_WORKER_BINDING_NAME";
 pub const ENV_ALIEN_CURRENT_CONTAINER_BINDING_NAME: &str = "ALIEN_CURRENT_CONTAINER_BINDING_NAME";
 pub const ENV_OPERATOR_BASE_PLATFORM: &str = "OPERATOR_BASE_PLATFORM";
+/// Where application pods reach the Kubernetes sandbox session broker. The Helm chart sets it
+/// on the operator from the Service it renders in front of the operator, which serves the
+/// broker; the Sandbox controller publishes it in the sandbox binding.
+pub const ENV_ALIEN_SANDBOX_BROKER_URL: &str = "ALIEN_SANDBOX_BROKER_URL";
 pub const ENV_ALIEN_DEPLOYMENT_TYPE: &str = "ALIEN_DEPLOYMENT_TYPE";
 pub const ENV_ALIEN_LAMBDA_MODE: &str = "ALIEN_LAMBDA_MODE";
 pub const ENV_ALIEN_RUNTIME_SEND_OTLP: &str = "ALIEN_RUNTIME_SEND_OTLP";

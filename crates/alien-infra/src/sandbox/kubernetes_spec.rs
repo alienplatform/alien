@@ -7,8 +7,8 @@
 use std::collections::BTreeMap;
 
 use k8s_openapi::api::core::v1::{
-    Capabilities, Container, EnvVar, EnvVarSource, ObjectFieldSelector, Pod, PodSecurityContext,
-    PodSpec, ResourceRequirements, SecurityContext,
+    Capabilities, Container, EmptyDirVolumeSource, EnvVar, EnvVarSource, ObjectFieldSelector, Pod,
+    PodSecurityContext, PodSpec, ResourceRequirements, SecurityContext, Volume, VolumeMount,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
@@ -23,6 +23,12 @@ pub const LABEL_SESSION: &str = "alien.dev/sandbox-session";
 
 /// The uid sandboxed workloads run as.
 const SANDBOX_UID: i64 = 65534;
+
+/// The one writable directory in a session pod, whose root filesystem is read-only. An
+/// unprivileged agent writes the egress gateway's trust bundle here, and commands use it as
+/// scratch space. It is a pod-local `emptyDir`, counted against the pod's ephemeral storage.
+const SCRATCH_VOLUME: &str = "tmp";
+const SCRATCH_PATH: &str = "/tmp";
 
 /// Names the pod backing one session.
 pub fn pod_name(sandbox: &str, session_id: &str) -> String {
@@ -112,10 +118,20 @@ pub(crate) fn sandbox_pod_with_labels(
                 fs_group: Some(SANDBOX_UID),
                 ..Default::default()
             }),
+            volumes: Some(vec![Volume {
+                name: SCRATCH_VOLUME.to_string(),
+                empty_dir: Some(EmptyDirVolumeSource::default()),
+                ..Default::default()
+            }]),
             containers: vec![Container {
                 name: "sandbox".to_string(),
                 image: Some(image),
                 env: capability_public_key.map(capability_environment),
+                volume_mounts: Some(vec![VolumeMount {
+                    name: SCRATCH_VOLUME.to_string(),
+                    mount_path: SCRATCH_PATH.to_string(),
+                    ..Default::default()
+                }]),
                 security_context: Some(SecurityContext {
                     allow_privilege_escalation: Some(false),
                     privileged: Some(false),
@@ -339,6 +355,33 @@ mod tests {
             security.capabilities.expect("capabilities").drop,
             Some(vec!["ALL".to_string()])
         );
+    }
+
+    /// With a read-only root, `/tmp` is the only place an unprivileged agent can write the
+    /// gateway trust bundle it is handed with every policy delivery. Without a writable `/tmp`
+    /// that delivery fails, and with it every gateway-backed session create. It must be a
+    /// pod-local volume, never a host path or anything shared with another pod.
+    #[test]
+    fn a_pod_has_a_pod_local_writable_tmp() {
+        let mut spec = sandbox_pod(
+            &sandbox(SandboxEgress::Internet),
+            "s1",
+            "sbx",
+            "gvisor",
+            None,
+            None,
+        )
+        .spec
+        .expect("a spec");
+        let mount = spec.containers.remove(0).volume_mounts.expect("mounts");
+        assert_eq!(mount.len(), 1);
+        assert_eq!(mount[0].mount_path, "/tmp");
+        assert_ne!(mount[0].read_only, Some(true));
+        let volumes = spec.volumes.expect("volumes");
+        assert_eq!(volumes.len(), 1);
+        assert_eq!(volumes[0].name, mount[0].name);
+        assert!(volumes[0].empty_dir.is_some(), "pod-local storage only");
+        assert!(volumes[0].host_path.is_none());
     }
 
     #[test]

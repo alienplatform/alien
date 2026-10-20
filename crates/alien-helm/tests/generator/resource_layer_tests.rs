@@ -550,3 +550,171 @@ async fn kubernetes_internet_sandbox_installs_a_hosted_gateway() {
         serde_yaml::from_str::<serde_yaml::Value>("[{protocol: TCP, port: 3128}]").unwrap()
     );
 }
+
+fn rendered_documents(rendered: &super::test_utils::LinterRun) -> Vec<serde_yaml::Value> {
+    use serde::Deserialize;
+    serde_yaml::Deserializer::from_str(&rendered.stdout)
+        .map(|document| serde_yaml::Value::deserialize(document).expect("rendered YAML"))
+        .filter(|document| !document.is_null())
+        .collect()
+}
+
+fn sandbox_with_linked_app() -> Stack {
+    use alien_core::{Container, ContainerCode, ResourceSpec};
+    let sandbox = Sandbox::new("agent".to_string())
+        .code(SandboxCode::Image {
+            image: "ubuntu:24.04".to_string(),
+        })
+        .egress(SandboxEgress::None)
+        .lifecycle(SandboxLifecyclePolicy {
+            max_lifetime_seconds: Some(3600),
+            idle_pause_seconds: None,
+        })
+        .build();
+    let container = |id: &str| {
+        Container::new(id.to_string())
+            .code(ContainerCode::Image {
+                image: "example.invalid/app:1".to_string(),
+            })
+            .cpu(ResourceSpec {
+                min: "0.1".to_string(),
+                desired: "0.1".to_string(),
+            })
+            .memory(ResourceSpec {
+                min: "128Mi".to_string(),
+                desired: "128Mi".to_string(),
+            })
+            .permissions("app".to_string())
+    };
+    let app = container("app").link(&sandbox).build();
+    let other = container("other").build();
+    Stack::new("sandbox-broker-chart".to_string())
+        .add(sandbox, ResourceLifecycle::Frozen)
+        .add(app, ResourceLifecycle::Live)
+        .add(other, ResourceLifecycle::Live)
+        .build()
+}
+
+/// The controller publishes the operator's `ALIEN_SANDBOX_BROKER_URL` as the binding's broker
+/// address, and a linked application calls it to claim every session. So the address has to name
+/// a Service this chart renders, on a port that reaches the operator's listener. The release name
+/// and the deployment name differ here on purpose: the operator's identity is not its Service.
+#[test]
+fn the_operator_is_given_the_address_of_its_own_broker_service() {
+    let chart = render(&sandbox_with_linked_app(), StackSettings::default());
+    assert_helm_valid(&chart, "sandbox broker service");
+    let rendered = super::test_utils::helm_template_for_release(
+        &chart.files,
+        Some("management:\n  name: customer-1\n"),
+        "acme",
+    );
+    rendered.assert_ok("sandbox broker service");
+    let documents = rendered_documents(&rendered);
+
+    let operator = documents
+        .iter()
+        .find(|document| document["kind"] == "Deployment" && document["metadata"]["name"] == "acme")
+        .expect("the operator Deployment");
+    let template = &operator["spec"]["template"];
+    let container = &template["spec"]["containers"][0];
+    let env = |name: &str| {
+        container["env"]
+            .as_sequence()
+            .expect("operator env")
+            .iter()
+            .find(|variable| variable["name"] == name)
+            .and_then(|variable| variable["value"].as_str())
+            .map(str::to_string)
+    };
+    let broker = env(alien_core::ENV_ALIEN_SANDBOX_BROKER_URL)
+        .expect("the operator is told where its broker is reachable");
+    let listener: u64 = env("OTLP_PORT")
+        .expect("the operator's listener port")
+        .parse()
+        .expect("numeric port");
+
+    let address = broker
+        .strip_prefix("http://")
+        .expect("in-cluster plain HTTP, like the broker listener");
+    let (host, port) = address.split_once(':').expect("host and port");
+    let port: u64 = port.parse().expect("numeric port");
+    let (service_name, rest) = host.split_once('.').expect("service.namespace.svc");
+    assert_eq!(rest, "default.svc", "the release namespace: {broker}");
+
+    let service = documents
+        .iter()
+        .find(|document| document["kind"] == "Service" && document["metadata"]["name"] == service_name)
+        .unwrap_or_else(|| panic!("{broker} names no Service this chart renders"));
+    let service_port = service["spec"]["ports"]
+        .as_sequence()
+        .expect("Service ports")
+        .iter()
+        .find(|entry| entry["port"].as_u64() == Some(port))
+        .unwrap_or_else(|| panic!("Service {service_name} does not expose port {port}"));
+    let target = service_port["targetPort"].as_str().expect("named target port");
+    let container_port = container["ports"]
+        .as_sequence()
+        .expect("operator ports")
+        .iter()
+        .find(|entry| entry["name"] == target)
+        .unwrap_or_else(|| panic!("the operator declares no port named {target}"));
+    assert_eq!(
+        container_port["containerPort"].as_u64(),
+        Some(listener),
+        "the Service reaches the port the broker listens on"
+    );
+    let pod_labels = template["metadata"]["labels"]
+        .as_mapping()
+        .expect("pod labels");
+    for (key, value) in service["spec"]["selector"]
+        .as_mapping()
+        .expect("Service selector")
+    {
+        assert_eq!(
+            pod_labels.get(key),
+            Some(value),
+            "the Service selects the operator pod"
+        );
+    }
+}
+
+/// An application drives its sessions over the agent port, so the sandbox policy must admit the
+/// workloads that link the sandbox, and only them, alongside the operator.
+#[test]
+fn the_sandbox_policy_admits_its_linkers_on_the_agent_port() {
+    let chart = render(&sandbox_with_linked_app(), StackSettings::default());
+    let rendered = super::test_utils::helm_template_for_release(
+        &chart.files,
+        Some("serviceAccountPrefix: release-a\n"),
+        "acme",
+    );
+    rendered.assert_ok("sandbox policy");
+    let documents = rendered_documents(&rendered);
+    let policy = documents
+        .iter()
+        .find(|document| {
+            document["kind"] == "NetworkPolicy" && document["metadata"]["name"] == "alien-sbx-agent"
+        })
+        .expect("the sandbox NetworkPolicy");
+    let ingress = policy["spec"]["ingress"].as_sequence().expect("ingress");
+    assert_eq!(ingress.len(), 1, "one rule, for the agent port: {ingress:?}");
+    assert_eq!(
+        ingress[0]["ports"][0]["port"].as_u64(),
+        Some(u64::from(alien_core::sandbox_image::AGENT_PORT))
+    );
+    let peers: Vec<serde_yaml::Value> = ingress[0]["from"]
+        .as_sequence()
+        .expect("peers")
+        .iter()
+        .map(|peer| peer["podSelector"]["matchLabels"].clone())
+        .collect();
+    let app: serde_yaml::Value = serde_yaml::from_str(
+        "alien.dev/deployment: release-a\nalien.dev/resource: app\nmanaged-by: runtime\n",
+    )
+    .unwrap();
+    let operator: serde_yaml::Value = serde_yaml::from_str(
+        "app.kubernetes.io/name: sandbox-broker-chart\napp.kubernetes.io/instance: acme\n",
+    )
+    .unwrap();
+    assert_eq!(peers, vec![operator, app], "only the operator and the linker");
+}

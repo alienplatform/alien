@@ -1,7 +1,8 @@
 //! The sandbox session broker, served by the operator.
 //!
-//! Mounted on the operator's existing HTTP server, which the Helm chart already exposes through
-//! a Service, so this adds no deployment surface and no chart change.
+//! Mounted on the operator's existing HTTP server. A chart with a sandbox always renders the
+//! Service in front of that server and passes its address to the operator, which the controller
+//! publishes as the binding's broker URL.
 //!
 //! **Why a route at all.** Claiming a warm pod is a `PATCH` on pods. Putting that in the binding
 //! would give the customer's application pod-write on the namespace, and `pods/exec` on top of
