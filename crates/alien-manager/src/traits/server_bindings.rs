@@ -11,6 +11,8 @@ use alien_core::Platform;
 /// Contains the KV store, storage, dispatcher, and registry used by the
 /// command server, plus bindings providers for cross-account registry access.
 pub struct ServerBindings {
+    /// Queue owners shared by local controllers and the manager HTTP listener.
+    pub local_queues: Arc<alien_local::LocalQueueService>,
     /// General-purpose KV store for manager operational data.
     ///
     /// Used by:

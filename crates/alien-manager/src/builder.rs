@@ -703,6 +703,7 @@ impl AlienManagerBuilder {
             );
 
             self.server_bindings = Some(ServerBindings {
+                local_queues: Arc::new(alien_local::LocalQueueService::default()),
                 kv,
                 command_storage,
                 command_dispatcher,
@@ -930,6 +931,7 @@ async fn finalize(
 
     // --- Router ---
     let mut router = crate::routes::create_router_inner(app_state.clone(), router_options)
+        .merge(server_bindings.local_queues.clone().router())
         .layer(crate::routes::cors_layer(&config));
     if let Some(platform) = platform_routes {
         router = router.merge(platform.with_state(app_state.clone()));

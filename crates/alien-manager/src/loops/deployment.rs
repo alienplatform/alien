@@ -1130,6 +1130,11 @@ impl DeploymentLoop {
                     state_dir,
                     &deployment_id,
                 )?;
+                self.server_bindings.local_queues.register(
+                    &deployment_id,
+                    local_bindings.queue_manager().clone(),
+                    &self.config.base_url(),
+                );
                 Arc::new(DefaultPlatformServiceProvider::with_local_bindings(
                     local_bindings,
                 ))
@@ -1984,6 +1989,7 @@ mod tests {
             current: None,
         });
         let bindings = Arc::new(ServerBindings {
+            local_queues: Arc::new(alien_local::LocalQueueService::default()),
             kv: Arc::new(LocalKv::new(temp.path().join("kv")).await.unwrap()),
             command_storage: Arc::new(
                 LocalStorage::new(temp.path().join("storage").to_string_lossy().to_string())
@@ -2264,6 +2270,7 @@ mod tests {
                 row.get::<i64>(0).unwrap()
             };
             let bindings = Arc::new(ServerBindings {
+                local_queues: Arc::new(alien_local::LocalQueueService::default()),
                 kv: Arc::new(LocalKv::new(temp.path().join("kv")).await.unwrap()),
                 command_storage: Arc::new(
                     LocalStorage::new(temp.path().join("storage").to_string_lossy().to_string())

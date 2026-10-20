@@ -14,14 +14,12 @@ use alien_core::{
     Container, ContainerCode, ContainerHeartbeatData, ContainerOutputs, ContainerStatus,
     EnvironmentVariable, EnvironmentVariableType, ExposeProtocol, HeartbeatBackend, Kv,
     LocalContainerHeartbeatData, LocalRuntimeUnitKind, LocalRuntimeUnitStatus, ObservedHealth,
-    Platform, Postgres, ProviderLifecycleState, PublicEndpointOutput, Queue, ResourceHeartbeat,
+    Platform, Postgres, ProviderLifecycleState, PublicEndpointOutput, ResourceHeartbeat,
     ResourceHeartbeatData, ResourceOutputs as CoreResourceOutputs, ResourceStatus, Storage, Vault,
     WorkloadHeartbeatStatus,
 };
 use alien_error::{AlienError, Context, IntoAlienError as _};
-use alien_local::{
-    BindMount, ContainerConfig, ContainerInfo, LocalPublicEndpoint, LocalQueueManager,
-};
+use alien_local::{ContainerConfig, ContainerInfo, LocalPublicEndpoint};
 use alien_macros::controller;
 use chrono::Utc;
 
@@ -82,30 +80,6 @@ fn local_health_check_port(config: &Container, ports: &[u16]) -> Result<Option<u
         },
         |port| Ok(Some(port)),
     )
-}
-
-fn local_queue_bind_mount(
-    queue_manager: Option<&LocalQueueManager>,
-    resource_id: &str,
-) -> Result<BindMount> {
-    let queue_manager = queue_manager.ok_or_else(|| {
-        AlienError::new(ErrorData::LocalServicesNotAvailable {
-            service_name: "LocalQueueManager".to_string(),
-        })
-    })?;
-    let host_path = queue_manager.get_queue_path(resource_id).context(
-        ErrorData::ResourceControllerConfigError {
-            resource_id: resource_id.to_string(),
-            message: "Failed to resolve local Queue path for container mount".to_string(),
-        },
-    )?;
-
-    Ok(BindMount {
-        host_path,
-        container_path: format!("/mnt/queue/{resource_id}"),
-        resource_id: resource_id.to_string(),
-        shared_with_host_workloads: true,
-    })
 }
 
 /// Local Container controller.
@@ -228,14 +202,6 @@ impl LocalContainerController {
                             });
                         }
                     }
-                }
-                // Check if it's a Queue resource
-                else if resource_config.downcast_ref::<Queue>().is_some() {
-                    let queue_manager = ctx.service_provider.get_local_queue_manager();
-                    bind_mounts.push(local_queue_bind_mount(
-                        queue_manager.as_deref(),
-                        linked_resource_id,
-                    )?);
                 }
                 // Check if it's a Vault resource
                 else if resource_config.downcast_ref::<Vault>().is_some() {
@@ -1193,28 +1159,6 @@ mod tests {
             serde_json::json!({"8080":"http://web.svc:8080", "3129":"http://web.svc:3129"})
         );
         assert_eq!(binding["publicUrl"], "http://localhost:49153");
-    }
-
-    #[test]
-    fn local_queue_mount_requires_queue_manager() {
-        let error = local_queue_bind_mount(None, "jobs")
-            .expect_err("a linked Queue must not silently skip its container mount");
-
-        assert_eq!(error.code, "LOCAL_SERVICES_NOT_AVAILABLE");
-        assert!(error.message.contains("LocalQueueManager"));
-    }
-
-    #[test]
-    fn local_queue_mount_reports_missing_queue_path() {
-        let state_dir = tempfile::tempdir().expect("tempdir");
-        let queue_manager = LocalQueueManager::new(state_dir.path().to_path_buf());
-
-        let error = local_queue_bind_mount(Some(&queue_manager), "jobs")
-            .expect_err("a linked Queue without local state must fail before container startup");
-
-        assert_eq!(error.code, "RESOURCE_CONTROLLER_CONFIG_ERROR");
-        assert!(error.message.contains("jobs"));
-        assert!(error.message.contains("Failed to resolve local Queue path"));
     }
 
     #[test]

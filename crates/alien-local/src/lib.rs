@@ -62,6 +62,8 @@ mod kv_manager;
 mod local_bindings_provider;
 mod postgres_manager;
 mod queue_manager;
+mod queue_service;
+pub use queue_service::LocalQueueService;
 mod sandbox_identity;
 mod sandbox_manager;
 mod sandbox_route;

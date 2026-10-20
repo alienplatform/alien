@@ -1,262 +1,328 @@
 use crate::error::{ErrorData, Result};
+use alien_bindings::{
+    providers::queue::{local::LocalQueue, local_http::QueueStats},
+    traits::{Binding, MessagePayload, Queue, QueueAckResult, QueueMessage, QueueSendResult},
+};
+use alien_core::bindings::{BindingValue, LocalHttpQueueBinding, QueueBinding};
 use alien_error::{AlienError, Context, IntoAlienError};
-use std::path::PathBuf;
-use tracing::{debug, info};
+use async_trait::async_trait;
+use sha2::{Digest, Sha256};
+use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::{Arc, RwLock},
+};
+use tokio::sync::Mutex;
 
-/// Manager for local Queue resources.
-///
-/// Creates the on-disk directory for each queue resource. The `LocalQueue`
-/// binding opens its own SQLite-compatible database (`localqueue.v1`) inside that
-/// directory and performs all operations directly.
-///
-/// # State Scoping
-/// All queue databases are created under `{state_dir}/queue/{resource_id}/`.
-/// The `state_dir` should be scoped by agent ID (e.g., `~/.alien-cli/<agent_id>`)
-/// to avoid conflicts between agents.
-#[derive(Debug, Clone)]
+/// The manager owns each queue handle. Clients never receive its filesystem path.
+#[derive(Debug)]
 pub struct LocalQueueManager {
     state_dir: PathBuf,
+    endpoint: RwLock<Option<String>>,
+    queues: Mutex<HashMap<String, Arc<ManagedQueue>>>,
+}
+
+/// A revocable handle: deletion waits for in-flight operations and closes the store
+/// before unlinking it. Existing trigger handles cannot write into an unlinked database.
+#[derive(Debug)]
+pub struct ManagedQueue {
+    queue: Mutex<Option<LocalQueue>>,
+}
+fn unavailable() -> alien_bindings::error::ErrorData {
+    alien_bindings::error::ErrorData::config_invalid("queue", "Queue has been deleted")
+}
+impl ManagedQueue {
+    pub async fn stats(&self) -> alien_bindings::error::Result<QueueStats> {
+        self.queue
+            .lock()
+            .await
+            .as_ref()
+            .ok_or_else(|| AlienError::new(unavailable()))?
+            .stats()
+            .await
+    }
+}
+impl Binding for ManagedQueue {}
+#[async_trait]
+impl Queue for ManagedQueue {
+    async fn send(&self, name: &str, message: MessagePayload) -> alien_bindings::error::Result<()> {
+        self.queue
+            .lock()
+            .await
+            .as_ref()
+            .ok_or_else(|| AlienError::new(unavailable()))?
+            .send(name, message)
+            .await
+    }
+    async fn send_batch(
+        &self,
+        name: &str,
+        messages: Vec<MessagePayload>,
+    ) -> alien_bindings::error::Result<Vec<QueueSendResult>> {
+        self.queue
+            .lock()
+            .await
+            .as_ref()
+            .ok_or_else(|| AlienError::new(unavailable()))?
+            .send_batch(name, messages)
+            .await
+    }
+    async fn receive(
+        &self,
+        name: &str,
+        max: usize,
+    ) -> alien_bindings::error::Result<Vec<QueueMessage>> {
+        self.queue
+            .lock()
+            .await
+            .as_ref()
+            .ok_or_else(|| AlienError::new(unavailable()))?
+            .receive(name, max)
+            .await
+    }
+    async fn ack(&self, name: &str, receipt: &str) -> alien_bindings::error::Result<()> {
+        self.queue
+            .lock()
+            .await
+            .as_ref()
+            .ok_or_else(|| AlienError::new(unavailable()))?
+            .ack(name, receipt)
+            .await
+    }
+    async fn ack_batch(
+        &self,
+        name: &str,
+        receipts: &[String],
+    ) -> alien_bindings::error::Result<Vec<QueueAckResult>> {
+        self.queue
+            .lock()
+            .await
+            .as_ref()
+            .ok_or_else(|| AlienError::new(unavailable()))?
+            .ack_batch(name, receipts)
+            .await
+    }
+    async fn nack(&self, name: &str, receipt: &str) -> alien_bindings::error::Result<()> {
+        self.queue
+            .lock()
+            .await
+            .as_ref()
+            .ok_or_else(|| AlienError::new(unavailable()))?
+            .nack(name, receipt)
+            .await
+    }
+    async fn renew_lease(
+        &self,
+        name: &str,
+        receipt: &str,
+        duration: u32,
+    ) -> alien_bindings::error::Result<()> {
+        self.queue
+            .lock()
+            .await
+            .as_ref()
+            .ok_or_else(|| AlienError::new(unavailable()))?
+            .renew_lease(name, receipt, duration)
+            .await
+    }
+    async fn purge(&self, name: &str) -> alien_bindings::error::Result<()> {
+        self.queue
+            .lock()
+            .await
+            .as_ref()
+            .ok_or_else(|| AlienError::new(unavailable()))?
+            .purge(name)
+            .await
+    }
+}
+fn queue_error(id: &str, reason: impl Into<String>) -> ErrorData {
+    ErrorData::BindingsStoreError {
+        binding_id: id.into(),
+        operation: "open queue".into(),
+        reason: reason.into(),
+    }
 }
 
 impl LocalQueueManager {
-    /// Creates a new queue manager.
-    ///
-    /// # Arguments
-    /// * `state_dir` - Base directory for all local platform state
     pub fn new(state_dir: PathBuf) -> Self {
-        Self { state_dir }
+        Self {
+            state_dir,
+            endpoint: RwLock::new(None),
+            queues: Mutex::new(HashMap::new()),
+        }
     }
 
-    /// Creates a queue database directory for a resource.
-    ///
-    /// The binding will open its own SQLite database (`localqueue.sqlite`)
-    /// inside this directory.
-    ///
-    /// # Arguments
-    /// * `id` - Resource identifier
-    ///
-    /// # Returns
-    /// Path to the database directory
-    ///
-    /// # Note
-    /// This is idempotent - can be called multiple times (e.g., during reconciliation).
-    /// Uses `create_dir_all` which succeeds even if the directory already exists.
-    pub async fn create_queue(&self, id: &str) -> Result<PathBuf> {
-        let db_path = self.state_dir.join("queue").join(id);
+    /// Configure the existing manager listener before publishing bindings.
+    pub fn set_endpoint(&self, endpoint: String) {
+        *self.endpoint.write().expect("queue endpoint poisoned") = Some(endpoint);
+    }
 
-        tokio::fs::create_dir_all(&db_path)
+    fn path(&self, id: &str) -> Result<PathBuf> {
+        if id.is_empty() || id == "." || id == ".." || id.contains(['/', '\\']) {
+            return Err(AlienError::new(queue_error(id, "Invalid queue identifier")));
+        }
+        // Never open an old file while older SDKs may still hold a mount/handle.
+        if self.state_dir.join("queue").join(id).exists() {
+            return Err(AlienError::new(queue_error(id,
+                "Legacy local queue requires offline migration. Stop the old manager and every queue client, preserve the queue directory, then migrate it to queue-owned before restarting with rebuilt SDKs. No legacy database was opened.")));
+        }
+        Ok(self.state_dir.join("queue-owned").join(id))
+    }
+
+    pub async fn create_queue(&self, id: &str) -> Result<PathBuf> {
+        let path = self.path(id)?;
+        tokio::fs::create_dir_all(&path)
             .await
             .into_alien_error()
-            .context(ErrorData::LocalDirectoryError {
-                path: db_path.display().to_string(),
-                operation: "create".to_string(),
-                reason: "Failed to create queue database directory".to_string(),
-            })?;
-
-        info!(
-            resource_id = %id,
-            path = %db_path.display(),
-            "Queue database directory created"
-        );
-
-        Ok(db_path)
+            .context(queue_error(id, "Create queue directory"))?;
+        self.load_queue(id).await?;
+        Ok(path)
     }
 
-    /// Gets the path to a queue database.
-    ///
-    /// Returns an error if the database doesn't exist.
     pub fn get_queue_path(&self, id: &str) -> Result<PathBuf> {
-        let queue_path = self.state_dir.join("queue").join(id);
-
-        if !queue_path.exists() {
+        let path = self.path(id)?;
+        if !path.is_dir() {
             return Err(AlienError::new(ErrorData::ServiceResourceNotFound {
-                resource_id: id.to_string(),
-                resource_type: "queue".to_string(),
+                resource_id: id.into(),
+                resource_type: "queue".into(),
             }));
         }
-
-        Ok(queue_path)
+        Ok(path)
     }
 
-    /// Deletes a queue database directory and all its contents.
-    ///
-    /// # Arguments
-    /// * `id` - Resource identifier
-    ///
-    /// # Note
-    /// This is idempotent - succeeds even if the queue doesn't exist.
-    pub async fn delete_queue(&self, id: &str) -> Result<()> {
-        let db_path = self.state_dir.join("queue").join(id);
+    pub async fn load_queue(&self, id: &str) -> Result<Arc<ManagedQueue>> {
+        let path = self.get_queue_path(id)?;
+        let mut queues = self.queues.lock().await;
+        if let Some(queue) = queues.get(id) {
+            return Ok(queue.clone());
+        }
+        let queue = Arc::new(ManagedQueue {
+            queue: Mutex::new(Some(
+                LocalQueue::single_process(path)
+                    .await
+                    .context(queue_error(id, "Open exclusively owned queue"))?,
+            )),
+        });
+        queues.insert(id.into(), queue.clone());
+        Ok(queue)
+    }
 
-        if db_path.exists() {
-            tokio::fs::remove_dir_all(&db_path)
+    pub async fn delete_queue(&self, id: &str) -> Result<()> {
+        let path = self.path(id)?;
+        let mut queues = self.queues.lock().await;
+        if let Some(queue) = queues.remove(id) {
+            queue.queue.lock().await.take();
+        }
+        if path.exists() {
+            tokio::fs::remove_dir_all(path)
                 .await
                 .into_alien_error()
-                .context(ErrorData::LocalDirectoryError {
-                    path: db_path.display().to_string(),
-                    operation: "delete".to_string(),
-                    reason: "Failed to delete queue database directory".to_string(),
-                })?;
-
-            debug!(
-                resource_id = %id,
-                path = %db_path.display(),
-                "Queue database deleted"
-            );
-        } else {
-            debug!(
-                resource_id = %id,
-                path = %db_path.display(),
-                "Queue database does not exist (already deleted)"
-            );
+                .context(queue_error(id, "Delete queue directory"))?;
         }
-
         Ok(())
     }
 
-    /// Checks if a queue database exists on disk.
     pub fn queue_exists(&self, id: &str) -> bool {
-        self.state_dir.join("queue").join(id).exists()
+        self.get_queue_path(id).is_ok()
     }
 
-    /// Verifies that a queue resource exists and its store is usable.
-    ///
-    /// Mirrors the KV health check:
-    /// - Missing resource directory → `ServiceResourceNotFound`.
-    /// - Path exists but is a file → `LocalDirectoryError`.
-    /// - Directory exists but `localqueue.sqlite` is absent → **healthy**: the
-    ///   `LocalQueue` binding materializes the database on first use, so a
-    ///   not-yet-opened store is a valid state, not a failure.
-    /// - `localqueue.sqlite` present with a wrong/unreadable `meta.format` →
-    ///   error, so the resource is not reported healthy when the trigger
-    ///   service or app would fail to open it on `LocalQueue::new`. The probe
-    ///   opens with the same multi-process WAL opt-in as the binding, so it is
-    ///   safe alongside the worker runtime and trigger service.
     pub async fn check_health(&self, id: &str) -> Result<()> {
-        let queue_path = self.state_dir.join("queue").join(id);
+        self.load_queue(id)
+            .await?
+            .stats()
+            .await
+            .context(queue_error(id, "Read queue metrics"))?;
+        Ok(())
+    }
 
-        if !queue_path.exists() {
-            return Err(AlienError::new(ErrorData::ServiceResourceNotFound {
-                resource_id: id.to_string(),
-                resource_type: "queue".to_string(),
-            }));
+    fn token(&self, id: &str) -> Result<String> {
+        let path = self.get_queue_path(id)?.join("access-token");
+        if !path.exists() {
+            let token = format!(
+                "ax_lq_{}{}",
+                uuid::Uuid::new_v4().simple(),
+                uuid::Uuid::new_v4().simple()
+            );
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            options.mode(0o600);
+            match options.open(&path) {
+                Ok(mut file) => {
+                    file.write_all(token.as_bytes())
+                        .into_alien_error()
+                        .context(queue_error(id, "Write queue credential"))?;
+                    file.sync_all()
+                        .into_alien_error()
+                        .context(queue_error(id, "Sync queue credential"))?;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(e) => {
+                    return Err(e)
+                        .into_alien_error()
+                        .context(queue_error(id, "Create queue credential"))
+                }
+            }
         }
-
-        if !queue_path.is_dir() {
-            return Err(AlienError::new(ErrorData::LocalDirectoryError {
-                path: queue_path.display().to_string(),
-                operation: "health_check".to_string(),
-                reason: "Expected directory but found file".to_string(),
-            }));
+        let token = std::fs::read_to_string(path)
+            .into_alien_error()
+            .context(queue_error(id, "Read queue credential"))?;
+        if token.len() != 70 || !token.starts_with("ax_lq_") {
+            return Err(AlienError::new(queue_error(
+                id,
+                "Invalid saved queue credential",
+            )));
         }
+        Ok(token)
+    }
 
-        let db_path = queue_path.join("localqueue.sqlite");
-
-        // Store not yet materialized (directory created, no binding opened
-        // yet): healthy.
-        if !db_path.exists() {
-            return Ok(());
+    pub(crate) fn authorize(&self, id: &str, token: &str) -> Result<()> {
+        let expected = Sha256::digest(self.token(id)?.as_bytes());
+        let actual = Sha256::digest(token.as_bytes());
+        // Compare hashes, never retain or log a request's bearer credential.
+        if expected
+            .iter()
+            .zip(actual.iter())
+            .fold(0u8, |diff, (a, b)| diff | (a ^ b))
+            != 0
+        {
+            return Err(AlienError::new(queue_error(id, "Invalid queue credential")));
         }
-
-        crate::store_probe::check_store_format(&db_path, "localqueue.v1").await
+        Ok(())
     }
 
-    /// Gets the binding configuration for a queue resource.
-    ///
-    /// # Arguments
-    /// * `id` - Resource identifier
-    ///
-    /// # Returns
-    /// QueueBinding configured for this queue database, or error if queue doesn't exist
-    pub fn get_binding(&self, id: &str) -> Result<alien_core::bindings::QueueBinding> {
-        use alien_core::bindings::{BindingValue, QueueBinding};
-
-        let queue_path = self.get_queue_path(id)?;
-
-        Ok(QueueBinding::local(BindingValue::value(
-            queue_path.to_string_lossy().to_string(),
-        )))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::LocalQueueManager;
-
-    #[tokio::test]
-    async fn health_check_missing_resource_is_unhealthy() {
-        let state_dir = tempfile::tempdir().expect("tempdir");
-        let manager = LocalQueueManager::new(state_dir.path().to_path_buf());
-
-        manager
-            .check_health("missing")
-            .await
-            .expect_err("a never-created queue must be unhealthy");
+    pub fn runtime_binding(&self, id: &str) -> Result<QueueBinding> {
+        let mut binding = self.get_binding(id)?;
+        if let QueueBinding::LocalHttp(config) = &mut binding {
+            config.token = Some(self.token(id)?);
+        }
+        Ok(binding)
     }
 
-    #[tokio::test]
-    async fn health_check_empty_directory_is_healthy() {
-        let state_dir = tempfile::tempdir().expect("tempdir");
-        let manager = LocalQueueManager::new(state_dir.path().to_path_buf());
-
-        manager.create_queue("q").await.expect("create queue");
-        // No binding has opened the store yet: localqueue.sqlite is absent.
-        manager
-            .check_health("q")
-            .await
-            .expect("a not-yet-opened queue must be healthy");
-    }
-
-    #[tokio::test]
-    async fn health_check_valid_store_is_healthy() {
-        let state_dir = tempfile::tempdir().expect("tempdir");
-        let manager = LocalQueueManager::new(state_dir.path().to_path_buf());
-
-        let data_dir = manager.create_queue("q").await.expect("create queue");
-        // Materialize a real localqueue.v1 store through the actual binding.
-        alien_bindings::providers::queue::local::LocalQueue::new(data_dir)
-            .await
-            .expect("open local queue");
-
-        manager
-            .check_health("q")
-            .await
-            .expect("a valid localqueue.v1 store must be healthy");
-    }
-
-    #[tokio::test]
-    async fn health_check_wrong_format_store_is_unhealthy() {
-        let state_dir = tempfile::tempdir().expect("tempdir");
-        let manager = LocalQueueManager::new(state_dir.path().to_path_buf());
-
-        let data_dir = manager.create_queue("q").await.expect("create queue");
-        let db_path = data_dir.join("localqueue.sqlite");
-        let db = turso::Builder::new_local(&db_path.to_string_lossy())
-            .build()
-            .await
-            .expect("build db");
-        let conn = db.connect().expect("connect");
-        conn.execute(
-            "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
-            (),
-        )
-        .await
-        .expect("create meta");
-        conn.execute(
-            "INSERT INTO meta (key, value) VALUES ('format', 'localqueue.v2')",
-            (),
-        )
-        .await
-        .expect("insert format");
-
-        let err = manager
-            .check_health("q")
-            .await
-            .expect_err("a wrong-format store must be unhealthy");
-        let msg = err.to_string();
-        assert!(
-            msg.contains("localqueue.v2") && msg.contains("localqueue.v1"),
-            "error must name found and expected formats, got: {msg}"
-        );
+    /// Non-secret binding topology. Credentials are injected only at process start.
+    pub fn get_binding(&self, id: &str) -> Result<QueueBinding> {
+        self.get_queue_path(id)?;
+        let endpoint = self
+            .endpoint
+            .read()
+            .expect("queue endpoint poisoned")
+            .clone()
+            .ok_or_else(|| {
+                AlienError::new(queue_error(
+                    id,
+                    "Local queue HTTP endpoint is not configured",
+                ))
+            })?;
+        Ok(QueueBinding::LocalHttp(LocalHttpQueueBinding {
+            endpoint: BindingValue::value(format!(
+                "{}/{}",
+                endpoint.trim_end_matches('/'),
+                urlencoding::encode(id)
+            )),
+            token: None,
+        }))
     }
 }

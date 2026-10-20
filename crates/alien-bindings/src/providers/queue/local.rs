@@ -128,15 +128,32 @@ impl LocalQueue {
 
     /// Create a LocalQueue from a LocalQueueBinding.
     pub async fn from_binding(binding: LocalQueueBinding) -> Result<Self> {
-        let queue_path = binding
-            .queue_path
-            .into_value("queue", "queue_path")
-            .context(ErrorData::config_invalid(
-                "queue",
-                "Failed to resolve queue_path from binding",
-            ))?;
+        let _ = binding;
+        Err(AlienError::new(ErrorData::config_invalid(
+            "queue",
+            "Legacy file-backed local queue bindings are no longer supported. Upgrade the local manager and rebuild workloads to use local-queue-http; stop all legacy clients before migrating existing queue data.",
+        )))
+    }
 
-        Self::new(PathBuf::from(queue_path)).await
+    /// Open a queue owned exclusively by this process. No shared-memory WAL coordination.
+    pub async fn single_process(data_dir: PathBuf) -> Result<Self> {
+        Ok(Self {
+            store: LocalStore::open(data_dir, &QUEUE_SPEC, Sharing::SingleProcess).await?,
+        })
+    }
+
+    /// Read queue metrics through the owning database handle.
+    pub async fn stats(&self) -> Result<super::local_http::QueueStats> {
+        self.store.with_conn(|conn| async move {
+            let rows = query_all(&conn,
+                "SELECT COUNT(*), COALESCE(SUM(visible_at <= ?1), 0), COALESCE(SUM(visible_at > ?1 AND receipt_handle IS NOT NULL), 0), COALESCE(SUM(visible_at > ?1 AND receipt_handle IS NULL), 0) FROM messages",
+                [Utc::now().timestamp_millis()]).await.into_alien_error()
+                .context(queue_error("stats", "failed to read queue counts".into()))?;
+            let row = rows.first().ok_or_else(|| AlienError::new(queue_error("stats", "missing counts".into())))?;
+            let count = |i: usize| row.get(i).and_then(as_i64).and_then(|v| u64::try_from(v).ok())
+                .ok_or_else(|| AlienError::new(queue_error("stats", "invalid count".into())));
+            Ok(super::local_http::QueueStats { total: count(0)?, visible: count(1)?, in_flight: count(2)?, delayed: count(3)? })
+        }).await
     }
 
     /// Get the data directory path (the directory that holds `localqueue.sqlite`).
