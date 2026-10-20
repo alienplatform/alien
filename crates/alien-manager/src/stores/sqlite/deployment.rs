@@ -42,6 +42,10 @@ pub struct SqliteDeploymentStore {
     db: Arc<SqliteDatabase>,
 }
 
+/// A setup reservation whose installer has not registered yet. The manager has
+/// installed nothing for it; the installer owns any cloud resources until then.
+const UNREGISTERED_SETUP_RESERVATION: &str = "status = 'pending' AND current_release_id IS NULL AND json_extract(COALESCE(setup_metadata, '{}'), '$.setupReservation.releaseId') IS NOT NULL";
+
 impl SqliteDeploymentStore {
     pub(crate) const WORK_STATUSES: [&'static str; 9] = [
         "pending",
@@ -328,7 +332,7 @@ impl SqliteDeploymentStore {
 
     fn acquire_status_condition(statuses: Option<&Vec<String>>) -> sea_query::Condition {
         Cond::all()
-            .add(Expr::cust("NOT (status = 'pending' AND current_release_id IS NULL AND json_extract(COALESCE(setup_metadata, '{}'), '$.setupReservation.releaseId') IS NOT NULL)"))
+            .add(Expr::cust(format!("NOT ({UNREGISTERED_SETUP_RESERVATION})")))
             .add(Self::unreserved_acquire_status_condition(statuses))
     }
 
@@ -1159,6 +1163,18 @@ impl DeploymentStore for SqliteDeploymentStore {
                 status: deployment.status,
             })
             .into_generic());
+        }
+
+        // Nothing to clean up for an unregistered reservation, so remove it. The
+        // condition is rechecked in the delete, so a registration that activated
+        // it in the meantime keeps it and it takes the normal cleanup path.
+        let sql = Query::delete()
+            .from_table(Deployments::Table)
+            .and_where(Expr::col(Deployments::Id).eq(id))
+            .and_where(Expr::cust(UNREGISTERED_SETUP_RESERVATION))
+            .to_string(SqliteQueryBuilder);
+        if self.db.execute_returning_rows_affected(&sql).await? > 0 {
+            return Ok(());
         }
 
         // FUTURE: reject or queue delete requests when another session currently owns the deployment lock.
