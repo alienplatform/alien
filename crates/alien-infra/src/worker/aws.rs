@@ -2661,11 +2661,134 @@ impl AwsWorkerController {
 
         self.renew_certificate(ctx).await?;
 
+        // A linked resource can change what its binding publishes without this worker being
+        // updated: a sandbox promoting a rebuilt image version after this worker rendered, or a
+        // re-registration. Compare the bindings rendered now with the ones Lambda runs, and
+        // refresh only when they differ.
+        if binding_check_due(&aws_worker_name, Utc::now()) {
+            if let Some(expected) = self.linked_binding_environment(ctx, &worker_config).await? {
+                // The comparison is optional to the heartbeat: a throttled or failed read skips
+                // it until the next window instead of failing a healthy worker.
+                match client.get_function_environment(&aws_worker_name).await {
+                    Ok(live) => {
+                        let drifted = drifted_variables(&expected, &live);
+                        if !drifted.is_empty() {
+                            // Names only: binding values can carry secrets.
+                            info!(
+                                worker = %worker_config.id,
+                                variables = ?drifted,
+                                reason = "linked binding drift",
+                                "Refreshing the worker's linked bindings"
+                            );
+                            return Ok(HandlerAction::Continue {
+                                state: RefreshingLinkedBindings,
+                                suggested_delay: None,
+                            });
+                        }
+                    }
+                    Err(error) => {
+                        warn!(
+                            worker = %worker_config.id,
+                            code = %error.code,
+                            "Skipped the linked binding comparison; it runs again in the next window"
+                        );
+                    }
+                }
+            }
+        }
+
         debug!(name = %worker_config.id, "Heartbeat check passed");
         Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: Some(Duration::from_secs(30)),
         })
+    }
+
+    /// Re-renders the environment with the linked bindings as they are now and applies it. Only
+    /// the environment changes; the worker's configuration is unchanged. The worker reports
+    /// Updating meanwhile, so the planner waits for the refresh before starting an update (which
+    /// only begins from Ready) and dependents wait for the binding to settle.
+    #[handler(
+        state = RefreshingLinkedBindings,
+        on_failure = RefreshFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn refreshing_linked_bindings(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        let aws_cfg = ctx.get_aws_config()?;
+        let client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
+        let aws_worker_name = get_aws_worker_name(ctx.resource_prefix, &worker_config.id);
+        let environment = self
+            .prepare_environment_variables(
+                &worker_config.environment,
+                &worker_config.links,
+                ctx,
+                &aws_worker_name,
+            )
+            .await?;
+        let arn = self.arn.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "Worker ARN not available for a binding refresh".to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })
+        })?;
+        client
+            .update_function_configuration(
+                &arn,
+                UpdateFunctionConfigurationRequest::builder()
+                    .environment(Environment::builder().variables(environment).build())
+                    .build(),
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to refresh the worker's linked bindings".to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })?;
+        Ok(HandlerAction::Continue {
+            state: RefreshingLinkedBindingsWaitForActive,
+            suggested_delay: Some(Duration::from_secs(3)),
+        })
+    }
+
+    #[handler(
+        state = RefreshingLinkedBindingsWaitForActive,
+        on_failure = RefreshFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn refreshing_linked_bindings_wait_for_active(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        let aws_cfg = ctx.get_aws_config()?;
+        let client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
+        let aws_worker_name = get_aws_worker_name(ctx.resource_prefix, &worker_config.id);
+        let result = client
+            .get_function_configuration(&aws_worker_name, None)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to read the worker after a binding refresh".to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })?;
+        match (result.state.as_deref(), result.last_update_status.as_deref()) {
+            (Some("Active"), Some("Successful")) => Ok(HandlerAction::Continue {
+                state: Ready,
+                suggested_delay: None,
+            }),
+            (Some("Pending"), _) | (_, Some("InProgress")) => Ok(HandlerAction::Stay {
+                max_times: Some(AWS_LAMBDA_ACTIVE_MAX_POLLS),
+                suggested_delay: Some(Duration::from_secs(5)),
+            }),
+            (state, status) => Err(AlienError::new(ErrorData::CloudPlatformError {
+                message: format!(
+                    "The worker's binding refresh failed. State: {state:?}, Last Update: {status:?}"
+                ),
+                resource_id: Some(worker_config.id.clone()),
+            })),
+        }
     }
 
     // ─────────────── UPDATE FLOW ──────────────────────────────
@@ -2856,16 +2979,64 @@ impl AwsWorkerController {
             || (current_config.triggers != previous_config.triggers
                 && (current_config.has_queue_batches() || previous_config.has_queue_batches()));
 
-        if !config_changed {
-            return Ok(HandlerAction::Continue {
-                state: UpdateConfigWaitForActive,
-                suggested_delay: None,
-            });
-        }
-
         let aws_cfg = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
         let aws_worker_name = get_aws_worker_name(ctx.resource_prefix, &current_config.id);
+
+        // An update whose own configuration is unchanged (new code, or a dependency's update)
+        // still re-renders the linked bindings: they may have moved since this worker rendered.
+        if !config_changed {
+            let bindings_drifted = match self
+                .linked_binding_environment(ctx, &current_config)
+                .await?
+            {
+                Some(expected) => {
+                    let live = client
+                        .get_function_environment(&aws_worker_name)
+                        .await
+                        .context(ErrorData::CloudPlatformError {
+                            message: "Failed to read the worker environment for an update"
+                                .to_string(),
+                            resource_id: Some(current_config.id.clone()),
+                        })?;
+                    !drifted_variables(&expected, &live).is_empty()
+                }
+                None if current_config.links.is_empty()
+                    && current_config.runtime_binding_links().is_empty() =>
+                {
+                    false
+                }
+                // A linked resource is still in its own flow; wait for the value it settles on.
+                None => {
+                    return Err(AlienError::new(ErrorData::DependencyNotReady {
+                        resource_id: current_config.id.clone(),
+                        dependency_id: current_config
+                            .links
+                            .iter()
+                            .chain(current_config.runtime_binding_links().iter())
+                            .find(|link| {
+                                ctx.state
+                                    .resources
+                                    .get(link.id())
+                                    .is_none_or(|state| state.status != ResourceStatus::Running)
+                            })
+                            .map(|link| link.id().to_string())
+                            .unwrap_or_default(),
+                    }))
+                }
+            };
+            if !bindings_drifted {
+                return Ok(HandlerAction::Continue {
+                    state: UpdateConfigWaitForActive,
+                    suggested_delay: None,
+                });
+            }
+            info!(
+                worker = %current_config.id,
+                reason = "linked binding drift",
+                "Re-rendering the worker's linked bindings during its update"
+            );
+        }
 
         // Get the ServiceAccount for this worker's permission profile
         let service_account_id = format!("{}-sa", current_config.get_permissions());
@@ -5492,6 +5663,37 @@ impl AwsWorkerController {
         ))
     }
 
+    /// The linked resources' binding variables as they would be rendered now, or `None` while
+    /// any linked resource is not Running: a dependency in the middle of its own flow has not
+    /// reached the value its dependents should see.
+    async fn linked_binding_environment(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        worker_config: &Worker,
+    ) -> Result<Option<HashMap<String, String>>> {
+        let mut links = worker_config.links.clone();
+        for link in worker_config.runtime_binding_links() {
+            if !links.contains(&link) {
+                links.push(link);
+            }
+        }
+        if links.is_empty()
+            || links.iter().any(|link| {
+                ctx.state
+                    .resources
+                    .get(link.id())
+                    .is_none_or(|state| state.status != ResourceStatus::Running)
+            })
+        {
+            return Ok(None);
+        }
+        let rendered = EnvironmentVariableBuilder::try_new(&HashMap::new())?
+            .add_linked_resources(&links, ctx, &worker_config.id)
+            .await?
+            .build();
+        Ok(Some(rendered))
+    }
+
     async fn prepare_environment_variables(
         &self,
         initial_env: &HashMap<String, String>,
@@ -5566,11 +5768,74 @@ impl AwsWorkerController {
     }
 }
 
+/// Time is cut into slots of this many seconds, and each worker compares its linked bindings
+/// with its live environment in one slot out of every [`LINKED_BINDING_CHECK_SLOTS`]. The
+/// comparison costs a GetFunction call, against Lambda's 100 per second per Region, so it runs on
+/// a fraction of heartbeats rather than on each one.
+const LINKED_BINDING_CHECK_SLOT_SECONDS: i64 = 30;
+/// Prime, so a worker reaches its slot within this many heartbeats whatever the heartbeat
+/// interval (30 s, the manager's 60 s, 90 s, ...), unless that interval is a multiple of
+/// `LINKED_BINDING_CHECK_SLOTS * LINKED_BINDING_CHECK_SLOT_SECONDS` (330 s).
+const LINKED_BINDING_CHECK_SLOTS: i64 = 11;
+
+/// Whether `now` falls in this worker's comparison slot. The slot is derived from the worker's
+/// name and the clock, so the cadence stores nothing and writes no state per heartbeat, and
+/// workers in one account spread their reads.
+fn binding_check_due(worker_name: &str, now: chrono::DateTime<Utc>) -> bool {
+    // Tests open the slot explicitly, so heartbeat tests about something else never depend on
+    // the clock.
+    #[cfg(test)]
+    {
+        let _ = (worker_name, now);
+        tests::FORCED_BINDING_CHECK.with(|forced| forced.get())
+    }
+    #[cfg(not(test))]
+    binding_window_open(worker_name, now)
+}
+
+fn binding_window_open(worker_name: &str, now: chrono::DateTime<Utc>) -> bool {
+    let offset = worker_name.bytes().fold(0i64, |hash, byte| {
+        (hash * 31 + i64::from(byte)) % LINKED_BINDING_CHECK_SLOTS
+    });
+    (now.timestamp() / LINKED_BINDING_CHECK_SLOT_SECONDS).rem_euclid(LINKED_BINDING_CHECK_SLOTS)
+        == offset
+}
+
+/// Names of the variables in `expected` that `live` lacks or holds with another value. Binding
+/// variables are JSON, compared as values: key order and formatting are not a difference.
+fn drifted_variables(
+    expected: &HashMap<String, String>,
+    live: &HashMap<String, String>,
+) -> Vec<String> {
+    let same = |expected: &str, live: &str| {
+        expected == live
+            || matches!(
+                (
+                    serde_json::from_str::<serde_json::Value>(expected),
+                    serde_json::from_str::<serde_json::Value>(live),
+                ),
+                (Ok(expected), Ok(live)) if expected == live
+            )
+    };
+    let mut drifted: Vec<String> = expected
+        .iter()
+        .filter(|(name, value)| live.get(*name).is_none_or(|live| !same(value, live)))
+        .map(|(name, _)| name.clone())
+        .collect();
+    drifted.sort();
+    drifted
+}
+
 #[cfg(test)]
 mod tests {
     //! # AWS Worker Controller Tests
     //!
     //! See `crate::core::controller_test` for a comprehensive guide on testing infrastructure controllers.
+    thread_local! {
+        /// Forces the linked-binding comparison window open or closed in tests.
+        pub(super) static FORCED_BINDING_CHECK: std::cell::Cell<bool> =
+            const { std::cell::Cell::new(false) };
+    }
 
     use std::collections::HashMap;
     use std::sync::{
@@ -10164,4 +10429,419 @@ mod tests {
             assert_eq!(state.state, AwsWorkerState::DeletingLogGroup);
         }
     }
+
+    /// A linked sandbox can publish a new image version after this worker rendered its binding
+    /// (a rebuild that becomes active later, a re-registration). The worker must pick it up
+    /// without its own configuration changing, and must not touch Lambda when nothing moved.
+    mod linked_binding_refresh {
+        use super::*;
+        use crate::sandbox::{AwsSandboxController, AwsSandboxState};
+        use alien_core::{ResourceRef, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy};
+
+        const IMAGE_ARN: &str = "arn:aws:lambda:us-east-1:123456789012:microvm-image:test-sb";
+
+        fn sandbox() -> Sandbox {
+            Sandbox::new("sb".to_string())
+                .code(SandboxCode::Image {
+                    image: "registry.example.com/sb:1".to_string(),
+                })
+                .egress(SandboxEgress::None)
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: Some(1800),
+                    idle_pause_seconds: None,
+                })
+                .build()
+        }
+
+        fn sandbox_on(version: &str, state: AwsSandboxState) -> AwsSandboxController {
+            AwsSandboxController {
+                state,
+                image_identifier: Some(IMAGE_ARN.to_string()),
+                image_arn: Some(IMAGE_ARN.to_string()),
+                active_version: Some(version.to_string()),
+                region: Some("us-east-1".to_string()),
+                ..Default::default()
+            }
+        }
+
+        fn linked_worker() -> Worker {
+            let mut worker = basic_function();
+            worker.links = vec![ResourceRef::new(Sandbox::RESOURCE_TYPE, "sb")];
+            worker
+        }
+
+        /// The sandbox binding variable as a worker renders it for `version`.
+        fn binding_variable(version: &str) -> (String, String) {
+            let params = sandbox_on(version, AwsSandboxState::Ready)
+                .get_binding_params()
+                .unwrap()
+                .expect("a ready sandbox publishes a binding");
+            alien_core::bindings::serialize_binding_as_env_var("sb", &params)
+                .unwrap()
+                .into_iter()
+                .next()
+                .unwrap()
+        }
+
+        async fn executor(
+            lambda: MockLambdaApi,
+            controller: AwsWorkerController,
+            sandbox_controller: AwsSandboxController,
+            previous: Option<Worker>,
+        ) -> SingleControllerExecutor {
+            super::FORCED_BINDING_CHECK.with(|forced| forced.set(true));
+            let provider = setup_mock_service_provider(Arc::new(lambda), None, None);
+            let mut builder = SingleControllerExecutor::builder()
+                .resource(linked_worker())
+                .controller(controller)
+                .platform(Platform::Aws)
+                .service_provider(provider)
+                .with_test_dependencies()
+                .with_dependency(
+                    Network::new("default-network".into())
+                        .settings(NetworkSettings::UseDefault)
+                        .build(),
+                    AwsNetworkController::mock_ready("vpc-test", 0),
+                )
+                .with_dependency(sandbox(), sandbox_controller);
+            if let Some(previous) = previous {
+                builder = builder.previous_resource(previous);
+            }
+            builder.build().await.unwrap()
+        }
+
+        fn active(lambda: &mut MockLambdaApi) {
+            lambda
+                .expect_get_function_configuration()
+                .returning(|name, _| Ok(create_successful_function_response(name)));
+        }
+
+        /// The full environment the worker applies when the sandbox serves `version`, as Lambda
+        /// would then hold it.
+        async fn rendered_environment(version: &str) -> HashMap<String, String> {
+            let captured = Arc::new(std::sync::Mutex::new(None));
+            let sink = captured.clone();
+            let mut lambda = MockLambdaApi::new();
+            active(&mut lambda);
+            lambda
+                .expect_get_function_environment()
+                .returning(|_| Ok(HashMap::new()));
+            lambda
+                .expect_update_function_configuration()
+                .returning(move |name, request| {
+                    *sink.lock().unwrap() =
+                        request.environment.and_then(|environment| environment.variables);
+                    Ok(create_successful_function_response(name))
+                });
+            let mut executor = executor(
+                lambda,
+                AwsWorkerController::mock_ready("basic-func"),
+                sandbox_on(version, AwsSandboxState::Ready),
+                None,
+            )
+            .await;
+            executor.step().await.unwrap();
+            executor.step().await.unwrap();
+            let rendered = captured.lock().unwrap().clone();
+            rendered.expect("the worker applies its environment")
+        }
+
+        /// The worker as the stack mutations prepare it, with its previous release's code, so an
+        /// update sees only a code change.
+        async fn previous_release() -> Worker {
+            let mut lambda = MockLambdaApi::new();
+            active(&mut lambda);
+            let mut executor = executor(
+                lambda,
+                AwsWorkerController::mock_ready("basic-func"),
+                sandbox_on("1.0", AwsSandboxState::Ready),
+                None,
+            )
+            .await;
+            let mut previous = executor
+                .desired_resource_config_mut("basic-func")
+                .and_then(|config| config.downcast_ref::<Worker>().cloned())
+                .expect("the prepared worker");
+            previous.code = alien_core::WorkerCode::Image {
+                image: "registry.example.com/worker:old".into(),
+            };
+            previous
+        }
+
+        fn carries(variables: Option<&HashMap<String, String>>, version: &str) -> bool {
+            let (name, value) = binding_variable(version);
+            variables
+                .and_then(|variables| variables.get(&name))
+                .is_some_and(|live| {
+                    serde_json::from_str::<serde_json::Value>(live).unwrap()
+                        == serde_json::from_str::<serde_json::Value>(&value).unwrap()
+                })
+        }
+
+        /// The staging case: the sandbox moved from 1.0 to 2.0 and the worker was never updated.
+        /// The heartbeat sees the difference and applies the current binding, once.
+        #[tokio::test]
+        async fn a_heartbeat_applies_a_linked_binding_that_moved() {
+            let mut lambda = MockLambdaApi::new();
+            active(&mut lambda);
+            let live = rendered_environment("1.0").await;
+            assert!(carries(Some(&live), "1.0"));
+            lambda
+                .expect_get_function_environment()
+                .times(1)
+                .returning(move |_| Ok(live.clone()));
+            lambda
+                .expect_update_function_configuration()
+                .times(1)
+                .withf(|_, request| {
+                    carries(
+                        request
+                            .environment
+                            .as_ref()
+                            .and_then(|environment| environment.variables.as_ref()),
+                        "2.0",
+                    ) && request.memory_size.is_none()
+                        && request.role.is_none()
+                })
+                .returning(|name, _| Ok(create_successful_function_response(name)));
+            let worker = AwsWorkerController::mock_ready("basic-func");
+            let own_binding = worker.get_binding_params().unwrap();
+            let mut executor = executor(
+                lambda,
+                worker,
+                sandbox_on("2.0", AwsSandboxState::Ready),
+                None,
+            )
+            .await;
+
+            executor.step().await.expect("the heartbeat runs");
+            assert_eq!(
+                executor.internal_state::<AwsWorkerController>().unwrap().state,
+                AwsWorkerState::RefreshingLinkedBindings
+            );
+            assert_eq!(
+                executor.status(),
+                ResourceStatus::Updating,
+                "the planner must not start an update mid-refresh: updates begin only from Ready"
+            );
+            executor.step().await.expect("the refresh applies the binding");
+            executor.step().await.expect("the refresh settles");
+            let controller = executor.internal_state::<AwsWorkerController>().unwrap();
+            assert_eq!(controller.state, AwsWorkerState::Ready);
+            assert_eq!(
+                controller.get_binding_params().unwrap(),
+                own_binding,
+                "a refresh must not change the worker's own binding, or its dependents would follow"
+            );
+        }
+
+        /// No fleet churn: a live environment that already matches, even with the JSON keys in
+        /// another order, makes no write.
+        #[tokio::test]
+        async fn a_heartbeat_leaves_matching_bindings_alone() {
+            let current = rendered_environment("2.0").await;
+            let (name, _) = binding_variable("2.0");
+            let mut reformatted = current.clone();
+            let pretty = serde_json::to_string_pretty(
+                &serde_json::from_str::<serde_json::Value>(&current[&name]).unwrap(),
+            )
+            .unwrap();
+            reformatted.insert(name.clone(), pretty);
+            for live in [current, reformatted] {
+                let mut lambda = MockLambdaApi::new();
+                active(&mut lambda);
+                lambda
+                    .expect_get_function_environment()
+                    .times(1)
+                    .returning(move |_| Ok(live.clone()));
+                lambda.expect_update_function_configuration().times(0);
+                let mut executor = executor(
+                    lambda,
+                    AwsWorkerController::mock_ready("basic-func"),
+                    sandbox_on("2.0", AwsSandboxState::Ready),
+                    None,
+                )
+                .await;
+                executor.step().await.expect("the heartbeat runs");
+                assert_eq!(
+                    executor.internal_state::<AwsWorkerController>().unwrap().state,
+                    AwsWorkerState::Ready
+                );
+            }
+        }
+
+        /// Every worker compares once in any eleven consecutive heartbeats, at the 30-second
+        /// heartbeat, the manager's 60-second tick and a 90-second one alike, so a heartbeat that
+        /// keeps landing in one half-minute still reaches its slot.
+        #[test]
+        fn each_worker_compares_once_in_eleven_heartbeats_at_any_interval() {
+            let start = chrono::DateTime::from_timestamp(1_800_000_007, 0).unwrap();
+            for interval in [30, 60, 90] {
+                for name in ["test-a", "test-b", "stack-worker", "w"] {
+                    for shift in [0, 11, 29] {
+                        let due = (0..super::super::LINKED_BINDING_CHECK_SLOTS)
+                            .filter(|beat| {
+                                super::super::binding_window_open(
+                                    name,
+                                    start + chrono::Duration::seconds(shift + beat * interval),
+                                )
+                            })
+                            .count();
+                        assert_eq!(due, 1, "{name} every {interval}s, shifted {shift}s");
+                    }
+                }
+            }
+        }
+
+        /// A throttled read skips the comparison: the heartbeat still succeeds, the worker stays
+        /// Ready and healthy, and nothing is written.
+        #[tokio::test]
+        async fn a_throttled_comparison_is_skipped_without_failing_the_heartbeat() {
+            let mut lambda = MockLambdaApi::new();
+            active(&mut lambda);
+            lambda.expect_get_function_environment().times(1).returning(|_| {
+                Err(AlienError::new(CloudClientErrorData::RateLimitExceeded {
+                    message: "Rate exceeded".to_string(),
+                }))
+            });
+            lambda.expect_update_function_configuration().times(0);
+            let mut executor = executor(
+                lambda,
+                AwsWorkerController::mock_ready("basic-func"),
+                sandbox_on("2.0", AwsSandboxState::Ready),
+                None,
+            )
+            .await;
+            executor.step().await.expect("a throttled comparison does not fail the heartbeat");
+            assert_eq!(
+                executor.internal_state::<AwsWorkerController>().unwrap().state,
+                AwsWorkerState::Ready
+            );
+            assert_eq!(executor.status(), ResourceStatus::Running);
+        }
+
+        /// No new write per heartbeat: a heartbeat that finds no drift leaves the controller's
+        /// state exactly as it was, so the deployment loop has nothing new to persist.
+        #[tokio::test]
+        async fn a_heartbeat_without_drift_changes_no_state() {
+            let current = rendered_environment("2.0").await;
+            let mut lambda = MockLambdaApi::new();
+            active(&mut lambda);
+            lambda
+                .expect_get_function_environment()
+                .times(1)
+                .returning(move |_| Ok(current.clone()));
+            lambda.expect_update_function_configuration().times(0);
+            let before = AwsWorkerController::mock_ready("basic-func");
+            let mut executor = executor(
+                lambda,
+                before.clone(),
+                sandbox_on("2.0", AwsSandboxState::Ready),
+                None,
+            )
+            .await;
+            executor.step().await.expect("the heartbeat runs");
+            assert_eq!(
+                serialize_controller(executor.internal_state::<AwsWorkerController>().unwrap())
+                    .unwrap(),
+                serialize_controller(&before).unwrap()
+            );
+        }
+
+        /// Ordering: while the sandbox is in its own update it has not reached the value its
+        /// dependents should see, so the worker neither compares nor writes.
+        #[tokio::test]
+        async fn a_heartbeat_waits_for_a_linked_resource_in_its_own_flow() {
+            let mut lambda = MockLambdaApi::new();
+            active(&mut lambda);
+            lambda.expect_get_function_environment().times(0);
+            lambda.expect_update_function_configuration().times(0);
+            let mut executor = executor(
+                lambda,
+                AwsWorkerController::mock_ready("basic-func"),
+                sandbox_on("1.0", AwsSandboxState::WaitingForRolledImageActive),
+                None,
+            )
+            .await;
+            executor.step().await.expect("the heartbeat runs");
+            assert_eq!(
+                executor.internal_state::<AwsWorkerController>().unwrap().state,
+                AwsWorkerState::Ready
+            );
+        }
+
+        /// The other staging case: the worker's code changed in the same release, so it was
+        /// updated, but its own configuration did not change and the update skipped the
+        /// environment. It must re-render the binding the sandbox publishes now.
+        #[tokio::test]
+        async fn a_code_only_update_applies_a_linked_binding_that_moved() {
+            let mut lambda = MockLambdaApi::new();
+            active(&mut lambda);
+            let live = rendered_environment("1.0").await;
+            lambda
+                .expect_get_function_environment()
+                .times(1)
+                .returning(move |_| Ok(live.clone()));
+            lambda
+                .expect_update_function_configuration()
+                .times(1)
+                .withf(|_, request| {
+                    carries(
+                        request
+                            .environment
+                            .as_ref()
+                            .and_then(|environment| environment.variables.as_ref()),
+                        "2.0",
+                    )
+                })
+                .returning(|name, _| Ok(create_successful_function_response(name)));
+            let previous = previous_release().await;
+            let controller = AwsWorkerController {
+                state: AwsWorkerState::UpdateConfigStart,
+                ..AwsWorkerController::mock_ready("basic-func")
+            };
+            let mut executor = executor(
+                lambda,
+                controller,
+                sandbox_on("2.0", AwsSandboxState::Ready),
+                Some(previous),
+            )
+            .await;
+            executor.step().await.expect("the update re-renders the binding");
+            assert_eq!(
+                executor.internal_state::<AwsWorkerController>().unwrap().state,
+                AwsWorkerState::UpdateConfigWaitForActive
+            );
+        }
+
+        /// A code-only update whose bindings did not move still makes no configuration write.
+        #[tokio::test]
+        async fn a_code_only_update_with_current_bindings_writes_nothing() {
+            let mut lambda = MockLambdaApi::new();
+            active(&mut lambda);
+            let live = rendered_environment("2.0").await;
+            lambda
+                .expect_get_function_environment()
+                .times(1)
+                .returning(move |_| Ok(live.clone()));
+            lambda.expect_update_function_configuration().times(0);
+            let previous = previous_release().await;
+            let mut executor = executor(
+                lambda,
+                AwsWorkerController {
+                    state: AwsWorkerState::UpdateConfigStart,
+                    ..AwsWorkerController::mock_ready("basic-func")
+                },
+                sandbox_on("2.0", AwsSandboxState::Ready),
+                Some(previous),
+            )
+            .await;
+            executor.step().await.expect("the update runs");
+            assert_eq!(
+                executor.internal_state::<AwsWorkerController>().unwrap().state,
+                AwsWorkerState::UpdateConfigWaitForActive
+            );
+        }
+    }
+
 }
