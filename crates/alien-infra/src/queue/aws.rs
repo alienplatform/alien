@@ -266,8 +266,16 @@ impl AwsQueueController {
                     self.queue_url = None;
                     self.queue_name = None;
                 }
+                Err(e)
+                    if matches!(
+                        e.error,
+                        Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+                    ) =>
+                {
+                    self.queue_url = None;
+                    self.queue_name = None;
+                }
                 Err(e) => {
-                    // Consider not found as successful deletion
                     return Err(e.context(ErrorData::CloudPlatformError {
                         message: format!("Failed to delete SQS queue '{}'", queue_url),
                         resource_id: Some(config.id.clone()),

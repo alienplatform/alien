@@ -125,8 +125,16 @@ impl SsmClient {
             .content_sha256(&body)
             .body(body.clone());
 
-        let result =
-            crate::aws::aws_request_utils::sign_send_json(builder, &self.sign_config()).await;
+        let result = if operation == "DeleteParameter" {
+            crate::aws::aws_request_utils::sign_send_json_retrying_when(
+                builder,
+                &self.sign_config(),
+                crate::aws::aws_request_utils::is_retryable_delete,
+            )
+            .await
+        } else {
+            crate::aws::aws_request_utils::sign_send_json(builder, &self.sign_config()).await
+        };
 
         Self::map_result(result, operation, resource, Some(&body))
     }

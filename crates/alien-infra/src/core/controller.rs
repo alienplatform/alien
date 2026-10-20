@@ -4,7 +4,7 @@
 //! Each controller handles one resource type on one platform (e.g., `AwsWorkerController`, `GcpRoleController`).
 //!
 //! **Key Principles:**
-//! - **Fail Fast on Conflict for Create/Update**: Issue the cloud API call directly and propagate all errors (including `RemoteResourceConflict`). The executor handles retries automatically. Deletion flows still tolerate `RemoteResourceNotFound` and `RemoteAccessDenied`.
+//! - **Fail Fast on Conflict for Create/Update**: Issue the cloud API call directly and propagate all errors (including `RemoteResourceConflict`). The executor handles retries automatically. Delete handlers handle genuine `RemoteResourceNotFound` for each child and propagate permission errors.
 //! - **Retry-Safe Handler Boundaries**: A handler should perform at most one externally durable mutating operation unless the phase is explicitly idempotent, progress-tracked, or best-effort cleanup.
 //! - **Retry Failed State**: The executor retries the failed handler state, stores `last_failed_state`, and manual retry resumes from that state.
 //! - **Stable Phase Order**: Flows should follow predictable phases. No-op phases are fine when they keep update/delete paths easier to reason about.
@@ -255,8 +255,10 @@
 //! }
 //! ```
 //!
-//! ### Delete Operations – Best-Effort Cleanup
-//! Delete states should treat `RemoteResourceNotFound` and `RemoteAccessDenied` as success, making cleanup idempotent even when an imported resource has already been removed or is no longer accessible.
+//! ### Delete Operations – Preserve Unfinished Cleanup
+//! Handle `RemoteResourceNotFound` at the individual child operation and continue remaining cleanup.
+//! Access denied is an error, not evidence of absence. Keep identifiers and propagate failures.
+//! A confirming read may tolerate denial only when durable state proves its delete succeeded.
 //! Provider dependency-drain errors during delete, such as GCP `resourceInUseByAnotherResource`,
 //! AWS `DependencyViolation`/`ResourceInUse`, and Azure `InUse`/`Conflict`, should usually be
 //! handled as wait conditions. Keep the referenced remote ID in state and return `Stay` or a
@@ -265,7 +267,7 @@
 //! ```ignore
 //! match client.delete_service_account(&name).await {
 //!     Ok(_) => next_state_deleting_role(),
-//!     Err(e) if matches!(e.error, Some(CloudClientErrorData::RemoteResourceNotFound { .. } | CloudClientErrorData::RemoteAccessDenied { .. })) => next_state_deleting_role(),
+//!     Err(e) if matches!(e.error, Some(CloudClientErrorData::RemoteResourceNotFound { .. })) => next_state_deleting_role(),
 //!     Err(e) => return Err(e),
 //! }
 //! ```

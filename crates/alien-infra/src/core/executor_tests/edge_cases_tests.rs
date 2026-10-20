@@ -51,7 +51,7 @@ fn external_ai_config(resource_id: &str) -> DeploymentConfig {
         .build()
 }
 
-async fn assert_best_effort_delete_error_marks_deleted(flag: &str) -> Result<()> {
+async fn assert_delete_error_preserves_checkpoint(flag: &str) -> Result<()> {
     let mut func1 = test_function("func1");
     func1
         .environment
@@ -71,16 +71,35 @@ async fn assert_best_effort_delete_error_marks_deleted(flag: &str) -> Result<()>
     );
 
     let deletion_executor = new_deletion_executor()?;
-    let state_after_delete = run_to_synced(&deletion_executor, state_after_create).await?;
-
-    assert_deleted(&state_after_delete, &["func1"]);
-    assert!(
-        state_after_delete
-            .resources
-            .get("func1")
-            .and_then(|state| state.internal_state.as_ref())
-            .is_none(),
-        "Best-effort delete should clean up controller state"
+    let mut state = state_after_create;
+    for _ in 0..30 {
+        state = deletion_executor.step(state).await?.next_state;
+        state = serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
+        if matches!(
+            get_status(&state, "func1"),
+            Some(ResourceStatus::Deleted | ResourceStatus::DeleteFailed)
+        ) {
+            break;
+        }
+    }
+    let failed = &state.resources["func1"];
+    assert_eq!(failed.status, ResourceStatus::DeleteFailed);
+    assert!(failed.error.is_some());
+    assert!(failed.internal_state.is_some());
+    assert!(failed.last_failed_state.is_some());
+    assert_eq!(
+        failed.internal_state.as_ref().unwrap()["identifier"],
+        failed.last_failed_state.as_ref().unwrap()["identifier"]
+    );
+    assert!(failed.internal_state.as_ref().unwrap()["identifier"].is_string());
+    let unchanged = deletion_executor.step(state.clone()).await?.next_state;
+    assert_eq!(
+        unchanged.resources["func1"].status,
+        ResourceStatus::DeleteFailed
+    );
+    assert_eq!(
+        unchanged.resources["func1"].last_failed_state,
+        state.resources["func1"].last_failed_state
     );
 
     Ok(())
@@ -123,16 +142,16 @@ async fn test_recreate_deleted_resource() -> Result<()> {
     Ok(())
 }
 
-/// Tests best-effort delete cleanup when the remote resource is already gone.
+/// A child NotFound returned by a handler cannot finish the whole resource.
 #[tokio::test]
-async fn test_delete_not_found_marks_deleted() -> Result<()> {
-    assert_best_effort_delete_error_marks_deleted("SIMULATE_DELETE_NOT_FOUND").await
+async fn test_delete_not_found_preserves_checkpoint() -> Result<()> {
+    assert_delete_error_preserves_checkpoint("SIMULATE_DELETE_NOT_FOUND").await
 }
 
-/// Tests best-effort delete cleanup when imported-resource credentials can no longer access it.
+/// A denied delete retains the checkpoint needed after permissions are restored.
 #[tokio::test]
-async fn test_delete_access_denied_marks_deleted() -> Result<()> {
-    assert_best_effort_delete_error_marks_deleted("SIMULATE_DELETE_ACCESS_DENIED").await
+async fn test_delete_access_denied_preserves_checkpoint() -> Result<()> {
+    assert_delete_error_preserves_checkpoint("SIMULATE_DELETE_ACCESS_DENIED").await
 }
 
 /// Tests handling resources that are externally provisioned.

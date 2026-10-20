@@ -9,7 +9,7 @@ use alien_core::{
     EnvironmentVariablesSnapshot, GcpEnvironmentInfo, LocalEnvironmentInfo, OtlpConfig, Platform,
     ResourceLifecycle, ResourceStatus, RuntimeMetadata, SecretDelivery, Stack, StackResourceState,
     StackState, TestEnvironmentInfo, Vault, VaultBinding, Worker, ENV_ALIEN_COMMANDS_TOKEN,
-    ENV_ALIEN_DEPLOYER_SECRETS, ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_SECRETS, SECRETS_VAULT_ID,
+    ENV_ALIEN_DEPLOYER_SECRETS, ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_SECRETS,
 };
 use alien_error::{AlienError, Context, IntoAlienError as _};
 use alien_gcp_clients::{ResourceManagerApi, ResourceManagerClient};
@@ -17,7 +17,7 @@ use alien_infra::StackResourceStateExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 const OTEL_RESOURCE_ATTRIBUTES: &str = "OTEL_RESOURCE_ATTRIBUTES";
 const OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: &str = "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT";
@@ -848,26 +848,12 @@ pub async fn sync_secrets_to_vault(
     // exception: it is a reserved, control-plane-owned key that pre-v2 sync wrote without an
     // ownership inventory. The sync-schema hash forces one idempotent cleanup after upgrade.
     // Never list or infer any other ownership from the shared vault.
-    //
-    // A delete the cloud denies is let go rather than failing the update: setup
-    // revokes the management role's vault access once no workload reads the
-    // vault, and the customer may run it before this update. The value stays
-    // in the customer's account, read by nothing.
     for name in &removed_secret_names {
-        match vault.delete_secret(name).await {
-            Ok(()) => debug!("Deleted removed deployment-owned secret '{name}' from vault"),
-            Err(error) if is_access_denied(&error) => warn!(
-                secret = %name,
-                error = %error,
-                "Management role can no longer delete a removed secret; leaving it in place"
-            ),
-            Err(error) => {
-                return Err(error).context(ErrorData::SecretSyncFailed {
-                    vault_name: "secrets".to_string(),
-                    reason: format!("Failed to delete removed secret '{name}'"),
-                })
-            }
-        }
+        vault.delete_secret(name).await.context(ErrorData::SecretSyncFailed {
+            vault_name: "secrets".to_string(),
+            reason: format!("Failed to delete removed secret '{name}'; restore delete permission and retry before narrowing setup grants"),
+        })?;
+        debug!("Deleted removed deployment-owned secret '{name}' from vault");
     }
 
     // Record ownership only after every mutation succeeds. A partial failure
@@ -1157,26 +1143,6 @@ pub async fn delete_deployment_vault_secrets(
         "Deleted deployment-owned vault secrets"
     );
     Ok(true)
-}
-
-/// Whether an error, or any error it wraps, is the cloud refusing access.
-fn is_access_denied<T>(error: &AlienError<T>) -> bool
-where
-    T: alien_error::AlienErrorData + Clone + std::fmt::Debug + serde::Serialize,
-{
-    let denied =
-        |code: &str, status: Option<u16>| code == "REMOTE_ACCESS_DENIED" || status == Some(403);
-    if denied(&error.code, error.http_status_code) {
-        return true;
-    }
-    let mut source = error.source.as_deref();
-    while let Some(error) = source {
-        if denied(&error.code, error.http_status_code) {
-            return true;
-        }
-        source = error.source.as_deref();
-    }
-    false
 }
 
 fn has_secrets_vault(stack_state: &StackState) -> bool {
@@ -1812,9 +1778,9 @@ mod tests {
     /// workload reads secrets from it.
     fn with_secrets_vault(mut stack: Stack) -> Stack {
         stack.resources.insert(
-            SECRETS_VAULT_ID.to_string(),
+            alien_core::SECRETS_VAULT_ID.to_string(),
             ResourceEntry {
-                config: Resource::new(Vault::new(SECRETS_VAULT_ID.to_string()).build()),
+                config: Resource::new(Vault::new(alien_core::SECRETS_VAULT_ID.to_string()).build()),
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: Vec::new(),
                 remote_access: false,
@@ -2536,28 +2502,96 @@ mod tests {
         assert!(!desired.contains_key(ENV_ALIEN_COMMANDS_TOKEN));
     }
 
-    /// The AWS SSM vault reports a denied delete as a cloud-platform error
-    /// wrapping the denial. Only that lets a removed secret go; any other
-    /// failure still fails the sync.
-    #[test]
-    fn a_denied_delete_is_recognised_through_the_error_chain() {
-        let mut denied = AlienError::new(GenericError {
-            message: "Request failed with HTTP 400: Bad Request".to_string(),
-        });
-        denied.code = "REMOTE_ACCESS_DENIED".to_string();
-        let mut wrapped = AlienError::new(GenericError {
-            message: "Failed to delete parameter".to_string(),
-        });
-        wrapped.code = "CLOUD_PLATFORM_ERROR".to_string();
-        wrapped.source = Some(Box::new(denied));
-        assert!(is_access_denied(&wrapped));
-
-        let mut throttled = AlienError::new(GenericError {
-            message: "Rate exceeded".to_string(),
-        });
-        throttled.code = "CLOUD_PLATFORM_ERROR".to_string();
-        throttled.http_status_code = Some(429);
-        assert!(!is_access_denied(&throttled));
+    #[tokio::test]
+    async fn denied_secret_cleanup_keeps_inventory_across_reload_and_retry() {
+        let server = httpmock::MockServer::start_async().await;
+        let mut denied = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .header("x-amz-target", "AmazonSSM.DeleteParameter")
+                    .json_body(serde_json::json!({"Name": "test-secrets-B"}));
+                then.status(400).json_body(serde_json::json!({
+                    "__type": "AccessDeniedException", "message": "delete denied"
+                }));
+            })
+            .await;
+        let already_missing = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .header("x-amz-target", "AmazonSSM.DeleteParameter")
+                    .json_body(serde_json::json!({"Name": "test-secrets-A"}));
+                then.status(400).json_body(serde_json::json!({
+                    "__type": "ParameterNotFound", "message": "already removed"
+                }));
+            })
+            .await;
+        let reads = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .header("x-amz-target", "AmazonSSM.GetParameter");
+                then.status(403);
+            })
+            .await;
+        let cfg = ClientConfig::Aws(Box::new(alien_core::AwsClientConfig {
+            account_id: "123456789012".into(),
+            region: "us-east-1".into(),
+            credentials: alien_core::AwsCredentials::AccessKeys {
+                access_key_id: "test".into(),
+                secret_access_key: "test".into(),
+                session_token: None,
+            },
+            service_overrides: Some(alien_core::AwsServiceOverrides {
+                endpoints: HashMap::from([("ssm".into(), server.base_url())]),
+            }),
+        }));
+        let mut resource = StackResourceState::new_pending(
+            Vault::RESOURCE_TYPE.to_string(),
+            Resource::new(Vault::new("secrets".into()).build()),
+            Some(ResourceLifecycle::Frozen),
+            vec![],
+        );
+        resource.status = ResourceStatus::Running;
+        resource.remote_binding_params =
+            Some(serde_json::to_value(VaultBinding::parameter_store("test-secrets")).unwrap());
+        let mut state = StackState::new(Platform::Aws);
+        state.resources.insert("secrets".into(), resource);
+        let stack = with_secrets_vault(make_single_function_stack("worker"));
+        let config = make_config(make_snapshot(&[], &[]));
+        let mut metadata = RuntimeMetadata {
+            last_synced_env_vars_hash: Some("installed".into()),
+            last_synced_secret_names: vec!["A".into(), "B".into()],
+            ..Default::default()
+        };
+        let before = serde_json::to_value(&metadata).unwrap();
+        let error = sync_secrets_to_vault(&stack, &state, &cfg, &config, &mut metadata)
+            .await
+            .expect_err("denied cleanup must fail");
+        assert_eq!(error.code, "SECRET_SYNC_FAILED");
+        assert_eq!(serde_json::to_value(&metadata).unwrap(), before);
+        already_missing.assert_hits_async(1).await;
+        assert!(denied.hits_async().await >= 1);
+        reads.assert_hits_async(0).await;
+        metadata = serde_json::from_value(serde_json::to_value(metadata).unwrap()).unwrap();
+        denied.delete_async().await;
+        let allowed = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .header("x-amz-target", "AmazonSSM.DeleteParameter");
+                then.status(200).json_body(serde_json::json!({}));
+            })
+            .await;
+        assert!(
+            sync_secrets_to_vault(&stack, &state, &cfg, &config, &mut metadata)
+                .await
+                .unwrap()
+        );
+        assert!(metadata.last_synced_secret_names.is_empty());
+        assert_ne!(
+            metadata.last_synced_env_vars_hash.as_deref(),
+            Some("installed")
+        );
+        assert!(allowed.hits_async().await >= 1);
+        reads.assert_hits_async(0).await;
     }
 
     #[tokio::test]

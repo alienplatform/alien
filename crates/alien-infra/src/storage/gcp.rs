@@ -623,14 +623,21 @@ impl GcpStorageController {
         let gcp_config = ctx.get_gcp_config()?;
         let client = ctx.service_provider.get_gcp_gcs_client(gcp_config)?;
 
-        // Best effort: try to empty the bucket first
+        // Empty the bucket before deleting it; keep this phase retryable on failure.
         match client.empty_bucket(bucket_name.clone()).await {
             Ok(_) => {
                 info!(bucket = %bucket_name, "Bucket emptied successfully");
             }
-            Err(e) => {
-                // Log but continue - bucket might not exist or might already be empty
-                info!(bucket = %bucket_name, error=?e, "Could not empty bucket, continuing with deletion attempt");
+            Err(error)
+                if matches!(
+                    error.error,
+                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                ) => {}
+            Err(error) => {
+                return Err(error.context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to empty bucket '{bucket_name}' before deletion"),
+                    resource_id: Some(config.id.clone()),
+                }))
             }
         }
 

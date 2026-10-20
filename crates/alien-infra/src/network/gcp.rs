@@ -1090,21 +1090,62 @@ impl GcpNetworkController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Network>()?;
-        let firewall_name = self.firewall_name.clone().unwrap();
+        let Some(firewall_name) = self.firewall_name.clone() else {
+            return Ok(HandlerAction::Continue {
+                state: DeletingCloudNat,
+                suggested_delay: None,
+            });
+        };
 
         info!(firewall_name = %firewall_name, "Deleting firewall rule");
 
         let gcp_config = ctx.get_gcp_config()?;
         let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
 
-        let operation = compute_client
-            .delete_firewall(firewall_name.clone())
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: format!("Failed to delete firewall '{}'", firewall_name),
-                operation: Some("delete_firewall".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let result = compute_client.delete_firewall(firewall_name.clone()).await;
+        if result.as_ref().err().is_some_and(|error| {
+            matches!(
+                error.error,
+                Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+            )
+        }) {
+            return {
+                self.firewall_name = None;
+                self.pending_operation_name = None;
+
+                if self.cloud_nat_name.is_some() {
+                    Ok(HandlerAction::Continue {
+                        state: DeletingCloudNat,
+                        suggested_delay: None,
+                    })
+                } else if self.router_name.is_some() {
+                    Ok(HandlerAction::Continue {
+                        state: DeletingRouter,
+                        suggested_delay: None,
+                    })
+                } else if self.subnetwork_name.is_some() {
+                    Ok(HandlerAction::Continue {
+                        state: DeletingSubnetwork,
+                        suggested_delay: None,
+                    })
+                } else if self.network_name.is_some() {
+                    Ok(HandlerAction::Continue {
+                        state: DeletingNetwork,
+                        suggested_delay: None,
+                    })
+                } else {
+                    Ok(HandlerAction::Continue {
+                        state: Deleted,
+                        suggested_delay: None,
+                    })
+                }
+            };
+        }
+        let operation = result.context(ErrorData::InfrastructureError {
+            message: format!("Failed to delete firewall '{}'", firewall_name),
+            operation: Some("delete_firewall".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         self.pending_operation_name = operation.name;
 
@@ -1124,20 +1165,51 @@ impl GcpNetworkController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Network>()?;
-        let operation_name = self.pending_operation_name.clone().unwrap();
+        let Some(operation_name) = self.pending_operation_name.clone() else {
+            return Ok(HandlerAction::Continue {
+                state: DeletingFirewall,
+                suggested_delay: None,
+            });
+        };
 
         let gcp_config = ctx.get_gcp_config()?;
         let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
 
-        let operation = compute_client
+        let result = compute_client
             .get_global_operation(operation_name.clone())
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: "Failed to check firewall deletion status".to_string(),
-                operation: Some("get_global_operation".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+            .await;
+        if result.as_ref().err().is_some_and(|error| {
+            matches!(
+                error.error,
+                Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+            )
+        }) {
+            self.pending_operation_name = None;
+            self.pending_operation_region = None;
+            return Ok(HandlerAction::Continue {
+                state: DeletingFirewall,
+                suggested_delay: None,
+            });
+        }
+        let operation = result.context(ErrorData::InfrastructureError {
+            message: "Failed to check firewall deletion status".to_string(),
+            operation: Some("get_global_operation".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
+        if operation.has_error() || operation.http_error_status_code.is_some() {
+            // A terminal failed operation cannot recover. Keep child identifiers, but
+            // let an explicit retry submit a fresh idempotent delete.
+            self.pending_operation_name = None;
+            self.pending_operation_region = None;
+            let mut error = AlienError::new(ErrorData::InfrastructureError {
+                message: format!("Network deletion operation failed: {:?}", operation.error),
+                operation: operation.name.clone(),
+                resource_id: Some(config.id.clone()),
+            });
+            error.retryable = false;
+            return Err(error);
+        }
         if !operation.is_done() {
             return Ok(HandlerAction::Stay {
                 max_times: Some(60),
@@ -1186,7 +1258,12 @@ impl GcpNetworkController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Network>()?;
-        let router_name = self.router_name.clone().unwrap();
+        let Some(router_name) = self.router_name.clone() else {
+            return Ok(HandlerAction::Continue {
+                state: DeletingSubnetwork,
+                suggested_delay: None,
+            });
+        };
         let region = self.region.clone().unwrap();
 
         info!(router_name = %router_name, "Removing Cloud NAT from router");
@@ -1195,14 +1272,27 @@ impl GcpNetworkController {
         let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
 
         // Get router and remove NAT config
-        let mut router = compute_client
+        let router_result = compute_client
             .get_router(region.clone(), router_name.clone())
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: format!("Failed to get router '{}' for NAT removal", router_name),
-                operation: Some("get_router".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+            .await;
+        if router_result.as_ref().err().is_some_and(|error| {
+            matches!(
+                error.error,
+                Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+            )
+        }) {
+            self.cloud_nat_name = None;
+            self.router_name = None;
+            return Ok(HandlerAction::Continue {
+                state: DeletingSubnetwork,
+                suggested_delay: None,
+            });
+        }
+        let mut router = router_result.context(ErrorData::InfrastructureError {
+            message: format!("Failed to get router '{}' for NAT removal", router_name),
+            operation: Some("get_router".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         router.nats = vec![]; // Remove all NAT configs
 
@@ -1234,21 +1324,50 @@ impl GcpNetworkController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Network>()?;
-        let operation_name = self.pending_operation_name.clone().unwrap();
+        let Some(operation_name) = self.pending_operation_name.clone() else {
+            return Ok(HandlerAction::Continue {
+                state: DeletingCloudNat,
+                suggested_delay: None,
+            });
+        };
         let region = self.pending_operation_region.clone().unwrap();
 
         let gcp_config = ctx.get_gcp_config()?;
         let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
 
-        let operation = compute_client
+        let result = compute_client
             .get_region_operation(region, operation_name.clone())
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: "Failed to check Cloud NAT deletion status".to_string(),
-                operation: Some("get_region_operation".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+            .await;
+        if result.as_ref().err().is_some_and(|error| {
+            matches!(
+                error.error,
+                Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+            )
+        }) {
+            self.pending_operation_name = None;
+            self.pending_operation_region = None;
+            return Ok(HandlerAction::Continue {
+                state: DeletingCloudNat,
+                suggested_delay: None,
+            });
+        }
+        let operation = result.context(ErrorData::InfrastructureError {
+            message: "Failed to check Cloud NAT deletion status".to_string(),
+            operation: Some("get_region_operation".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
+        if operation.has_error() || operation.http_error_status_code.is_some() {
+            self.pending_operation_name = None;
+            self.pending_operation_region = None;
+            let mut error = AlienError::new(ErrorData::InfrastructureError {
+                message: format!("Network deletion operation failed: {:?}", operation.error),
+                operation: operation.name.clone(),
+                resource_id: Some(config.id.clone()),
+            });
+            error.retryable = false;
+            return Err(error);
+        }
         if !operation.is_done() {
             return Ok(HandlerAction::Stay {
                 max_times: Some(60),
@@ -1276,7 +1395,12 @@ impl GcpNetworkController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Network>()?;
-        let router_name = self.router_name.clone().unwrap();
+        let Some(router_name) = self.router_name.clone() else {
+            return Ok(HandlerAction::Continue {
+                state: DeletingSubnetwork,
+                suggested_delay: None,
+            });
+        };
         let region = self.region.clone().unwrap();
 
         info!(router_name = %router_name, "Deleting Cloud Router");
@@ -1284,14 +1408,31 @@ impl GcpNetworkController {
         let gcp_config = ctx.get_gcp_config()?;
         let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
 
-        let operation = compute_client
+        let result = compute_client
             .delete_router(region.clone(), router_name.clone())
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: format!("Failed to delete router '{}'", router_name),
-                operation: Some("delete_router".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+            .await;
+        if result.as_ref().err().is_some_and(|error| {
+            matches!(
+                error.error,
+                Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+            )
+        }) {
+            return {
+                self.router_name = None;
+                self.pending_operation_name = None;
+                self.pending_operation_region = None;
+
+                Ok(HandlerAction::Continue {
+                    state: DeletingSubnetwork,
+                    suggested_delay: None,
+                })
+            };
+        }
+        let operation = result.context(ErrorData::InfrastructureError {
+            message: format!("Failed to delete router '{}'", router_name),
+            operation: Some("delete_router".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         self.pending_operation_name = operation.name;
         self.pending_operation_region = Some(region);
@@ -1312,21 +1453,52 @@ impl GcpNetworkController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Network>()?;
-        let operation_name = self.pending_operation_name.clone().unwrap();
+        let Some(operation_name) = self.pending_operation_name.clone() else {
+            return Ok(HandlerAction::Continue {
+                state: DeletingRouter,
+                suggested_delay: None,
+            });
+        };
         let region = self.pending_operation_region.clone().unwrap();
 
         let gcp_config = ctx.get_gcp_config()?;
         let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
 
-        let operation = compute_client
+        let result = compute_client
             .get_region_operation(region, operation_name.clone())
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: "Failed to check router deletion status".to_string(),
-                operation: Some("get_region_operation".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+            .await;
+        if result.as_ref().err().is_some_and(|error| {
+            matches!(
+                error.error,
+                Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+            )
+        }) {
+            self.pending_operation_name = None;
+            self.pending_operation_region = None;
+            return Ok(HandlerAction::Continue {
+                state: DeletingRouter,
+                suggested_delay: None,
+            });
+        }
+        let operation = result.context(ErrorData::InfrastructureError {
+            message: "Failed to check router deletion status".to_string(),
+            operation: Some("get_region_operation".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
+        if operation.has_error() || operation.http_error_status_code.is_some() {
+            // A terminal failed operation cannot recover. Keep child identifiers, but
+            // let an explicit retry submit a fresh idempotent delete.
+            self.pending_operation_name = None;
+            self.pending_operation_region = None;
+            let mut error = AlienError::new(ErrorData::InfrastructureError {
+                message: format!("Network deletion operation failed: {:?}", operation.error),
+                operation: operation.name.clone(),
+                resource_id: Some(config.id.clone()),
+            });
+            error.retryable = false;
+            return Err(error);
+        }
         if !operation.is_done() {
             return Ok(HandlerAction::Stay {
                 max_times: Some(60),
@@ -1354,7 +1526,12 @@ impl GcpNetworkController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Network>()?;
-        let subnetwork_name = self.subnetwork_name.clone().unwrap();
+        let Some(subnetwork_name) = self.subnetwork_name.clone() else {
+            return Ok(HandlerAction::Continue {
+                state: DeletingNetwork,
+                suggested_delay: None,
+            });
+        };
         let region = self.region.clone().unwrap();
 
         info!(subnetwork_name = %subnetwork_name, "Deleting subnetwork");
@@ -1362,14 +1539,32 @@ impl GcpNetworkController {
         let gcp_config = ctx.get_gcp_config()?;
         let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
 
-        let operation = compute_client
+        let result = compute_client
             .delete_subnetwork(region.clone(), subnetwork_name.clone())
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: format!("Failed to delete subnetwork '{}'", subnetwork_name),
-                operation: Some("delete_subnetwork".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+            .await;
+        if result.as_ref().err().is_some_and(|error| {
+            matches!(
+                error.error,
+                Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+            )
+        }) {
+            return {
+                self.subnetwork_name = None;
+                self.subnetwork_self_link = None;
+                self.pending_operation_name = None;
+                self.pending_operation_region = None;
+
+                Ok(HandlerAction::Continue {
+                    state: DeletingNetwork,
+                    suggested_delay: None,
+                })
+            };
+        }
+        let operation = result.context(ErrorData::InfrastructureError {
+            message: format!("Failed to delete subnetwork '{}'", subnetwork_name),
+            operation: Some("delete_subnetwork".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         self.pending_operation_name = operation.name;
         self.pending_operation_region = Some(region);
@@ -1390,21 +1585,52 @@ impl GcpNetworkController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Network>()?;
-        let operation_name = self.pending_operation_name.clone().unwrap();
+        let Some(operation_name) = self.pending_operation_name.clone() else {
+            return Ok(HandlerAction::Continue {
+                state: DeletingSubnetwork,
+                suggested_delay: None,
+            });
+        };
         let region = self.pending_operation_region.clone().unwrap();
 
         let gcp_config = ctx.get_gcp_config()?;
         let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
 
-        let operation = compute_client
+        let result = compute_client
             .get_region_operation(region, operation_name.clone())
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: "Failed to check subnetwork deletion status".to_string(),
-                operation: Some("get_region_operation".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+            .await;
+        if result.as_ref().err().is_some_and(|error| {
+            matches!(
+                error.error,
+                Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+            )
+        }) {
+            self.pending_operation_name = None;
+            self.pending_operation_region = None;
+            return Ok(HandlerAction::Continue {
+                state: DeletingSubnetwork,
+                suggested_delay: None,
+            });
+        }
+        let operation = result.context(ErrorData::InfrastructureError {
+            message: "Failed to check subnetwork deletion status".to_string(),
+            operation: Some("get_region_operation".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
+        if operation.has_error() || operation.http_error_status_code.is_some() {
+            // A terminal failed operation cannot recover. Keep child identifiers, but
+            // let an explicit retry submit a fresh idempotent delete.
+            self.pending_operation_name = None;
+            self.pending_operation_region = None;
+            let mut error = AlienError::new(ErrorData::InfrastructureError {
+                message: format!("Network deletion operation failed: {:?}", operation.error),
+                operation: operation.name.clone(),
+                resource_id: Some(config.id.clone()),
+            });
+            error.retryable = false;
+            return Err(error);
+        }
         if !operation.is_done() {
             return Ok(HandlerAction::Stay {
                 max_times: Some(60),
@@ -1433,21 +1659,43 @@ impl GcpNetworkController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Network>()?;
-        let network_name = self.network_name.clone().unwrap();
+        let Some(network_name) = self.network_name.clone() else {
+            return Ok(HandlerAction::Continue {
+                state: Deleted,
+                suggested_delay: None,
+            });
+        };
 
         info!(network_name = %network_name, "Deleting VPC network");
 
         let gcp_config = ctx.get_gcp_config()?;
         let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
 
-        let operation = compute_client
-            .delete_network(network_name.clone())
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: format!("Failed to delete network '{}'", network_name),
-                operation: Some("delete_network".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let result = compute_client.delete_network(network_name.clone()).await;
+        if result.as_ref().err().is_some_and(|error| {
+            matches!(
+                error.error,
+                Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+            )
+        }) {
+            return {
+                self.network_name = None;
+                self.network_self_link = None;
+                self.pending_operation_name = None;
+
+                info!("GCP Network infrastructure deleted successfully");
+
+                Ok(HandlerAction::Continue {
+                    state: Deleted,
+                    suggested_delay: None,
+                })
+            };
+        }
+        let operation = result.context(ErrorData::InfrastructureError {
+            message: format!("Failed to delete network '{}'", network_name),
+            operation: Some("delete_network".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         self.pending_operation_name = operation.name;
 
@@ -1467,20 +1715,51 @@ impl GcpNetworkController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Network>()?;
-        let operation_name = self.pending_operation_name.clone().unwrap();
+        let Some(operation_name) = self.pending_operation_name.clone() else {
+            return Ok(HandlerAction::Continue {
+                state: DeletingNetwork,
+                suggested_delay: None,
+            });
+        };
 
         let gcp_config = ctx.get_gcp_config()?;
         let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
 
-        let operation = compute_client
+        let result = compute_client
             .get_global_operation(operation_name.clone())
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: "Failed to check network deletion status".to_string(),
-                operation: Some("get_global_operation".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+            .await;
+        if result.as_ref().err().is_some_and(|error| {
+            matches!(
+                error.error,
+                Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+            )
+        }) {
+            self.pending_operation_name = None;
+            self.pending_operation_region = None;
+            return Ok(HandlerAction::Continue {
+                state: DeletingNetwork,
+                suggested_delay: None,
+            });
+        }
+        let operation = result.context(ErrorData::InfrastructureError {
+            message: "Failed to check network deletion status".to_string(),
+            operation: Some("get_global_operation".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
+        if operation.has_error() || operation.http_error_status_code.is_some() {
+            // A terminal failed operation cannot recover. Keep child identifiers, but
+            // let an explicit retry submit a fresh idempotent delete.
+            self.pending_operation_name = None;
+            self.pending_operation_region = None;
+            let mut error = AlienError::new(ErrorData::InfrastructureError {
+                message: format!("Network deletion operation failed: {:?}", operation.error),
+                operation: operation.name.clone(),
+                resource_id: Some(config.id.clone()),
+            });
+            error.retryable = false;
+            return Err(error);
+        }
         if !operation.is_done() {
             return Ok(HandlerAction::Stay {
                 max_times: Some(60),

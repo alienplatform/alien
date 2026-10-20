@@ -270,8 +270,20 @@ impl EventBridgeApi for EventBridgeClient {
             field_name: None,
         })?;
 
-        self.send_json_no_response("AWSEvents.RemoveTargets", body, "RemoveTargets", rule_name)
-            .await
+        let response: RemoveTargetsResponse = self
+            .send_json("AWSEvents.RemoveTargets", body, "RemoveTargets", rule_name)
+            .await?;
+        if response.failed_entry_count > 0 || !response.failed_entries.is_empty() {
+            return Err(alien_error::AlienError::new(
+                ErrorData::RemoteServiceUnavailable {
+                    message: format!(
+                        "EventBridge failed to remove {} targets; retry before deleting the rule",
+                        response.failed_entry_count
+                    ),
+                },
+            ));
+        }
+        Ok(())
     }
 
     async fn delete_rule(&self, rule_name: &str) -> Result<()> {
@@ -360,4 +372,44 @@ struct EventBridgeErrorResponse {
     message: Option<String>,
     #[serde(rename = "Message")]
     message_capital: Option<String>,
+}
+
+// RemoveTargets can report partial failure with HTTP 200.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct RemoveTargetsResponse {
+    failed_entry_count: usize,
+    #[serde(default)]
+    failed_entries: Vec<serde_json::Value>,
+}
+
+#[cfg(test)]
+mod cleanup_tests {
+    use super::*;
+    use crate::AwsClientConfigExt;
+    use alien_core::{AwsClientConfig, AwsServiceOverrides};
+    use httpmock::{Method::POST, MockServer};
+    use std::collections::HashMap;
+
+    #[tokio::test]
+    async fn remove_targets_partial_failure_is_an_error() {
+        let server = MockServer::start_async().await;
+        let response = server.mock_async(|when, then| {
+            when.method(POST).header("X-Amz-Target", "AWSEvents.RemoveTargets");
+            then.status(200).json_body(serde_json::json!({"FailedEntryCount":1,"FailedEntries":[{"TargetId":"1","ErrorCode":"ConcurrentModificationException"}]}));
+        }).await;
+        let mut config = AwsClientConfig::mock();
+        config.service_overrides = Some(AwsServiceOverrides {
+            endpoints: HashMap::from([("events".into(), server.base_url())]),
+        });
+        let client = EventBridgeClient::new(
+            reqwest::Client::new(),
+            AwsCredentialProvider::from_config_sync(config),
+        );
+        assert!(client
+            .remove_targets("synthetic-rule", vec!["1".into()])
+            .await
+            .is_err());
+        response.assert_hits_async(1).await;
+    }
 }

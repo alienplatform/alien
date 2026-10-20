@@ -30,18 +30,14 @@ pub(crate) fn is_remote_not_found(error: &AlienError<CloudClientErrorData>) -> b
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum TagScopedDelete {
     Deleted,
-    /// Already gone, or no longer carrying this resource's tags.
+    /// The provider explicitly reported the object missing.
     Gone,
 }
 
 /// Interprets a delete of an object behind a tag-conditioned grant.
 ///
-/// The role may delete and read such an object only while it carries the stack's tags. An
-/// object that is gone has no tags, so AWS answers a delete of it (deleted out of band, or by an
-/// earlier attempt whose response was lost) with AccessDenied, not NotFound. A denied delete is
-/// checked with `probe`, a read under the same grant: when the read is denied or not found too,
-/// nothing this resource may delete is left; when it succeeds, the object is there and the
-/// denial is real.
+/// A denied delete is not proof of absence, even when a read is also denied.
+/// Only an explicit NotFound from the operation or probe establishes absence.
 pub(crate) async fn delete_tag_scoped<D, P, F>(
     result: std::result::Result<D, AlienError<CloudClientErrorData>>,
     probe: F,
@@ -55,12 +51,8 @@ where
         Err(error) if is_remote_not_found(&error) => Ok(TagScopedDelete::Gone),
         Err(error) if is_remote_access_denied(&error) => match probe().await {
             Ok(()) => Err(error),
-            Err(probe_error)
-                if is_remote_not_found(&probe_error) || is_remote_access_denied(&probe_error) =>
-            {
-                Ok(TagScopedDelete::Gone)
-            }
-            Err(probe_error) => Err(probe_error),
+            Err(probe_error) if is_remote_not_found(&probe_error) => Ok(TagScopedDelete::Gone),
+            Err(_) => Err(error),
         },
         Err(error) => Err(error),
     }

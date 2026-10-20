@@ -74,7 +74,9 @@ pub async fn prepare_direct_setup_update(
     )?;
     let mut metadata = existing_metadata.clone();
     metadata.initial_setup_authority = alien_core::InitialSetupAuthority::DirectSetup;
-    metadata.prepared_stack = Some(mutated_stack);
+    // Preserve the installed baseline until removed live resources and owned
+    // values are cleaned up. InitialSetup drains them before changing any grants.
+    metadata.pending_prepared_stack = Some(mutated_stack);
     metadata.persisted_gate_answers = persisted_gate_answers;
     metadata.setup_update_authorization = None;
     Ok(metadata)

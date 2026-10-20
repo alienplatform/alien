@@ -196,6 +196,13 @@ impl SqsClient {
         let result = if operation == "ChangeMessageVisibility" {
             crate::aws::aws_request_utils::sign_send_no_response_once(builder, &self.sign_config())
                 .await
+        } else if operation == "DeleteQueue" {
+            crate::aws::aws_request_utils::sign_send_no_response_retrying_when(
+                builder,
+                &self.sign_config(),
+                crate::aws::aws_request_utils::is_retryable_delete,
+            )
+            .await
         } else {
             crate::aws::aws_request_utils::sign_send_no_response(builder, &self.sign_config()).await
         };
@@ -936,8 +943,78 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::AwsClientConfigExt;
     use alien_core::{AwsClientConfig, AwsCredentials, AwsServiceOverrides};
     use httpmock::{Method::POST, MockServer};
+
+    #[tokio::test]
+    async fn delete_queue_terminal_errors_do_not_repeat_http_requests() {
+        for (status, code, expected) in [
+            (400, "AccessDenied", "REMOTE_ACCESS_DENIED"),
+            (403, "AccessDenied", "REMOTE_ACCESS_DENIED"),
+            (
+                400,
+                "AWS.SimpleQueueService.NonExistentQueue",
+                "REMOTE_RESOURCE_NOT_FOUND",
+            ),
+            (400, "ExpiredToken", "REMOTE_ACCESS_DENIED"),
+        ] {
+            let server = MockServer::start_async().await;
+            let mut config = AwsClientConfig::mock();
+            config.service_overrides = Some(AwsServiceOverrides {
+                endpoints: HashMap::from([("sqs".into(), server.base_url())]),
+            });
+            let client = SqsClient::new(
+                Client::new(),
+                AwsCredentialProvider::from_config_sync(config),
+            );
+            let response = server.mock_async(|when, then| {
+                when.method(POST).body_contains("Action=DeleteQueue");
+                then.status(status).body(format!("<ErrorResponse><Error><Code>{code}</Code><Message>synthetic</Message></Error></ErrorResponse>"));
+            }).await;
+            let error = client
+                .delete_queue("https://example.test/jobs")
+                .await
+                .unwrap_err();
+            assert_eq!(error.code, expected);
+            response.assert_hits_async(1).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn delete_queue_retries_service_unavailable() {
+        let server = MockServer::start_async().await;
+        let mut config = AwsClientConfig::mock();
+        config.service_overrides = Some(AwsServiceOverrides {
+            endpoints: HashMap::from([("sqs".into(), server.base_url())]),
+        });
+        let client = SqsClient::new(
+            Client::new(),
+            AwsCredentialProvider::from_config_sync(config),
+        );
+        let unavailable = server.mock_async(|when, then| {
+            when.method(POST).body_contains("Action=DeleteQueue");
+            then.status(503).body("<ErrorResponse><Error><Code>ServiceUnavailable</Code><Message>synthetic</Message></Error></ErrorResponse>");
+        }).await;
+        let request =
+            tokio::spawn(async move { client.delete_queue("https://example.test/jobs").await });
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while unavailable.hits_async().await == 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        unavailable.delete_async().await;
+        let success = server
+            .mock_async(|when, then| {
+                when.method(POST).body_contains("Action=DeleteQueue");
+                then.status(200).body("<DeleteQueueResponse/>");
+            })
+            .await;
+        assert!(request.await.unwrap().is_ok());
+        success.assert_hits_async(1).await;
+    }
 
     #[tokio::test]
     async fn batch_send_does_not_retry_an_ambiguous_failure() {

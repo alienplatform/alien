@@ -225,9 +225,23 @@ impl AzureQueueController {
         if let (Some(ns), Some(qn)) = (&self.namespace_name, &self.queue_name) {
             let resource_group =
                 crate::infra_requirements::azure_utils::get_resource_group_name(&ctx.state)?;
-            let _ = mgmt
+            match mgmt
                 .delete_queue(resource_group, ns.clone(), qn.clone())
-                .await;
+                .await
+            {
+                Ok(()) => {}
+                Err(error)
+                    if matches!(
+                        error.error,
+                        Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+                    ) => {}
+                Err(error) => {
+                    return Err(error).context(ErrorData::CloudPlatformError {
+                        message: format!("Failed to delete Service Bus queue '{qn}'"),
+                        resource_id: Some(ctx.desired_config.id().to_string()),
+                    })
+                }
+            }
         }
         self.namespace_name = None;
         self.queue_name = None;

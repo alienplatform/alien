@@ -5,7 +5,7 @@ use alien_core::{
     InitialSetupAuthority, ResourceLifecycle, ResourceStatus, RuntimeMetadata, Stack, StackState,
     StackStatus,
 };
-use alien_error::{AlienError, Context};
+use alien_error::{AlienError, Context, ContextError};
 use alien_infra::setup_scaffolding::{
     self, ScaffoldingProgress, SeedContext, SetupScaffoldingContext,
 };
@@ -35,7 +35,7 @@ pub async fn handle_initial_setup(
     let current_cloned = current.clone();
 
     // Stack state is required
-    let stack_state = current.stack_state.ok_or_else(|| {
+    let mut stack_state = current.stack_state.ok_or_else(|| {
         AlienError::new(ErrorData::MissingConfiguration {
             message: "Stack state required for initial setup".to_string(),
         })
@@ -49,8 +49,135 @@ pub async fn handle_initial_setup(
         })
     })?;
 
+    // A setup update must finish old live cleanup before it narrows the
+    // identities that authorize it. Persist the old and desired definitions
+    // separately across every step and failure.
+    if runtime_metadata.initial_setup_authority == InitialSetupAuthority::DirectSetup {
+        if let Some(desired) = runtime_metadata.pending_prepared_stack.clone() {
+            if let Err(error) = crate::helpers::sync_secrets_to_vault(
+                &desired,
+                &stack_state,
+                &client_config,
+                &config,
+                &mut runtime_metadata,
+            )
+            .await
+            {
+                return Ok(failed_keeping_record(
+                    current_cloned,
+                    stack_state,
+                    runtime_metadata,
+                    error,
+                ));
+            }
+            let executor = StackExecutor::builder(&desired, client_config.clone())
+                .deployment_config(&config)
+                .service_provider(service_provider.clone())
+                .lifecycle_filter(vec![ResourceLifecycle::Live])
+                .deletions_only(true)
+                .step_running_resources(false)
+                .step_out_of_scope_resources(false)
+                .build()
+                .context(ErrorData::StackExecutionFailed {
+                    message: "Failed to prepare cleanup before setup".to_string(),
+                })?;
+            // Only removed resources are advanced here. Existing live resources
+            // retain their installed config; new resources wait for setup.
+            let removed = stack_state.resources.iter().any(|(id, resource)| {
+                resource.lifecycle == Some(ResourceLifecycle::Live)
+                    && !desired.resources.contains_key(id)
+                    && resource.status != ResourceStatus::Deleted
+            });
+            if removed {
+                let plan =
+                    executor
+                        .plan(&stack_state)
+                        .context(ErrorData::StackExecutionFailed {
+                            message: "Failed to plan cleanup before setup".to_string(),
+                        })?;
+                let active = stack_state.resources.iter().any(|(id, resource)| {
+                    !desired.resources.contains_key(id)
+                        && resource.status == ResourceStatus::Deleting
+                });
+                let failed = stack_state
+                    .resources
+                    .values()
+                    .any(|resource| resource.status == ResourceStatus::DeleteFailed);
+                if plan.deletes.is_empty() && !active && !failed {
+                    let error = AlienError::new(alien_preflights::error::ErrorData::SetupRequired {
+                        message: "Removed resources still have installed consumers. Apply an intermediate release that detaches those consumers and removes the old resources using installed permissions, then rerun setup for the new resources and grants".to_string(),
+                    }).context(ErrorData::PreflightChecksFailed);
+                    return Ok(failed_keeping_record(
+                        current_cloned,
+                        stack_state,
+                        runtime_metadata,
+                        error,
+                    ));
+                }
+                let result = executor.step(stack_state.clone()).await.context(
+                    ErrorData::StackExecutionFailed {
+                        message: "Failed to clean up resources before setup".to_string(),
+                    },
+                );
+                let result = match result {
+                    Ok(result) => result,
+                    Err(error) => {
+                        return Ok(failed_keeping_record(
+                            current_cloned,
+                            stack_state,
+                            runtime_metadata,
+                            error,
+                        ))
+                    }
+                };
+                stack_state = result.next_state;
+                let failed = stack_state
+                    .resources
+                    .values()
+                    .any(|resource| resource.status == ResourceStatus::DeleteFailed);
+                let mut next = current_cloned;
+                next.status = if failed {
+                    DeploymentStatus::InitialSetupFailed
+                } else {
+                    DeploymentStatus::InitialSetup
+                };
+                next.error = stack_state.resources.values().find_map(|resource| {
+                    (resource.status == ResourceStatus::DeleteFailed)
+                        .then(|| resource.error.clone())
+                        .flatten()
+                });
+                next.retry_requested = false;
+                next.stack_state = Some(stack_state);
+                next.runtime_metadata = Some(runtime_metadata);
+                return Ok(DeploymentStepResult {
+                    state: next,
+                    suggested_delay_ms: result.suggested_delay_ms.or(Some(1_000)),
+                    update_heartbeat: false,
+                    heartbeats: result.heartbeats,
+                    observed_inventory_batches: vec![],
+                });
+            }
+        }
+    }
+
+    if runtime_metadata.initial_setup_authority == InitialSetupAuthority::DirectSetup {
+        if let Some(installed) = runtime_metadata.prepared_stack.as_mut() {
+            alien_infra::ResourcePermissionsHelper::capture_legacy_installed_account_grants(
+                installed,
+                &mut stack_state,
+            )
+            .context(ErrorData::StackExecutionFailed {
+                message: "Failed to capture installed permissions before setup".to_string(),
+            })?;
+        }
+    }
+
+    let mut desired_metadata = runtime_metadata.clone();
+    if let Some(desired) = desired_metadata.pending_prepared_stack.take() {
+        desired_metadata.prepared_stack = Some(desired);
+    }
     let target_stack =
-        crate::helpers::injected_target_stack(&runtime_metadata, &config, current.platform)?;
+        crate::helpers::injected_target_stack(&desired_metadata, &config, current.platform)?;
 
     // Sync secrets to vault if the vault is already Running (from a previous
     // step). The executor checks dependencies against the pre-step state, so a
@@ -81,8 +208,14 @@ pub async fn handle_initial_setup(
     // created later in Provisioning using the permissions granted by setup.
     info!("Deploying frozen resources in initial setup");
     let client_config_for_scaffolding = client_config.clone();
-    let executor = StackExecutor::builder(&target_stack, client_config)
-        .deployment_config(&config)
+    let mut setup_config = config.clone();
+    // Automatic setup has the same installed DirectSetup authority as the CLI,
+    // but its caller is not itself a setup command. Enable management policy
+    // reconciliation only inside this privileged phase.
+    setup_config.setup_run =
+        runtime_metadata.initial_setup_authority == InitialSetupAuthority::DirectSetup;
+    let executor = StackExecutor::builder(&target_stack, client_config.clone())
+        .deployment_config(&setup_config)
         .service_provider(service_provider.clone())
         .initial_setup_authority(runtime_metadata.initial_setup_authority)
         .lifecycle_filter(vec![ResourceLifecycle::Frozen])
@@ -219,6 +352,62 @@ pub async fn handle_initial_setup(
 
     let result = if stack_status == StackStatus::Running && scaffolding == ScaffoldingProgress::Done
     {
+        if runtime_metadata.initial_setup_authority == InitialSetupAuthority::DirectSetup
+            && runtime_metadata
+                .prepared_stack
+                .as_ref()
+                .is_some_and(|installed| {
+                    installed.permissions != target_stack.permissions
+                        || installed
+                            .resources
+                            .keys()
+                            .any(|id| !target_stack.resources.contains_key(id))
+                })
+        {
+            let registry = std::sync::Arc::new(alien_infra::ResourceRegistry::with_built_ins());
+            for (id, resource) in &step_result.next_state.resources {
+                let context = alien_infra::ResourceControllerContext {
+                    desired_config: &resource.config,
+                    platform: current.platform,
+                    client_config: client_config.clone(),
+                    state: &step_result.next_state,
+                    resource_prefix: &step_result.next_state.resource_prefix,
+                    registry: &registry,
+                    desired_stack: &target_stack,
+                    service_provider: &service_provider,
+                    deployment_config: &config,
+                    initial_setup_authority: runtime_metadata.initial_setup_authority,
+                    heartbeat_collector: Default::default(),
+                };
+                if let Err(error) =
+                    alien_infra::ResourcePermissionsHelper::reconcile_removed_setup_permissions(
+                        &context,
+                        id,
+                        &resource.resource_type,
+                        runtime_metadata
+                            .prepared_stack
+                            .as_ref()
+                            .unwrap_or(&target_stack),
+                    )
+                    .await
+                    .context(ErrorData::StackExecutionFailed {
+                        message: "Failed to reconcile setup-owned permissions after cleanup"
+                            .to_string(),
+                    })
+                {
+                    return Ok(failed_keeping_record(
+                        current_cloned,
+                        step_result.next_state,
+                        runtime_metadata,
+                        error,
+                    ));
+                }
+            }
+        }
+
+        if let Some(desired) = runtime_metadata.pending_prepared_stack.take() {
+            runtime_metadata.prepared_stack = Some(desired);
+        }
         info!("Initial setup complete (frozen resources deployed), transitioning to Provisioning");
 
         // Debug: log all resources in stack state to diagnose external binding persistence
@@ -486,15 +675,23 @@ pub fn retry_failed_setup_resources(
             });
     }
 
+    let mut desired_metadata = runtime_metadata.clone();
+    if let Some(desired) = desired_metadata.pending_prepared_stack.take() {
+        desired_metadata.prepared_stack = Some(desired);
+    }
     let target_stack =
-        crate::helpers::injected_target_stack(runtime_metadata, config, stack_state.platform)?;
+        crate::helpers::injected_target_stack(&desired_metadata, config, stack_state.platform)?;
     // A replace whose delete was denied waits for this explicit retry.
     alien_infra::allow_denied_replaces_to_retry(stack_state);
     Ok(
         crate::helpers::resume_unchanged_failed_resources(
             stack_state,
             &target_stack,
-            |resource| resource.lifecycle == Some(ResourceLifecycle::Frozen),
+            |resource| {
+                resource.lifecycle == Some(ResourceLifecycle::Frozen)
+                    || (resource.status == ResourceStatus::DeleteFailed
+                        && !target_stack.resources.contains_key(resource.config.id()))
+            },
         )?
         .retried,
     )
@@ -2663,6 +2860,146 @@ mod tests {
         );
     }
 
+    async fn automatic_detach_fixture(mixed: bool) -> DeploymentState {
+        use alien_core::permissions::{PermissionProfile, PermissionsConfig};
+        use alien_core::{ReleaseInfo, ServiceAccount, Worker, WorkerCode};
+        let jobs = Storage::new("jobs".to_string()).build();
+        let worker = Worker::new("consumer".to_string())
+            .permissions("sender".to_string())
+            .code(WorkerCode::Image {
+                image: "example.com/worker:one".to_string(),
+            })
+            .link(&jobs)
+            .build();
+        let detached = Worker::new("consumer".to_string())
+            .permissions("sender".to_string())
+            .code(WorkerCode::Image {
+                image: "example.com/worker:one".to_string(),
+            })
+            .build();
+        let installed = Stack::new("test".to_string())
+            .permissions(PermissionsConfig::new().with_profile(
+                "sender",
+                PermissionProfile::new().resource("jobs", ["storage/data-read"]),
+            ))
+            .add(
+                ServiceAccount::new("sender-sa".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(jobs, ResourceLifecycle::Live)
+            .add(worker, ResourceLifecycle::Live)
+            .build();
+        let mut target = Stack::new("test".to_string())
+            .permissions(PermissionsConfig::new().with_profile("sender", PermissionProfile::new()))
+            .add(
+                ServiceAccount::new("sender-sa".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(detached, ResourceLifecycle::Live)
+            .build();
+        if mixed {
+            let extra = Stack::new("extra".to_string())
+                .add(
+                    Storage::new("added".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build();
+            target.resources.extend(extra.resources);
+        }
+        let prepared = alien_preflights::runner::PreflightRunner::new()
+            .run_deployment_time_preflights(
+                installed.clone(),
+                &StackState::new(Platform::Test),
+                &config(),
+                &ClientConfig::Test,
+                None,
+                None,
+                Some(InitialSetupAuthority::DirectSetup),
+            )
+            .await
+            .unwrap()
+            .0;
+        let stack_state = deployed_test_stack(&prepared).await;
+        let mut state = resumed_test_setup(stack_state, prepared);
+        state.current_release = Some(ReleaseInfo {
+            release_id: Some("installed".to_string()),
+            version: None,
+            description: None,
+            stack: installed,
+        });
+        state.target_release = Some(ReleaseInfo {
+            release_id: Some("desired".to_string()),
+            version: None,
+            description: None,
+            stack: target,
+        });
+        state.runtime_metadata.as_mut().unwrap().automatic_setup = true;
+        state.status = DeploymentStatus::UpdatePending;
+        state
+    }
+
+    #[tokio::test]
+    async fn automatic_narrowing_detaches_consumers_before_cleanup_and_setup() {
+        let mut state = automatic_detach_fixture(false).await;
+        let mut saw_updating = false;
+        let mut saw_setup = false;
+        for _ in 0..80 {
+            state = crate::step(state, config(), ClientConfig::Test, None)
+                .await
+                .unwrap()
+                .state;
+            state = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+            saw_updating |= state.status == DeploymentStatus::Updating;
+            saw_setup |= state.status == DeploymentStatus::InitialSetup;
+            if state.status == DeploymentStatus::Running {
+                break;
+            }
+            assert!(
+                !matches!(
+                    state.status,
+                    DeploymentStatus::InitialSetupFailed
+                        | DeploymentStatus::UpdateFailed
+                        | DeploymentStatus::ProvisioningFailed
+                ),
+                "unexpected failure: {:?}",
+                state.error
+            );
+        }
+        assert_eq!(state.status, DeploymentStatus::Running);
+        assert!(saw_updating && saw_setup);
+        let resources = &state.stack_state.unwrap().resources;
+        assert_eq!(resources["jobs"].status, ResourceStatus::Deleted);
+        assert!(!resources["consumer"]
+            .dependencies
+            .iter()
+            .any(|dependency| dependency.id() == "jobs"));
+    }
+
+    #[tokio::test]
+    async fn mixed_setup_refuses_before_mutation_and_stays_failed_across_reload() {
+        let mut state = automatic_detach_fixture(true).await;
+        state = crate::step(state, config(), ClientConfig::Test, None)
+            .await
+            .unwrap()
+            .state;
+        assert_eq!(state.status, DeploymentStatus::InitialSetup);
+        let before = serde_json::to_value(&state.stack_state).unwrap();
+        state = crate::step(state, config(), ClientConfig::Test, None)
+            .await
+            .unwrap()
+            .state;
+        assert_eq!(state.status, DeploymentStatus::InitialSetupFailed);
+        assert!(format!("{:?}", state.error.as_ref().unwrap()).contains("intermediate release"));
+        assert_eq!(serde_json::to_value(&state.stack_state).unwrap(), before);
+        state = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+        state = crate::step(state, config(), ClientConfig::Test, None)
+            .await
+            .unwrap()
+            .state;
+        assert_eq!(state.status, DeploymentStatus::InitialSetupFailed);
+        assert_eq!(serde_json::to_value(&state.stack_state).unwrap(), before);
+    }
+
     #[tokio::test]
     async fn automatic_setup_retry_prepares_corrective_release_before_resuming() {
         let installed = Stack::new("test".to_string())
@@ -2701,7 +3038,7 @@ mod tests {
             .runtime_metadata
             .as_ref()
             .unwrap()
-            .prepared_stack
+            .pending_prepared_stack
             .as_ref()
             .unwrap()
             .resources

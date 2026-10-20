@@ -145,7 +145,35 @@ pub async fn handle_update_pending(
             &prepared_target,
             |resource| resource.lifecycle == Some(ResourceLifecycle::Live),
         )?;
-        next.status = DeploymentStatus::InitialSetup;
+        // When installed authority is sufficient, let ordinary update detach
+        // retained consumers before deleting their old dependencies. Setup then
+        // narrows grants only after that update has converged.
+        let cleanup_before_setup = metadata.prepared_stack.as_ref().zip(metadata.pending_prepared_stack.as_ref())
+            .is_some_and(|(installed, desired)| {
+                let removes_live = stack_state.resources.iter().any(|(id, resource)| {
+                    resource.lifecycle == Some(ResourceLifecycle::Live)
+                        && resource.status != ResourceStatus::Deleted
+                        && !desired.resources.contains_key(id)
+                });
+                let profiles_narrow = desired.permissions.profiles.iter().all(|(name, profile)| {
+                    installed.permissions.profiles.get(name).is_some_and(|old| {
+                        alien_preflights::compatibility::narrowing::profile_narrowed(old, profile)
+                    })
+                });
+                let management_safe = installed.permissions.management == desired.permissions.management
+                    || alien_preflights::compatibility::narrowing::management_narrowed(
+                        &installed.permissions.management, &desired.permissions.management);
+                let frozen_safe = desired.resources.iter().filter(|(_, entry)| entry.lifecycle == ResourceLifecycle::Frozen)
+                    .all(|(id, desired_entry)| installed.resources.get(id).is_some_and(|old| {
+                        old.config == desired_entry.config || alien_preflights::compatibility::narrowing::service_account_narrowed(desired, &old.config, &desired_entry.config)
+                    }));
+                removes_live && profiles_narrow && management_safe && frozen_safe
+            });
+        next.status = if cleanup_before_setup {
+            DeploymentStatus::Updating
+        } else {
+            DeploymentStatus::InitialSetup
+        };
         next.stack_state = Some(stack_state);
         next.runtime_metadata = Some(metadata);
         next.error = None;
@@ -405,10 +433,9 @@ pub async fn handle_updating(
             }
         }
     }
-    // The effective target is the new durable baseline. Persist it before
-    // executor-only environment injection so a second release that also omits
-    // a setup-owned resource cannot lose ownership information and delete it.
-    runtime_metadata.pending_prepared_stack = Some(target_stack.clone());
+    // Keep the desired stack separate from the installed identities until setup
+    // actually narrows their grants. Otherwise a retry forgets the requested removal.
+    let effective_baseline = target_stack.clone();
     // Check the deployer secret slots first: which are filled decides how
     // workloads read them (see inject_environment_variables).
     runtime_metadata.deployer_secrets = crate::helpers::check_deployer_secrets(
@@ -441,14 +468,29 @@ pub async fn handle_updating(
     // The vault is Running and secrets may have been updated
     // This checks the hash and only syncs if needed
     info!("Syncing secrets to vault before updating managed resources");
-    let synced = crate::helpers::sync_secrets_to_vault(
+    let synced = match crate::helpers::sync_secrets_to_vault(
         &target_stack,
         &stack_state,
         &client_config,
         &config,
         &mut runtime_metadata,
     )
-    .await?;
+    .await
+    {
+        Ok(synced) => synced,
+        Err(error) => {
+            next.status = DeploymentStatus::UpdateFailed;
+            next.error = Some(error.into_generic());
+            next.runtime_metadata = Some(runtime_metadata);
+            return Ok(DeploymentStepResult {
+                state: next,
+                suggested_delay_ms: None,
+                update_heartbeat: false,
+                heartbeats: vec![],
+                observed_inventory_batches: vec![],
+            });
+        }
+    };
 
     if synced {
         info!("Secrets synced successfully");
@@ -561,7 +603,66 @@ pub async fn handle_updating(
         next.stack_state = Some(step_result.next_state);
         next.error = None;
         // The converged stack is the installed baseline either way.
-        runtime_metadata.prepared_stack = runtime_metadata.pending_prepared_stack.take();
+        let desired = runtime_metadata
+            .pending_prepared_stack
+            .as_ref()
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::MissingConfiguration {
+                    message: "Desired stack missing after runtime cleanup".to_string(),
+                })
+            })?;
+        let installed = next.stack_state.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::MissingConfiguration {
+                message: "Updated stack state missing after cleanup".to_string(),
+            })
+        })?;
+        let pending_accounts: Vec<_> = installed
+            .resources
+            .iter()
+            .filter_map(|(id, resource)| {
+                let account = resource
+                    .config
+                    .downcast_ref::<alien_core::ServiceAccount>()?;
+                if resource.lifecycle != Some(ResourceLifecycle::Frozen)
+                    || resource.status == ResourceStatus::Deleted
+                {
+                    return None;
+                }
+                let desired_account = desired
+                    .resources
+                    .get(id)
+                    .and_then(|entry| entry.config.downcast_ref::<alien_core::ServiceAccount>());
+                let grants_differ = desired_account.is_none_or(|new| {
+                    account.stack_permission_sets != new.stack_permission_sets
+                        || account.resource_permission_sets != new.resource_permission_sets
+                });
+                grants_differ.then_some(id.as_str())
+            })
+            .collect();
+        let profiles_changed = runtime_metadata
+            .prepared_stack
+            .as_ref()
+            .is_some_and(|installed| installed.permissions != desired.permissions);
+        if !pending_accounts.is_empty() || profiles_changed {
+            next.status = if runtime_metadata.automatic_setup {
+                DeploymentStatus::InitialSetup
+            } else {
+                DeploymentStatus::UpdateFailed
+            };
+            next.error = Some(AlienError::new(alien_preflights::error::ErrorData::SetupRequired {
+                message: format!("Runtime cleanup completed; setup must reconcile permissions for {} before this update is complete. Rerun setup with the desired release", pending_accounts.join(", ")),
+            }).into_generic());
+            next.runtime_metadata = Some(runtime_metadata);
+            return Ok(DeploymentStepResult {
+                state: next,
+                suggested_delay_ms: None,
+                update_heartbeat: false,
+                heartbeats: step_result.heartbeats,
+                observed_inventory_batches: vec![],
+            });
+        }
+        runtime_metadata.prepared_stack = Some(effective_baseline);
+        runtime_metadata.pending_prepared_stack = None;
         let converged_release_id = runtime_metadata.pending_prepared_release_id.take();
         let target_release_id = next
             .target_release
@@ -1088,12 +1189,7 @@ mod tests {
 
         #[tokio::test]
         async fn a_sandbox_added_by_an_update_waits_for_setup_to_create_its_build_role() {
-            assert_setup_required(
-                empty(),
-                sandbox(SandboxEgress::Allow, BUNDLE, None),
-                None,
-            )
-            .await;
+            assert_setup_required(empty(), sandbox(SandboxEgress::Allow, BUNDLE, None), None).await;
         }
 
         /// Every release publishes its bundle under a new version segment of the same prefix,

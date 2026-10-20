@@ -338,9 +338,9 @@ async fn failed_replace_delete_resumes_at_the_failed_step() -> Result<()> {
     Ok(())
 }
 
-/// A not-found answer ends the delete as best-effort, and the create follows.
+/// An unhandled child NotFound cannot complete a replacement or discard its IDs.
 #[tokio::test]
-async fn replace_delete_ended_by_not_found_creates_with_new_config() -> Result<()> {
+async fn replace_delete_not_found_preserves_unfinished_cleanup() -> Result<()> {
     let id = "replace-delete-not-found";
     let v1 = worker(
         id,
@@ -354,26 +354,26 @@ async fn replace_delete_ended_by_not_found_creates_with_new_config() -> Result<(
         worker(id, "image-v2", &[]),
         ResourceLifecycle::Live,
     ))?;
-    let state = step_until(&executor, state, id, ResourceStatus::Deleted).await?;
+    let state = step_until(&executor, state, id, ResourceStatus::DeleteFailed).await?;
     assert!(
-        !state.resources[id].has_internal_state(),
-        "a best-effort delete drops the controller"
+        state.resources[id].has_internal_state(),
+        "failed cleanup retains its controller"
     );
     assert_eq!(
         images(&test_worker_deletes_issued(&identifier(id))),
         vec!["image-v1"]
     );
 
-    let state = run_to_synced(&executor, state).await?;
-    assert_eq!(get_status(&state, id), Some(ResourceStatus::Running));
-    assert_eq!(image(&state, id), "image-v2");
+    assert!(state.resources[id].has_last_failed_state());
+    assert!(state.resources[id].error.is_some());
+    assert_eq!(image(&state, id), "image-v1");
     Ok(())
 }
 
 /// Access denied does not end a replace delete. The resource is still desired, so taking the
 /// denial as "deleted" would create a second one next to the first. The delete fails with the
 /// error and keeps the IDs; nothing is created. (A delete of a resource the stack no longer
-/// declares still treats access denied as best-effort.)
+/// declares also retains its failed cleanup.)
 #[tokio::test]
 async fn replace_delete_denied_access_fails_and_does_not_create() -> Result<()> {
     let id = "replace-delete-denied";
@@ -961,18 +961,19 @@ async fn reverting_after_a_denied_replace_resumes_the_failed_create() -> Result<
     Ok(())
 }
 
-/// Removing the resource from the stack deletes it, with the usual best-effort rule: a denied
-/// delete of a resource nobody wants any more counts as deleted.
+/// Removing a resource does not turn its denied replacement into a successful delete.
 #[tokio::test]
-async fn removing_a_resource_after_a_denied_replace_deletes_it() -> Result<()> {
+async fn removing_a_resource_after_a_denied_replace_preserves_failure() -> Result<()> {
     let id = "replace-denied-removed";
     let state = replace_denied_before_anything_was_deleted(id).await?;
 
     let without = new_executor(&Stack::new("replace-test".to_owned()).build())?;
     assert_eq!(without.plan(&state)?.deletes, vec![id.to_string()]);
     let state = run_to_synced(&without, state).await?;
-    assert_eq!(get_status(&state, id), Some(ResourceStatus::Deleted));
+    assert_eq!(get_status(&state, id), Some(ResourceStatus::DeleteFailed));
     assert_eq!(test_worker_deletes_denied(&identifier(id)), 2);
+    assert!(state.resources[id].has_last_failed_state());
+    assert!(state.resources[id].error.is_some());
     allow_test_worker_deletes(&identifier(id));
     Ok(())
 }
@@ -1004,9 +1005,9 @@ async fn retrying_a_denied_replace_after_the_permission_is_granted_completes_it(
 }
 
 /// A replace denied after a delete step succeeded stays DeleteFailed; removing the resource
-/// from the stack then resumes and finishes that delete.
+/// from the stack must preserve the unfinished cleanup.
 #[tokio::test]
-async fn removing_a_resource_whose_replace_failed_mid_delete_finishes_the_delete() -> Result<()> {
+async fn removing_a_resource_whose_replace_failed_mid_delete_preserves_failure() -> Result<()> {
     let id = "replace-denied-mid-delete-removed";
     let v1 = worker(
         id,
@@ -1033,8 +1034,10 @@ async fn removing_a_resource_whose_replace_failed_mid_delete_finishes_the_delete
 
     let without = new_update_executor(&Stack::new("replace-test".to_owned()).build())?;
     assert_eq!(without.plan(&state)?.deletes, vec![id.to_string()]);
-    let state = step_until(&without, state, id, ResourceStatus::Deleted).await?;
-    assert!(state.resources[id].error.is_none());
+    let state = without.step(state).await?.next_state;
+    assert_eq!(get_status(&state, id), Some(ResourceStatus::DeleteFailed));
+    assert!(state.resources[id].error.is_some());
+    assert!(state.resources[id].has_last_failed_state());
     Ok(())
 }
 

@@ -4291,12 +4291,9 @@ mod tests {
             assert_eq!(state.managed_acm_import_token, None);
         }
 
-        /// The recorded certificate exists but no longer carries this resource's tags, so the
-        /// tag-conditioned delete and describe are both denied. It is not this resource's to
-        /// delete any more: the update goes on instead of failing with a permission error no
-        /// grant can fix, and the certificate is left alone.
+        /// Two denied calls cannot establish absence or relinquish recorded ownership.
         #[tokio::test]
-        async fn update_away_from_managed_acm_leaves_a_certificate_that_is_no_longer_ours() {
+        async fn update_away_from_managed_acm_preserves_an_inaccessible_certificate() {
             let retagged = vec![Tag {
                 key: "deployment".to_string(),
                 value: "someone-else".to_string(),
@@ -4311,7 +4308,7 @@ mod tests {
 
             clean_up_after_leaving_managed_acm(&harness, &mut state)
                 .await
-                .expect("a certificate that is not ours is not deleted");
+                .expect_err("denial must preserve the cleanup obligation");
 
             assert_eq!(*calls.deletes.lock().unwrap(), [arn(1)]);
             assert_eq!(
@@ -4319,7 +4316,7 @@ mod tests {
                 1,
                 "the certificate is left alone"
             );
-            assert_eq!(state.managed_acm_certificate_arn, None);
+            assert_eq!(state.managed_acm_certificate_arn, Some(arn(1)));
         }
 
         /// When the certificate is still readable, its denied delete is a real denial: the

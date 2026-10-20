@@ -36,7 +36,7 @@ use alien_core::{
     ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
     ResourceStatus,
 };
-use alien_error::{AlienError, Context};
+use alien_error::{AlienError, Context, ContextError};
 use alien_macros::controller;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -1506,6 +1506,16 @@ impl AzureNetworkController {
         let result = network_client
             .delete_network_security_group(&resource_group, &nsg_name)
             .await
+            .or_else(|error| {
+                if matches!(
+                    error.error,
+                    Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+                ) {
+                    Ok(OperationResult::Completed(()))
+                } else {
+                    Err(error)
+                }
+            })
             .context(ErrorData::InfrastructureError {
                 message: format!("Failed to delete NSG '{}'", nsg_name),
                 operation: Some("delete_network_security_group".to_string()),
@@ -1563,7 +1573,12 @@ impl AzureNetworkController {
                     suggested_delay: Some(std::time::Duration::from_secs(5)),
                 })
             }
-            Err(_) => {
+            Err(error)
+                if matches!(
+                    error.error,
+                    Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+                ) =>
+            {
                 self.nsg_name = None;
                 self.nsg_id = None;
                 if self.nat_gateway_name.is_some() {
@@ -1578,6 +1593,11 @@ impl AzureNetworkController {
                     })
                 }
             }
+            Err(error) => Err(error.context(ErrorData::InfrastructureError {
+                message: "Failed to confirm network child deletion".to_string(),
+                operation: Some("confirm_delete".to_string()),
+                resource_id: Some(ctx.desired_config.id().to_string()),
+            })),
         }
     }
 
@@ -1703,6 +1723,16 @@ impl AzureNetworkController {
         let result = network_client
             .delete_nat_gateway(&resource_group, &nat_gateway_name)
             .await
+            .or_else(|error| {
+                if matches!(
+                    error.error,
+                    Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+                ) {
+                    Ok(OperationResult::Completed(()))
+                } else {
+                    Err(error)
+                }
+            })
             .context(ErrorData::InfrastructureError {
                 message: format!("Failed to delete NAT Gateway '{}'", nat_gateway_name),
                 operation: Some("delete_nat_gateway".to_string()),
@@ -1753,7 +1783,12 @@ impl AzureNetworkController {
                     suggested_delay: Some(std::time::Duration::from_secs(10)),
                 })
             }
-            Err(_) => {
+            Err(error)
+                if matches!(
+                    error.error,
+                    Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+                ) =>
+            {
                 self.nat_gateway_name = None;
                 self.nat_gateway_id = None;
                 Ok(HandlerAction::Continue {
@@ -1761,6 +1796,11 @@ impl AzureNetworkController {
                     suggested_delay: None,
                 })
             }
+            Err(error) => Err(error.context(ErrorData::InfrastructureError {
+                message: "Failed to confirm network child deletion".to_string(),
+                operation: Some("confirm_delete".to_string()),
+                resource_id: Some(ctx.desired_config.id().to_string()),
+            })),
         }
     }
 
@@ -1795,6 +1835,16 @@ impl AzureNetworkController {
         let result = network_client
             .delete_public_ip_address(&resource_group, &public_ip_name)
             .await
+            .or_else(|error| {
+                if matches!(
+                    error.error,
+                    Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+                ) {
+                    Ok(OperationResult::Completed(()))
+                } else {
+                    Err(error)
+                }
+            })
             .context(ErrorData::InfrastructureError {
                 message: format!("Failed to delete Public IP '{}'", public_ip_name),
                 operation: Some("delete_public_ip_address".to_string()),
@@ -1846,7 +1896,12 @@ impl AzureNetworkController {
                     suggested_delay: Some(std::time::Duration::from_secs(5)),
                 })
             }
-            Err(_) => {
+            Err(error)
+                if matches!(
+                    error.error,
+                    Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+                ) =>
+            {
                 self.public_ip_name = None;
                 self.public_ip_id = None;
                 self.egress_public_ips.clear();
@@ -1855,6 +1910,11 @@ impl AzureNetworkController {
                     suggested_delay: None,
                 })
             }
+            Err(error) => Err(error.context(ErrorData::InfrastructureError {
+                message: "Failed to confirm network child deletion".to_string(),
+                operation: Some("confirm_delete".to_string()),
+                resource_id: Some(ctx.desired_config.id().to_string()),
+            })),
         }
     }
 
@@ -1881,6 +1941,16 @@ impl AzureNetworkController {
         let result = network_client
             .delete_virtual_network(&resource_group, &vnet_name)
             .await
+            .or_else(|error| {
+                if matches!(
+                    error.error,
+                    Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+                ) {
+                    Ok(OperationResult::Completed(()))
+                } else {
+                    Err(error)
+                }
+            })
             .context(ErrorData::InfrastructureError {
                 message: format!("Failed to delete VNet '{}'", vnet_name),
                 operation: Some("delete_virtual_network".to_string()),
@@ -1930,13 +2000,23 @@ impl AzureNetworkController {
                     suggested_delay: Some(std::time::Duration::from_secs(10)),
                 })
             }
-            Err(_) => {
+            Err(error)
+                if matches!(
+                    error.error,
+                    Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+                ) =>
+            {
                 info!("Azure Network infrastructure deleted successfully");
                 Ok(HandlerAction::Continue {
                     state: Deleted,
                     suggested_delay: None,
                 })
             }
+            Err(error) => Err(error.context(ErrorData::InfrastructureError {
+                message: "Failed to confirm network child deletion".to_string(),
+                operation: Some("confirm_delete".to_string()),
+                resource_id: Some(ctx.desired_config.id().to_string()),
+            })),
         }
     }
 
@@ -1960,8 +2040,8 @@ impl AzureNetworkController {
 #[cfg(test)]
 mod tests {
     use super::AzureNetworkController;
+    use crate::core::controller_test::{test_azure_resource_group, SingleControllerExecutor};
     use crate::core::MockPlatformServiceProvider;
-    use crate::core::controller_test::{SingleControllerExecutor, test_azure_resource_group};
     use crate::infra_requirements::AzureResourceGroupController;
     use alien_azure_clients::azure::models::{
         nat_gateway::NatGateway,

@@ -215,6 +215,56 @@ async fn converge_gcp_custom_role(
 pub struct ResourcePermissionsHelper;
 
 impl ResourcePermissionsHelper {
+    /// Capture the exact scoped grants recorded by legacy prepared profiles.
+    /// This changes bookkeeping only. It lets setup compare an old identity's
+    /// actual installed grants with an empty desired capture and run its existing
+    /// permission-reconciliation controller even when the legacy configs matched.
+    pub fn capture_legacy_installed_account_grants(
+        installed: &mut alien_core::Stack,
+        state: &mut alien_core::StackState,
+    ) -> Result<()> {
+        for (id, entry) in &mut installed.resources {
+            let Some(account) = entry.config.downcast_ref::<alien_core::ServiceAccount>() else {
+                continue;
+            };
+            if entry.lifecycle != ResourceLifecycle::Frozen
+                || !account.resource_permission_sets.is_empty()
+            {
+                continue;
+            }
+            let Some(profile) = id
+                .strip_suffix("-sa")
+                .and_then(|name| installed.permissions.profiles.get(name))
+            else {
+                continue;
+            };
+            let captured = alien_core::ServiceAccount::from_permission_profile(
+                account.id.clone(),
+                profile,
+                |name| alien_permissions::get_permission_set(name).cloned(),
+            )
+            .context(ErrorData::ResourceConfigInvalid {
+                message: "Cannot resolve previously installed account grants".to_string(),
+                resource_id: Some(id.clone()),
+            })?;
+            if captured.resource_permission_sets.is_empty() {
+                continue;
+            }
+            let mut account = account.clone();
+            account.resource_permission_sets = captured.resource_permission_sets;
+            let config = alien_core::Resource::new(account);
+            if let Some(recorded) = state
+                .resources
+                .get_mut(id)
+                .filter(|recorded| recorded.config == entry.config)
+            {
+                recorded.config = config.clone();
+            }
+            entry.config = config;
+        }
+        Ok(())
+    }
+
     /// Preserve request throttling, but make confirmed project account-capacity
     /// failures actionable with the same quota identity as the preflight.
     pub fn gcp_service_account_creation_error(
@@ -1531,6 +1581,25 @@ impl ResourcePermissionsHelper {
     /// previous `alien-` prefix), for registered
     /// `<resource_type>/` permission sets. A role that no longer exists has
     /// nothing to remove.
+    pub async fn reconcile_removed_setup_permissions(
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+        resource_type: &str,
+        installed: &alien_core::Stack,
+    ) -> Result<()> {
+        if ctx.initial_setup_authority != alien_core::InitialSetupAuthority::DirectSetup {
+            return Err(AlienError::new(ErrorData::ImportedSetupStateInvalid {
+                message: "Permission reconciliation requires privileged setup".to_string(),
+                resource_id: Some(resource_id.to_string()),
+            }));
+        }
+        if ctx.platform == alien_core::Platform::Aws {
+            Self::remove_stale_aws_policies(ctx, resource_id, resource_type, Some(installed))
+                .await?;
+        }
+        Ok(())
+    }
+
     pub async fn remove_stale_aws_resource_scoped_permissions(
         ctx: &ResourceControllerContext<'_>,
         resource_id: &str,
@@ -1539,12 +1608,51 @@ impl ResourcePermissionsHelper {
         if !Self::resource_is_setup_owned(ctx, resource_id)? {
             return Ok(());
         }
+        Self::remove_stale_aws_policies(ctx, resource_id, resource_type, None).await
+    }
 
+    async fn remove_stale_aws_policies(
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+        resource_type: &str,
+        installed: Option<&alien_core::Stack>,
+    ) -> Result<()> {
         let type_prefix = format!("{}/", resource_type);
-        let registered_sets: Vec<&str> = alien_permissions::list_permission_set_ids()
+        let mut registered_sets: HashSet<String> = alien_permissions::list_permission_set_ids()
             .into_iter()
             .filter(|id| id.starts_with(&type_prefix))
+            .map(str::to_owned)
             .collect();
+        // Inline permission sets may never have been registered globally. Their
+        // exact old IDs still prove ownership; do not infer it from a name prefix.
+        if let Some(installed) = installed {
+            for profile in installed
+                .permissions
+                .profiles
+                .values()
+                .chain(installed.management().profile())
+            {
+                registered_sets.extend(
+                    Self::aws_resource_scoped_refs(profile, resource_id, &type_prefix)
+                        .iter()
+                        .map(|reference| reference.id().to_string()),
+                );
+            }
+        }
+        for resource in ctx.state.resources.values() {
+            for config in std::iter::once(&resource.config).chain(resource.previous_config.as_ref())
+            {
+                if let Some(account) = config.downcast_ref::<alien_core::ServiceAccount>() {
+                    if let Some(sets) = account.resource_permission_sets.get(resource_id) {
+                        registered_sets.extend(sets.iter().map(|set| set.id.clone()));
+                    }
+                }
+            }
+        }
+
+        if registered_sets.is_empty() {
+            return Ok(());
+        }
 
         // (role, owned policy names, desired policy names)
         let mut roles: Vec<(String, HashSet<String>, HashSet<String>)> = Vec::new();
@@ -1567,6 +1675,12 @@ impl ResourcePermissionsHelper {
                         .flatten()
                 }),
         );
+        profile_names.extend(ctx.state.resources.iter().filter_map(|(id, resource)| {
+            (resource.resource_type == "service-account"
+                && resource.status != alien_core::ResourceStatus::Deleted)
+                .then(|| id.strip_suffix("-sa"))
+                .flatten()
+        }));
         for profile_name in profile_names {
             let Some(role_name) = Self::existing_aws_service_account_role_name(ctx, profile_name)?
             else {
@@ -1748,7 +1862,12 @@ impl ResourcePermissionsHelper {
         profile_name: &str,
     ) -> Result<Option<String>> {
         let service_account_id = format!("{}-sa", profile_name);
-        let Some(resource) = ctx.desired_stack.resources.get(&service_account_id) else {
+        let Some(resource) = ctx
+            .state
+            .resources
+            .get(&service_account_id)
+            .filter(|resource| resource.status != alien_core::ResourceStatus::Deleted)
+        else {
             return Ok(None);
         };
         let has_controller_state = ctx

@@ -165,6 +165,53 @@ fn replace_lambda_notification_config(
 }
 
 impl AwsWorkerController {
+    async fn delete_owned_schedule_triggers(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+        worker_id: &str,
+    ) -> Result<()> {
+        if self.eventbridge_rule_names.is_empty() {
+            return Ok(());
+        }
+        let client = ctx
+            .service_provider
+            .get_aws_eventbridge_client(ctx.get_aws_config()?)
+            .await?;
+        for rule in self.eventbridge_rule_names.clone() {
+            client
+                .remove_targets(&rule, vec!["1".to_string()])
+                .await
+                .or_else(|error| {
+                    if is_remote_not_found(&error) {
+                        Ok(())
+                    } else {
+                        Err(error)
+                    }
+                })
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to remove targets from EventBridge rule '{rule}'"),
+                    resource_id: Some(worker_id.to_string()),
+                })?;
+            client
+                .delete_rule(&rule)
+                .await
+                .or_else(|error| {
+                    if is_remote_not_found(&error) {
+                        Ok(())
+                    } else {
+                        Err(error)
+                    }
+                })
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to delete EventBridge rule '{rule}'"),
+                    resource_id: Some(worker_id.to_string()),
+                })?;
+            self.eventbridge_rule_names.retain(|owned| owned != &rule);
+        }
+        self.eventbridge_permission_statement_ids.clear();
+        Ok(())
+    }
+
     async fn renew_certificate(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<()> {
         let worker_config = ctx.desired_resource_config::<Worker>()?;
 
@@ -4009,60 +4056,38 @@ impl AwsWorkerController {
                     ..
                 } = trigger
                 {
-                    if let Ok(storage_controller) =
-                        ctx.require_dependency::<crate::storage::AwsStorageController>(storage_ref)
                     {
+                        let storage_controller = ctx
+                            .require_dependency::<crate::storage::AwsStorageController>(
+                                storage_ref,
+                            )?;
                         if let Some(bucket_name) = storage_controller.bucket_name.as_deref() {
                             let s3_client = ctx.service_provider.get_aws_s3_client(aws_cfg).await?;
                             let empty_config = NotificationConfiguration::default();
-                            if let Err(e) = s3_client
+                            s3_client
                                 .put_bucket_notification_configuration(bucket_name, &empty_config)
                                 .await
-                            {
-                                warn!(
-                                    worker=%current_config.id,
-                                    bucket=%bucket_name,
-                                    error=%e,
-                                    "Failed to clear old S3 notification configuration (best-effort)"
-                                );
-                            }
+                                .or_else(|error| {
+                                    if is_remote_not_found(&error) {
+                                        Ok(())
+                                    } else {
+                                        Err(error)
+                                    }
+                                })
+                                .context(ErrorData::CloudPlatformError {
+                                    message: format!(
+                                        "Failed to remove storage trigger from '{bucket_name}'"
+                                    ),
+                                    resource_id: Some(current_config.id.clone()),
+                                })?;
                         }
                     }
                 }
             }
             self.s3_permission_statement_ids.clear();
 
-            // Clean up old EventBridge schedule triggers
-            if !self.eventbridge_rule_names.is_empty() {
-                let eventbridge_client = ctx
-                    .service_provider
-                    .get_aws_eventbridge_client(aws_cfg)
-                    .await?;
-
-                for rule_name in &self.eventbridge_rule_names.clone() {
-                    if let Err(e) = eventbridge_client
-                        .remove_targets(rule_name, vec!["1".to_string()])
-                        .await
-                    {
-                        warn!(
-                            worker=%current_config.id,
-                            rule=%rule_name,
-                            error=%e,
-                            "Failed to remove targets from old EventBridge rule (best-effort)"
-                        );
-                    }
-                    if let Err(e) = eventbridge_client.delete_rule(rule_name).await {
-                        warn!(
-                            worker=%current_config.id,
-                            rule=%rule_name,
-                            error=%e,
-                            "Failed to delete old EventBridge rule (best-effort)"
-                        );
-                    }
-                }
-                self.eventbridge_rule_names.clear();
-                self.eventbridge_permission_statement_ids.clear();
-            }
+            self.delete_owned_schedule_triggers(ctx, &current_config.id)
+                .await?;
 
             // Recreate storage triggers
             let worker_name = self.worker_name.as_deref().unwrap_or("unknown");
@@ -4541,29 +4566,30 @@ impl AwsWorkerController {
                     ..
                 } = trigger
                 {
-                    if let Ok(storage_controller) =
-                        ctx.require_dependency::<crate::storage::AwsStorageController>(storage_ref)
                     {
+                        let storage_controller = ctx
+                            .require_dependency::<crate::storage::AwsStorageController>(
+                                storage_ref,
+                            )?;
                         if let Some(bucket_name) = storage_controller.bucket_name.as_deref() {
                             let s3_client = ctx.service_provider.get_aws_s3_client(aws_cfg).await?;
                             let empty_config = NotificationConfiguration::default();
-                            if let Err(e) = s3_client
+                            s3_client
                                 .put_bucket_notification_configuration(bucket_name, &empty_config)
                                 .await
-                            {
-                                warn!(
-                                    worker=%worker_config.id,
-                                    bucket=%bucket_name,
-                                    error=%e,
-                                    "Failed to clear S3 notification configuration (best-effort)"
-                                );
-                            } else {
-                                info!(
-                                    worker=%worker_config.id,
-                                    bucket=%bucket_name,
-                                    "S3 notification configuration cleared"
-                                );
-                            }
+                                .or_else(|error| {
+                                    if is_remote_not_found(&error) {
+                                        Ok(())
+                                    } else {
+                                        Err(error)
+                                    }
+                                })
+                                .context(ErrorData::CloudPlatformError {
+                                    message: format!(
+                                        "Failed to remove storage trigger from '{bucket_name}'"
+                                    ),
+                                    resource_id: Some(worker_config.id.clone()),
+                                })?;
                         }
                     }
                 }
@@ -4588,55 +4614,9 @@ impl AwsWorkerController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let worker_config = ctx.desired_resource_config::<Worker>()?;
-        let aws_cfg = ctx.get_aws_config()?;
 
-        // Delete EventBridge rules and their targets (best-effort)
-        if !self.eventbridge_rule_names.is_empty() {
-            info!(
-                worker=%worker_config.id,
-                rules=?self.eventbridge_rule_names,
-                "Deleting EventBridge schedule triggers"
-            );
-
-            let eventbridge_client = ctx
-                .service_provider
-                .get_aws_eventbridge_client(aws_cfg)
-                .await?;
-
-            for rule_name in &self.eventbridge_rule_names.clone() {
-                // Remove targets first (required before deleting rule)
-                if let Err(e) = eventbridge_client
-                    .remove_targets(rule_name, vec!["1".to_string()])
-                    .await
-                {
-                    warn!(
-                        worker=%worker_config.id,
-                        rule=%rule_name,
-                        error=%e,
-                        "Failed to remove targets from EventBridge rule (best-effort)"
-                    );
-                } else {
-                    info!(worker=%worker_config.id, rule=%rule_name, "EventBridge rule targets removed");
-                }
-
-                // Delete the rule
-                if let Err(e) = eventbridge_client.delete_rule(rule_name).await {
-                    warn!(
-                        worker=%worker_config.id,
-                        rule=%rule_name,
-                        error=%e,
-                        "Failed to delete EventBridge rule (best-effort)"
-                    );
-                } else {
-                    info!(worker=%worker_config.id, rule=%rule_name, "EventBridge rule deleted");
-                }
-            }
-            self.eventbridge_rule_names.clear();
-        }
-
-        // Clear EventBridge permission statement IDs
-        // (Lambda permissions are removed when the worker is deleted)
-        self.eventbridge_permission_statement_ids.clear();
+        self.delete_owned_schedule_triggers(ctx, &worker_config.id)
+            .await?;
 
         // Detach the Lambda from the VPC before deleting it. AWS otherwise
         // keeps Lambda-managed ENIs around after function deletion, which can
@@ -4828,12 +4808,9 @@ impl AwsWorkerController {
             .get_function_configuration(lookup_identifier, None)
             .await
         {
-            // `lambda:GetFunction` is granted only for functions that carry the stack's tags.
-            // A deleted function has none, so AWS answers AccessDenied instead of
-            // ResourceNotFound. Both mean the function is gone. Returning the denial as an
-            // error would make the executor's best-effort delete rule mark the worker
-            // deleted here, before the network interface wait and the certificate delete
-            // have run.
+            // This saved wait state follows a successful DeleteFunction or explicit
+            // NotFound. Tag-conditioned reads can be denied after that accepted mutation;
+            // continue the remaining owned cleanup without repeating the delete.
             Err(e)
                 if matches!(
                     e.error,
@@ -7595,7 +7572,7 @@ mod tests {
 
         mock_lambda
             .expect_update_function_configuration()
-            .returning(|_, _| Err(access_denied()));
+            .returning(|_, _| Ok(create_successful_function_response("test-public-func")));
         let mock_lambda = Arc::new(mock_lambda);
         let mock_ec2 = Arc::new(mock_ec2);
         let mock_acm = Arc::new(mock_acm);
@@ -7673,8 +7650,14 @@ mod tests {
         mock_lambda
             .expect_get_function_configuration()
             .returning(move |_, _| {
-                recorded.lock().unwrap().push("GetFunction");
-                Err(access_denied())
+                let mut calls = recorded.lock().unwrap();
+                let delete_succeeded = calls.contains(&"DeleteFunction");
+                calls.push("GetFunction");
+                if delete_succeeded {
+                    Err(access_denied())
+                } else {
+                    Ok(create_successful_function_response("test-public-func"))
+                }
             });
 
         let mut mock_ec2 = MockEc2Api::new();
@@ -7742,10 +7725,9 @@ mod tests {
         assert_eq!(status, ResourceStatus::Deleted);
     }
 
-    /// Continuing past the denied read must not wedge a delete whose role has lost its
-    /// permissions: the next call is denied too, and the worker still ends as `Deleted`.
+    /// A successful Lambda delete does not excuse failure to finish owned child cleanup.
     #[tokio::test]
-    async fn test_delete_still_ends_when_calls_after_the_function_delete_are_denied() {
+    async fn test_delete_fails_when_calls_after_the_function_delete_are_denied() {
         let calls = Arc::new(Mutex::new(Vec::new()));
 
         let mut mock_lambda = MockLambdaApi::new();
@@ -7758,8 +7740,14 @@ mod tests {
         mock_lambda
             .expect_get_function_configuration()
             .returning(move |_, _| {
-                recorded.lock().unwrap().push("GetFunction");
-                Err(access_denied())
+                let mut calls = recorded.lock().unwrap();
+                let delete_succeeded = calls.contains(&"DeleteFunction");
+                calls.push("GetFunction");
+                if delete_succeeded {
+                    Err(access_denied())
+                } else {
+                    Ok(create_successful_function_response("test-public-func"))
+                }
             });
 
         let mut mock_ec2 = MockEc2Api::new();
@@ -7787,7 +7775,7 @@ mod tests {
                 "DescribeNetworkInterfaces"
             ]
         );
-        assert_eq!(status, ResourceStatus::Deleted);
+        assert_eq!(status, ResourceStatus::DeleteFailed);
     }
 
     // ─────────────── SPECIFIC VALIDATION TESTS ─────────────────
@@ -9002,13 +8990,12 @@ mod tests {
         assert_eq!(state.rest_api_id, None);
     }
 
-    /// A confirmed object can be gone too (deleted out of band, or by an earlier attempt whose
-    /// response was lost). Its delete and its read are both denied, and the delete goes on to
-    /// the next object instead of ending there.
+    /// A delete and probe that both deny access leave the recorded API unresolved.
     #[tokio::test]
-    async fn denied_delete_of_an_api_that_is_gone_continues_to_the_function() {
+    async fn denied_delete_and_probe_preserve_the_api() {
         let calls = Calls::default();
-        let (lambda, acm) = delete_mocks(&calls);
+        let lambda = MockLambdaApi::new();
+        let acm = MockAcmApi::new();
         let mut apigw = MockApiGatewayV2Api::new();
         let recorded = calls.clone();
         apigw.expect_delete_api().times(1).returning(move |_| {
@@ -9032,12 +9019,17 @@ mod tests {
             .await
             .unwrap();
         executor.delete().unwrap();
-        executor.run_until_terminal().await.unwrap();
-        assert_eq!(executor.status(), ResourceStatus::Deleted);
-        assert_eq!(
-            *calls.lock().unwrap(),
-            ["DeleteApi", "GetApi", "DeleteFunction", "DeleteCertificate"]
-        );
+        executor
+            .run_until_terminal()
+            .await
+            .expect_err("uncertain deletion must fail");
+        assert_eq!(executor.status(), ResourceStatus::Deleting);
+        assert!(executor
+            .internal_state::<AwsWorkerController>()
+            .unwrap()
+            .api_id
+            .is_some());
+        assert_eq!(*calls.lock().unwrap(), ["DeleteApi", "GetApi"]);
     }
 
     /// When the API is still readable, its denied delete is real and is returned.

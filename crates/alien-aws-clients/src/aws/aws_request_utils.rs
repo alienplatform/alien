@@ -434,6 +434,69 @@ pub fn is_retryable_unless_denied(error: &AlienError<ErrorData>) -> bool {
     }
 }
 
+/// Delete denials and explicit absence are terminal transport responses. Other
+/// failures retain the existing retry policy, including throttling and service errors.
+pub(crate) fn is_retryable_delete(error: &AlienError<ErrorData>) -> bool {
+    if !is_retryable_unless_denied(error) {
+        return false;
+    }
+    if let Some(ErrorData::HttpResponseError {
+        http_status,
+        http_response_text,
+        ..
+    }) = &error.error
+    {
+        if *http_status == 404 {
+            return false;
+        }
+        if *http_status == 400 {
+            let code = http_response_text
+                .as_deref()
+                .and_then(|body| serde_json::from_str::<serde_json::Value>(body).ok())
+                .and_then(|value| {
+                    value
+                        .get("__type")
+                        .or_else(|| value.get("code"))
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned)
+                })
+                .or_else(|| {
+                    #[derive(serde::Deserialize)]
+                    struct Response {
+                        #[serde(rename = "Error")]
+                        error: Details,
+                    }
+                    #[derive(serde::Deserialize)]
+                    struct Details {
+                        #[serde(rename = "Code")]
+                        code: String,
+                    }
+                    http_response_text
+                        .as_deref()
+                        .and_then(|body| quick_xml::de::from_str::<Response>(body).ok())
+                        .map(|response| response.error.code)
+                });
+            if code.as_deref().is_some_and(|code| {
+                matches!(
+                    code.rsplit('#').next().unwrap_or(code),
+                    "AccessDeniedException"
+                        | "AccessDenied"
+                        | "ParameterNotFound"
+                        | "NotAuthorized"
+                        | "UnrecognizedClient"
+                        | "ExpiredToken"
+                        | "AWS.SimpleQueueService.NonExistentQueue"
+                        | "ResourceNotFound"
+                        | "QueueDoesNotExist"
+                )
+            }) {
+                return false;
+            }
+        }
+    }
+    error.retryable
+}
+
 /// Sign the request and deserialize an XML response into `T`, retrying only throttling.
 ///
 /// For a create the service cannot make idempotent: when a response is lost or a 5xx arrives

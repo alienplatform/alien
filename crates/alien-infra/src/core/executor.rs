@@ -11,7 +11,7 @@
 //! * [`StackExecutor::step`] – advance every **ready** resource by one step.
 //! * [`StackExecutor::run_until_synced`] – test helper that runs until desired == current.
 
-use alien_error::{AlienError, Context, ContextError, GenericError};
+use alien_error::{AlienError, Context, ContextError};
 use futures::{stream, StreamExt, TryStreamExt};
 use petgraph::algo::tarjan_scc;
 use petgraph::graph::{DiGraph, NodeIndex};
@@ -138,6 +138,7 @@ pub struct StackExecutor {
     node_index_to_id: HashMap<NodeIndex, String>,
     lifecycle_filter: Option<HashSet<ResourceLifecycle>>,
     runtime_cleanup_filter: bool,
+    deletions_only: bool,
     running_resource_policy: RunningResourcePolicy,
     step_out_of_scope_resources: bool,
     resume_unchanged_failed_resources: bool,
@@ -322,25 +323,22 @@ mod controller_platform_tests {
     }
 }
 
-/// Whether a failed delete step means the resource is gone or out of reach of these
-/// credentials, so retrying cannot help.
-///
-/// Such an error ends the whole resource as `Deleted` and the delete steps after it never
-/// run. A handler that has more cleanup ahead of it must therefore treat a not-found or
-/// access-denied answer it expects as success and continue, instead of returning it.
-///
-/// Access denied counts only when `access_denied_ends_delete`. A replace passes false: the
-/// resource is still desired and is created right after its delete, so treating a denied
-/// delete as done would create a second one next to the first.
-fn is_best_effort_delete_error(
-    err: &AlienError<ErrorData>,
-    access_denied_ends_delete: bool,
-) -> bool {
-    is_best_effort_delete_code(&err.code, err.http_status_code, access_denied_ends_delete)
-        || err
-            .source
-            .as_deref()
-            .is_some_and(|source| is_best_effort_delete_source(source, access_denied_ends_delete))
+/// Whether any layer reports denied access. A delete cannot recover from missing
+/// authority without user intervention; retain its checkpoint for explicit retry.
+fn is_delete_access_denied(err: &AlienError<ErrorData>) -> bool {
+    let denied =
+        |code: &str, status| code == "REMOTE_ACCESS_DENIED" || matches!(status, Some(401 | 403));
+    if denied(&err.code, err.http_status_code) {
+        return true;
+    }
+    let mut source = err.source.as_deref();
+    while let Some(error) = source {
+        if denied(&error.code, error.http_status_code) {
+            return true;
+        }
+        source = error.source.as_deref();
+    }
+    false
 }
 
 /// Clears the denial of every replace that waits for an explicit retry, so the planner plans
@@ -377,28 +375,6 @@ fn error_chain_text(err: &AlienError<ErrorData>) -> String {
 
 fn is_dependency_not_ready_error(err: &AlienError<ErrorData>) -> bool {
     err.code == DEPENDENCY_NOT_READY_CODE
-}
-
-fn is_best_effort_delete_source(
-    err: &AlienError<GenericError>,
-    access_denied_ends_delete: bool,
-) -> bool {
-    is_best_effort_delete_code(&err.code, err.http_status_code, access_denied_ends_delete)
-        || err
-            .source
-            .as_deref()
-            .is_some_and(|source| is_best_effort_delete_source(source, access_denied_ends_delete))
-}
-
-fn is_best_effort_delete_code(
-    code: &str,
-    http_status_code: Option<u16>,
-    access_denied_ends_delete: bool,
-) -> bool {
-    let not_found = http_status_code == Some(404) || code == "REMOTE_RESOURCE_NOT_FOUND";
-    let access_denied =
-        matches!(http_status_code, Some(401 | 403)) || code == "REMOTE_ACCESS_DENIED";
-    not_found || (access_denied_ends_delete && access_denied)
 }
 
 fn validate_stack_controller_state_versions(state: &StackState) -> Result<()> {
@@ -443,6 +419,11 @@ pub struct StackExecutorConfig<'a> {
     /// Frozen resources that explicitly have runtime cleanup before teardown.
     #[builder(default = false)]
     runtime_cleanup_filter: bool,
+
+    /// Only delete resources absent from the desired stack. Retained resources,
+    /// including in-flight controllers, remain available as dependencies but never step.
+    #[builder(default = false)]
+    deletions_only: bool,
 
     /// Whether resources that are already Running should execute their Ready handler.
     #[builder(default = true)]
@@ -552,6 +533,7 @@ impl StackExecutor {
         let deployment_config = config.deployment_config.clone();
         let lifecycle_filter = config.lifecycle_filter;
         let runtime_cleanup_filter = config.runtime_cleanup_filter;
+        let deletions_only = config.deletions_only;
         let running_resource_policy =
             config
                 .running_resource_policy
@@ -584,6 +566,10 @@ impl StackExecutor {
         // and ensuring a controller exists for each resource on the target platform.
         for (id, resource_entry) in stack.resources() {
             let id = id.clone();
+            if deletions_only {
+                filtered_out_ids.insert(id);
+                continue;
+            }
 
             // Apply lifecycle filter if provided
             if let Some(filter_set) = &filter_set {
@@ -695,6 +681,7 @@ impl StackExecutor {
             node_index_to_id: node_to_id,
             lifecycle_filter: filter_set,
             runtime_cleanup_filter,
+            deletions_only,
             running_resource_policy,
             step_out_of_scope_resources,
             resume_unchanged_failed_resources,
@@ -831,6 +818,9 @@ impl StackExecutor {
         resource_id: &str,
         resource_state: &StackResourceState,
     ) -> Result<bool> {
+        if self.deletions_only && self.desired_stack.resources.contains_key(resource_id) {
+            return Ok(false);
+        }
         if self.runtime_cleanup_filter {
             return self.resource_matches_runtime_cleanup(resource_id, resource_state);
         }
@@ -912,7 +902,7 @@ impl StackExecutor {
     /// Map of resource id to the ids still depending on it, for deletion safety checks.
     fn deletion_dependents(&self, state: &StackState) -> HashMap<String, Vec<String>> {
         let mut has_dependents: HashMap<String, Vec<String>> = HashMap::new();
-        if self.lifecycle_filter.is_none() && !self.runtime_cleanup_filter {
+        if self.lifecycle_filter.is_none() && !self.runtime_cleanup_filter && !self.deletions_only {
             return has_dependents;
         }
 
@@ -958,7 +948,7 @@ impl StackExecutor {
             return Ok(false);
         }
 
-        if self.lifecycle_filter.is_none() && !self.runtime_cleanup_filter {
+        if self.lifecycle_filter.is_none() && !self.runtime_cleanup_filter && !self.deletions_only {
             return Ok(true);
         }
 
@@ -2193,6 +2183,9 @@ impl StackExecutor {
         let mut ready_resource_ids = Vec::new();
         // Use the keys from the state *after* applying the plan
         for resource_id in next_state.resources.keys() {
+            if self.deletions_only && self.desired_stack.resources.contains_key(resource_id) {
+                continue;
+            }
             // Check status and terminal state using next_state
             let current_resource_view = next_state.resources.get(resource_id).unwrap(); // Should always exist
                                                                                         // Check terminality based on *desired* state + current status
@@ -2223,7 +2216,8 @@ impl StackExecutor {
             let should_step_out_of_scope_resource = opted_in_running_resource
                 || self.should_step_out_of_scope_resource(resource_id, current_resource_view);
 
-            if self.lifecycle_filter.is_some() || self.runtime_cleanup_filter {
+            if self.lifecycle_filter.is_some() || self.runtime_cleanup_filter || self.deletions_only
+            {
                 let resource_in_scope = self.resources.contains_key(resource_id)
                     || self
                         .resource_matches_deletion_scope(resource_id, current_resource_view)
@@ -2453,27 +2447,17 @@ impl StackExecutor {
                 next_error,
                 step_suggested_delay,
                 force_failure,
-                force_deleted,
             ) = match step_outcome_result {
                 Ok(step_result) => {
                     // Step succeeded, clear retry count and error
-                    (0, None, step_result.suggested_delay, false, false)
+                    (0, None, step_result.suggested_delay, false)
                 }
                 Err(err) => {
                     warn!("Step failed for '{}': {}", resource_id, err);
 
                     if current_resource_state.status == ResourceStatus::Deleting
-                        && is_best_effort_delete_error(&err, !replacing)
-                    {
-                        info!(
-                            resource_id = %resource_id,
-                            error = %err,
-                            "Best-effort delete accepted missing or inaccessible resource"
-                        );
-                        (0, None, None, false, true)
-                    } else if current_resource_state.status == ResourceStatus::Deleting
                         && replacing
-                        && is_best_effort_delete_error(&err, true)
+                        && is_delete_access_denied(&err)
                     {
                         // Access denied while deleting to replace. Below, the failed create is
                         // restored if nothing was deleted yet, including by this step before its
@@ -2494,7 +2478,7 @@ impl StackExecutor {
                             ),
                         });
                         warn!(resource_id = %resource_id, error = %denial, "Replace delete denied");
-                        (0, Some(denial.into_generic()), None, true, false)
+                        (0, Some(denial.into_generic()), None, true)
                     } else if is_dependency_not_ready_error(&err) {
                         let delay = Duration::from_secs(10);
                         info!(
@@ -2502,15 +2486,18 @@ impl StackExecutor {
                             error = %err,
                             "Dependency is not ready; waiting without consuming retry budget"
                         );
-                        (0, None, Some(delay), false, false)
-                    } else if !err.retryable {
+                        (0, None, Some(delay), false)
+                    } else if !err.retryable
+                        || (current_resource_state.status == ResourceStatus::Deleting
+                            && is_delete_access_denied(&err))
+                    {
                         let error = Some(err.clone().into_generic());
                         error!(
                             "Non-retryable error for '{}', transitioning to failure immediately",
                             resource_id
                         );
                         // For non-retryable errors, immediately transition to failure (no retries)
-                        (0, error, None, true, false) // force_failure = true bypasses retry logic
+                        (0, error, None, true) // force_failure = true bypasses retry logic
                     } else {
                         let error = Some(err.clone().into_generic());
                         let new_retry_attempt = original_retry_attempt + 1;
@@ -2520,7 +2507,7 @@ impl StackExecutor {
                                 resource_id
                             );
                             // Transition to failure state on the updated controller
-                            (new_retry_attempt, error, None, true, false) // force_failure = true
+                            (new_retry_attempt, error, None, true) // force_failure = true
                         } else {
                             // Calculate exponential backoff delay: 2^(retry_attempt) seconds
                             let delay_secs = 2u64.pow(original_retry_attempt);
@@ -2532,7 +2519,7 @@ impl StackExecutor {
                             // Update min_delay if this retry suggests a delay
                             resource_min_delay =
                                 Some(resource_min_delay.map_or(delay, |d| d.min(delay)));
-                            (new_retry_attempt, error, None, false, false) // No step delay on error, use retry delay instead
+                            (new_retry_attempt, error, None, false) // No step delay on error, use retry delay instead
                         }
                     }
                 }
@@ -2562,9 +2549,7 @@ impl StackExecutor {
             }
 
             let (final_controller, next_status, next_outputs, next_binding_params) =
-                if force_deleted {
-                    (None, ResourceStatus::Deleted, None, None)
-                } else if force_failure
+                if force_failure
                     || (next_error.is_some() && next_retry_attempt >= MAX_RETRIES)
                 {
                     let mut failure_controller = updated_controller.clone();
