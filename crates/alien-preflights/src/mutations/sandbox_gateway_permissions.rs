@@ -196,9 +196,9 @@ pub(crate) fn grant_management_gateway_config_read(stack: &mut Stack) -> Result<
         ManagementPermissions::Extend(profile) => profile,
     };
     let grants = profile.0.entry(SECRETS_VAULT_ID.into()).or_default();
-    if !grants.iter().any(|existing| existing.id() == read.id()) {
-        grants.push(read);
-    }
+    // An author's grant cannot take the read's place by reusing its id.
+    grants.retain(|existing| existing.id() != read.id());
+    grants.push(read);
     Ok(())
 }
 
@@ -220,9 +220,6 @@ fn grants_sandbox_management(set: &PermissionSetReference) -> bool {
         }
     }
 }
-
-/// Id of the managing identity's exact read of the gateway configuration.
-pub(crate) const GATEWAY_CONFIG_READ_ID: &str = "vault/sandbox-egress-gateway-config-read";
 
 fn exact_read(key: &str) -> Result<PermissionSet> {
     let parameter =

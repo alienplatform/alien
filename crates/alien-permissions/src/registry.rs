@@ -167,9 +167,14 @@ pub fn permission_set_reaches_a_sandbox(
     reaches_on_aws || reaches_on_azure || reaches_on_gcp
 }
 
-/// Whether `permission_set` allows reading or writing S3 object contents on AWS. Only those
-/// requests make S3 use a bucket's KMS key on the caller's behalf, so only their holders need the
-/// key: bucket configuration, health checks and object deletion use no key material.
+/// S3 actions that read or write object contents, the only requests that make S3 use a bucket's
+/// KMS key on the caller's behalf.
+const S3_OBJECT_DATA_ACTIONS: &[&str] = &["s3:getobject", "s3:getobjectversion", "s3:putobject"];
+
+/// Whether `permission_set` allows reading or writing S3 object contents on AWS, matching IAM
+/// action patterns (`s3:Get*`, `s3:*`, `*`) case-insensitively the way IAM does. Only holders of
+/// such a grant need the bucket key: bucket configuration, health checks and object deletion use
+/// no key material.
 pub fn permission_set_uses_aws_object_data(
     permission_set: &alien_core::permissions::PermissionSet,
 ) -> bool {
@@ -180,7 +185,28 @@ pub fn permission_set_uses_aws_object_data(
         .flatten()
         .filter(|entry| entry.effect.is_allow())
         .flat_map(|entry| entry.grant.actions.iter().flatten())
-        .any(|action| matches!(action.as_str(), "s3:GetObject" | "s3:PutObject" | "s3:*"))
+        .any(|pattern| {
+            let pattern = pattern.to_ascii_lowercase();
+            S3_OBJECT_DATA_ACTIONS
+                .iter()
+                .any(|action| iam_action_pattern_matches(pattern.as_bytes(), action.as_bytes()))
+        })
+}
+
+/// IAM action wildcard matching: `*` matches any run of characters, `?` any one character.
+fn iam_action_pattern_matches(pattern: &[u8], action: &[u8]) -> bool {
+    match (pattern.first(), action.first()) {
+        (None, None) => true,
+        (Some(b'*'), _) => {
+            iam_action_pattern_matches(&pattern[1..], action)
+                || (!action.is_empty() && iam_action_pattern_matches(pattern, &action[1..]))
+        }
+        (Some(b'?'), Some(_)) => iam_action_pattern_matches(&pattern[1..], &action[1..]),
+        (Some(expected), Some(actual)) if expected == actual => {
+            iam_action_pattern_matches(&pattern[1..], &action[1..])
+        }
+        _ => false,
+    }
 }
 
 /// Predefined GCP roles that carry `aiplatform.sandboxEnvironments.execute`, read off the live
@@ -895,3 +921,52 @@ pub const SANDBOX_SETUP_ROLES_GUARD: &str = "sandbox/protect-setup-roles";
 
 /// The set that refuses the management identity any write to its own role.
 pub const MANAGEMENT_ROLE_GUARD: &str = "remote-stack-management/protect-management-role";
+
+#[cfg(test)]
+mod object_data_tests {
+    use super::*;
+
+    fn aws_set(actions: &[&str]) -> alien_core::permissions::PermissionSet {
+        serde_json::from_value(serde_json::json!({
+            "id": "test/inline", "description": "test",
+            "platforms": { "aws": [{
+                "grant": { "actions": actions },
+                "binding": { "stack": { "resources": ["*"] } }
+            }] }
+        }))
+        .unwrap()
+    }
+
+    /// An author's inline storage grant keeps the bucket key whatever IAM form it uses for an
+    /// object read or write; grants that never touch object contents do not get it.
+    #[test]
+    fn object_reads_and_writes_are_recognised_in_every_iam_form() {
+        for actions in [
+            &["s3:GetObject"][..],
+            &["S3:getobject"],
+            &["s3:GetObjectVersion"],
+            &["s3:Get*"],
+            &["s3:Put*"],
+            &["s3:*"],
+            &["*"],
+            &["s3:GetObj?ct"],
+        ] {
+            assert!(permission_set_uses_aws_object_data(&aws_set(actions)), "{actions:?}");
+        }
+        for actions in [
+            &["s3:ListBucket", "s3:GetBucketLocation"][..],
+            &["s3:DeleteObject"],
+            &["s3:GetObjectAcl"],
+            &["s3:GetBucket*"],
+            &["kms:*"],
+        ] {
+            assert!(!permission_set_uses_aws_object_data(&aws_set(actions)), "{actions:?}");
+        }
+        for id in ["storage/data-read", "storage/data-write", "storage/remote-data-write"] {
+            assert!(permission_set_uses_aws_object_data(get_permission_set(id).unwrap()), "{id}");
+        }
+        for id in ["storage/heartbeat", "storage/management", "storage/provision"] {
+            assert!(!permission_set_uses_aws_object_data(get_permission_set(id).unwrap()), "{id}");
+        }
+    }
+}

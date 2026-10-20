@@ -4371,6 +4371,117 @@ mod tests {
             assert_eq!(published["keys"][0]["kid"], "kid-test");
         }
 
+        /// One refresh pass of internet sandbox `id` in a stack that also declares `others`,
+        /// against a local secrets vault in `directory`. Returns the controller afterwards.
+        async fn refresh_pass(
+            id: &str,
+            others: &[&str],
+            controller: AwsSandboxController,
+            directory: &std::path::Path,
+        ) -> AwsSandboxController {
+            use crate::{LocalVaultController, LocalVaultState};
+            use alien_core::{Vault, SECRETS_VAULT_ID};
+
+            let mut microvms = MockLambdaMicrovmsApi::new();
+            microvms
+                .expect_get_microvm_image()
+                .returning(|_| Ok(served_image(IMAGE_ARN)));
+            microvms
+                .expect_list_microvm_image_versions()
+                .returning(|_| Ok(vec![]));
+            let microvms = Arc::new(microvms);
+            let ec2 = Arc::new(valid_sandbox_network_ec2());
+            let mut provider = MockPlatformServiceProvider::new();
+            provider
+                .expect_get_aws_microvms_client()
+                .returning(move |_| Ok(microvms.clone()));
+            provider
+                .expect_get_aws_ec2_client()
+                .returning(move |_| Ok(ec2.clone()));
+            let mut builder = SingleControllerExecutor::builder()
+                .resource(internet_sandbox(id))
+                .controller(AwsSandboxController {
+                    state: AwsSandboxState::RefreshingEgressConfig,
+                    ..controller
+                })
+                .platform(Platform::Aws)
+                .service_provider(Arc::new(provider));
+            for other in others {
+                builder = builder
+                    .with_stack_resource(internet_sandbox(other), alien_core::ResourceLifecycle::Live);
+            }
+            let mut executor = builder
+                .with_dependency(sandbox_network(), sandbox_network_controller())
+                .with_dependency(
+                    Vault::new(SECRETS_VAULT_ID.into()).build(),
+                    LocalVaultController {
+                        state: LocalVaultState::Ready,
+                        vault_path: Some(directory.to_string_lossy().into_owned()),
+                        ..Default::default()
+                    },
+                )
+                .build()
+                .await
+                .unwrap();
+            executor.step().await.expect("the refresh runs");
+            executor
+                .internal_state::<AwsSandboxController>()
+                .unwrap()
+                .clone()
+        }
+
+        /// The owner skips republishing an unchanged configuration, so it must forget what it
+        /// published once another sandbox owns the entry: that sandbox rewrites it, and when the
+        /// first becomes the owner again the stored configuration is not the one it remembers.
+        #[tokio::test]
+        async fn an_owner_that_regains_the_configuration_publishes_it_again() {
+            use alien_bindings::{providers::vault::LocalVault, Vault as _};
+
+            let directory = tempfile::tempdir().unwrap();
+            let vault = LocalVault::new("secrets".into(), directory.path().into());
+            let stored_audiences = || async {
+                let value: serde_json::Value = serde_json::from_str(
+                    &vault
+                        .get_secret(crate::sandbox::egress::GATEWAY_CONFIG)
+                        .await
+                        .unwrap(),
+                )
+                .unwrap();
+                value["audiences"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|audience| {
+                        audience.as_str().unwrap().rsplit('/').next().unwrap().to_string()
+                    })
+                    .collect::<Vec<_>>()
+            };
+
+            let owner = refresh_pass("b", &["c"], running_internet_controller(IMAGE_ARN), directory.path()).await;
+            assert!(owner.egress_config_digest.is_some());
+            assert_eq!(stored_audiences().await, ["b", "c"]);
+
+            // A lower id takes the entry over and publishes its own audiences.
+            let displaced = refresh_pass("b", &["a"], owner, directory.path()).await;
+            assert_eq!(displaced.egress_config_digest, None);
+            let mut taken_over: serde_json::Value = serde_json::from_str(
+                &vault
+                    .get_secret(crate::sandbox::egress::GATEWAY_CONFIG)
+                    .await
+                    .unwrap(),
+            )
+            .unwrap();
+            taken_over["audiences"] = serde_json::json!(["test/a", "test/b"]);
+            vault
+                .set_secret(crate::sandbox::egress::GATEWAY_CONFIG, &taken_over.to_string())
+                .await
+                .unwrap();
+
+            // The lower id goes and `c` is back: `b` owns the entry again and must rewrite it.
+            refresh_pass("b", &["c"], displaced, directory.path()).await;
+            assert_eq!(stored_audiences().await, ["b", "c"]);
+        }
+
         /// Runs the runtime cleanup a CloudFormation deployment's delete runs: an empty target
         /// stack, the setup-owned network and vault left to setup teardown, and a Lambda Worker that
         /// links the key-owning internet sandbox and takes several steps to delete. Returns the

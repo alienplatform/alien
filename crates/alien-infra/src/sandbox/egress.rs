@@ -435,7 +435,11 @@ pub(crate) async fn publish_aws_config(
     published: &mut Option<String>,
 ) -> Result<()> {
     let facts = validate_aws_network(ctx).await?;
+    // A sandbox that does not own the entry publishes nothing and forgets its digest: the owner
+    // may rewrite the entry, so the digest says nothing about what is stored if this sandbox
+    // becomes the owner again.
     let Some(value) = gateway_config(ctx, key, &facts.vpc_cidrs) else {
+        *published = None;
         return Ok(());
     };
     let vault = deployment_vault(ctx).await?;

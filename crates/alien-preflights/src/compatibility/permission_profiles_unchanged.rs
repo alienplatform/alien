@@ -2,9 +2,9 @@ use crate::compatibility::narrowing::{management_narrowed, profile_narrowed};
 use crate::error::Result;
 use crate::mutations::management_permission_profile::{
     GATE_DERIVED_GLOBAL_SUFFIXES, KEY_AVAILABILITY_PERMISSION_SET_ID,
-    NATIVE_VOLUME_MANAGEMENT_PERMISSION_SET_ID, SANDBOX_SIGNING_KEY_GUARD_ID,
+    sandbox_signing_key_guard, NATIVE_VOLUME_MANAGEMENT_PERMISSION_SET_ID,
 };
-use crate::mutations::sandbox_gateway_permissions::GATEWAY_CONFIG_READ_ID;
+use crate::mutations::sandbox_gateway_permissions::management_gateway_config_read;
 use crate::{CheckResult, StackCompatibilityCheck};
 use alien_core::permissions::{ManagementPermissions, PermissionProfile, PermissionSetReference};
 use alien_core::{Key, Stack, SECRETS_VAULT_ID};
@@ -175,11 +175,10 @@ fn management_differs_outside_gates(
 ///   when setup reports that it installed it (`availabilityProbe` in the key's import data), so a
 ///   setup that predates it keeps its metadata-only health check until setup is rerun. Only the
 ///   canonical reference in that key's own scope.
-/// - the AWS sandbox signing-key Deny: a Deny only narrows, and preparation replaces any
-///   grant with its id by the canonical one. Stack scope only.
+/// - the canonical AWS sandbox signing-key Deny: a Deny only narrows. Stack scope only.
 /// - `key/native-volume-management` on a Key whose installed scope holds `key/native-volume`:
 ///   the same EC2 key use without `kms:Decrypt`, so the installed role already covers it.
-/// - the exact gateway-configuration read on the secrets vault, where the installed profile
+/// - the canonical exact gateway-configuration read on the secrets vault, where the installed profile
 ///   already holds `vault/data-read` on that vault: the installed role reads the whole vault,
 ///   so the runtime keeps every read it needs until setup narrows it.
 ///
@@ -217,22 +216,25 @@ fn without_added_migration_grants(
             }
         }
     };
-    let strip_id = |profile: &mut PermissionProfile, scope: &str, id: &str| {
-        if old_scope(scope).is_some_and(|grants| grants.iter().any(|grant| grant.id() == id)) {
-            return;
-        }
-        if let Some(grants) = profile.0.get_mut(scope) {
-            grants.retain(|grant| grant.id() != id);
-            if grants.is_empty() && old_scope(scope).is_none() {
-                profile.0.shift_remove(scope);
-            }
-        }
+    // Only the canonical grants preparation authors are exempt: an author's grant reusing one of
+    // these ids may ask for anything, so it is compared like any other grant.
+    let added_canonical = |scope: &str, grant: Option<PermissionSetReference>| {
+        grant
+            .filter(|grant| !old_scope(scope).is_some_and(|grants| grants.contains(grant)))
+            .into_iter()
+            .collect::<Vec<_>>()
     };
+    let signing_key_guard = added_canonical("*", sandbox_signing_key_guard().ok());
     let installed_reads_secrets = old_scope(SECRETS_VAULT_ID).is_some_and(|grants| {
         grants
             .iter()
             .any(|grant| grant == &PermissionSetReference::from_name("vault/data-read"))
     });
+    let gateway_config_read = if installed_reads_secrets {
+        added_canonical(SECRETS_VAULT_ID, management_gateway_config_read().ok())
+    } else {
+        Vec::new()
+    };
     let installed_volume_use = PermissionSetReference::from_name("key/native-volume");
     let volume_management =
         PermissionSetReference::from_name(NATIVE_VOLUME_MANAGEMENT_PERMISSION_SET_ID);
@@ -249,10 +251,8 @@ fn without_added_migration_grants(
     let without = |profile: &PermissionProfile| {
         let mut profile = profile.clone();
         strip(&mut profile, "*", &added_guards);
-        strip_id(&mut profile, "*", SANDBOX_SIGNING_KEY_GUARD_ID);
-        if installed_reads_secrets {
-            strip_id(&mut profile, SECRETS_VAULT_ID, GATEWAY_CONFIG_READ_ID);
-        }
+        strip(&mut profile, "*", &signing_key_guard);
+        strip(&mut profile, SECRETS_VAULT_ID, &gateway_config_read);
         for scope in &keys_with_installed_volume_use {
             strip(&mut profile, scope, std::slice::from_ref(&volume_management));
         }
@@ -441,10 +441,7 @@ fn check_permission_profiles(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mutations::management_permission_profile::{
-        sandbox_signing_key_guard, ManagementPermissionProfileMutation,
-    };
-    use crate::mutations::sandbox_gateway_permissions::management_gateway_config_read;
+    use crate::mutations::management_permission_profile::ManagementPermissionProfileMutation;
     use crate::StackMutation;
     use alien_core::permissions::PermissionsConfig;
     use alien_core::{Email, Kv, ResourceLifecycle};
@@ -488,6 +485,34 @@ mod tests {
             )
             .await
         );
+    }
+
+    /// An author's grant that reuses the gateway-read id but asks for more is not the canonical
+    /// read, so it still needs setup even where the installed profile reads the vault.
+    #[tokio::test]
+    async fn a_grant_reusing_the_gateway_read_id_still_needs_setup() {
+        let mut broader = secrets_vault_management(false);
+        if let ManagementPermissions::Extend(profile) = &mut broader {
+            let set: alien_core::permissions::PermissionSet = serde_json::from_value(
+                serde_json::json!({
+                    "id": "vault/sandbox-egress-gateway-config-read",
+                    "description": "not the canonical read",
+                    "platforms": { "aws": [{
+                        "grant": { "actions": ["ssm:GetParameter", "ssm:DeleteParameter"] },
+                        "binding": { "resource": { "resources": ["arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${resourceName}-*"] } }
+                    }] }
+                }),
+            )
+            .unwrap();
+            profile.0.insert(
+                SECRETS_VAULT_ID.to_string(),
+                vec![
+                    PermissionSetReference::from_name("vault/data-write"),
+                    PermissionSetReference::from_inline(set),
+                ],
+            );
+        }
+        assert!(!update_passes(secrets_vault_management(true), broader).await);
     }
 
     /// Management's volume-key grant moves from `key/native-volume` to the same EC2 use
