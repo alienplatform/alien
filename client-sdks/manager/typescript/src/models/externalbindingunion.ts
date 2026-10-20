@@ -577,6 +577,17 @@ export type TypeArtifactRegistry1 = ClosedEnum<typeof TypeArtifactRegistry1>;
  * AWS ECR (Elastic Container Registry)
  */
 export type ExternalBindingEcr = {
+  /**
+   * Repository prefixes this registry used before `repositoryPrefix`. Images already released
+   *
+   * @remarks
+   * under them stay readable and keep their cross-account grants; nothing new is written there.
+   */
+  legacyRepositoryPrefixes?: Array<string> | undefined;
+  /**
+   * Sandbox namespaces this registry used before `sandboxRepositoryPrefix`, read the same way.
+   */
+  legacySandboxRepositoryPrefixes?: Array<string> | undefined;
   pullRoleArn?: BindingValueStringUnion | null | undefined;
   pushRoleArn?: BindingValueStringUnion | null | undefined;
   /**
@@ -2018,6 +2029,8 @@ export const ExternalBindingEcr$inboundSchema: z.ZodType<
   ExternalBindingEcr,
   unknown
 > = z.object({
+  legacyRepositoryPrefixes: z.array(z.string()).optional(),
+  legacySandboxRepositoryPrefixes: z.array(z.string()).optional(),
   pullRoleArn: z.nullable(BindingValueStringUnion$inboundSchema).optional(),
   pushRoleArn: z.nullable(BindingValueStringUnion$inboundSchema).optional(),
   repositoryPrefix: BindingValueStringUnion$inboundSchema,
@@ -2028,6 +2041,8 @@ export const ExternalBindingEcr$inboundSchema: z.ZodType<
 });
 /** @internal */
 export type ExternalBindingEcr$Outbound = {
+  legacyRepositoryPrefixes?: Array<string> | undefined;
+  legacySandboxRepositoryPrefixes?: Array<string> | undefined;
   pullRoleArn?: BindingValueStringUnion$Outbound | null | undefined;
   pushRoleArn?: BindingValueStringUnion$Outbound | null | undefined;
   repositoryPrefix: BindingValueStringUnion$Outbound;
@@ -2041,6 +2056,8 @@ export const ExternalBindingEcr$outboundSchema: z.ZodType<
   ExternalBindingEcr$Outbound,
   ExternalBindingEcr
 > = z.object({
+  legacyRepositoryPrefixes: z.array(z.string()).optional(),
+  legacySandboxRepositoryPrefixes: z.array(z.string()).optional(),
   pullRoleArn: z.nullable(BindingValueStringUnion$outboundSchema).optional(),
   pushRoleArn: z.nullable(BindingValueStringUnion$outboundSchema).optional(),
   repositoryPrefix: BindingValueStringUnion$outboundSchema,

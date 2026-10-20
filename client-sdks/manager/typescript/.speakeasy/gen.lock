@@ -1,7 +1,7 @@
 lockVersion: 2.0.0
 id: 8940d7e8-6d5d-4ea9-9632-85457ecd75f0
 management:
-  docChecksum: a2468350cf992c6a988207406f7d74d1
+  docChecksum: 9e184d4eb3d621217791b132c4df1299
   docVersion: 1.0.0
   speakeasyVersion: 1.680.11
   generationVersion: 2.788.15
@@ -10,9 +10,9 @@ management:
   repoURL: https://github.com/alienplatform/alien.git
   repoSubDirectory: client-sdks/manager/typescript
 persistentEdits:
-  generation_id: abfc9e6b-65c6-4997-91c3-c979b04328da
-  pristine_commit_hash: cb3ff676ebe543f31e23d675215721eca81be988
-  pristine_tree_hash: ed34b53a4d9191aad6adb92848e5bb486915e375
+  generation_id: da639bf6-60b6-4d78-9efe-2b3e0b147c33
+  pristine_commit_hash: fcc4974023b6097002e902527eabe9d6cd657ac8
+  pristine_tree_hash: 06be9b49ba858f60da8be49cb1efce287ad0dc33
 features:
   typescript:
     additionalDependencies: 0.1.0
@@ -661,8 +661,8 @@ trackedFiles:
     pristine_git_object: 48cda5bef7f949e0173cf1f075b317c81614327b
   docs/models/externalbindingecr.md:
     id: efce1f8de97f
-    last_write_checksum: sha1:cdc6cb1bc76d2f352d455dcff57d0fc246846d71
-    pristine_git_object: 3433ddf3e15a9f54178f2b4855fd587a136f8883
+    last_write_checksum: sha1:edcefe083a5c41f67633341708cdff2c2907494e
+    pristine_git_object: 682ddcaad615553fc8bcebcf2930c1c8eb1cfa8c
   docs/models/externalbindingexternal.md:
     id: df103cc00ce6
     last_write_checksum: sha1:43902333b13cb52b536171e08a215da51529edd7
@@ -707,6 +707,10 @@ trackedFiles:
     id: 3dbf0a514396
     last_write_checksum: sha1:e35566b62acba40befcd421ab99be86e91b98c15
     pristine_git_object: f8dd2c66ee0ffe60cd02432e696d247dfbeffdd1
+  docs/models/externalbindinglocalqueuehttp.md:
+    id: a923ed084216
+    last_write_checksum: sha1:808abff468318947158d4e26ec7ff1cb4e8eb4e5
+    pristine_git_object: 6808b15f08499569f2ab74debad6efdc5a914e38
   docs/models/externalbindinglocalstorage.md:
     id: 547405d5ef0b
     last_write_checksum: sha1:2236643d6e83e50923273a9154220728905e3bd6
@@ -757,8 +761,8 @@ trackedFiles:
     pristine_git_object: a5f4bf5181e983c37f71cbb7504373c2cd5ac32f
   docs/models/externalbindingunion2.md:
     id: 7d6198b837a8
-    last_write_checksum: sha1:3282aaf2305fc24f572be68ca12f1bde1ffccb7f
-    pristine_git_object: 0aeb6f9416cd253d638e92507a81f5579ba0ec43
+    last_write_checksum: sha1:55d064ab73ce3d75987b3ff8b901eb648a9fe7dd
+    pristine_git_object: 0fb74de763a449fe816b7c8bc3aff780a120b2e9
   docs/models/externalbindingunion3.md:
     id: 6abb272ebf68
     last_write_checksum: sha1:0c80755e1a7b2f765e4e11abc36cc2c828fa03fc
@@ -2179,6 +2183,10 @@ trackedFiles:
     id: 0b97d42b6235
     last_write_checksum: sha1:f4b3a9f7c4438385980689aa709c59cadb1f2eb8
     pristine_git_object: e8a3d7382804808fbd74326101041fda7a1f8f27
+  docs/models/typequeue5.md:
+    id: e3ee74e14c10
+    last_write_checksum: sha1:7b04f019938d05fb5791f7c156dd87eb0238e018
+    pristine_git_object: e79cd8c2692c660079973edbce9067905ac645f2
   docs/models/typestorage1.md:
     id: 96e38793b432
     last_write_checksum: sha1:2e9439ad9d102038478073d8afd72b765954f2fc
@@ -2377,8 +2385,8 @@ trackedFiles:
     pristine_git_object: de90a48bb180b7678882da5865a285d8899ff0a7
   package.json:
     id: 7030d0b2f71b
-    last_write_checksum: sha1:da350f3b887b172ad82d4e7941efc108c127977b
-    pristine_git_object: 9a059e98daf02e6519e5304b3f2f7d30cba0466c
+    last_write_checksum: sha1:ed5a7b2b34b4c8fab8dbff7ec6bf8dc3bcc82945
+    pristine_git_object: e47417c68a1866b546c33d883e6fc7bdddcebdc8
   src/core.ts:
     id: f431fdbcd144
     last_write_checksum: sha1:a3b94f76908a8f9a4857fea8aac869403adb797c
@@ -3113,8 +3121,8 @@ trackedFiles:
     pristine_git_object: 696abd7f5ce619dd20476058609f3dd6bc125f01
   src/models/externalbindingunion.ts:
     id: 4fb102621a92
-    last_write_checksum: sha1:c13cd80b40d3b034d0b9c98556854f620048fb65
-    pristine_git_object: f9c9b07ca4d865d77262035ab8363c7ffeb96439
+    last_write_checksum: sha1:4b35f6336f80a7fcbe6c83f556ffc9a6e0e1f82e
+    pristine_git_object: 70f58cf21374fb82f1c7c03f5352453082c0d1b2
   src/models/externalpostgressslmode.ts:
     id: f31b4c618990
     last_write_checksum: sha1:bee4d90b697ad4f5204655de7c12c4a528dc6bd9
