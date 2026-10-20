@@ -20,6 +20,7 @@ mod generator {
     pub mod azure_data_layer_tests;
     pub mod azure_full_stack_tests;
     pub mod azure_identity_tests;
+    pub mod deployment_name_tests;
     pub mod enabled_queue_tests;
     pub mod enabled_storage_tests;
     pub mod enabled_tests;
