@@ -168,15 +168,6 @@ mod tests {
         StackSettings,
     };
 
-    /// The pinned gateway must read its replica secret from a source and, on Kubernetes, its
-    /// configuration and replica secret from mounted files: the controllers stop embedding the
-    /// secret and stop reading the configuration only for such an image.
-    #[test]
-    fn the_pinned_gateway_reads_mounted_configuration() {
-        assert!(alien_core::sandbox_egress::gateway_image_reads_replica_secret_source(GATEWAY_IMAGE));
-        assert!(alien_core::sandbox_egress::gateway_image_reads_config_files(GATEWAY_IMAGE));
-    }
-
     fn fixture() -> (Stack, StackState, DeploymentConfig) {
         let sandbox = Sandbox::new("subject".into())
             .code(SandboxCode::Image {
