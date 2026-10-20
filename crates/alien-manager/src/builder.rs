@@ -338,10 +338,10 @@ impl AlienManagerBuilder {
             let ar = &toml_config.artifact_registry;
             let imp = &toml_config.impersonation;
 
-            for (platform, ar_binding, imp_binding) in [
-                (Platform::Aws, &ar.aws, &imp.aws),
-                (Platform::Gcp, &ar.gcp, &imp.gcp),
-                (Platform::Azure, &ar.azure, &imp.azure),
+            for (platform, ar_binding) in [
+                (Platform::Aws, &ar.aws),
+                (Platform::Gcp, &ar.gcp),
+                (Platform::Azure, &ar.azure),
             ] {
                 if target_bindings.contains_key(&platform) {
                     continue; // explicit override wins
@@ -360,10 +360,10 @@ impl AlienManagerBuilder {
                     );
                 }
 
-                if let Some(ref imp_val) = imp_binding {
+                for (name, binding) in imp.target_bindings(platform) {
                     bindings.insert(
-                        "management".to_string(),
-                        serde_json::to_value(imp_val).into_alien_error().context(
+                        name.to_string(),
+                        serde_json::to_value(binding).into_alien_error().context(
                             ErrorData::ServerInitFailed {
                                 reason: format!(
                                     "Failed to serialize {} impersonation binding",

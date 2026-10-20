@@ -162,6 +162,19 @@ pub enum ErrorData {
     )]
     CredentialMaterializationFailed { platform: Platform, purpose: String },
 
+    /// A deployment's stack trusts a managing identity this manager holds no binding for.
+    #[error(
+        code = "MANAGING_IDENTITY_NOT_HELD",
+        message = "Deployment '{deployment_id}' trusts the managing identity '{managing_identity}', which this manager has no management binding for",
+        retryable = "false",
+        internal = "true",
+        http_status_code = 500
+    )]
+    ManagingIdentityNotHeld {
+        deployment_id: String,
+        managing_identity: String,
+    },
+
     /// A cloud registry refused or failed to create a project's image repository.
     #[error(
         code = "IMAGE_REPOSITORY_PROVISIONING_FAILED",
