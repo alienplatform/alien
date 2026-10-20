@@ -10,7 +10,9 @@ import { BindingValueStringSchema } from "./binding-value-string-schema.js";
  * @description AWS ECR (Elastic Container Registry) binding configuration
  */
 export const EcrArtifactRegistryBindingSchema = z.object({
-    get "pullRoleArn"(){
+    "legacyRepositoryPrefixes": z.optional(z.array(z.string()).describe("Repository prefixes this registry used before `repositoryPrefix`. Images already released\nunder them stay readable and keep their cross-account grants; nothing new is written there.")),
+"legacySandboxRepositoryPrefixes": z.optional(z.array(z.string()).describe("Sandbox namespaces this registry used before `sandboxRepositoryPrefix`, read the same way.")),
+get "pullRoleArn"(){
                 return z.union([BindingValueStringSchema, z.null()]).optional()
               },
 get "pushRoleArn"(){

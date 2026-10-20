@@ -31,6 +31,8 @@ pub struct EcrArtifactRegistry {
     binding_name: String,
     repository_prefix: String,
     sandbox_repository_prefix: Option<String>,
+    legacy_repository_prefixes: Vec<String>,
+    legacy_sandbox_repository_prefixes: Vec<String>,
     pull_role_arn: Option<String>,
     push_role_arn: Option<String>,
 }
@@ -158,6 +160,69 @@ fn repository_lookup_names(repository_prefix: &str, repo_id: &str) -> Vec<String
     }
 }
 
+/// Whether `name` is a repository under `prefix`, which joins its suffix with `-`.
+fn under_prefix(name: &str, prefix: &str) -> bool {
+    name.starts_with(&format!("{prefix}-"))
+}
+
+/// Whether `name` is in a sandbox namespace, current or legacy. Those repositories are created
+/// per region on demand instead of replicated, so a grant prepares them rather than waiting.
+fn in_sandbox_namespace(name: &str, sandbox: Option<&str>, legacy_sandbox: &[String]) -> bool {
+    sandbox
+        .into_iter()
+        .chain(legacy_sandbox.iter().map(String::as_str))
+        .any(|prefix| under_prefix(name, prefix))
+}
+
+/// Why a set of repository prefixes cannot name repositories unambiguously, if it cannot.
+///
+/// Every repository prefix, current or legacy, is an eager replication filter, so a sandbox
+/// namespace must sit outside all of them. A legacy prefix must not be the current one or nest
+/// with it at a `-` boundary, or one repository would be read under both.
+fn invalid_repository_prefixes(
+    current: &str,
+    sandbox: Option<&str>,
+    legacy: &[String],
+    legacy_sandbox: &[String],
+) -> Option<String> {
+    for prefix in legacy {
+        if prefix.is_empty()
+            || prefix.contains('/')
+            || prefix == current
+            || under_prefix(prefix, current)
+            || under_prefix(current, prefix)
+        {
+            return Some(format!(
+                "Legacy repository prefix '{prefix}' must be a distinct, non-nested repository prefix"
+            ));
+        }
+    }
+    let replicated: Vec<&str> = std::iter::once(current)
+        .chain(legacy.iter().map(String::as_str))
+        .collect();
+    for namespace in sandbox
+        .into_iter()
+        .chain(legacy_sandbox.iter().map(String::as_str))
+    {
+        if !replicated
+            .iter()
+            .all(|prefix| valid_sandbox_namespace(namespace, prefix))
+        {
+            return Some(format!(
+                "Sandbox namespace '{namespace}' must be outside every replicated repository prefix"
+            ));
+        }
+    }
+    if let Some(namespace) =
+        sandbox.filter(|namespace| legacy_sandbox.iter().any(|l| l == namespace))
+    {
+        return Some(format!(
+            "Sandbox namespace '{namespace}' cannot also be a legacy sandbox namespace"
+        ));
+    }
+    None
+}
+
 fn valid_sandbox_namespace(prefix: &str, replicated_prefix: &str) -> bool {
     !replicated_prefix.is_empty()
         && !prefix.starts_with(replicated_prefix)
@@ -218,15 +283,18 @@ impl EcrArtifactRegistry {
                 binding_name: binding_name.clone(),
                 reason: "Failed to extract sandbox_repository_prefix".to_string(),
             })?;
-        if sandbox_repository_prefix
-            .as_ref()
-            .is_some_and(|prefix| !valid_sandbox_namespace(prefix, &repository_prefix))
-        {
+        let legacy_repository_prefixes = config.legacy_repository_prefixes;
+        let legacy_sandbox_repository_prefixes = config.legacy_sandbox_repository_prefixes;
+        if let Some(reason) = invalid_repository_prefixes(
+            &repository_prefix,
+            sandbox_repository_prefix.as_deref(),
+            &legacy_repository_prefixes,
+            &legacy_sandbox_repository_prefixes,
+        ) {
             return Err(AlienError::new(ErrorData::BindingConfigInvalid {
                 env_var: binding_env_var(&binding_name),
                 binding_name: binding_name.clone(),
-                reason: "Sandbox namespace must be outside the replicated repository prefix"
-                    .to_string(),
+                reason,
             }));
         }
 
@@ -262,6 +330,8 @@ impl EcrArtifactRegistry {
             binding_name,
             repository_prefix,
             sandbox_repository_prefix,
+            legacy_repository_prefixes,
+            legacy_sandbox_repository_prefixes,
             pull_role_arn,
             push_role_arn,
         })
@@ -374,9 +444,21 @@ impl EcrArtifactRegistry {
     }
 
     fn is_cached_repository(&self, name: &str) -> bool {
-        self.sandbox_repository_prefix
-            .as_ref()
-            .is_some_and(|prefix| name.starts_with(&format!("{prefix}-")))
+        in_sandbox_namespace(
+            name,
+            self.sandbox_repository_prefix.as_deref(),
+            &self.legacy_sandbox_repository_prefixes,
+        )
+    }
+
+    /// Whether `name` is already a full repository name outside the current prefix: a sandbox
+    /// repository, or one under a legacy prefix. Neither is re-prefixed on lookup.
+    fn names_repository_outside_prefix(&self, name: &str) -> bool {
+        self.is_cached_repository(name)
+            || self
+                .legacy_repository_prefixes
+                .iter()
+                .any(|prefix| under_prefix(name, prefix))
     }
 
     fn repository_uri(&self, full_repo_name: &str) -> String {
@@ -577,6 +659,14 @@ impl ArtifactRegistry for EcrArtifactRegistry {
         self.sandbox_repository_prefix.clone()
     }
 
+    fn legacy_repository_prefixes(&self) -> Vec<String> {
+        self.legacy_repository_prefixes.clone()
+    }
+
+    fn legacy_sandbox_repository_prefixes(&self) -> Vec<String> {
+        self.legacy_sandbox_repository_prefixes.clone()
+    }
+
     async fn create_repository(&self, repo_name: &str) -> Result<RepositoryResponse> {
         self.create_named_repository(self.make_full_repo_name(repo_name))
             .await
@@ -597,7 +687,7 @@ impl ArtifactRegistry for EcrArtifactRegistry {
 
     async fn get_repository(&self, repo_id: &str) -> Result<RepositoryResponse> {
         let lookup_names = repository_lookup_names(
-            if self.is_cached_repository(repo_id) {
+            if self.names_repository_outside_prefix(repo_id) {
                 ""
             } else {
                 &self.repository_prefix
@@ -1462,6 +1552,102 @@ mod tests {
                 "{prefix}"
             );
         }
+    }
+
+    #[test]
+    fn a_renamed_registry_keeps_its_previous_names_apart_from_the_new_ones() {
+        let legacy = vec!["acme-artifacts".to_string()];
+        let legacy_sandbox = vec!["sandbox-acme/acme-artifacts".to_string()];
+        assert_eq!(
+            invalid_repository_prefixes(
+                "artifacts",
+                Some("sandbox-cache/artifacts"),
+                &legacy,
+                &legacy_sandbox
+            ),
+            None
+        );
+        for (current, sandbox, legacy, legacy_sandbox, why) in [
+            (
+                "artifacts",
+                None,
+                vec!["artifacts"],
+                vec![],
+                "the current prefix",
+            ),
+            (
+                "artifacts",
+                None,
+                vec!["artifacts-old"],
+                vec![],
+                "nested under the current one",
+            ),
+            (
+                "acme-artifacts-v2",
+                None,
+                vec!["acme-artifacts"],
+                vec![],
+                "the current one nests under it",
+            ),
+            ("artifacts", None, vec![""], vec![], "empty"),
+            (
+                "artifacts",
+                None,
+                vec!["team/artifacts"],
+                vec![],
+                "a namespace path",
+            ),
+            (
+                "artifacts",
+                Some("acme-artifacts/sandbox"),
+                vec!["acme-artifacts"],
+                vec![],
+                "a sandbox namespace a legacy replication filter still copies",
+            ),
+            (
+                "artifacts",
+                Some("sandbox-cache/artifacts"),
+                vec!["acme-artifacts"],
+                vec!["artifacts-sandbox/x"],
+                "a legacy sandbox namespace the current filter copies",
+            ),
+            (
+                "artifacts",
+                Some("sandbox-cache/artifacts"),
+                vec![],
+                vec!["sandbox-cache/artifacts"],
+                "the current sandbox namespace",
+            ),
+        ] {
+            let legacy: Vec<String> = legacy.into_iter().map(str::to_string).collect();
+            let legacy_sandbox: Vec<String> =
+                legacy_sandbox.into_iter().map(str::to_string).collect();
+            assert!(
+                invalid_repository_prefixes(current, sandbox, &legacy, &legacy_sandbox).is_some(),
+                "{why}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_legacy_sandbox_repository_is_prepared_per_region_like_a_current_one() {
+        let legacy_sandbox = vec!["sandbox-acme/acme-artifacts".to_string()];
+        let sandbox = Some("sandbox-cache/artifacts");
+        assert!(in_sandbox_namespace(
+            "sandbox-acme/acme-artifacts-prj_1",
+            sandbox,
+            &legacy_sandbox
+        ));
+        assert!(in_sandbox_namespace(
+            "sandbox-cache/artifacts-prj_1",
+            sandbox,
+            &legacy_sandbox
+        ));
+        assert!(!in_sandbox_namespace(
+            "acme-artifacts-prj_1",
+            sandbox,
+            &legacy_sandbox
+        ));
     }
 
     #[test]
