@@ -2435,7 +2435,7 @@ fn management_url_variable_block(registered: bool, setup_only: bool) -> Block {
                 [
                     attr(
                         "condition",
-                        expr::raw("can(regex(\"^https?://[^/]\", var.management_url))"),
+                        expr::raw("can(regex(\"^https?://[^/?#]+\", var.management_url))"),
                     ),
                     attr(
                         "error_message",

@@ -72,7 +72,14 @@ fn registered_module_requires_a_management_url() {
         &[("token", "example-token")],
         "\"management_url\" is not set",
     );
-    for url in ["", "manager.example.com", "https://"] {
+    for url in [
+        "",
+        "manager.example.com",
+        "https://",
+        "https://?",
+        "https://#",
+        "https:///manager",
+    ] {
         assert_terraform_variable_plan_invalid_contains(
             &module,
             &format!("management_url = {url:?}"),
