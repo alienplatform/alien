@@ -13,10 +13,12 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import socket
 import ssl
 import statistics
 import subprocess
+import tempfile
 import time
 from urllib.parse import urlencode
 
@@ -107,6 +109,20 @@ server.handle_request();server.server_close()
     if not allowed:
         # The agent can still reach the same command listener through loopback.
         assert docker("exec", container, "python", "-c", f'import urllib.request;assert urllib.request.urlopen("http://127.0.0.1:{port}/",timeout=3).read()==b"remote-preview-ok"') == ""
+
+
+def guest_image(agent_image, python_version):
+    """The fixture agent on another Python base image, so guest client differences are qualified."""
+    tag = f"{PREFIX}-guest-py{python_version}".lower()
+    dockerfile = (Path(__file__).parent / "Dockerfile.agent").read_text()
+    dockerfile = re.sub(r"^FROM python:\S+", f"FROM python:{python_version}-slim", dockerfile, count=1, flags=re.M)
+    dockerfile = dockerfile.replace(
+        "COPY alien-sandbox-agent /usr/local/bin/alien-sandbox-agent",
+        f"COPY --from={agent_image} /usr/local/bin/alien-sandbox-agent /usr/local/bin/alien-sandbox-agent")
+    with tempfile.TemporaryDirectory() as context:
+        (Path(context) / "Dockerfile").write_text(dockerfile)
+        docker("build", "-q", "-t", tag, context)
+    return tag
 
 
 def policy_digest(policy):
@@ -667,11 +683,11 @@ while True:
                 self.record("open floor direct canary positive control", lambda: equal(docker("exec", closed, "python", "-c", control), "reachable"))
 
 
-    def proxy_only(self, image, containers, networks):
-        name = PREFIX + "-proxy-only"
-        sub = "proxy-only"
+    def proxy_only(self, image, containers, networks, label="", ip="172.29.91.4"):
+        name = PREFIX + "-proxy-only" + label
+        sub = "proxy-only" + label
         assert self.admin("/v1/policies", {"aud": AUD, "sub": sub, "policy": self.policy})[0] == 204
-        docker("run", "-d", "--name", name, "--network", PREFIX + "-guest", "--ip", "172.29.91.4",
+        docker("run", "-d", "--name", name, "--network", PREFIX + "-guest", "--ip", ip,
                "--user", f"{AGENT_UID}:{AGENT_UID}", "--cap-drop", "ALL", "--read-only",
                "--tmpfs", f"/data:rw,uid={AGENT_UID},gid={AGENT_UID},mode=0700",
                "-e", "ALIEN_SANDBOX_ISOLATION=platform", "-e", "ALIEN_SANDBOX_SESSION_ID=" + sub,
@@ -680,7 +696,7 @@ while True:
         containers.append(name)
         def call(method, path, body=None):
             if method == "PUT" and path == "/v1/egress": body = self.delivery(body)
-            conn = http.client.HTTPConnection("172.29.91.4", 8080, timeout=10)
+            conn = http.client.HTTPConnection(ip, 8080, timeout=10)
             conn.request(method, path, json.dumps(body) if body is not None else None, {"Content-Type":"application/json"})
             response = conn.getresponse()
             result = response.status, response.read()
@@ -698,7 +714,7 @@ while True:
         def install():
             status, body = call("PUT", "/v1/egress", {"token":self.token(sub=sub)})
             assert status == 204, (status, body)
-        self.record("unprivileged agent installs identity and verifies floor", install)
+        self.record("unprivileged agent installs identity and verifies floor" + label, install)
         script = '''import os,urllib.request,socket
 from pathlib import Path
 env=dict(line.split("=",1) for line in Path("/data/image-env").read_text().splitlines())
@@ -715,7 +731,32 @@ print("proxy-only passed")
 '''
         def probe():
             assert docker("exec", name, "python", "-c", script) == "proxy-only passed"
-        self.record("unprivileged HTTPS_PROXY works and direct socket fails", probe)
+        self.record("unprivileged HTTPS_PROXY works and direct socket fails" + label, probe)
+        # Clients differ in how they open a tunnel. Python 3.11 and earlier send
+        # `CONNECT host:443 HTTP/1.0` with no Host header; curl sends HTTP/1.1 with one.
+        def expect(command, output):
+            actual = docker("exec", name, "python", "-c", command)
+            assert actual == output, actual
+        guest_env = 'from pathlib import Path\nimport os\nenv=dict(line.split("=",1) for line in Path("/data/image-env").read_text().splitlines())\n'
+        raw_connect = guest_env + '''import socket,urllib.parse
+proxy=urllib.parse.urlsplit(env["HTTPS_PROXY"])
+s=socket.create_connection((proxy.hostname,proxy.port),timeout=8)
+s.sendall(b"CONNECT allowed.test:443 HTTP/1.0\\r\\n\\r\\n")
+status=s.recv(64).split(b"\\r\\n")[0]
+assert status.startswith(b"HTTP/1.1 200"),status
+print("raw connect passed")
+'''
+        self.record("raw HTTP/1.0 CONNECT without Host through the guest proxy" + label,
+                    lambda: expect(raw_connect, "raw connect passed"))
+        curl = guest_env + '''import subprocess
+out=subprocess.check_output(["curl","--fail","--silent","--show-error","--max-time","8","--cacert","/fixture-ca.pem","https://allowed.test/"],env=env)
+assert out==b"controlled-origin-response\\n",out
+print("curl passed")
+'''
+        self.record("curl through the guest proxy" + label,
+                    lambda: expect(curl, "curl passed"))
+        if label:
+            return
         check_resume_path(self, name, call, docker, networks, PREFIX, metadata=True, sub=sub)
         self.record("unprivileged localhost HTTP remains local", lambda: check_loopback_http(name))
 
@@ -737,6 +778,8 @@ def main():
     parser.add_argument("--splice-only", action="store_true")
     parser.add_argument("--dns-limit-only", action="store_true")
     parser.add_argument("--replica-failover-only", action="store_true")
+    parser.add_argument("--guest-pythons", default="3.11,3.12,3.13",
+                        help="Python base images to rerun the proxy-only guest checks on, with the same agent binary")
     args = parser.parse_args()
     if args.range_refresh_only and not args.vault_config:
         parser.error("--range-refresh-only requires --vault-config")
@@ -765,7 +808,7 @@ def main():
     config = dict(listen="0.0.0.0:3128", audiences=[AUD], defaultPolicies={AUD: "internet"}, peers={"dns":"replicas.test","port":3129}, replicaSecret=base64.b64encode(bytes([7])*32).decode(), keys=[dict(kid="test", publicKey=public)], deniedRanges=["93.184.217.0/24", "10.244.0.0/16"], credentials=rules, upstreamCaCertificates=[ca])
     if args.vault_config:
         (output / "vault/secrets.json").write_text(json.dumps({"test":"fake-test-secret", "sandbox-egress-gateway-config":json.dumps(config)}))
-    containers, networks = [], []
+    containers, networks, images = [], [], []
     try:
         docker("network", "create", "--internal", "--subnet", "93.184.216.0/24", PREFIX)
         networks.append(PREFIX)
@@ -848,6 +891,10 @@ def main():
             check_run_ordering(suite, args.agent_image, containers, networks, PREFIX, AUD)
             suite.agent(args.agent_image, containers, networks)
             suite.proxy_only(args.agent_image, containers, networks)
+            for index, version in enumerate(v for v in args.guest_pythons.split(",") if v):
+                guest = guest_image(args.agent_image, version)
+                images.append(guest)
+                suite.proxy_only(guest, containers, networks, label=f"-py{version}", ip=f"172.29.91.{20 + index}")
             from run_hook_egress import check_run_hook_agents
             check_run_hook_agents(suite, args.agent_image, containers, AGENT_UID)
         if not args.vault_config:
@@ -856,6 +903,8 @@ def main():
             from denied_ranges import check_denied_range_refresh
             check_denied_range_refresh(suite, config, docker, containers, PREFIX, AUD, ORIGIN, PROXY)
     finally:
+        for guest in images:
+            docker("rmi", "-f", guest)
         secret_in_logs = False
         for name in reversed(containers):
             logs = docker("logs", name)
