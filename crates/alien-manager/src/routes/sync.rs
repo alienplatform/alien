@@ -2309,9 +2309,17 @@ async fn agent_sync(
     let mut target_dynamic_containers = None;
     // A target-bearing row without an echoed claim belongs to work the agent
     // has not accepted yet. Do not let its idle state acknowledge that target.
-    if let Some(current_state_value) = req.current_state.as_ref().filter(|_| {
-        report_has_claim || !requires_execution_claims || deployment.desired_release_id.is_none()
-    }) {
+    let reported_state_owns_target =
+        report_has_claim || !requires_execution_claims || deployment.desired_release_id.is_none();
+    // The skipped report still proves the agent is connected. Its heartbeat and
+    // observations are recorded below against the manager's own state, so an
+    // update the agent cannot take yet does not make it look disconnected.
+    let unaccepted_target_report = req.current_state.is_some() && !reported_state_owns_target;
+    if let Some(current_state_value) = req
+        .current_state
+        .as_ref()
+        .filter(|_| reported_state_owns_target)
+    {
         match serde_json::from_value::<DeploymentState>(current_state_value.clone()) {
             Ok(mut agent_state) => {
                 reported_claim_is_terminal =
@@ -2562,7 +2570,20 @@ async fn agent_sync(
         agent_state_uninitialized,
         &deployment,
     );
-    let current_state = if should_return_current_state {
+    // Without a claim, the agent's liveness and observations are recorded
+    // against the manager's own state, never the agent's report.
+    let record_unclaimed_observations = execution_claim.is_none()
+        && (unaccepted_target_report
+            || (should_return_current_state
+                && (!req.heartbeats.is_empty()
+                    || !req.observed_inventory_batches.is_empty()
+                    || !req.capabilities.is_empty()
+                    || req.operator_version.is_some()
+                    || operator_image.is_some()
+                    || application.is_some()
+                    || operations_config.is_some()
+                    || req.operations_report.is_some())));
+    let current_state = if should_return_current_state || record_unclaimed_observations {
         let release_stack_platform = release_stack_platform(deployment.platform);
         let current_release = if let Some(ref release_id) = deployment.current_release_id {
             let system = crate::auth::Subject::system();
@@ -2585,16 +2606,7 @@ async fn agent_sync(
         let target_release = target.as_ref().map(|t| t.release_info.clone());
         match deployment_state_from_record(&deployment, current_release, target_release) {
             Some(deployment_state) => {
-                if execution_claim.is_none()
-                    && (!req.heartbeats.is_empty()
-                        || !req.observed_inventory_batches.is_empty()
-                        || !req.capabilities.is_empty()
-                        || req.operator_version.is_some()
-                        || operator_image.is_some()
-                        || application.is_some()
-                        || operations_config.is_some()
-                        || req.operations_report.is_some())
-                {
+                if record_unclaimed_observations {
                     let reconcile_data = ReconcileData {
                         deployment_id: req.deployment_id.clone(),
                         session: "agent-sync".to_string(),
@@ -2634,12 +2646,16 @@ async fn agent_sync(
                     }
                 }
 
-                match serde_json::to_value(deployment_state) {
-                    Ok(v) => Some(v),
-                    Err(e) => {
-                        tracing::warn!("Failed to serialize deployment state: {e}");
-                        return ErrorData::internal("Failed to serialize deployment state")
-                            .into_response();
+                if !should_return_current_state {
+                    None
+                } else {
+                    match serde_json::to_value(deployment_state) {
+                        Ok(v) => Some(v),
+                        Err(e) => {
+                            tracing::warn!("Failed to serialize deployment state: {e}");
+                            return ErrorData::internal("Failed to serialize deployment state")
+                                .into_response();
+                        }
                     }
                 }
             }
