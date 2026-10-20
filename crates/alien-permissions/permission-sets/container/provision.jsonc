@@ -538,7 +538,7 @@
         }
       },
       // Every DLM policy runs as the role setup creates for the stack's compute cluster,
-      // `${stackPrefix}-{cluster}-volume-backups`, from `container/volume-backups`: it can only
+      // `${stackPrefix}-volume-backups-{cluster}`, from `container/volume-backups`: it can only
       // snapshot this stack's volumes and can't share or copy a snapshot. The management identity
       // never creates or changes an IAM role here; it may only pass that role to DLM. (IAM
       // doesn't evaluate a role's tags for PassRole, so the name is the only scope.)
@@ -548,10 +548,10 @@
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-volume-backups"]
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-volume-backups-*"]
           },
           "resource": {
-            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-volume-backups"]
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-volume-backups-*"]
           }
         }
       },
@@ -561,7 +561,7 @@
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-volume-backups"],
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-volume-backups-*"],
             "condition": {
               "StringEquals": {
                 "iam:PassedToService": "dlm.amazonaws.com"
@@ -569,7 +569,7 @@
             }
           },
           "resource": {
-            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-volume-backups"],
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-volume-backups-*"],
             "condition": {
               "StringEquals": {
                 "iam:PassedToService": "dlm.amazonaws.com"
@@ -598,10 +598,10 @@
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-volume-backups"]
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-volume-backups-*"]
           },
           "resource": {
-            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-volume-backups"]
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-volume-backups-*"]
           }
         }
       },

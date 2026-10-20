@@ -195,7 +195,7 @@ const DLM_SERVICE_POLICY: &str =
 fn management_cannot_make_or_rewrite_a_role_dlm_runs_as() {
     let management = management();
     let legacy = role_arn("app-dlm-0123456789abcdef");
-    let setup_role = role_arn("app-compute-volume-backups");
+    let setup_role = role_arn("app-volume-backups-compute");
 
     for target in [&legacy, &setup_role] {
         let create =
@@ -242,10 +242,24 @@ fn management_passes_dlm_only_the_setup_role() {
         )
     };
 
-    assert_eq!(
-        pass("app-compute-volume-backups", "dlm.amazonaws.com"),
-        Decision::Allowed
-    );
+    // Whatever the cluster is called, its setup role stays clear of the legacy-role Deny,
+    // `app-dlm-*`, and of the legacy cleanup grants on the same names.
+    for cluster in ["compute", "dlm", "dlm-a", "volume-backups"] {
+        let setup_role = format!("app-volume-backups-{cluster}");
+        assert_eq!(
+            pass(&setup_role, "dlm.amazonaws.com"),
+            Decision::Allowed,
+            "{setup_role}"
+        );
+        assert_eq!(
+            evaluate(
+                &management,
+                &Request::new("iam:DeleteRole", role_arn(&setup_role))
+            ),
+            Decision::ExplicitlyDenied,
+            "{setup_role}"
+        );
+    }
     // A role earlier releases made at runtime still carries the AWS managed DLM policy, which
     // may share or copy any snapshot. The compute cluster's prefix-wide PassRole names it too.
     assert_eq!(
@@ -365,7 +379,7 @@ fn wildcard_matching_follows_iam() {
     assert!(wildcard_match("ec2:*", "ec2:createtags"));
     assert!(wildcard_match("a?c", "abc"));
     assert!(!wildcard_match(
-        "arn:aws:iam::1:role/app-*-volume-backups",
+        "arn:aws:iam::1:role/app-volume-backups-*",
         "arn:aws:iam::1:role/app-dlm-1"
     ));
     assert!(!wildcard_match("app", "app-x"));
