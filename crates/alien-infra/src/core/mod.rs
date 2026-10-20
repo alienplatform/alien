@@ -29,6 +29,8 @@ pub use state_utils::*;
 pub mod environment_variables;
 pub use environment_variables::*;
 
+pub mod linked_bindings;
+
 pub mod k8s_secret_bindings;
 pub use k8s_secret_bindings::*;
 
