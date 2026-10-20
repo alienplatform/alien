@@ -5768,19 +5768,22 @@ impl AwsWorkerController {
     }
 }
 
-/// How often a worker compares its linked bindings with its live environment: the comparison
-/// costs a GetFunction call, against Lambda's 100 per second per Region, so it runs in one
-/// heartbeat window per period rather than on every heartbeat.
-const LINKED_BINDING_CHECK_PERIOD_SECONDS: i64 = 300;
-/// The heartbeat interval in `Ready`; one window of this length per period is due.
-const LINKED_BINDING_CHECK_WINDOW_SECONDS: i64 = 30;
+/// Time is cut into slots of this many seconds, and each worker compares its linked bindings
+/// with its live environment in one slot out of every [`LINKED_BINDING_CHECK_SLOTS`]. The
+/// comparison costs a GetFunction call, against Lambda's 100 per second per Region, so it runs on
+/// a fraction of heartbeats rather than on each one.
+const LINKED_BINDING_CHECK_SLOT_SECONDS: i64 = 30;
+/// Prime, so a worker reaches its slot within this many heartbeats whatever the heartbeat
+/// interval (30 s, the manager's 60 s, 90 s, ...), unless that interval is a multiple of
+/// `LINKED_BINDING_CHECK_SLOTS * LINKED_BINDING_CHECK_SLOT_SECONDS` (330 s).
+const LINKED_BINDING_CHECK_SLOTS: i64 = 11;
 
-/// Whether `now` falls in this worker's comparison window. The window is derived from the
-/// worker's name and the clock, so the cadence stores nothing and writes no state per heartbeat,
-/// and workers in one account spread their reads across the period.
+/// Whether `now` falls in this worker's comparison slot. The slot is derived from the worker's
+/// name and the clock, so the cadence stores nothing and writes no state per heartbeat, and
+/// workers in one account spread their reads.
 fn binding_check_due(worker_name: &str, now: chrono::DateTime<Utc>) -> bool {
-    // Tests open the window explicitly, so heartbeat tests about something else never depend
-    // on the clock.
+    // Tests open the slot explicitly, so heartbeat tests about something else never depend on
+    // the clock.
     #[cfg(test)]
     {
         let _ = (worker_name, now);
@@ -5791,11 +5794,11 @@ fn binding_check_due(worker_name: &str, now: chrono::DateTime<Utc>) -> bool {
 }
 
 fn binding_window_open(worker_name: &str, now: chrono::DateTime<Utc>) -> bool {
-    let windows = LINKED_BINDING_CHECK_PERIOD_SECONDS / LINKED_BINDING_CHECK_WINDOW_SECONDS;
-    let offset = worker_name
-        .bytes()
-        .fold(0i64, |hash, byte| (hash * 31 + i64::from(byte)) % windows);
-    (now.timestamp() / LINKED_BINDING_CHECK_WINDOW_SECONDS).rem_euclid(windows) == offset
+    let offset = worker_name.bytes().fold(0i64, |hash, byte| {
+        (hash * 31 + i64::from(byte)) % LINKED_BINDING_CHECK_SLOTS
+    });
+    (now.timestamp() / LINKED_BINDING_CHECK_SLOT_SECONDS).rem_euclid(LINKED_BINDING_CHECK_SLOTS)
+        == offset
 }
 
 /// Names of the variables in `expected` that `live` lacks or holds with another value. Binding
@@ -10667,22 +10670,26 @@ mod tests {
             }
         }
 
-        /// The comparison costs a GetFunction call, so each worker compares in one heartbeat
-        /// window per five minutes, derived from the clock and its name: nothing is stored.
+        /// Every worker compares once in any eleven consecutive heartbeats, at the 30-second
+        /// heartbeat, the manager's 60-second tick and a 90-second one alike, so a heartbeat that
+        /// keeps landing in one half-minute still reaches its slot.
         #[test]
-        fn each_worker_compares_once_per_period() {
-            let start = chrono::DateTime::from_timestamp(1_800_000_000, 0).unwrap();
-            for name in ["test-a", "test-b", "stack-worker"] {
-                let open = (0..super::super::LINKED_BINDING_CHECK_PERIOD_SECONDS)
-                    .step_by(super::super::LINKED_BINDING_CHECK_WINDOW_SECONDS as usize)
-                    .filter(|offset| {
-                        super::super::binding_window_open(
-                            name,
-                            start + chrono::Duration::seconds(*offset),
-                        )
-                    })
-                    .count();
-                assert_eq!(open, 1, "{name}");
+        fn each_worker_compares_once_in_eleven_heartbeats_at_any_interval() {
+            let start = chrono::DateTime::from_timestamp(1_800_000_007, 0).unwrap();
+            for interval in [30, 60, 90] {
+                for name in ["test-a", "test-b", "stack-worker", "w"] {
+                    for shift in [0, 11, 29] {
+                        let due = (0..super::super::LINKED_BINDING_CHECK_SLOTS)
+                            .filter(|beat| {
+                                super::super::binding_window_open(
+                                    name,
+                                    start + chrono::Duration::seconds(shift + beat * interval),
+                                )
+                            })
+                            .count();
+                        assert_eq!(due, 1, "{name} every {interval}s, shifted {shift}s");
+                    }
+                }
             }
         }
 
