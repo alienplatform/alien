@@ -7,6 +7,7 @@
 //! reconstruct the namespace without a cloud lookup.
 
 use crate::{
+    block::{attr, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::aws::helpers::{
         aws_terraform_permission_context, downcast, emit_iam_role_policy_for_target_with_label,
@@ -84,6 +85,12 @@ impl TfEmitter for AwsVaultEmitter {
             }
         }
 
+        if vault.id() == alien_core::SECRETS_VAULT_ID
+            && alien_core::sandbox_egress::has_sandbox_gateway(ctx.stack)
+        {
+            emit_sandbox_gateway_replica_secret(&mut fragment, required_label(ctx)?);
+        }
+
         Ok(fragment)
     }
 
@@ -113,6 +120,50 @@ impl TfEmitter for AwsVaultEmitter {
             ),
         ])))
     }
+}
+
+/// Setup generates the sandbox gateway's replica secret in the customer account, so no vendor
+/// identity ever writes or reads its value: only the gateway's role may read it, and the
+/// management role is denied. The generated value is also kept in the Terraform state of the
+/// account that runs this setup.
+fn emit_sandbox_gateway_replica_secret(fragment: &mut TfFragment, label: &str) {
+    let name = format!("{label}_sandbox_egress_replica_secret");
+    fragment.resource_blocks.push(resource_block(
+        "random_password",
+        &name,
+        [
+            attr("length", Expression::Number(hcl::Number::from(64i64))),
+            attr("special", Expression::Bool(false)),
+        ],
+    ));
+    fragment.resource_blocks.push(resource_block(
+        "aws_secretsmanager_secret",
+        &name,
+        [
+            attr(
+                "name",
+                expr::template(format!(
+                    "${{local.resource_prefix}}-{}",
+                    alien_core::sandbox_egress::SANDBOX_EGRESS_REPLICA_SECRET
+                )),
+            ),
+            attr(
+                "description",
+                Expression::String(
+                    "Sandbox egress gateway replica secret, readable only by the gateway".into(),
+                ),
+            ),
+            attr("recovery_window_in_days", Expression::Number(hcl::Number::from(0i64))),
+        ],
+    ));
+    fragment.resource_blocks.push(resource_block(
+        "aws_secretsmanager_secret_version",
+        &name,
+        [
+            attr("secret_id", expr::raw(format!("aws_secretsmanager_secret.{name}.id"))),
+            attr("secret_string", expr::raw(format!("random_password.{name}.result"))),
+        ],
+    ));
 }
 
 fn vault_permission_owners(ctx: &EmitContext<'_>) -> Vec<(String, Vec<PermissionSetReference>)> {

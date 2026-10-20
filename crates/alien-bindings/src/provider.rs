@@ -1592,6 +1592,15 @@ impl BindingsProviderApi for BindingsProvider {
             })),
 
             #[cfg(feature = "local")]
+            QueueBinding::LocalHttp(config) => Ok(Arc::new(
+                crate::providers::queue::local_http::LocalHttpQueue::new(config)?,
+            ) as Arc<dyn Queue>),
+            #[cfg(not(feature = "local"))]
+            QueueBinding::LocalHttp(_) => Err(AlienError::new(ErrorData::FeatureNotEnabled {
+                feature: "local".to_string(),
+            })),
+
+            #[cfg(feature = "local")]
             QueueBinding::Local(config) => {
                 use crate::providers::queue::local::LocalQueue;
 
@@ -1933,12 +1942,13 @@ impl BindingsProviderApi for BindingsProvider {
             SandboxBinding::Kubernetes(kubernetes_binding) => {
                 use crate::providers::sandbox::kubernetes::KubernetesSandbox;
 
-                let sandbox: Arc<dyn crate::traits::Sandbox> = Arc::new(KubernetesSandbox::new_with_egress_manager(
-                    binding_name,
-                    &kubernetes_binding,
-                    binding_name,
-                    egress_manager,
-                )?);
+                let sandbox: Arc<dyn crate::traits::Sandbox> =
+                    Arc::new(KubernetesSandbox::new_with_egress_manager(
+                        binding_name,
+                        &kubernetes_binding,
+                        binding_name,
+                        egress_manager,
+                    )?);
                 Ok(sandbox)
             }
             #[cfg(feature = "gcp")]

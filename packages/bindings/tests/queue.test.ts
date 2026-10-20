@@ -9,7 +9,8 @@
  */
 
 import { randomUUID } from "node:crypto"
-import { afterAll, describe, expect, it } from "vitest"
+import { afterAll, beforeAll, describe, expect, it } from "vitest"
+import { prepareQueueServer } from "../scripts/queue-test-server.mjs"
 import type { Queue } from "../src/index.js"
 import { queue } from "../src/index.js"
 import { cleanupTempDirs, localQueueBindingEnv, only } from "./helpers/local-binding-env.js"
@@ -23,7 +24,10 @@ function freshQueue(): Queue {
   return queue(name)
 }
 
-describe("queue (local turso-backed provider)", () => {
+describe("queue (manager-owned HTTP provider)", () => {
+  beforeAll(() => {
+    if (process.env.BUN_EXPECTED !== "1") prepareQueueServer()
+  }, 300_000)
   afterAll(() => {
     cleanupTempDirs()
   })

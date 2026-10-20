@@ -334,6 +334,7 @@ export type { LocalArtifactRegistryHeartbeatData } from "./zod/local-artifact-re
 export type { LocalComputeClusterHeartbeatData } from "./zod/local-compute-cluster-heartbeat-data-schema.js";
 export type { LocalContainerHeartbeatData } from "./zod/local-container-heartbeat-data-schema.js";
 export type { LocalDaemonHeartbeatData } from "./zod/local-daemon-heartbeat-data-schema.js";
+export type { LocalHttpQueueBinding } from "./zod/local-http-queue-binding-schema.js";
 export type { LocalKvBinding } from "./zod/local-kv-binding-schema.js";
 export type { LocalKvHeartbeatData } from "./zod/local-kv-heartbeat-data-schema.js";
 export type { LocalOperation } from "./zod/local-operation-schema.js";
@@ -855,6 +856,7 @@ export { LocalArtifactRegistryHeartbeatDataSchema } from "./zod/local-artifact-r
 export { LocalComputeClusterHeartbeatDataSchema } from "./zod/local-compute-cluster-heartbeat-data-schema.js";
 export { LocalContainerHeartbeatDataSchema } from "./zod/local-container-heartbeat-data-schema.js";
 export { LocalDaemonHeartbeatDataSchema } from "./zod/local-daemon-heartbeat-data-schema.js";
+export { LocalHttpQueueBindingSchema } from "./zod/local-http-queue-binding-schema.js";
 export { LocalKvBindingSchema } from "./zod/local-kv-binding-schema.js";
 export { LocalKvHeartbeatDataSchema } from "./zod/local-kv-heartbeat-data-schema.js";
 export { LocalOperationSchema } from "./zod/local-operation-schema.js";

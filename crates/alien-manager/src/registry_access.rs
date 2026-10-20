@@ -616,7 +616,7 @@ pub async fn cleanup_deleted_registry_access(
             let mut derived =
                 repository_ids_for_access(artifact_registry.as_ref(), state, project_id);
             if recorded_grant && matches!(platform, Platform::Aws) && declares_sandbox(state) {
-                if let Some(own) = project_repository(artifact_registry.as_ref(), project_id) {
+                for own in project_repositories(artifact_registry.as_ref(), project_id) {
                     if !derived.contains(&own) {
                         match artifact_registry.get_repository(&own).await {
                             Ok(_) => derived.push(own),
@@ -639,12 +639,12 @@ pub async fn cleanup_deleted_registry_access(
     // Older worker grants matched the prefix alone. Keep that derivation for cleanup: a policy
     // write can precede the save of its record, and the new grant rule must not strand that write.
     if matches!(platform, Platform::Aws) {
-        let prefix = artifact_registry.upstream_repository_prefix();
-        if !prefix.is_empty() {
+        let prefixes = RepositoryPrefixes::of(artifact_registry.as_ref());
+        if !prefixes.current.is_empty() {
             let mut collect = |stack: &Stack| {
                 for (_, entry) in stack.resources() {
                     if let Some(image) = resource_image_reference(entry, SandboxImageSource::None) {
-                        if let Some(repository) = repository_path_under_prefix(image, &prefix) {
+                        if let Some((_, repository)) = prefixes.repository_of(image, false) {
                             repo_ids.push(repository);
                         }
                     }
@@ -826,8 +826,8 @@ fn repository_access_with_proxy(
     project_id: &str,
     proxy_url: Option<&str>,
 ) -> (Vec<String>, Vec<RefusedImage>) {
-    let prefix = artifact_registry.upstream_repository_prefix();
-    if prefix.is_empty() {
+    let prefixes = RepositoryPrefixes::of(artifact_registry);
+    if prefixes.current.is_empty() {
         return (Vec::new(), Vec::new());
     }
 
@@ -841,8 +841,7 @@ fn repository_access_with_proxy(
         let mut repo_ids = HashSet::new();
         let refused = collect_image_repositories(
             state,
-            &prefix,
-            artifact_registry.sandbox_repository_prefix().as_deref(),
+            &prefixes,
             &artifact_registry.registry_endpoint(),
             project_id,
             proxy_url,
@@ -951,14 +950,54 @@ fn resource_image_reference(
     None
 }
 
-/// The one repository a sandbox in this project can be granted, if the registry names repositories
-/// by prefix at all.
-fn project_repository(
-    artifact_registry: &dyn ArtifactRegistry,
-    project_id: &str,
-) -> Option<String> {
+/// The repositories a sandbox in this project can be granted: its own under the current prefix,
+/// and under each legacy one a grant may have been written to before the registry was renamed.
+/// Empty when the registry does not name repositories by prefix.
+fn project_repositories(artifact_registry: &dyn ArtifactRegistry, project_id: &str) -> Vec<String> {
     let prefix = artifact_registry.upstream_repository_prefix();
-    (!prefix.is_empty()).then(|| format!("{prefix}-{project_id}"))
+    if prefix.is_empty() {
+        return Vec::new();
+    }
+    std::iter::once(prefix)
+        .chain(artifact_registry.legacy_repository_prefixes())
+        .map(|prefix| format!("{prefix}-{project_id}"))
+        .collect()
+}
+
+/// The prefixes a registry names repositories under: the ones it writes now, and the legacy ones
+/// whose released images it still serves and grants.
+struct RepositoryPrefixes {
+    current: String,
+    sandbox: Option<String>,
+    legacy: Vec<String>,
+    legacy_sandbox: Vec<String>,
+}
+
+impl RepositoryPrefixes {
+    fn of(artifact_registry: &dyn ArtifactRegistry) -> Self {
+        Self {
+            current: artifact_registry.upstream_repository_prefix(),
+            sandbox: artifact_registry.sandbox_repository_prefix(),
+            legacy: artifact_registry.legacy_repository_prefixes(),
+            legacy_sandbox: artifact_registry.legacy_sandbox_repository_prefixes(),
+        }
+    }
+
+    /// The prefix `image`'s repository sits under, and that repository. A sandbox's image may be
+    /// in a sandbox namespace; anything else is matched against the repository prefixes only.
+    fn repository_of(&self, image: &str, is_sandbox: bool) -> Option<(&str, String)> {
+        let sandbox = self
+            .sandbox
+            .iter()
+            .chain(&self.legacy_sandbox)
+            .filter(|_| is_sandbox);
+        sandbox
+            .chain(std::iter::once(&self.current))
+            .chain(&self.legacy)
+            .find_map(|prefix| {
+                repository_path_under_prefix(image, prefix).map(|path| (prefix.as_str(), path))
+            })
+    }
 }
 
 /// The account and region a `{account}.dkr.ecr.{region}.amazonaws.com` host names.
@@ -998,8 +1037,7 @@ fn served_by_registry(image: &str, registry_endpoint: &str) -> bool {
 
 fn collect_image_repositories(
     state: &DeploymentState,
-    prefix: &str,
-    sandbox_prefix: Option<&str>,
+    prefixes: &RepositoryPrefixes,
     registry_endpoint: &str,
     project_id: &str,
     proxy_url: Option<&str>,
@@ -1008,30 +1046,19 @@ fn collect_image_repositories(
 ) -> Vec<RefusedImage> {
     let mut refused = Vec::new();
     // Every project shares the prefix, so matching the prefix alone would open a repository
-    // outside the deployment's project. Workers and sandbox base images follow the same rule.
-    let own_repository = format!("{prefix}-{project_id}");
+    // outside the deployment's project. Workers and sandbox base images follow the same rule,
+    // under whichever prefix, current or legacy, the image was released.
+    let prefix = prefixes.current.as_str();
     let mut collect = |stack: &Stack| {
         for (id, entry) in stack.resources() {
             let Some(image) = resource_image_reference(entry, sandbox_source) else {
                 continue;
             };
             let is_sandbox = entry.config.downcast_ref::<Sandbox>().is_some();
-            let image_prefix = if is_sandbox
-                && sandbox_prefix
-                    .is_some_and(|sandbox| repository_path_under_prefix(image, sandbox).is_some())
-            {
-                sandbox_prefix.expect("matched sandbox prefix")
-            } else {
-                prefix
-            };
-            let Some(image_path) = repository_path_under_prefix(image, image_prefix) else {
+            let Some((image_prefix, image_path)) = prefixes.repository_of(image, is_sandbox) else {
                 continue;
             };
-            let own_repository = if image_prefix != prefix {
-                format!("{image_prefix}-{project_id}")
-            } else {
-                own_repository.clone()
-            };
+            let own_repository = format!("{image_prefix}-{project_id}");
             let (repo_id, own_repository) = if let Some((cloud_project, gar_prefix)) = prefix
                 .split_once('/')
                 .filter(|_| matches!(state.environment_info, Some(EnvironmentInfo::Gcp(_))))
@@ -1049,7 +1076,7 @@ fn collect_image_repositories(
                 let own = image_path == own_repository
                     || (entry.config.downcast_ref::<Worker>().is_some()
                         && project_id == "default"
-                        && image_path == prefix);
+                        && image_path == image_prefix);
                 (image_path, own)
             };
             // The host too: the grant is written on this registry, so a same-path repository in
@@ -2872,6 +2899,157 @@ mod tests {
         );
     }
 
+    /// An ECR registry renamed from `acme-artifacts` to `artifacts`, as its binding describes it.
+    #[derive(Debug)]
+    struct RenamedRegistry;
+
+    impl alien_bindings::traits::Binding for RenamedRegistry {}
+
+    #[async_trait]
+    impl ArtifactRegistry for RenamedRegistry {
+        fn registry_endpoint(&self) -> String {
+            "https://123456789012.dkr.ecr.us-east-2.amazonaws.com".to_string()
+        }
+
+        fn upstream_repository_prefix(&self) -> String {
+            "artifacts".to_string()
+        }
+
+        fn sandbox_repository_prefix(&self) -> Option<String> {
+            Some("sandbox-cache/artifacts".to_string())
+        }
+
+        fn legacy_repository_prefixes(&self) -> Vec<String> {
+            vec!["acme-artifacts".to_string()]
+        }
+
+        fn legacy_sandbox_repository_prefixes(&self) -> Vec<String> {
+            vec!["sandbox-acme/acme-artifacts".to_string()]
+        }
+
+        async fn create_repository(&self, _: &str) -> BindingResult<RepositoryResponse> {
+            unimplemented!("not needed for registry access repo-id tests")
+        }
+
+        async fn get_repository(&self, _: &str) -> BindingResult<RepositoryResponse> {
+            unimplemented!("not needed for registry access repo-id tests")
+        }
+
+        async fn add_cross_account_access(
+            &self,
+            _: &str,
+            _: CrossAccountAccess,
+        ) -> BindingResult<()> {
+            unimplemented!("not needed for registry access repo-id tests")
+        }
+
+        async fn remove_cross_account_access(
+            &self,
+            _: &str,
+            _: CrossAccountAccess,
+        ) -> BindingResult<()> {
+            unimplemented!("not needed for registry access repo-id tests")
+        }
+
+        async fn get_cross_account_access(
+            &self,
+            _: &str,
+        ) -> BindingResult<CrossAccountPermissions> {
+            unimplemented!("not needed for registry access repo-id tests")
+        }
+
+        async fn generate_credentials(
+            &self,
+            _: &str,
+            _: ArtifactRegistryPermissions,
+            _: Option<u32>,
+        ) -> BindingResult<ArtifactRegistryCredentials> {
+            unimplemented!("not needed for registry access repo-id tests")
+        }
+
+        async fn delete_repository(&self, _: &str) -> BindingResult<()> {
+            unimplemented!("not needed for registry access repo-id tests")
+        }
+    }
+
+    const RENAMED_HOST: &str = "123456789012.dkr.ecr.{region}.amazonaws.com";
+
+    /// A deployment still on a release from before the rename keeps the grant on the repository
+    /// that release names, beside the one its next release is pushed to.
+    #[test]
+    fn a_release_from_before_a_registry_rename_keeps_its_grant() {
+        let mut state = aws_state_with_stack(worker_stack(&format!(
+            "{RENAMED_HOST}/artifacts-{PROJECT}:v2"
+        )));
+        state.current_release = Some(ReleaseInfo {
+            release_id: Some("rel_old".to_string()),
+            version: None,
+            description: None,
+            stack: worker_stack(&format!("{RENAMED_HOST}/acme-artifacts-{PROJECT}:v1")),
+        });
+
+        let (repositories, refused) = repository_access(&RenamedRegistry, &state, PROJECT);
+        assert_eq!(
+            repositories,
+            vec![
+                format!("acme-artifacts-{PROJECT}"),
+                format!("artifacts-{PROJECT}")
+            ]
+        );
+        assert!(refused.is_empty(), "{refused:?}");
+    }
+
+    #[test]
+    fn a_sandbox_base_from_before_a_registry_rename_keeps_its_grant() {
+        for (base, repository) in [
+            (
+                format!("{RENAMED_HOST}/sandbox-acme/acme-artifacts-{PROJECT}:v1"),
+                format!("sandbox-acme/acme-artifacts-{PROJECT}"),
+            ),
+            (
+                format!("{RENAMED_HOST}/acme-artifacts-{PROJECT}:v1"),
+                format!("acme-artifacts-{PROJECT}"),
+            ),
+            (
+                format!("{RENAMED_HOST}/sandbox-cache/artifacts-{PROJECT}:v2"),
+                format!("sandbox-cache/artifacts-{PROJECT}"),
+            ),
+        ] {
+            let state = aws_state_with_stack(sandbox_stack(Some(&base)));
+            assert_eq!(
+                repository_ids_for_access(&RenamedRegistry, &state, PROJECT),
+                vec![repository]
+            );
+        }
+    }
+
+    #[test]
+    fn a_legacy_repository_of_another_project_is_refused() {
+        let state = aws_state_with_stack(worker_stack(&format!(
+            "{RENAMED_HOST}/acme-artifacts-prj_other:v1"
+        )));
+        let (repositories, refused) = repository_access(&RenamedRegistry, &state, PROJECT);
+        assert!(repositories.is_empty());
+        assert_eq!(
+            refused,
+            vec![RefusedImage {
+                resource_id: "test-worker".to_string(),
+                repository: "acme-artifacts-prj_other".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn cleanup_revokes_a_sandbox_grant_under_either_name() {
+        assert_eq!(
+            project_repositories(&RenamedRegistry, PROJECT),
+            vec![
+                format!("artifacts-{PROJECT}"),
+                format!("acme-artifacts-{PROJECT}")
+            ]
+        );
+    }
+
     /// The fallback a grant recorded before the record existed still depends on: the stack no
     /// longer names the repository, and the one a sandbox is ever granted is derived instead.
     #[test]
@@ -2889,8 +3067,8 @@ mod tests {
         );
 
         assert_eq!(
-            project_repository(&registry, PROJECT),
-            Some("alien-artifacts-prj_test".to_string())
+            project_repositories(&registry, PROJECT),
+            vec!["alien-artifacts-prj_test".to_string()]
         );
     }
 

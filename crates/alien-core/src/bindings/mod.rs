@@ -51,7 +51,8 @@ pub use postgres::{
     ExternalPostgresSslMode, FlexibleServerPostgresBinding, LocalPostgresBinding, PostgresBinding,
 };
 pub use queue::{
-    LocalQueueBinding, PubSubQueueBinding, QueueBinding, ServiceBusQueueBinding, SqsQueueBinding,
+    LocalHttpQueueBinding, LocalQueueBinding, PubSubQueueBinding, QueueBinding,
+    ServiceBusQueueBinding, SqsQueueBinding,
 };
 pub use sandbox::{
     AwsSandboxBinding, AzureSandboxBinding, GcpAgentPlatformSandboxBinding,

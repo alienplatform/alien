@@ -488,8 +488,9 @@ fn actions(statement: &serde_json::Value) -> Vec<String> {
 /// A deployment with its own key: a bucket encrypted with it, an application that reads and
 /// writes the bucket and drives an internet sandbox, and the vendor's management identity. The
 /// management role may check the bucket's health and write the deployment's secrets vault, but
-/// it may not use the key to decrypt and may read nothing from the vault except the gateway
-/// configuration. The application keeps its own key and vault access.
+/// it may not use the key to decrypt, may read nothing from the vault, and may only see that the
+/// gateway's replica secret exists. Setup generates that secret; the gateway reads it. The
+/// application keeps its own key and vault access.
 #[tokio::test]
 async fn the_management_role_cannot_decrypt_or_read_the_deployments_secrets() {
     let sandbox = Sandbox::new("agents".to_string())
@@ -593,26 +594,52 @@ async fn the_management_role_cannot_decrypt_or_read_the_deployments_secrets() {
         if reads_parameters {
             for resource in &resources {
                 assert!(
-                    !resource.contains(":parameter/") || resource.contains(gateway_config),
-                    "management may read only the gateway configuration: {statement}"
+                    !resource.contains(":parameter/"),
+                    "management may read no parameter: {statement}"
                 );
             }
         }
+        let secret_access = actions
+            .iter()
+            .filter(|action| action.starts_with("secretsmanager:"))
+            .collect::<Vec<_>>();
+        assert!(
+            secret_access.iter().all(|action| *action == "secretsmanager:DescribeSecret"),
+            "management may only see that the replica secret exists: {statement}"
+        );
     }
-    let denies_signing_key = management.iter().any(|statement| {
-        let actions = actions(statement);
-        statement["Effect"] == "Deny"
-            && ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParameterHistory"]
-                .iter()
-                .all(|action| actions.iter().any(|granted| granted == action))
-            && statement["Resource"]
-                .to_string()
-                .contains("${AWS::StackName}-secrets-sandbox-egress-signing-key")
-    });
+    let denies = |wanted: &[&str], resource: &str| {
+        management.iter().any(|statement| {
+            let actions = actions(statement);
+            statement["Effect"] == "Deny"
+                && wanted
+                    .iter()
+                    .all(|action| actions.iter().any(|granted| granted == action))
+                && statement["Resource"].to_string().contains(resource)
+        })
+    };
     assert!(
-        denies_signing_key,
-        "management is explicitly denied reading the signing key: {management:#?}"
+        denies(
+            &["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParameterHistory"],
+            "${AWS::StackName}-secrets-*"
+        ),
+        "management is explicitly denied reading the secrets vault: {management:#?}"
     );
+    assert!(
+        denies(
+            &["secretsmanager:GetSecretValue", "secretsmanager:PutSecretValue"],
+            "${AWS::StackName}-sandbox-egress-replica-secret-??????"
+        ),
+        "management is explicitly denied the replica secret's value: {management:#?}"
+    );
+    let replica_secret = &template.resources["SandboxEgressReplicaSecret"];
+    assert_eq!(replica_secret.resource_type, "AWS::SecretsManager::Secret");
+    let replica_secret = serde_json::to_value(&replica_secret.properties).unwrap();
+    assert_eq!(
+        replica_secret["Name"],
+        serde_json::json!({"Fn::Sub": "${AWS::StackName}-sandbox-egress-replica-secret"})
+    );
+    assert!(replica_secret["GenerateSecretString"]["PasswordLength"].as_u64() >= Some(32));
     assert!(
         management.iter().any(|statement| statement["Effect"] == "Deny"
             && actions(statement).contains(&"ssm:GetParametersByPath".to_string())),
@@ -654,5 +681,15 @@ async fn the_management_role_cannot_decrypt_or_read_the_deployments_secrets() {
                 && statement["Resource"].to_string().contains(gateway_config)
         }),
         "the gateway reads its configuration"
+    );
+    assert!(
+        role_statements(&template, &gateway).iter().any(|statement| {
+            statement["Effect"] == "Allow"
+                && actions(statement).contains(&"secretsmanager:GetSecretValue".to_string())
+                && statement["Resource"]
+                    .to_string()
+                    .contains("${AWS::StackName}-sandbox-egress-replica-secret-??????")
+        }),
+        "the gateway reads its replica secret"
     );
 }

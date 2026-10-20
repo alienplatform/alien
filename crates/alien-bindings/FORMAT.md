@@ -8,26 +8,19 @@ them exactly.
 
 Both stores run on **turso**, an async-native database engine that reads and
 writes the **SQLite-compatible file format**. Standard SQLite tooling can
-inspect the store after all processes using it have stopped. Live inspection
-must use the pinned turso engine with the same multi-process WAL mode as the
-bindings: compatible database files do not imply interchangeable live WAL and
-shared-memory coordination. A SQLite reader can encounter short reads while
-turso writers remain healthy.
+inspect the store after all processes using it have stopped. Compatible
+database files do not imply interchangeable live WAL coordination.
+Live queue inspection uses the owner's HTTP metrics endpoint; no observer
+opens the queue database.
 
-Multi-process safety comes from turso's **multi-process WAL mode**
-(`Builder::experimental_multiprocess_wal(true)`), enabled explicitly on every
-open. Honest caveats, straight from turso's own positioning of the feature:
+Deployed queues and the manager's command KV use single-process ownership.
+General local KV bindings retain the experimental multi-process WAL mode
+(`Builder::experimental_multiprocess_wal(true)`) on 64-bit Unix platforms.
+This change does not alter KV ownership or its format. The exact Turso version
+remains pinned because WAL coordination can change between engine releases.
 
-- The mode is **experimental** upstream. Its cross-process WAL coordination
-  format may change between turso releases, which is why the crate pins an
-  exact turso version.
-- It targets 64-bit Unix platforms.
-
-Both trade-offs are acceptable here: these are local development stores with
-disposable state, and the multi-handle concurrency tests in the provider
-modules are the gate that the mode actually delivers the semantics pinned
-below. Alongside the database file turso maintains WAL sidecar files (e.g.
-`-wal`); treat every `<file>.sqlite*` sibling as part of the store.
+Alongside the database file Turso maintains WAL sidecar files (e.g. `-wal`);
+preserve every `<file>.sqlite*` sibling when backing up or migrating a store.
 
 ## `localkv.v2` — `LocalKv`
 
@@ -74,8 +67,8 @@ CREATE TABLE IF NOT EXISTS kv (
 );
 ```
 
-Settings applied per open: multi-process WAL mode (on the database handle) and
-a 5s `busy_timeout` (on every connection, via the turso API).
+Settings: multi-process WAL mode for general KV bindings (single-process mode
+for the manager's command KV) and a 5s `busy_timeout` on each connection.
 
 ### Versioning rule
 
@@ -169,14 +162,61 @@ created if missing; the database file (plus its WAL siblings) lives inside it.
 
 ### Connection strategy
 
-Identical to `localkv.v2`: `LocalQueue` holds one `turso::Database` handle;
-every operation opens its own short-lived connection from it, which is dropped
-when the operation completes, and every statement is driven to completion. No
-connection crosses operations and there is no `Mutex<Connection>` anywhere.
-Correctness under concurrent access — including multiple handles on the same
-file, i.e. multiple OS processes — is provided by the engine's multi-process
-WAL mode (see *Engine* above) and a 5s **`busy_timeout`** so writers wait for
-the write lock instead of failing with `Busy`.
+Local deployments use a single owner in the existing manager (or local Operator).
+The `local-queue-http` binding points directly at that owner's existing HTTP listener;
+Containers and Daemons still run their application process without a runtime wrapper.
+Workers, triggers, health checks and HTTP observers share the same queue handle.
+Queue files are never mounted into application containers.
+
+The owner opens Turso in single-process mode and serializes operations on a revocable
+handle. Each operation uses a fresh connection, drains statements and awaits commit
+before returning success. The pinned engine defaults to synchronous FULL. Deletion
+waits for active operations, revokes old handles, then removes the directory.
+
+Local KV retains its existing multiprocess implementation. Its shared store plumbing
+already supports single-process mode; queue ownership does not change the KV format.
+
+### Compatibility and offline upgrade
+
+Older SDKs do not recognize `local-queue-http` and fail binding initialization. Current
+SDKs reject legacy `local-queue` file bindings before opening or creating files. Rebuild
+all applications, including native Workers and container images, with the matching SDK.
+There is no file-access fallback or automatic request retry.
+
+The owner stores queues under `<stateDir>/queue-owned/<resourceId>`. A legacy
+`<stateDir>/queue/<resourceId>` directory blocks opening that queue, even if an owned
+directory also exists. This deliberately prevents an upgrade from overlapping clients
+that still use mounted files. A manager restart alone does not stop standalone Docker
+workloads and therefore cannot authorize migration.
+
+To preserve an existing local queue:
+
+1. Stop the previous manager/Operator and every producer, consumer and observer. Stop
+   the deployment's Docker workloads too. Do not migrate while an older client holds
+   the directory or can restart itself.
+2. Back up the entire queue directory, including its database, WAL and shared-memory
+   files together. Do not copy just the SQLite file or edit pending rows.
+3. With all clients stopped, move the entire `queue/<resourceId>` directory into
+   `queue-owned/<resourceId>` under the same state directory. The destination must not
+   already exist. The `localqueue.v1` SQL format is unchanged; no rows are rewritten.
+4. Rebuild applications with the current SDK. Remove the stopped, deployment-owned
+   Docker containers (preserve data directories), so reconciliation recreates them with
+   HTTP bindings instead of retaining their old mount/environment configuration.
+5. Restart the current manager/Operator with the same deployment state and reconcile
+   the deployment. Native workloads receive fresh runtime bindings. If an earlier
+   upgrade attempt left a failed resource, retry that deployment after the handoff.
+
+Downgrading requires stopping all clients and an explicit reverse offline handoff;
+never run old and new owners together. Direct database access is not a supported queue
+observer interface. Observers use the authenticated `stats` HTTP operation (or
+`LocalHttpQueue::stats`) to read total, visible, in-flight and delayed counts.
+
+Queue credentials are scoped per queue and persisted in a mode-0600 local file. They
+are injected into runtime bindings, omitted from saved controller/worker state, and
+checked by hash. Requests go to `POST <binding.endpoint>` with the binding token as a
+Bearer credential. The JSON `operation` selects send, sendBatch, receive, ack, ackBatch,
+nack, renew, purge or stats. Transport failures leave acceptance uncertain; batch
+responses preserve one outcome per input and never claim an uncertain send succeeded.
 
 ### DDL
 
@@ -199,8 +239,8 @@ CREATE TABLE IF NOT EXISTS messages (
 CREATE INDEX IF NOT EXISTS idx_messages_visible ON messages (visible_at, enqueued_at, id);
 ```
 
-Settings applied per open: multi-process WAL mode (on the database handle) and
-a 5s `busy_timeout` (on every connection, via the turso API).
+Settings applied by the owner: single-process WAL mode and a 5s `busy_timeout`
+on each connection.
 
 ### Versioning rule
 
@@ -208,8 +248,8 @@ The `meta` table carries the format identifier in the row
 `('format', 'localqueue.v1')`. Any future incompatible change to the `messages`
 schema MUST bump this string (e.g. `localqueue.v2`) and add explicit
 migration/rejection logic. Readers MUST reject a format they do not understand
-— and this implementation does: `LocalQueue::new` reads the marker after schema
-init and fails fast (`BINDING_SETUP_FAILED`, naming both the found and the
+— and this implementation does: `LocalQueue` reads the marker before provider schema
+initialization and fails fast (`BINDING_SETUP_FAILED`, naming both the found and the
 supported format) unless it equals `localqueue.v1`. The `meta` row is written
 with `INSERT OR IGNORE`, so re-opening an existing store never overwrites it.
 

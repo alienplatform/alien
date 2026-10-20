@@ -10,6 +10,12 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use ed25519_compact::{KeyPair, SecretKey};
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "aws")]
+use alien_aws_clients::secrets_manager::{
+    CreateSecretRequest, DeleteSecretRequest, DescribeSecretRequest, SecretsManagerApi,
+};
+#[cfg(feature = "aws")]
+use alien_client_core::ErrorData as CloudError;
+#[cfg(feature = "aws")]
 use sha2::{Digest, Sha256};
 
 use crate::{ErrorData, Result};
@@ -424,26 +430,233 @@ pub(crate) async fn validate_aws_network(
 }
 
 /// Publishes the gateway configuration when what this owner would publish changed since its
-/// last successful publish, recorded as `published` (a digest of the configuration without the
-/// replica secret). An unchanged configuration makes no vault request at all, so the periodic
-/// refresh does not read the stored entry, which embeds the gateway's replica secret. A changed
-/// one still reads that entry once to carry the replica secret forward.
+/// last successful publish, recorded as `published` (a digest of what it wrote). An unchanged
+/// configuration makes no vault request.
+///
+/// Once the gateway runs an image that reads its replica secret from a source and that secret
+/// exists (`replica_secret_ready`), the configuration names the source and is written without
+/// reading anything. Until then the stored entry embeds the replica secret, and a changed
+/// configuration reads it once to carry the secret forward.
 #[cfg(feature = "aws")]
 pub(crate) async fn publish_aws_config(
     ctx: &crate::core::ResourceControllerContext<'_>,
     key: &GatewayPublicKey,
     published: &mut Option<String>,
+    replica_secret_ready: &mut bool,
 ) -> Result<()> {
     let facts = validate_aws_network(ctx).await?;
     // A sandbox that does not own the entry publishes nothing and forgets its digest: the owner
     // may rewrite the entry, so the digest says nothing about what is stored if this sandbox
     // becomes the owner again.
-    let Some(value) = gateway_config(ctx, key, &facts.vpc_cidrs) else {
+    let Some(mut value) = gateway_config(ctx, key, &facts.vpc_cidrs) else {
         *published = None;
         return Ok(());
     };
+    if !*replica_secret_ready && gateway_reads_replica_secret_source(ctx) {
+        *replica_secret_ready = ensure_aws_replica_secret(ctx).await?;
+    }
     let vault = deployment_vault(ctx).await?;
-    publish_changed_gateway_config(vault.as_ref(), value, published).await
+    if !*replica_secret_ready {
+        if gateway_not_created(ctx) {
+            return publish_new_gateway_config(vault.as_ref(), value, published).await;
+        }
+        return publish_changed_gateway_config(vault.as_ref(), value, published).await;
+    }
+    value["replicaSecretSource"] = serde_json::json!({
+        "awsSecretsManager": {"secretId": replica_secret_name(ctx.resource_prefix)}
+    });
+    let digest = config_digest(&value);
+    if published.as_deref() == Some(digest.as_str()) {
+        return Ok(());
+    }
+    vault
+        .set_secret(GATEWAY_CONFIG, &value.to_string())
+        .await
+        .context(ErrorData::ResourceConfigInvalid {
+            message: "Failed to publish the sandbox gateway configuration".into(),
+            resource_id: Some(alien_core::SECRETS_VAULT_ID.into()),
+        })?;
+    *published = Some(digest);
+    Ok(())
+}
+
+/// `{resource prefix}-sandbox-egress-replica-secret`.
+#[cfg(feature = "aws")]
+pub(crate) fn replica_secret_name(resource_prefix: &str) -> String {
+    format!(
+        "{resource_prefix}-{}",
+        alien_core::sandbox_egress::SANDBOX_EGRESS_REPLICA_SECRET
+    )
+}
+
+/// Whether every gateway replica runs, or will start on, an image that reads its replica secret
+/// from a source. A running gateway is judged by the image it runs, with no roll in progress. A
+/// gateway that has never run has no replica holding an embedded secret, so the image it is
+/// starting on decides; before it is in the state at all, the desired stack's image does. A
+/// fresh install therefore never needs the stored configuration, which the managing identity
+/// may not read.
+#[cfg(feature = "aws")]
+fn gateway_reads_replica_secret_source(ctx: &crate::core::ResourceControllerContext<'_>) -> bool {
+    use alien_core::ResourceStatus::{Pending, ProvisionFailed, Provisioning, Running};
+    let reads_source = |config: &alien_core::Resource| {
+        config
+            .downcast_ref::<alien_core::Container>()
+            .is_some_and(|gateway| match &gateway.code {
+                alien_core::ContainerCode::Image { image } => {
+                    alien_core::sandbox_egress::gateway_image_reads_replica_secret_source(image)
+                }
+                _ => false,
+            })
+    };
+    let id = alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID;
+    match ctx.state.resources.get(id) {
+        Some(state)
+            if matches!(
+                state.status,
+                Running | Pending | Provisioning | ProvisionFailed
+            ) =>
+        {
+            reads_source(&state.config)
+        }
+        Some(_) => false,
+        None => ctx
+            .desired_stack
+            .resources
+            .get(id)
+            .is_some_and(|entry| reads_source(&entry.config)),
+    }
+}
+
+/// Whether the gateway has not been created yet: no replica holds a replica secret.
+#[cfg(feature = "aws")]
+fn gateway_not_created(ctx: &crate::core::ResourceControllerContext<'_>) -> bool {
+    ctx.state
+        .resources
+        .get(alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID)
+        .is_none_or(|state| state.status == alien_core::ResourceStatus::Pending)
+}
+
+/// Whether the replica secret exists. Setup creates it; the managing identity may only see
+/// that it exists, never its value. A direct setup has no setup stack, so the controller creates
+/// it once, with a value it never reads back. A setup from before the secret existed answers
+/// absent, or access denied for a role without the existence check, and keeps the embedded
+/// secret.
+#[cfg(feature = "aws")]
+async fn ensure_aws_replica_secret(ctx: &crate::core::ResourceControllerContext<'_>) -> Result<bool> {
+    let name = replica_secret_name(ctx.resource_prefix);
+    let client = ctx
+        .service_provider
+        .get_aws_secrets_manager_client(ctx.get_aws_config()?)
+        .await?;
+    match client
+        .describe_secret(DescribeSecretRequest {
+            secret_id: name.clone(),
+        })
+        .await
+    {
+        Ok(_) => return Ok(true),
+        Err(error) if matches!(error.error, Some(CloudError::RemoteAccessDenied { .. })) => {
+            return Ok(false)
+        }
+        Err(error) if matches!(error.error, Some(CloudError::RemoteResourceNotFound { .. })) => {}
+        Err(error) => {
+            return Err(error).context(ErrorData::CloudPlatformError {
+                message: format!("Failed to look up the sandbox gateway replica secret '{name}'"),
+                resource_id: Some(alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.into()),
+            })
+        }
+    }
+    if ctx.initial_setup_authority != alien_core::InitialSetupAuthority::DirectSetup {
+        return Ok(false);
+    }
+    let value = STANDARD.encode(ed25519_compact::Seed::generate().as_ref());
+    match client
+        .create_secret(
+            CreateSecretRequest::builder()
+                .name(name.clone())
+                .description("Sandbox egress gateway replica secret".to_string())
+                .secret_string(value)
+                .build(),
+        )
+        .await
+    {
+        Ok(_) => Ok(true),
+        Err(error) if matches!(error.error, Some(CloudError::RemoteResourceConflict { .. })) => {
+            Ok(true)
+        }
+        Err(error) => Err(error).context(ErrorData::CloudPlatformError {
+            message: format!("Failed to create the sandbox gateway replica secret '{name}'"),
+            resource_id: Some(alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.into()),
+        }),
+    }
+}
+
+/// Deletes the replica secret a direct setup created. Setup stacks own theirs, so this runs only
+/// for a direct setup. Deleted without a recovery window, so the deployment can be recreated
+/// under the same name; an already deleted secret counts as deleted.
+#[cfg(feature = "aws")]
+pub(crate) async fn delete_aws_replica_secret(
+    client: &dyn SecretsManagerApi,
+    resource_prefix: &str,
+) -> Result<()> {
+    let name = replica_secret_name(resource_prefix);
+    match client
+        .delete_secret(
+            DeleteSecretRequest::builder()
+                .secret_id(name.clone())
+                .force_delete_without_recovery(true)
+                .build(),
+        )
+        .await
+    {
+        Ok(_) => Ok(()),
+        Err(error) if matches!(error.error, Some(CloudError::RemoteResourceNotFound { .. })) => {
+            Ok(())
+        }
+        Err(error) => Err(error).context(ErrorData::CloudPlatformError {
+            message: format!("Failed to delete the sandbox gateway replica secret '{name}'"),
+            resource_id: Some(alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.into()),
+        }),
+    }
+}
+
+/// The first configuration of a gateway that has not been created and embeds its replica
+/// secret: no replica holds a secret yet, so it carries a new one and is written without reading
+/// the stored entry, which setup forbids the managing identity to read. A later change to it
+/// needs that read ([`publish_gateway_config`]) until the gateway reads its secret from a source.
+#[cfg(feature = "aws")]
+pub(crate) async fn publish_new_gateway_config(
+    vault: &dyn Vault,
+    mut value: serde_json::Value,
+    published: &mut Option<String>,
+) -> Result<()> {
+    let digest = config_digest(&value);
+    if published.as_deref() == Some(digest.as_str()) {
+        return Ok(());
+    }
+    value
+        .as_object_mut()
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "The sandbox gateway configuration must be an object".into(),
+                resource_id: Some(alien_core::SECRETS_VAULT_ID.into()),
+            })
+        })?
+        .insert(
+            "replicaSecret".into(),
+            STANDARD
+                .encode(ed25519_compact::Seed::generate().as_ref())
+                .into(),
+        );
+    vault
+        .set_secret(GATEWAY_CONFIG, &value.to_string())
+        .await
+        .context(ErrorData::ResourceConfigInvalid {
+            message: "Failed to publish the sandbox gateway configuration".into(),
+            resource_id: Some(alien_core::SECRETS_VAULT_ID.into()),
+        })?;
+    *published = Some(digest);
+    Ok(())
 }
 
 /// Publishes `value` unless its digest equals `published`, then records the new digest. Only a
@@ -556,6 +769,16 @@ pub(crate) async fn publish_gateway_config(
             None
         }
         Err(error) => {
+            #[cfg(feature = "aws")]
+            if is_access_denied(&error) {
+                // Setup has removed the managing identity's read before the gateway reads its
+                // replica secret from the source: changing the configuration now would drop
+                // the secret the running gateways embed.
+                return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                    message: "The sandbox gateway configuration can no longer be read to carry its replica secret forward. Roll the sandbox gateway to an image that reads its replica secret from Secrets Manager; the configuration cannot change until then.".into(),
+                    resource_id: Some(alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.into()),
+                }));
+            }
             return Err(error).context(ErrorData::ResourceConfigInvalid {
                 message: "Failed to read the sandbox gateway configuration".into(),
                 resource_id: Some(alien_core::SECRETS_VAULT_ID.into()),
@@ -745,5 +968,79 @@ mod aws_tests {
         assert!(read.hits_async().await > reads);
         assert_eq!(write.hits_async().await, 2);
         assert_ne!(published.as_deref(), Some(digest.as_str()));
+    }
+    /// A fresh install whose gateway image still embeds its replica secret, under a managing
+    /// identity that may not read the secrets vault. The first configuration is written with a
+    /// new secret and no read. A later change needs the stored secret, so it fails with what to
+    /// do (roll the gateway image) instead of dropping the secret the replicas embed.
+    #[tokio::test]
+    async fn a_new_legacy_gateway_gets_a_first_configuration_and_later_changes_fail_loudly() {
+        let server = MockServer::start_async().await;
+        let read = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .header("x-amz-target", "AmazonSSM.GetParameter");
+                then.status(400).json_body(serde_json::json!({
+                    "__type": "AccessDeniedException",
+                    "message": "User: arn:aws:sts::111122223333:assumed-role/test-management/session is not authorized to perform: ssm:GetParameter with an explicit deny in an identity-based policy"
+                }));
+            })
+            .await;
+        let write = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .header("x-amz-target", "AmazonSSM.PutParameter")
+                    .body_contains("test-secrets-sandbox-egress-gateway-config")
+                    .body_contains("replicaSecret");
+                then.status(200)
+                    .json_body(serde_json::json!({"Version": 1, "Tier": "Standard"}));
+            })
+            .await;
+        let vault = parameter_store(&server);
+        let config = |audiences: &[&str]| serde_json::json!({"audiences": audiences});
+        let mut published = None;
+
+        publish_new_gateway_config(&vault, config(&["first"]), &mut published)
+            .await
+            .expect("the first configuration is written without a read");
+        assert_eq!((read.hits_async().await, write.hits_async().await), (0, 1));
+
+        let error =
+            publish_changed_gateway_config(&vault, config(&["first", "second"]), &mut published)
+                .await
+                .expect_err("a change needs the stored secret, which may not be read");
+        assert!(
+            error.message.contains("Roll the sandbox gateway"),
+            "{}",
+            error.message
+        );
+        assert_eq!(write.hits_async().await, 1, "nothing is written without the secret");
+    }
+
+    #[cfg(feature = "aws")]
+    #[tokio::test]
+    async fn a_direct_setup_replica_secret_is_deleted_without_recovery() {
+        let mut client = alien_aws_clients::secrets_manager::MockSecretsManagerApi::new();
+        client
+            .expect_delete_secret()
+            .withf(|request| {
+                request.secret_id == "test-sandbox-egress-replica-secret"
+                    && request.force_delete_without_recovery == Some(true)
+            })
+            .times(1)
+            .returning(|_| {
+                Ok(serde_json::from_value(serde_json::json!({"Name": "test-sandbox-egress-replica-secret"}))
+                    .unwrap())
+            });
+        delete_aws_replica_secret(&client, "test").await.unwrap();
+
+        let mut gone = alien_aws_clients::secrets_manager::MockSecretsManagerApi::new();
+        gone.expect_delete_secret().times(1).returning(|_| {
+            Err(AlienError::new(CloudError::RemoteResourceNotFound {
+                resource_type: "secret".into(),
+                resource_name: "test-sandbox-egress-replica-secret".into(),
+            }))
+        });
+        delete_aws_replica_secret(&gone, "test").await.unwrap();
     }
 }

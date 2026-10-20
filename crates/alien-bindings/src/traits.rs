@@ -374,6 +374,18 @@ pub trait ArtifactRegistry: Binding {
         None
     }
 
+    /// Prefixes the registry named repositories with before [`Self::upstream_repository_prefix`].
+    /// Repositories under them are only read: released images keep resolving and keep their
+    /// grants, and nothing new is created or pushed there.
+    fn legacy_repository_prefixes(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// Sandbox namespaces used before [`Self::sandbox_repository_prefix`], read the same way.
+    fn legacy_sandbox_repository_prefixes(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     /// Creates a project sandbox repository, preserving the normal destination unless configured.
     async fn create_sandbox_project_repository(
         &self,

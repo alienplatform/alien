@@ -6,6 +6,18 @@ listener remains `listen`. Local tests may configure
 admin addresses (exclude the current replica). Service discovery uses
 `peers: {"dns": "gateway.svc", "port": 3129}`. Omit `peers` for a single replica.
 `replicaSecret` is a base64-encoded 32-byte secret shared only by gateway replicas.
+Instead of embedding it, the configuration can name `replicaSecretSource`, which the
+gateway reads with its own identity: `{"awsSecretsManager": {"secretId": "..."}}` or
+`{"vault": {"binding": "secrets", "key": "..."}}`. A sourced value is any string of at
+least 32 characters; its SHA-256 is the key. Each peer request carries one
+`x-alien-replica-signature` value per accepted secret, comma-separated, and any match
+authenticates. When a running replica's configuration moves from an embedded secret to a
+source, it keeps the embedded secret as well and signs with both until it restarts, so
+replicas that have not refreshed yet keep verifying it. The embedded secret never changes
+in place, and a replica holds at most two secrets; any other change needs a restart. A
+replica that boots after the move knows only the sourced secret: peers that still sign
+with the embedded one alone are refused by it until they refresh (at most one refresh
+interval).
 The optional `policyMemoryBytes` overrides half the finite cgroup v2 `memory.max`
 limit (256 MiB for the default 512 MiB container). Without a finite limit or explicit override,
 startup fails. Local processes in an unbounded host must set an override.

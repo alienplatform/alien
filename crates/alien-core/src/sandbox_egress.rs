@@ -16,6 +16,28 @@ use crate::{
 /// Reserved resource id of the deployment's sandbox egress gateway Container.
 pub const SANDBOX_EGRESS_GATEWAY_ID: &str = "sandbox-egress-gateway";
 
+/// The gateway's replica secret, named `{resource prefix}-sandbox-egress-replica-secret` in
+/// AWS Secrets Manager. Setup generates it; only the gateway reads it.
+pub const SANDBOX_EGRESS_REPLICA_SECRET: &str = "sandbox-egress-replica-secret";
+
+/// Gateway images pinned before gateways read their replica secret from a source. A gateway on
+/// one of these needs the secret embedded in its configuration; every later image reads the
+/// source. The list never grows.
+pub const EMBEDDED_REPLICA_SECRET_GATEWAY_DIGESTS: &[&str] = &[
+    "sha256:dbac794afe2185a8ce025d92ec05a5878d6367ae9380eccc2c3dfc4d55f1c59c",
+    "sha256:1dc14128e34426b84c7a02228a6de790ea092b156776c3f2688b9843b26fc924",
+    "sha256:7a3a66b0894c05fca445cbf5fd71e351cd8a9a98c40744acad4496b59574bdbd",
+    "sha256:f0e47d06eea327bc27fdc1238dae6a8938572db0c1d139495d00dd5623b657dd",
+    "sha256:b252a1b423b95385e5df0c57a37daae6937daa274e3c7783c71704584b18483d",
+];
+
+/// Whether a gateway running `image` reads its replica secret from a source.
+pub fn gateway_image_reads_replica_secret_source(image: &str) -> bool {
+    !EMBEDDED_REPLICA_SECRET_GATEWAY_DIGESTS
+        .iter()
+        .any(|digest| image.ends_with(&format!("@{digest}")))
+}
+
 /// Whether preflight installed the managed gateway for this deployment.
 pub fn has_sandbox_gateway(stack: &Stack) -> bool {
     stack

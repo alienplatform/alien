@@ -678,15 +678,24 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
                     &ctx, &id, None, !json,
                 )
                 .await?;
+                let setup_rerun = setup_rerun_hint(
+                    &serde_json::to_value(&resolved.detail)
+                        .into_alien_error()
+                        .context(ErrorData::JsonError {
+                            operation: "serialize".to_string(),
+                            reason: "deployment detail".to_string(),
+                        })?,
+                );
                 return retry_deployment_task(
                     &resolved.manager.client,
                     &String::from(resolved.detail.id),
                     json,
+                    setup_rerun,
                 )
                 .await;
             }
             let manager = resolve_manager_client(&ctx, None, !json).await?;
-            retry_deployment_task(&manager, &id, json).await
+            retry_deployment_task(&manager, &id, json, None).await
         }
         DeploymentsCmd::Redeploy {
             id,
@@ -1832,10 +1841,123 @@ fn force_delete_leftovers(deployment: &DeploymentResponse) -> String {
     }
 }
 
+/// What a retry still needs when the deployment's setup runs on the customer's side.
+#[derive(Debug, PartialEq, Eq)]
+struct SetupRerunHint {
+    /// The setup command to rerun.
+    command: String,
+    /// The cloud environment the setup must target, when the failed install recorded it.
+    environment: Option<String>,
+}
+
+/// A CLI-owned first install that failed resumes only when its setup command runs again: Alien
+/// does not hold the customer's cloud credentials. For that case, return the command to rerun.
+/// Other failures (and Google sign-in or dashboard setups) retry without it.
+#[cfg_attr(not(feature = "platform"), allow(dead_code))]
+fn setup_rerun_hint(deployment: &serde_json::Value) -> Option<SetupRerunHint> {
+    let field = |name: &str| deployment.get(name).and_then(serde_json::Value::as_str);
+    let automatic_setup = deployment
+        .pointer("/runtimeMetadata/automaticSetup")
+        .and_then(serde_json::Value::as_bool)
+        == Some(true);
+    if field("setupMethod") != Some("cli")
+        || field("status") != Some("initial-setup-failed")
+        || field("currentReleaseId").is_some()
+        || automatic_setup
+    {
+        return None;
+    }
+    let name = field("name")?;
+    let platform = field("platform")?;
+    if platform == "machines" {
+        return None;
+    }
+    let environment_field = |name: &str| {
+        deployment
+            .pointer(&format!("/environmentInfo/{name}"))
+            .and_then(serde_json::Value::as_str)
+    };
+    let environment = match platform {
+        "aws" => environment_field("accountId").map(|account| {
+            format!(
+                "AWS account {account}{}",
+                region_suffix(environment_field("region"))
+            )
+        }),
+        "gcp" => environment_field("projectId").map(|project| {
+            format!(
+                "GCP project {project}{}",
+                region_suffix(environment_field("region"))
+            )
+        }),
+        "azure" => environment_field("subscriptionId").map(|subscription| {
+            format!(
+                "Azure subscription {subscription}{}",
+                region_suffix(environment_field("location"))
+            )
+        }),
+        _ => None,
+    };
+    Some(SetupRerunHint {
+        command: format!(
+            "alien-deploy deploy --name {} --platform {platform}",
+            shell_argument(name)
+        ),
+        environment,
+    })
+}
+
+/// Quote a value for a copyable shell command, leaving plain names readable.
+#[cfg_attr(not(feature = "platform"), allow(dead_code))]
+fn shell_argument(value: &str) -> String {
+    if !value.is_empty()
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    {
+        return value.to_string();
+    }
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+#[cfg_attr(not(feature = "platform"), allow(dead_code))]
+fn region_suffix(region: Option<&str>) -> String {
+    region
+        .map(|region| format!(" ({region})"))
+        .unwrap_or_default()
+}
+
+/// The human output that follows an accepted retry.
+fn retry_next_steps(deployment_id: &str, setup_rerun: Option<&SetupRerunHint>) -> Vec<String> {
+    let Some(hint) = setup_rerun else {
+        return vec![
+            success_line("Retry requested."),
+            format!(
+                "{} {}",
+                dim_label("Next"),
+                command(&format!("alien deployments get {deployment_id}"))
+            ),
+        ];
+    };
+    let credentials = hint
+        .environment
+        .as_deref()
+        .map(|environment| format!("cloud credentials for {environment}"))
+        .unwrap_or_else(|| "the same cloud credentials".to_string());
+    vec![
+        "Retry queued. This install's setup runs with your cloud credentials, so it resumes only when you rerun the setup command.".to_string(),
+        format!("{} {}", dim_label("Next"), command(&hint.command)),
+        format!(
+            "     Run it on the machine that ran the original setup, with {credentials}. If your project ships its own deploy CLI, use that CLI instead of alien-deploy."
+        ),
+    ]
+}
+
 async fn retry_deployment_task(
     client: &alien_manager_api::Client,
     reference: &str,
     json: bool,
+    setup_rerun: Option<SetupRerunHint>,
 ) -> Result<()> {
     let deployment = resolve_deployment_reference(client, reference).await?;
 
@@ -1868,12 +1990,9 @@ async fn retry_deployment_task(
         });
     }
 
-    println!("{}", success_line("Retry requested."));
-    println!(
-        "{} {}",
-        dim_label("Next"),
-        command(&format!("alien deployments get {}", deployment.id))
-    );
+    for line in retry_next_steps(&deployment.id, setup_rerun.as_ref()) {
+        println!("{line}");
+    }
 
     Ok(())
 }
@@ -3333,6 +3452,90 @@ fn parse_targeted_env_var(input: &str) -> Option<(String, String, Vec<String>)> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn failed_cli_first_install() -> serde_json::Value {
+        serde_json::json!({
+            "id": "dep_demo",
+            "name": "acme-prod",
+            "platform": "gcp",
+            "status": "initial-setup-failed",
+            "setupMethod": "cli",
+            "currentReleaseId": null,
+            "runtimeMetadata": {},
+            "environmentInfo": {
+                "platform": "gcp",
+                "projectId": "acme-prod-project",
+                "projectNumber": "123456789012",
+                "region": "us-east4"
+            }
+        })
+    }
+
+    #[test]
+    fn retry_of_a_failed_cli_first_install_names_the_setup_command() {
+        let hint = setup_rerun_hint(&failed_cli_first_install()).expect("setup must rerun");
+        assert_eq!(
+            hint,
+            SetupRerunHint {
+                command: "alien-deploy deploy --name acme-prod --platform gcp".to_string(),
+                environment: Some("GCP project acme-prod-project (us-east4)".to_string()),
+            }
+        );
+        assert_eq!(
+            retry_next_steps("dep_demo", Some(&hint)),
+            vec![
+                "Retry queued. This install's setup runs with your cloud credentials, so it resumes only when you rerun the setup command.".to_string(),
+                "Next alien-deploy deploy --name acme-prod --platform gcp".to_string(),
+                "     Run it on the machine that ran the original setup, with cloud credentials for GCP project acme-prod-project (us-east4). If your project ships its own deploy CLI, use that CLI instead of alien-deploy.".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn retry_that_starts_work_keeps_the_plain_confirmation() {
+        let mut google = failed_cli_first_install();
+        google["setupMethod"] = serde_json::json!("google-oauth");
+        let mut installed = failed_cli_first_install();
+        installed["currentReleaseId"] = serde_json::json!("rel_installed");
+        let mut runtime_failure = failed_cli_first_install();
+        runtime_failure["status"] = serde_json::json!("provisioning-failed");
+        let mut automatic = failed_cli_first_install();
+        automatic["runtimeMetadata"] = serde_json::json!({"automaticSetup": true});
+        let mut machines = failed_cli_first_install();
+        machines["platform"] = serde_json::json!("machines");
+        for deployment in [google, installed, runtime_failure, automatic, machines] {
+            assert_eq!(setup_rerun_hint(&deployment), None, "{deployment}");
+        }
+        assert_eq!(
+            retry_next_steps("dep_demo", None),
+            vec![
+                "> Success! Retry requested.".to_string(),
+                "Next alien deployments get dep_demo".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn setup_rerun_command_quotes_a_name_the_shell_would_split() {
+        let mut deployment = failed_cli_first_install();
+        deployment["name"] = serde_json::json!("acme prod's");
+        let hint = setup_rerun_hint(&deployment).expect("setup must rerun");
+        assert_eq!(
+            hint.command,
+            r#"alien-deploy deploy --name 'acme prod'"'"'s' --platform gcp"#
+        );
+    }
+
+    #[test]
+    fn setup_rerun_without_a_recorded_environment_still_names_the_command() {
+        let mut deployment = failed_cli_first_install();
+        deployment["platform"] = serde_json::json!("aws");
+        deployment["environmentInfo"] = serde_json::Value::Null;
+        let hint = setup_rerun_hint(&deployment).expect("setup must rerun");
+        assert_eq!(hint.environment, None);
+        assert!(retry_next_steps("dep_demo", Some(&hint))[2]
+            .contains("with the same cloud credentials"));
+    }
     use alien_manager_api::types::{DeploymentGroupMinimal, Platform};
     use alien_platform_api::types::{DeploymentUpdateOperationStatus, DeploymentUpdateReason};
     use axum::{

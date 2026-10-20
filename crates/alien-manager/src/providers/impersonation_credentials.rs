@@ -118,7 +118,13 @@ impl ImpersonationCredentialResolver {
         // identity would send target resource operations to the wrong account.
         if uses_direct_impersonation_credentials(&deployment) {
             let provider = self.provider_for_target(platform);
-            let base_config = impersonate_management_sa(&**provider, platform).await?;
+            let base_config = impersonate_management_sa_trusted_by(
+                &**provider,
+                platform,
+                &deployment.id,
+                deployment.management_config.as_ref(),
+            )
+            .await?;
             return apply_target_environment(base_config, deployment.environment_info.as_ref());
         }
 
@@ -138,7 +144,13 @@ impl ImpersonationCredentialResolver {
                     )
                     .await
             } else {
-                let base_config = impersonate_management_sa(&**provider, platform).await?;
+                let base_config = impersonate_management_sa_trusted_by(
+                    &**provider,
+                    platform,
+                    &deployment.id,
+                    deployment.management_config.as_ref(),
+                )
+                .await?;
                 let external_id = self.management_external_id(deployment).await?;
                 resolver
                     .resolve(
@@ -284,7 +296,13 @@ impl CredentialResolver for ImpersonationCredentialResolver {
                 )
                 .await
         } else {
-            let base = impersonate_management_sa(&**provider, deployment.platform).await?;
+            let base = impersonate_management_sa_trusted_by(
+                &**provider,
+                deployment.platform,
+                &deployment.id,
+                deployment.management_config.as_ref(),
+            )
+            .await?;
             let external_id = self.management_external_id(deployment).await?;
             resolver
                 .resolve_remote_bindings(
@@ -337,17 +355,103 @@ impl CredentialResolver for ImpersonationCredentialResolver {
     }
 }
 
+/// Binding of the management identity a manager used before its current one. An operator that
+/// moves the management role keeps the previous role bound under this name: stacks set up
+/// earlier trust only that role, and stay reachable through it.
+pub const PREVIOUS_MANAGEMENT_BINDING: &str = "previous-management";
+
+/// Impersonate the management identity a deployment's stack trusts: the AWS role its management
+/// config names, which is either the current `management` binding or the
+/// [`PREVIOUS_MANAGEMENT_BINDING`]. A deployment with no recorded role, or on another platform,
+/// uses the current binding. A recorded role neither binding holds is refused before any
+/// AssumeRole, so it surfaces as a configuration error rather than an access denial.
+pub async fn impersonate_management_sa_trusted_by(
+    bindings_provider: &dyn BindingsProviderApi,
+    platform: Platform,
+    deployment_id: &str,
+    management_config: Option<&ManagementConfig>,
+) -> Result<ClientConfig, AlienError> {
+    let trusted_role = match (management_config, platform) {
+        (Some(ManagementConfig::Aws(config)), Platform::Aws) => &config.managing_role_arn,
+        _ => return impersonate_management_sa(bindings_provider, platform).await,
+    };
+    if management_role_arn(bindings_provider, "management", platform)
+        .await?
+        .as_ref()
+        == Some(trusted_role)
+    {
+        return impersonate_service_account(bindings_provider, "management", platform).await;
+    }
+    if management_role_arn(bindings_provider, PREVIOUS_MANAGEMENT_BINDING, platform)
+        .await?
+        .as_ref()
+        == Some(trusted_role)
+    {
+        return impersonate_service_account(
+            bindings_provider,
+            PREVIOUS_MANAGEMENT_BINDING,
+            platform,
+        )
+        .await;
+    }
+    Err(AlienError::new(ErrorData::ManagingIdentityNotHeld {
+        deployment_id: deployment_id.to_string(),
+        managing_identity: trusted_role.clone(),
+    })
+    .into_generic())
+}
+
+/// The AWS role a management binding names, or `None` when the binding is absent.
+async fn management_role_arn(
+    bindings_provider: &dyn BindingsProviderApi,
+    binding: &str,
+    platform: Platform,
+) -> Result<Option<String>, AlienError> {
+    let service_account = match bindings_provider.load_service_account(binding).await {
+        Ok(service_account) => service_account,
+        Err(error) if error.code == "BINDING_NOT_CONFIGURED" => return Ok(None),
+        Err(error) => {
+            return Err(error)
+                .context(ErrorData::CredentialMaterializationFailed {
+                    platform,
+                    purpose: format!("load the {binding} service account"),
+                })
+                .map_err(|error| classify_credential_error(error.into_generic()));
+        }
+    };
+    let info = service_account
+        .get_info()
+        .await
+        .context(ErrorData::CredentialMaterializationFailed {
+            platform,
+            purpose: format!("read the {binding} service account"),
+        })
+        .map_err(|error| classify_credential_error(error.into_generic()))?;
+    Ok(match info {
+        ServiceAccountInfo::Aws(info) => Some(info.role_arn),
+        _ => None,
+    })
+}
+
 /// Impersonate the management service account to get base credentials.
 pub async fn impersonate_management_sa(
     bindings_provider: &dyn BindingsProviderApi,
     platform: Platform,
 ) -> Result<ClientConfig, AlienError> {
+    impersonate_service_account(bindings_provider, "management", platform).await
+}
+
+async fn impersonate_service_account(
+    bindings_provider: &dyn BindingsProviderApi,
+    binding: &str,
+    platform: Platform,
+) -> Result<ClientConfig, AlienError> {
     let service_account = bindings_provider
-        .load_service_account("management")
+        .load_service_account(binding)
         .await
         .context(ErrorData::CredentialMaterializationFailed {
             platform,
-            purpose: "load management service account".to_string(),
+            purpose: format!("load the {binding} service account"),
         })
         .map_err(|error| classify_credential_error(error.into_generic()))?;
 
@@ -365,7 +469,7 @@ pub async fn impersonate_management_sa(
         .await
         .context(ErrorData::CredentialMaterializationFailed {
             platform,
-            purpose: "impersonate management service account".to_string(),
+            purpose: format!("impersonate the {binding} service account"),
         })
         .map_err(|error| classify_credential_error(error.into_generic()))?;
 
@@ -1059,6 +1163,169 @@ mod tests {
             HashSet::from([Platform::Aws]),
         )
         .with_management_external_ids(Arc::new(external_ids))
+    }
+
+    const AWS_PREVIOUS_MANAGEMENT_ROLE: &str =
+        "arn:aws:iam::123456789012:role/manager-management-previous";
+
+    /// A resolver holding the current management role and the previous one.
+    fn aws_resolver_with_previous_role(sts_url: String) -> ImpersonationCredentialResolver {
+        let base_config = ClientConfig::Aws(Box::new(AwsClientConfig {
+            account_id: "123456789012".to_string(),
+            region: "us-east-2".to_string(),
+            credentials: AwsCredentials::AccessKeys {
+                access_key_id: "AKIAMANAGER".to_string(),
+                secret_access_key: "secret".to_string(),
+                session_token: None,
+            },
+            service_overrides: Some(alien_core::AwsServiceOverrides {
+                endpoints: HashMap::from([("sts".to_string(), sts_url)]),
+            }),
+        }));
+        let binding = |name: &str, arn: &str| {
+            serde_json::to_value(ServiceAccountBinding::aws_iam(name, arn))
+                .expect("management binding should serialize")
+        };
+        let bindings = HashMap::from([
+            (
+                "management".to_string(),
+                binding("manager-management", AWS_MANAGEMENT_ROLE),
+            ),
+            (
+                PREVIOUS_MANAGEMENT_BINDING.to_string(),
+                binding("manager-management-previous", AWS_PREVIOUS_MANAGEMENT_ROLE),
+            ),
+        ]);
+        let provider: Arc<dyn BindingsProviderApi> = Arc::new(
+            BindingsProvider::new(base_config, bindings)
+                .expect("AWS management bindings provider should be valid"),
+        );
+        ImpersonationCredentialResolver::new(
+            provider.clone(),
+            HashMap::from([(Platform::Aws, provider)]),
+            HashSet::from([Platform::Aws]),
+        )
+    }
+
+    fn aws_deployment_trusting(role: Option<&str>) -> DeploymentRecord {
+        let mut deployment = aws_running_deployment();
+        deployment.management_config = role.map(|role| {
+            ManagementConfig::Aws(alien_core::AwsManagementConfig {
+                managing_role_arn: role.to_string(),
+            })
+        });
+        deployment
+    }
+
+    /// The first hop assumes the managing role the deployment's stack trusts, so a stack set up
+    /// before the manager's role moved is still reached through the previous role.
+    #[tokio::test]
+    async fn a_deployment_is_reached_through_the_managing_role_its_stack_trusts() {
+        for (trusted, expected) in [
+            (
+                Some(AWS_PREVIOUS_MANAGEMENT_ROLE),
+                AWS_PREVIOUS_MANAGEMENT_ROLE,
+            ),
+            (Some(AWS_MANAGEMENT_ROLE), AWS_MANAGEMENT_ROLE),
+            (None, AWS_MANAGEMENT_ROLE),
+        ] {
+            let server = httpmock::MockServer::start_async().await;
+            let management = server
+                .mock_async(|when, then| {
+                    when.method(httpmock::Method::POST)
+                        .body_contains(format!("RoleArn={}", urlencoding::encode(expected)));
+                    then.status(200)
+                        .header("content-type", "text/xml")
+                        .body(aws_assume_role_xml(expected, "ASIAMANAGER"));
+                })
+                .await;
+            let customer = server
+                .mock_async(|when, then| {
+                    when.method(httpmock::Method::POST)
+                        .body_contains(format!("RoleArn={}", urlencoding::encode(AWS_TARGET_ROLE)));
+                    then.status(200)
+                        .header("content-type", "text/xml")
+                        .body(aws_assume_role_xml(AWS_TARGET_ROLE, "ASIACUSTOMER"));
+                })
+                .await;
+
+            aws_resolver_with_previous_role(server.base_url())
+                .resolve_from_env(&aws_deployment_trusting(trusted), HashMap::new())
+                .await
+                .unwrap_or_else(|error| panic!("{trusted:?}: {error:?}"));
+
+            management.assert_async().await;
+            customer.assert_async().await;
+        }
+    }
+
+    /// A previous binding that is present but unusable reports why, rather than reading as a
+    /// role the manager does not hold.
+    #[tokio::test]
+    async fn a_broken_previous_binding_reports_its_own_error() {
+        let base_config = ClientConfig::Aws(Box::new(AwsClientConfig {
+            account_id: "123456789012".to_string(),
+            region: "us-east-2".to_string(),
+            credentials: AwsCredentials::AccessKeys {
+                access_key_id: "AKIAMANAGER".to_string(),
+                secret_access_key: "secret".to_string(),
+                session_token: None,
+            },
+            service_overrides: None,
+        }));
+        let bindings = HashMap::from([
+            (
+                "management".to_string(),
+                serde_json::to_value(ServiceAccountBinding::aws_iam(
+                    "manager-management",
+                    AWS_MANAGEMENT_ROLE,
+                ))
+                .unwrap(),
+            ),
+            (
+                PREVIOUS_MANAGEMENT_BINDING.to_string(),
+                serde_json::json!({ "service": "awsiam" }),
+            ),
+        ]);
+        let provider: Arc<dyn BindingsProviderApi> =
+            Arc::new(BindingsProvider::new(base_config, bindings).unwrap());
+
+        let error = impersonate_management_sa_trusted_by(
+            &*provider,
+            Platform::Aws,
+            "deployment",
+            Some(&ManagementConfig::Aws(alien_core::AwsManagementConfig {
+                managing_role_arn: AWS_PREVIOUS_MANAGEMENT_ROLE.to_string(),
+            })),
+        )
+        .await
+        .expect_err("the previous binding cannot be parsed");
+
+        assert_eq!(error.code, "CREDENTIAL_MATERIALIZATION_FAILED", "{error:?}");
+    }
+
+    /// A stack trusting a role the manager holds no binding for is refused before any AssumeRole.
+    #[tokio::test]
+    async fn a_managing_role_the_manager_does_not_hold_is_refused() {
+        let server = httpmock::MockServer::start_async().await;
+        let any = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST);
+                then.status(500);
+            })
+            .await;
+
+        let error = aws_resolver_with_previous_role(server.base_url())
+            .resolve_from_env(
+                &aws_deployment_trusting(Some("arn:aws:iam::123456789012:role/someone-else")),
+                HashMap::new(),
+            )
+            .await
+            .expect_err("no binding holds that role");
+
+        assert_eq!(error.code, "MANAGING_IDENTITY_NOT_HELD");
+        assert!(!error.retryable);
+        any.assert_hits_async(0).await;
     }
 
     /// The manager's own management role is assumed without an ExternalId;

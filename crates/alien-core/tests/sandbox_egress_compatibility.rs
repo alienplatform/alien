@@ -63,6 +63,8 @@ fn released_plans_and_frozen_setup_digest_are_identical() {
     let actual = serde_json::json!({"liveDigest":live, "frozenDigest":stack.setup_owned_digest(), "plans":plans});
     // Produced by main core (374cc95f3) from the actual released SDK fixture.
     // This includes the image USER contract while keeping egress and setup unchanged.
+    // A Live sandbox's setup inputs name the bucket its setup granted in place of the release's
+    // own, so the live digest and the build role inputs carry that placeholder.
     let expected: serde_json::Value = serde_json::from_str(include_str!(
         "fixtures/sandbox-egress-core-3.3.34-expected-plan.json"
     ))

@@ -38,15 +38,40 @@ pub struct Config {
     /// Global open proxy connections; rejects excess admission before allocating tunnel buffers.
     #[serde(default = "max_connections")]
     pub max_connections: usize,
-    /// Base64 32-byte gateway-only key for replica authentication and scoped CAs.
+    /// Base64 32-byte gateway-only key for replica authentication and scoped CAs. Older
+    /// controllers embed it here; newer ones name a `replica_secret_source` instead.
     #[serde(default)]
     pub replica_secret: Option<String>,
+    /// Where the gateway reads its replica secret with its own identity. The value never
+    /// appears in this configuration, so the managing identity that publishes it never holds it.
+    #[serde(default)]
+    pub replica_secret_source: Option<ReplicaSecretSource>,
     /// Additional deployment-owned trust roots, base64 DER, for upstream TLS.
     #[serde(default)]
     pub upstream_ca_certificates: Vec<String>,
     /// Opt-in credential rules; no rule means TLS is spliced after SNI validation.
     #[serde(default)]
     pub credentials: Vec<CredentialRule>,
+}
+
+/// A replica secret stored outside the configuration, readable only by the gateway.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub enum ReplicaSecretSource {
+    /// An AWS Secrets Manager secret holding the base64 32-byte value as its string.
+    #[serde(rename_all = "camelCase")]
+    AwsSecretsManager {
+        /// Secret name or ARN.
+        secret_id: String,
+    },
+    /// An entry of one of the gateway's vault bindings.
+    #[serde(rename_all = "camelCase")]
+    Vault {
+        /// Vault binding name.
+        binding: String,
+        /// Secret name within the vault.
+        key: String,
+    },
 }
 
 /// One signing key accepted during key rotation.

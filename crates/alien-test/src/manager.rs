@@ -528,6 +528,8 @@ impl TestManager {
                         section.aws =
                             Some(ArtifactRegistryBinding::Ecr(EcrArtifactRegistryBinding {
                                 sandbox_repository_prefix: None,
+                                legacy_repository_prefixes: Vec::new(),
+                                legacy_sandbox_repository_prefixes: Vec::new(),
                                 repository_prefix: BindingValue::Value("alien-e2e".to_string()),
                                 pull_role_arn: Some(BindingValue::Value(pull_role.clone())),
                                 push_role_arn: Some(BindingValue::Value(push_role.clone())),

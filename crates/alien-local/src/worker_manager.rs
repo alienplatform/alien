@@ -82,6 +82,7 @@ impl RuntimeOnlyBindingRef {
             .filter(|link| {
                 link.resource_type() == &alien_core::Postgres::RESOURCE_TYPE
                     || link.resource_type() == &alien_core::Ai::RESOURCE_TYPE
+                    || link.resource_type() == &alien_core::Queue::RESOURCE_TYPE
             })
             .map(|link| Self {
                 name: link.id().to_string(),

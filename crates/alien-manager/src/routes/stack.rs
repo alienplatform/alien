@@ -2326,20 +2326,30 @@ mod setup_update_authorization_tests {
 
         for setup_owned in [
             with(
-                V1,
-                "123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base-b:1",
+                "s3://bucket/other-prefix/v1/bundle.zip",
+                BASE_A,
                 alien_core::SandboxEgress::Internet,
             ),
             with(V1, BASE_A, alien_core::SandboxEgress::None),
         ] {
             assert!(reimport(setup_owned).is_some());
         }
-        assert!(reimport(with(
-            "s3://bucket/sandbox-bundle/v2/bundle.zip",
-            "123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base-a:2",
-            alien_core::SandboxEgress::Internet,
-        ))
-        .is_none());
+        // A Live sandbox builds each release from the store and repository its setup granted, so
+        // neither moving is a setup change.
+        for runtime_owned in [
+            with(
+                "s3://bucket/sandbox-bundle/v2/bundle.zip",
+                "123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base-a:2",
+                alien_core::SandboxEgress::Internet,
+            ),
+            with(
+                "s3://other-bucket/sandbox-bundle/v1/bundle.zip",
+                "123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base-b:1",
+                alien_core::SandboxEgress::Internet,
+            ),
+        ] {
+            assert!(reimport(runtime_owned).is_none());
+        }
     }
 
     #[test]

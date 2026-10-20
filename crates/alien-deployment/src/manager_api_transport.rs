@@ -455,6 +455,15 @@ pub async fn acquire_setup_run_deployment(
     if !SETUP_RUN_FAILED_STATUSES.contains(&status.as_str()) {
         return Err(error);
     }
+    // Rerunning setup resumes a failed first install for a caller that may retry it, so a refusal
+    // there is about who is asking, not a missing retry.
+    if status == "initial-setup-failed" {
+        return Err(error
+            .context(ErrorData::SetupRunCannotResumeFailedInstall {
+                deployment_id: deployment_id.to_string(),
+            })
+            .into_generic());
+    }
     Err(error
         .context(ErrorData::SetupRunAfterFailedOperation {
             deployment_id: deployment_id.to_string(),
@@ -699,7 +708,7 @@ fn acquisition_timeout_message(
     use alien_manager_api::types::DeploymentAcquireUnavailableReason as Reason;
     match unavailable.iter().find(|outcome| outcome.deployment_id == deployment_id) {
         Some(outcome) if outcome.reason == Reason::Contended =>
-            "Timed out waiting for deployment lock: another operation still holds the deployment lease. Check the current deployment operation before retrying; this command did not acquire the lease.".to_string(),
+            format!("Timed out waiting for deployment '{deployment_id}': another operation still holds it. Wait for that operation to finish (`alien deployments get {deployment_id}` shows it), then try again. This command did not acquire the lease and changed nothing."),
         Some(outcome) if outcome.reason == Reason::Deferred =>
             "Timed out waiting for deployment lock: the manager deferred this deployment. Check its current operation and status before retrying; this command did not acquire the lease.".to_string(),
         _ => "Timed out waiting for deployment lock; the manager did not provide an acquisition reason. Check the current deployment operation before retrying.".to_string(),
@@ -2259,6 +2268,11 @@ mod tests {
     async fn setup_run_refused_after_a_failed_operation_names_the_retry() {
         for (lookup_status, deployment_status, expected_code) in [
             (200, "update-failed", "SETUP_RUN_AFTER_FAILED_OPERATION"),
+            (
+                200,
+                "initial-setup-failed",
+                "SETUP_RUN_CANNOT_RESUME_FAILED_INSTALL",
+            ),
             (200, "updating", "DEPLOYMENT_ACQUIRE_UNAVAILABLE"),
             (500, "update-failed", "DEPLOYMENT_ACQUIRE_UNAVAILABLE"),
         ] {
@@ -2315,7 +2329,25 @@ mod tests {
             );
             if expected_code == "SETUP_RUN_AFTER_FAILED_OPERATION" {
                 assert!(error.message.contains("update-failed"), "{}", error.message);
-                assert!(error.message.contains("Retry the deployment first"));
+                assert!(
+                    error.message.contains(
+                        "Run `alien deployments retry deployment-1` (or click Retry in the dashboard) to retry it. If the retry stops with an error that asks for setup, rerun this command"
+                    ),
+                    "{}",
+                    error.message
+                );
+            }
+            if expected_code == "SETUP_RUN_CANNOT_RESUME_FAILED_INSTALL" {
+                assert!(
+                    error.message.contains(
+                        "Rerun this command with the setup token that created the deployment"
+                    ),
+                    "{}",
+                    error.message
+                );
+                assert!(error.message.contains(
+                    "run `alien deployments retry deployment-1` and then rerun this command"
+                ));
             }
             acquire.assert_hits_async(1).await;
             lookup.assert_hits_async(1).await;
@@ -2371,7 +2403,7 @@ mod tests {
             .await
             .expect_err("a held lease must exhaust the bounded wait");
         assert!(
-            error.message.contains("another operation still holds"),
+            error.message.contains("Timed out waiting for deployment 'deployment-1': another operation still holds it. Wait for that operation to finish (`alien deployments get deployment-1` shows it), then try again."),
             "{}",
             error.message
         );

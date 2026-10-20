@@ -118,6 +118,10 @@ pub(crate) fn configure_aws_gateway_permissions(stack: &mut Stack) -> Result<()>
             "sandbox-egress-gateway-config",
         )?)],
     );
+    gateway_profile.0.insert(
+        "*".into(),
+        vec![PermissionSetReference::from_inline(replica_secret_read()?)],
+    );
     if stack
         .permissions
         .profiles
@@ -125,7 +129,7 @@ pub(crate) fn configure_aws_gateway_permissions(stack: &mut Stack) -> Result<()>
         .is_some_and(|profile| !profile.0.is_empty() && profile != &gateway_profile)
     {
         return Err(AlienError::new(invalid(
-            "The sandbox gateway profile must grant only its exact gateway config entry",
+            "The sandbox gateway profile must grant only its exact gateway config entry and replica secret",
         )));
     }
     stack
@@ -219,6 +223,24 @@ fn grants_sandbox_management(set: &PermissionSetReference) -> bool {
             alien_permissions::get_permission_set("sandbox/management") == Some(inline)
         }
     }
+}
+
+/// The gateway reads its replica secret, which setup generates in Secrets Manager.
+pub(crate) fn replica_secret_read() -> Result<PermissionSet> {
+    let arn = format!(
+        "arn:aws:secretsmanager:${{awsRegion}}:${{awsAccountId}}:secret:${{stackPrefix}}-{}-??????",
+        alien_core::sandbox_egress::SANDBOX_EGRESS_REPLICA_SECRET
+    );
+    serde_json::from_value(serde_json::json!({
+        "id": "sandbox/egress-replica-secret-read",
+        "description": "Read the sandbox gateway's replica secret",
+        "platforms": {"aws": [{
+            "grant": {"actions": ["secretsmanager:GetSecretValue"]},
+            "binding": {"stack": {"resources": [arn]}, "resource": {"resources": [arn]}}
+        }]}
+    }))
+    .into_alien_error()
+    .context(invalid("Failed to construct the sandbox gateway replica secret grant"))
 }
 
 fn exact_read(key: &str) -> Result<PermissionSet> {

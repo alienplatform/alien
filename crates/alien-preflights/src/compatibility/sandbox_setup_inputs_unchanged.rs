@@ -164,6 +164,21 @@ mod tests {
         assert!(result.success, "{:?}", result.errors);
     }
 
+    /// A Live sandbox builds each release's key from the bucket and base repository its setup
+    /// granted, so a release naming another of either is not a setup input change.
+    #[tokio::test]
+    async fn another_bucket_or_base_repository_passes() {
+        let result = run(
+            stack(Some(REPO_A), BUNDLE_V1),
+            stack(
+                Some("123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base-b:1"),
+                "s3://other-bucket/sandbox-bundle/v1/bundle.zip",
+            ),
+        )
+        .await;
+        assert!(result.success, "{:?}", result.errors);
+    }
+
     #[tokio::test]
     async fn a_live_sandbox_new_to_the_installed_stack_needs_setup() {
         for private_base_image in [Some(REPO_A), None] {
@@ -190,14 +205,6 @@ mod tests {
             .remote_access = true;
         for (old, new, input) in [
             (
-                stack(Some(REPO_A), BUNDLE_V1),
-                stack(
-                    Some("123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base-b:1"),
-                    BUNDLE_V1,
-                ),
-                "build role policy",
-            ),
-            (
                 stack(None, BUNDLE_V1),
                 stack(Some(REPO_A), BUNDLE_V1),
                 "build role policy",
@@ -205,11 +212,6 @@ mod tests {
             (
                 stack(Some(REPO_A), BUNDLE_V1),
                 stack(None, BUNDLE_V1),
-                "build role policy",
-            ),
-            (
-                stack(None, BUNDLE_V1),
-                stack(None, "s3://other-bucket/sandbox-bundle/v1/bundle.zip"),
                 "build role policy",
             ),
             (

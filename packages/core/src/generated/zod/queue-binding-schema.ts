@@ -4,6 +4,7 @@
 */
 
 import * as z from "zod";
+import { LocalHttpQueueBindingSchema } from "./local-http-queue-binding-schema.js";
 import { LocalQueueBindingSchema } from "./local-queue-binding-schema.js";
 import { PubSubQueueBindingSchema } from "./pub-sub-queue-binding-schema.js";
 import { ServiceBusQueueBindingSchema } from "./service-bus-queue-binding-schema.js";
@@ -20,6 +21,8 @@ export const QueueBindingSchema = z.union([z.lazy(() => SqsQueueBindingSchema).a
     "service": z.enum(["servicebus"])
     })).describe("Azure Service Bus parameters"), z.lazy(() => LocalQueueBindingSchema).and(z.object({
     "service": z.enum(["local-queue"])
-    })).describe("Local queue parameters")]).describe("Binding parameters for Queue at runtime or in templates.")
+    })).describe("Local queue parameters"), z.lazy(() => LocalHttpQueueBindingSchema).and(z.object({
+    "service": z.enum(["local-queue-http"])
+    })).describe("Connection to one manager-owned local queue. Old SDKs reject its distinct service tag.")]).describe("Binding parameters for Queue at runtime or in templates.")
 
 export type QueueBinding = z.infer<typeof QueueBindingSchema>
