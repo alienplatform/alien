@@ -357,8 +357,6 @@
         }
       },
       // Restore: the restored volume's marker tag is removed once it replaces the old one.
-      // Installations set up before the marker was renamed grant only its previous key; the
-      // runtime keeps using that key for them and leaves the new marker in place.
       {
         "grant": {
           "actions": ["ec2:DeleteTags"]
