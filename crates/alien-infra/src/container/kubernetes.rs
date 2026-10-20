@@ -124,6 +124,32 @@ fn gateway_mounts_config(config: &Container) -> bool {
             if alien_core::sandbox_egress::gateway_image_reads_config_files(image))
 }
 
+/// Pod template annotation carrying the gateway settings a running replica cannot refresh.
+const GATEWAY_RESTART_SETTINGS_ANNOTATION: &str = "alien.dev/egress-gateway-restart-settings";
+
+/// A mounted configuration changes without the pod template, but a running replica refuses a
+/// change to its peers. The template carries them, so such a change restarts the pods, as any
+/// configuration change did when it was in the pod's environment.
+fn with_gateway_restart_settings(
+    config: &Container,
+    namespace: &str,
+    ctx: &ResourceControllerContext<'_>,
+    annotations: Option<BTreeMap<String, String>>,
+) -> Result<Option<BTreeMap<String, String>>> {
+    if !gateway_mounts_config(config) {
+        return Ok(annotations);
+    }
+    let mut annotations = annotations.unwrap_or_default();
+    annotations.insert(
+        GATEWAY_RESTART_SETTINGS_ANNOTATION.to_string(),
+        serde_json::json!({
+            "peers": crate::sandbox::kubernetes_egress::gateway_peers(ctx, namespace)?
+        })
+        .to_string(),
+    );
+    Ok(Some(annotations))
+}
+
 fn first_declared_container_port(config: &Container) -> Option<u16> {
     config.ports.first().map(|port| port.port)
 }
@@ -2244,7 +2270,12 @@ impl KubernetesContainerController {
                 ctx,
             )
             .await?;
-        let pod_annotations = pod_template_annotations(env_secret_plan, &config.environment)?;
+        let pod_annotations = with_gateway_restart_settings(
+            config,
+            namespace,
+            ctx,
+            pod_template_annotations(env_secret_plan, &config.environment)?,
+        )?;
 
         let deployment = Deployment {
             metadata: ObjectMeta {
@@ -2299,7 +2330,12 @@ impl KubernetesContainerController {
                 ctx,
             )
             .await?;
-        let pod_annotations = pod_template_annotations(env_secret_plan, &config.environment)?;
+        let pod_annotations = with_gateway_restart_settings(
+            config,
+            namespace,
+            ctx,
+            pod_template_annotations(env_secret_plan, &config.environment)?,
+        )?;
 
         // Build volume claim templates for persistent storage
         let mut volume_claim_templates = Vec::new();
@@ -3147,6 +3183,13 @@ mod tests {
     /// configuration, read by the controller, in its environment.
     #[tokio::test]
     async fn a_mounting_gateway_gets_its_secrets_from_the_kubelet_not_the_controller() {
+        // Outside a cluster the controller is told the cluster DNS domain.
+        unsafe {
+            std::env::set_var(
+                crate::sandbox::kubernetes_egress::CLUSTER_DOMAIN_ENV,
+                "corp.example",
+            )
+        };
         use httpmock::Method::{GET, POST};
         let server = httpmock::MockServer::start_async().await;
         let reads = server
@@ -3273,6 +3316,23 @@ mod tests {
         assert!(!environment
             .iter()
             .any(|variable| variable.name == "ALIEN_EGRESS_GATEWAY_CONFIG"));
+        // The settings a running replica cannot refresh are in the pod template, so a change to
+        // them restarts the pods.
+        let template = controller
+            .build_deployment(&gateway, "gateway", "test-ns", "gateway-sa", None, None, &ctx)
+            .await
+            .unwrap()
+            .spec
+            .unwrap()
+            .template;
+        let annotation: serde_json::Value = serde_json::from_str(
+            &template.metadata.unwrap().annotations.unwrap()[GATEWAY_RESTART_SETTINGS_ANNOTATION],
+        )
+        .unwrap();
+        assert_eq!(
+            annotation,
+            serde_json::json!({"peers": {"dns": "sandbox-egress-gateway-peers.test-ns.svc.corp.example", "port": 3129}})
+        );
 
         // The pinned image from before: configuration in the environment, read by the controller.
         let earlier = gateway_container(
@@ -3306,6 +3366,13 @@ mod tests {
 
     #[tokio::test]
     async fn gateway_replicas_wait_out_a_resynchronization_and_get_no_api_token() {
+        // Outside a cluster the controller is told the cluster DNS domain.
+        unsafe {
+            std::env::set_var(
+                crate::sandbox::kubernetes_egress::CLUSTER_DOMAIN_ENV,
+                "corp.example",
+            )
+        };
         let mut gateway = manifest_test_container(&[], false);
         gateway.id = alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.to_string();
         let mut ordinary = manifest_test_container(&[], false);

@@ -16,7 +16,7 @@ use k8s_openapi::api::core::v1::EnvVar;
 use super::{egress, KubernetesSandboxController};
 
 /// Configures the cluster DNS domain for a controller running outside the cluster.
-const CLUSTER_DOMAIN_ENV: &str = "ALIEN_KUBERNETES_CLUSTER_DOMAIN";
+pub(crate) const CLUSTER_DOMAIN_ENV: &str = "ALIEN_KUBERNETES_CLUSTER_DOMAIN";
 
 /// The gateway resolves its peers as an absolute DNS name, so it needs the cluster's
 /// DNS domain. Inside the cluster the kubelet lists it in the pod's resolver search path
@@ -106,10 +106,6 @@ pub(super) async fn configure(
     let workload = kubernetes_resource_name(&ctx.resource_prefix, SANDBOX_EGRESS_GATEWAY_ID);
     let peer = crate::container::peer_service_name(&workload);
     if owns {
-        let domain = cluster_domain(
-            std::env::var(CLUSTER_DOMAIN_ENV).ok().as_deref(),
-            std::fs::read_to_string("/etc/resolv.conf").ok().as_deref(),
-        )?;
         let denied = crate::core::k8s_network::cluster_denied_ranges(ctx).await?;
         let audiences: Vec<_> = ids
             .iter()
@@ -119,8 +115,7 @@ pub(super) async fn configure(
             "listen": "0.0.0.0:3128", "admin": "0.0.0.0:3129",
             "audiences": audiences, "defaultPolicies": {}, "keys": [&key],
             "deniedRanges": denied,
-            // The gateway resolves this as an absolute name, without search domains.
-            "peers": {"dns": format!("{peer}.{namespace}.svc.{domain}"), "port": 3129},
+            "peers": gateway_peers(ctx, namespace)?,
             "credentials": []
         });
         let vault = egress::deployment_vault(ctx).await?;
@@ -178,6 +173,22 @@ async fn owner_key(ctx: &ResourceControllerContext<'_>) -> Result<egress::Gatewa
         Some(key) => Ok(key),
         None => egress::read_signing_public_key(vault.as_ref()).await,
     }
+}
+
+/// How gateway replicas find each other. The gateway resolves the name as an absolute name,
+/// without search domains. A running gateway cannot take a change to it, so its pods restart
+/// when it changes.
+pub(crate) fn gateway_peers(
+    ctx: &ResourceControllerContext<'_>,
+    namespace: &str,
+) -> Result<serde_json::Value> {
+    let workload = kubernetes_resource_name(&ctx.resource_prefix, SANDBOX_EGRESS_GATEWAY_ID);
+    let peer = crate::container::peer_service_name(&workload);
+    let domain = cluster_domain(
+        std::env::var(CLUSTER_DOMAIN_ENV).ok().as_deref(),
+        std::fs::read_to_string("/etc/resolv.conf").ok().as_deref(),
+    )?;
+    Ok(serde_json::json!({"dns": format!("{peer}.{namespace}.svc.{domain}"), "port": 3129}))
 }
 
 fn gateway_replicas(ctx: &ResourceControllerContext<'_>) -> u32 {
