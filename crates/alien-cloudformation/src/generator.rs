@@ -2598,12 +2598,6 @@ fn apply_management_trust(template: &mut CfTemplate, trust: &ManagementTrustOpti
                 }));
             }
         }
-        let alternatives = trust
-            .allowed_managing_role_arns
-            .iter()
-            .map(|arn| escape_pattern_literal(arn))
-            .collect::<Vec<_>>()
-            .join("|");
         let parameter = template
             .parameters
             .get_mut(PARAM_MANAGING_ROLE_ARN)
@@ -2613,10 +2607,17 @@ fn apply_management_trust(template: &mut CfTemplate, trust: &ManagementTrustOpti
                     reason: "the template declares no such parameter".to_string(),
                 })
             })?;
-        // An empty default would contradict the pattern; installed stacks keep
-        // their value on update, and new installs pass it in the launch link.
+        // An empty default would not be one of the allowed values. Installed
+        // stacks keep their value on update, and new installs pass it in the
+        // launch link.
         parameter.default = None;
-        parameter.allowed_pattern = Some(format!("^({alternatives})$"));
+        parameter.allowed_values = Some(
+            trust
+                .allowed_managing_role_arns
+                .iter()
+                .map(|arn| CfExpression::from(arn.clone()))
+                .collect(),
+        );
         parameter.constraint_description = Some(format!(
             "Use the management role ARN from the setup page: {}.",
             trust.allowed_managing_role_arns.join(" or ")
@@ -2649,19 +2650,6 @@ fn is_iam_role_arn(arn: &str) -> bool {
         && role
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || b"+=,.@_-/".contains(&byte))
-}
-
-/// Escape the regular-expression metacharacters a role ARN can contain, so
-/// the pattern matches the ARN literally.
-fn escape_pattern_literal(value: &str) -> String {
-    let mut escaped = String::with_capacity(value.len());
-    for character in value.chars() {
-        if r"\.+*?()|[]{}^$".contains(character) {
-            escaped.push('\\');
-        }
-        escaped.push(character);
-    }
-    escaped
 }
 
 fn add_custom_resource(

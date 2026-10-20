@@ -5,7 +5,8 @@
 //! before it creates or updates anything:
 //! - a missing value takes the default, and a parameter without one fails
 //!   with "must have values";
-//! - then `MinLength`, `MaxLength` and `AllowedPattern` must all hold.
+//! - then `AllowedValues`, `MinLength`, `MaxLength` and `AllowedPattern`
+//!   must all hold.
 //!
 //! A pre-parameter stack updated to the template has no value. A stack left
 //! empty and updated with "use existing value" sends "".
@@ -21,6 +22,7 @@ use super::helpers::custom_resource_registration;
 use alien_cloudformation::{
     generate_cloudformation_template, test_utils::cfn_lint, to_yaml, CfExpression, CfParameter,
     CfRegistry, CfTemplate, CloudFormationOptions, CloudFormationTarget, ManagementTrustOptions,
+    RegistrationMode,
 };
 use alien_core::{
     KubernetesCluster, KubernetesClusterOwnership, KubernetesClusterProvider,
@@ -72,6 +74,7 @@ fn eks_stack() -> Stack {
 fn try_render(
     stack: &Stack,
     target: CloudFormationTarget,
+    registration: RegistrationMode,
     management_trust: ManagementTrustOptions,
 ) -> Result<CfTemplate> {
     let registry = CfRegistry::built_in();
@@ -88,7 +91,7 @@ fn try_render(
             .to_string(),
             setup_fingerprint: "test".to_string(),
             setup_fingerprint_version: 1,
-            registration: custom_resource_registration(),
+            registration,
             description: Some("management trust".to_string()),
             management_trust,
         },
@@ -100,9 +103,11 @@ fn try_render(
 fn render(
     stack: &Stack,
     target: CloudFormationTarget,
+    registration: RegistrationMode,
     management_trust: ManagementTrustOptions,
 ) -> CfTemplate {
-    let template = try_render(stack, target, management_trust).expect("template should render");
+    let template = try_render(stack, target, registration, management_trust)
+        .expect("template should render");
     let yaml = to_yaml(&template).expect("template should serialize");
     cfn_lint(&yaml).assert_ok("management trust");
     template
@@ -125,7 +130,9 @@ fn accepts(parameter: &CfParameter, value: Option<&str>) -> bool {
         (None, None) => return false,
     };
     let length = value.chars().count() as u32;
-    parameter.min_length.is_none_or(|min| length >= min)
+    parameter.allowed_values.as_ref().is_none_or(|values| {
+        values.contains(&CfExpression::from(value.clone()))
+    }) && parameter.min_length.is_none_or(|min| length >= min)
         && parameter.max_length.is_none_or(|max| length <= max)
         && parameter.allowed_pattern.as_deref().is_none_or(|pattern| {
             // CloudFormation requires the whole value to match.
@@ -141,10 +148,16 @@ fn a_required_external_id_refuses_every_install_or_update_without_the_value() {
         (managed_stack(), CloudFormationTarget::Aws),
         (eks_stack(), CloudFormationTarget::Eks),
     ] {
-        let open = render(&stack, target, ManagementTrustOptions::default());
+        let open = render(
+            &stack,
+            target,
+            custom_resource_registration(),
+            ManagementTrustOptions::default(),
+        );
         let required = render(
             &stack,
             target,
+            custom_resource_registration(),
             ManagementTrustOptions {
                 require_external_id: true,
                 allowed_managing_role_arns: Vec::new(),
@@ -180,53 +193,71 @@ fn a_required_external_id_refuses_every_install_or_update_without_the_value() {
     }
 }
 
+/// Registration modes that put `ManagingRoleArn` in a custom resource
+/// property and in JSON text in the stack outputs.
+fn registrations() -> [RegistrationMode; 2] {
+    [
+        custom_resource_registration(),
+        RegistrationMode::Both {
+            lambda_arn: "arn:aws:lambda:us-east-1:123456789012:function:register".to_string(),
+            callback_url: None,
+        },
+    ]
+}
+
 #[test]
 fn the_managing_role_must_be_one_of_the_listed_roles() {
     for (stack, target) in [
         (managed_stack(), CloudFormationTarget::Aws),
         (eks_stack(), CloudFormationTarget::Eks),
     ] {
-        let open = render(&stack, target, ManagementTrustOptions::default());
-        let restricted = render(&stack, target, hardened());
-        let parameter = &restricted.parameters[ROLE_ARN];
-
-        assert!(accepts(parameter, Some(CURRENT_ROLE)), "{target:?}");
-        assert!(
-            accepts(parameter, Some(PREVIOUS_ROLE)),
-            "{target:?}: stacks installed against the previous role must still update"
-        );
-        for candidate in [
-            None,
-            Some(""),
-            Some("arn:aws:iam::444455556666:role/deployment-management"),
-            Some("arn:aws:iam::111122223333:role/deployment-management-2"),
-            Some("arn:aws:iam::111122223333:role/xdeployment-management"),
-            Some("arn:aws:iam::111122223333:role/path/deployment-management"),
-            Some("arn:aws:iam::111122223333:user/deployment-management"),
-            // The '.' in the previous role's name must match only itself.
-            Some("arn:aws:iam::111122223333:role/opsXmanagement"),
-            Some("arn:aws:iam::111122223333:role/deployment-management|.*"),
-        ] {
-            assert!(
-                !accepts(parameter, candidate),
-                "{target:?}: {candidate:?} must be refused"
+        for registration in registrations() {
+            let open = render(
+                &stack,
+                target,
+                registration.clone(),
+                ManagementTrustOptions::default(),
             );
-        }
-        assert!(
-            parameter
-                .constraint_description
-                .as_deref()
-                .is_some_and(|text| text.contains(CURRENT_ROLE) && text.contains(PREVIOUS_ROLE)),
-            "the refusal names the roles to use: {:?}",
-            parameter.constraint_description
-        );
+            let restricted = render(&stack, target, registration.clone(), hardened());
+            let parameter = &restricted.parameters[ROLE_ARN];
+            let case = format!("{target:?} {registration:?}");
 
-        // Without the list any role ARN is still accepted.
-        assert!(accepts(
-            &open.parameters[ROLE_ARN],
-            Some("arn:aws:iam::444455556666:role/deployment-management")
-        ));
-        assert_eq!(open.resources, restricted.resources, "{target:?}");
+            assert!(accepts(parameter, Some(CURRENT_ROLE)), "{case}");
+            assert!(
+                accepts(parameter, Some(PREVIOUS_ROLE)),
+                "{case}: stacks installed against the previous role must still update"
+            );
+            for candidate in [
+                None,
+                Some(""),
+                Some("arn:aws:iam::444455556666:role/deployment-management"),
+                Some("arn:aws:iam::111122223333:role/deployment-management-2"),
+                Some("arn:aws:iam::111122223333:role/xdeployment-management"),
+                Some("arn:aws:iam::111122223333:role/path/deployment-management"),
+                Some("arn:aws:iam::111122223333:user/deployment-management"),
+                Some("arn:aws:iam::111122223333:role/opsXmanagement"),
+            ] {
+                assert!(
+                    !accepts(parameter, candidate),
+                    "{case}: {candidate:?} must be refused"
+                );
+            }
+            assert!(
+                parameter.constraint_description.as_deref().is_some_and(|text| {
+                    text.contains(CURRENT_ROLE) && text.contains(PREVIOUS_ROLE)
+                }),
+                "the refusal names the roles to use: {:?}",
+                parameter.constraint_description
+            );
+
+            // Without the list any role ARN is still accepted.
+            assert!(accepts(
+                &open.parameters[ROLE_ARN],
+                Some("arn:aws:iam::444455556666:role/deployment-management")
+            ));
+            assert_eq!(open.resources, restricted.resources, "{case}");
+            assert_eq!(open.outputs, restricted.outputs, "{case}");
+        }
     }
 }
 
@@ -244,6 +275,7 @@ fn a_listed_value_that_is_not_an_iam_role_arn_fails_the_render() {
         let error = try_render(
             &managed_stack(),
             CloudFormationTarget::Aws,
+            custom_resource_registration(),
             ManagementTrustOptions {
                 require_external_id: false,
                 allowed_managing_role_arns: vec![CURRENT_ROLE.to_string(), arn.to_string()],
