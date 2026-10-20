@@ -15,7 +15,7 @@
 //!        ALIEN_EXTERNAL_ID_LIVE_ROLE_ARN=<the stack's management role> \
 //!        ALIEN_EXTERNAL_ID_LIVE_VALUE=<the ManagementExternalId value> \
 //!        ALIEN_EXTERNAL_ID_LIVE_EXPECT=open|protected
-//! cargo test -p alien-infra --features aws --test aws_management_external_id_live -- --ignored --nocapture
+//! cargo test -p alien-infra --features all-platforms --test aws_management_external_id_live -- --ignored --nocapture
 //! ```
 //!
 //! It creates nothing; the stack is the caller's to create and delete.
