@@ -5,7 +5,8 @@ use tracing::{debug, info};
 use crate::core::kubernetes_errors::is_remote_resource_conflict;
 use crate::core::{
     delete_environment_secret, direct_monitoring_auth_headers, kubernetes_branded_resource_labels,
-    kubernetes_cleanup_resource_labels, kubernetes_runtime_pod_labels, pod_template_annotations,
+    kubernetes_cleanup_resource_labels, kubernetes_runtime_pod_labels, linked_bindings,
+    pod_template_annotations,
     projected_env_vars, reconcile_environment_secret_with_additional_secrets,
     EnvSecretRotationTracker, EnvironmentVariableBuilder, KubernetesEnvSecretPlan,
     ResourceController, ResourceControllerContext,
@@ -783,6 +784,46 @@ impl KubernetesContainerController {
                 }
             };
 
+            // A linked resource can change what its binding publishes without this container
+            // being updated, such as a sandbox reading its broker address again on its own Ready.
+            // Compare before replica health: a stale binding can be why a replica is unhealthy.
+            let live_pod_spec = match &workload {
+                KubernetesWorkload::Deployment(deployment) => deployment
+                    .spec
+                    .as_ref()
+                    .and_then(|spec| spec.template.spec.as_ref()),
+                KubernetesWorkload::StatefulSet(statefulset) => statefulset
+                    .spec
+                    .as_ref()
+                    .and_then(|spec| spec.template.spec.as_ref()),
+                _ => None,
+            };
+            if let Some(live) = linked_bindings::pod_template_env(
+                live_pod_spec,
+                &kubernetes_resource_name("", &config.id),
+            ) {
+                let drifted = linked_bindings::kubernetes_linked_binding_drift(
+                    ctx,
+                    &config.links,
+                    &config.id,
+                    live,
+                )
+                .await?;
+                if !drifted.is_empty() {
+                    // Names only: binding values can carry secrets.
+                    info!(
+                        container = %config.id,
+                        variables = ?drifted,
+                        reason = "linked binding drift",
+                        "Refreshing the container's linked bindings"
+                    );
+                    return Ok(HandlerAction::Continue {
+                        state: UpdateStart,
+                        suggested_delay: None,
+                    });
+                }
+            }
+
             if let (Some(ready_replicas), Some(replicas)) = (ready_replicas, replicas) {
                 if ready_replicas < replicas {
                     return Err(AlienError::new(ErrorData::ResourceDrift {
@@ -954,7 +995,17 @@ impl KubernetesContainerController {
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let kubernetes_config = ctx.get_kubernetes_config()?;
         let config = ctx.desired_resource_config::<Container>()?;
-        let previous = ctx.previous_resource_config::<Container>()?;
+        // A refresh started from Ready (gateway configuration, linked binding drift) can come
+        // before any planned update; the configuration in place is then the current one.
+        let previous = match ctx
+            .state
+            .resources
+            .get(ctx.desired_config.id())
+            .and_then(|resource| resource.previous_config.as_ref())
+        {
+            Some(_) => ctx.previous_resource_config::<Container>()?,
+            None => config,
+        };
         if previous
             .persistent_storage
             .as_ref()

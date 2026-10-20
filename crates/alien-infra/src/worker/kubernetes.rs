@@ -2,8 +2,8 @@ use std::time::Duration;
 use tracing::{debug, info};
 
 use crate::core::{
-    delete_environment_secret, kubernetes_cleanup_resource_labels, reconcile_environment_secret,
-    ResourceControllerContext,
+    delete_environment_secret, kubernetes_cleanup_resource_labels, linked_bindings,
+    reconcile_environment_secret, ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
 use crate::kubernetes_public_endpoint::{
@@ -25,7 +25,9 @@ use alien_macros::controller;
 use super::kubernetes_command_service::{
     delete_command_service, reconcile_command_service, reconcile_ready_command_service,
 };
-use super::kubernetes_deployment::{build_worker_deployment, kubernetes_namespace, worker_labels};
+use super::kubernetes_deployment::{
+    build_worker_deployment, kubernetes_namespace, worker_labels, WORKER_CONTAINER_NAME,
+};
 
 #[controller]
 pub struct KubernetesWorkerController {
@@ -358,6 +360,38 @@ impl KubernetesWorkerController {
                     message: format!("Failed to get deployment '{}'", deployment_name),
                     resource_id: Some(config.id.clone()),
                 })?;
+
+            // A linked resource can change what its binding publishes without this worker being
+            // updated, such as a sandbox reading its broker address again on its own Ready.
+            // Compare before replica health: a stale binding can be why a replica is unhealthy.
+            if let Some(live) = linked_bindings::pod_template_env(
+                deployment
+                    .spec
+                    .as_ref()
+                    .and_then(|spec| spec.template.spec.as_ref()),
+                WORKER_CONTAINER_NAME,
+            ) {
+                let drifted = linked_bindings::kubernetes_linked_binding_drift(
+                    ctx,
+                    &config.runtime_binding_links(),
+                    &config.id,
+                    live,
+                )
+                .await?;
+                if !drifted.is_empty() {
+                    // Names only: binding values can carry secrets.
+                    info!(
+                        worker = %config.id,
+                        variables = ?drifted,
+                        reason = "linked binding drift",
+                        "Refreshing the worker's linked bindings"
+                    );
+                    return Ok(HandlerAction::Continue {
+                        state: UpdateStart,
+                        suggested_delay: None,
+                    });
+                }
+            }
 
             if let Some(status) = deployment.status.clone() {
                 if let (Some(ready_replicas), Some(replicas)) =
