@@ -894,6 +894,21 @@ pub enum ErrorData {
         reason: String,
     },
 
+    /// The manager hosts local deployments but has not registered this deployment's queue
+    /// owner yet, e.g. a workload that outlived a manager restart calls before the first
+    /// reconciliation of its deployment.
+    #[error(
+        code = "LOCAL_QUEUE_OWNER_NOT_READY",
+        message = "Local queue owner for deployment '{deployment}' is not registered yet",
+        retryable = "true",
+        internal = "false",
+        http_status_code = 503
+    )]
+    LocalQueueOwnerNotReady {
+        /// Deployment whose queue owner is missing
+        deployment: String,
+    },
+
     /// The caller does not hold the credential for this local queue.
     #[error(
         code = "LOCAL_QUEUE_UNAUTHORIZED",

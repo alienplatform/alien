@@ -281,6 +281,8 @@ pub(crate) async fn serve(
 mod tests {
     use super::*;
     use crate::standalone_config::ManagerTomlConfig;
+    use alien_bindings::providers::queue::local_http::{Payload, Request};
+    use alien_core::Platform;
     use axum::{routing::get, Router};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpStream;
@@ -313,6 +315,70 @@ mod tests {
                 return text.into_owned();
             }
         }
+    }
+
+    /// Sends a well-formed queue request for a deployment with no registered owner to a real
+    /// manager listener and returns the HTTP status and JSON body (`Null` when empty).
+    async fn send_to_unowned_local_queue(targets: Vec<Platform>) -> (u16, serde_json::Value) {
+        let directory = tempfile::tempdir().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let config = ManagerConfig {
+            db_path: Some(directory.path().join("manager.db")),
+            state_dir: Some(directory.path().to_path_buf()),
+            targets,
+            disable_deployment_loop: true,
+            disable_heartbeat_loop: true,
+            response_signing_key: b"test-response-signing-key".to_vec(),
+            ..Default::default()
+        };
+        let server = AlienManager::builder(config)
+            .with_standalone_defaults(&ManagerTomlConfig::default())
+            .await
+            .unwrap()
+            .build()
+            .await
+            .unwrap();
+        let task = tokio::spawn(server.start_with_listener_and_shutdown(listener, pending()));
+        let response = reqwest::Client::new()
+            .post(format!("http://{addr}/v1/local/queues/dep-unowned/jobs"))
+            .bearer_auth("any-token")
+            .json(&Request::Send {
+                message: Payload::Text("hello".to_string()),
+            })
+            .send()
+            .await
+            .expect("manager should answer");
+        let status = response.status().as_u16();
+        let body = response.bytes().await.unwrap();
+        task.abort();
+        let body = if body.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&body).expect("error body should be JSON")
+        };
+        (status, body)
+    }
+
+    #[tokio::test]
+    async fn manager_without_local_deployments_does_not_serve_local_queues() {
+        let (status, body) = send_to_unowned_local_queue(vec![Platform::Aws]).await;
+        assert_eq!(status, 404, "unexpected body: {body}");
+        assert_eq!(body, serde_json::Value::Null);
+    }
+
+    #[tokio::test]
+    async fn local_manager_reports_unregistered_queue_owner_as_temporarily_unavailable() {
+        let (status, body) = send_to_unowned_local_queue(Vec::new()).await;
+        assert_eq!(status, 503, "unexpected body: {body}");
+        assert_eq!(body["code"], "LOCAL_QUEUE_OWNER_NOT_READY");
+        assert_eq!(body["retryable"], true);
+        assert!(
+            body["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("dep-unowned")),
+            "message should name the deployment: {body}"
+        );
     }
 
     #[tokio::test]

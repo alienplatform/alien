@@ -68,6 +68,14 @@ impl ManagerConfig {
         self.enable_local_log_ingest
     }
 
+    /// Whether this manager can reconcile `Local` platform deployments, and so own their
+    /// queues. Local deployments need a state directory and must not be filtered out by
+    /// `targets` (empty means every platform).
+    pub fn hosts_local_deployments(&self) -> bool {
+        self.state_dir.is_some()
+            && (self.targets.is_empty() || self.targets.contains(&Platform::Local))
+    }
+
     pub fn base_url(&self) -> String {
         self.base_url
             .clone()
