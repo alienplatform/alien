@@ -128,11 +128,19 @@ powers that can change IAM or deploy code using a workload identity:
   `RunInstances`, and IAM `PutRolePolicy` / `UpdateAssumeRolePolicy` changes.
   `PassRole` is a permission check, not a separate CloudTrail event; inspect the
   role in the compute API event. KMS decrypt alone does not authorize SSM reads.
-- GCP management retains project `setIamPolicy`, custom-role updates, and
-  project-level secret creation. Secret creation checks the parent project,
-  so IAM cannot exclude a requested slot name using a resource-name condition.
-  IAM changes can grant subsequent payload access. Admin Activity logs record
-  `SetIamPolicy`, `google.iam.admin.v1.UpdateRole`, and
+- GCP management, after a Terraform setup, holds no permission that changes
+  IAM in a way that reaches the secrets vaults: no project, service-account or
+  secret `setIamPolicy`, and no custom-role edits. It cannot grant itself a
+  read or make itself able to impersonate a workload. It keeps
+  `iam.serviceAccounts.actAs` to deploy workloads, the same class as AWS
+  `iam:PassRole`, and project-level secret creation. Secret creation checks
+  the parent project, so IAM cannot exclude a requested slot name using a
+  resource-name condition. Automatic setup grants every provision set,
+  including project `setIamPolicy` and custom-role updates, so there IAM
+  changes can grant subsequent payload access. A hard boundary for automatic
+  setup needs a customer-owned organization IAM deny policy:
+  `roles/iam.denyAdmin` cannot be granted on a project. Admin Activity logs
+  record `SetIamPolicy`, `google.iam.admin.v1.UpdateRole`, and
   `google.cloud.secretmanager.v1.SecretManagerService.CreateSecret`.
 - Azure management retains resource-group role-assignment writes and vault
   configuration powers. Those can grant payload access or change the vault's

@@ -127,9 +127,11 @@ impl StackMutation for SecretsVaultMutation {
         // see ManagementPermissionProfileMutation. A vault-scoped grant would make the
         // runtime write a policy onto its own management role, which is denied.
         //
-        // On AWS management only writes here: environment sync, the sandbox egress key and the
-        // gateway configuration are write-only, so the vendor-side identity cannot read the
-        // deployment's secrets back.
+        // On AWS, GCP and Azure management only writes here: environment sync, the AWS sandbox
+        // egress key and the gateway configuration are write-only, so the vendor-side identity
+        // cannot read the deployment's secrets back. GCP and Azure refuse internet sandboxes at
+        // plan time (`SandboxPlatformSupportCheck`), so no controller there reads this vault.
+        // Kubernetes keeps the read: its gateway controllers read the configuration back.
         if !(stack_state.platform == Platform::Aws
             && config.stack_settings.setup_management == alien_core::SetupManagement::Automatic)
         {
@@ -139,11 +141,14 @@ impl StackMutation for SecretsVaultMutation {
                         || entry.config.downcast_ref::<Daemon>().is_some())
                         && azure_resource_needs_vault(entry)
                 });
-            let aws = stack_state.platform == Platform::Aws;
+            let write_only = matches!(
+                stack_state.platform,
+                Platform::Aws | Platform::Gcp | Platform::Azure
+            );
             add_vault_permissions_to_management(
                 &mut stack,
                 secrets_vault_id,
-                !infrastructure_only && !aws,
+                !infrastructure_only && !write_only,
                 needs_certificates,
             )?;
         }
@@ -3183,6 +3188,87 @@ mod tests {
             let ManagementPermissions::Auto = repeated.permissions.management else {
                 panic!("database-client access must not change management grants without remote management");
             };
+        }
+    }
+
+    /// A GCP or Azure setup installed before management stopped reading the secrets vault
+    /// granted it `vault/data-read` there. Dropping that grant only narrows the identity, so a
+    /// release update runs without a setup rerun; adding it back would need setup again.
+    #[tokio::test]
+    async fn dropping_the_management_secrets_read_on_gcp_and_azure_needs_no_setup() {
+        for platform in [Platform::Gcp, Platform::Azure] {
+            let stack = Stack::new("secrets-read".to_string())
+                .add(
+                    Worker::new("api".to_string())
+                        .code(WorkerCode::Image {
+                            image: "test:latest".to_string(),
+                        })
+                        .permissions("execution".to_string())
+                        .build(),
+                    ResourceLifecycle::Live,
+                )
+                .add(
+                    RemoteStackManagement::new("remote-stack-management".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .permission(
+                    "execution",
+                    PermissionProfile::new().resource(SECRETS_VAULT_ID, ["vault/data-read"]),
+                )
+                .build();
+            let config = DeploymentConfig::builder()
+                .stack_settings(StackSettings::default())
+                .environment_variables(empty_env_snapshot())
+                .allow_frozen_changes(false)
+                .external_bindings(ExternalBindings::default())
+                .build();
+            let prepared = crate::runner::PreflightRunner::new()
+                .apply_mutations(stack, &StackState::new(platform), &config)
+                .await
+                .unwrap();
+            let ManagementPermissions::Extend(profile) = &prepared.permissions.management else {
+                panic!("{platform:?}: management profile")
+            };
+            let grants = &profile.0[SECRETS_VAULT_ID];
+            assert!(
+                grants.iter().all(|grant| grant.id() != "vault/data-read"),
+                "{platform:?}: management must not read the secrets vault: {grants:?}"
+            );
+            assert!(grants.iter().any(|grant| grant.id() == "vault/data-write"));
+            assert!(
+                prepared.permissions.profiles["execution"].0[SECRETS_VAULT_ID]
+                    .iter()
+                    .any(|grant| grant.id() == "vault/data-read")
+            );
+
+            let mut installed = prepared.clone();
+            let ManagementPermissions::Extend(profile) = &mut installed.permissions.management
+            else {
+                unreachable!("checked above")
+            };
+            profile
+                .0
+                .get_mut(SECRETS_VAULT_ID)
+                .unwrap()
+                .push(PermissionSetReference::from_name("vault/data-read"));
+
+            let narrowed = PermissionProfilesUnchangedCheck
+                .check_with_config(&installed, &prepared, &config)
+                .await
+                .unwrap();
+            assert!(
+                narrowed.errors.is_empty(),
+                "{platform:?}: {:?}",
+                narrowed.errors
+            );
+            let widened = PermissionProfilesUnchangedCheck
+                .check_with_config(&prepared, &installed, &config)
+                .await
+                .unwrap();
+            assert!(
+                !widened.errors.is_empty(),
+                "{platform:?}: a new read needs setup"
+            );
         }
     }
 }

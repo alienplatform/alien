@@ -655,8 +655,6 @@
             "pubsub.subscriptions.get",
             "pubsub.subscriptions.update",
             "storage.buckets.get",
-            "iam.serviceAccounts.getIamPolicy",
-            "iam.serviceAccounts.setIamPolicy",
             "compute.globalOperations.get",
             "compute.globalOperations.list",
             "compute.regionOperations.get",

@@ -271,6 +271,17 @@ impl GcpAiController {
             "ai",
             rm_client,
             |rm_client, desired_policy| async move {
+                // Every registered `ai/*` grant binds at project scope, which setup
+                // installs, so there is usually nothing to add here. Skip the project
+                // policy entirely then: management holds no project IAM write, which
+                // would let it grant itself any role in the project.
+                if desired_policy.bindings.is_empty() {
+                    info!(
+                        project = %project_id,
+                        "No resource-scoped Vertex AI bindings to apply"
+                    );
+                    return Ok(());
+                }
                 // Project-level IAM requires read-modify-write to avoid clobbering
                 // bindings owned by other controllers.
                 let current_policy = rm_client
@@ -507,7 +518,74 @@ impl GcpAiController {
 #[cfg(all(test, feature = "test-utils"))]
 mod tests {
     use super::*;
+    use crate::core::controller_test::SingleControllerExecutor;
+    use crate::service_account::GcpServiceAccountController;
+    use crate::MockPlatformServiceProvider;
+    use alien_core::permissions::PermissionProfile;
+    use alien_core::ServiceAccount;
+    use alien_gcp_clients::longrunning::Operation;
     use alien_gcp_clients::model_garden::{MockModelGardenApi, PublisherModelEulaAcceptance};
+    use alien_gcp_clients::resource_manager::MockResourceManagerApi;
+    use alien_gcp_clients::service_usage::MockServiceUsageApi;
+
+    /// A workload that invokes a Live AI resource. Every `ai/*` grant binds at project scope,
+    /// which setup installs, so creating the resource must not touch the project IAM policy:
+    /// the resource manager mock has no expectations and fails any read or write.
+    #[tokio::test]
+    async fn creating_a_live_ai_resource_leaves_project_iam_alone() {
+        let mut usage = MockServiceUsageApi::new();
+        usage
+            .expect_enable_service()
+            .returning(|_| Ok(Operation::default()));
+        let usage = Arc::new(usage);
+        let resource_manager = Arc::new(MockResourceManagerApi::new());
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_gcp_service_usage_client()
+            .returning(move |_| Ok(usage.clone()));
+        provider
+            .expect_get_gcp_resource_manager_client()
+            .returning(move |_| Ok(resource_manager.clone()));
+        let account = GcpServiceAccountController {
+            service_account_email: Some(
+                "test-execution-sa@test-project.iam.gserviceaccount.com".to_string(),
+            ),
+            ..Default::default()
+        };
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(Ai::new("llm".to_string()).build())
+            .controller(GcpAiController::default())
+            .platform(Platform::Gcp)
+            .service_provider(Arc::new(provider))
+            .permission_profile(
+                "execution",
+                PermissionProfile::new()
+                    .resource("llm", ["ai/invoke"])
+                    .global(["ai/invoke"]),
+            )
+            .with_dependency(
+                ServiceAccount::new("execution-sa".to_string()).build(),
+                account,
+            )
+            .build()
+            .await
+            .unwrap();
+
+        while executor
+            .internal_state::<GcpAiController>()
+            .is_some_and(|controller| {
+                matches!(
+                    controller.state,
+                    GcpAiState::CreateStart
+                        | GcpAiState::EnablingApi
+                        | GcpAiState::ApplyingResourcePermissions
+                )
+            })
+        {
+            executor.step().await.unwrap();
+        }
+        assert_ne!(executor.status(), ResourceStatus::ProvisionFailed);
+    }
 
     #[tokio::test]
     async fn distinguishes_first_party_models_from_unaccepted_publisher_terms() {

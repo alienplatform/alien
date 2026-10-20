@@ -28,11 +28,7 @@
     "gcp": [
       {
         "grant": {
-          "permissions": [
-            "serviceusage.services.enable",
-            "resourcemanager.projects.getIamPolicy",
-            "resourcemanager.projects.setIamPolicy"
-          ]
+          "permissions": ["serviceusage.services.enable"]
         },
         "binding": {
           "stack": { "scope": "projects/${projectName}" },
