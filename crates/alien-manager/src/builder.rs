@@ -622,6 +622,7 @@ impl AlienManagerBuilder {
             // Build registry routing table from configured providers.
             let mut routes = Vec::new();
             let mut sandbox_prefixes = Vec::new();
+            let mut legacy_prefixes = Vec::new();
 
             // Add target platform registries (ECR/GAR/ACR).
             for (platform, provider) in &target_bindings {
@@ -649,6 +650,27 @@ impl AlienManagerBuilder {
                             provider: provider.clone(),
                             binding_name: binding_name.to_string(),
                         });
+                        for legacy in ar.legacy_sandbox_repository_prefixes() {
+                            sandbox_prefixes.push(legacy.clone());
+                            push_legacy_route(
+                                &mut routes,
+                                &mut legacy_prefixes,
+                                legacy,
+                                *platform,
+                                provider,
+                                binding_name,
+                            );
+                        }
+                        for legacy in ar.legacy_repository_prefixes() {
+                            push_legacy_route(
+                                &mut routes,
+                                &mut legacy_prefixes,
+                                legacy,
+                                *platform,
+                                provider,
+                                binding_name,
+                            );
+                        }
                         break;
                     }
                 }
@@ -671,6 +693,16 @@ impl AlienManagerBuilder {
                     })?;
                 let prefix = ar.upstream_repository_prefix();
                 info!(prefix = %prefix, "Registered default artifact registry route");
+                for legacy in ar.legacy_repository_prefixes() {
+                    push_legacy_route(
+                        &mut routes,
+                        &mut legacy_prefixes,
+                        legacy,
+                        Platform::Local,
+                        &default_provider,
+                        "artifacts",
+                    );
+                }
                 routes.push(crate::routes::registry_proxy::RegistryRoute {
                     prefix,
                     platform: Platform::Local,
@@ -691,9 +723,10 @@ impl AlienManagerBuilder {
             }
 
             let routing_table = Arc::new(
-                crate::routes::registry_proxy::RegistryRoutingTable::with_sandbox_routes(
+                crate::routes::registry_proxy::RegistryRoutingTable::with_legacy_routes(
                     routes,
                     sandbox_prefixes,
+                    legacy_prefixes,
                 )
                 .map_err(|e| {
                     AlienError::new(ErrorData::ServerInitFailed {
@@ -813,6 +846,26 @@ fn storage_binding_platform(
         StorageBinding::Blob(_) => alien_core::Platform::Azure,
         StorageBinding::Local(_) => alien_core::Platform::Local,
     }
+}
+
+/// Registers a read-only route for a prefix the registry used before its current one.
+#[cfg(feature = "sqlite")]
+fn push_legacy_route(
+    routes: &mut Vec<crate::routes::registry_proxy::RegistryRoute>,
+    legacy_prefixes: &mut Vec<String>,
+    prefix: String,
+    platform: alien_core::Platform,
+    provider: &Arc<dyn alien_bindings::BindingsProviderApi>,
+    binding_name: &str,
+) {
+    info!(platform = %platform, prefix = %prefix, "Registered legacy artifact registry route");
+    legacy_prefixes.push(prefix.clone());
+    routes.push(crate::routes::registry_proxy::RegistryRoute {
+        prefix,
+        platform,
+        provider: provider.clone(),
+        binding_name: binding_name.to_string(),
+    });
 }
 
 /// Build the bindings provider for a cloud `[artifact-registry.default]`

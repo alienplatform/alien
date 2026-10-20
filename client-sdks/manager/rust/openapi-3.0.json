@@ -7541,6 +7541,20 @@
           "repositoryPrefix"
         ],
         "properties": {
+          "legacyRepositoryPrefixes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Repository prefixes this registry used before `repositoryPrefix`. Images already released\nunder them stay readable and keep their cross-account grants; nothing new is written there."
+          },
+          "legacySandboxRepositoryPrefixes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Sandbox namespaces this registry used before `sandboxRepositoryPrefix`, read the same way."
+          },
           "pullRoleArn": {
             "nullable": true,
             "description": "ARN of the IAM role for pull permissions (optional — omit for single-account)",
