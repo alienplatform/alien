@@ -106,8 +106,8 @@ fn render(
     registration: RegistrationMode,
     management_trust: ManagementTrustOptions,
 ) -> CfTemplate {
-    let template = try_render(stack, target, registration, management_trust)
-        .expect("template should render");
+    let template =
+        try_render(stack, target, registration, management_trust).expect("template should render");
     let yaml = to_yaml(&template).expect("template should serialize");
     cfn_lint(&yaml).assert_ok("management trust");
     template
@@ -130,9 +130,11 @@ fn accepts(parameter: &CfParameter, value: Option<&str>) -> bool {
         (None, None) => return false,
     };
     let length = value.chars().count() as u32;
-    parameter.allowed_values.as_ref().is_none_or(|values| {
-        values.contains(&CfExpression::from(value.clone()))
-    }) && parameter.min_length.is_none_or(|min| length >= min)
+    parameter
+        .allowed_values
+        .as_ref()
+        .is_none_or(|values| values.contains(&CfExpression::from(value.clone())))
+        && parameter.min_length.is_none_or(|min| length >= min)
         && parameter.max_length.is_none_or(|max| length <= max)
         && parameter.allowed_pattern.as_deref().is_none_or(|pattern| {
             // CloudFormation requires the whole value to match.
@@ -173,9 +175,15 @@ fn a_required_external_id_refuses_every_install_or_update_without_the_value() {
 
         for (value, case) in [
             (None, "a stack from before the parameter"),
-            (Some(""), "a stack left empty, updated with its existing value"),
+            (
+                Some(""),
+                "a stack left empty, updated with its existing value",
+            ),
             (Some(&ISSUED[..31]), "a value one character short"),
-            (Some(" 0123456789abcdef0123456789ABCDE"), "a value with a space"),
+            (
+                Some(" 0123456789abcdef0123456789ABCDE"),
+                "a value with a space",
+            ),
         ] {
             assert!(
                 !accepts(required_parameter, value),
@@ -243,9 +251,12 @@ fn the_managing_role_must_be_one_of_the_listed_roles() {
                 );
             }
             assert!(
-                parameter.constraint_description.as_deref().is_some_and(|text| {
-                    text.contains(CURRENT_ROLE) && text.contains(PREVIOUS_ROLE)
-                }),
+                parameter
+                    .constraint_description
+                    .as_deref()
+                    .is_some_and(|text| {
+                        text.contains(CURRENT_ROLE) && text.contains(PREVIOUS_ROLE)
+                    }),
                 "the refusal names the roles to use: {:?}",
                 parameter.constraint_description
             );
