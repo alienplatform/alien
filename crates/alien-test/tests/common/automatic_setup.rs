@@ -48,6 +48,10 @@ impl AutomaticSetup {
             .client()
             .create_deployment()
             .body(alien_manager_api::types::CreateDeploymentRequest {
+                base_platform: None,
+                pinned_release_id: None,
+                setup_handoff: Default::default(),
+                setup_method: None,
                 name: format!("automatic-{}", uuid::Uuid::new_v4().simple()),
                 platform: serde_json::from_value(serde_json::json!(platform))?,
                 deployment_group_id: Some(group.id.clone()),

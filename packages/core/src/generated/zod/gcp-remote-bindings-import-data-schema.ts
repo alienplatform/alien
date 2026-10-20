@@ -4,9 +4,13 @@
 */
 
 import * as z from "zod";
+import { GcpFederationAccessSchema } from "./gcp-federation-access-schema.js";
 
 export const GcpRemoteBindingsImportDataSchema = z.object({
-    "projectId": z.string(),
+    get "federation"(){
+                return GcpFederationAccessSchema.describe("Setup-owned federation access. Contains no assertions, keys or access tokens.")
+              },
+"projectId": z.string(),
 "serviceAccountEmail": z.string(),
 "serviceAccountUniqueId": z.string()
     })

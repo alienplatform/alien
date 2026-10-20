@@ -996,6 +996,10 @@ pub async fn deploy_test_app(
     info!(%resource_prefix, "Using E2E resource prefix");
 
     let create_body = alien_manager_api::types::CreateDeploymentRequest {
+        base_platform: None,
+        pinned_release_id: None,
+        setup_handoff: Default::default(),
+        setup_method: None,
         name: deployment_name.clone(),
         platform: api_platform,
         deployment_group_id: Some(group_id.to_string()),

@@ -94,16 +94,35 @@ impl GcpClientBase {
         }
 
         // Cache miss or expired – fetch a fresh token.
-        let token = self
-            .cfg
-            .get_bearer_token(self.svc_cfg.default_audience())
-            .await?;
+        let (token, cache_ttl) =
+            if matches!(&self.cfg.credentials, GcpCredentials::Federated { .. }) {
+                let minted = self.cfg.acquire_federated_token(&self.http).await?;
+                let remaining =
+                    (minted.expires_at - chrono::Utc::now())
+                        .to_std()
+                        .map_err(|_| {
+                            AlienError::new(ErrorData::InvalidClientConfig {
+                                message: "Federated target token expired during acquisition"
+                                    .to_string(),
+                                errors: None,
+                            })
+                        })?;
+                let margin = std::cmp::min(Duration::from_secs(60), remaining / 10);
+                (minted.token, remaining.saturating_sub(margin))
+            } else {
+                (
+                    self.cfg
+                        .get_bearer_token(self.svc_cfg.default_audience())
+                        .await?,
+                    TOKEN_CACHE_TTL,
+                )
+            };
 
         {
             let mut cache = self.token_cache.lock().await;
             *cache = Some(CachedToken {
                 token: token.clone(),
-                expires_at: Instant::now() + TOKEN_CACHE_TTL,
+                expires_at: Instant::now() + cache_ttl,
             });
         }
 

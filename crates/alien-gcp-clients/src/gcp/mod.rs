@@ -1,3 +1,5 @@
+mod federation;
+pub use federation::GcpFederatedAccessToken;
 pub mod agent_platform;
 pub mod api_client;
 pub mod artifactregistry;
@@ -14,6 +16,7 @@ pub mod firestore;
 pub mod gcp_request_utils;
 pub mod gcs;
 pub mod iam;
+mod iam_workload_identity;
 pub mod longrunning;
 pub mod model_garden;
 pub mod monitoring;
@@ -56,6 +59,10 @@ pub trait GcpClientConfigExt {
 
     /// Get bearer token for the given audience
     async fn get_bearer_token(&self, audience: &str) -> Result<String>;
+
+    /// Acquire a federated target token with its authoritative expiry.
+    /// The supplied HTTP client also applies to Google assertion and STS calls.
+    async fn acquire_federated_token(&self, http: &Client) -> Result<GcpFederatedAccessToken>;
 
     /// Generate an OAuth2 access token from service account credentials
     async fn generate_jwt_token(&self, service_account_json: &str) -> Result<String>;
@@ -306,6 +313,9 @@ impl GcpClientConfigExt for GcpClientConfig {
     async fn get_bearer_token(&self, _audience: &str) -> Result<String> {
         match &self.credentials {
             GcpCredentials::AccessToken { token } => Ok(token.clone()),
+            GcpCredentials::Federated { .. } => federation::exchange(self, &Client::new())
+                .await
+                .map(|minted| minted.token),
             GcpCredentials::ImpersonatedServiceAccount { source, config } => {
                 generate_impersonated_access_token(source, config)
                     .await
@@ -338,6 +348,10 @@ impl GcpClientConfigExt for GcpClientConfig {
                 refresh_token,
             } => Self::exchange_refresh_token(client_id, client_secret, refresh_token).await,
         }
+    }
+
+    async fn acquire_federated_token(&self, http: &Client) -> Result<GcpFederatedAccessToken> {
+        federation::exchange(self, http).await
     }
 
     /// Get service endpoint, checking for overrides first

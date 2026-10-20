@@ -16,6 +16,8 @@ export type ReleaseRolloutStateCounts = {
   updating: number;
   failed: number;
   pending: number;
+  waitingOnOwner: number;
+  waitingOnInputs: number;
   pinnedOther: number;
   superseded: number;
   onOther: number;
@@ -30,11 +32,15 @@ export const ReleaseRolloutStateCounts$inboundSchema: z.ZodType<
   updating: z.int(),
   failed: z.int(),
   pending: z.int(),
+  "waiting-on-owner": z.int(),
+  "waiting-on-inputs": z.int(),
   "pinned-other": z.int(),
   superseded: z.int(),
   "on-other": z.int(),
 }).transform((v) => {
   return remap$(v, {
+    "waiting-on-owner": "waitingOnOwner",
+    "waiting-on-inputs": "waitingOnInputs",
     "pinned-other": "pinnedOther",
     "on-other": "onOther",
   });

@@ -44,15 +44,15 @@ export type ListReleasesRequest = {
    */
   include?: Array<ListReleasesInclude> | undefined;
   /**
-   * Search releases by commit message, branch, SHA, or release ID
+   * Search releases by release ID or title, and by commit message, branch, SHA, or author when the caller can read source-control details
    */
   search?: string | null | undefined;
   /**
-   * Filter by git branch (commitRef)
+   * Filter by git branch (commitRef). Rejected for deployment and deployment-group tokens.
    */
   branch?: string | null | undefined;
   /**
-   * Filter by commit author login or name
+   * Filter by commit author login or name. Rejected for deployment and deployment-group tokens.
    */
   author?: string | null | undefined;
   /**

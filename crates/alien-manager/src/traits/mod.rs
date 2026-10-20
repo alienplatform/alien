@@ -32,8 +32,8 @@ pub use deployment_store::{
     CreateImportedDeploymentParams, DeploymentAcquireMode, DeploymentAcquireResult,
     DeploymentAcquireUnavailableReason, DeploymentFilter, DeploymentGroupRecord,
     DeploymentGroupSetup, DeploymentRecord, DeploymentStore, ReconcileData, ReconcileInput,
-    ReconcileInputBuilder, ReconcileOutcome, SuppliedStacks, UnacquiredDeployment,
-    UpdateImportedDeploymentParams,
+    ReconcileInputBuilder, ReconcileOutcome, SetupReservation, SuppliedStacks,
+    UnacquiredDeployment, UpdateImportedDeploymentParams,
 };
 pub use project_store::{ProjectRecord, ProjectStore};
 pub use release_channel_store::{

@@ -43,6 +43,9 @@ use super::{auth, AppState};
 #[serde(rename_all = "camelCase")]
 pub struct AcquireRequest {
     pub session: String,
+    /// Missing on protocol1 actors. Advertise the reader ceiling before taking ownership.
+    #[serde(default)]
+    pub max_supported_deployment_protocol_version: Option<u32>,
     #[serde(default)]
     pub deployment_ids: Option<Vec<String>>,
     #[serde(default)]
@@ -185,6 +188,9 @@ struct AgentSyncWireRequest {
     #[serde(flatten)]
     #[cfg_attr(feature = "openapi", schema(inline))]
     request: AgentSyncRequest,
+    /// Missing on actors that only understand protocol1.
+    #[serde(default)]
+    max_supported_deployment_protocol_version: Option<u32>,
     /// Exact immutable Operator image identity reported by the running process.
     #[serde(default)]
     operator_image: Option<OperatorImageReport>,
@@ -387,6 +393,14 @@ async fn acquire(
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
+    let supported_protocol = req
+        .max_supported_deployment_protocol_version
+        .unwrap_or(1)
+        .min(alien_core::MAX_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION);
+    if supported_protocol == 0 {
+        return ErrorData::bad_request("maxSupportedDeploymentProtocolVersion must be positive")
+            .into_response();
+    }
     // If the caller named specific deployments, fetch each and run
     // `Authz::can_acquire_deployments` over the slice. Workspace-scoped
     // callers (e.g., legacy admin tokens) can run with no id list — the
@@ -403,6 +417,14 @@ async fn acquire(
         if !state.authz.can_acquire_deployments(&subject, &deployments) {
             return ErrorData::forbidden("Access denied: cannot acquire these deployments")
                 .into_response();
+        }
+        if deployments
+            .iter()
+            .any(|deployment| deployment.deployment_protocol_version > supported_protocol)
+        {
+            return ErrorData::bad_request(
+                "This deployment requires a newer deployment protocol. Update the deployment CLI or manager before retrying.",
+            ).into_response();
         }
     } else if !matches!(subject.scope, crate::auth::Scope::Workspace) {
         return ErrorData::forbidden(
@@ -424,6 +446,7 @@ async fn acquire(
     let filter = DeploymentFilter {
         deployment_group_id: None,
         deployment_ids: req.deployment_ids,
+        max_deployment_protocol_version: Some(supported_protocol),
         statuses: req.statuses,
         platforms: req.platforms,
         setup_method: req.setup_method,
@@ -579,6 +602,14 @@ async fn reconcile(
             return ErrorData::bad_request("Invalid deployment state").into_response();
         }
     };
+
+    if deployment_state.protocol_version != deployment.deployment_protocol_version
+        || deployment_state.protocol_version > alien_core::MAX_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION
+    {
+        return ErrorData::bad_request(
+            "A deployment report must preserve its registered protocol version. Update the deployment actor or manager before retrying.",
+        ).into_response();
+    }
 
     // 1. Run registry access reconciliation (cross-account IAM grants).
     //    This must happen before persisting so the `registry_access_granted`
@@ -826,7 +857,7 @@ mod tests {
         deployment_state_from_record, deployment_target_release_id, management_platform,
         may_deliver_agent_target, preserve_recorded_gate_answers, release_stack_platform,
         should_ignore_agent_state_report, should_return_current_state_for_agent_sync,
-        validate_initialize_base_platform, AgentSyncRequest, AgentSyncWireRequest,
+        validate_kubernetes_base_platform, AgentSyncRequest, AgentSyncWireRequest,
         InitialDesiredRelease, InitializeRequest, ReconcileRequest, RunnerConfigSources,
     };
 
@@ -1201,20 +1232,20 @@ mod tests {
     #[test]
     fn initialize_accepts_cloud_base_platform_for_kubernetes() {
         assert_eq!(
-            validate_initialize_base_platform(Platform::Kubernetes, Some(Platform::Gcp)).unwrap(),
+            validate_kubernetes_base_platform(Platform::Kubernetes, Some(Platform::Gcp)).unwrap(),
             Some(Platform::Gcp)
         );
     }
 
     #[test]
     fn initialize_rejects_base_platform_for_non_kubernetes_platform() {
-        assert!(validate_initialize_base_platform(Platform::Aws, Some(Platform::Gcp)).is_err());
+        assert!(validate_kubernetes_base_platform(Platform::Aws, Some(Platform::Gcp)).is_err());
     }
 
     #[test]
     fn initialize_rejects_non_cloud_base_platform_for_kubernetes() {
         assert!(
-            validate_initialize_base_platform(Platform::Kubernetes, Some(Platform::Local)).is_err()
+            validate_kubernetes_base_platform(Platform::Kubernetes, Some(Platform::Local)).is_err()
         );
     }
 
@@ -1627,6 +1658,7 @@ mod tests {
 
     fn test_deployment_config() -> DeploymentConfig {
         DeploymentConfig {
+            gcp_federation_scope: None,
             stored_secret_input_ids: None,
             input_values: Default::default(),
             deployment_name: None,
@@ -1936,6 +1968,7 @@ async fn agent_sync(
     headers: HeaderMap,
     Json(AgentSyncWireRequest {
         request: req,
+        max_supported_deployment_protocol_version,
         operator_image,
         application,
         dynamic_containers,
@@ -1960,6 +1993,29 @@ async fn agent_sync(
     };
     if !state.authz.can_sync_deployment(&subject, &deployment) {
         return ErrorData::forbidden("Access denied").into_response();
+    }
+
+    let supported_protocol = max_supported_deployment_protocol_version
+        .unwrap_or(1)
+        .min(alien_core::MAX_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION);
+    if deployment.deployment_protocol_version > supported_protocol {
+        return ErrorData::bad_request(
+            "This deployment requires a newer deployment protocol. Update the deployment actor or manager before retrying.",
+        ).into_response();
+    }
+    if let Some(reported) = req.current_state.as_ref() {
+        let version = reported
+            .get("protocolVersion")
+            .and_then(serde_json::Value::as_u64);
+        if version
+            .is_some_and(|version| version != u64::from(deployment.deployment_protocol_version))
+            || (version.is_none() && deployment.deployment_protocol_version > 1)
+        {
+            return ErrorData::bad_request(
+                "A deployment report must preserve its registered protocol version",
+            )
+            .into_response();
+        }
     }
 
     if let Some(operator_image) = &operator_image {
@@ -2163,6 +2219,7 @@ async fn agent_sync(
             name: None,
             deployment_ids: Some(vec![req.deployment_id.clone()]),
             excluded_deployment_ids: Vec::new(),
+            max_deployment_protocol_version: Some(supported_protocol),
             statuses: Some(vec![deployment.status.clone()]),
             platforms: Some(vec![deployment.platform]),
             setup_method: None,
@@ -2609,7 +2666,7 @@ fn management_platform(platform: Platform, base_platform: Option<Platform>) -> P
     base_platform.unwrap_or(platform)
 }
 
-fn validate_initialize_base_platform(
+pub(crate) fn validate_kubernetes_base_platform(
     platform: Platform,
     base_platform: Option<Platform>,
 ) -> std::result::Result<Option<Platform>, alien_error::AlienError<ErrorData>> {
@@ -2946,7 +3003,7 @@ async fn initialize(
                 }
                 None => None,
             };
-            let base_platform = match validate_initialize_base_platform(platform, req.base_platform)
+            let base_platform = match validate_kubernetes_base_platform(platform, req.base_platform)
             {
                 Ok(base_platform) => base_platform,
                 Err(e) => return e.into_response(),
@@ -3075,7 +3132,10 @@ async fn initialize(
                     &subject,
                     CreateDeploymentParams {
                         deployment_protocol_version:
-                            alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                            alien_core::deployment_protocol_version_for_platform(
+                                platform,
+                                base_platform,
+                            ),
                         name,
                         deployment_group_id: dg_id.clone(),
                         platform,

@@ -11,7 +11,7 @@ let value: DeploymentUpdateState = {
   active: null,
   next: {
     id: "duop_0vtxpb1sw4sbcdwg2xo37q6",
-    status: "blocked",
+    status: "applying",
     reasons: [],
     targetReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
     changedKeys: [
@@ -19,7 +19,12 @@ let value: DeploymentUpdateState = {
       "<value 2>",
       "<value 3>",
     ],
-    requestedAt: new Date("2025-05-23T02:17:08.731Z"),
+    cause: {
+      kind: "volume-restore",
+      at: new Date("2024-04-20T16:58:36.345Z"),
+      releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+    },
+    requestedAt: new Date("2025-07-21T11:59:25.062Z"),
   },
   latest: null,
 };

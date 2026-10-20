@@ -453,8 +453,13 @@ impl TestManager {
             Platform::Gcp => {
                 let mgmt = config.gcp_mgmt.as_ref()?;
                 let email = mgmt.management_identity_email.as_ref()?;
+                let subject = mgmt.management_identity_unique_id.as_ref()?;
                 Some(alien_core::ManagementConfig::Gcp(
                     alien_core::GcpManagementConfig {
+                        federation_trust: Some(alien_core::GcpFederationTrust {
+                            issuer: "https://accounts.google.com".to_string(),
+                            subject: subject.clone(),
+                        }),
                         service_account_email: email.clone(),
                     },
                 ))

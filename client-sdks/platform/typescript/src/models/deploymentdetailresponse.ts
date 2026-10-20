@@ -12,6 +12,8 @@ import { Result as SafeParseResult } from "../types/fp.js";
 import {
   DeploymentDetailResponseBasePlatform,
   DeploymentDetailResponseBasePlatform$inboundSchema,
+  DeploymentDetailResponseCredentialRetryUnion,
+  DeploymentDetailResponseCredentialRetryUnion$inboundSchema,
   DeploymentDetailResponseDeployerSecret,
   DeploymentDetailResponseDeployerSecret$inboundSchema,
   DeploymentDetailResponseEnvironmentInfoUnion,
@@ -26,17 +28,17 @@ import {
   DeploymentDetailResponseStackState$inboundSchema,
   DeploymentDetailResponseStatus,
   DeploymentDetailResponseStatus$inboundSchema,
-} from "./deploymentdetailresponsependingpreparedstackdefaultunion.js";
+} from "./deploymentdetailresponsependingpreparedstackdefaultstringlist.js";
 import {
   DeploymentDetailResponsePendingPreparedStackUnion,
   DeploymentDetailResponsePendingPreparedStackUnion$inboundSchema,
+  DeploymentDetailResponsePreparedStackApprovalPlugins,
+  DeploymentDetailResponsePreparedStackApprovalPlugins$inboundSchema,
   DeploymentDetailResponsePreparedStackCustom,
   DeploymentDetailResponsePreparedStackCustom$inboundSchema,
   DeploymentDetailResponsePreparedStackInput,
   DeploymentDetailResponsePreparedStackInput$inboundSchema,
-  DeploymentDetailResponsePreparedStackPlugins,
-  DeploymentDetailResponsePreparedStackPlugins$inboundSchema,
-} from "./deploymentdetailresponsepreparedstackplugins.js";
+} from "./deploymentdetailresponsepreparedstackapprovalplugins.js";
 import {
   DeploymentGroupInfo,
   DeploymentGroupInfo$inboundSchema,
@@ -78,6 +80,83 @@ import {
   ReportedOperation,
   ReportedOperation$inboundSchema,
 } from "./reportedoperation.js";
+
+/**
+ * Whether matching operations run without approval.
+ */
+export const DeploymentDetailResponsePreparedStackApprovalPluginsEnum = {
+  Auto: "auto",
+  Manual: "manual",
+} as const;
+/**
+ * Whether matching operations run without approval.
+ */
+export type DeploymentDetailResponsePreparedStackApprovalPluginsEnum =
+  ClosedEnum<typeof DeploymentDetailResponsePreparedStackApprovalPluginsEnum>;
+
+/**
+ * Approval rule for the operations a pattern matches.
+ */
+export type DeploymentDetailResponsePreparedStackPluginsApprovalUnion =
+  | DeploymentDetailResponsePreparedStackApprovalPlugins
+  | DeploymentDetailResponsePreparedStackApprovalPluginsEnum;
+
+export type DeploymentDetailResponsePreparedStackSettingsPlugins3 = {
+  /**
+   * Environment variable name.
+   */
+  env: string;
+};
+
+export type DeploymentDetailResponsePreparedStackSettingsPlugins2 = {
+  /**
+   * Resource ids in the same stack.
+   */
+  resources: Array<string>;
+};
+
+export type DeploymentDetailResponsePreparedStackSettingsPlugins1 = {
+  /**
+   * Stack input id.
+   */
+  input: string;
+};
+
+/**
+ * Value of one plugin setting.
+ */
+export type DeploymentDetailResponsePreparedStackPluginsSettingsUnion =
+  | DeploymentDetailResponsePreparedStackSettingsPlugins1
+  | DeploymentDetailResponsePreparedStackSettingsPlugins2
+  | DeploymentDetailResponsePreparedStackSettingsPlugins3
+  | string;
+
+/**
+ * Settings and approval rules for one plugin.
+ */
+export type DeploymentDetailResponsePreparedStackPlugins = {
+  /**
+   * Approval rule per operation: an operation name, or `*` for all of them.
+   *
+   * @remarks
+   * Operations no rule matches need approval.
+   */
+  approval?: {
+    [k: string]:
+      | DeploymentDetailResponsePreparedStackApprovalPlugins
+      | DeploymentDetailResponsePreparedStackApprovalPluginsEnum;
+  } | undefined;
+  /**
+   * Values for the settings the plugin's manifest declares.
+   */
+  settings?: {
+    [k: string]:
+      | DeploymentDetailResponsePreparedStackSettingsPlugins1
+      | DeploymentDetailResponsePreparedStackSettingsPlugins2
+      | DeploymentDetailResponsePreparedStackSettingsPlugins3
+      | string;
+  } | undefined;
+};
 
 /**
  * Operations declared by a stack, or by an Operator installed on its own.
@@ -1577,6 +1656,13 @@ export type DeploymentDetailResponseRuntimeMetadata = {
    */
   automaticSetup?: boolean | undefined;
   /**
+   * Bounded credential retry state shared by all deployment drivers.
+   */
+  credentialRetry?:
+    | DeploymentDetailResponseCredentialRetryUnion
+    | null
+    | undefined;
+  /**
    * Whether each vault-native deployer secret is in the customer's secret
    *
    * @remarks
@@ -1984,7 +2070,12 @@ export type DeploymentDetailResponse = {
    * A customer encryption key is unavailable. Dependent resources are preserved until access returns.
    */
   customerKeyUnavailable?: boolean | undefined;
+  /**
+   * Time of the last accepted runtime checkpoint or heartbeat; absent before registration.
+   */
+  resourceObservedAt?: Date | null | undefined;
   release?: DeploymentReleaseInfo | null | undefined;
+  desiredRelease?: DeploymentReleaseInfo | null | undefined;
   deploymentGroup?: DeploymentGroupInfo | undefined;
   project?: DeploymentProjectInfo | undefined;
   /**
@@ -1994,6 +2085,181 @@ export type DeploymentDetailResponse = {
 };
 
 /** @internal */
+export const DeploymentDetailResponsePreparedStackApprovalPluginsEnum$inboundSchema:
+  z.ZodEnum<typeof DeploymentDetailResponsePreparedStackApprovalPluginsEnum> = z
+    .enum(DeploymentDetailResponsePreparedStackApprovalPluginsEnum);
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackPluginsApprovalUnion$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePreparedStackPluginsApprovalUnion,
+    unknown
+  > = z.union([
+    DeploymentDetailResponsePreparedStackApprovalPlugins$inboundSchema,
+    DeploymentDetailResponsePreparedStackApprovalPluginsEnum$inboundSchema,
+  ]);
+
+export function deploymentDetailResponsePreparedStackPluginsApprovalUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackPluginsApprovalUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackPluginsApprovalUnion$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackPluginsApprovalUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackSettingsPlugins3$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackSettingsPlugins3, unknown> = z
+    .object({
+      env: z.string(),
+    });
+
+export function deploymentDetailResponsePreparedStackSettingsPlugins3FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackSettingsPlugins3,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackSettingsPlugins3$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackSettingsPlugins3' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackSettingsPlugins2$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackSettingsPlugins2, unknown> = z
+    .object({
+      resources: z.array(z.string()),
+    });
+
+export function deploymentDetailResponsePreparedStackSettingsPlugins2FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackSettingsPlugins2,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackSettingsPlugins2$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackSettingsPlugins2' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackSettingsPlugins1$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackSettingsPlugins1, unknown> = z
+    .object({
+      input: z.string(),
+    });
+
+export function deploymentDetailResponsePreparedStackSettingsPlugins1FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackSettingsPlugins1,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackSettingsPlugins1$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackSettingsPlugins1' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackPluginsSettingsUnion$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePreparedStackPluginsSettingsUnion,
+    unknown
+  > = z.union([
+    z.lazy(() =>
+      DeploymentDetailResponsePreparedStackSettingsPlugins1$inboundSchema
+    ),
+    z.lazy(() =>
+      DeploymentDetailResponsePreparedStackSettingsPlugins2$inboundSchema
+    ),
+    z.lazy(() =>
+      DeploymentDetailResponsePreparedStackSettingsPlugins3$inboundSchema
+    ),
+    z.string(),
+  ]);
+
+export function deploymentDetailResponsePreparedStackPluginsSettingsUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackPluginsSettingsUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackPluginsSettingsUnion$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackPluginsSettingsUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackPlugins$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackPlugins, unknown> = z.object({
+    approval: z.record(
+      z.string(),
+      z.union([
+        DeploymentDetailResponsePreparedStackApprovalPlugins$inboundSchema,
+        DeploymentDetailResponsePreparedStackApprovalPluginsEnum$inboundSchema,
+      ]),
+    ).optional(),
+    settings: z.record(
+      z.string(),
+      z.union([
+        z.lazy(() =>
+          DeploymentDetailResponsePreparedStackSettingsPlugins1$inboundSchema
+        ),
+        z.lazy(() =>
+          DeploymentDetailResponsePreparedStackSettingsPlugins2$inboundSchema
+        ),
+        z.lazy(() =>
+          DeploymentDetailResponsePreparedStackSettingsPlugins3$inboundSchema
+        ),
+        z.string(),
+      ]),
+    ).optional(),
+  });
+
+export function deploymentDetailResponsePreparedStackPluginsFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackPlugins,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackPlugins$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackPlugins' from JSON`,
+  );
+}
+
+/** @internal */
 export const DeploymentDetailResponsePreparedStackOperations$inboundSchema:
   z.ZodType<DeploymentDetailResponsePreparedStackOperations, unknown> = z
     .object({
@@ -2001,7 +2267,9 @@ export const DeploymentDetailResponsePreparedStackOperations$inboundSchema:
         .optional(),
       plugins: z.record(
         z.string(),
-        DeploymentDetailResponsePreparedStackPlugins$inboundSchema,
+        z.lazy(() =>
+          DeploymentDetailResponsePreparedStackPlugins$inboundSchema
+        ),
       ).optional(),
     });
 
@@ -4366,6 +4634,9 @@ export const DeploymentDetailResponseRuntimeMetadata$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   automaticSetup: z.boolean().optional(),
+  credentialRetry: z.nullable(
+    DeploymentDetailResponseCredentialRetryUnion$inboundSchema,
+  ).optional(),
   deployerSecrets: z.array(DeploymentDetailResponseDeployerSecret$inboundSchema)
     .optional(),
   directSetupRevision: z.nullable(z.string()).optional(),
@@ -4568,7 +4839,11 @@ export const DeploymentDetailResponse$inboundSchema: z.ZodType<
   managerId: z.string(),
   workspaceId: z.string(),
   customerKeyUnavailable: z.boolean().optional(),
+  resourceObservedAt: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
   release: z.nullable(DeploymentReleaseInfo$inboundSchema).optional(),
+  desiredRelease: z.nullable(DeploymentReleaseInfo$inboundSchema).optional(),
   deploymentGroup: DeploymentGroupInfo$inboundSchema.optional(),
   project: DeploymentProjectInfo$inboundSchema.optional(),
   operatorSync: z.nullable(z.lazy(() => OperatorSync$inboundSchema)).optional(),

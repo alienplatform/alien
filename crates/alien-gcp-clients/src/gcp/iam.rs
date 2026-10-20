@@ -1,4 +1,6 @@
 use crate::gcp::api_client::{GcpClientBase, GcpServiceConfig};
+pub use crate::gcp::iam_workload_identity::*;
+use crate::gcp::longrunning::Operation;
 use crate::gcp::GcpClientConfig;
 use alien_client_core::Result;
 use bon::Builder;
@@ -120,6 +122,65 @@ pub trait IamApi: Send + Sync + Debug {
         service_account_name: String,
         request: GenerateAccessTokenRequest,
     ) -> Result<GenerateAccessTokenResponse>;
+
+    async fn create_workload_identity_pool(
+        &self,
+        pool_id: String,
+        pool: WorkloadIdentityPool,
+    ) -> Result<Operation>;
+
+    async fn get_workload_identity_pool(&self, pool_id: String) -> Result<WorkloadIdentityPool>;
+
+    async fn update_workload_identity_pool(
+        &self,
+        pool_id: String,
+        pool: WorkloadIdentityPool,
+    ) -> Result<Operation>;
+
+    async fn delete_workload_identity_pool(&self, pool_id: String) -> Result<Operation>;
+
+    async fn undelete_workload_identity_pool(&self, pool_id: String) -> Result<Operation>;
+
+    async fn create_workload_identity_provider(
+        &self,
+        pool_id: String,
+        provider_id: String,
+        provider: WorkloadIdentityPoolProvider,
+    ) -> Result<Operation>;
+
+    async fn get_workload_identity_provider(
+        &self,
+        pool_id: String,
+        provider_id: String,
+    ) -> Result<WorkloadIdentityPoolProvider>;
+
+    async fn update_workload_identity_provider(
+        &self,
+        pool_id: String,
+        provider_id: String,
+        provider: WorkloadIdentityPoolProvider,
+    ) -> Result<Operation>;
+
+    async fn delete_workload_identity_provider(
+        &self,
+        pool_id: String,
+        provider_id: String,
+    ) -> Result<Operation>;
+
+    async fn undelete_workload_identity_provider(
+        &self,
+        pool_id: String,
+        provider_id: String,
+    ) -> Result<Operation>;
+
+    async fn get_workload_identity_operation(&self, operation_name: String) -> Result<Operation>;
+
+    /// Generate a Google-issued OIDC assertion for a specific audience.
+    async fn generate_id_token(
+        &self,
+        service_account_name: String,
+        request: GenerateIdTokenRequest,
+    ) -> Result<GenerateIdTokenResponse>;
 }
 
 // --- IAM Client ---
@@ -461,6 +522,227 @@ impl IamApi for IamClient {
             )
             .await
     }
+
+    async fn generate_id_token(
+        &self,
+        service_account_name: String,
+        request: GenerateIdTokenRequest,
+    ) -> Result<GenerateIdTokenResponse> {
+        let encoded_name = urlencoding::encode(&service_account_name);
+        let path = format!("projects/-/serviceAccounts/{encoded_name}:generateIdToken");
+        self.credentials_base
+            .execute_request(
+                Method::POST,
+                &path,
+                None,
+                Some(request),
+                &service_account_name,
+            )
+            .await
+    }
+    async fn create_workload_identity_pool(
+        &self,
+        pool_id: String,
+        pool: WorkloadIdentityPool,
+    ) -> Result<Operation> {
+        let path = format!(
+            "projects/{}/locations/global/workloadIdentityPools",
+            self.project_id
+        );
+        self.base
+            .execute_request_once(
+                Method::POST,
+                &path,
+                Some(vec![("workloadIdentityPoolId", pool_id.clone())]),
+                Some(pool),
+                &pool_id,
+            )
+            .await
+    }
+
+    async fn get_workload_identity_pool(&self, pool_id: String) -> Result<WorkloadIdentityPool> {
+        let path = format!(
+            "projects/{}/locations/global/workloadIdentityPools/{}",
+            self.project_id,
+            urlencoding::encode(&pool_id)
+        );
+        self.base
+            .execute_request(Method::GET, &path, None, Option::<()>::None, &pool_id)
+            .await
+    }
+
+    async fn update_workload_identity_pool(
+        &self,
+        pool_id: String,
+        pool: WorkloadIdentityPool,
+    ) -> Result<Operation> {
+        let path = format!(
+            "projects/{}/locations/global/workloadIdentityPools/{}",
+            self.project_id,
+            urlencoding::encode(&pool_id)
+        );
+        self.base
+            .execute_request_once(
+                Method::PATCH,
+                &path,
+                Some(vec![("updateMask", "disabled".to_string())]),
+                Some(pool),
+                &pool_id,
+            )
+            .await
+    }
+
+    async fn delete_workload_identity_pool(&self, pool_id: String) -> Result<Operation> {
+        let path = format!(
+            "projects/{}/locations/global/workloadIdentityPools/{}",
+            self.project_id,
+            urlencoding::encode(&pool_id)
+        );
+        self.base
+            .execute_request_once(Method::DELETE, &path, None, Option::<()>::None, &pool_id)
+            .await
+    }
+
+    async fn undelete_workload_identity_pool(&self, pool_id: String) -> Result<Operation> {
+        let path = format!(
+            "projects/{}/locations/global/workloadIdentityPools/{}",
+            self.project_id,
+            urlencoding::encode(&pool_id)
+        ) + ":undelete";
+        self.base
+            .execute_request_once(
+                Method::POST,
+                &path,
+                None,
+                Some(serde_json::json!({})),
+                &pool_id,
+            )
+            .await
+    }
+
+    async fn create_workload_identity_provider(
+        &self,
+        pool_id: String,
+        provider_id: String,
+        provider: WorkloadIdentityPoolProvider,
+    ) -> Result<Operation> {
+        let path = format!(
+            "projects/{}/locations/global/workloadIdentityPools/{}",
+            self.project_id,
+            urlencoding::encode(&pool_id)
+        ) + "/providers";
+        self.base
+            .execute_request_once(
+                Method::POST,
+                &path,
+                Some(vec![(
+                    "workloadIdentityPoolProviderId",
+                    provider_id.clone(),
+                )]),
+                Some(provider),
+                &provider_id,
+            )
+            .await
+    }
+
+    async fn get_workload_identity_provider(
+        &self,
+        pool_id: String,
+        provider_id: String,
+    ) -> Result<WorkloadIdentityPoolProvider> {
+        let path = format!(
+            "projects/{}/locations/global/workloadIdentityPools/{}/providers/{}",
+            self.project_id,
+            urlencoding::encode(&pool_id),
+            urlencoding::encode(&provider_id)
+        );
+        self.base
+            .execute_request(Method::GET, &path, None, Option::<()>::None, &provider_id)
+            .await
+    }
+
+    async fn update_workload_identity_provider(
+        &self,
+        pool_id: String,
+        provider_id: String,
+        provider: WorkloadIdentityPoolProvider,
+    ) -> Result<Operation> {
+        let path = format!(
+            "projects/{}/locations/global/workloadIdentityPools/{}/providers/{}",
+            self.project_id,
+            urlencoding::encode(&pool_id),
+            urlencoding::encode(&provider_id)
+        );
+        self.base
+            .execute_request_once(
+                Method::PATCH,
+                &path,
+                Some(vec![(
+                    "updateMask",
+                    "oidc,attribute_mapping,attribute_condition,disabled".to_string(),
+                )]),
+                Some(provider),
+                &provider_id,
+            )
+            .await
+    }
+
+    async fn delete_workload_identity_provider(
+        &self,
+        pool_id: String,
+        provider_id: String,
+    ) -> Result<Operation> {
+        let path = format!(
+            "projects/{}/locations/global/workloadIdentityPools/{}/providers/{}",
+            self.project_id,
+            urlencoding::encode(&pool_id),
+            urlencoding::encode(&provider_id)
+        );
+        self.base
+            .execute_request_once(
+                Method::DELETE,
+                &path,
+                None,
+                Option::<()>::None,
+                &provider_id,
+            )
+            .await
+    }
+
+    async fn undelete_workload_identity_provider(
+        &self,
+        pool_id: String,
+        provider_id: String,
+    ) -> Result<Operation> {
+        let path = format!(
+            "projects/{}/locations/global/workloadIdentityPools/{}/providers/{}",
+            self.project_id,
+            urlencoding::encode(&pool_id),
+            urlencoding::encode(&provider_id)
+        ) + ":undelete";
+        self.base
+            .execute_request_once(
+                Method::POST,
+                &path,
+                None,
+                Some(serde_json::json!({})),
+                &provider_id,
+            )
+            .await
+    }
+
+    async fn get_workload_identity_operation(&self, operation_name: String) -> Result<Operation> {
+        let path = operation_name.clone();
+        self.base
+            .execute_request(
+                Method::GET,
+                &path,
+                None,
+                Option::<()>::None,
+                &operation_name,
+            )
+            .await
+    }
 }
 
 // --- Data Structures ---
@@ -695,4 +977,28 @@ pub struct GenerateAccessTokenResponse {
 
     /// The expiration time of the access token in RFC3339 format.
     pub expire_time: String,
+}
+
+/// Request a Google-issued identity assertion without adding email claims.
+/// https://cloud.google.com/iam/docs/reference/credentials/rest/v1/projects.serviceAccounts/generateIdToken
+#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct GenerateIdTokenRequest {
+    /// Exact recipient of the assertion.
+    pub audience: String,
+}
+
+/// Short-lived Google-issued identity assertion. Never log the token.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GenerateIdTokenResponse {
+    pub token: String,
+}
+
+impl Debug for GenerateIdTokenResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GenerateIdTokenResponse")
+            .field("token", &"[REDACTED]")
+            .finish()
+    }
 }

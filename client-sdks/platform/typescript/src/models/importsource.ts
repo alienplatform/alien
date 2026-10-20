@@ -1278,6 +1278,24 @@ export type ImportSourceManagementConfigAzure = {
   platform: ImportSourcePlatformAzure;
 };
 
+/**
+ * The exact manager identity trusted by a deployment-owned identity pool.
+ */
+export type ImportSourceFederationTrust = {
+  /**
+   * OIDC issuer; Google or the manager's Kubernetes issuer.
+   */
+  issuer: string;
+  /**
+   * Exact immutable Google account ID or Kubernetes service-account subject.
+   */
+  subject: string;
+};
+
+export type ImportSourceFederationTrustUnion =
+  | ImportSourceFederationTrust
+  | string;
+
 export const ImportSourcePlatformGcp = {
   Gcp: "gcp",
 } as const;
@@ -1289,8 +1307,9 @@ export type ImportSourcePlatformGcp = ClosedEnum<
  * GCP management configuration extracted from stack settings
  */
 export type ImportSourceManagementConfigGcp = {
+  federationTrust?: ImportSourceFederationTrust | string | null | undefined;
   /**
-   * Service account email for management roles
+   * Linked source account metadata; never a direct target trust grant.
    */
   serviceAccountEmail: string;
   platform: ImportSourcePlatformGcp;
@@ -3866,12 +3885,66 @@ export function importSourceManagementConfigAzureToJSON(
 }
 
 /** @internal */
+export type ImportSourceFederationTrust$Outbound = {
+  issuer: string;
+  subject: string;
+};
+
+/** @internal */
+export const ImportSourceFederationTrust$outboundSchema: z.ZodType<
+  ImportSourceFederationTrust$Outbound,
+  ImportSourceFederationTrust
+> = z.object({
+  issuer: z.string(),
+  subject: z.string(),
+});
+
+export function importSourceFederationTrustToJSON(
+  importSourceFederationTrust: ImportSourceFederationTrust,
+): string {
+  return JSON.stringify(
+    ImportSourceFederationTrust$outboundSchema.parse(
+      importSourceFederationTrust,
+    ),
+  );
+}
+
+/** @internal */
+export type ImportSourceFederationTrustUnion$Outbound =
+  | ImportSourceFederationTrust$Outbound
+  | string;
+
+/** @internal */
+export const ImportSourceFederationTrustUnion$outboundSchema: z.ZodType<
+  ImportSourceFederationTrustUnion$Outbound,
+  ImportSourceFederationTrustUnion
+> = z.union([
+  z.lazy(() => ImportSourceFederationTrust$outboundSchema),
+  z.string(),
+]);
+
+export function importSourceFederationTrustUnionToJSON(
+  importSourceFederationTrustUnion: ImportSourceFederationTrustUnion,
+): string {
+  return JSON.stringify(
+    ImportSourceFederationTrustUnion$outboundSchema.parse(
+      importSourceFederationTrustUnion,
+    ),
+  );
+}
+
+/** @internal */
 export const ImportSourcePlatformGcp$outboundSchema: z.ZodEnum<
   typeof ImportSourcePlatformGcp
 > = z.enum(ImportSourcePlatformGcp);
 
 /** @internal */
 export type ImportSourceManagementConfigGcp$Outbound = {
+  federationTrust?:
+    | ImportSourceFederationTrust$Outbound
+    | string
+    | null
+    | undefined;
   serviceAccountEmail: string;
   platform: string;
 };
@@ -3881,6 +3954,12 @@ export const ImportSourceManagementConfigGcp$outboundSchema: z.ZodType<
   ImportSourceManagementConfigGcp$Outbound,
   ImportSourceManagementConfigGcp
 > = z.object({
+  federationTrust: z.nullable(
+    z.union([
+      z.lazy(() => ImportSourceFederationTrust$outboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
   serviceAccountEmail: z.string(),
   platform: ImportSourcePlatformGcp$outboundSchema,
 });

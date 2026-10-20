@@ -23,6 +23,24 @@ export type ManagerManagementConfigsAws = {
   platform: ManagerManagementConfigsPlatformAws;
 };
 
+/**
+ * The exact manager identity trusted by a deployment-owned identity pool.
+ */
+export type ManagerManagementConfigsFederationTrust = {
+  /**
+   * OIDC issuer; Google or the manager's Kubernetes issuer.
+   */
+  issuer: string;
+  /**
+   * Exact immutable Google account ID or Kubernetes service-account subject.
+   */
+  subject: string;
+};
+
+export type ManagerManagementConfigsFederationTrustUnion =
+  | ManagerManagementConfigsFederationTrust
+  | string;
+
 export const ManagerManagementConfigsPlatformGcp = {
   Gcp: "gcp",
 } as const;
@@ -31,8 +49,13 @@ export type ManagerManagementConfigsPlatformGcp = ClosedEnum<
 >;
 
 export type ManagerManagementConfigsGcp = {
+  federationTrust?:
+    | ManagerManagementConfigsFederationTrust
+    | string
+    | null
+    | undefined;
   /**
-   * Service account email for management roles
+   * Linked source account metadata; never a direct target trust grant.
    */
   serviceAccountEmail: string;
   platform: ManagerManagementConfigsPlatformGcp;
@@ -134,6 +157,102 @@ export function managerManagementConfigsAwsFromJSON(
 }
 
 /** @internal */
+export const ManagerManagementConfigsFederationTrust$inboundSchema: z.ZodType<
+  ManagerManagementConfigsFederationTrust,
+  unknown
+> = z.object({
+  issuer: z.string(),
+  subject: z.string(),
+});
+/** @internal */
+export type ManagerManagementConfigsFederationTrust$Outbound = {
+  issuer: string;
+  subject: string;
+};
+
+/** @internal */
+export const ManagerManagementConfigsFederationTrust$outboundSchema: z.ZodType<
+  ManagerManagementConfigsFederationTrust$Outbound,
+  ManagerManagementConfigsFederationTrust
+> = z.object({
+  issuer: z.string(),
+  subject: z.string(),
+});
+
+export function managerManagementConfigsFederationTrustToJSON(
+  managerManagementConfigsFederationTrust:
+    ManagerManagementConfigsFederationTrust,
+): string {
+  return JSON.stringify(
+    ManagerManagementConfigsFederationTrust$outboundSchema.parse(
+      managerManagementConfigsFederationTrust,
+    ),
+  );
+}
+export function managerManagementConfigsFederationTrustFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  ManagerManagementConfigsFederationTrust,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ManagerManagementConfigsFederationTrust$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'ManagerManagementConfigsFederationTrust' from JSON`,
+  );
+}
+
+/** @internal */
+export const ManagerManagementConfigsFederationTrustUnion$inboundSchema:
+  z.ZodType<ManagerManagementConfigsFederationTrustUnion, unknown> = z.union([
+    z.lazy(() => ManagerManagementConfigsFederationTrust$inboundSchema),
+    z.string(),
+  ]);
+/** @internal */
+export type ManagerManagementConfigsFederationTrustUnion$Outbound =
+  | ManagerManagementConfigsFederationTrust$Outbound
+  | string;
+
+/** @internal */
+export const ManagerManagementConfigsFederationTrustUnion$outboundSchema:
+  z.ZodType<
+    ManagerManagementConfigsFederationTrustUnion$Outbound,
+    ManagerManagementConfigsFederationTrustUnion
+  > = z.union([
+    z.lazy(() => ManagerManagementConfigsFederationTrust$outboundSchema),
+    z.string(),
+  ]);
+
+export function managerManagementConfigsFederationTrustUnionToJSON(
+  managerManagementConfigsFederationTrustUnion:
+    ManagerManagementConfigsFederationTrustUnion,
+): string {
+  return JSON.stringify(
+    ManagerManagementConfigsFederationTrustUnion$outboundSchema.parse(
+      managerManagementConfigsFederationTrustUnion,
+    ),
+  );
+}
+export function managerManagementConfigsFederationTrustUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  ManagerManagementConfigsFederationTrustUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ManagerManagementConfigsFederationTrustUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'ManagerManagementConfigsFederationTrustUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const ManagerManagementConfigsPlatformGcp$inboundSchema: z.ZodEnum<
   typeof ManagerManagementConfigsPlatformGcp
 > = z.enum(ManagerManagementConfigsPlatformGcp);
@@ -147,11 +266,22 @@ export const ManagerManagementConfigsGcp$inboundSchema: z.ZodType<
   ManagerManagementConfigsGcp,
   unknown
 > = z.object({
+  federationTrust: z.nullable(
+    z.union([
+      z.lazy(() => ManagerManagementConfigsFederationTrust$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
   serviceAccountEmail: z.string(),
   platform: ManagerManagementConfigsPlatformGcp$inboundSchema,
 });
 /** @internal */
 export type ManagerManagementConfigsGcp$Outbound = {
+  federationTrust?:
+    | ManagerManagementConfigsFederationTrust$Outbound
+    | string
+    | null
+    | undefined;
   serviceAccountEmail: string;
   platform: string;
 };
@@ -161,6 +291,12 @@ export const ManagerManagementConfigsGcp$outboundSchema: z.ZodType<
   ManagerManagementConfigsGcp$Outbound,
   ManagerManagementConfigsGcp
 > = z.object({
+  federationTrust: z.nullable(
+    z.union([
+      z.lazy(() => ManagerManagementConfigsFederationTrust$outboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
   serviceAccountEmail: z.string(),
   platform: ManagerManagementConfigsPlatformGcp$outboundSchema,
 });

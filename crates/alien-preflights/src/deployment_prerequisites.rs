@@ -783,6 +783,7 @@ mod tests {
 
     fn deployment_config() -> DeploymentConfig {
         DeploymentConfig {
+            gcp_federation_scope: None,
             deployment_name: Some("test deployment".to_string()),
             stack_settings: Default::default(),
             management_config: None,
@@ -1146,7 +1147,13 @@ mod tests {
         assert!(refused.errors[0].contains("managed container backend"));
 
         config.compute_backend = Some(horizon_backend());
-        assert!(check.check(&prepared, &state, &config).await.unwrap().success);
+        assert!(
+            check
+                .check(&prepared, &state, &config)
+                .await
+                .unwrap()
+                .success
+        );
     }
 
     #[tokio::test]

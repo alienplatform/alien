@@ -11,6 +11,8 @@ let value: DeploymentInfoDeploymentGroup = {
   id: "dg_r27ict8c7vcgsumpj90ackf7b",
   name: "<value>",
   pinnedSubdomain: "<value>",
+  maxDeployments: 611440,
+  currentCount: 42267,
 };
 ```
 
@@ -21,3 +23,5 @@ let value: DeploymentInfoDeploymentGroup = {
 | `id`                                        | *string*                                    | :heavy_check_mark:                          | Unique identifier for the deployment group. | dg_r27ict8c7vcgsumpj90ackf7b                |
 | `name`                                      | *string*                                    | :heavy_check_mark:                          | N/A                                         |                                             |
 | `pinnedSubdomain`                           | *string*                                    | :heavy_check_mark:                          | N/A                                         |                                             |
+| `maxDeployments`                            | *number*                                    | :heavy_check_mark:                          | N/A                                         |                                             |
+| `currentCount`                              | *number*                                    | :heavy_check_mark:                          | N/A                                         |                                             |

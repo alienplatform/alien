@@ -21,8 +21,12 @@ pub struct AwsManagementConfig {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct GcpManagementConfig {
-    /// Service account email for management roles
+    /// Linked source account metadata; never a direct target trust grant.
     pub service_account_email: String,
+    /// Available on managers supporting customer-owned target federation.
+    /// New GCP setup requires this capability; unaffected cloud metadata stays readable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub federation_trust: Option<crate::GcpFederationTrust>,
 }
 
 /// Azure management configuration extracted from stack settings

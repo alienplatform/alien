@@ -337,6 +337,7 @@ pub struct SingleControllerExecutor {
     setup_run: bool,
     // Platform management configuration
     management_config: Option<ManagementConfig>,
+    gcp_federation_scope: Option<alien_core::GcpFederationScope>,
     // Compute backend configuration for managed containers
     compute_backend: Option<ComputeBackend>,
     // Environment variables snapshot for deployment config
@@ -411,6 +412,7 @@ impl SingleControllerExecutor {
                 .stack_settings(self.stack_settings.clone())
                 .setup_run(self.setup_run)
                 .maybe_management_config(self.management_config.clone())
+                .maybe_gcp_federation_scope(self.gcp_federation_scope.clone())
                 .maybe_compute_backend(self.compute_backend.clone())
                 .environment_variables(self.environment_variables.clone())
                 .maybe_monitoring(self.monitoring.clone())
@@ -672,6 +674,7 @@ impl SingleControllerExecutor {
             .stack_settings(self.stack_settings.clone())
             .setup_run(self.setup_run)
             .maybe_management_config(self.management_config.clone())
+            .maybe_gcp_federation_scope(self.gcp_federation_scope.clone())
             .maybe_compute_backend(self.compute_backend.clone())
             .environment_variables(self.environment_variables.clone())
             .maybe_monitoring(self.monitoring.clone())
@@ -767,6 +770,7 @@ pub struct SingleControllerExecutorBuilder {
     stack_settings: StackSettings,
     setup_run: bool,
     management_config: Option<ManagementConfig>,
+    gcp_federation_scope: Option<alien_core::GcpFederationScope>,
     compute_backend: Option<ComputeBackend>,
     environment_variables: EnvironmentVariablesSnapshot,
     external_bindings: ExternalBindings,
@@ -797,6 +801,7 @@ impl SingleControllerExecutorBuilder {
             stack_settings: StackSettings::default(),
             setup_run: true,
             management_config: None,
+            gcp_federation_scope: None,
             compute_backend: None,
             environment_variables: EnvironmentVariablesSnapshot {
                 variables: vec![],
@@ -871,6 +876,11 @@ impl SingleControllerExecutorBuilder {
     }
 
     /// Sets the management configuration.
+    pub fn gcp_federation_scope(mut self, scope: alien_core::GcpFederationScope) -> Self {
+        self.gcp_federation_scope = Some(scope);
+        self
+    }
+
     pub fn management_config(mut self, config: ManagementConfig) -> Self {
         self.management_config = Some(config);
         self
@@ -1318,6 +1328,7 @@ impl SingleControllerExecutorBuilder {
             .stack_settings(self.stack_settings.clone())
             .setup_run(self.setup_run)
             .maybe_management_config(management_config.clone())
+            .maybe_gcp_federation_scope(self.gcp_federation_scope.clone())
             .maybe_compute_backend(self.compute_backend.clone())
             .environment_variables(self.environment_variables.clone())
             .external_bindings(self.external_bindings.clone())
@@ -1424,6 +1435,7 @@ impl SingleControllerExecutorBuilder {
             stack_settings: self.stack_settings,
             setup_run: self.setup_run,
             management_config,
+            gcp_federation_scope: self.gcp_federation_scope,
             compute_backend: self.compute_backend,
             environment_variables: self.environment_variables,
             external_bindings: self.external_bindings,

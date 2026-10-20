@@ -132,29 +132,40 @@ impl ImpersonationCredentialResolver {
         // in the stack state (two-hop: management SA → target identity).
         if let Some(ref stack_state) = deployment.stack_state {
             let provider = self.provider_for_target(platform);
-            let base_config = impersonate_management_sa_trusted_by(
-                &**provider,
-                platform,
-                &deployment.id,
-                deployment.management_config.as_ref(),
-            )
-            .await?;
-
-            let external_id = self.management_external_id(deployment).await?;
-            let resolver = alien_infra::RemoteAccessResolver::new(env);
-            let resolved = resolver
-                .resolve(
-                    base_config,
-                    stack_state,
-                    deployment.environment_info.as_ref(),
-                    external_id.as_ref(),
-                )
-                .await
-                .context(ErrorData::RemoteCredentialHandoffFailed {
-                    deployment_id: deployment.id.clone(),
+            let resolver = alien_infra::RemoteAccessResolver::new(env.clone());
+            let resolved = if platform == Platform::Gcp {
+                let source = super::gcp_federation::assertion_source(&**provider, &env).await?;
+                resolver
+                    .resolve_gcp_federation(
+                        source,
+                        &deployment.gcp_federation_scope(),
+                        stack_state,
+                        deployment.environment_info.as_ref(),
+                    )
+                    .await
+            } else {
+                let base_config = impersonate_management_sa_trusted_by(
+                    &**provider,
                     platform,
-                })
-                .map_err(|error| classify_credential_error(error.into_generic()))?;
+                    &deployment.id,
+                    deployment.management_config.as_ref(),
+                )
+                .await?;
+                let external_id = self.management_external_id(deployment).await?;
+                resolver
+                    .resolve(
+                        base_config,
+                        stack_state,
+                        deployment.environment_info.as_ref(),
+                        external_id.as_ref(),
+                    )
+                    .await
+            }
+            .context(ErrorData::RemoteCredentialHandoffFailed {
+                deployment_id: deployment.id.clone(),
+                platform,
+            })
+            .map_err(|error| classify_credential_error(error.into_generic()))?;
 
             return Ok(resolved);
         }
@@ -252,6 +263,16 @@ impl CredentialResolver for ImpersonationCredentialResolver {
             .and_then(|state| state.outputs.as_ref())
             .and_then(|outputs| outputs.downcast_ref::<alien_core::RemoteStackManagementOutputs>())
             .and_then(|outputs| outputs.legacy_remote_bindings_access.as_ref());
+        if deployment.platform == Platform::Gcp && first_class_outputs.is_none() {
+            return Err(
+                AlienError::new(alien_core::ErrorData::GcpFederationInvalid {
+                    field: "remoteBindings".to_string(),
+                    reason: "requires its separate installed federation identity; regenerate setup"
+                        .to_string(),
+                })
+                .into_generic(),
+            );
+        }
         let outputs = first_class_outputs.or(legacy_outputs).ok_or_else(|| {
             AlienError::new(GenericError {
                 message: format!(
@@ -262,28 +283,42 @@ impl CredentialResolver for ImpersonationCredentialResolver {
         })?;
 
         let provider = self.provider_for_target(deployment.platform);
-        let base = impersonate_management_sa_trusted_by(
-            &**provider,
-            deployment.platform,
-            &deployment.id,
-            deployment.management_config.as_ref(),
-        )
-        .await?;
-        let external_id = self.management_external_id(deployment).await?;
-        let resolved = alien_infra::RemoteAccessResolver::new(std::env::vars().collect())
-            .resolve_remote_bindings(
-                base,
-                outputs,
-                deployment.environment_info.as_ref(),
-                Some(remote_bindings_session_name(&deployment.id, resource_id)),
-                external_id.as_ref(),
+        let env: HashMap<String, String> = std::env::vars().collect();
+        let resolver = alien_infra::RemoteAccessResolver::new(env.clone());
+        let resolved = if deployment.platform == Platform::Gcp {
+            let source = super::gcp_federation::assertion_source(&**provider, &env).await?;
+            resolver
+                .resolve_gcp_remote_bindings(
+                    source,
+                    &deployment.gcp_federation_scope(),
+                    outputs,
+                    deployment.environment_info.as_ref(),
+                )
+                .await
+        } else {
+            let base = impersonate_management_sa_trusted_by(
+                &**provider,
+                deployment.platform,
+                &deployment.id,
+                deployment.management_config.as_ref(),
             )
-            .await
-            .context(ErrorData::RemoteCredentialHandoffFailed {
-                deployment_id: deployment.id.clone(),
-                platform: deployment.platform,
-            })
-            .map_err(|error| classify_credential_error(error.into_generic()))?;
+            .await?;
+            let external_id = self.management_external_id(deployment).await?;
+            resolver
+                .resolve_remote_bindings(
+                    base,
+                    outputs,
+                    deployment.environment_info.as_ref(),
+                    Some(remote_bindings_session_name(&deployment.id, resource_id)),
+                    external_id.as_ref(),
+                )
+                .await
+        }
+        .context(ErrorData::RemoteCredentialHandoffFailed {
+            deployment_id: deployment.id.clone(),
+            platform: deployment.platform,
+        })
+        .map_err(|error| classify_credential_error(error.into_generic()))?;
         Ok(RemoteStorageCredentialSource::Direct(resolved))
     }
 
@@ -464,6 +499,11 @@ fn management_config_from_info(
         }
         ServiceAccountInfo::Gcp(gcp_info) => {
             Ok(ManagementConfig::Gcp(alien_core::GcpManagementConfig {
+                federation_trust: super::gcp_federation::federation_trust(
+                    Some(&gcp_info.unique_id),
+                    &std::env::vars().collect(),
+                )
+                .map_err(|error| error.into_generic())?,
                 service_account_email: gcp_info.email,
             }))
         }
@@ -692,6 +732,24 @@ mod tests {
     }
 
     fn gcp_handoff_deployment() -> DeploymentRecord {
+        let scope = alien_core::GcpFederationScope {
+            deployment_id: "deployment".into(),
+        };
+        let access = alien_core::GcpFederationAccess {
+            project_number: "987654321".into(),
+            pool_id: scope
+                .pool_id(&RemoteStackManagement::RESOURCE_TYPE)
+                .unwrap(),
+            provider_id: "manager".into(),
+            service_account_email: "deployment@target-project.iam.gserviceaccount.com".into(),
+            assertion_audience: scope
+                .assertion_audience(&RemoteStackManagement::RESOURCE_TYPE)
+                .unwrap(),
+            trust: alien_core::GcpFederationTrust {
+                issuer: "https://accounts.google.com".into(),
+                subject: "123456789012345678901".into(),
+            },
+        };
         let remote_management = RemoteStackManagement::new("management".to_string()).build();
         let mut stack_state =
             StackState::with_resource_prefix(Platform::Gcp, "test-prefix".to_string());
@@ -704,8 +762,7 @@ mod tests {
                 .outputs(ResourceOutputs::new(RemoteStackManagementOutputs {
                     management_resource_id: "deployment@target-project.iam.gserviceaccount.com"
                         .to_string(),
-                    access_configuration: "deployment@target-project.iam.gserviceaccount.com"
-                        .to_string(),
+                    access_configuration: serde_json::to_string(&access).unwrap(),
                     legacy_remote_bindings_access: None,
                 }))
                 .lifecycle(ResourceLifecycle::Frozen)
@@ -774,7 +831,7 @@ mod tests {
             "management".to_string(),
             serde_json::to_value(ServiceAccountBinding::gcp_service_account(
                 "management@managing-project.iam.gserviceaccount.com",
-                "management-unique-id",
+                "123456789012345678901",
             ))
             .expect("management binding should serialize"),
         )]);
@@ -827,7 +884,7 @@ mod tests {
                     "management".to_string(),
                     serde_json::to_value(ServiceAccountBinding::gcp_service_account(
                         "management@example.invalid",
-                        "synthetic-id",
+                        "123456789012345678901",
                     ))
                     .unwrap(),
                 )]),
@@ -859,12 +916,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn gcp_target_denials_and_missing_setup_are_permanent() {
+    async fn gcp_assertion_denials_and_missing_setup_preserve_error_classification() {
         let server = httpmock::MockServer::start_async().await;
-        let _management = server.mock_async(|when, then| {
-            when.method(httpmock::Method::POST).path("/projects/-/serviceAccounts/management%40example.invalid:generateAccessToken");
-            then.status(200).json_body(serde_json::json!({"accessToken": "synthetic-management-token", "expireTime": "2099-01-01T00:00:00Z"}));
-        }).await;
         let config = ClientConfig::Gcp(Box::new(GcpClientConfig {
             project_id: "managing-project".to_string(),
             region: "us-central1".to_string(),
@@ -883,7 +936,7 @@ mod tests {
                     "management".to_string(),
                     serde_json::to_value(ServiceAccountBinding::gcp_service_account(
                         "management@example.invalid",
-                        "synthetic-id",
+                        "123456789012345678901",
                     ))
                     .unwrap(),
                 )]),
@@ -897,7 +950,7 @@ mod tests {
         );
         for (status, retryable) in [(403, false), (429, true), (503, true)] {
             let response = server.mock_async(|when, then| {
-                when.method(httpmock::Method::POST).path("/projects/-/serviceAccounts/deployment%40target-project.iam.gserviceaccount.com:generateAccessToken");
+                when.method(httpmock::Method::POST).path("/projects/-/serviceAccounts/management%40example.invalid:generateIdToken");
                 then.status(status).json_body(serde_json::json!({"error": {"code": status, "message": "synthetic target rejection"}}));
             }).await;
             let error = resolver

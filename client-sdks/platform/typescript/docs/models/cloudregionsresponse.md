@@ -7,13 +7,15 @@ import { CloudRegionsResponse } from "@alienplatform/platform-api/models";
 
 let value: CloudRegionsResponse = {
   supportedRegions: {
-    aws: [],
-    gcp: [
+    aws: [
       "<value 1>",
+      "<value 2>",
     ],
+    gcp: [],
     azure: [
       "<value 1>",
       "<value 2>",
+      "<value 3>",
     ],
   },
 };

@@ -21,9 +21,10 @@ const value: operations.ResourceManaged = {
   desiredCount: 364799,
   currentCount: 399507,
   readyCount: 342238,
-  deploymentCount: 524553,
-  attentionCount: 468100,
-  lastObservedAt: new Date("2026-02-15T18:26:49.854Z"),
+  updatedCount: 468100,
+  deploymentCount: 708731,
+  attentionCount: 250872,
+  lastObservedAt: new Date("2026-07-23T10:28:00.747Z"),
   source: "managed",
   deploymentId: "<id>",
   deploymentName: "<value>",
@@ -60,4 +61,3 @@ const value: operations.ResourceObserved = {
   lastObservedAt: new Date("2025-12-16T15:58:04.032Z"),
 };
 ```
-

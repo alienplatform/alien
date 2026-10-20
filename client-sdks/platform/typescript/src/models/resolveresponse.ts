@@ -68,11 +68,30 @@ export type ResolveResponseManagementConfigAzure = {
 };
 
 /**
+ * The exact manager identity trusted by a deployment-owned identity pool.
+ */
+export type ResolveResponseFederationTrust = {
+  /**
+   * OIDC issuer; Google or the manager's Kubernetes issuer.
+   */
+  issuer: string;
+  /**
+   * Exact immutable Google account ID or Kubernetes service-account subject.
+   */
+  subject: string;
+};
+
+export type ResolveResponseFederationTrustUnion =
+  | ResolveResponseFederationTrust
+  | string;
+
+/**
  * GCP management configuration extracted from stack settings
  */
 export type ResolveResponseManagementConfigGcp = {
+  federationTrust?: ResolveResponseFederationTrust | string | null | undefined;
   /**
-   * Service account email for management roles
+   * Linked source account metadata; never a direct target trust grant.
    */
   serviceAccountEmail: string;
   platform: "gcp";
@@ -213,10 +232,55 @@ export function resolveResponseManagementConfigAzureFromJSON(
 }
 
 /** @internal */
+export const ResolveResponseFederationTrust$inboundSchema: z.ZodType<
+  ResolveResponseFederationTrust,
+  unknown
+> = z.object({
+  issuer: z.string(),
+  subject: z.string(),
+});
+
+export function resolveResponseFederationTrustFromJSON(
+  jsonString: string,
+): SafeParseResult<ResolveResponseFederationTrust, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ResolveResponseFederationTrust$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ResolveResponseFederationTrust' from JSON`,
+  );
+}
+
+/** @internal */
+export const ResolveResponseFederationTrustUnion$inboundSchema: z.ZodType<
+  ResolveResponseFederationTrustUnion,
+  unknown
+> = z.union([
+  z.lazy(() => ResolveResponseFederationTrust$inboundSchema),
+  z.string(),
+]);
+
+export function resolveResponseFederationTrustUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<ResolveResponseFederationTrustUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ResolveResponseFederationTrustUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ResolveResponseFederationTrustUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const ResolveResponseManagementConfigGcp$inboundSchema: z.ZodType<
   ResolveResponseManagementConfigGcp,
   unknown
 > = z.object({
+  federationTrust: z.nullable(
+    z.union([
+      z.lazy(() => ResolveResponseFederationTrust$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
   serviceAccountEmail: z.string(),
   platform: z.literal("gcp"),
 });

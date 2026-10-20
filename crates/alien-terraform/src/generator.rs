@@ -23,7 +23,7 @@ use crate::{
     target::TerraformTarget,
 };
 use alien_core::{
-    import::{EmitContext, CURRENT_SETUP_IMPORT_FORMAT_VERSION},
+    import::{setup_import_format_version_for_platform, EmitContext},
     ComputeCluster, DeploymentModel, ErrorData, HeartbeatsMode, Key, KubernetesCertificateMode,
     KubernetesExposureSettings, KubernetesSettings, Network, NetworkSettings, RemoteBindings,
     RemoteStackManagement, ResourceLifecycle, Result, Sandbox, Stack, StackInputDefaultValue,
@@ -509,6 +509,8 @@ fn generate_terraform_module_internal(
             product_remote_operator,
             &deployment_name_default,
             needs_azure_management_inputs,
+            target.cloud_platform() == alien_core::Platform::Gcp
+                && (has_remote_management || has_remote_bindings),
             setup_only,
             &options.supported_aws_regions,
             &stack_inputs,
@@ -1864,6 +1866,7 @@ fn variables_body(
     product_remote_operator: bool,
     deployment_name_default: &str,
     needs_azure_management_inputs: bool,
+    needs_gcp_federation: bool,
     setup_only: bool,
     supported_aws_regions: &[String],
     stack_inputs: &[StackInputDefinition],
@@ -2039,10 +2042,31 @@ fn variables_body(
             Some(Expression::String("us-central1".to_string())),
             false,
         )));
+        // Keep the reservation input on every GCP package as its setup contract marker.
+        blocks.push(nested(variable_block(
+            "deployment_id",
+            "Immutable deployment ID reserved by the management service before setup.",
+            (!needs_gcp_federation).then(|| Expression::String(String::new())),
+            false,
+        )));
+        if needs_gcp_federation {
+            for (name, description) in [
+                (
+                    "managing_oidc_issuer",
+                    "OIDC issuer of the management identity.",
+                ),
+                (
+                    "managing_oidc_subject",
+                    "Exact immutable subject of the management identity.",
+                ),
+            ] {
+                blocks.push(nested(variable_block(name, description, None, false)));
+            }
+        }
         blocks.push(nested(variable_block(
             "managing_service_account_email",
-            "Email of the management service account allowed to impersonate setup-created identities.",
-            (!setup_only).then(|| Expression::String(String::new())),
+            "Management service account metadata; federation controls remote access.",
+            Some(Expression::String(String::new())),
             false,
         )));
         blocks.push(nested(bool_variable_block(
@@ -3457,6 +3481,7 @@ fn management_config_expression(target: TerraformTarget, setup_only: bool) -> Ex
   platform            = "gcp"
   projectId           = var.gcp_project
   serviceAccountEmail = var.managing_service_account_email
+  federationTrust = var.managing_oidc_issuer != "" ? { issuer = var.managing_oidc_issuer, subject = var.managing_oidc_subject } : null
 }"#,
         ),
         (alien_core::Platform::Azure, true) => expr::raw(
@@ -3478,6 +3503,7 @@ fn management_config_expression(target: TerraformTarget, setup_only: bool) -> Ex
   platform            = "gcp"
   projectId           = var.gcp_project
   serviceAccountEmail = var.managing_service_account_email
+  federationTrust = var.managing_oidc_issuer != "" ? { issuer = var.managing_oidc_issuer, subject = var.managing_oidc_subject } : null
 } : null"#,
         ),
         (alien_core::Platform::Azure, false) => expr::raw(
@@ -3664,7 +3690,7 @@ fn registration_body(
             attr(
                 "setup_import_format_version",
                 Expression::Number(hcl::Number::from(i64::from(
-                    CURRENT_SETUP_IMPORT_FORMAT_VERSION,
+                    setup_import_format_version_for_platform(target.cloud_platform()),
                 ))),
             ),
             attr(
@@ -3731,7 +3757,7 @@ fn registration_body(
                 (
                     "setup_import_format_version",
                     Expression::Number(hcl::Number::from(i64::from(
-                        CURRENT_SETUP_IMPORT_FORMAT_VERSION,
+                        setup_import_format_version_for_platform(target.cloud_platform()),
                     ))),
                 ),
                 (
@@ -4239,7 +4265,7 @@ fn outputs_body(
         (
             "deployment_setup_import_format_version",
             Expression::Number(hcl::Number::from(i64::from(
-                CURRENT_SETUP_IMPORT_FORMAT_VERSION,
+                setup_import_format_version_for_platform(target.cloud_platform()),
             ))),
             "Setup registration payload format version.",
         ),
@@ -4452,7 +4478,10 @@ fn readme_md(
         input_sections.push(readme_aws_inputs());
     }
     if matches!(target.cloud_platform(), alien_core::Platform::Gcp) {
-        input_sections.push(readme_gcp_inputs());
+        input_sections.push(readme_gcp_inputs(
+            stack_has_resource_type(stack, RemoteStackManagement::RESOURCE_TYPE)
+                || stack_has_resource_type(stack, RemoteBindings::RESOURCE_TYPE),
+        ));
     }
     if matches!(target.cloud_platform(), alien_core::Platform::Azure) {
         input_sections.push(readme_azure_inputs(target));
@@ -4581,8 +4610,13 @@ fn readme_aws_inputs() -> String {
     "AWS settings:\n\n- `aws_region`: AWS region used by the provider.\n- `managing_role_arn`: management identity allowed to assume setup-created roles.\n- `managing_account_id`: account that hosts application container images. Empty disables scoped cross-account image-pull grants.".to_string()
 }
 
-fn readme_gcp_inputs() -> String {
-    "GCP settings:\n\n- `gcp_project`: target GCP project ID.\n- `gcp_region`: target GCP region.\n- `managing_service_account_email`: management service account allowed to impersonate setup-created identities.\n- `gcp_manage_custom_roles`: whether this module creates project custom roles.\n- `gcp_custom_role_prefix`: custom role ID prefix when roles are managed outside this module.".to_string()
+fn readme_gcp_inputs(needs_federation: bool) -> String {
+    let federation = if needs_federation {
+        "\n- `deployment_id`: immutable deployment ID reserved before setup.\n- `managing_oidc_issuer` and `managing_oidc_subject`: exact management identity trusted by the customer-owned pool."
+    } else {
+        ""
+    };
+    format!("GCP settings:\n\n- `gcp_project`: target GCP project ID.\n- `gcp_region`: target GCP region.\n- `managing_service_account_email`: management service account metadata.{federation}\n- `gcp_manage_custom_roles`: whether this module creates project custom roles.\n- `gcp_custom_role_prefix`: custom role ID prefix when roles are managed outside this module.")
 }
 
 fn readme_azure_inputs(target: TerraformTarget) -> String {

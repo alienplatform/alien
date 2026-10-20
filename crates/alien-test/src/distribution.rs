@@ -1060,6 +1060,7 @@ fn render_management_config(
             managing_role_arn: String::new(),
         })),
         Platform::Gcp => Some(ManagementConfig::Gcp(GcpManagementConfig {
+            federation_trust: None,
             service_account_email: String::new(),
         })),
         Platform::Azure => Some(ManagementConfig::Azure(AzureManagementConfig {
@@ -1113,6 +1114,8 @@ async fn apply_render_mutations_with_management_config(
 
     let stack_state = StackState::new(platform);
     let config = DeploymentConfig {
+        // Rendering precedes installation reservation; setup supplies the scope.
+        gcp_federation_scope: None,
         stored_secret_input_ids: None,
         input_values: Default::default(),
         deployment_name: Some(stack.id().to_string()),
@@ -2089,6 +2092,8 @@ async fn terraform_kubernetes_stack_for_target(
 
     let stack_state = StackState::new(Platform::Kubernetes);
     let config = DeploymentConfig {
+        // Rendering precedes installation reservation; setup supplies the scope.
+        gcp_federation_scope: None,
         stored_secret_input_ids: None,
         input_values: Default::default(),
         deployment_name: Some(stack.id().to_string()),
@@ -4616,7 +4621,8 @@ mod tests {
             "resource \"google_project_iam_custom_role\" \"gcp_role_manage_cloud_run_services\""
         ));
         assert!(rendered.contains("run.services.update"));
-        assert!(rendered.contains("roles/iam.serviceAccountUser"));
+        assert!(rendered.contains("iam.serviceAccounts.actAs"));
+        assert!(rendered.contains("roles/iam.workloadIdentityUser"));
         assert!(rendered.contains("roles/artifactregistry.reader"));
     }
 

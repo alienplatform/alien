@@ -19,19 +19,155 @@ import {
   TargetDeploymentBasePlatformUnion$inboundSchema,
   TargetDeploymentComputeBackendUnion,
   TargetDeploymentComputeBackendUnion$inboundSchema,
+  TargetDeploymentComputeUnion,
+  TargetDeploymentComputeUnion$inboundSchema,
+  TargetDeploymentDeploymentModel,
+  TargetDeploymentDeploymentModel$inboundSchema,
   TargetDeploymentDomainMetadataUnion,
   TargetDeploymentDomainMetadataUnion$inboundSchema,
+  TargetDeploymentDomainsUnion,
+  TargetDeploymentDomainsUnion$inboundSchema,
+  TargetDeploymentEndpointAccess,
+  TargetDeploymentEndpointAccess$inboundSchema,
   TargetDeploymentEnvironmentVariables,
   TargetDeploymentEnvironmentVariables$inboundSchema,
+  TargetDeploymentGcpFederationScopeUnion,
+  TargetDeploymentGcpFederationScopeUnion$inboundSchema,
+  TargetDeploymentHeartbeats,
+  TargetDeploymentHeartbeats$inboundSchema,
+  TargetDeploymentKubernetesUnion,
+  TargetDeploymentKubernetesUnion$inboundSchema,
   TargetDeploymentManagementConfigUnion,
   TargetDeploymentManagementConfigUnion$inboundSchema,
   TargetDeploymentMonitoringUnion,
   TargetDeploymentMonitoringUnion$inboundSchema,
-  TargetDeploymentStackSettings,
-  TargetDeploymentStackSettings$inboundSchema,
-  TargetDeploymentVolumeRestore,
-  TargetDeploymentVolumeRestore$inboundSchema,
-} from "./targetdeploymentvolumerestore.js";
+  TargetDeploymentNetworkUnion,
+  TargetDeploymentNetworkUnion$inboundSchema,
+  TargetDeploymentSetupManagement,
+  TargetDeploymentSetupManagement$inboundSchema,
+} from "./targetdeploymentsetupmanagement.js";
+
+/**
+ * How telemetry (logs, metrics, traces) is handled.
+ */
+export const TargetDeploymentTelemetry = {
+  Off: "off",
+  Auto: "auto",
+  ApprovalRequired: "approval-required",
+} as const;
+/**
+ * How telemetry (logs, metrics, traces) is handled.
+ */
+export type TargetDeploymentTelemetry = ClosedEnum<
+  typeof TargetDeploymentTelemetry
+>;
+
+/**
+ * How updates are delivered to the deployment.
+ */
+export const TargetDeploymentUpdates = {
+  Auto: "auto",
+  ApprovalRequired: "approval-required",
+} as const;
+/**
+ * How updates are delivered to the deployment.
+ */
+export type TargetDeploymentUpdates = ClosedEnum<
+  typeof TargetDeploymentUpdates
+>;
+
+/**
+ * User-customizable deployment settings specified at deploy time.
+ *
+ * @remarks
+ *
+ * These settings are provided by the customer via CloudFormation parameters,
+ * Terraform attributes, CLI flags, or Helm values. They customize how the
+ * deployment runs and what capabilities are enabled.
+ *
+ * **Key distinction**: StackSettings is user-customizable, while ManagementConfig
+ * is platform-derived (from the Manager's ServiceAccount).
+ */
+export type TargetDeploymentStackSettings = {
+  compute?: TargetDeploymentComputeUnion | null | undefined;
+  /**
+   * Deployment model: how updates are delivered to the remote environment.
+   */
+  deploymentModel?: TargetDeploymentDeploymentModel | undefined;
+  domains?: TargetDeploymentDomainsUnion | null | undefined;
+  /**
+   * Reachability of the deployment's public endpoints, fixed at setup.
+   */
+  endpointAccess?: TargetDeploymentEndpointAccess | undefined;
+  externalBindings?: { [k: string]: ExternalBindingUnion } | null | undefined;
+  /**
+   * How heartbeat health checks are handled.
+   */
+  heartbeats?: TargetDeploymentHeartbeats | undefined;
+  kubernetes?: TargetDeploymentKubernetesUnion | null | undefined;
+  network?: TargetDeploymentNetworkUnion | null | undefined;
+  /**
+   * Exact externally managed endpoint URLs, keyed by resource ID and endpoint name.
+   *
+   * @remarks
+   *
+   * This is intended for adopted Machines deployments whose DNS and certificates remain
+   * customer-owned. The platform passes these URLs to the runtime without creating or
+   * replacing DNS records or certificates.
+   */
+  publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * Provider quota identities whose preflight failures become visible warnings
+   *
+   * @remarks
+   * for this deployment. Checks still run; deploy-time provider limits still apply.
+   * Unknown identities are rejected. An empty list restores normal blocking.
+   */
+  quotaWarningOverrides?: Array<string> | undefined;
+  /**
+   * Whether setup remains a separate administrator operation.
+   */
+  setupManagement?: TargetDeploymentSetupManagement | undefined;
+  /**
+   * How telemetry (logs, metrics, traces) is handled.
+   */
+  telemetry?: TargetDeploymentTelemetry | undefined;
+  /**
+   * How updates are delivered to the deployment.
+   */
+  updates?: TargetDeploymentUpdates | undefined;
+};
+
+/**
+ * Replace one replica's persistent volume with a new volume made from a snapshot.
+ *
+ * @remarks
+ *
+ * The controller stops the replica, snapshots the volume it is about to
+ * replace (so the restore can be undone), creates the new volume in the same
+ * zone, starts the replica on it, and deletes the replaced volume.
+ */
+export type TargetDeploymentVolumeRestore = {
+  /**
+   * Replica ordinal whose volume is replaced
+   */
+  ordinal: number;
+  /**
+   * Unique ID of this request. A controller performs each request once.
+   */
+  requestId: string;
+  /**
+   * ID of the container resource that owns the volume
+   */
+  resourceId: string;
+  /**
+   * Cloud ID of the snapshot to restore: an EBS snapshot ID, a Compute
+   *
+   * @remarks
+   * Engine snapshot name, or an Azure snapshot resource ID
+   */
+  snapshotId: string;
+};
 
 /**
  * Deployment configuration
@@ -84,6 +220,10 @@ export type TargetDeploymentConfig = {
    * Validated at runtime: binding type must match resource type.
    */
   externalBindings?: { [k: string]: ExternalBindingUnion } | undefined;
+  gcpFederationScope?:
+    | TargetDeploymentGcpFederationScopeUnion
+    | null
+    | undefined;
   /**
    * Deployer-provided stack input values, keyed by input id. A resource
    *
@@ -2025,6 +2165,72 @@ export type TargetDeployment = {
 };
 
 /** @internal */
+export const TargetDeploymentTelemetry$inboundSchema: z.ZodEnum<
+  typeof TargetDeploymentTelemetry
+> = z.enum(TargetDeploymentTelemetry);
+
+/** @internal */
+export const TargetDeploymentUpdates$inboundSchema: z.ZodEnum<
+  typeof TargetDeploymentUpdates
+> = z.enum(TargetDeploymentUpdates);
+
+/** @internal */
+export const TargetDeploymentStackSettings$inboundSchema: z.ZodType<
+  TargetDeploymentStackSettings,
+  unknown
+> = z.object({
+  compute: z.nullable(TargetDeploymentComputeUnion$inboundSchema).optional(),
+  deploymentModel: TargetDeploymentDeploymentModel$inboundSchema.optional(),
+  domains: z.nullable(TargetDeploymentDomainsUnion$inboundSchema).optional(),
+  endpointAccess: TargetDeploymentEndpointAccess$inboundSchema.optional(),
+  externalBindings: z.nullable(
+    z.record(z.string(), ExternalBindingUnion$inboundSchema),
+  ).optional(),
+  heartbeats: TargetDeploymentHeartbeats$inboundSchema.optional(),
+  kubernetes: z.nullable(TargetDeploymentKubernetesUnion$inboundSchema)
+    .optional(),
+  network: z.nullable(TargetDeploymentNetworkUnion$inboundSchema).optional(),
+  publicEndpoints: z.nullable(
+    z.record(z.string(), z.record(z.string(), z.string())),
+  ).optional(),
+  quotaWarningOverrides: z.array(z.string()).optional(),
+  setupManagement: TargetDeploymentSetupManagement$inboundSchema.optional(),
+  telemetry: TargetDeploymentTelemetry$inboundSchema.optional(),
+  updates: TargetDeploymentUpdates$inboundSchema.optional(),
+});
+
+export function targetDeploymentStackSettingsFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetDeploymentStackSettings, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetDeploymentStackSettings$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetDeploymentStackSettings' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetDeploymentVolumeRestore$inboundSchema: z.ZodType<
+  TargetDeploymentVolumeRestore,
+  unknown
+> = z.object({
+  ordinal: z.int(),
+  requestId: z.string(),
+  resourceId: z.string(),
+  snapshotId: z.string(),
+});
+
+export function targetDeploymentVolumeRestoreFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetDeploymentVolumeRestore, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetDeploymentVolumeRestore$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetDeploymentVolumeRestore' from JSON`,
+  );
+}
+
+/** @internal */
 export const TargetDeploymentConfig$inboundSchema: z.ZodType<
   TargetDeploymentConfig,
   unknown
@@ -2041,6 +2247,9 @@ export const TargetDeploymentConfig$inboundSchema: z.ZodType<
   environmentVariables: TargetDeploymentEnvironmentVariables$inboundSchema,
   externalBindings: z.record(z.string(), ExternalBindingUnion$inboundSchema)
     .optional(),
+  gcpFederationScope: z.nullable(
+    TargetDeploymentGcpFederationScopeUnion$inboundSchema,
+  ).optional(),
   inputValues: z.record(z.string(), z.nullable(z.any())).optional(),
   labelDomain: z.nullable(z.string()).optional(),
   managementConfig: z.nullable(
@@ -2055,10 +2264,12 @@ export const TargetDeploymentConfig$inboundSchema: z.ZodType<
   publicEndpoints: z.nullable(
     z.record(z.string(), z.record(z.string(), z.string())),
   ).optional(),
-  stackSettings: TargetDeploymentStackSettings$inboundSchema.optional(),
-  storedSecretInputIds: z.array(z.string()).optional(),
-  volumeRestores: z.array(TargetDeploymentVolumeRestore$inboundSchema)
+  stackSettings: z.lazy(() => TargetDeploymentStackSettings$inboundSchema)
     .optional(),
+  storedSecretInputIds: z.array(z.string()).optional(),
+  volumeRestores: z.array(
+    z.lazy(() => TargetDeploymentVolumeRestore$inboundSchema),
+  ).optional(),
 });
 
 export function targetDeploymentConfigFromJSON(

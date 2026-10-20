@@ -522,6 +522,7 @@ mod tests {
 
     fn test_deployment_config() -> DeploymentConfig {
         DeploymentConfig {
+            gcp_federation_scope: None,
             stored_secret_input_ids: None,
             input_values: Default::default(),
             deployment_name: None,

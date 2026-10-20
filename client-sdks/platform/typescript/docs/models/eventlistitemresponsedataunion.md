@@ -3,6 +3,27 @@
 
 ## Supported Types
 
+### `models.DeploymentCheckRequestedEvent`
+
+```typescript
+const value: models.DeploymentCheckRequestedEvent = {
+  type: "DeploymentCheckRequested",
+  deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+};
+```
+
+### `models.DeploymentEndpointHealthChangedEvent`
+
+```typescript
+const value: models.DeploymentEndpointHealthChangedEvent = {
+  type: "DeploymentEndpointHealthChanged",
+  deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+  resourceId: "<id>",
+  observedAt: new Date("2025-09-02T13:18:55.549Z"),
+  targets: [],
+};
+```
+
 ### `models.DeploymentGroupMovedEvent`
 
 ```typescript
@@ -516,4 +537,3 @@ const value: models.DeploymentCredentialRotationEvent = {
   },
 };
 ```
-

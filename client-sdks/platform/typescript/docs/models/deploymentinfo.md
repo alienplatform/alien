@@ -11,6 +11,8 @@ let value: DeploymentInfo = {
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
     name: "<value>",
     pinnedSubdomain: "<value>",
+    maxDeployments: 737152,
+    currentCount: 255496,
   },
   workspace: {
     id: "<id>",
@@ -23,28 +25,37 @@ let value: DeploymentInfo = {
     },
   },
   packages: {
-    ready: false,
+    ready: true,
   },
   installContext: {
     targets: {},
   },
   supportedRegions: {
-    aws: [],
-    gcp: [
-      "<value 1>",
-    ],
-    azure: [
+    aws: [
       "<value 1>",
       "<value 2>",
     ],
+    gcp: [],
+    azure: [
+      "<value 1>",
+      "<value 2>",
+      "<value 3>",
+    ],
   },
-  modelAvailabilitySources: [],
+  modelAvailabilitySources: [
+    {
+      deploymentId: "<id>",
+      resourceId: "<id>",
+      observedAt: new Date("2026-08-14T14:13:50.770Z"),
+      status: "stale",
+    },
+  ],
   setupItems: [
     {
-      item: "sandbox",
+      item: "deployment",
       source: {
         type: "built-in",
-        definitionId: "customer-sandbox",
+        definitionId: "customer-registry",
         version: "<value>",
         sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
       },
@@ -53,30 +64,32 @@ let value: DeploymentInfo = {
       deploymentIds: [
         "<value 1>",
         "<value 2>",
-        "<value 3>",
       ],
     },
   ],
   setupConfig: {
-    metadata: {
-      "key": "<value>",
-      "key1": "<value>",
-    },
+    metadata: {},
     policy: {
       allowedPlatforms: [],
       allowedSetupMethods: [],
     },
-    environmentVariables: [],
+    environmentVariables: [
+      {
+        name: "<value>",
+        type: "plain",
+        targetResources: [],
+      },
+    ],
     items: [
       {
-        item: "deployment",
+        item: "registry",
         source: {
           type: "built-in",
           definitionId: "customer-ai",
           version: "<value>",
           sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
         },
-        required: false,
+        required: true,
       },
     ],
   },

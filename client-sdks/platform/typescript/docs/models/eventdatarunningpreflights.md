@@ -14,8 +14,9 @@ let value: EventDataRunningPreflights = {
 
 ## Fields
 
-| Field                           | Type                            | Required                        | Description                     |
-| ------------------------------- | ------------------------------- | ------------------------------- | ------------------------------- |
-| `platform`                      | *string*                        | :heavy_check_mark:              | Platform being targeted         |
-| `stack`                         | *string*                        | :heavy_check_mark:              | Name of the stack being checked |
-| `type`                          | *"RunningPreflights"*           | :heavy_check_mark:              | N/A                             |
+| Field                                                      | Type                                                       | Required                                                   | Description                                                |
+| ---------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- |
+| `platform`                                                 | *string*                                                   | :heavy_check_mark:                                         | Platform being targeted                                    |
+| `stack`                                                    | *string*                                                   | :heavy_check_mark:                                         | Name of the stack being checked                            |
+| `type`                                                     | *"RunningPreflights"*                                      | :heavy_check_mark:                                         | N/A                                                        |
+| `warnings`                                                 | *string*[]                                                 | :heavy_minus_sign:                                         | Non-blocking diagnostics reported by the completed checks. |

@@ -4,6 +4,7 @@
 
 import * as z from "zod/v4";
 import { safeParse } from "../lib/schemas.js";
+import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import {
   DeploymentUpdateOperationStatus,
@@ -14,6 +15,114 @@ import {
   DeploymentUpdateReason$inboundSchema,
 } from "./deploymentupdatereason.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
+
+export const BlockerKind = {
+  Input: "input",
+  Setup: "setup",
+  Other: "other",
+} as const;
+export type BlockerKind = ClosedEnum<typeof BlockerKind>;
+
+/**
+ * Why the update is blocked. Input values and internal errors are never included.
+ */
+export type DeploymentUpdateOperationSummaryBlocker = {
+  kind: BlockerKind;
+  message: string;
+  inputId?: string | undefined;
+};
+
+/**
+ * The action that asked for the update
+ */
+export const CauseKind = {
+  Promotion: "promotion",
+  Pin: "pin",
+  Unpin: "unpin",
+  ChannelChange: "channel-change",
+  Redeploy: "redeploy",
+  Retry: "retry",
+  Configuration: "configuration",
+  VolumeRestore: "volume-restore",
+} as const;
+/**
+ * The action that asked for the update
+ */
+export type CauseKind = ClosedEnum<typeof CauseKind>;
+
+/**
+ * Type of authenticated principal that requested an event.
+ */
+export const CauseActorKind = {
+  User: "user",
+  ServiceAccount: "serviceAccount",
+} as const;
+/**
+ * Type of authenticated principal that requested an event.
+ */
+export type CauseActorKind = ClosedEnum<typeof CauseActorKind>;
+
+/**
+ * Client channel that carried a principal's request.
+ */
+export const DeploymentUpdateOperationSummaryViaEnum = {
+  Mcp: "mcp",
+} as const;
+/**
+ * Client channel that carried a principal's request.
+ */
+export type DeploymentUpdateOperationSummaryViaEnum = ClosedEnum<
+  typeof DeploymentUpdateOperationSummaryViaEnum
+>;
+
+export type DeploymentUpdateOperationSummaryViaUnion =
+  | DeploymentUpdateOperationSummaryViaEnum
+  | string;
+
+/**
+ * Who took the action, when known
+ */
+export type DeploymentUpdateOperationSummaryActor = {
+  /**
+   * User email when the principal is a user.
+   */
+  email?: string | null | undefined;
+  /**
+   * Stable user or service-account identifier.
+   */
+  id: string;
+  /**
+   * Type of authenticated principal that requested an event.
+   */
+  kind: CauseActorKind;
+  via?: DeploymentUpdateOperationSummaryViaEnum | string | null | undefined;
+};
+
+/**
+ * What asked for this update, when it was recorded
+ */
+export type Cause = {
+  /**
+   * The action that asked for the update
+   */
+  kind: CauseKind;
+  /**
+   * Who took the action, when known
+   */
+  actor?: DeploymentUpdateOperationSummaryActor | null | undefined;
+  /**
+   * When the action was taken
+   */
+  at: Date;
+  /**
+   * The promoted channel, or the channel the deployment moved to
+   */
+  channel?: string | null | undefined;
+  /**
+   * The promoted or pinned release
+   */
+  releaseId?: string | null | undefined;
+};
 
 export type DeploymentUpdateOperationSummary = {
   /**
@@ -28,13 +137,139 @@ export type DeploymentUpdateOperationSummary = {
   targetReleaseId: string;
   changedKeys: Array<string>;
   /**
+   * Why the update is blocked. Input values and internal errors are never included.
+   */
+  blocker?: DeploymentUpdateOperationSummaryBlocker | null | undefined;
+  /**
    * Action needed before this update can execute; the current release remains installed.
    */
   actionRequired?: string | null | undefined;
+  /**
+   * What asked for this update, when it was recorded
+   */
+  cause?: Cause | null | undefined;
   requestedAt: Date;
   startedAt?: Date | null | undefined;
   completedAt?: Date | null | undefined;
 };
+
+/** @internal */
+export const BlockerKind$inboundSchema: z.ZodEnum<typeof BlockerKind> = z.enum(
+  BlockerKind,
+);
+
+/** @internal */
+export const DeploymentUpdateOperationSummaryBlocker$inboundSchema: z.ZodType<
+  DeploymentUpdateOperationSummaryBlocker,
+  unknown
+> = z.object({
+  kind: BlockerKind$inboundSchema,
+  message: z.string(),
+  inputId: z.string().optional(),
+});
+
+export function deploymentUpdateOperationSummaryBlockerFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentUpdateOperationSummaryBlocker,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentUpdateOperationSummaryBlocker$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentUpdateOperationSummaryBlocker' from JSON`,
+  );
+}
+
+/** @internal */
+export const CauseKind$inboundSchema: z.ZodEnum<typeof CauseKind> = z.enum(
+  CauseKind,
+);
+
+/** @internal */
+export const CauseActorKind$inboundSchema: z.ZodEnum<typeof CauseActorKind> = z
+  .enum(CauseActorKind);
+
+/** @internal */
+export const DeploymentUpdateOperationSummaryViaEnum$inboundSchema: z.ZodEnum<
+  typeof DeploymentUpdateOperationSummaryViaEnum
+> = z.enum(DeploymentUpdateOperationSummaryViaEnum);
+
+/** @internal */
+export const DeploymentUpdateOperationSummaryViaUnion$inboundSchema: z.ZodType<
+  DeploymentUpdateOperationSummaryViaUnion,
+  unknown
+> = z.union([
+  DeploymentUpdateOperationSummaryViaEnum$inboundSchema,
+  z.string(),
+]);
+
+export function deploymentUpdateOperationSummaryViaUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentUpdateOperationSummaryViaUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentUpdateOperationSummaryViaUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentUpdateOperationSummaryViaUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentUpdateOperationSummaryActor$inboundSchema: z.ZodType<
+  DeploymentUpdateOperationSummaryActor,
+  unknown
+> = z.object({
+  email: z.nullable(z.string()).optional(),
+  id: z.string(),
+  kind: CauseActorKind$inboundSchema,
+  via: z.nullable(
+    z.union([
+      DeploymentUpdateOperationSummaryViaEnum$inboundSchema,
+      z.string(),
+    ]),
+  ).optional(),
+});
+
+export function deploymentUpdateOperationSummaryActorFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentUpdateOperationSummaryActor, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentUpdateOperationSummaryActor$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentUpdateOperationSummaryActor' from JSON`,
+  );
+}
+
+/** @internal */
+export const Cause$inboundSchema: z.ZodType<Cause, unknown> = z.object({
+  kind: CauseKind$inboundSchema,
+  actor: z.nullable(
+    z.lazy(() => DeploymentUpdateOperationSummaryActor$inboundSchema),
+  ).optional(),
+  at: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  channel: z.nullable(z.string()).optional(),
+  releaseId: z.nullable(z.string()).optional(),
+});
+
+export function causeFromJSON(
+  jsonString: string,
+): SafeParseResult<Cause, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Cause$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Cause' from JSON`,
+  );
+}
 
 /** @internal */
 export const DeploymentUpdateOperationSummary$inboundSchema: z.ZodType<
@@ -46,7 +281,11 @@ export const DeploymentUpdateOperationSummary$inboundSchema: z.ZodType<
   reasons: z.array(DeploymentUpdateReason$inboundSchema),
   targetReleaseId: z.string(),
   changedKeys: z.array(z.string()),
+  blocker: z.nullable(
+    z.lazy(() => DeploymentUpdateOperationSummaryBlocker$inboundSchema),
+  ).optional(),
   actionRequired: z.nullable(z.string()).optional(),
+  cause: z.nullable(z.lazy(() => Cause$inboundSchema)).optional(),
   requestedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   startedAt: z.nullable(
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),

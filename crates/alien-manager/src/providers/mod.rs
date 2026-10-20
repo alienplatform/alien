@@ -1,5 +1,6 @@
 pub(crate) mod credential_errors;
 pub mod environment_credentials;
+pub mod gcp_federation;
 pub mod impersonation_credentials;
 pub mod in_memory_telemetry;
 pub mod local_credentials;

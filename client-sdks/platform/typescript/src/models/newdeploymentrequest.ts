@@ -174,6 +174,21 @@ export type NewDeploymentRequestEnvironmentInfoUnion =
   | string;
 
 /**
+ * Base environment for a Kubernetes installation.
+ */
+export const NewDeploymentRequestBasePlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+} as const;
+/**
+ * Base environment for a Kubernetes installation.
+ */
+export type NewDeploymentRequestBasePlatform = ClosedEnum<
+  typeof NewDeploymentRequestBasePlatform
+>;
+
+/**
  * Deployment-time resource allocation for a container. Omitted fields use release defaults.
  */
 export type NewDeploymentRequestContainers = {
@@ -1501,6 +1516,10 @@ export type NewDeploymentRequest = {
    */
   project: string;
   /**
+   * Base environment for a Kubernetes installation.
+   */
+  basePlatform?: NewDeploymentRequestBasePlatform | undefined;
+  /**
    * Stack settings for deployment customization
    */
   stackSettings?: NewDeploymentRequestStackSettings | undefined;
@@ -1750,6 +1769,11 @@ export function newDeploymentRequestEnvironmentInfoUnionToJSON(
     ),
   );
 }
+
+/** @internal */
+export const NewDeploymentRequestBasePlatform$outboundSchema: z.ZodEnum<
+  typeof NewDeploymentRequestBasePlatform
+> = z.enum(NewDeploymentRequestBasePlatform);
 
 /** @internal */
 export type NewDeploymentRequestContainers$Outbound = {
@@ -4353,6 +4377,7 @@ export type NewDeploymentRequest$Outbound = {
     | null
     | undefined;
   project: string;
+  basePlatform?: string | undefined;
   stackSettings?: NewDeploymentRequestStackSettings$Outbound | undefined;
   resourcePrefix?: string | undefined;
   publicSubdomain?: string | undefined;
@@ -4391,6 +4416,7 @@ export const NewDeploymentRequest$outboundSchema: z.ZodType<
     ]),
   ).optional(),
   project: z.string(),
+  basePlatform: NewDeploymentRequestBasePlatform$outboundSchema.optional(),
   stackSettings: z.lazy(() => NewDeploymentRequestStackSettings$outboundSchema)
     .optional(),
   resourcePrefix: z.string().optional(),

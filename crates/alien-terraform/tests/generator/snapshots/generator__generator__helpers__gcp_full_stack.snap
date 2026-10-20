@@ -136,9 +136,24 @@ variable "gcp_region" {
   default     = "us-central1"
 }
 
+variable "deployment_id" {
+  type        = string
+  description = "Immutable deployment ID reserved by the management service before setup."
+}
+
+variable "managing_oidc_issuer" {
+  type        = string
+  description = "OIDC issuer of the management identity."
+}
+
+variable "managing_oidc_subject" {
+  type        = string
+  description = "Exact immutable subject of the management identity."
+}
+
 variable "managing_service_account_email" {
   type        = string
-  description = "Email of the management service account allowed to impersonate setup-created identities."
+  description = "Management service account metadata; federation controls remote access."
   default     = ""
 }
 
@@ -209,7 +224,7 @@ locals {
   deployment_platform          = "gcp"
   deployment_target            = "gcp"
   deployment_region            = var.gcp_region
-  deployment_management_config = var.deployment_model == "push" ? { platform = "gcp", projectId = var.gcp_project, serviceAccountEmail = var.managing_service_account_email } : null
+  deployment_management_config = var.deployment_model == "push" ? { platform = "gcp", projectId = var.gcp_project, serviceAccountEmail = var.managing_service_account_email, federationTrust = var.managing_oidc_issuer != "" ? { issuer = var.managing_oidc_issuer, subject = var.managing_oidc_subject } : null } : null
   advanced_settings            = merge(jsondecode(var.advanced_settings_json), jsondecode(var.advanced_settings_overlay_json))
   deployment_settings          = merge(local.advanced_settings, { deploymentModel = var.deployment_model, updates = var.updates_mode, telemetry = var.telemetry_mode, heartbeats = var.heartbeats_mode, endpointAccess = var.endpoint_access, network = jsondecode(var.network_mode == "create-new" ? jsonencode({ type = "create", cidr = var.network_cidr == "" ? null : var.network_cidr, availabilityZones = var.availability_zones }) : var.network_mode == "use-existing" ? jsonencode({ type = "byo-vpc-gcp", networkName = var.network_name, subnetName = var.subnet_name, region = var.network_region == "" ? var.gcp_region : var.network_region }) : jsonencode({ type = "use-default" })) })
   deployment_resources = [
@@ -241,6 +256,17 @@ locals {
       id   = "management"
       type = "remote-stack-management"
       importData = {
+        federation = {
+          projectNumber       = split("/", google_iam_workload_identity_pool.management_manager.name)[1]
+          poolId              = google_iam_workload_identity_pool.management_manager.workload_identity_pool_id
+          providerId          = "manager"
+          serviceAccountEmail = google_service_account.management.email
+          assertionAudience   = "urn:deployment-access:v1:${sha256("gcp-deployment-access-v1:${base64encode(var.deployment_id)}:${base64encode("remote-stack-management")}")}"
+          trust = {
+            issuer  = var.managing_oidc_issuer
+            subject = var.managing_oidc_subject
+          }
+        }
         projectId                    = var.gcp_project
         projectNumber                = data.google_project.current.number
         serviceAccountEmail          = google_service_account.management.email
@@ -587,18 +613,37 @@ resource "google_project_iam_member" "pubsub_viewer_management_binding_0" {
   member  = "serviceAccount:${google_service_account.management.email}"
 }
 
-resource "google_service_account_iam_member" "management_manager_token_creator" {
-  for_each           = toset(compact([var.managing_service_account_email]))
-  service_account_id = google_service_account.management.id
-  role               = "roles/iam.serviceAccountTokenCreator"
-  member             = "serviceAccount:${each.value}"
+resource "google_iam_workload_identity_pool" "management_manager" {
+  project                   = var.gcp_project
+  workload_identity_pool_id = "deployment-${substr(sha256("gcp-deployment-access-v1:${base64encode(var.deployment_id)}:${base64encode("remote-stack-management")}"), 0, 20)}"
+  display_name              = "Deployment access"
+  description               = "Deployment identity pool. Scope: urn:deployment-access:v1:${sha256("gcp-deployment-access-v1:${base64encode(var.deployment_id)}:${base64encode("remote-stack-management")}")}"
 }
 
-resource "google_service_account_iam_member" "management_manager_user" {
-  for_each           = toset(compact([var.managing_service_account_email]))
+resource "google_iam_workload_identity_pool_provider" "management_manager" {
+  project                            = var.gcp_project
+  workload_identity_pool_id          = google_iam_workload_identity_pool.management_manager.workload_identity_pool_id
+  workload_identity_pool_provider_id = "manager"
+  attribute_mapping = {
+    "google.subject" = "assertion.sub"
+  }
+  attribute_condition = "assertion.sub == ${jsonencode(var.managing_oidc_subject)}"
+
+  oidc {
+    issuer_uri = var.managing_oidc_issuer
+    allowed_audiences = [
+      "urn:deployment-access:v1:${sha256("gcp-deployment-access-v1:${base64encode(var.deployment_id)}:${base64encode("remote-stack-management")}")}"
+    ]
+  }
+}
+
+resource "google_service_account_iam_member" "management_manager" {
   service_account_id = google_service_account.management.id
-  role               = "roles/iam.serviceAccountUser"
-  member             = "serviceAccount:${each.value}"
+  role               = "roles/iam.workloadIdentityUser"
+  member             = "principal://iam.googleapis.com/${google_iam_workload_identity_pool.management_manager.name}/subject/${var.managing_oidc_subject}"
+  depends_on = [
+    google_iam_workload_identity_pool_provider.management_manager
+  ]
 }
 
 === assets.tf ===
@@ -798,8 +843,7 @@ resource "time_sleep" "gcp_iam_propagation" {
     google_project_iam_member.gcp_role_manage_cloud_run_https_endpoints_management_binding_1,
     google_project_iam_member.gcp_role_check_cloud_storage_health_management_binding_0,
     google_project_iam_member.pubsub_viewer_management_binding_0,
-    google_service_account_iam_member.management_manager_token_creator,
-    google_service_account_iam_member.management_manager_user,
+    google_service_account_iam_member.management_manager,
     google_project_iam_member.gcp_role_create_secret_manager_secrets_management_secrets_vault_data_write_binding_0,
     google_project_iam_member.secretmanager_secretversionadder_management_secrets_vault_data_write_binding_1,
     google_project_iam_member.gcp_role_write_secret_manager_values_management_secrets_vault_data_write_binding_2
@@ -814,7 +858,7 @@ resource "terraform_data" "deployment_registration" {
     name                        = var.name
     resource_prefix             = local.resource_prefix
     setup_target                = ""
-    setup_import_format_version = 1
+    setup_import_format_version = 2
     setup_fingerprint           = ""
     setup_fingerprint_version   = 0
     management_url              = var.management_url
@@ -845,8 +889,9 @@ resource "terraform_data" "deployment_registration" {
     google_project_iam_custom_role.gcp_role_check_cloud_storage_health,
     google_project_iam_member.gcp_role_check_cloud_storage_health_management_binding_0,
     google_project_iam_member.pubsub_viewer_management_binding_0,
-    google_service_account_iam_member.management_manager_token_creator,
-    google_service_account_iam_member.management_manager_user,
+    google_iam_workload_identity_pool.management_manager,
+    google_iam_workload_identity_pool_provider.management_manager,
+    google_service_account_iam_member.management_manager,
     google_storage_bucket.assets,
     google_storage_bucket_iam_member.gcp_role_check_cloud_storage_health_assets_management_storage_0,
     google_pubsub_topic.jobs,
@@ -895,7 +940,7 @@ output "deployment_setup_target" {
 }
 
 output "deployment_setup_import_format_version" {
-  value       = 1
+  value       = 2
   description = "Setup registration payload format version."
 }
 
@@ -954,7 +999,9 @@ GCP settings:
 
 - `gcp_project`: target GCP project ID.
 - `gcp_region`: target GCP region.
-- `managing_service_account_email`: management service account allowed to impersonate setup-created identities.
+- `managing_service_account_email`: management service account metadata.
+- `deployment_id`: immutable deployment ID reserved before setup.
+- `managing_oidc_issuer` and `managing_oidc_subject`: exact management identity trusted by the customer-owned pool.
 - `gcp_manage_custom_roles`: whether this module creates project custom roles.
 - `gcp_custom_role_prefix`: custom role ID prefix when roles are managed outside this module.
 

@@ -39,7 +39,7 @@ use alien_core::{
     container_resources::keep_volume_sizes_over_setup_source,
     import::{
         ImportContext, ImportedResource, StackImportRequest, StackImportResponse,
-        CURRENT_SETUP_IMPORT_FORMAT_VERSION, MIN_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION,
+        MAX_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION, MIN_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION,
     },
     is_valid_resource_prefix, AwsEnvironmentInfo, AzureEnvironmentInfo, DeploymentConfig,
     DeploymentStatus, EnvironmentInfo, EnvironmentVariablesSnapshot, ExternalBindings,
@@ -346,6 +346,9 @@ pub async fn stack_import(
                 return ErrorData::forbidden("Cannot update imported deployment in this group")
                     .into_response();
             }
+            if let Err(error) = validate_gcp_federation_handoff(&req, Some(&existing.id)) {
+                return error.into_response();
+            }
             if existing.stack_settings.as_ref().is_some_and(|settings| {
                 settings.endpoint_access != req.stack_settings.endpoint_access
             }) {
@@ -609,6 +612,10 @@ pub async fn stack_import(
         Err(e) => return e.into_response(),
     }
 
+    if let Err(error) = validate_gcp_federation_handoff(&req, None) {
+        return error.into_response();
+    }
+
     // The deployment could have been deleted during preparation. Do not turn
     // a re-registration into a new deployment or issue a replacement credential.
     if matches!(subject.scope, Scope::Deployment { .. }) {
@@ -652,7 +659,10 @@ pub async fn stack_import(
     let (raw_token, key_prefix, key_hash) = ids::generate_token(TokenType::Deployment.prefix());
 
     let params = CreateImportedDeploymentParams {
-        deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        deployment_protocol_version: alien_core::deployment_protocol_version_for_platform(
+            req.platform,
+            req.base_platform,
+        ),
         name: deployment_name,
         deployment_group_id: deployment_group_id.clone(),
         platform: req.platform,
@@ -770,22 +780,6 @@ fn migrate_legacy_remote_bindings_handoff(
             serde_json::to_value(alien_core::AwsRemoteBindingsImportData {
                 role_name: role_arn.rsplit('/').next().unwrap_or(&role_arn).to_string(),
                 role_arn,
-            })
-        }
-        Platform::Gcp => {
-            let legacy: alien_core::GcpRemoteStackManagementImportData =
-                serde_json::from_value(management.import_data.clone()).map_err(|error| {
-                    ErrorData::bad_request(format!(
-                        "Invalid legacy GCP management handoff: {error}"
-                    ))
-                })?;
-            let Some(service_account_email) = legacy.remote_bindings_service_account_email else {
-                return Ok(());
-            };
-            serde_json::to_value(alien_core::GcpRemoteBindingsImportData {
-                project_id: legacy.project_id,
-                service_account_email,
-                service_account_unique_id: String::new(),
             })
         }
         Platform::Azure => {
@@ -972,19 +966,19 @@ fn parse_stack_import_request(raw: serde_json::Value) -> crate::error::Result<St
             AlienError::new(ErrorData::IncompatibleSetupImport {
                 found_version: 0,
                 min_supported_version: MIN_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION,
-                current_version: CURRENT_SETUP_IMPORT_FORMAT_VERSION,
+                current_version: MAX_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION,
                 repair: "Use a setup package that emits setupImportFormatVersion, or upgrade the setup package."
                     .to_string(),
             })
         })?;
 
-    if !(MIN_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION..=CURRENT_SETUP_IMPORT_FORMAT_VERSION)
+    if !(MIN_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION..=MAX_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION)
         .contains(&found_version)
     {
         return Err(AlienError::new(ErrorData::IncompatibleSetupImport {
             found_version,
             min_supported_version: MIN_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION,
-            current_version: CURRENT_SETUP_IMPORT_FORMAT_VERSION,
+            current_version: MAX_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION,
             repair: "Use a setup package compatible with this manager, or upgrade the manager."
                 .to_string(),
         }));
@@ -1433,6 +1427,9 @@ async fn prepare_import_stack(
 
     let stack_state = StackState::new(mutation_platform);
     let config = DeploymentConfig {
+        // Template preparation grants no access and does not select an
+        // installation authorization namespace.
+        gcp_federation_scope: None,
         stored_secret_input_ids: None,
         input_values: Default::default(),
         deployment_name: Some(req.deployment_name.clone()),
@@ -1672,6 +1669,44 @@ fn build_stack_state(
     Ok(stack_state)
 }
 
+/// Remote access is bound to the authenticated record allocated before setup.
+/// A resource prefix, display name, or identifier supplied by an import cannot
+/// authorize access on behalf of a different installation.
+fn validate_gcp_federation_handoff(
+    req: &StackImportRequest,
+    deployment_id: Option<&str>,
+) -> crate::error::Result<()> {
+    if req.base_platform.unwrap_or(req.platform) != Platform::Gcp {
+        return Ok(());
+    }
+    for resource in &req.resources {
+        if resource.resource_type != alien_core::RemoteStackManagement::RESOURCE_TYPE
+            && resource.resource_type != alien_core::RemoteBindings::RESOURCE_TYPE
+        {
+            continue;
+        }
+        let deployment_id = deployment_id.ok_or_else(|| ErrorData::bad_request(
+            "GCP remote access requires a deployment reserved before setup. Regenerate and rerun the setup artifact.",
+        ))?;
+        let access: alien_core::GcpFederationAccess = serde_json::from_value(
+            resource
+                .import_data
+                .get("federation")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
+        )
+        .map_err(|_| {
+            ErrorData::bad_request(
+                "GCP setup requires valid federation metadata. Regenerate and rerun setup.",
+            )
+        })?;
+        alien_core::GcpFederationScope { deployment_id: deployment_id.to_string() }
+            .validate_access(&access, &resource.resource_type)
+            .map_err(|_| ErrorData::bad_request("GCP federation access does not match the registered deployment and purpose. Regenerate and rerun setup."))?;
+    }
+    Ok(())
+}
+
 fn validate_import_handoff(req: &StackImportRequest, stack: &Stack) -> crate::error::Result<()> {
     let delivered: std::collections::HashSet<&str> = req
         .resources
@@ -1749,7 +1784,7 @@ mod setup_update_authorization_tests {
 
     fn request() -> StackImportRequest {
         StackImportRequest {
-            setup_import_format_version: CURRENT_SETUP_IMPORT_FORMAT_VERSION,
+            setup_import_format_version: alien_core::import::CURRENT_SETUP_IMPORT_FORMAT_VERSION,
             deployment_group_token: String::new(),
             deployment_name: "deployment".to_string(),
             resource_prefix: "deployment".to_string(),
@@ -1767,6 +1802,46 @@ mod setup_update_authorization_tests {
             input_values: HashMap::new(),
             resources: vec![],
         }
+    }
+
+    #[test]
+    fn federation_import_is_bound_to_reserved_identity_and_access_purpose() {
+        let mut req = request();
+        req.platform = Platform::Gcp;
+        let purpose = RemoteStackManagement::RESOURCE_TYPE;
+        let scope = alien_core::GcpFederationScope {
+            deployment_id: "dep_reserved".into(),
+        };
+        let access = alien_core::GcpFederationAccess {
+            project_number: "123456789012".into(),
+            pool_id: scope.pool_id(&purpose).unwrap(),
+            provider_id: "manager".into(),
+            service_account_email: "management@example.iam.gserviceaccount.com".into(),
+            assertion_audience: scope.assertion_audience(&purpose).unwrap(),
+            trust: alien_core::GcpFederationTrust {
+                issuer: "https://accounts.google.com".into(),
+                subject: "123456789012345678901".into(),
+            },
+        };
+        req.resources.push(ImportedResource {
+            id: "management".into(),
+            resource_type: purpose,
+            import_data: serde_json::json!({ "federation": access }),
+        });
+        validate_gcp_federation_handoff(&req, Some("dep_reserved")).unwrap();
+        // User-visible names are mutable and carry no authorization.
+        req.deployment_name = "renamed".into();
+        req.resource_prefix = "another-prefix".into();
+        validate_gcp_federation_handoff(&req, Some("dep_reserved")).unwrap();
+        assert!(validate_gcp_federation_handoff(&req, None).is_err());
+        assert!(validate_gcp_federation_handoff(&req, Some("dep_recreated")).is_err());
+        req.resources[0].resource_type = alien_core::RemoteBindings::RESOURCE_TYPE;
+        assert!(validate_gcp_federation_handoff(&req, Some("dep_reserved")).is_err());
+        req.platform = Platform::Kubernetes;
+        req.base_platform = Some(Platform::Gcp);
+        assert!(validate_gcp_federation_handoff(&req, Some("dep_reserved")).is_err());
+        req.base_platform = Some(Platform::Aws);
+        validate_gcp_federation_handoff(&req, None).unwrap();
     }
 
     /// Registration must expect exactly what the generators render, and a Live sandbox is the

@@ -181,6 +181,15 @@ pub struct CreateDeploymentParams {
     pub deployment_token: Option<String>,
 }
 
+/// Immutable setup selection recorded before an installer creates cloud resources.
+#[derive(Debug, Clone)]
+pub struct SetupReservation {
+    pub release_id: String,
+    pub import_source: ImportSourceKind,
+    pub setup_target: String,
+    pub setup_fingerprint_version: u32,
+}
+
 /// Parameters for creating a deployment whose layer-2 stack state was produced
 /// by a setup artifact (CloudFormation, Terraform, Helm).
 #[derive(Debug, Clone)]
@@ -295,6 +304,8 @@ pub struct DeploymentFilter {
     pub deployment_ids: Option<Vec<String>>,
     /// IDs acquisition must skip, applied before its limit.
     pub excluded_deployment_ids: Vec<String>,
+    /// Filter unsupported records before discovery acquisition applies its limit.
+    pub max_deployment_protocol_version: Option<u32>,
     pub statuses: Option<Vec<String>>,
     pub platforms: Option<Vec<Platform>>,
     pub setup_method: Option<String>,
@@ -523,6 +534,20 @@ pub trait DeploymentStore: Send + Sync {
         caller: &crate::auth::Subject,
         params: CreateDeploymentParams,
     ) -> Result<DeploymentRecord, AlienError>;
+
+    /// Allocate the installation identity and durable token without starting setup.
+    /// The later import activates this same record. Implementations must persist
+    /// the reservation and deployment together, including the original inputs.
+    async fn create_setup_reservation(
+        &self,
+        _caller: &crate::auth::Subject,
+        _params: CreateDeploymentParams,
+        _reservation: SetupReservation,
+    ) -> Result<DeploymentRecord, AlienError> {
+        Err(AlienError::new(alien_error::GenericError {
+            message: "This deployment store does not support setup reservations".to_string(),
+        }))
+    }
 
     /// Persist a deployment whose stack state was produced by a setup artifact
     /// (CloudFormation custom resource, Terraform provider, or Helm chart).
@@ -817,5 +842,14 @@ pub trait DeploymentStore: Send + Sync {
     /// caller instead.
     async fn cleanup_stale_locks(&self, _caller: &crate::auth::Subject) -> Result<u64, AlienError> {
         Ok(0)
+    }
+}
+
+impl DeploymentRecord {
+    /// Authorization namespace from the registered record, never imported target metadata.
+    pub fn gcp_federation_scope(&self) -> alien_core::GcpFederationScope {
+        alien_core::GcpFederationScope {
+            deployment_id: self.id.clone(),
+        }
     }
 }

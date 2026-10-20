@@ -363,7 +363,7 @@ export type ReleaseData = {
   rollout: Array<Rollout>;
 };
 
-export type Release = {
+export type GetRemoteOperatorProjectSummaryRelease = {
   status: ReleaseStatus;
   freshness: ReleaseFreshness;
   sourceUpdatedAt: Date | null;
@@ -730,7 +730,7 @@ export type GetRemoteOperatorProjectSummaryResponse = {
   project: GetRemoteOperatorProjectSummaryProject;
   nextAction: NextAction;
   installations: Installations;
-  release: Release;
+  release: GetRemoteOperatorProjectSummaryRelease;
   access: GetRemoteOperatorProjectSummaryAccess;
   operations: Operations;
   activity: Activity;
@@ -1229,7 +1229,10 @@ export function releaseDataFromJSON(
 }
 
 /** @internal */
-export const Release$inboundSchema: z.ZodType<Release, unknown> = z.object({
+export const GetRemoteOperatorProjectSummaryRelease$inboundSchema: z.ZodType<
+  GetRemoteOperatorProjectSummaryRelease,
+  unknown
+> = z.object({
   status: ReleaseStatus$inboundSchema,
   freshness: ReleaseFreshness$inboundSchema,
   sourceUpdatedAt: z.nullable(
@@ -1239,13 +1242,14 @@ export const Release$inboundSchema: z.ZodType<Release, unknown> = z.object({
   data: z.nullable(z.lazy(() => ReleaseData$inboundSchema)),
 });
 
-export function releaseFromJSON(
+export function getRemoteOperatorProjectSummaryReleaseFromJSON(
   jsonString: string,
-): SafeParseResult<Release, SDKValidationError> {
+): SafeParseResult<GetRemoteOperatorProjectSummaryRelease, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Release$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Release' from JSON`,
+    (x) =>
+      GetRemoteOperatorProjectSummaryRelease$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetRemoteOperatorProjectSummaryRelease' from JSON`,
   );
 }
 
@@ -1904,7 +1908,7 @@ export const GetRemoteOperatorProjectSummaryResponse$inboundSchema: z.ZodType<
   project: z.lazy(() => GetRemoteOperatorProjectSummaryProject$inboundSchema),
   nextAction: z.lazy(() => NextAction$inboundSchema),
   installations: z.lazy(() => Installations$inboundSchema),
-  release: z.lazy(() => Release$inboundSchema),
+  release: z.lazy(() => GetRemoteOperatorProjectSummaryRelease$inboundSchema),
   access: z.lazy(() => GetRemoteOperatorProjectSummaryAccess$inboundSchema),
   operations: z.lazy(() => Operations$inboundSchema),
   activity: z.lazy(() => Activity$inboundSchema),

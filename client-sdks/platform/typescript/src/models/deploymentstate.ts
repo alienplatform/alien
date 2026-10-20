@@ -26,7 +26,7 @@ import {
   DeploymentStatePlatform,
   DeploymentStatePlatform$inboundSchema,
   DeploymentStatePlatform$outboundSchema,
-} from "./deploymentstatependingpreparedstackdefaultunion.js";
+} from "./deploymentstatependingpreparedstackdefaultstringlist.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 import {
   DeploymentStateStatus,
@@ -40,15 +40,100 @@ import {
   StackState$inboundSchema,
   StackState$Outbound,
   StackState$outboundSchema,
+  TargetReleaseApprovalPlugins,
+  TargetReleaseApprovalPlugins$inboundSchema,
+  TargetReleaseApprovalPlugins$Outbound,
+  TargetReleaseApprovalPlugins$outboundSchema,
+  TargetReleaseApprovalPluginsEnum,
+  TargetReleaseApprovalPluginsEnum$inboundSchema,
+  TargetReleaseApprovalPluginsEnum$outboundSchema,
+  TargetReleaseCustom,
+  TargetReleaseCustom$inboundSchema,
+  TargetReleaseCustom$Outbound,
+  TargetReleaseCustom$outboundSchema,
   TargetReleaseInput,
   TargetReleaseInput$inboundSchema,
   TargetReleaseInput$Outbound,
   TargetReleaseInput$outboundSchema,
-  TargetReleaseOperations,
-  TargetReleaseOperations$inboundSchema,
-  TargetReleaseOperations$Outbound,
-  TargetReleaseOperations$outboundSchema,
-} from "./targetreleaseoperations.js";
+} from "./targetreleaseapprovalpluginsenum.js";
+
+/**
+ * Approval rule for the operations a pattern matches.
+ */
+export type TargetReleasePluginsApprovalUnion =
+  | TargetReleaseApprovalPlugins
+  | TargetReleaseApprovalPluginsEnum;
+
+export type TargetReleaseSettingsPlugins3 = {
+  /**
+   * Environment variable name.
+   */
+  env: string;
+};
+
+export type TargetReleaseSettingsPlugins2 = {
+  /**
+   * Resource ids in the same stack.
+   */
+  resources: Array<string>;
+};
+
+export type TargetReleaseSettingsPlugins1 = {
+  /**
+   * Stack input id.
+   */
+  input: string;
+};
+
+/**
+ * Value of one plugin setting.
+ */
+export type TargetReleasePluginsSettingsUnion =
+  | TargetReleaseSettingsPlugins1
+  | TargetReleaseSettingsPlugins2
+  | TargetReleaseSettingsPlugins3
+  | string;
+
+/**
+ * Settings and approval rules for one plugin.
+ */
+export type TargetReleasePlugins = {
+  /**
+   * Approval rule per operation: an operation name, or `*` for all of them.
+   *
+   * @remarks
+   * Operations no rule matches need approval.
+   */
+  approval?: {
+    [k: string]:
+      | TargetReleaseApprovalPlugins
+      | TargetReleaseApprovalPluginsEnum;
+  } | undefined;
+  /**
+   * Values for the settings the plugin's manifest declares.
+   */
+  settings?: {
+    [k: string]:
+      | TargetReleaseSettingsPlugins1
+      | TargetReleaseSettingsPlugins2
+      | TargetReleaseSettingsPlugins3
+      | string;
+  } | undefined;
+};
+
+/**
+ * Operations declared by a stack, or by an Operator installed on its own.
+ */
+export type TargetReleaseOperations = {
+  /**
+   * Published custom plugins, pinned to exact versions.
+   */
+  custom?: Array<TargetReleaseCustom> | undefined;
+  /**
+   * Built-in plugins, by plugin name.
+   */
+  plugins?: { [k: string]: TargetReleasePlugins } | undefined;
+};
 
 export type TargetReleaseOperationsUnion = TargetReleaseOperations | string;
 
@@ -1390,10 +1475,337 @@ export type DeploymentState = {
 };
 
 /** @internal */
+export const TargetReleasePluginsApprovalUnion$inboundSchema: z.ZodType<
+  TargetReleasePluginsApprovalUnion,
+  unknown
+> = z.union([
+  TargetReleaseApprovalPlugins$inboundSchema,
+  TargetReleaseApprovalPluginsEnum$inboundSchema,
+]);
+/** @internal */
+export type TargetReleasePluginsApprovalUnion$Outbound =
+  | TargetReleaseApprovalPlugins$Outbound
+  | string;
+
+/** @internal */
+export const TargetReleasePluginsApprovalUnion$outboundSchema: z.ZodType<
+  TargetReleasePluginsApprovalUnion$Outbound,
+  TargetReleasePluginsApprovalUnion
+> = z.union([
+  TargetReleaseApprovalPlugins$outboundSchema,
+  TargetReleaseApprovalPluginsEnum$outboundSchema,
+]);
+
+export function targetReleasePluginsApprovalUnionToJSON(
+  targetReleasePluginsApprovalUnion: TargetReleasePluginsApprovalUnion,
+): string {
+  return JSON.stringify(
+    TargetReleasePluginsApprovalUnion$outboundSchema.parse(
+      targetReleasePluginsApprovalUnion,
+    ),
+  );
+}
+export function targetReleasePluginsApprovalUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleasePluginsApprovalUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleasePluginsApprovalUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleasePluginsApprovalUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseSettingsPlugins3$inboundSchema: z.ZodType<
+  TargetReleaseSettingsPlugins3,
+  unknown
+> = z.object({
+  env: z.string(),
+});
+/** @internal */
+export type TargetReleaseSettingsPlugins3$Outbound = {
+  env: string;
+};
+
+/** @internal */
+export const TargetReleaseSettingsPlugins3$outboundSchema: z.ZodType<
+  TargetReleaseSettingsPlugins3$Outbound,
+  TargetReleaseSettingsPlugins3
+> = z.object({
+  env: z.string(),
+});
+
+export function targetReleaseSettingsPlugins3ToJSON(
+  targetReleaseSettingsPlugins3: TargetReleaseSettingsPlugins3,
+): string {
+  return JSON.stringify(
+    TargetReleaseSettingsPlugins3$outboundSchema.parse(
+      targetReleaseSettingsPlugins3,
+    ),
+  );
+}
+export function targetReleaseSettingsPlugins3FromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseSettingsPlugins3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseSettingsPlugins3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseSettingsPlugins3' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseSettingsPlugins2$inboundSchema: z.ZodType<
+  TargetReleaseSettingsPlugins2,
+  unknown
+> = z.object({
+  resources: z.array(z.string()),
+});
+/** @internal */
+export type TargetReleaseSettingsPlugins2$Outbound = {
+  resources: Array<string>;
+};
+
+/** @internal */
+export const TargetReleaseSettingsPlugins2$outboundSchema: z.ZodType<
+  TargetReleaseSettingsPlugins2$Outbound,
+  TargetReleaseSettingsPlugins2
+> = z.object({
+  resources: z.array(z.string()),
+});
+
+export function targetReleaseSettingsPlugins2ToJSON(
+  targetReleaseSettingsPlugins2: TargetReleaseSettingsPlugins2,
+): string {
+  return JSON.stringify(
+    TargetReleaseSettingsPlugins2$outboundSchema.parse(
+      targetReleaseSettingsPlugins2,
+    ),
+  );
+}
+export function targetReleaseSettingsPlugins2FromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseSettingsPlugins2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseSettingsPlugins2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseSettingsPlugins2' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseSettingsPlugins1$inboundSchema: z.ZodType<
+  TargetReleaseSettingsPlugins1,
+  unknown
+> = z.object({
+  input: z.string(),
+});
+/** @internal */
+export type TargetReleaseSettingsPlugins1$Outbound = {
+  input: string;
+};
+
+/** @internal */
+export const TargetReleaseSettingsPlugins1$outboundSchema: z.ZodType<
+  TargetReleaseSettingsPlugins1$Outbound,
+  TargetReleaseSettingsPlugins1
+> = z.object({
+  input: z.string(),
+});
+
+export function targetReleaseSettingsPlugins1ToJSON(
+  targetReleaseSettingsPlugins1: TargetReleaseSettingsPlugins1,
+): string {
+  return JSON.stringify(
+    TargetReleaseSettingsPlugins1$outboundSchema.parse(
+      targetReleaseSettingsPlugins1,
+    ),
+  );
+}
+export function targetReleaseSettingsPlugins1FromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseSettingsPlugins1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseSettingsPlugins1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseSettingsPlugins1' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleasePluginsSettingsUnion$inboundSchema: z.ZodType<
+  TargetReleasePluginsSettingsUnion,
+  unknown
+> = z.union([
+  z.lazy(() => TargetReleaseSettingsPlugins1$inboundSchema),
+  z.lazy(() => TargetReleaseSettingsPlugins2$inboundSchema),
+  z.lazy(() => TargetReleaseSettingsPlugins3$inboundSchema),
+  z.string(),
+]);
+/** @internal */
+export type TargetReleasePluginsSettingsUnion$Outbound =
+  | TargetReleaseSettingsPlugins1$Outbound
+  | TargetReleaseSettingsPlugins2$Outbound
+  | TargetReleaseSettingsPlugins3$Outbound
+  | string;
+
+/** @internal */
+export const TargetReleasePluginsSettingsUnion$outboundSchema: z.ZodType<
+  TargetReleasePluginsSettingsUnion$Outbound,
+  TargetReleasePluginsSettingsUnion
+> = z.union([
+  z.lazy(() => TargetReleaseSettingsPlugins1$outboundSchema),
+  z.lazy(() => TargetReleaseSettingsPlugins2$outboundSchema),
+  z.lazy(() => TargetReleaseSettingsPlugins3$outboundSchema),
+  z.string(),
+]);
+
+export function targetReleasePluginsSettingsUnionToJSON(
+  targetReleasePluginsSettingsUnion: TargetReleasePluginsSettingsUnion,
+): string {
+  return JSON.stringify(
+    TargetReleasePluginsSettingsUnion$outboundSchema.parse(
+      targetReleasePluginsSettingsUnion,
+    ),
+  );
+}
+export function targetReleasePluginsSettingsUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleasePluginsSettingsUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleasePluginsSettingsUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleasePluginsSettingsUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleasePlugins$inboundSchema: z.ZodType<
+  TargetReleasePlugins,
+  unknown
+> = z.object({
+  approval: z.record(
+    z.string(),
+    z.union([
+      TargetReleaseApprovalPlugins$inboundSchema,
+      TargetReleaseApprovalPluginsEnum$inboundSchema,
+    ]),
+  ).optional(),
+  settings: z.record(
+    z.string(),
+    z.union([
+      z.lazy(() => TargetReleaseSettingsPlugins1$inboundSchema),
+      z.lazy(() => TargetReleaseSettingsPlugins2$inboundSchema),
+      z.lazy(() => TargetReleaseSettingsPlugins3$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+});
+/** @internal */
+export type TargetReleasePlugins$Outbound = {
+  approval?:
+    | { [k: string]: TargetReleaseApprovalPlugins$Outbound | string }
+    | undefined;
+  settings?: {
+    [k: string]:
+      | TargetReleaseSettingsPlugins1$Outbound
+      | TargetReleaseSettingsPlugins2$Outbound
+      | TargetReleaseSettingsPlugins3$Outbound
+      | string;
+  } | undefined;
+};
+
+/** @internal */
+export const TargetReleasePlugins$outboundSchema: z.ZodType<
+  TargetReleasePlugins$Outbound,
+  TargetReleasePlugins
+> = z.object({
+  approval: z.record(
+    z.string(),
+    z.union([
+      TargetReleaseApprovalPlugins$outboundSchema,
+      TargetReleaseApprovalPluginsEnum$outboundSchema,
+    ]),
+  ).optional(),
+  settings: z.record(
+    z.string(),
+    z.union([
+      z.lazy(() => TargetReleaseSettingsPlugins1$outboundSchema),
+      z.lazy(() => TargetReleaseSettingsPlugins2$outboundSchema),
+      z.lazy(() => TargetReleaseSettingsPlugins3$outboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+});
+
+export function targetReleasePluginsToJSON(
+  targetReleasePlugins: TargetReleasePlugins,
+): string {
+  return JSON.stringify(
+    TargetReleasePlugins$outboundSchema.parse(targetReleasePlugins),
+  );
+}
+export function targetReleasePluginsFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleasePlugins, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleasePlugins$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleasePlugins' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetReleaseOperations$inboundSchema: z.ZodType<
+  TargetReleaseOperations,
+  unknown
+> = z.object({
+  custom: z.array(TargetReleaseCustom$inboundSchema).optional(),
+  plugins: z.record(
+    z.string(),
+    z.lazy(() => TargetReleasePlugins$inboundSchema),
+  ).optional(),
+});
+/** @internal */
+export type TargetReleaseOperations$Outbound = {
+  custom?: Array<TargetReleaseCustom$Outbound> | undefined;
+  plugins?: { [k: string]: TargetReleasePlugins$Outbound } | undefined;
+};
+
+/** @internal */
+export const TargetReleaseOperations$outboundSchema: z.ZodType<
+  TargetReleaseOperations$Outbound,
+  TargetReleaseOperations
+> = z.object({
+  custom: z.array(TargetReleaseCustom$outboundSchema).optional(),
+  plugins: z.record(
+    z.string(),
+    z.lazy(() => TargetReleasePlugins$outboundSchema),
+  ).optional(),
+});
+
+export function targetReleaseOperationsToJSON(
+  targetReleaseOperations: TargetReleaseOperations,
+): string {
+  return JSON.stringify(
+    TargetReleaseOperations$outboundSchema.parse(targetReleaseOperations),
+  );
+}
+export function targetReleaseOperationsFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetReleaseOperations, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetReleaseOperations$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetReleaseOperations' from JSON`,
+  );
+}
+
+/** @internal */
 export const TargetReleaseOperationsUnion$inboundSchema: z.ZodType<
   TargetReleaseOperationsUnion,
   unknown
-> = z.union([TargetReleaseOperations$inboundSchema, z.string()]);
+> = z.union([z.lazy(() => TargetReleaseOperations$inboundSchema), z.string()]);
 /** @internal */
 export type TargetReleaseOperationsUnion$Outbound =
   | TargetReleaseOperations$Outbound
@@ -1403,7 +1815,7 @@ export type TargetReleaseOperationsUnion$Outbound =
 export const TargetReleaseOperationsUnion$outboundSchema: z.ZodType<
   TargetReleaseOperationsUnion$Outbound,
   TargetReleaseOperationsUnion
-> = z.union([TargetReleaseOperations$outboundSchema, z.string()]);
+> = z.union([z.lazy(() => TargetReleaseOperations$outboundSchema), z.string()]);
 
 export function targetReleaseOperationsUnionToJSON(
   targetReleaseOperationsUnion: TargetReleaseOperationsUnion,
@@ -4877,7 +5289,7 @@ export const TargetReleaseStack$inboundSchema: z.ZodType<
   id: z.string(),
   inputs: z.array(TargetReleaseInput$inboundSchema).optional(),
   operations: z.nullable(
-    z.union([TargetReleaseOperations$inboundSchema, z.string()]),
+    z.union([z.lazy(() => TargetReleaseOperations$inboundSchema), z.string()]),
   ).optional(),
   permissions: z.lazy(() => TargetReleasePermissions$inboundSchema).optional(),
   resources: z.record(
@@ -4910,7 +5322,7 @@ export const TargetReleaseStack$outboundSchema: z.ZodType<
   id: z.string(),
   inputs: z.array(TargetReleaseInput$outboundSchema).optional(),
   operations: z.nullable(
-    z.union([TargetReleaseOperations$outboundSchema, z.string()]),
+    z.union([z.lazy(() => TargetReleaseOperations$outboundSchema), z.string()]),
   ).optional(),
   permissions: z.lazy(() => TargetReleasePermissions$outboundSchema).optional(),
   resources: z.record(

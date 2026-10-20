@@ -8,6 +8,17 @@ pub const MIN_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION: u32 = 1;
 /// Setup import payload format this binary writes.
 pub const CURRENT_SETUP_IMPORT_FORMAT_VERSION: u32 = 1;
 
+/// Latest setup payload this binary can read. GCP federation packages require v2.
+pub const MAX_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION: u32 = 2;
+
+pub fn setup_import_format_version_for_platform(platform: Platform) -> u32 {
+    if platform == Platform::Gcp {
+        2
+    } else {
+        CURRENT_SETUP_IMPORT_FORMAT_VERSION
+    }
+}
+
 /// Package source that produced an import request. Observability label
 /// only — the manager does not branch on this value, and any new deployment
 /// pathway can omit it without affecting import behavior.

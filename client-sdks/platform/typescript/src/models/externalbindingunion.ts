@@ -36,10 +36,23 @@ import {
   ExternalBindingUnion6$inboundSchema,
   ExternalBindingUnion6$Outbound,
   ExternalBindingUnion6$outboundSchema,
-  TypeKv4,
-  TypeKv4$inboundSchema,
-  TypeKv4$outboundSchema,
-} from "./typekv4.js";
+  KeyPrefixSecretRef1,
+  KeyPrefixSecretRef1$inboundSchema,
+  KeyPrefixSecretRef1$Outbound,
+  KeyPrefixSecretRef1$outboundSchema,
+} from "./keyprefixsecretref1.js";
+
+export type KeyPrefix1 = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: KeyPrefixSecretRef1;
+};
+
+export const TypeKv4 = {
+  Kv: "kv",
+} as const;
+export type TypeKv4 = ClosedEnum<typeof TypeKv4>;
 
 /**
  * Redis KV binding configuration
@@ -769,6 +782,43 @@ export type ExternalBindingUnion =
   | ExternalBindingUnion4
   | ExternalBindingUnion5
   | ExternalBindingUnion6;
+
+/** @internal */
+export const KeyPrefix1$inboundSchema: z.ZodType<KeyPrefix1, unknown> = z
+  .object({
+    secretRef: KeyPrefixSecretRef1$inboundSchema,
+  });
+/** @internal */
+export type KeyPrefix1$Outbound = {
+  secretRef: KeyPrefixSecretRef1$Outbound;
+};
+
+/** @internal */
+export const KeyPrefix1$outboundSchema: z.ZodType<
+  KeyPrefix1$Outbound,
+  KeyPrefix1
+> = z.object({
+  secretRef: KeyPrefixSecretRef1$outboundSchema,
+});
+
+export function keyPrefix1ToJSON(keyPrefix1: KeyPrefix1): string {
+  return JSON.stringify(KeyPrefix1$outboundSchema.parse(keyPrefix1));
+}
+export function keyPrefix1FromJSON(
+  jsonString: string,
+): SafeParseResult<KeyPrefix1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => KeyPrefix1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'KeyPrefix1' from JSON`,
+  );
+}
+
+/** @internal */
+export const TypeKv4$inboundSchema: z.ZodEnum<typeof TypeKv4> = z.enum(TypeKv4);
+/** @internal */
+export const TypeKv4$outboundSchema: z.ZodEnum<typeof TypeKv4> =
+  TypeKv4$inboundSchema;
 
 /** @internal */
 export const ExternalBindingRedis$inboundSchema: z.ZodType<

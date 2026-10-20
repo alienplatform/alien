@@ -59,7 +59,7 @@ export type CreateAccessRequest = {
   /**
    * Absolute requester deadline in UTC (Z suffix). Must be in the future and at most six hours ahead (30 seconds clock-skew tolerance). Approvals never extend it. Omit for legacy approval-window behavior.
    */
-  requestedExpiresAt?: Date | undefined;
+  requestedExpiresAt?: string | undefined;
   deploymentId: string;
   /**
    * Set for a plan-backed (ai-agent) request. Omit for a plan-less (CLI) request.
@@ -166,7 +166,7 @@ export const CreateAccessRequest$outboundSchema: z.ZodType<
   CreateAccessRequest
 > = z.object({
   replayKey: z.string().optional(),
-  requestedExpiresAt: z.date().transform(v => v.toISOString()).optional(),
+  requestedExpiresAt: z.string().optional(),
   deploymentId: z.string(),
   remediationPlanId: z.string().optional(),
   title: z.string().optional(),

@@ -18,7 +18,6 @@ use alien_core::embedded_config::{
 use alien_core::{
     sync::{OperatorImageReport, OperatorImageSource},
     validate_public_endpoint_urls, DeploymentState, DeploymentStatus, Platform, PublicEndpointUrls,
-    DEPLOYMENT_PROTOCOL_VERSION,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_manager_api::SdkResultExt as _;
@@ -538,6 +537,7 @@ async fn run_operator_cli(
                             &sync_url,
                             &sync_token,
                             args.platform,
+                            args.base_platform,
                             args.operator_name.as_deref(),
                             args.operator_resource_prefix.as_deref(),
                             args.operator_setup_item.as_deref(),
@@ -588,6 +588,7 @@ async fn run_operator_cli(
                         &sync_url,
                         &sync_token,
                         args.platform,
+                        args.base_platform,
                         args.operator_name.as_deref(),
                         args.operator_resource_prefix.as_deref(),
                         args.operator_setup_item.as_deref(),
@@ -605,6 +606,7 @@ async fn run_operator_cli(
                         deployment_token,
                         &sync_token,
                         args.platform,
+                        args.base_platform,
                         args.initial_desired_release,
                     )
                     .await?;
@@ -813,13 +815,14 @@ async fn persist_initialized_manager_identity(
     replacement_token: Option<String>,
     configured_sync_token: &str,
     platform: Platform,
+    base_platform: Option<Platform>,
     initial_desired_release: InitialDesiredReleaseArg,
 ) -> Result<String> {
     if replacement_token.is_some() {
         info!("   Received deployment-scoped token from manager");
     }
     let initial_state = (initial_desired_release == InitialDesiredReleaseArg::None)
-        .then(|| observe_only_initial_state(platform));
+        .then(|| observe_only_initial_state(platform, base_platform));
     db.persist_initialized_identity(
         deployment_id,
         initial_state.as_ref(),
@@ -829,7 +832,10 @@ async fn persist_initialized_manager_identity(
     Ok(replacement_token.unwrap_or_else(|| configured_sync_token.to_string()))
 }
 
-fn observe_only_initial_state(platform: Platform) -> DeploymentState {
+fn observe_only_initial_state(
+    platform: Platform,
+    base_platform: Option<Platform>,
+) -> DeploymentState {
     DeploymentState {
         platform,
         status: DeploymentStatus::Running,
@@ -840,7 +846,10 @@ fn observe_only_initial_state(platform: Platform) -> DeploymentState {
         environment_info: None,
         runtime_metadata: None,
         retry_requested: false,
-        protocol_version: DEPLOYMENT_PROTOCOL_VERSION,
+        protocol_version: alien_core::deployment_protocol_version_for_platform(
+            platform,
+            base_platform,
+        ),
     }
 }
 
@@ -1048,6 +1057,7 @@ async fn initialize_with_manager(
     sync_url: &url::Url,
     token: &str,
     platform: Platform,
+    base_platform: Option<Platform>,
     operator_name: Option<&str>,
     resource_prefix: Option<&str>,
     setup_item: Option<&str>,
@@ -1082,7 +1092,7 @@ async fn initialize_with_manager(
     let base_url = sync_url.as_str().trim_end_matches('/');
     let client = alien_manager_api::Client::new_with_client(base_url, http_client);
 
-    let sdk_platform = match platform {
+    let sdk_platform = |platform| match platform {
         Platform::Aws => SdkPlatform::Aws,
         Platform::Gcp => SdkPlatform::Gcp,
         Platform::Azure => SdkPlatform::Azure,
@@ -1103,11 +1113,14 @@ async fn initialize_with_manager(
         InitialDesiredReleaseArg::None => alien_manager_api::types::InitialDesiredRelease::None,
     };
     let mut builder = client.initialize().body_map(|b| {
-        b.platform(sdk_platform)
+        b.platform(sdk_platform(platform))
             .initial_desired_release(sdk_initial_desired_release)
             .input_values(input_values.clone())
     });
 
+    if let Some(base_platform) = base_platform {
+        builder = builder.body_map(|b| b.base_platform(sdk_platform(base_platform)));
+    }
     if let Some(name) = default_name {
         builder = builder.body_map(|b| b.name(name));
     }
@@ -1573,6 +1586,7 @@ mod tests {
             None,
             "ax_admin_existing",
             Platform::Kubernetes,
+            None,
             InitialDesiredReleaseArg::Active,
         )
         .await
@@ -1592,7 +1606,7 @@ mod tests {
 
     #[test]
     fn no_desired_release_initializes_running_observed_state() {
-        let state = observe_only_initial_state(Platform::Kubernetes);
+        let state = observe_only_initial_state(Platform::Kubernetes, None);
         assert_eq!(state.status, DeploymentStatus::Running);
         assert_eq!(state.platform, Platform::Kubernetes);
         assert!(state.current_release.is_none());

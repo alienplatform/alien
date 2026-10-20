@@ -472,7 +472,7 @@ fn gcp_remote_management_import_request(
     project_id: &str,
     project_number: Option<&str>,
 ) -> StackImportRequest {
-    StackImportRequest {
+    let mut request = StackImportRequest {
         setup_import_format_version: 1,
         deployment_group_token: "ignored".to_string(),
         deployment_name: deployment_name.to_string(),
@@ -488,6 +488,7 @@ fn gcp_remote_management_import_request(
         setup_fingerprint_version: 1,
         stack_settings: StackSettings::default(),
         management_config: Some(ManagementConfig::Gcp(GcpManagementConfig {
+            federation_trust: None,
             service_account_email: "manager@example.iam.gserviceaccount.com".to_string(),
         })),
         input_values: Default::default(),
@@ -495,18 +496,54 @@ fn gcp_remote_management_import_request(
             id: resource_id.to_string(),
             resource_type: RemoteStackManagement::RESOURCE_TYPE.into(),
             import_data: serde_json::to_value(GcpRemoteStackManagementImportData {
+                federation: {
+                    let scope = alien_core::GcpFederationScope {
+                        deployment_id: "dep_pending_fixture".into(),
+                    };
+                    alien_core::GcpFederationAccess {
+                        project_number: project_number.unwrap_or("123456789012").into(),
+                        pool_id: scope
+                            .pool_id(&RemoteStackManagement::RESOURCE_TYPE)
+                            .unwrap(),
+                        provider_id: "manager".into(),
+                        service_account_email: format!(
+                            "{deployment_name}-management@{project_id}.iam.gserviceaccount.com"
+                        ),
+                        assertion_audience: scope
+                            .assertion_audience(&RemoteStackManagement::RESOURCE_TYPE)
+                            .unwrap(),
+                        trust: alien_core::GcpFederationTrust {
+                            issuer: "https://accounts.google.com".into(),
+                            subject: "1234567890".into(),
+                        },
+                    }
+                },
                 project_id: project_id.to_string(),
                 project_number: project_number.map(ToString::to_string),
                 service_account_email: format!(
                     "{deployment_name}-management@{project_id}.iam.gserviceaccount.com"
                 ),
                 service_account_unique_id: "1234567890".to_string(),
-                remote_bindings_service_account_email: None,
                 management_permissions_applied: true,
             })
             .unwrap(),
         }],
+    };
+    for (id, service) in [
+        ("enable-iam", "iam.googleapis.com"),
+        (
+            "enable-cloud-resource-manager",
+            "cloudresourcemanager.googleapis.com",
+        ),
+        ("enable-iam-credentials", "iamcredentials.googleapis.com"),
+        ("enable-security-token-service", "sts.googleapis.com"),
+    ] {
+        request.resources.push(ImportedResource {
+            id: id.into(), resource_type: alien_core::ServiceActivation::RESOURCE_TYPE,
+            import_data: serde_json::json!({ "projectId": project_id, "serviceName": service, "activated": true }),
+        });
     }
+    request
 }
 
 fn azure_remote_management_import_request(
@@ -954,7 +991,7 @@ async fn gcp_import_persists_target_environment_info() {
     let fixture =
         make_fixture_for_platform(Platform::Gcp, Some(source_stack_without_setup_resources()))
             .await;
-    let body = gcp_remote_management_import_request(
+    let mut body = gcp_remote_management_import_request(
         "acme-prod",
         "us-central1",
         "management",
@@ -962,8 +999,9 @@ async fn gcp_import_persists_target_environment_info() {
         Some("123456789012"),
     );
 
+    reserve_gcp_import_fixture(&fixture, &mut body).await;
     let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
-    assert_eq!(status, StatusCode::CREATED, "body = {:#}", json);
+    assert_eq!(status, StatusCode::OK, "body = {:#}", json);
 
     let parsed: StackImportResponse = serde_json::from_value(json).unwrap();
     let persisted = fixture
@@ -1024,8 +1062,9 @@ async fn gcp_import_retains_delivered_quota_activation() {
             "activated": true
         }),
     });
+    reserve_gcp_import_fixture(&fixture, &mut body).await;
     let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
-    assert_eq!(status, StatusCode::CREATED, "body = {json:#}");
+    assert_eq!(status, StatusCode::OK, "body = {json:#}");
     let parsed: StackImportResponse = serde_json::from_value(json).unwrap();
     let persisted = fixture
         .deployment_store
@@ -2946,3 +2985,71 @@ async fn automatic_registration_requires_approval_and_defers_application_resourc
         );
     }
 }
+
+/// Match the pre-setup reservation used by generated GCP setup packages.
+async fn reserve_gcp_import_fixture(fixture: &Fixture, body: &mut StackImportRequest) -> String {
+    reserve_gcp_import_fixture_with_protocol(
+        fixture,
+        body,
+        alien_core::GCP_FEDERATION_DEPLOYMENT_PROTOCOL_VERSION,
+    )
+    .await
+}
+
+async fn reserve_gcp_import_fixture_with_protocol(
+    fixture: &Fixture,
+    body: &mut StackImportRequest,
+    protocol: u32,
+) -> String {
+    let reserved = fixture
+        .deployment_store
+        .create_with_state(
+            &alien_manager::auth::Subject::system(),
+            CreateImportedDeploymentParams {
+                name: body.deployment_name.clone(),
+                deployment_group_id: fixture.deployment_group_id.clone(),
+                platform: body.platform,
+                deployment_protocol_version: protocol,
+                base_platform: body.base_platform,
+                stack_settings: body.stack_settings.clone(),
+                stack_state: StackState::new(body.platform),
+                environment_info: None,
+                runtime_metadata: RuntimeMetadata::default(),
+                status: "pending".into(),
+                current_release_id: None,
+                desired_release_id: None,
+                import_source: Some(ImportSourceKind::Terraform),
+                setup_metadata: Some(
+                    serde_json::json!({ "setupReservation": { "releaseId": fixture.release_id } }),
+                ),
+                setup_target: body.setup_target.clone(),
+                setup_fingerprint: body.setup_fingerprint.clone(),
+                setup_fingerprint_version: body.setup_fingerprint_version,
+                deployment_token: None,
+                management_config: body.management_config.clone(),
+                input_values: body.input_values.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    let scope = alien_core::GcpFederationScope {
+        deployment_id: reserved.id.clone(),
+    };
+    for resource in &mut body.resources {
+        if resource.resource_type == RemoteStackManagement::RESOURCE_TYPE
+            || resource.resource_type == alien_core::RemoteBindings::RESOURCE_TYPE
+        {
+            resource.import_data["federation"]["assertionAudience"] =
+                serde_json::json!(scope.assertion_audience(&resource.resource_type).unwrap());
+            resource.import_data["federation"]["poolId"] =
+                serde_json::json!(scope.pool_id(&resource.resource_type).unwrap());
+        }
+    }
+    reserved.id
+}
+
+#[path = "stack_import/protocol.rs"]
+mod protocol;
+
+#[path = "stack_import/reservation.rs"]
+mod reservation;

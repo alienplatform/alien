@@ -103,6 +103,10 @@ export type SyncAcquireRequestDeploymentModel = ClosedEnum<
  * Request to acquire deployments for processing
  */
 export type SyncAcquireRequest = {
+  /**
+   * Highest deployment protocol this runtime can interpret. Omitted means version 1.
+   */
+  maxSupportedDeploymentProtocolVersion?: number | undefined;
   managerId?: string | undefined;
   /**
    * Unique session identifier for lock tracking
@@ -165,6 +169,7 @@ export const SyncAcquireRequestDeploymentModel$outboundSchema: z.ZodEnum<
 
 /** @internal */
 export type SyncAcquireRequest$Outbound = {
+  maxSupportedDeploymentProtocolVersion?: number | undefined;
   managerId?: string | undefined;
   session: string;
   requestId: string;
@@ -183,6 +188,7 @@ export const SyncAcquireRequest$outboundSchema: z.ZodType<
   SyncAcquireRequest$Outbound,
   SyncAcquireRequest
 > = z.object({
+  maxSupportedDeploymentProtocolVersion: z.int().optional(),
   managerId: z.string().optional(),
   session: z.string(),
   requestId: z.string(),

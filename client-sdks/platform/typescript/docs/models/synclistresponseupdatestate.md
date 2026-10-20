@@ -14,11 +14,16 @@ let value: SyncListResponseUpdateState = {
     reasons: [],
     targetReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
     changedKeys: [],
-    requestedAt: new Date("2026-04-28T10:12:17.277Z"),
+    cause: {
+      kind: "volume-restore",
+      at: new Date("2024-04-20T16:58:36.345Z"),
+      releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+    },
+    requestedAt: new Date("2024-05-03T02:14:14.983Z"),
   },
   next: {
     id: "duop_0vtxpb1sw4sbcdwg2xo37q6",
-    status: "blocked",
+    status: "applying",
     reasons: [],
     targetReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
     changedKeys: [
@@ -26,21 +31,28 @@ let value: SyncListResponseUpdateState = {
       "<value 2>",
       "<value 3>",
     ],
-    requestedAt: new Date("2025-05-23T02:17:08.731Z"),
+    cause: {
+      kind: "volume-restore",
+      at: new Date("2024-04-20T16:58:36.345Z"),
+      releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+    },
+    requestedAt: new Date("2025-07-21T11:59:25.062Z"),
   },
   latest: {
     id: "duop_0vtxpb1sw4sbcdwg2xo37q6",
-    status: "superseded",
-    reasons: [
-      "redeploy",
-    ],
+    status: "queued",
+    reasons: [],
     targetReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
     changedKeys: [
       "<value 1>",
       "<value 2>",
-      "<value 3>",
     ],
-    requestedAt: new Date("2024-11-23T19:43:18.153Z"),
+    cause: {
+      kind: "volume-restore",
+      at: new Date("2024-04-20T16:58:36.345Z"),
+      releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+    },
+    requestedAt: new Date("2026-06-26T04:52:21.740Z"),
   },
 };
 ```

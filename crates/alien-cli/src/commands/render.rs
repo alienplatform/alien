@@ -174,6 +174,8 @@ async fn prepare_stack_for_render(
 
     let stack_state = StackState::new(platform);
     let config = DeploymentConfig {
+        // Rendering precedes installation reservation; setup supplies the scope.
+        gcp_federation_scope: None,
         stored_secret_input_ids: None,
         input_values: Default::default(),
         deployment_name: Some(stack.id().to_string()),
@@ -258,6 +260,7 @@ fn render_management_config(platform: Platform) -> Option<ManagementConfig> {
             managing_role_arn: "rendered-from-template-parameter".to_string(),
         })),
         Platform::Gcp => Some(ManagementConfig::Gcp(GcpManagementConfig {
+            federation_trust: None,
             service_account_email: "rendered-from-terraform-variable".to_string(),
         })),
         Platform::Azure => Some(ManagementConfig::Azure(AzureManagementConfig {
@@ -762,6 +765,8 @@ mod tests {
                 }
 
                 let config = DeploymentConfig {
+                    // Rendering precedes installation reservation; setup supplies the scope.
+                    gcp_federation_scope: None,
                     stored_secret_input_ids: None,
                     input_values: Default::default(),
                     deployment_name: Some("agents-stack".to_string()),

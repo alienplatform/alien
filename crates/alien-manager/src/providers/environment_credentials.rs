@@ -46,6 +46,19 @@ impl EnvironmentCredentialResolver {
         // same OIDC token file is trusted first by the external management
         // identity and, after setup, by the generated target UAMI.
         if deployment.platform != Platform::Azure {
+            if deployment.platform == Platform::Gcp
+                && deployment.stack_state.as_ref().is_some_and(|state| {
+                    state.resources.values().any(|resource| {
+                        resource.resource_type
+                            == alien_core::RemoteStackManagement::RESOURCE_TYPE.as_ref()
+                    })
+                })
+            {
+                return Err(AlienError::new(alien_core::ErrorData::GcpFederationInvalid {
+                    field: "managerSource".to_string(),
+                    reason: "installed target access requires the manager's linked assertion identity; configure its management binding".to_string(),
+                }).into_generic());
+            }
             return Ok(base_config);
         }
 

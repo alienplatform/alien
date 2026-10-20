@@ -42,6 +42,10 @@ pub struct SqliteDeploymentStore {
     db: Arc<SqliteDatabase>,
 }
 
+/// A setup reservation whose installer has not registered yet. The manager has
+/// installed nothing for it; the installer owns any cloud resources until then.
+const UNREGISTERED_SETUP_RESERVATION: &str = "status = 'pending' AND current_release_id IS NULL AND json_extract(COALESCE(setup_metadata, '{}'), '$.setupReservation.releaseId') IS NOT NULL";
+
 impl SqliteDeploymentStore {
     pub(crate) const WORK_STATUSES: [&'static str; 9] = [
         "pending",
@@ -66,6 +70,183 @@ impl SqliteDeploymentStore {
     const RUNTIME_DELETE_STATUSES: [&'static str; 3] =
         ["delete-pending", "deleting", "delete-failed"];
     const RUNNING_STATUS: &'static str = "running";
+
+    async fn insert_deployment(
+        &self,
+        caller: &crate::auth::Subject,
+        params: CreateDeploymentParams,
+        reservation: Option<SetupReservation>,
+    ) -> Result<DeploymentRecord, AlienError> {
+        if let Some(_existing) = self
+            .get_deployment_by_name(caller, &params.deployment_group_id, &params.name)
+            .await?
+        {
+            return Err(AlienError::new(ErrorData::DeploymentNameConflict {
+                name: params.name,
+                deployment_group_id: params.deployment_group_id,
+            })
+            .into_generic());
+        }
+
+        let id = ids::deployment_id();
+        let now = Utc::now();
+
+        let setup_metadata = reservation.as_ref().map(|reservation| serde_json::json!({
+            "setupReservation": { "releaseId": reservation.release_id, "createdAt": now.to_rfc3339() }
+        }));
+        let setup_metadata_json = setup_metadata
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .into_alien_error()
+            .context(GenericError {
+                message: "Failed to serialize setup reservation".to_string(),
+            })?;
+        let stack_settings_json = serde_json::to_string(&params.stack_settings)
+            .into_alien_error()
+            .context(GenericError {
+                message: "Failed to serialize stack_settings".to_string(),
+            })?;
+        let stack_state_json: Option<String> = params
+            .stack_state
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .into_alien_error()
+            .context(GenericError {
+                message: "Failed to serialize stack_state".to_string(),
+            })?;
+
+        let env_vars_json: Option<String> = params
+            .environment_variables
+            .as_ref()
+            .map(|ev| serde_json::to_string(ev))
+            .transpose()
+            .into_alien_error()
+            .context(GenericError {
+                message: "Failed to serialize environment_variables".to_string(),
+            })?;
+
+        let input_values_json = serde_json::to_string(&params.input_values)
+            .into_alien_error()
+            .context(GenericError {
+                message: "Failed to serialize input_values".to_string(),
+            })?;
+
+        // Build SQL in a block so sea_query types (which contain Rc and are !Send)
+        // are dropped before the .await.
+        let sql = {
+            let mut columns = vec![
+                Deployments::Id,
+                Deployments::Name,
+                Deployments::DeploymentGroupId,
+                Deployments::Platform,
+                Deployments::DeploymentProtocolVersion,
+                Deployments::Status,
+                Deployments::StackSettings,
+                Deployments::RetryRequested,
+                Deployments::CreatedAt,
+                Deployments::InputValues,
+            ];
+            let mut values: Vec<sea_query::SimpleExpr> = vec![
+                id.clone().into(),
+                params.name.clone().into(),
+                params.deployment_group_id.clone().into(),
+                params.platform.as_str().to_string().into(),
+                (params.deployment_protocol_version as i64).into(),
+                "pending".to_string().into(),
+                stack_settings_json.into(),
+                0i64.into(),
+                now.to_rfc3339().into(),
+                input_values_json.into(),
+            ];
+
+            if let Some(ref ev_json) = env_vars_json {
+                columns.push(Deployments::EnvironmentVariables);
+                values.push(ev_json.clone().into());
+            }
+
+            if let Some(ref state_json) = stack_state_json {
+                columns.push(Deployments::StackState);
+                values.push(state_json.clone().into());
+            }
+
+            if let Some(ref token) = params.deployment_token {
+                columns.push(Deployments::DeploymentToken);
+                values.push(token.clone().into());
+            }
+
+            if let Some(base_platform) = params.base_platform {
+                columns.push(Deployments::BasePlatform);
+                values.push(base_platform.as_str().to_string().into());
+            }
+            if let Some(reservation) = &reservation {
+                columns.extend([
+                    Deployments::ImportSource,
+                    Deployments::SetupMetadata,
+                    Deployments::SetupTarget,
+                    Deployments::SetupFingerprintVersion,
+                ]);
+                let source = import_source_to_string(&reservation.import_source);
+                values.extend([
+                    source.into(),
+                    setup_metadata_json.clone().into(),
+                    reservation.setup_target.clone().into(),
+                    i64::from(reservation.setup_fingerprint_version).into(),
+                ]);
+            }
+            Query::insert()
+                .into_table(Deployments::Table)
+                .columns(columns)
+                .values(values)
+                .map_err(|e| db_error(&format!("Failed to build deployment insert query: {}", e)))?
+                .to_string(SqliteQueryBuilder)
+        };
+
+        self.db.execute(&sql).await?;
+
+        Ok(DeploymentRecord {
+            supplied_stacks: None,
+            id,
+            workspace_id: "default".to_string(),
+            project_id: "default".to_string(),
+            name: params.name,
+            deployment_group_id: params.deployment_group_id,
+            platform: params.platform,
+            deployment_protocol_version: params.deployment_protocol_version,
+            base_platform: params.base_platform,
+            status: "pending".to_string(),
+            stack_settings: Some(params.stack_settings),
+            stack_state: params.stack_state,
+            environment_info: None,
+            runtime_metadata: None,
+            current_release_id: None,
+            desired_release_id: None,
+            import_source: reservation
+                .as_ref()
+                .map(|value| value.import_source.clone()),
+            setup_method: reservation
+                .as_ref()
+                .map(|value| import_source_to_string(&value.import_source)),
+            setup_metadata,
+            setup_target: reservation.as_ref().map(|value| value.setup_target.clone()),
+            setup_fingerprint: None,
+            setup_fingerprint_version: reservation
+                .as_ref()
+                .map(|value| value.setup_fingerprint_version),
+            user_environment_variables: params.environment_variables,
+            deployment_token: params.deployment_token,
+            input_values: params.input_values,
+            management_config: None,
+            deployment_config: None,
+            retry_requested: false,
+            locked_by: None,
+            locked_at: None,
+            created_at: now,
+            updated_at: None,
+            error: None,
+        })
+    }
 
     pub fn new(db: Arc<SqliteDatabase>) -> Self {
         Self { db }
@@ -150,6 +331,12 @@ impl SqliteDeploymentStore {
     }
 
     fn acquire_status_condition(statuses: Option<&Vec<String>>) -> sea_query::Condition {
+        Cond::all()
+            .add(Expr::cust(format!("NOT ({UNREGISTERED_SETUP_RESERVATION})")))
+            .add(Self::unreserved_acquire_status_condition(statuses))
+    }
+
+    fn unreserved_acquire_status_condition(statuses: Option<&Vec<String>>) -> sea_query::Condition {
         let retryable_failed = Cond::all()
             .add(Expr::col(Deployments::Status).is_in(Self::FAILED_STATUSES))
             .add(Expr::col(Deployments::RetryRequested).eq(1));
@@ -527,139 +714,17 @@ impl DeploymentStore for SqliteDeploymentStore {
         caller: &crate::auth::Subject,
         params: CreateDeploymentParams,
     ) -> Result<DeploymentRecord, AlienError> {
-        if let Some(_existing) = self
-            .get_deployment_by_name(caller, &params.deployment_group_id, &params.name)
-            .await?
-        {
-            return Err(AlienError::new(ErrorData::DeploymentNameConflict {
-                name: params.name,
-                deployment_group_id: params.deployment_group_id,
-            })
-            .into_generic());
-        }
+        self.insert_deployment(caller, params, None).await
+    }
 
-        let id = ids::deployment_id();
-        let now = Utc::now();
-
-        let stack_settings_json = serde_json::to_string(&params.stack_settings)
-            .into_alien_error()
-            .context(GenericError {
-                message: "Failed to serialize stack_settings".to_string(),
-            })?;
-        let stack_state_json: Option<String> = params
-            .stack_state
-            .as_ref()
-            .map(serde_json::to_string)
-            .transpose()
-            .into_alien_error()
-            .context(GenericError {
-                message: "Failed to serialize stack_state".to_string(),
-            })?;
-
-        let env_vars_json: Option<String> = params
-            .environment_variables
-            .as_ref()
-            .map(|ev| serde_json::to_string(ev))
-            .transpose()
-            .into_alien_error()
-            .context(GenericError {
-                message: "Failed to serialize environment_variables".to_string(),
-            })?;
-
-        let input_values_json = serde_json::to_string(&params.input_values)
-            .into_alien_error()
-            .context(GenericError {
-                message: "Failed to serialize input_values".to_string(),
-            })?;
-
-        // Build SQL in a block so sea_query types (which contain Rc and are !Send)
-        // are dropped before the .await.
-        let sql = {
-            let mut columns = vec![
-                Deployments::Id,
-                Deployments::Name,
-                Deployments::DeploymentGroupId,
-                Deployments::Platform,
-                Deployments::DeploymentProtocolVersion,
-                Deployments::Status,
-                Deployments::StackSettings,
-                Deployments::RetryRequested,
-                Deployments::CreatedAt,
-                Deployments::InputValues,
-            ];
-            let mut values: Vec<sea_query::SimpleExpr> = vec![
-                id.clone().into(),
-                params.name.clone().into(),
-                params.deployment_group_id.clone().into(),
-                params.platform.as_str().to_string().into(),
-                (params.deployment_protocol_version as i64).into(),
-                "pending".to_string().into(),
-                stack_settings_json.into(),
-                0i64.into(),
-                now.to_rfc3339().into(),
-                input_values_json.into(),
-            ];
-
-            if let Some(ref ev_json) = env_vars_json {
-                columns.push(Deployments::EnvironmentVariables);
-                values.push(ev_json.clone().into());
-            }
-
-            if let Some(ref state_json) = stack_state_json {
-                columns.push(Deployments::StackState);
-                values.push(state_json.clone().into());
-            }
-
-            if let Some(ref token) = params.deployment_token {
-                columns.push(Deployments::DeploymentToken);
-                values.push(token.clone().into());
-            }
-
-            Query::insert()
-                .into_table(Deployments::Table)
-                .columns(columns)
-                .values(values)
-                .map_err(|e| db_error(&format!("Failed to build deployment insert query: {}", e)))?
-                .to_string(SqliteQueryBuilder)
-        };
-
-        self.db.execute(&sql).await?;
-
-        Ok(DeploymentRecord {
-            supplied_stacks: None,
-            id,
-            workspace_id: "default".to_string(),
-            project_id: "default".to_string(),
-            name: params.name,
-            deployment_group_id: params.deployment_group_id,
-            platform: params.platform,
-            deployment_protocol_version: params.deployment_protocol_version,
-            base_platform: None,
-            status: "pending".to_string(),
-            stack_settings: Some(params.stack_settings),
-            stack_state: params.stack_state,
-            environment_info: None,
-            runtime_metadata: None,
-            current_release_id: None,
-            desired_release_id: None,
-            import_source: None,
-            setup_method: None,
-            setup_metadata: None,
-            setup_target: None,
-            setup_fingerprint: None,
-            setup_fingerprint_version: None,
-            user_environment_variables: params.environment_variables,
-            deployment_token: params.deployment_token,
-            input_values: params.input_values,
-            management_config: None,
-            deployment_config: None,
-            retry_requested: false,
-            locked_by: None,
-            locked_at: None,
-            created_at: now,
-            updated_at: None,
-            error: None,
-        })
+    async fn create_setup_reservation(
+        &self,
+        caller: &crate::auth::Subject,
+        params: CreateDeploymentParams,
+        reservation: SetupReservation,
+    ) -> Result<DeploymentRecord, AlienError> {
+        self.insert_deployment(caller, params, Some(reservation))
+            .await
     }
 
     async fn create_with_state(
@@ -1034,6 +1099,9 @@ impl DeploymentStore for SqliteDeploymentStore {
                         .is_not_in(filter.excluded_deployment_ids.iter().map(String::as_str)),
                 );
             }
+            if let Some(max_version) = filter.max_deployment_protocol_version {
+                query.and_where(Expr::col(Deployments::DeploymentProtocolVersion).lte(max_version));
+            }
             if let Some(platforms) = &filter.platforms {
                 let platform_strs: Vec<&str> = platforms.iter().map(|p| p.as_str()).collect();
                 query.and_where(Expr::col(Deployments::Platform).is_in(platform_strs));
@@ -1095,6 +1163,18 @@ impl DeploymentStore for SqliteDeploymentStore {
                 status: deployment.status,
             })
             .into_generic());
+        }
+
+        // Nothing to clean up for an unregistered reservation, so remove it. The
+        // condition is rechecked in the delete, so a registration that activated
+        // it in the meantime keeps it and it takes the normal cleanup path.
+        let sql = Query::delete()
+            .from_table(Deployments::Table)
+            .and_where(Expr::col(Deployments::Id).eq(id))
+            .and_where(Expr::cust(UNREGISTERED_SETUP_RESERVATION))
+            .to_string(SqliteQueryBuilder);
+        if self.db.execute_returning_rows_affected(&sql).await? > 0 {
+            return Ok(());
         }
 
         // FUTURE: reject or queue delete requests when another session currently owns the deployment lock.
@@ -1328,6 +1408,9 @@ impl DeploymentStore for SqliteDeploymentStore {
                     Expr::col(Deployments::Id)
                         .is_not_in(filter.excluded_deployment_ids.iter().map(String::as_str)),
                 );
+            }
+            if let Some(max_version) = filter.max_deployment_protocol_version {
+                query.and_where(Expr::col(Deployments::DeploymentProtocolVersion).lte(max_version));
             }
             if let Some(platforms) = &filter.platforms {
                 let platform_strs: Vec<&str> = platforms.iter().map(|p| p.as_str()).collect();

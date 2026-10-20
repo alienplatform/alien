@@ -36,6 +36,10 @@ pub struct DeploymentConfig {
     /// Derived from Manager's ServiceAccount, not user-specified.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub management_config: Option<ManagementConfig>,
+    /// Registered installation identity for target federation setup.
+    /// Callers derive this from registration, separately from display metadata.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gcp_federation_scope: Option<crate::GcpFederationScope>,
     /// Environment variables snapshot
     pub environment_variables: EnvironmentVariablesSnapshot,
     /// Deployer-provided stack input values, keyed by input id. A resource

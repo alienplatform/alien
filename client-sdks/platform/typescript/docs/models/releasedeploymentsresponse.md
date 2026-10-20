@@ -13,9 +13,11 @@ let value: ReleaseDeploymentsResponse = {
     updating: 670112,
     failed: 812790,
     pending: 710404,
-    pinnedOther: 896373,
-    superseded: 835410,
-    onOther: 213666,
+    waitingOnOwner: 896373,
+    waitingOnInputs: 835410,
+    pinnedOther: 213666,
+    superseded: 823528,
+    onOther: 692726,
   },
 };
 ```

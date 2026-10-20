@@ -1451,7 +1451,12 @@ impl RunnerConfigSources<'_> {
         )
         .await;
 
+        let gcp_federation_scope = (deployment.base_platform.unwrap_or(deployment.platform)
+            == alien_core::Platform::Gcp)
+            .then(|| deployment.gcp_federation_scope());
         let config = if let Some(mut config) = deployment.deployment_config.clone() {
+            // Stored installer configuration cannot choose the broker's authorization namespace.
+            config.gcp_federation_scope = gcp_federation_scope;
             config.environment_variables = environment_variables;
             if config.deployment_name.is_none() {
                 config.deployment_name = Some(deployment.name.clone());
@@ -1487,6 +1492,7 @@ impl RunnerConfigSources<'_> {
             })?;
 
             DeploymentConfig {
+                gcp_federation_scope,
                 stored_secret_input_ids: None,
                 input_values: deployment.input_values.clone(),
                 deployment_name: Some(deployment.name.clone()),
@@ -3879,9 +3885,16 @@ mod tests {
                 endpoints: HashMap::from([("iamcredentials".to_string(), server.base_url())]),
             }),
         }));
-        let stack = gcp_stack_with_target_identity();
-        let error = alien_infra::RemoteAccessResolver::new(HashMap::new())
-            .resolve(config, &stack, None, None)
+        use alien_gcp_clients::iam::{GenerateAccessTokenRequest, IamApi, IamClient};
+        let error = IamClient::new(reqwest::Client::new(), config.gcp_config().unwrap().clone())
+            .generate_access_token(
+                "target@example.invalid".to_string(),
+                GenerateAccessTokenRequest::builder()
+                    .scope(vec![
+                        "https://www.googleapis.com/auth/cloud-platform".to_string()
+                    ])
+                    .build(),
+            )
             .await
             .context(ErrorData::RemoteCredentialHandoffFailed {
                 deployment_id: "dep_test".to_string(),

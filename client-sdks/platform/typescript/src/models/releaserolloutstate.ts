@@ -10,6 +10,8 @@ export const ReleaseRolloutState = {
   Updating: "updating",
   Failed: "failed",
   Pending: "pending",
+  WaitingOnOwner: "waiting-on-owner",
+  WaitingOnInputs: "waiting-on-inputs",
   PinnedOther: "pinned-other",
   Superseded: "superseded",
   OnOther: "on-other",

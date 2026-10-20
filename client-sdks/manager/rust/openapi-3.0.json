@@ -1941,6 +1941,13 @@
             "format": "int32",
             "minimum": 0
           },
+          "maxSupportedDeploymentProtocolVersion": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Missing on protocol1 actors. Advertise the reader ceiling before taking ownership.",
+            "minimum": 0,
+            "nullable": true
+          },
           "platforms": {
             "type": "array",
             "items": {
@@ -2113,6 +2120,13 @@
                   "$ref": "#/components/schemas/DynamicContainerReport"
                 },
                 "description": "Absent for older Operators. This report has no secret values.",
+                "nullable": true
+              },
+              "maxSupportedDeploymentProtocolVersion": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Missing on actors that only understand protocol1.",
+                "minimum": 0,
                 "nullable": true
               },
               "operationsConfig": {
@@ -6809,6 +6823,15 @@
           "platform"
         ],
         "properties": {
+          "basePlatform": {
+            "nullable": true,
+            "description": "Base cloud for a Kubernetes installation; omitted for cloud-native targets.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Platform"
+              }
+            ]
+          },
           "deploymentGroupId": {
             "type": "string",
             "nullable": true
@@ -6828,10 +6851,22 @@
           "name": {
             "type": "string"
           },
+          "pinnedReleaseId": {
+            "type": "string",
+            "nullable": true
+          },
           "platform": {
             "$ref": "#/components/schemas/Platform"
           },
           "resourcePrefix": {
+            "type": "string",
+            "nullable": true
+          },
+          "setupHandoff": {
+            "$ref": "#/components/schemas/SetupHandoff",
+            "description": "Reserve an installation before an external setup package creates resources."
+          },
+          "setupMethod": {
             "type": "string",
             "nullable": true
           },
@@ -7358,7 +7393,7 @@
           "deploymentProtocolVersion": {
             "type": "integer",
             "format": "int32",
-            "description": "Required by the platform-SDK Deployment schema. Hard-coded to\nalien-core's `CURRENT_DEPLOYMENT_PROTOCOL_VERSION` so the CLI\naccepts the response.",
+            "description": "State protocol stored on this deployment and required by its runtime.",
             "minimum": 0
           },
           "desiredReleaseId": {
@@ -8649,6 +8684,25 @@
           }
         }
       },
+      "GcpFederationTrust": {
+        "type": "object",
+        "description": "The exact manager identity trusted by a deployment-owned identity pool.",
+        "required": [
+          "issuer",
+          "subject"
+        ],
+        "properties": {
+          "issuer": {
+            "type": "string",
+            "description": "OIDC issuer; Google or the manager's Kubernetes issuer."
+          },
+          "subject": {
+            "type": "string",
+            "description": "Exact immutable Google account ID or Kubernetes service-account subject."
+          }
+        },
+        "additionalProperties": false
+      },
       "GcpFirestoreKvHeartbeatData": {
         "type": "object",
         "required": [
@@ -8735,9 +8789,18 @@
           "serviceAccountEmail"
         ],
         "properties": {
+          "federationTrust": {
+            "nullable": true,
+            "description": "Available on managers supporting customer-owned target federation.\nNew GCP setup requires this capability; unaffected cloud metadata stays readable.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/GcpFederationTrust"
+              }
+            ]
+          },
           "serviceAccountEmail": {
             "type": "string",
-            "description": "Service account email for management roles"
+            "description": "Linked source account metadata; never a direct target trust grant."
           }
         }
       },
@@ -16885,6 +16948,13 @@
             "type": "string"
           }
         }
+      },
+      "SetupHandoff": {
+        "type": "string",
+        "enum": [
+          "immediate",
+          "await-registration"
+        ]
       },
       "SetupManagement": {
         "type": "string",
