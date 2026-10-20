@@ -231,8 +231,7 @@ resource "azurerm_role_definition" "application_access_read_write_container_blob
   }
 
   assignable_scopes = [
-    "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}",
-    "/subscriptions/${var.azure_subscription_id}"
+    "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
   ]
   depends_on = [
     azurerm_resource_group.default_resource_group
