@@ -176,51 +176,62 @@ fn in_sandbox_namespace(name: &str, sandbox: Option<&str>, legacy_sandbox: &[Str
 
 /// Why a set of repository prefixes cannot name repositories unambiguously, if it cannot.
 ///
-/// Every repository prefix, current or legacy, is an eager replication filter, so a sandbox
-/// namespace must sit outside all of them. A legacy prefix must not be the current one or nest
-/// with it at a `-` boundary, or one repository would be read under both.
+/// A repository is attributed to the first prefix it sits under, so no two repository prefixes
+/// may be equal or nest at a `-` boundary, and neither may two sandbox namespaces: one image
+/// would otherwise be read under a prefix that names another project's repository. Every
+/// repository prefix, current or legacy, is an eager replication filter, so a sandbox namespace
+/// must also sit outside all of them.
 fn invalid_repository_prefixes(
     current: &str,
     sandbox: Option<&str>,
     legacy: &[String],
     legacy_sandbox: &[String],
 ) -> Option<String> {
-    for prefix in legacy {
-        if prefix.is_empty()
-            || prefix.contains('/')
-            || prefix == current
-            || under_prefix(prefix, current)
-            || under_prefix(current, prefix)
-        {
-            return Some(format!(
-                "Legacy repository prefix '{prefix}' must be a distinct, non-nested repository prefix"
-            ));
-        }
+    if let Some(prefix) = legacy
+        .iter()
+        .find(|prefix| prefix.is_empty() || prefix.contains('/'))
+    {
+        return Some(format!(
+            "Legacy repository prefix '{prefix}' must be a non-empty repository prefix"
+        ));
     }
     let replicated: Vec<&str> = std::iter::once(current)
         .chain(legacy.iter().map(String::as_str))
         .collect();
-    for namespace in sandbox
+    if let Some((a, b)) = overlapping(&replicated) {
+        return Some(format!(
+            "Repository prefixes '{a}' and '{b}' overlap; each must name repositories of its own"
+        ));
+    }
+    let namespaces: Vec<&str> = sandbox
         .into_iter()
         .chain(legacy_sandbox.iter().map(String::as_str))
-    {
-        if !replicated
+        .collect();
+    if let Some(namespace) = namespaces.iter().find(|namespace| {
+        !replicated
             .iter()
             .all(|prefix| valid_sandbox_namespace(namespace, prefix))
-        {
-            return Some(format!(
-                "Sandbox namespace '{namespace}' must be outside every replicated repository prefix"
-            ));
-        }
-    }
-    if let Some(namespace) =
-        sandbox.filter(|namespace| legacy_sandbox.iter().any(|l| l == namespace))
-    {
+    }) {
         return Some(format!(
-            "Sandbox namespace '{namespace}' cannot also be a legacy sandbox namespace"
+            "Sandbox namespace '{namespace}' must be outside every replicated repository prefix"
+        ));
+    }
+    if let Some((a, b)) = overlapping(&namespaces) {
+        return Some(format!(
+            "Sandbox namespaces '{a}' and '{b}' overlap; each must name repositories of its own"
         ));
     }
     None
+}
+
+/// The first two prefixes that are equal or nest at a `-` boundary.
+fn overlapping<'a>(prefixes: &[&'a str]) -> Option<(&'a str, &'a str)> {
+    prefixes.iter().enumerate().find_map(|(i, a)| {
+        prefixes[i + 1..]
+            .iter()
+            .find(|b| a == *b || under_prefix(a, b) || under_prefix(b, a))
+            .map(|b| (*a, *b))
+    })
 }
 
 fn valid_sandbox_namespace(prefix: &str, replicated_prefix: &str) -> bool {
@@ -1617,6 +1628,37 @@ mod tests {
                 vec![],
                 vec!["sandbox-cache/artifacts"],
                 "the current sandbox namespace",
+            ),
+            (
+                "artifacts",
+                None,
+                vec!["acme-artifacts", "acme-artifacts-v2"],
+                vec![],
+                "two legacy prefixes that nest",
+            ),
+            (
+                "artifacts",
+                None,
+                vec!["acme-artifacts", "acme-artifacts"],
+                vec![],
+                "the same legacy prefix twice",
+            ),
+            (
+                "artifacts",
+                Some("sandbox-cache/artifacts"),
+                vec![],
+                vec![
+                    "sandbox-acme/acme-artifacts",
+                    "sandbox-acme/acme-artifacts-v2",
+                ],
+                "two legacy sandbox namespaces that nest",
+            ),
+            (
+                "artifacts",
+                Some("sandbox-cache/artifacts-v2"),
+                vec![],
+                vec!["sandbox-cache/artifacts"],
+                "a current sandbox namespace nested under a legacy one",
             ),
         ] {
             let legacy: Vec<String> = legacy.into_iter().map(str::to_string).collect();
