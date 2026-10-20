@@ -46,8 +46,9 @@ use alien_bindings::traits::{
 };
 use alien_bindings::BindingsProviderApi;
 use alien_core::{
-    classify_azure_sandbox_image, image_rewrite::strip_registry_host, AzureSandboxImage, Container,
-    ContainerCode, Daemon, DaemonCode, Platform, Sandbox, SandboxCode, Worker, WorkerCode,
+    bindings::LEGACY_REPOSITORY_PUSH_REFUSAL, classify_azure_sandbox_image,
+    image_rewrite::strip_registry_host, AzureSandboxImage, Container, ContainerCode, Daemon,
+    DaemonCode, Platform, Sandbox, SandboxCode, Worker, WorkerCode,
 };
 
 use super::AppState;
@@ -1436,7 +1437,7 @@ fn refuse_legacy_push(
         return Err(RegistryRefusal::new(
             StatusCode::FORBIDDEN,
             "DENIED",
-            "Repository is under a legacy prefix, which is read-only; push under the current prefix.",
+            LEGACY_REPOSITORY_PUSH_REFUSAL,
         ));
     }
     Ok(())

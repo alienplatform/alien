@@ -101,6 +101,7 @@ crossterm = { workspace = true }
 
 [dev-dependencies]
 alien-aws-clients = { workspace = true, features = ["test-utils"] }
+container-registry = { workspace = true, features = ["test-support"] }
 httpmock = { workspace = true }
 http = { workspace = true }
 snapbox = "0.6.0"
