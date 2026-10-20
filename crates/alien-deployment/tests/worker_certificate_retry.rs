@@ -117,7 +117,7 @@ async fn unchanged_deployment_retry_recovers_legacy_certificate_update_failure()
                 ..Default::default()
             }),
             retry_requested: true,
-            protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+            protocol_version: alien_core::deployment_protocol_version_for_platform(platform, None),
         };
         let client = match platform {
             Platform::Aws => ClientConfig::Aws(Box::new(AwsClientConfig::mock())),

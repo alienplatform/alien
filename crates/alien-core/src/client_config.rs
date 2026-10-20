@@ -224,8 +224,10 @@ pub enum GcpCredentials {
     /// Exchange a manager assertion through deployment-owned trust, then mint
     /// the narrowly granted target account's short-lived access token.
     Federated {
-        access: crate::GcpFederationAccess,
-        source: crate::GcpFederationSource,
+        // Every GCP API client embeds these credentials. Keep federation settings
+        // indirect so they do not enlarge every client and deployment future.
+        access: Box<crate::GcpFederationAccess>,
+        source: Box<crate::GcpFederationSource>,
         /// Requested target token lifetime; defaults to 3600 seconds.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         lifetime_seconds: Option<u32>,

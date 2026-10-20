@@ -302,8 +302,8 @@ impl RemoteAccessResolver {
             project_number: Some(access.project_number.clone()),
             service_overrides: None,
             credentials: alien_core::GcpCredentials::Federated {
-                access,
-                source,
+                access: Box::new(access),
+                source: Box::new(source),
                 lifetime_seconds: None,
             },
         };

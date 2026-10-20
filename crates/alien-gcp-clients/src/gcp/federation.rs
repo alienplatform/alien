@@ -79,7 +79,7 @@ pub(crate) async fn exchange(
             message: "Cannot identify the deployment's federation provider".to_string(),
             errors: None,
         })?;
-    let assertion = match source {
+    let assertion = match source.as_ref() {
         GcpFederationSource::GoogleServiceAccount {
             source,
             service_account_email,

@@ -4621,7 +4621,8 @@ mod tests {
             "resource \"google_project_iam_custom_role\" \"gcp_role_manage_cloud_run_services\""
         ));
         assert!(rendered.contains("run.services.update"));
-        assert!(rendered.contains("roles/iam.serviceAccountUser"));
+        assert!(rendered.contains("iam.serviceAccounts.actAs"));
+        assert!(rendered.contains("roles/iam.workloadIdentityUser"));
         assert!(rendered.contains("roles/artifactregistry.reader"));
     }
 
