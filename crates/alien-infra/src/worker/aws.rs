@@ -533,11 +533,6 @@ pub struct AwsWorkerController {
     /// The execution role must retain its VPC permissions until this wait finishes.
     #[serde(default)]
     pub(crate) vpc_eni_wait_started_at: Option<chrono::DateTime<Utc>>,
-    /// Heartbeats left before the next comparison of the linked bindings with the environment
-    /// Lambda runs. The comparison costs a GetFunction call, so it runs on every tenth
-    /// heartbeat (about five minutes) rather than on each one.
-    #[serde(default)]
-    pub(crate) heartbeats_until_binding_check: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2670,39 +2665,35 @@ impl AwsWorkerController {
         // updated: a sandbox promoting a rebuilt image version after this worker rendered, or a
         // re-registration. Compare the bindings rendered now with the ones Lambda runs, and
         // refresh only when they differ.
-        let check_bindings = self.heartbeats_until_binding_check == 0;
-        self.heartbeats_until_binding_check = if check_bindings {
-            LINKED_BINDING_CHECK_EVERY - 1
-        } else {
-            self.heartbeats_until_binding_check - 1
-        };
-        let expected = if check_bindings {
-            self.linked_binding_environment(ctx, &worker_config).await?
-        } else {
-            None
-        };
-        if let Some(expected) = expected {
-            let live = client
-                .get_function_environment(&aws_worker_name)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: "Failed to read the worker environment during heartbeat check"
-                        .to_string(),
-                    resource_id: Some(worker_config.id.clone()),
-                })?;
-            let drifted = drifted_variables(&expected, &live);
-            if !drifted.is_empty() {
-                // Names only: binding values can carry secrets.
-                info!(
-                    worker = %worker_config.id,
-                    variables = ?drifted,
-                    reason = "linked binding drift",
-                    "Refreshing the worker's linked bindings"
-                );
-                return Ok(HandlerAction::Continue {
-                    state: RefreshingLinkedBindings,
-                    suggested_delay: None,
-                });
+        if binding_check_due(&aws_worker_name, Utc::now()) {
+            if let Some(expected) = self.linked_binding_environment(ctx, &worker_config).await? {
+                // The comparison is optional to the heartbeat: a throttled or failed read skips
+                // it until the next window instead of failing a healthy worker.
+                match client.get_function_environment(&aws_worker_name).await {
+                    Ok(live) => {
+                        let drifted = drifted_variables(&expected, &live);
+                        if !drifted.is_empty() {
+                            // Names only: binding values can carry secrets.
+                            info!(
+                                worker = %worker_config.id,
+                                variables = ?drifted,
+                                reason = "linked binding drift",
+                                "Refreshing the worker's linked bindings"
+                            );
+                            return Ok(HandlerAction::Continue {
+                                state: RefreshingLinkedBindings,
+                                suggested_delay: None,
+                            });
+                        }
+                    }
+                    Err(error) => {
+                        warn!(
+                            worker = %worker_config.id,
+                            code = %error.code,
+                            "Skipped the linked binding comparison; it runs again in the next window"
+                        );
+                    }
+                }
             }
         }
 
@@ -2714,11 +2705,13 @@ impl AwsWorkerController {
     }
 
     /// Re-renders the environment with the linked bindings as they are now and applies it. Only
-    /// the environment changes; the worker's configuration is unchanged.
+    /// the environment changes; the worker's configuration is unchanged. The worker reports
+    /// Updating meanwhile, so the planner waits for the refresh before starting an update (which
+    /// only begins from Ready) and dependents wait for the binding to settle.
     #[handler(
         state = RefreshingLinkedBindings,
         on_failure = RefreshFailed,
-        status = ResourceStatus::Running,
+        status = ResourceStatus::Updating,
     )]
     async fn refreshing_linked_bindings(
         &mut self,
@@ -2763,7 +2756,7 @@ impl AwsWorkerController {
     #[handler(
         state = RefreshingLinkedBindingsWaitForActive,
         on_failure = RefreshFailed,
-        status = ResourceStatus::Running,
+        status = ResourceStatus::Updating,
     )]
     async fn refreshing_linked_bindings_wait_for_active(
         &mut self,
@@ -5770,14 +5763,40 @@ impl AwsWorkerController {
             eventbridge_permission_statement_ids: Vec::new(),
             delete_removed_something: false,
             vpc_eni_wait_started_at: None,
-            heartbeats_until_binding_check: 0,
             _internal_stay_count: None,
         }
     }
 }
 
-/// Heartbeats between comparisons of a worker's linked bindings with its live environment.
-const LINKED_BINDING_CHECK_EVERY: u32 = 10;
+/// How often a worker compares its linked bindings with its live environment: the comparison
+/// costs a GetFunction call, against Lambda's 100 per second per Region, so it runs in one
+/// heartbeat window per period rather than on every heartbeat.
+const LINKED_BINDING_CHECK_PERIOD_SECONDS: i64 = 300;
+/// The heartbeat interval in `Ready`; one window of this length per period is due.
+const LINKED_BINDING_CHECK_WINDOW_SECONDS: i64 = 30;
+
+/// Whether `now` falls in this worker's comparison window. The window is derived from the
+/// worker's name and the clock, so the cadence stores nothing and writes no state per heartbeat,
+/// and workers in one account spread their reads across the period.
+fn binding_check_due(worker_name: &str, now: chrono::DateTime<Utc>) -> bool {
+    // Tests open the window explicitly, so heartbeat tests about something else never depend
+    // on the clock.
+    #[cfg(test)]
+    {
+        let _ = (worker_name, now);
+        tests::FORCED_BINDING_CHECK.with(|forced| forced.get())
+    }
+    #[cfg(not(test))]
+    binding_window_open(worker_name, now)
+}
+
+fn binding_window_open(worker_name: &str, now: chrono::DateTime<Utc>) -> bool {
+    let windows = LINKED_BINDING_CHECK_PERIOD_SECONDS / LINKED_BINDING_CHECK_WINDOW_SECONDS;
+    let offset = worker_name
+        .bytes()
+        .fold(0i64, |hash, byte| (hash * 31 + i64::from(byte)) % windows);
+    (now.timestamp() / LINKED_BINDING_CHECK_WINDOW_SECONDS).rem_euclid(windows) == offset
+}
 
 /// Names of the variables in `expected` that `live` lacks or holds with another value. Binding
 /// variables are JSON, compared as values: key order and formatting are not a difference.
@@ -5809,6 +5828,11 @@ mod tests {
     //! # AWS Worker Controller Tests
     //!
     //! See `crate::core::controller_test` for a comprehensive guide on testing infrastructure controllers.
+    thread_local! {
+        /// Forces the linked-binding comparison window open or closed in tests.
+        pub(super) static FORCED_BINDING_CHECK: std::cell::Cell<bool> =
+            const { std::cell::Cell::new(false) };
+    }
 
     use std::collections::HashMap;
     use std::sync::{
@@ -10044,8 +10068,6 @@ mod tests {
         let provider = setup_mock_service_provider(Arc::new(lambda), Some(Arc::new(acm)), None);
         let mut controller = AwsWorkerController {
             state: AwsWorkerState::Ready,
-            // This test is about certificate renewal; the binding comparison is not due.
-            heartbeats_until_binding_check: super::LINKED_BINDING_CHECK_EVERY - 1,
             certificate_arn: Some(imported_certificate_arn(1)),
             event_source_mappings: vec!["live-mapping-uuid".to_string()],
             certificate_issued_at: Some("2023-01-01T00:00:00Z".to_string()),
@@ -10464,6 +10486,7 @@ mod tests {
             sandbox_controller: AwsSandboxController,
             previous: Option<Worker>,
         ) -> SingleControllerExecutor {
+            super::FORCED_BINDING_CHECK.with(|forced| forced.set(true));
             let provider = setup_mock_service_provider(Arc::new(lambda), None, None);
             let mut builder = SingleControllerExecutor::builder()
                 .resource(linked_worker())
@@ -10593,6 +10616,11 @@ mod tests {
                 executor.internal_state::<AwsWorkerController>().unwrap().state,
                 AwsWorkerState::RefreshingLinkedBindings
             );
+            assert_eq!(
+                executor.status(),
+                ResourceStatus::Updating,
+                "the planner must not start an update mid-refresh: updates begin only from Ready"
+            );
             executor.step().await.expect("the refresh applies the binding");
             executor.step().await.expect("the refresh settles");
             let controller = executor.internal_state::<AwsWorkerController>().unwrap();
@@ -10639,36 +10667,77 @@ mod tests {
             }
         }
 
-        /// The comparison costs a GetFunction call, so it runs every tenth heartbeat, not on
-        /// each one.
+        /// The comparison costs a GetFunction call, so each worker compares in one heartbeat
+        /// window per five minutes, derived from the clock and its name: nothing is stored.
+        #[test]
+        fn each_worker_compares_once_per_period() {
+            let start = chrono::DateTime::from_timestamp(1_800_000_000, 0).unwrap();
+            for name in ["test-a", "test-b", "stack-worker"] {
+                let open = (0..super::super::LINKED_BINDING_CHECK_PERIOD_SECONDS)
+                    .step_by(super::super::LINKED_BINDING_CHECK_WINDOW_SECONDS as usize)
+                    .filter(|offset| {
+                        super::super::binding_window_open(
+                            name,
+                            start + chrono::Duration::seconds(*offset),
+                        )
+                    })
+                    .count();
+                assert_eq!(open, 1, "{name}");
+            }
+        }
+
+        /// A throttled read skips the comparison: the heartbeat still succeeds, the worker stays
+        /// Ready and healthy, and nothing is written.
         #[tokio::test]
-        async fn the_binding_check_runs_every_tenth_heartbeat() {
+        async fn a_throttled_comparison_is_skipped_without_failing_the_heartbeat() {
             let mut lambda = MockLambdaApi::new();
             active(&mut lambda);
+            lambda.expect_get_function_environment().times(1).returning(|_| {
+                Err(AlienError::new(CloudClientErrorData::RateLimitExceeded {
+                    message: "Rate exceeded".to_string(),
+                }))
+            });
+            lambda.expect_update_function_configuration().times(0);
+            let mut executor = executor(
+                lambda,
+                AwsWorkerController::mock_ready("basic-func"),
+                sandbox_on("2.0", AwsSandboxState::Ready),
+                None,
+            )
+            .await;
+            executor.step().await.expect("a throttled comparison does not fail the heartbeat");
+            assert_eq!(
+                executor.internal_state::<AwsWorkerController>().unwrap().state,
+                AwsWorkerState::Ready
+            );
+            assert_eq!(executor.status(), ResourceStatus::Running);
+        }
+
+        /// No new write per heartbeat: a heartbeat that finds no drift leaves the controller's
+        /// state exactly as it was, so the deployment loop has nothing new to persist.
+        #[tokio::test]
+        async fn a_heartbeat_without_drift_changes_no_state() {
             let current = rendered_environment("2.0").await;
+            let mut lambda = MockLambdaApi::new();
+            active(&mut lambda);
             lambda
                 .expect_get_function_environment()
                 .times(1)
                 .returning(move |_| Ok(current.clone()));
             lambda.expect_update_function_configuration().times(0);
+            let before = AwsWorkerController::mock_ready("basic-func");
             let mut executor = executor(
                 lambda,
-                AwsWorkerController {
-                    heartbeats_until_binding_check: 1,
-                    ..AwsWorkerController::mock_ready("basic-func")
-                },
+                before.clone(),
                 sandbox_on("2.0", AwsSandboxState::Ready),
                 None,
             )
             .await;
-            executor.step().await.expect("a heartbeat that is not due");
-            executor.step().await.expect("the due heartbeat compares");
+            executor.step().await.expect("the heartbeat runs");
             assert_eq!(
-                executor
-                    .internal_state::<AwsWorkerController>()
-                    .unwrap()
-                    .heartbeats_until_binding_check,
-                super::super::LINKED_BINDING_CHECK_EVERY - 1
+                serialize_controller(executor.internal_state::<AwsWorkerController>().unwrap())
+                    .unwrap(),
+                serialize_controller(&before).unwrap()
             );
         }
 

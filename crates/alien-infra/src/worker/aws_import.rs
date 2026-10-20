@@ -73,7 +73,6 @@ impl ResourceImporter for AwsWorkerImporter {
             eventbridge_permission_statement_ids: data.eventbridge_permission_statement_ids,
             delete_removed_something: false,
             vpc_eni_wait_started_at: None,
-            heartbeats_until_binding_check: 0,
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)
