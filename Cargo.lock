@@ -1361,6 +1361,7 @@ dependencies = [
  "alien-core",
  "alien-error",
  "alien-permissions",
+ "alien-preflights",
  "hcl-rs",
  "indexmap 2.14.1",
  "insta",
@@ -1368,6 +1369,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]
