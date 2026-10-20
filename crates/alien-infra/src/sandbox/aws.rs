@@ -1986,6 +1986,14 @@ mod tests {
                 }));
             })
             .await;
+        // The key does not exist yet: metadata only, which management may describe.
+        let describe = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .header("x-amz-target", "AmazonSSM.DescribeParameters");
+                then.status(200).json_body(serde_json::json!({"Parameters": []}));
+            })
+            .await;
         let write = server
             .mock_async(|when, then| {
                 when.method(POST)
@@ -2042,6 +2050,7 @@ mod tests {
         let key = controller.egress_public_key.as_ref().expect("public key");
         assert!(!key.kid.is_empty());
         assert_eq!(read.hits_async().await, 0, "the private key must not be read");
+        assert!(describe.hits_async().await >= 1);
         assert_eq!(write.hits_async().await, 1);
     }
 

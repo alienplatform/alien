@@ -66,8 +66,35 @@ fn new_signing_key() -> Result<(String, GatewayPublicKey)> {
 /// Writes a new signing key and returns its public half, which the caller keeps in its own
 /// state. The private key is never read back, so the managing identity needs no read access to
 /// it. A retry before the caller saves its state overwrites a key nothing has used yet.
+///
+/// A key the published gateway configuration already trusts is never replaced: every session
+/// token and stored policy is signed with it, and the managing identity cannot recover its public
+/// half without reading the private key. Presence is checked from metadata only.
 #[cfg(feature = "aws")]
 pub(crate) async fn create_signing_key(vault: &dyn Vault) -> Result<GatewayPublicKey> {
+    let present = |name: &'static str| async move {
+        vault
+            .secret_presence(name)
+            .await
+            .map(|presence| !matches!(presence, alien_bindings::SecretPresence::Missing))
+            .context(ErrorData::ResourceConfigInvalid {
+                message: format!("Failed to check whether the sandbox egress vault entry '{name}' exists"),
+                resource_id: Some(alien_core::SECRETS_VAULT_ID.into()),
+            })
+    };
+    if present(SIGNING_KEY).await? && present(GATEWAY_CONFIG).await? {
+        return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+            message: format!(
+                "The deployment's sandbox egress signing key '{SIGNING_KEY}' exists and the published \
+                 gateway configuration trusts it, but no sandbox state records its public half. \
+                 Writing a new key would invalidate every session token and stored egress policy, \
+                 so it is not replaced. Restore the sandbox's controller state from the previous \
+                 deployment state, or, to rotate deliberately, delete '{SIGNING_KEY}' and \
+                 '{GATEWAY_CONFIG}' from the secrets vault and retry."
+            ),
+            resource_id: Some(alien_core::SECRETS_VAULT_ID.into()),
+        }));
+    }
     let (value, public) = new_signing_key()?;
     vault
         .set_secret(SIGNING_KEY, &value)
@@ -142,6 +169,32 @@ fn public_key(value: &str) -> Result<GatewayPublicKey> {
 mod tests {
     use super::*;
     use alien_bindings::providers::vault::LocalVault;
+
+    /// The safety net under re-registration: a signing key the published gateway configuration
+    /// trusts is never replaced. A key written by a pass that never saved its state, before any
+    /// configuration was published, is still replaced on retry.
+    #[cfg(feature = "aws")]
+    #[tokio::test]
+    async fn a_signing_key_the_gateway_trusts_is_never_replaced() {
+        let directory = tempfile::tempdir().unwrap();
+        let vault = LocalVault::new("secrets".into(), directory.path().into());
+
+        let first = create_signing_key(&vault).await.expect("a new deployment gets a key");
+        let unused = vault.get_secret(SIGNING_KEY).await.unwrap();
+        let retried = create_signing_key(&vault)
+            .await
+            .expect("an unpublished key is replaced on retry");
+        assert_ne!(retried.kid, first.kid);
+
+        vault.set_secret(GATEWAY_CONFIG, "{}").await.unwrap();
+        let in_use = vault.get_secret(SIGNING_KEY).await.unwrap();
+        assert_ne!(in_use, unused);
+        let error = create_signing_key(&vault)
+            .await
+            .expect_err("a trusted key must not be replaced");
+        assert!(error.message.contains("is not replaced"), "{}", error.message);
+        assert_eq!(vault.get_secret(SIGNING_KEY).await.unwrap(), in_use);
+    }
 
     #[tokio::test]
     async fn resumed_initialization_keeps_the_original_signing_key() {

@@ -178,6 +178,16 @@ impl ResourceImporter for AwsSandboxImporter {
         if ctx.resource.lifecycle == ResourceLifecycle::Frozen
             && imported_controller.build_role_arn.is_none()
         {
+            // The registration replaces what setup owns, but not what this controller wrote at
+            // runtime: the signing key's public half, the configuration it published and the
+            // replica secret's readiness. Without the public half the key owner writes a new
+            // signing key, which invalidates every session token and stored policy.
+            if requires_gateway {
+                imported_controller.egress_public_key = existing_controller.egress_public_key;
+                imported_controller.egress_config_digest = existing_controller.egress_config_digest;
+                imported_controller.egress_replica_secret_ready =
+                    existing_controller.egress_replica_secret_ready;
+            }
             return make_imported_state_with_status(imported_controller, ctx, imported.status);
         }
         let gateway = existing_controller

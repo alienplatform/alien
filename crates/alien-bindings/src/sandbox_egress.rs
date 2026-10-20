@@ -127,9 +127,20 @@ impl SandboxEgressManager {
     pub fn bootstrap_payload(&self) -> String {
         serde_json::json!({"gateway":self.gateway,"audience":self.config.audience}).to_string()
     }
+    /// The deployment's current signing key, read from the vault on every use. The binding's
+    /// `kid` is only what the key was when the binding was rendered: a linked workload is not
+    /// re-rendered when the key changes, and tokens must carry the key id the gateway trusts now.
     async fn issuer(&self) -> Result<EgressTokenIssuer> {
         let secret = self.vault.get_secret(&self.config.signing_key.key).await?;
-        EgressTokenIssuer::from_vault_json(&secret, &self.config.kid)
+        let issuer = EgressTokenIssuer::from_vault_document(&secret)?;
+        if issuer.kid() != self.config.kid {
+            tracing::debug!(
+                binding_kid = %self.config.kid,
+                vault_kid = %issuer.kid(),
+                "sandbox egress signing key changed since this binding was rendered; using the vault's"
+            );
+        }
+        Ok(issuer)
     }
     /// Install policy before the provider delivers the sandbox's identity token.
     pub async fn create(

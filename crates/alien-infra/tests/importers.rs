@@ -1391,6 +1391,86 @@ fn aws_sandbox_reimport_preserves_the_built_image_and_takes_the_new_connector() 
     );
 }
 
+/// A setup update re-registers a template's Frozen internet sandbox with its new image. The
+/// image is setup's, but the signing key's public half, the published configuration's digest and
+/// the replica secret's readiness are what the controller wrote at runtime. Dropping the public
+/// half made the key owner write a new signing key on its next pass.
+#[test]
+fn aws_internet_sandbox_frozen_reimport_keeps_its_signing_key() {
+    let entry = ResourceEntry {
+        config: Resource::new({
+            let mut sandbox = sandbox_resource();
+            sandbox.egress = SandboxEgress::Internet;
+            sandbox
+        }),
+        lifecycle: ResourceLifecycle::Frozen,
+        dependencies: vec![],
+        remote_access: true,
+        enabled_when: None,
+    };
+    let settings = settings();
+    let management = aws_management_config();
+    let ctx = ImportContext {
+        resource_id: "agents",
+        platform: Platform::Aws,
+        region: "us-east-2",
+        stack_settings: &settings,
+        management_config: Some(&management),
+        resource: &entry,
+    };
+    let registry = ImporterRegistry::built_in();
+    let frozen = |version: &str| {
+        serde_json::to_value(AwsSandboxImportData {
+            image_identifier: Some(
+                "arn:aws:lambda:us-east-2:123456789012:microvm-image:stack-agents".to_string(),
+            ),
+            image_arn: Some(
+                "arn:aws:lambda:us-east-2:123456789012:microvm-image:stack-agents".to_string(),
+            ),
+            image_version: Some(version.to_string()),
+            build_role_arn: None,
+            bundle_uri: None,
+            egress_connector_arns: vec![
+                "arn:aws:lambda:us-east-2:123456789012:network-connector:nc-1".to_string(),
+            ],
+            allow_egress: false,
+            preview_ports: vec![],
+        })
+        .unwrap()
+    };
+    let existing = registry
+        .run(&Sandbox::RESOURCE_TYPE, Platform::Aws, frozen("1.0"), &ctx)
+        .expect("first import");
+    let mut existing_internal = internal_state(&existing).clone();
+    existing_internal["state"] = serde_json::json!("ready");
+    existing_internal["egressPublicKey"] =
+        serde_json::json!({"kid": "kid-in-use", "publicKey": "public-key-in-use"});
+    existing_internal["egressConfigDigest"] = serde_json::json!("digest-published");
+    existing_internal["egressReplicaSecretReady"] = serde_json::json!(true);
+    let existing = alien_core::StackResourceState {
+        internal_state: Some(existing_internal),
+        status: alien_core::ResourceStatus::Running,
+        ..existing
+    };
+    let imported = registry
+        .run(&Sandbox::RESOURCE_TYPE, Platform::Aws, frozen("2.0"), &ctx)
+        .expect("re-import");
+
+    let merged = registry
+        .merge_reimport(&Sandbox::RESOURCE_TYPE, Platform::Aws, existing, imported, &ctx)
+        .expect("merge should succeed");
+
+    let internal = internal_state(&merged);
+    assert_eq!(internal["activeVersion"], "2.0", "setup owns the image");
+    assert_eq!(
+        internal["egressPublicKey"],
+        serde_json::json!({"kid": "kid-in-use", "publicKey": "public-key-in-use"}),
+        "the key owner must keep the key every session token is signed with"
+    );
+    assert_eq!(internal["egressConfigDigest"], "digest-published");
+    assert_eq!(internal["egressReplicaSecretReady"], true);
+}
+
 /// A template's Frozen sandbox image is built and owned by stack creation, so its registration
 /// stays authoritative and a re-import replaces.
 #[test]
