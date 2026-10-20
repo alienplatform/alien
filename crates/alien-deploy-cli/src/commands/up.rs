@@ -535,7 +535,10 @@ mod tests {
         let error = validate_push_environment_identity(&aws, &wrong_aws)
             .expect_err("account and region changes must fail closed");
         let rendered = error.to_string();
-        assert!(rendered.contains("existing cloud environment"));
+        assert!(
+            rendered.contains("was set up in AWS account 123456789012 (us-east-2), but your current cloud credentials point to AWS account 999999999999 (us-east-1). Switch your credentials to AWS account 123456789012 (us-east-2) and rerun this command."),
+            "{rendered}"
+        );
 
         let gcp: EnvironmentInfo = serde_json::from_value(serde_json::json!({
             "platform": "gcp",
@@ -568,6 +571,75 @@ mod tests {
         }))
         .unwrap();
         assert!(validate_push_environment_identity(&azure, &wrong_azure).is_err());
+    }
+
+    #[test]
+    fn failed_first_install_rerun_stays_in_its_cloud_environment() {
+        // Rerunning setup resumes resources the failed install already created, so it must use
+        // the same environment, as an installed deployment does.
+        assert!(pins_push_environment_identity(
+            DeploymentStatus::InitialSetupFailed,
+            false
+        ));
+        assert!(pins_push_environment_identity(
+            DeploymentStatus::Running,
+            true
+        ));
+        // Before setup reached the target, the recorded environment may be the manager's.
+        for status in [
+            DeploymentStatus::Pending,
+            DeploymentStatus::PreflightsFailed,
+            DeploymentStatus::InitialSetup,
+        ] {
+            assert!(!pins_push_environment_identity(status, false), "{status:?}");
+        }
+
+        let gcp: EnvironmentInfo = serde_json::from_value(serde_json::json!({
+            "platform": "gcp",
+            "projectNumber": "123456789012",
+            "projectId": "primary-project",
+            "region": "us-central1"
+        }))
+        .unwrap();
+        let other: EnvironmentInfo = serde_json::from_value(serde_json::json!({
+            "platform": "gcp",
+            "projectNumber": "210987654321",
+            "projectId": "other-project",
+            "region": "us-central1"
+        }))
+        .unwrap();
+        let rendered = validate_push_environment_identity(&gcp, &other)
+            .expect_err("a different project must be refused")
+            .to_string();
+        assert!(
+            rendered.contains("was set up in GCP project primary-project (us-central1), but your current cloud credentials point to GCP project other-project (us-central1)"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn announces_resume_only_for_a_retried_failed_first_install() {
+        assert!(resumes_failed_first_install(
+            DeploymentStatus::InitialSetupFailed,
+            true,
+            false
+        ));
+        // Without the retry flag the engine does not resume; a fresh claim runs from Pending.
+        assert!(!resumes_failed_first_install(
+            DeploymentStatus::InitialSetupFailed,
+            false,
+            false
+        ));
+        assert!(!resumes_failed_first_install(
+            DeploymentStatus::Pending,
+            false,
+            false
+        ));
+        assert!(!resumes_failed_first_install(
+            DeploymentStatus::InitialSetupFailed,
+            true,
+            true
+        ));
     }
 
     #[test]
@@ -5281,6 +5353,25 @@ async fn validate_existing_push_environment_identity(
     validate_push_environment_identity(existing, &observed)
 }
 
+/// Whether setup must run against the cloud environment the deployment already recorded.
+///
+/// An installed deployment is bound to its environment. So is a failed first install: its setup
+/// already created resources there, and rerunning setup resumes them. Before setup has reached the
+/// target, the recorded environment can still be the management environment, so it is not pinned.
+fn pins_push_environment_identity(status: DeploymentStatus, installed: bool) -> bool {
+    installed || status == DeploymentStatus::InitialSetupFailed
+}
+
+/// Whether this setup run resumes a first install that failed: the claim carries the failed phase
+/// with the retry flag, which resumes the failed resources instead of starting over.
+fn resumes_failed_first_install(
+    status: DeploymentStatus,
+    retry_requested: bool,
+    installed: bool,
+) -> bool {
+    status == DeploymentStatus::InitialSetupFailed && retry_requested && !installed
+}
+
 fn validate_push_environment_identity(
     existing: &EnvironmentInfo,
     observed: &EnvironmentInfo,
@@ -5292,9 +5383,30 @@ fn validate_push_environment_identity(
     Err(AlienError::new(ErrorData::ValidationError {
         field: "environment".to_string(),
         message: format!(
-            "This deployment is bound to {existing:?}, but the active cloud credentials resolve to {observed:?}. Select the deployment's existing cloud environment before retrying setup."
+            "This deployment was set up in {}, but your current cloud credentials point to {}. Switch your credentials to {} and rerun this command. To install into a different environment, deploy under a new name instead.",
+            describe_environment(existing),
+            describe_environment(observed),
+            describe_environment(existing),
         ),
     }))
+}
+
+/// A cloud environment as a person would name it, for error messages.
+fn describe_environment(environment: &EnvironmentInfo) -> String {
+    match environment {
+        EnvironmentInfo::Aws(aws) => {
+            format!("AWS account {} ({})", aws.account_id, aws.region)
+        }
+        EnvironmentInfo::Gcp(gcp) => {
+            format!("GCP project {} ({})", gcp.project_id, gcp.region)
+        }
+        EnvironmentInfo::Azure(azure) => format!(
+            "Azure subscription {} ({})",
+            azure.subscription_id, azure.location
+        ),
+        EnvironmentInfo::Local(_) => "the local environment".to_string(),
+        EnvironmentInfo::Test(_) => "the test environment".to_string(),
+    }
 }
 
 fn setup_release_id<'a>(desired: Option<&'a str>, current: Option<&'a str>) -> Option<&'a str> {
@@ -6644,7 +6756,7 @@ async fn push_initial_setup_targeted(
                 .context(ErrorData::DeploymentFailed {
                     operation: "target environment-info collection".to_string(),
                 })?;
-        if deployment.current_release_id.is_some() {
+        if pins_push_environment_identity(status, deployment.current_release_id.is_some()) {
             if let Some(existing) = state.environment_info.as_ref() {
                 validate_push_environment_identity(existing, &env_info)?;
             }
@@ -6816,6 +6928,13 @@ async fn push_initial_setup_targeted(
         state.retry_requested = acquired_deployment.deployment.get("retryRequested")
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(deployment.retry_requested);
+        if resumes_failed_first_install(
+            status,
+            state.retry_requested,
+            deployment.current_release_id.is_some(),
+        ) {
+            output::info("Resuming the failed install from where it stopped.");
+        }
 
         // Apply the choice only after acquiring the lock and refreshing status,
         // so a setup that completed while we waited cannot change reachability.
