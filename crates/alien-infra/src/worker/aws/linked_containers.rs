@@ -10,8 +10,8 @@ use alien_aws_clients::{
     lambda::VpcConfig,
 };
 use alien_core::{
-    ALIEN_MANAGED_BY_TAG_KEY, ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY, Container, Network,
-    ResourceRef, Worker,
+    Container, Network, ResourceRef, Worker, ALIEN_MANAGED_BY_TAG_KEY, ALIEN_RESOURCE_TAG_KEY,
+    ALIEN_STACK_TAG_KEY,
 };
 use alien_error::{AlienError, Context};
 

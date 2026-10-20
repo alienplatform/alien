@@ -79,7 +79,7 @@ impl ServiceAccount for AwsIamServiceAccount {
         let role_arn = self.get_role_arn()?;
         let session_name = request
             .session_name
-            .unwrap_or_else(|| "alien-impersonation".to_string());
+            .unwrap_or_else(|| "deployment-impersonation".to_string());
         let duration = request.duration_seconds.unwrap_or(3600);
 
         let assume_role_request = AssumeRoleRequest::builder()

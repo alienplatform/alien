@@ -3087,6 +3087,16 @@ mod tests {
         let put_policies: Arc<Mutex<Vec<(String, String, serde_json::Value)>>> =
             Arc::new(Mutex::new(Vec::new()));
         let mut iam = MockIamApi::new();
+        // A fresh role holds no inline policies yet.
+        iam.expect_list_role_policies().returning(|_| {
+            Ok(alien_aws_clients::iam::ListRolePoliciesResponse {
+                list_role_policies_result: alien_aws_clients::iam::ListRolePoliciesResult {
+                    policy_names: None,
+                    is_truncated: Some(false),
+                    marker: None,
+                },
+            })
+        });
         let recorded = put_policies.clone();
         iam.expect_put_role_policy()
             .returning(move |role, name, document| {
@@ -3141,8 +3151,8 @@ mod tests {
         assert_eq!(
             granted,
             vec![
-                ("execution-sa", "alien-agents-sandbox-management"),
-                ("execution-sa", "alien-agents-sandbox-execute"),
+                ("execution-sa", "deployment-agents-sandbox-management"),
+                ("execution-sa", "deployment-agents-sandbox-execute"),
             ]
         );
 

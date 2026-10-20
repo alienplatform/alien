@@ -284,7 +284,7 @@ impl EcrArtifactRegistry {
                 .config()
                 .impersonate(alien_aws_clients::AwsImpersonationConfig {
                     role_arn: push_role_arn.clone(),
-                    session_name: Some("alien-ecr-create".to_string()),
+                    session_name: Some("deployment-ecr-create".to_string()),
                     duration_seconds: None,
                     external_id: None,
                     target_region: None,
@@ -408,7 +408,7 @@ impl EcrArtifactRegistry {
                 .config()
                 .impersonate(alien_aws_clients::AwsImpersonationConfig {
                     role_arn: push_role_arn.clone(),
-                    session_name: Some("alien-ecr-policy".to_string()),
+                    session_name: Some("deployment-ecr-policy".to_string()),
                     duration_seconds: None,
                     external_id: None,
                     target_region: Some(region.to_string()),
@@ -619,7 +619,7 @@ impl ArtifactRegistry for EcrArtifactRegistry {
                 .config()
                 .impersonate(alien_aws_clients::AwsImpersonationConfig {
                     role_arn: pull_role_arn.clone(),
-                    session_name: Some("alien-ecr-describe".to_string()),
+                    session_name: Some("deployment-ecr-describe".to_string()),
                     duration_seconds: None,
                     external_id: None,
                     target_region: None,
@@ -1063,7 +1063,7 @@ impl ArtifactRegistry for EcrArtifactRegistry {
                 .impersonate(alien_aws_clients::AwsImpersonationConfig {
                     role_arn: role_arn.clone(),
                     session_name: Some(format!(
-                        "alien-ecr-access-{}",
+                        "deployment-ecr-access-{}",
                         chrono::Utc::now().timestamp()
                     )),
                     duration_seconds: ttl_seconds.map(|ttl| ttl.min(43200) as i32),
@@ -1187,7 +1187,7 @@ impl ArtifactRegistry for EcrArtifactRegistry {
                 .config()
                 .impersonate(alien_aws_clients::AwsImpersonationConfig {
                     role_arn: push_role_arn.clone(),
-                    session_name: Some("alien-ecr-delete".to_string()),
+                    session_name: Some("deployment-ecr-delete".to_string()),
                     duration_seconds: None,
                     external_id: None,
                     target_region: None,

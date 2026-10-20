@@ -207,8 +207,20 @@ async fn remote_access(
             None => ScaffoldingProgress::Done,
         });
     };
-    let policy_name = aws_remote_access_policy_name(&sandbox.id);
-    let applied = applied_policy(iam, &role_name, &policy_name, &sandbox.id).await?;
+    // A role set up before the policy rename keeps the grant under its previous name.
+    let current_name = aws_remote_access_policy_name(&sandbox.id);
+    let (policy_name, applied) = match applied_policy(iam, &role_name, &current_name, &sandbox.id)
+        .await?
+    {
+        Some(applied) => (current_name, Some(applied)),
+        None => match alien_permissions::aws_resource_policies::legacy_policy_name(&current_name) {
+            Some(legacy) => match applied_policy(iam, &role_name, &legacy, &sandbox.id).await? {
+                Some(applied) => (legacy, Some(applied)),
+                None => (current_name, None),
+            },
+            None => (current_name, None),
+        },
+    };
 
     let Some(definition) = wanted else {
         if applied.is_none() {
@@ -1568,7 +1580,9 @@ mod tests {
     }
 
     const ACCESS_ROLE: &str = "test-access";
-    const GRANT_POLICY: &str = "alien-agents-remote-access";
+    const GRANT_POLICY: &str = "deployment-agents-remote-access";
+    /// The grant's name on roles set up before the policy rename.
+    const LEGACY_GRANT_POLICY: &str = "alien-agents-remote-access";
     const IMAGE_ARN: &str = "arn:aws:lambda:us-east-1:123456789012:microvm-image:test-agents";
 
     fn published_stack(remote_access: bool) -> Stack {
@@ -1622,6 +1636,23 @@ mod tests {
         deletes: usize,
         put_answer: fn() -> alien_client_core::Result<()>,
     ) -> MockIamApi {
+        with_access_role_holding(GRANT_POLICY, applied, puts, deletes, put_answer)
+    }
+
+    /// As [`with_access_role_answering`], with `applied` held under `held_name`; every other
+    /// name is absent, and puts and deletes are expected on the name the role holds.
+    fn with_access_role_holding(
+        held_name: &'static str,
+        applied: Option<Value>,
+        puts: usize,
+        deletes: usize,
+        put_answer: fn() -> alien_client_core::Result<()>,
+    ) -> MockIamApi {
+        let written_name = if applied.is_some() {
+            held_name
+        } else {
+            GRANT_POLICY
+        };
         let mut iam = existing(
             ROLE_ARN,
             expected_trust(),
@@ -1630,9 +1661,12 @@ mod tests {
             0,
         );
         iam.expect_get_role_policy()
-            .withf(|role_name, policy_name| role_name == ACCESS_ROLE && policy_name == GRANT_POLICY)
+            .withf(|role_name, _| role_name == ACCESS_ROLE)
             .returning(move |role_name, policy_name| {
-                let document = applied.clone().ok_or_else(not_found)?;
+                let document = applied
+                    .clone()
+                    .filter(|_| policy_name == held_name)
+                    .ok_or_else(not_found)?;
                 Ok(GetRolePolicyResponse {
                     get_role_policy_result: GetRolePolicyResult {
                         role_name: role_name.to_string(),
@@ -1642,15 +1676,17 @@ mod tests {
                 })
             });
         iam.expect_put_role_policy()
-            .withf(|role_name, policy_name, document| {
+            .withf(move |role_name, policy_name, document| {
                 role_name == ACCESS_ROLE
-                    && policy_name == GRANT_POLICY
+                    && policy_name == written_name
                     && grants_the_image(&serde_json::from_str(document).unwrap())
             })
             .times(puts)
             .returning(move |_, _, _| put_answer());
         iam.expect_delete_role_policy()
-            .withf(|role_name, policy_name| role_name == ACCESS_ROLE && policy_name == GRANT_POLICY)
+            .withf(move |role_name, policy_name| {
+                role_name == ACCESS_ROLE && policy_name == written_name
+            })
             .times(deletes)
             .returning(|_, _| Ok(()));
         iam
@@ -1749,6 +1785,37 @@ mod tests {
         )
         .await;
         assert_eq!(progress, ScaffoldingProgress::Done);
+    }
+
+    /// A role set up before the policy rename holds the grant under its previous name: an
+    /// outdated grant is rewritten under that name, never added again under the new one, and
+    /// unpublishing revokes it there.
+    #[tokio::test]
+    async fn a_grant_held_under_its_previous_name_stays_under_it() {
+        let outdated = serde_json::json!({ "Version": "2012-10-17", "Statement": [] });
+        let progress = published_step(
+            with_access_role_holding(LEGACY_GRANT_POLICY, Some(outdated), 1, 0, || Ok(())),
+            &published_stack(true),
+            &created_access(),
+        )
+        .await;
+        assert_eq!(progress, ScaffoldingProgress::InProgress);
+
+        let progress = published_step(
+            with_access_role_holding(LEGACY_GRANT_POLICY, Some(granted()), 0, 0, || Ok(())),
+            &published_stack(true),
+            &created_access(),
+        )
+        .await;
+        assert_eq!(progress, ScaffoldingProgress::Done);
+
+        let progress = published_step(
+            with_access_role_holding(LEGACY_GRANT_POLICY, Some(granted()), 0, 1, || Ok(())),
+            &published_stack(false),
+            &created_access(),
+        )
+        .await;
+        assert_eq!(progress, ScaffoldingProgress::InProgress);
     }
 
     #[tokio::test]

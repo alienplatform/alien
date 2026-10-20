@@ -114,7 +114,7 @@ impl crate::traits::Vault for AwsParameterStoreVault {
             .value(value.to_string())
             .parameter_type("SecureString".to_string())
             .description(format!(
-                "Secret managed by Alien vault {}",
+                "Secret managed by deployment vault {}",
                 self.vault_prefix
             ))
             .overwrite(true)

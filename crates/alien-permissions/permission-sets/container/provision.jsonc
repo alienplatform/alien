@@ -433,7 +433,7 @@
                 "aws:ResourceTag/${managedByTag}": "runtime"
               },
               "ForAllValues:StringEquals": {
-                "aws:TagKeys": "alien-restore-request"
+                "aws:TagKeys": "deployment-restore-request"
               }
             }
           },
@@ -446,7 +446,7 @@
                 "aws:ResourceTag/${managedByTag}": "runtime"
               },
               "ForAllValues:StringEquals": {
-                "aws:TagKeys": "alien-restore-request"
+                "aws:TagKeys": "deployment-restore-request"
               }
             }
           }

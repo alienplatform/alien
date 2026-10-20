@@ -318,7 +318,7 @@ pub async fn impersonate_management_sa(
 
     let impersonation_request = ImpersonationRequest {
         session_name: Some(format!(
-            "alien-managed-srv-{}",
+            "deployment-management-{}",
             uuid::Uuid::new_v4().simple()
         )),
         duration_seconds: Some(3600),
@@ -480,7 +480,7 @@ fn uses_direct_impersonation_credentials(deployment: &DeploymentRecord) -> bool 
 }
 
 fn remote_bindings_session_name(deployment_id: &str, resource_id: &str) -> String {
-    format!("alien-{deployment_id}-{resource_id}")
+    format!("deployment-{deployment_id}-{resource_id}")
         .chars()
         .map(|character| {
             if character.is_ascii_alphanumeric()

@@ -619,6 +619,15 @@ mod tests {
                     })
                 });
             let mut iam = MockIamApi::new();
+            iam.expect_list_role_policies().returning(|_| {
+                Ok(alien_aws_clients::iam::ListRolePoliciesResponse {
+                    list_role_policies_result: alien_aws_clients::iam::ListRolePoliciesResult {
+                        policy_names: None,
+                        is_truncated: Some(false),
+                        marker: None,
+                    },
+                })
+            });
             let policy_calls = calls.clone();
             iam.expect_put_role_policy()
                 .times(if authority == InitialSetupAuthority::DirectSetup {
