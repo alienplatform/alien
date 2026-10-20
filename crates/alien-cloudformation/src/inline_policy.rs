@@ -877,6 +877,7 @@ mod tests {
                     setup_fingerprint_version: 1,
                     registration: RegistrationMode::OutputsFallback,
                     description: None,
+                    management_trust: Default::default(),
                 },
             );
             if should_pass {

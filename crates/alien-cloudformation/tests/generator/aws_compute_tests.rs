@@ -190,6 +190,7 @@ fn aws_container_cluster_without_platform_extension_errors_cleanly() {
             setup_fingerprint_version: 1,
             registration: RegistrationMode::OutputsFallback,
             description: None,
+            management_trust: Default::default(),
         },
     )
     .expect_err("OSS registry should not register container_cluster");

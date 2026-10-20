@@ -147,6 +147,7 @@ fn aws_open_search_rejects_invalid_capacity_before_rendering() {
             setup_fingerprint_version: 1,
             registration: RegistrationMode::OutputsFallback,
             description: None,
+            management_trust: Default::default(),
         },
     )
     .expect_err("unsupported OCU values must fail generation");
@@ -210,6 +211,7 @@ fn aws_open_search_rejects_id_unusable_as_collection_name() {
                 setup_fingerprint_version: 1,
                 registration: RegistrationMode::OutputsFallback,
                 description: None,
+                management_trust: Default::default(),
             },
         );
 

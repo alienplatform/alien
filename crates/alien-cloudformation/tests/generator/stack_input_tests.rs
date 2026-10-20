@@ -67,6 +67,7 @@ fn cloudformation_emits_stack_inputs_as_parameters_and_registration_values() {
                 callback_url: None,
             },
             description: Some("stack inputs".to_string()),
+            management_trust: Default::default(),
         },
     )
     .expect("template should render");
