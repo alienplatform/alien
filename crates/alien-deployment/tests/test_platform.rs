@@ -2525,7 +2525,8 @@ async fn setup_retry_creates_a_failed_setup_owned_store_again_with_the_new_confi
     assert_eq!(
         state.status,
         DeploymentStatus::Running,
-        "{:?}",
+        "error={:?}; resource={:?}",
+        state.error,
         state.stack_state.as_ref().unwrap().resources[store_id]
     );
 
@@ -2695,6 +2696,34 @@ async fn declining_a_linked_gate_deprovisions_the_store_before_the_update_comple
     start_update(&mut state, release_of("rel_v2", stack));
     state = run_to_completion(state, config_with_store_enabled(false)).await;
 
+    assert_eq!(state.status, DeploymentStatus::UpdateFailed);
+    assert_eq!(
+        state.error.as_ref().unwrap().code,
+        "DEPLOYMENT_SETUP_REQUIRED"
+    );
+    assert!(state
+        .stack_state
+        .as_ref()
+        .unwrap()
+        .resources
+        .get("cache")
+        .is_none_or(|resource| resource.status == alien_core::ResourceStatus::Deleted));
+    // Runtime cleanup is complete; privileged setup must revoke the consumer's
+    // former store grants before the update can report completion.
+    let target = state.target_release.as_ref().unwrap().stack.clone();
+    state.runtime_metadata = Some(
+        alien_deployment::prepare_direct_setup_update(
+            target,
+            state.stack_state.as_ref().unwrap(),
+            &config_with_store_enabled(false),
+            &ClientConfig::Test,
+            state.runtime_metadata.as_ref().unwrap(),
+        )
+        .await
+        .unwrap(),
+    );
+    state.status = DeploymentStatus::InitialSetup;
+    state = run_to_completion(state, config_with_store_enabled(false)).await;
     assert_eq!(state.status, DeploymentStatus::Running);
     let resources = &state.stack_state.as_ref().unwrap().resources;
     assert!(

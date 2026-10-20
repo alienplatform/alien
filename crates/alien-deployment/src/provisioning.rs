@@ -389,6 +389,7 @@ pub async fn handle_provisioning_failed(
             )
             .await?,
         );
+        next.protocol_version = alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION;
     }
 
     if local_setup_retry {
@@ -402,9 +403,20 @@ pub async fn handle_provisioning_failed(
     // Every failure whose config is unchanged resumes where it stopped. A changed runtime
     // resource is left to the planner, which updates or replaces it. A changed setup-owned one
     // needs setup, which this runtime executor never does for it, so the retry is refused.
+    // A direct local retry has just prepared a corrective release for setup.
+    // Compare checkpoints with that desired release, retaining the installed
+    // baseline in persisted metadata until setup actually completes.
+    let mut retry_metadata = next.runtime_metadata.clone();
+    if local_setup_retry {
+        if let Some(metadata) = retry_metadata.as_mut() {
+            if let Some(desired) = metadata.pending_prepared_stack.take() {
+                metadata.prepared_stack = Some(desired);
+            }
+        }
+    }
     let outcome = crate::helpers::retry_failed_runtime_resources(
         &mut stack_state,
-        next.runtime_metadata.as_ref(),
+        retry_metadata.as_ref(),
         &config,
     )?;
     let blocking = outcome

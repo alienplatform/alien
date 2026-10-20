@@ -222,8 +222,13 @@ pub async fn step(
             }
         }
         DeploymentStatus::InitialSetup => {
-            initial_setup::handle_initial_setup(current, config, client_config, service_provider)
-                .await?
+            Box::pin(initial_setup::handle_initial_setup(
+                current,
+                config,
+                client_config,
+                service_provider,
+            ))
+            .await?
         }
         DeploymentStatus::Provisioning => {
             provisioning::handle_provisioning(current, config, client_config, service_provider)

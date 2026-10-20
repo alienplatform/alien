@@ -12,6 +12,15 @@ use alien_infra::setup_scaffolding::{
 use alien_infra::{ImporterRegistry, RunningResourcePolicy, StackExecutor, StackStateExt};
 use tracing::{debug, info};
 
+fn normalize_legacy_setup_metadata(metadata: &mut RuntimeMetadata, protocol_version: &mut u32) {
+    if *protocol_version < 2 {
+        if let Some(installed) = metadata.pending_prepared_stack.take() {
+            metadata.pending_prepared_stack = metadata.prepared_stack.replace(installed);
+            *protocol_version = alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION;
+        }
+    }
+}
+
 /// Handle InitialSetup status (deploy setup-owned Frozen resources)
 ///
 /// This step:
@@ -32,7 +41,7 @@ pub async fn handle_initial_setup(
     info!("Handling InitialSetup status");
 
     // Clone current first before moving any fields
-    let current_cloned = current.clone();
+    let mut current_cloned = current.clone();
 
     // Stack state is required
     let mut stack_state = current.stack_state.ok_or_else(|| {
@@ -48,27 +57,38 @@ pub async fn handle_initial_setup(
             message: "Runtime metadata with prepared stack required for initial setup".to_string(),
         })
     })?;
+    if runtime_metadata.initial_setup_authority == InitialSetupAuthority::DirectSetup {
+        normalize_legacy_setup_metadata(
+            &mut runtime_metadata,
+            &mut current_cloned.protocol_version,
+        );
+    }
 
     // A setup update must finish old live cleanup before it narrows the
     // identities that authorize it. Persist the old and desired definitions
     // separately across every step and failure.
     if runtime_metadata.initial_setup_authority == InitialSetupAuthority::DirectSetup {
         if let Some(desired) = runtime_metadata.pending_prepared_stack.clone() {
-            if let Err(error) = crate::helpers::sync_secrets_to_vault(
-                &desired,
-                &stack_state,
-                &client_config,
-                &config,
-                &mut runtime_metadata,
-            )
-            .await
-            {
-                return Ok(failed_keeping_record(
-                    current_cloned,
-                    stack_state,
-                    runtime_metadata,
-                    error,
-                ));
+            // Only existing owned values create a cleanup obligation before
+            // IAM changes. A failed first setup may not have created its vault
+            // yet; new values are synced below once that vault is Running.
+            if !runtime_metadata.last_synced_secret_names.is_empty() {
+                if let Err(error) = crate::helpers::sync_secrets_to_vault(
+                    &desired,
+                    &stack_state,
+                    &client_config,
+                    &config,
+                    &mut runtime_metadata,
+                )
+                .await
+                {
+                    return Ok(failed_keeping_record(
+                        current_cloned,
+                        stack_state,
+                        runtime_metadata,
+                        error,
+                    ));
+                }
             }
             let executor = StackExecutor::builder(&desired, client_config.clone())
                 .deployment_config(&config)
@@ -362,6 +382,16 @@ pub async fn handle_initial_setup(
                             .resources
                             .keys()
                             .any(|id| !target_stack.resources.contains_key(id))
+                        || installed.resources.iter().any(|(id, entry)| {
+                            entry
+                                .config
+                                .downcast_ref::<alien_core::ServiceAccount>()
+                                .is_some()
+                                && target_stack
+                                    .resources
+                                    .get(id)
+                                    .is_some_and(|desired| entry.config != desired.config)
+                        })
                 })
         {
             let registry = std::sync::Arc::new(alien_infra::ResourceRegistry::with_built_ins());
@@ -795,6 +825,7 @@ pub async fn handle_initial_setup_failed(
             )
             .await?,
         );
+        next.protocol_version = alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION;
     }
     if current.platform == alien_core::Platform::Local {
         if let Some(metadata) = next.runtime_metadata.as_mut().filter(|metadata| {
@@ -806,11 +837,14 @@ pub async fn handle_initial_setup_failed(
                 .and_then(|release| release.release_id.clone());
         }
     }
-    let runtime_metadata = next.runtime_metadata.as_ref().ok_or_else(|| {
+    let runtime_metadata = next.runtime_metadata.as_mut().ok_or_else(|| {
         AlienError::new(ErrorData::MissingConfiguration {
             message: "Runtime metadata with prepared stack required for setup retry".to_string(),
         })
     })?;
+    if runtime_metadata.initial_setup_authority == InitialSetupAuthority::DirectSetup {
+        normalize_legacy_setup_metadata(runtime_metadata, &mut next.protocol_version);
+    }
     let retried = retry_failed_setup_resources(&mut stack_state, runtime_metadata, &config)?;
 
     info!("Retried {} failed resources: {:?}", retried.len(), retried);
@@ -2857,6 +2891,119 @@ mod tests {
             ),
             "unchanged failed runtime resource must resume, got {:?}",
             live.status
+        );
+    }
+
+    #[tokio::test]
+    async fn automatic_corrective_release_does_not_resume_old_runtime_checkpoint() {
+        let installed = Stack::new("test".to_string())
+            .add(
+                Storage::new("live".to_string()).build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        let mut stack_state = deployed_test_stack(&installed).await;
+        let resource = stack_state.resources.get_mut("live").unwrap();
+        let mut controller = resource.get_internal_controller().unwrap().unwrap();
+        controller.transition_to_update().unwrap();
+        resource
+            .set_internal_controller(Some(controller.clone()))
+            .unwrap();
+        resource.last_failed_state = resource.internal_state.clone();
+        controller.transition_to_failure();
+        resource.status = controller.get_status();
+        resource.set_internal_controller(Some(controller)).unwrap();
+        let target = Stack::new("test".to_string())
+            .add(
+                Storage::new("live".to_string()).versioning(true).build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        let mut state = resumed_test_setup(stack_state, installed);
+        state.status = DeploymentStatus::UpdatePending;
+        state.target_release = Some(alien_core::ReleaseInfo {
+            release_id: Some("corrected".to_string()),
+            version: None,
+            description: None,
+            stack: target.clone(),
+        });
+        state.runtime_metadata.as_mut().unwrap().automatic_setup = true;
+        state = crate::updating::handle_update_pending(
+            state,
+            target,
+            config(),
+            ClientConfig::Test,
+            Arc::new(DefaultPlatformServiceProvider::default()),
+        )
+        .await
+        .unwrap()
+        .state;
+        assert_eq!(
+            state.stack_state.as_ref().unwrap().resources["live"].status,
+            ResourceStatus::UpdateFailed,
+            "a changed config must reach the planner without resuming the old update"
+        );
+        for _ in 0..32 {
+            state = crate::step(state, config(), ClientConfig::Test, None)
+                .await
+                .unwrap()
+                .state;
+            state = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+            if state.status == DeploymentStatus::Running {
+                break;
+            }
+        }
+        assert_eq!(state.status, DeploymentStatus::Running);
+        assert!(
+            state.stack_state.as_ref().unwrap().resources["live"]
+                .config
+                .downcast_ref::<Storage>()
+                .unwrap()
+                .versioning
+        );
+        assert!(state
+            .runtime_metadata
+            .unwrap()
+            .pending_prepared_stack
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn omitted_empty_frozen_account_does_not_require_permission_cleanup() {
+        let installed = Stack::new("test".to_string())
+            .permissions(
+                alien_core::permissions::PermissionsConfig::new().with_profile(
+                    "empty",
+                    alien_core::permissions::PermissionProfile::new()
+                        .resource("unused", Vec::<String>::new()),
+                ),
+            )
+            .add(
+                alien_core::ServiceAccount::new("empty-sa".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let stack_state = deployed_test_stack(&installed).await;
+        let mut state = resumed_test_setup(stack_state, installed);
+        state.status = DeploymentStatus::Updating;
+        state
+            .runtime_metadata
+            .as_mut()
+            .unwrap()
+            .pending_prepared_stack = Some(Stack::new("test".to_string()).build());
+        state = crate::updating::handle_updating(
+            state,
+            config(),
+            ClientConfig::Test,
+            Arc::new(DefaultPlatformServiceProvider::default()),
+        )
+        .await
+        .unwrap()
+        .state;
+        assert_eq!(state.status, DeploymentStatus::Running);
+        assert_eq!(
+            state.stack_state.as_ref().unwrap().resources["empty-sa"].status,
+            ResourceStatus::Running
         );
     }
 

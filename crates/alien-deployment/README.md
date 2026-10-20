@@ -67,6 +67,13 @@ before changing IAM instead of waiting indefinitely or deleting a live dependenc
 
 ### Previously lost deletion checkpoints
 
+Setup checkpoints written by older executors are normalized on load using a
+deployment protocol version. Their prepared desired stack must not be
+overwritten by a stale pending stack from a failed runtime update. Version 2 checkpoints are rejected by version 1 executors before provider work. Upgrade all
+executors that can read a deployment before allowing them to write the new
+installed/pending setup representation. Do not downgrade an executor while such
+a setup is in progress; finish setup first.
+
 Upgrading cannot recover identifiers that an older executor discarded when it
 reported Deleted. Before repairing such a deployment, an operator must identify the
 exact owned objects using independent inventory and ownership evidence. Explicitly

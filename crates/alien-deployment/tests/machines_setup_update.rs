@@ -213,7 +213,7 @@ async fn external_machines_storage_setup_and_repeat_never_create_a_storage_contr
     .await
     .expect("repeated setup should remain valid");
     let executor = StackExecutor::builder(
-        repeated.prepared_stack.as_ref().unwrap(),
+        repeated.pending_prepared_stack.as_ref().unwrap(),
         ClientConfig::Machines,
     )
     .deployment_config(&config)

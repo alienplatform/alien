@@ -7019,6 +7019,7 @@ async fn push_initial_setup_targeted(
                     operation: "retry failed setup-owned resources".to_string(),
                 })?;
             state.runtime_metadata = Some(runtime_metadata);
+            state.protocol_version = alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION;
             state.status = DeploymentStatus::InitialSetup;
         }
 

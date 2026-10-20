@@ -385,7 +385,11 @@ async fn live_denied_delete_preserves_checkpoint() {
     );
 }
 
-async fn setup_scoped_grant_cleanup(legacy_capture: bool, removed_profile: bool) {
+async fn setup_scoped_grant_cleanup(
+    legacy_capture: bool,
+    removed_profile: bool,
+    legacy_checkpoint: bool,
+) {
     use alien_aws_clients::iam::{
         ListRolePoliciesResponse, ListRolePoliciesResult, MockIamApi, PolicyNames,
     };
@@ -520,6 +524,17 @@ async fn setup_scoped_grant_cleanup(legacy_capture: bool, removed_profile: bool)
         pending_prepared_stack: Some(desired),
         ..Default::default()
     });
+    if legacy_checkpoint {
+        // Produced by the previous executor's failed update followed by its
+        // real direct-setup preparation, before any new-format metadata existed.
+        state = serde_json::from_str(include_str!("fixtures/legacy_cleanup_setup.json")).unwrap();
+        state.status = DeploymentStatus::InitialSetupFailed;
+        state.retry_requested = true;
+        state = alien_deployment::step(state, config(), fake_config(), Some(services.clone()))
+            .await
+            .unwrap()
+            .state;
+    }
     for _ in 0..32 {
         state = alien_deployment::step(state, config(), fake_config(), Some(services.clone()))
             .await
@@ -543,17 +558,17 @@ async fn setup_scoped_grant_cleanup(legacy_capture: bool, removed_profile: bool)
 
 #[tokio::test]
 async fn setup_drains_live_resources_then_removes_current_and_legacy_owned_grants() {
-    setup_scoped_grant_cleanup(false, false).await;
+    setup_scoped_grant_cleanup(false, false, false).await;
 }
 
 #[tokio::test]
 async fn setup_reconciles_legacy_uncaptured_inline_grants() {
-    setup_scoped_grant_cleanup(true, false).await;
+    setup_scoped_grant_cleanup(true, false, false).await;
 }
 
 #[tokio::test]
 async fn setup_removes_profile_grants_from_a_retained_identity() {
-    setup_scoped_grant_cleanup(false, true).await;
+    setup_scoped_grant_cleanup(false, true, false).await;
 }
 
 async fn live_until(
@@ -565,6 +580,15 @@ async fn live_until(
     for _ in 0..64 {
         let result =
             alien_deployment::step(state, config(), cfg.clone(), Some(services.clone())).await;
+        if let Err(error) = &result {
+            let dir = std::path::PathBuf::from(std::env::var("ALIEN_DELETE_TEST_DIR").unwrap());
+            std::fs::write(
+                dir.join("live-step-error.json"),
+                serde_json::to_vec(error).unwrap(),
+            )
+            .unwrap();
+            eprintln!("live deployment step error code={}", error.code);
+        }
         assert!(result.is_ok(), "live deployment step returned an error");
         let result = result.unwrap();
         state = serde_json::from_slice(&serde_json::to_vec(&result.state).unwrap()).unwrap();
@@ -662,6 +686,21 @@ async fn live_setup_removes_permissions_after_cleanup() {
     account.status = ResourceStatus::Running;
     account.set_internal_controller(Some(deserialize_controller(json!({"type":"AwsServiceAccountController","_controllerStateVersion":1,"state":"ready","stackPermissionsApplied":true,"roleName":role,"roleArn":fixture["senderRoleArn"]})).unwrap())).unwrap();
     stack_state.resources.insert("sender-sa".into(), account);
+    // Match the canonical installed definitions that real deployment preflights
+    // produce. Retry runs those preflights again before advancing the checkpoint.
+    let runner = alien_preflights::runner::PreflightRunner::new();
+    let old = runner
+        .apply_mutations(old, &stack_state, &config())
+        .await
+        .unwrap();
+    let empty = runner
+        .apply_mutations(empty, &stack_state, &config())
+        .await
+        .unwrap();
+    let desired = runner
+        .apply_mutations(desired, &stack_state, &config())
+        .await
+        .unwrap();
     let mut state = deployment(stack_state);
     state.status = DeploymentStatus::InitialSetup;
     state.target_release = Some(ReleaseInfo {
@@ -926,4 +965,9 @@ async fn live_workload_permission_probe() {
             assert_eq!(error.code, "REMOTE_ACCESS_DENIED");
         }
     }
+}
+
+#[tokio::test]
+async fn setup_resumes_legacy_prepared_desired_and_stale_pending_checkpoint() {
+    setup_scoped_grant_cleanup(false, false, true).await;
 }

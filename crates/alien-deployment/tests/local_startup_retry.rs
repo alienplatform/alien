@@ -14,7 +14,12 @@ fn stack(lifecycle: ResourceLifecycle, added: bool) -> Stack {
             Storage::new("retained".to_string()).build(),
             ResourceLifecycle::Frozen,
         )
-        .add(Storage::new("blocked".to_string()).build(), lifecycle);
+        .add(
+            Storage::new("blocked".to_string())
+                .versioning(added)
+                .build(),
+            lifecycle,
+        );
     if added {
         builder
             .add(
@@ -120,6 +125,22 @@ async fn local_startup_retry_prepares_new_release_and_preserves_existing_data() 
             serde_json::from_slice(&serde_json::to_vec(&failed).unwrap()).unwrap();
         retry.target_release = Some(release("new", stack(lifecycle, true)));
         retry.retry_requested = true;
+        retry = alien_deployment::step(
+            retry,
+            config.clone(),
+            client.clone(),
+            Some(services.clone()),
+        )
+        .await
+        .unwrap()
+        .state;
+        if lifecycle == ResourceLifecycle::Live {
+            assert_eq!(
+                retry.stack_state.as_ref().unwrap().resources["blocked"].status,
+                alien_core::ResourceStatus::ProvisionFailed,
+                "the changed release must not resume the old create checkpoint"
+            );
+        }
         let ready = drive(retry, &config, &client, services).await;
         assert_eq!(ready.status, DeploymentStatus::Running);
         assert_eq!(
@@ -131,6 +152,18 @@ async fn local_startup_retry_prepares_new_release_and_preserves_existing_data() 
             "the new release must actually be provisioned"
         );
         assert!(directory.path().join("storage/blocked").is_dir());
+        assert!(
+            ready.stack_state.as_ref().unwrap().resources["blocked"]
+                .config
+                .downcast_ref::<Storage>()
+                .unwrap()
+                .versioning
+        );
+        assert!(ready
+            .runtime_metadata
+            .unwrap()
+            .pending_prepared_stack
+            .is_none());
         assert_eq!(std::fs::read_to_string(kept).unwrap(), "preserve this data");
         bindings.shutdown().await;
     }

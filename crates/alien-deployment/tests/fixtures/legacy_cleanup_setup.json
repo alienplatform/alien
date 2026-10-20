@@ -1,0 +1,524 @@
+{
+  "status": "initial-setup",
+  "platform": "aws",
+  "targetRelease": {
+    "releaseId": "desired",
+    "stack": {
+      "id": "synthetic",
+      "resources": {
+        "sender-sa": {
+          "config": {
+            "id": "sender-sa",
+            "stackPermissionSets": [],
+            "type": "service-account"
+          },
+          "lifecycle": "frozen",
+          "dependencies": [],
+          "remoteAccess": false
+        }
+      },
+      "permissions": {
+        "profiles": {
+          "sender": {}
+        },
+        "management": "auto"
+      }
+    }
+  },
+  "stackState": {
+    "platform": "aws",
+    "resources": {
+      "jobs": {
+        "type": "queue",
+        "_internal": {
+          "_controllerStateVersion": 1,
+          "internalStayCount": null,
+          "queueName": "synthetic-jobs",
+          "queueUrl": "synthetic-url",
+          "state": "deleteFailed",
+          "type": "AwsQueueController"
+        },
+        "status": "delete-failed",
+        "outputs": {
+          "identifier": "synthetic-url",
+          "queueName": "synthetic-jobs",
+          "type": "queue"
+        },
+        "config": {
+          "id": "jobs",
+          "type": "queue"
+        },
+        "error": {
+          "code": "CLOUD_PLATFORM_ERROR",
+          "message": "Cloud platform operation failed: Failed to delete SQS queue 'synthetic-url'",
+          "context": {
+            "message": "Failed to delete SQS queue 'synthetic-url'",
+            "resource_id": "jobs"
+          },
+          "retryable": false,
+          "internal": false,
+          "httpStatusCode": 500,
+          "source": {
+            "code": "SYNTHETIC_DELETE_FAILURE",
+            "message": "Access denied to queue 'synthetic-jobs'",
+            "context": {
+              "resource_name": "synthetic-jobs",
+              "resource_type": "queue"
+            },
+            "retryable": false,
+            "internal": false,
+            "httpStatusCode": 500
+          }
+        },
+        "lifecycle": "live",
+        "lastFailedState": {
+          "_controllerStateVersion": 1,
+          "internalStayCount": null,
+          "queueName": "synthetic-jobs",
+          "queueUrl": "synthetic-url",
+          "state": "deleteStart",
+          "type": "AwsQueueController"
+        }
+      },
+      "sender-sa": {
+        "type": "service-account",
+        "_internal": {
+          "_controllerStateVersion": 1,
+          "assumeRolePolicy": null,
+          "internalStayCount": null,
+          "roleArn": "arn:aws:iam::123456789012:role/synthetic-sender",
+          "roleName": "synthetic-sender",
+          "stackPermissionsApplied": true,
+          "state": "ready",
+          "type": "AwsServiceAccountController"
+        },
+        "status": "running",
+        "config": {
+          "id": "sender-sa",
+          "resourcePermissionSets": {
+            "jobs": [
+              {
+                "description": "Allows sending messages to queues and acknowledging received messages",
+                "id": "queue/data-write",
+                "platforms": {
+                  "aws": [
+                    {
+                      "binding": {
+                        "resource": {
+                          "resources": [
+                            "arn:aws:sqs:${awsRegion}:${awsAccountId}:${resourceName}"
+                          ]
+                        },
+                        "stack": {
+                          "resources": [
+                            "arn:aws:sqs:${awsRegion}:${awsAccountId}:${stackPrefix}-*"
+                          ]
+                        }
+                      },
+                      "description": "Send, acknowledge, and inspect messages in application-owned SQS queues.",
+                      "grant": {
+                        "actions": [
+                          "sqs:SendMessage",
+                          "sqs:DeleteMessage",
+                          "sqs:ChangeMessageVisibility",
+                          "sqs:GetQueueAttributes",
+                          "sqs:GetQueueUrl"
+                        ]
+                      },
+                      "label": "send-sqs-messages"
+                    }
+                  ],
+                  "azure": [
+                    {
+                      "binding": {
+                        "resource": {
+                          "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.ServiceBus/namespaces/${resourceName}-sb/queues/${resourceName}"
+                        },
+                        "stack": {
+                          "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+                        }
+                      },
+                      "description": "Send messages to application-owned Azure Service Bus queues.",
+                      "grant": {
+                        "predefinedRoles": [
+                          "Azure Service Bus Data Sender"
+                        ]
+                      },
+                      "label": "send-service-bus-messages"
+                    }
+                  ],
+                  "gcp": [
+                    {
+                      "binding": {
+                        "resource": {
+                          "scope": "projects/${projectName}/topics/${resourceName}"
+                        },
+                        "stack": {
+                          "scope": "projects/${projectName}"
+                        }
+                      },
+                      "description": "Publish messages to application-owned Pub/Sub topics.",
+                      "grant": {
+                        "predefinedRoles": [
+                          "roles/pubsub.publisher"
+                        ]
+                      },
+                      "label": "publish-pubsub-messages"
+                    },
+                    {
+                      "binding": {
+                        "resource": {
+                          "scope": "projects/${projectName}/subscriptions/${resourceName}"
+                        },
+                        "stack": {
+                          "scope": "projects/${projectName}"
+                        }
+                      },
+                      "description": "Acknowledge and inspect messages on application-owned Pub/Sub subscriptions.",
+                      "grant": {
+                        "predefinedRoles": [
+                          "roles/pubsub.subscriber",
+                          "roles/pubsub.viewer"
+                        ]
+                      },
+                      "label": "acknowledge-pubsub-messages"
+                    }
+                  ]
+                }
+              },
+              {
+                "description": "Allows sending messages to queues and acknowledging received messages",
+                "id": "queue/custom-send",
+                "platforms": {
+                  "aws": [
+                    {
+                      "binding": {
+                        "resource": {
+                          "resources": [
+                            "arn:aws:sqs:${awsRegion}:${awsAccountId}:${resourceName}"
+                          ]
+                        },
+                        "stack": {
+                          "resources": [
+                            "arn:aws:sqs:${awsRegion}:${awsAccountId}:${stackPrefix}-*"
+                          ]
+                        }
+                      },
+                      "description": "Send, acknowledge, and inspect messages in application-owned SQS queues.",
+                      "grant": {
+                        "actions": [
+                          "sqs:SendMessage",
+                          "sqs:DeleteMessage",
+                          "sqs:ChangeMessageVisibility",
+                          "sqs:GetQueueAttributes",
+                          "sqs:GetQueueUrl"
+                        ]
+                      },
+                      "label": "send-sqs-messages"
+                    }
+                  ],
+                  "azure": [
+                    {
+                      "binding": {
+                        "resource": {
+                          "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.ServiceBus/namespaces/${resourceName}-sb/queues/${resourceName}"
+                        },
+                        "stack": {
+                          "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+                        }
+                      },
+                      "description": "Send messages to application-owned Azure Service Bus queues.",
+                      "grant": {
+                        "predefinedRoles": [
+                          "Azure Service Bus Data Sender"
+                        ]
+                      },
+                      "label": "send-service-bus-messages"
+                    }
+                  ],
+                  "gcp": [
+                    {
+                      "binding": {
+                        "resource": {
+                          "scope": "projects/${projectName}/topics/${resourceName}"
+                        },
+                        "stack": {
+                          "scope": "projects/${projectName}"
+                        }
+                      },
+                      "description": "Publish messages to application-owned Pub/Sub topics.",
+                      "grant": {
+                        "predefinedRoles": [
+                          "roles/pubsub.publisher"
+                        ]
+                      },
+                      "label": "publish-pubsub-messages"
+                    },
+                    {
+                      "binding": {
+                        "resource": {
+                          "scope": "projects/${projectName}/subscriptions/${resourceName}"
+                        },
+                        "stack": {
+                          "scope": "projects/${projectName}"
+                        }
+                      },
+                      "description": "Acknowledge and inspect messages on application-owned Pub/Sub subscriptions.",
+                      "grant": {
+                        "predefinedRoles": [
+                          "roles/pubsub.subscriber",
+                          "roles/pubsub.viewer"
+                        ]
+                      },
+                      "label": "acknowledge-pubsub-messages"
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          "stackPermissionSets": [],
+          "type": "service-account"
+        },
+        "lifecycle": "frozen"
+      }
+    },
+    "resourcePrefix": "f27cb167"
+  },
+  "runtimeMetadata": {
+    "initialSetupAuthority": "directSetup",
+    "lastSyncedEnvVarsHash": "44e0e81566a75554c962faa07b08d765ce1871ac1fb2de4b3fb2b9e9013b3994",
+    "preparedStack": {
+      "id": "synthetic",
+      "resources": {
+        "sender-sa": {
+          "config": {
+            "id": "sender-sa",
+            "stackPermissionSets": [],
+            "type": "service-account"
+          },
+          "lifecycle": "frozen",
+          "dependencies": [],
+          "remoteAccess": false
+        }
+      },
+      "permissions": {
+        "profiles": {
+          "sender": {}
+        },
+        "management": {
+          "extend": {
+            "*": [
+              "service-account/heartbeat",
+              "remote-stack-management/protect-management-role"
+            ]
+          }
+        }
+      }
+    },
+    "pendingPreparedStack": {
+      "id": "synthetic",
+      "resources": {
+        "sender-sa": {
+          "config": {
+            "id": "sender-sa",
+            "resourcePermissionSets": {
+              "jobs": [
+                {
+                  "description": "Allows sending messages to queues and acknowledging received messages",
+                  "id": "queue/data-write",
+                  "platforms": {
+                    "aws": [
+                      {
+                        "binding": {
+                          "resource": {
+                            "resources": [
+                              "arn:aws:sqs:${awsRegion}:${awsAccountId}:${resourceName}"
+                            ]
+                          },
+                          "stack": {
+                            "resources": [
+                              "arn:aws:sqs:${awsRegion}:${awsAccountId}:${stackPrefix}-*"
+                            ]
+                          }
+                        },
+                        "description": "Send, acknowledge, and inspect messages in application-owned SQS queues.",
+                        "grant": {
+                          "actions": [
+                            "sqs:SendMessage",
+                            "sqs:DeleteMessage",
+                            "sqs:ChangeMessageVisibility",
+                            "sqs:GetQueueAttributes",
+                            "sqs:GetQueueUrl"
+                          ]
+                        },
+                        "label": "send-sqs-messages"
+                      }
+                    ],
+                    "azure": [
+                      {
+                        "binding": {
+                          "resource": {
+                            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.ServiceBus/namespaces/${resourceName}-sb/queues/${resourceName}"
+                          },
+                          "stack": {
+                            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+                          }
+                        },
+                        "description": "Send messages to application-owned Azure Service Bus queues.",
+                        "grant": {
+                          "predefinedRoles": [
+                            "Azure Service Bus Data Sender"
+                          ]
+                        },
+                        "label": "send-service-bus-messages"
+                      }
+                    ],
+                    "gcp": [
+                      {
+                        "binding": {
+                          "resource": {
+                            "scope": "projects/${projectName}/topics/${resourceName}"
+                          },
+                          "stack": {
+                            "scope": "projects/${projectName}"
+                          }
+                        },
+                        "description": "Publish messages to application-owned Pub/Sub topics.",
+                        "grant": {
+                          "predefinedRoles": [
+                            "roles/pubsub.publisher"
+                          ]
+                        },
+                        "label": "publish-pubsub-messages"
+                      },
+                      {
+                        "binding": {
+                          "resource": {
+                            "scope": "projects/${projectName}/subscriptions/${resourceName}"
+                          },
+                          "stack": {
+                            "scope": "projects/${projectName}"
+                          }
+                        },
+                        "description": "Acknowledge and inspect messages on application-owned Pub/Sub subscriptions.",
+                        "grant": {
+                          "predefinedRoles": [
+                            "roles/pubsub.subscriber",
+                            "roles/pubsub.viewer"
+                          ]
+                        },
+                        "label": "acknowledge-pubsub-messages"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "description": "Allows sending messages to queues and acknowledging received messages",
+                  "id": "queue/custom-send",
+                  "platforms": {
+                    "aws": [
+                      {
+                        "binding": {
+                          "resource": {
+                            "resources": [
+                              "arn:aws:sqs:${awsRegion}:${awsAccountId}:${resourceName}"
+                            ]
+                          },
+                          "stack": {
+                            "resources": [
+                              "arn:aws:sqs:${awsRegion}:${awsAccountId}:${stackPrefix}-*"
+                            ]
+                          }
+                        },
+                        "description": "Send, acknowledge, and inspect messages in application-owned SQS queues.",
+                        "grant": {
+                          "actions": [
+                            "sqs:SendMessage",
+                            "sqs:DeleteMessage",
+                            "sqs:ChangeMessageVisibility",
+                            "sqs:GetQueueAttributes",
+                            "sqs:GetQueueUrl"
+                          ]
+                        },
+                        "label": "send-sqs-messages"
+                      }
+                    ],
+                    "azure": [
+                      {
+                        "binding": {
+                          "resource": {
+                            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.ServiceBus/namespaces/${resourceName}-sb/queues/${resourceName}"
+                          },
+                          "stack": {
+                            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+                          }
+                        },
+                        "description": "Send messages to application-owned Azure Service Bus queues.",
+                        "grant": {
+                          "predefinedRoles": [
+                            "Azure Service Bus Data Sender"
+                          ]
+                        },
+                        "label": "send-service-bus-messages"
+                      }
+                    ],
+                    "gcp": [
+                      {
+                        "binding": {
+                          "resource": {
+                            "scope": "projects/${projectName}/topics/${resourceName}"
+                          },
+                          "stack": {
+                            "scope": "projects/${projectName}"
+                          }
+                        },
+                        "description": "Publish messages to application-owned Pub/Sub topics.",
+                        "grant": {
+                          "predefinedRoles": [
+                            "roles/pubsub.publisher"
+                          ]
+                        },
+                        "label": "publish-pubsub-messages"
+                      },
+                      {
+                        "binding": {
+                          "resource": {
+                            "scope": "projects/${projectName}/subscriptions/${resourceName}"
+                          },
+                          "stack": {
+                            "scope": "projects/${projectName}"
+                          }
+                        },
+                        "description": "Acknowledge and inspect messages on application-owned Pub/Sub subscriptions.",
+                        "grant": {
+                          "predefinedRoles": [
+                            "roles/pubsub.subscriber",
+                            "roles/pubsub.viewer"
+                          ]
+                        },
+                        "label": "acknowledge-pubsub-messages"
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            "stackPermissionSets": [],
+            "type": "service-account"
+          },
+          "lifecycle": "frozen",
+          "dependencies": [],
+          "remoteAccess": false
+        }
+      },
+      "permissions": {
+        "profiles": {
+          "sender": {}
+        },
+        "management": "auto"
+      }
+    }
+  },
+  "protocolVersion": 1
+}

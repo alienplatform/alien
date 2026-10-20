@@ -10,6 +10,45 @@ use alien_infra::{RunningResourcePolicy, StackExecutor};
 use std::collections::{BTreeMap, HashSet};
 use tracing::{debug, info};
 
+fn same_profile_grants(
+    left: &alien_core::permissions::PermissionProfile,
+    right: &alien_core::permissions::PermissionProfile,
+) -> bool {
+    let contained = |a: &alien_core::permissions::PermissionProfile,
+                     b: &alien_core::permissions::PermissionProfile| {
+        a.0.iter().all(|(scope, grants)| {
+            grants
+                .iter()
+                .all(|grant| b.0.get(scope).is_some_and(|other| other.contains(grant)))
+        })
+    };
+    contained(left, right) && contained(right, left)
+}
+
+fn same_permission_grants(left: &Stack, right: &Stack) -> bool {
+    use alien_core::permissions::{ManagementPermissions, PermissionProfile};
+    let empty = PermissionProfile::new();
+    let profiles_equal = left
+        .permissions
+        .profiles
+        .keys()
+        .chain(right.permissions.profiles.keys())
+        .all(|name| {
+            same_profile_grants(
+                left.permissions.profiles.get(name).unwrap_or(&empty),
+                right.permissions.profiles.get(name).unwrap_or(&empty),
+            )
+        });
+    let management_equal = match (&left.permissions.management, &right.permissions.management) {
+        (ManagementPermissions::Override(a), ManagementPermissions::Override(b))
+        | (ManagementPermissions::Extend(a), ManagementPermissions::Extend(b)) => {
+            same_profile_grants(a, b)
+        }
+        (a, b) => a == b,
+    };
+    profiles_equal && management_equal
+}
+
 fn machines_deployment_has_zero_machines(platform: Platform, stack_state: &StackState) -> bool {
     platform == Platform::Machines
         && stack_state.resources.values().any(|resource| {
@@ -138,8 +177,15 @@ pub async fn handle_update_pending(
         // Setup hands back to Provisioning, whose executor does not resume failures. Resume
         // unchanged failed runtime resources here, as the manual update executor does; changed
         // ones are left to the planner.
-        let prepared_target =
-            crate::helpers::injected_target_stack(&metadata, &config, stack_state.platform)?;
+        let mut desired_metadata = metadata.clone();
+        if let Some(desired) = desired_metadata.pending_prepared_stack.take() {
+            desired_metadata.prepared_stack = Some(desired);
+        }
+        let prepared_target = crate::helpers::injected_target_stack(
+            &desired_metadata,
+            &config,
+            stack_state.platform,
+        )?;
         crate::helpers::resume_unchanged_failed_resources(
             &mut stack_state,
             &prepared_target,
@@ -176,6 +222,7 @@ pub async fn handle_update_pending(
         };
         next.stack_state = Some(stack_state);
         next.runtime_metadata = Some(metadata);
+        next.protocol_version = alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION;
         next.error = None;
         next.retry_requested = false;
         return Ok(DeploymentStepResult {
@@ -304,6 +351,7 @@ pub async fn handle_update_pending(
     let pending_prepared_release_id = target_release_id.map(str::to_string);
     let mut runtime_metadata = current.runtime_metadata.unwrap_or_default();
     runtime_metadata.pending_prepared_stack = Some(mutated_stack);
+    next.protocol_version = alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION;
     runtime_metadata.pending_prepared_release_id = pending_prepared_release_id;
     runtime_metadata.persisted_gate_answers = persisted_gate_answers;
 
@@ -632,17 +680,26 @@ pub async fn handle_updating(
                     .resources
                     .get(id)
                     .and_then(|entry| entry.config.downcast_ref::<alien_core::ServiceAccount>());
-                let grants_differ = desired_account.is_none_or(|new| {
-                    account.stack_permission_sets != new.stack_permission_sets
-                        || account.resource_permission_sets != new.resource_permission_sets
-                });
+                let grants_differ = desired_account.map_or_else(
+                    || {
+                        !account.stack_permission_sets.is_empty()
+                            || account
+                                .resource_permission_sets
+                                .values()
+                                .any(|sets| !sets.is_empty())
+                    },
+                    |new| {
+                        account.stack_permission_sets != new.stack_permission_sets
+                            || account.resource_permission_sets != new.resource_permission_sets
+                    },
+                );
                 grants_differ.then_some(id.as_str())
             })
             .collect();
         let profiles_changed = runtime_metadata
             .prepared_stack
             .as_ref()
-            .is_some_and(|installed| installed.permissions != desired.permissions);
+            .is_some_and(|installed| !same_permission_grants(installed, desired));
         if !pending_accounts.is_empty() || profiles_changed {
             next.status = if runtime_metadata.automatic_setup {
                 DeploymentStatus::InitialSetup

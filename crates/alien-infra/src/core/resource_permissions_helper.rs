@@ -1626,6 +1626,13 @@ impl ResourcePermissionsHelper {
         // Inline permission sets may never have been registered globally. Their
         // exact old IDs still prove ownership; do not infer it from a name prefix.
         if let Some(installed) = installed {
+            for entry in installed.resources.values() {
+                if let Some(account) = entry.config.downcast_ref::<alien_core::ServiceAccount>() {
+                    if let Some(sets) = account.resource_permission_sets.get(resource_id) {
+                        registered_sets.extend(sets.iter().map(|set| set.id.clone()));
+                    }
+                }
+            }
             for profile in installed
                 .permissions
                 .profiles
