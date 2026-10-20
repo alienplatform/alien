@@ -155,3 +155,31 @@ fn network_added_by_the_preflight_declares_its_variables() {
 
     assert_terraform_valid(&module, "network added by the preflight");
 }
+
+/// A network the stack declares itself stays fixed when no settings are given. Offering a
+/// `network_mode` choice here would default to create-new, so an install with default inputs would
+/// build a new VPC instead of using the declared default VPC.
+#[test]
+fn network_declared_by_the_stack_stays_fixed() {
+    let stack = Stack::new("declared-network".into())
+        .add(
+            Network::new("default-network".into())
+                .settings(NetworkSettings::UseDefault)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+
+    let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
+
+    assert_terraform_valid(&module, "network declared by the stack");
+    let variables = module
+        .iter()
+        .find(|(path, _)| path.ends_with("variables.tf"))
+        .map(|(_, content)| content.to_string())
+        .expect("module declares variables");
+    assert!(
+        !variables.contains("variable \"network_mode\""),
+        "a declared network is not offered as a choice"
+    );
+}

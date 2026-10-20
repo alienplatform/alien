@@ -317,16 +317,8 @@ pub fn generate_cloudformation_template_with_profile(
     }
     // CloudFormation packages always register push deployments.
     stack_settings.deployment_model = DeploymentModel::Push;
-    // Without network settings, the network preflight adds a create-new network for the resources
-    // that need one. The generated setup builds that network, so it must declare the inputs the
-    // network reads, exactly as when create-new is passed as the settings. A network the stack
-    // declares itself (the default VPC, an existing VPC) stays fixed.
     if stack_settings.network.is_none() {
-        stack_settings.network = stack
-            .resources()
-            .find_map(|(_, entry)| entry.config.downcast_ref::<Network>())
-            .filter(|network| matches!(network.settings, NetworkSettings::Create { .. }))
-            .map(|network| network.settings.clone());
+        stack_settings.network = Network::preflight_settings(stack);
     }
     if options.target.is_kubernetes() && stack_settings.network.is_none() {
         stack_settings.network = Some(NetworkSettings::Create {

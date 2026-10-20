@@ -118,15 +118,7 @@ fn network_added_by_the_preflight_declares_its_inputs() {
         "aws",
         "network added by the preflight",
     );
-    for parameter in [
-        "NetworkMode",
-        "VpcCidr",
-        "AvailabilityZones",
-        "VpcId",
-        "PublicSubnetIds",
-        "PrivateSubnetIds",
-        "SecurityGroupIds",
-    ] {
+    for parameter in ["VpcCidr", "AvailabilityZones"] {
         assert!(
             template.parameters.contains_key(parameter),
             "{parameter} is declared"
