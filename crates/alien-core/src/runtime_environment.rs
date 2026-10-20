@@ -66,9 +66,10 @@ pub const ENV_ALIEN_DEPLOYMENT_TOKEN: &str = "ALIEN_DEPLOYMENT_TOKEN";
 /// application it spawns; the app connects as the gRPC client. Presence of this
 /// variable is what selects the worker-protocol gRPC channel in the app SDK.
 pub const ENV_ALIEN_WORKER_GRPC_ADDRESS: &str = "ALIEN_WORKER_GRPC_ADDRESS";
-/// Configured maximum Worker command execution time, in seconds. Controllers
-/// inject this from the trusted Worker resource rather than accepting a
-/// user-provided override.
+/// JSON batch limits keyed by logical queue resource ID.
+pub const ENV_ALIEN_QUEUE_BATCH_CONFIG: &str = "ALIEN_QUEUE_BATCH_CONFIG";
+
+/// Configured maximum Worker execution time in seconds, injected from the trusted resource.
 pub const ENV_ALIEN_WORKER_TIMEOUT_SECONDS: &str = "ALIEN_WORKER_TIMEOUT_SECONDS";
 pub const ENV_AWS_ACCOUNT_ID: &str = "AWS_ACCOUNT_ID";
 pub const ENV_AWS_REGION: &str = "AWS_REGION";
@@ -469,6 +470,7 @@ pub fn is_reserved_runtime_environment_name(name: &str) -> bool {
         || matches!(
             name,
             ENV_ALIEN_WORKER_GRPC_ADDRESS
+                | ENV_ALIEN_QUEUE_BATCH_CONFIG
                 | ENV_ALIEN_WORKER_TIMEOUT_SECONDS
                 | ENV_ALIEN_COMMANDS_TOKEN
                 | ENV_ALIEN_COMMANDS_TOKEN_FILE

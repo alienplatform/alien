@@ -444,6 +444,14 @@ function makeQueue(handle: () => Promise<RawQueueHandle>): Queue {
     sendText: text => guard(handle, raw => raw.sendText(text)),
     receive: (max): Promise<QueueMessage[]> => guard(handle, raw => raw.receive(max)),
     ack: receipt => guard(handle, raw => raw.ack(receipt)),
+    ackBatch: receipts =>
+      guard(
+        handle,
+        async raw =>
+          JSON.parse(await raw.ackBatch(receipts)) as import("./types.js").QueueAckResult[],
+      ),
+    renewLease: (receipt, durationSeconds) =>
+      guard(handle, raw => raw.renewLease(receipt, durationSeconds)),
     nack: receipt => guard(handle, raw => raw.nack(receipt)),
     purge: () => guard(handle, raw => raw.purge()),
   }

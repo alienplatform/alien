@@ -34,6 +34,9 @@
 
 export type {
   CronEvent,
+  QueueBatchEvent,
+  QueueDelivery,
+  QueueDeliveryOutcome,
   QueueMessage,
   QueueMessageEvent,
   ScheduledEvent,
@@ -46,6 +49,7 @@ export type {
 export {
   command,
   onCronEvent,
+  onQueueBatch,
   onQueueMessage,
   onStorageEvent,
   waitUntil,

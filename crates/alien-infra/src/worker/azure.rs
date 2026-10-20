@@ -10,9 +10,9 @@ use alien_azure_clients::long_running_operation::{LongRunningOperation, Operatio
 use alien_azure_clients::models::container_apps::{
     Configuration, ConfigurationActiveRevisionsMode, Container, ContainerApp,
     ContainerAppProperties, ContainerAppPropertiesProvisioningState, ContainerResources,
-    CustomDomain, CustomDomainBindingType, EnvironmentVar, IdentitySettings,
-    IdentitySettingsLifecycle, IngressTransport, RegistryCredentials, Scale, Secret, Template,
-    TrafficWeight,
+    CustomDomain, CustomDomainBindingType, CustomScaleRule, Dapr, DaprAppHealth, DaprAppProtocol,
+    EnvironmentVar, IdentitySettings, IdentitySettingsLifecycle, IngressTransport,
+    RegistryCredentials, Scale, ScaleRule, Secret, Template, TrafficWeight,
 };
 use alien_azure_clients::AzureClientConfig;
 use alien_client_core::ErrorData as CloudClientErrorData;
@@ -818,7 +818,7 @@ impl AzureWorkerController {
         let mut cron_index = 0usize;
         for trigger in &func_cfg.triggers {
             let operation = match trigger {
-                alien_core::WorkerTrigger::Queue { queue } => {
+                alien_core::WorkerTrigger::Queue { queue, .. } => {
                     self.create_dapr_service_bus_component(
                         ctx,
                         &container_app_name,
@@ -1578,7 +1578,7 @@ impl AzureWorkerController {
         let mut cron_index = 0usize;
         for trigger in &func_cfg.triggers {
             match trigger {
-                alien_core::WorkerTrigger::Queue { queue } => {
+                alien_core::WorkerTrigger::Queue { queue, .. } => {
                     info!(worker=%func_cfg.id, queue=%queue.id, "Creating Dapr Service Bus component");
                     let operation = match self
                         .create_dapr_service_bus_component(
@@ -2638,7 +2638,7 @@ impl AzureWorkerController {
             let mut cron_index = 0usize;
             for trigger in &current_config.triggers {
                 match trigger {
-                    alien_core::WorkerTrigger::Queue { queue } => {
+                    alien_core::WorkerTrigger::Queue { queue, .. } => {
                         let operation = match self
                             .create_dapr_service_bus_component(
                                 ctx,
@@ -4057,7 +4057,7 @@ impl AzureWorkerController {
         // IMPORTANT: Start with func.environment which includes injected vars from DeploymentConfig
         let complete_env = EnvironmentVariableBuilder::try_new(&func.environment)?
             .add_worker_runtime_env_vars(ctx, &func.id, func.timeout_seconds)?
-            .add_linked_resources(&func.links, ctx, &func.id)
+            .add_linked_resources(&func.runtime_binding_links(), ctx, &func.id)
             .await?
             .add_self_worker_binding(&func.id, self_binding_params.as_ref())?
             .build();
@@ -4274,7 +4274,7 @@ impl AzureWorkerController {
                 principal_id: None,
                 tenant_id: None,
                 type_: ManagedServiceIdentityType::UserAssigned,
-                user_assigned_identities: Some(UserAssignedIdentities(identity_map)),
+                user_assigned_identities: Some(UserAssignedIdentities(Some(identity_map))),
             })
         } else {
             None
@@ -4282,11 +4282,33 @@ impl AzureWorkerController {
 
         // Configure Dapr if the worker uses any triggers or commands.
         // Dapr handles delivery for queue (Service Bus), storage (blob), and cron triggers.
+        let disabling_batch = !func.has_queue_batches()
+            && ctx
+                .state
+                .resources
+                .get(&func.id)
+                .and_then(|state| state.previous_config.as_ref())
+                .and_then(|config| config.downcast_ref::<Worker>())
+                .is_some_and(Worker::has_queue_batches);
         let needs_dapr = func.commands_enabled || !func.triggers.is_empty();
         let dapr_config = if needs_dapr {
-            use alien_azure_clients::models::container_apps::{Dapr, DaprAppProtocol};
-
             Some(Dapr {
+                app_health: (func.has_queue_batches() || disabling_batch).then_some(
+                    DaprAppHealth {
+                        enabled: Some(func.has_queue_batches()),
+                        path: func.has_queue_batches().then(|| "/__alien/health".into()),
+                        probe_interval_seconds: std::num::NonZeroU32::new(1),
+                        probe_timeout_milliseconds: std::num::NonZeroU32::new(1000),
+                        threshold: std::num::NonZeroU32::new(1),
+                    },
+                ),
+                max_concurrency: if func.has_queue_batches() {
+                    Some(100)
+                } else if disabling_batch {
+                    Some(0)
+                } else {
+                    None
+                },
                 app_id: Some(container_app_name.to_string()),
                 app_port: Some(8080), // Port that alien-worker-runtime listens on
                 app_protocol: DaprAppProtocol::Http,
@@ -4318,6 +4340,57 @@ impl AzureWorkerController {
             service: None,
         };
 
+        let mut scale_rules = Vec::new();
+        for trigger in &func.triggers {
+            let alien_core::WorkerTrigger::Queue {
+                queue,
+                batch: Some(batch),
+            } = trigger
+            else {
+                continue;
+            };
+            let queue_state =
+                ctx.require_dependency::<crate::queue::azure::AzureQueueController>(queue)?;
+            let namespace = queue_state.namespace_name.as_ref().ok_or_else(|| {
+                AlienError::new(ErrorData::DependencyNotReady {
+                    resource_id: func.id.clone(),
+                    dependency_id: queue.id.clone(),
+                })
+            })?;
+            let queue_name = queue_state.queue_name.as_ref().ok_or_else(|| {
+                AlienError::new(ErrorData::DependencyNotReady {
+                    resource_id: func.id.clone(),
+                    dependency_id: queue.id.clone(),
+                })
+            })?;
+            let identity = ctx
+                .require_dependency::<crate::service_account::AzureServiceAccountController>(
+                    &service_account_ref,
+                )?
+                .identity_resource_id
+                .clone()
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::DependencyNotReady {
+                        resource_id: func.id.clone(),
+                        dependency_id: service_account_ref.id.clone(),
+                    })
+                })?;
+            scale_rules.push(ScaleRule {
+                name: Some(format!("queue-{}", scale_rules.len())),
+                custom: Some(CustomScaleRule {
+                    type_: Some("azure-servicebus".to_string()),
+                    identity: Some(identity),
+                    metadata: HashMap::from([
+                        ("namespace".to_string(), namespace.clone()),
+                        ("queueName".to_string(), queue_name.clone()),
+                        ("messageCount".to_string(), batch.max_messages.to_string()),
+                    ]),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            });
+        }
+
         let template = Template {
             containers: vec![container],
             init_containers: vec![],
@@ -4331,7 +4404,7 @@ impl AzureWorkerController {
                     1
                 }),
                 polling_interval: None,
-                rules: vec![],
+                rules: scale_rules,
             }),
             service_binds: vec![],
             termination_grace_period_seconds: None,
@@ -4339,6 +4412,7 @@ impl AzureWorkerController {
         };
 
         Ok(ContainerApp {
+            kind: None,
             extended_location: None,
             id: None,
             identity: managed_identity,
@@ -4435,6 +4509,31 @@ impl AzureWorkerController {
                         },
                     ];
 
+                    if worker_config.queue_batch_config(&queue_ref.id).is_some() {
+                        metadata.push(DaprMetadata {
+                            name: Some("route".into()),
+                            value: Some(format!("/__alien/queue/{}", queue_ref.id)),
+                            secret_ref: None,
+                        });
+                        // Dapr renews locks while the callback waits for collection and application work.
+                        // Bound prefetch and callback concurrency to the portable maximum batch size.
+                        for (name, value) in [
+                            ("maxActiveMessages", "100".to_string()),
+                            ("maxConcurrentHandlers", "100".to_string()),
+                            ("lockRenewalInSec", "10".to_string()),
+                            (
+                                "timeoutInSec",
+                                worker_config.timeout_seconds.saturating_add(30).to_string(),
+                            ),
+                            ("maxRetriableErrorsPerSec", "1".to_string()),
+                        ] {
+                            metadata.push(DaprMetadata {
+                                name: Some(name.into()),
+                                value: Some(value),
+                                secret_ref: None,
+                            });
+                        }
+                    }
                     // Add client ID for user-assigned managed identity
                     let service_account_id = format!("{}-sa", worker_config.get_permissions());
                     let service_account_ref = alien_core::ResourceRef::new(
@@ -4475,6 +4574,12 @@ impl AzureWorkerController {
             .service_provider
             .get_azure_container_apps_client(&azure_config)?;
 
+        // Record deterministic ownership before the mutation: a lost response or
+        // asynchronous operation must still be removable from a failed checkpoint.
+        if !self.dapr_components.contains(&component_name) {
+            self.dapr_components.push(component_name.clone());
+        }
+
         match client
             .create_or_update_dapr_component(
                 &resource_group_name,
@@ -4498,10 +4603,6 @@ impl AzureWorkerController {
                     lro.retry_after.unwrap_or(Duration::from_secs(15)),
                 ));
             }
-        }
-
-        if !self.dapr_components.contains(&component_name) {
-            self.dapr_components.push(component_name.clone());
         }
 
         info!(
@@ -5121,12 +5222,12 @@ impl AzureWorkerController {
                     );
                 }
                 Err(e) => {
-                    warn!(
-                        worker=%worker_config.id,
-                        component=%component_name,
-                        error=%e,
-                        "Failed to delete Dapr component during deletion"
-                    );
+                    return Err(e.context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to delete owned Dapr component '{component_name}'"
+                        ),
+                        resource_id: Some(worker_config.id.clone()),
+                    }));
                 }
             }
         }
@@ -5180,6 +5281,7 @@ mod tests {
     //!
     //! See `crate::core::controller_test` for a comprehensive guide on testing infrastructure controllers.
 
+    use std::collections::HashMap;
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -5585,6 +5687,7 @@ mod tests {
         };
 
         ContainerApp {
+            kind: None,
             id: Some(format!(
                 "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/test-rg/providers/Microsoft.App/containerApps/{}",
                 app_name
@@ -5627,6 +5730,7 @@ mod tests {
 
     fn create_in_progress_container_app_response(app_name: &str) -> ContainerApp {
         ContainerApp {
+            kind: None,
             id: Some(format!(
                 "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/test-rg/providers/Microsoft.App/containerApps/{}",
                 app_name
@@ -6297,6 +6401,7 @@ mod tests {
         });
 
         ContainerApp {
+            kind: None,
             id: Some(format!(
                 "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/test-rg/providers/Microsoft.App/containerApps/{}",
                 app_name
@@ -6764,6 +6869,350 @@ mod tests {
         let outputs = executor.outputs().unwrap();
         let function_outputs = outputs.downcast_ref::<WorkerOutputs>().unwrap();
         assert!(function_outputs.public_endpoints.is_empty());
+    }
+
+    #[tokio::test]
+    async fn queue_rollout_update_requests_preserve_legacy_and_clear_opt_in() {
+        for mode in 0..3 {
+            let mut worker = function_with_queue_trigger();
+            let mut previous = worker.clone();
+            let batch = alien_core::QueueBatchConfig {
+                max_messages: 8,
+                max_window_seconds: 2,
+            };
+            if mode == 1 {
+                worker.triggers =
+                    vec![
+                        alien_core::WorkerTrigger::queue_batch(&test_queue(), batch.clone())
+                            .unwrap(),
+                    ];
+            }
+            if mode == 2 {
+                previous.triggers =
+                    vec![alien_core::WorkerTrigger::queue_batch(&test_queue(), batch).unwrap()];
+            }
+            worker.code = alien_core::WorkerCode::Image {
+                image: "registry.example.com/worker:new".into(),
+            };
+            let mut apps = MockContainerAppsApi::new();
+            apps.expect_update_container_app()
+                .times(1)
+                .returning(move |_, name, app| {
+                    let properties = app.properties.as_ref().unwrap();
+                    let dapr = properties
+                        .configuration
+                        .as_ref()
+                        .unwrap()
+                        .dapr
+                        .as_ref()
+                        .unwrap();
+                    let template = properties.template.as_ref().unwrap();
+                    if mode == 1 {
+                        assert_eq!(dapr.app_health.as_ref().unwrap().enabled, Some(true));
+                        assert_eq!(dapr.max_concurrency, Some(100));
+                        assert_eq!(template.scale.as_ref().unwrap().rules.len(), 1);
+                    } else {
+                        assert!(template.scale.as_ref().unwrap().rules.is_empty());
+                        if mode == 0 {
+                            assert!(dapr.app_health.is_none());
+                            assert!(dapr.max_concurrency.is_none());
+                        } else {
+                            assert_eq!(dapr.app_health.as_ref().unwrap().enabled, Some(false));
+                            assert_eq!(dapr.max_concurrency, Some(0));
+                        }
+                    }
+                    let env: HashMap<_, _> = template.containers[0]
+                        .env
+                        .iter()
+                        .map(|value| {
+                            (
+                                value.name.as_deref().unwrap(),
+                                value.value.as_deref().unwrap(),
+                            )
+                        })
+                        .collect();
+                    assert_eq!(env.contains_key("ALIEN_QUEUE_BATCH_CONFIG"), mode == 1);
+                    assert_eq!(env.contains_key("ALIEN_TEST_QUEUE_BINDING"), mode == 1);
+                    Ok(OperationResult::Completed(
+                        create_successful_container_app_response(name, false),
+                    ))
+                });
+            // A saved UpdateStart has no batch rollout state; old checkpoints remain readable.
+            let controller = AzureWorkerController {
+                state: AzureWorkerState::UpdateStart,
+                ..AzureWorkerController::mock_ready("test-queue-func")
+            };
+            let restored: AzureWorkerController =
+                serde_json::from_value(serde_json::to_value(&controller).unwrap()).unwrap();
+            let mut executor = SingleControllerExecutor::builder()
+                .resource(worker.clone())
+                .previous_resource(previous.clone())
+                .controller(restored)
+                .platform(Platform::Azure)
+                .service_provider(setup_mock_service_provider(Arc::new(apps), None))
+                .with_test_dependencies()
+                .with_dependency(
+                    test_queue(),
+                    crate::queue::azure::AzureQueueController {
+                        namespace_name: Some("physical-namespace".into()),
+                        queue_name: Some("physical-jobs".into()),
+                        state: crate::queue::azure::AzureQueueState::Ready,
+                        ..Default::default()
+                    },
+                )
+                .build()
+                .await
+                .unwrap();
+            executor
+                .step()
+                .await
+                .expect("update legacy or opt-in worker");
+            assert_eq!(
+                executor
+                    .internal_state::<AzureWorkerController>()
+                    .unwrap()
+                    .state,
+                AzureWorkerState::UpdatingContainerApp
+            );
+
+            let mut apps = MockContainerAppsApi::new();
+            apps.expect_delete_dapr_component()
+                .times(if mode == 0 { 0 } else { 1 })
+                .returning(|_, _, _| Ok(OperationResult::Completed(())));
+            apps.expect_create_or_update_dapr_component()
+                .times(if mode == 0 { 0 } else { 1 })
+                .returning(move |_, _, _, component| {
+                    let metadata: HashMap<_, _> = component
+                        .properties
+                        .as_ref()
+                        .unwrap()
+                        .metadata
+                        .iter()
+                        .map(|value| {
+                            (
+                                value.name.as_deref().unwrap(),
+                                value.value.as_deref().unwrap(),
+                            )
+                        })
+                        .collect();
+                    assert_eq!(metadata["queueName"], "physical-jobs");
+                    for key in [
+                        "route",
+                        "maxActiveMessages",
+                        "maxConcurrentHandlers",
+                        "lockRenewalInSec",
+                        "timeoutInSec",
+                        "maxRetriableErrorsPerSec",
+                    ] {
+                        assert_eq!(metadata.contains_key(key), mode == 1, "{key}");
+                    }
+                    Ok(OperationResult::Completed(component.clone()))
+                });
+            let controller = AzureWorkerController {
+                state: AzureWorkerState::UpdateDaprComponents,
+                dapr_components: vec!["servicebus-test-queue-func-test-queue".into()],
+                ..AzureWorkerController::mock_ready("test-queue-func")
+            };
+            let restored = serde_json::from_value::<AzureWorkerController>(
+                serde_json::to_value(controller).unwrap(),
+            )
+            .unwrap();
+            let mut executor = SingleControllerExecutor::builder()
+                .resource(worker)
+                .previous_resource(previous)
+                .controller(restored)
+                .platform(Platform::Azure)
+                .service_provider(setup_mock_service_provider(Arc::new(apps), None))
+                .with_test_dependencies()
+                .with_dependency(
+                    test_queue(),
+                    crate::queue::azure::AzureQueueController {
+                        namespace_name: Some("physical-namespace".into()),
+                        queue_name: Some("physical-jobs".into()),
+                        state: crate::queue::azure::AzureQueueState::Ready,
+                        ..Default::default()
+                    },
+                )
+                .build()
+                .await
+                .unwrap();
+            executor
+                .step()
+                .await
+                .expect("update components at restored checkpoint");
+            assert_eq!(
+                executor
+                    .internal_state::<AzureWorkerController>()
+                    .unwrap()
+                    .dapr_components,
+                vec!["servicebus-test-queue-func-test-queue"]
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn live_queue_worker_restores_health_scaling_and_component_ownership() {
+        let queue = test_queue();
+        let mut worker = function_with_queue_trigger();
+        worker.triggers = vec![alien_core::WorkerTrigger::queue_batch(
+            &queue,
+            alien_core::QueueBatchConfig {
+                max_messages: 8,
+                max_window_seconds: 2,
+            },
+        )
+        .unwrap()];
+        let queue_controller = crate::queue::azure::AzureQueueController {
+            namespace_name: Some("physical-namespace".into()),
+            queue_name: Some("physical-prefixed-jobs".into()),
+            state: crate::queue::azure::AzureQueueState::Ready,
+            ..Default::default()
+        };
+        let mut apps = MockContainerAppsApi::new();
+        apps.expect_create_or_update_container_app()
+            .times(1)
+            .returning(|_, name, app| {
+                let properties = app.properties.as_ref().unwrap();
+                let dapr = properties
+                    .configuration
+                    .as_ref()
+                    .unwrap()
+                    .dapr
+                    .as_ref()
+                    .unwrap();
+                assert!(dapr.enabled);
+                assert_eq!(dapr.max_concurrency, Some(100));
+                let health = dapr.app_health.as_ref().unwrap();
+                assert_eq!(health.enabled, Some(true));
+                assert_eq!(health.path.as_deref(), Some("/__alien/health"));
+                assert_eq!(health.threshold.unwrap().get(), 1);
+                let template = properties.template.as_ref().unwrap();
+                let scale = template.scale.as_ref().unwrap();
+                assert_eq!(scale.min_replicas, Some(0));
+                assert_eq!(scale.rules.len(), 1);
+                let custom = scale.rules[0].custom.as_ref().unwrap();
+                assert_eq!(custom.type_.as_deref(), Some("azure-servicebus"));
+                assert_eq!(custom.metadata["namespace"], "physical-namespace");
+                assert_eq!(custom.metadata["queueName"], "physical-prefixed-jobs");
+                assert_eq!(custom.metadata["messageCount"], "8");
+                assert!(custom.identity.is_some());
+                let env: HashMap<_, _> = template.containers[0]
+                    .env
+                    .iter()
+                    .map(|entry| {
+                        (
+                            entry.name.as_deref().unwrap(),
+                            entry.value.as_deref().unwrap(),
+                        )
+                    })
+                    .collect();
+                let batches: serde_json::Value =
+                    serde_json::from_str(env["ALIEN_QUEUE_BATCH_CONFIG"]).unwrap();
+                assert_eq!(batches["test-queue"]["maxMessages"], 8);
+                Ok(OperationResult::Completed(
+                    create_successful_container_app_response(name, false),
+                ))
+            });
+        apps.expect_create_or_update_dapr_component()
+            .times(1)
+            .returning(|_, _, name, component| {
+                let properties = component.properties.as_ref().unwrap();
+                assert_eq!(properties.scopes, vec!["test-queue-func"]);
+                let metadata: HashMap<_, _> = properties
+                    .metadata
+                    .iter()
+                    .map(|entry| {
+                        (
+                            entry.name.as_deref().unwrap(),
+                            entry.value.as_deref().unwrap(),
+                        )
+                    })
+                    .collect();
+                assert_eq!(metadata["route"], "/__alien/queue/test-queue");
+                assert_eq!(metadata["queueName"], "physical-prefixed-jobs");
+                assert_eq!(metadata["maxRetriableErrorsPerSec"], "1");
+                assert!(metadata.contains_key("azureClientId"));
+                assert_eq!(name, "servicebus-test-queue-func-test-queue");
+                Err(AlienError::new(CloudClientErrorData::InvalidInput {
+                    message: "response lost after component was persisted".into(),
+                    field_name: None,
+                }))
+            });
+        let deletions = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let delete_calls = deletions.clone();
+        apps.expect_delete_dapr_component()
+            .times(2)
+            .returning(move |_, _, name| {
+                assert_eq!(name, "servicebus-test-queue-func-test-queue");
+                if delete_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                    return Err(AlienError::new(CloudClientErrorData::InvalidInput {
+                        message: "temporary delete failure".into(),
+                        field_name: None,
+                    }));
+                }
+                Ok(OperationResult::Completed(()))
+            });
+        let provider = setup_mock_service_provider(Arc::new(apps), None);
+        let controller = AzureWorkerController {
+            state: AzureWorkerState::CreatingContainerAppResource,
+            ..AzureWorkerController::mock_ready("test-queue-func")
+        };
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(worker.clone())
+            .controller(controller)
+            .platform(Platform::Azure)
+            .service_provider(provider.clone())
+            .with_test_dependencies()
+            .with_dependency(queue.clone(), queue_controller.clone())
+            .build()
+            .await
+            .unwrap();
+        executor.step().await.expect("live creation request");
+        executor.step().await.expect_err("lost component response");
+        let saved = executor.internal_state::<AzureWorkerController>().unwrap();
+        assert_eq!(
+            saved.dapr_components,
+            vec!["servicebus-test-queue-func-test-queue"]
+        );
+        let mut restored: AzureWorkerController =
+            serde_json::from_value(serde_json::to_value(saved).unwrap()).unwrap();
+        restored.state = AzureWorkerState::DeletingDaprComponents;
+        for attempt in 0..2 {
+            let mut executor = SingleControllerExecutor::builder()
+                .resource(worker.clone())
+                .controller(restored)
+                .platform(Platform::Azure)
+                .service_provider(provider.clone())
+                .with_test_dependencies()
+                .with_dependency(queue.clone(), queue_controller.clone())
+                .build()
+                .await
+                .unwrap();
+            if attempt == 0 {
+                executor
+                    .step()
+                    .await
+                    .expect_err("deletion failure must retain ownership");
+                let saved = executor.internal_state::<AzureWorkerController>().unwrap();
+                assert_eq!(
+                    saved.dapr_components,
+                    vec!["servicebus-test-queue-func-test-queue"]
+                );
+                restored = serde_json::from_value(serde_json::to_value(saved).unwrap()).unwrap();
+                restored.state = AzureWorkerState::DeletingDaprComponents;
+            } else {
+                executor
+                    .step()
+                    .await
+                    .expect("remove owned component after failed create");
+                restored = executor
+                    .internal_state::<AzureWorkerController>()
+                    .unwrap()
+                    .clone();
+                assert!(restored.dapr_components.is_empty());
+            }
+        }
+        assert_eq!(deletions.load(std::sync::atomic::Ordering::SeqCst), 2);
     }
 
     /// Test that verifies correct container app configuration parameters

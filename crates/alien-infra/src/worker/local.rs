@@ -134,7 +134,7 @@ impl LocalWorkerController {
         // cloud controllers and IaC renderers.
         let mut env_vars = EnvironmentVariableBuilder::try_new(&config.environment)?
             .add_worker_runtime_env_vars(ctx, &config.id, config.timeout_seconds)?
-            .add_linked_resources(&config.links, ctx, &config.id)
+            .add_linked_resources(&config.runtime_binding_links(), ctx, &config.id)
             .await?
             .build();
 

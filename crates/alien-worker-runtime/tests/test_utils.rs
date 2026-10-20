@@ -145,27 +145,14 @@ pub fn get_test_app_path() -> anyhow::Result<PathBuf> {
     ensure_alien_test_app_built()
 }
 
-/// Allocates distinct loopback ports for the child application and its transport.
-///
-/// Both listeners stay bound until both ports have been selected. Use ports below
-/// the OS ephemeral range: after these reservations close, the worker's outgoing
-/// gRPC connection must not claim a port before its HTTP transport binds it.
-pub fn distinct_free_local_ports() -> anyhow::Result<(u16, u16)> {
-    let application_listener =
-        reserve_test_listener().context("Failed to allocate child application port")?;
-    let transport_listener =
-        reserve_test_listener().context("Failed to allocate runtime transport port")?;
-
-    let application_port = application_listener
-        .local_addr()
-        .context("Failed to read child application port")?
-        .port();
-    let transport_port = transport_listener
+/// Select a transport port below the OS ephemeral range so outgoing gRPC
+/// connections and port-zero child applications cannot claim it before startup.
+pub fn free_local_transport_port() -> anyhow::Result<u16> {
+    let listener = reserve_test_listener().context("Failed to allocate runtime transport port")?;
+    Ok(listener
         .local_addr()
         .context("Failed to read runtime transport port")?
-        .port();
-
-    Ok((application_port, transport_port))
+        .port())
 }
 
 fn reserve_test_listener() -> std::io::Result<TcpListener> {

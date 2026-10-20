@@ -1,19 +1,25 @@
 use std::collections::HashMap;
 use std::process::Command as StdCommand;
 use std::sync::Arc;
+use std::time::Duration;
 
 use alien_core::{
     ENV_ALIEN_COMMANDS_TOKEN, ENV_ALIEN_CURRENT_WORKER_BINDING_NAME, ENV_ALIEN_DEPLOYMENT_ID,
     ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_TRANSPORT, ENV_ALIEN_WORKER_GRPC_ADDRESS,
 };
-use alien_worker_protocol::{ControlGrpcServer, WaitUntilGrpcServer};
+use alien_worker_protocol::{
+    control::{control_service_server::ControlService, Task, WaitForTasksRequest},
+    ControlGrpcServer, WaitUntilGrpcServer,
+};
 use tokio::process::Command;
 use tokio::sync::broadcast;
+use tokio_stream::StreamExt;
+use tonic::Request;
 
 use super::{
     application_runtime_env, command_push_config, run_transport, runtime_only_env,
-    start_application, RuntimeConfig, TransportType, ENV_ALIEN_BINDINGS_GRPC_ADDRESS,
-    ENV_ALIEN_BINDINGS_MODE,
+    start_application, PrestartedTransport, RuntimeConfig, TransportType,
+    ENV_ALIEN_BINDINGS_GRPC_ADDRESS, ENV_ALIEN_BINDINGS_MODE,
 };
 
 const SUBPROCESS_DRIVER: &str = "ALIEN_TEST_RUNTIME_ENV_SUBPROCESS_DRIVER";
@@ -64,6 +70,119 @@ async fn assert_port_released(port: u16) {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn cancelled_task_stops_child_before_returning_delivery_failure() {
+    let port = unused_local_port().await;
+    let config = RuntimeConfig::builder()
+        .transport(TransportType::Local)
+        .transport_port(port)
+        .command(vec!["unused".to_string()])
+        .build();
+    let mut child = Command::new("/bin/sleep")
+        .arg("60")
+        .kill_on_drop(true)
+        .spawn()
+        .expect("spawn application");
+    let control = Arc::new(ControlGrpcServer::new());
+    let mut stream = control
+        .wait_for_tasks(Request::new(WaitForTasksRequest {
+            application_id: "test-app".to_string(),
+        }))
+        .await
+        .expect("task subscription")
+        .into_inner();
+    let (_shutdown_tx, shutdown_rx) = broadcast::channel(1);
+    let delivery = tokio::spawn({
+        let control = control.clone();
+        async move {
+            wait_for_listener(port).await;
+            control
+                .send_task(
+                    Task {
+                        task_id: "delivery".to_string(),
+                        payload: None,
+                    },
+                    Duration::ZERO,
+                )
+                .await
+        }
+    });
+    let observed = tokio::spawn(async move {
+        stream.next().await.expect("task sent").expect("delivery");
+    });
+    let error = tokio::time::timeout(
+        Duration::from_secs(5),
+        run_transport(
+            &config,
+            control,
+            None,
+            None,
+            Arc::new(WaitUntilGrpcServer::new()),
+            &mut child,
+            shutdown_rx,
+            None,
+        ),
+    )
+    .await
+    .expect("bounded cancellation")
+    .expect_err("cancelled application fails runtime");
+    assert_eq!(error.code, "PROCESS_FAILED");
+    assert!(child.try_wait().expect("child status").is_some());
+    assert!(delivery.await.expect("delivery waiter").is_err());
+    observed.await.expect("task observer");
+    assert_port_released(port).await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn shutdown_stops_application_before_joining_cancelled_inflight_transport() {
+    let config = RuntimeConfig::builder()
+        .transport(TransportType::Local)
+        .command(vec!["unused".to_string()])
+        .build();
+    let mut child = Command::new("/bin/sleep")
+        .arg("60")
+        .kill_on_drop(true)
+        .spawn()
+        .expect("spawn application");
+    let control = Arc::new(ControlGrpcServer::new());
+    let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
+    let (transport_shutdown_tx, mut transport_shutdown_rx) = broadcast::channel(1);
+    let transport_control = control.clone();
+    // Model a graceful transport with an in-flight request whose deadline
+    // expires during shutdown: it cannot respond until the application stops.
+    let handle = tokio::spawn(async move {
+        transport_shutdown_rx
+            .recv()
+            .await
+            .expect("transport shutdown");
+        transport_control.cancel_application().await;
+        Ok(())
+    });
+    shutdown_tx.send(()).expect("runtime shutdown receiver");
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        run_transport(
+            &config,
+            control,
+            None,
+            None,
+            Arc::new(WaitUntilGrpcServer::new()),
+            &mut child,
+            shutdown_rx,
+            Some(PrestartedTransport {
+                shutdown_tx: transport_shutdown_tx,
+                handle,
+            }),
+        ),
+    )
+    .await
+    .expect("shutdown must not deadlock")
+    .expect("shutdown succeeds");
+    assert!(child.try_wait().expect("child status").is_some());
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn child_exit_stops_and_joins_transport_listener() {
     let port = unused_local_port().await;
     let config = RuntimeConfig::builder()
@@ -74,6 +193,7 @@ async fn child_exit_stops_and_joins_transport_listener() {
     let temp = tempfile::tempdir().expect("child exit marker directory");
     let exit_marker = temp.path().join("exit");
     let mut child = Command::new("/bin/sh")
+        .process_group(0)
         .args([
             "-c",
             "while [ ! -f \"$1\" ]; do sleep 0.01; done",
@@ -116,6 +236,7 @@ async fn normal_shutdown_stops_listener_and_child_before_returning() {
         .command(vec!["unused".to_string()])
         .build();
     let mut child = Command::new("/bin/sh")
+        .process_group(0)
         .args(["-c", "sleep 60"])
         .spawn()
         .expect("spawn long-lived child");
@@ -336,4 +457,51 @@ fn application_runtime_env_injects_both_worker_protocol_address_names() {
         assert_eq!(env.get(ENV_ALIEN_TRANSPORT), Some(&expected.to_string()));
         assert_eq!(env.get("PORT"), None);
     }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn parent_exit_stops_descendants_before_releasing_transport() {
+    let config = RuntimeConfig::builder()
+        .transport(TransportType::Local)
+        .command(vec!["unused".into()])
+        .build();
+    let mut child = Command::new("/bin/sh")
+        .args(["-c", "sleep 60 & exit 42"])
+        .process_group(0)
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn process group");
+    // The descendant inherits stdout. EOF proves it no longer holds the pipe.
+    let mut output = child.stdout.take().expect("inherited pipe");
+    let control = Arc::new(ControlGrpcServer::new());
+    let (_shutdown, shutdown_rx) = broadcast::channel(1);
+    let (transport_shutdown, mut transport_rx) = broadcast::channel(1);
+    let handle = tokio::spawn(async move {
+        transport_rx.recv().await.expect("transport stopped");
+        let mut bytes = Vec::new();
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            tokio::io::AsyncReadExt::read_to_end(&mut output, &mut bytes),
+        )
+        .await
+        .expect("descendant must stop before transport joins")
+        .expect("pipe EOF");
+        Ok(())
+    });
+    let result = run_transport(
+        &config,
+        control,
+        None,
+        None,
+        Arc::new(WaitUntilGrpcServer::new()),
+        &mut child,
+        shutdown_rx,
+        Some(PrestartedTransport {
+            shutdown_tx: transport_shutdown,
+            handle,
+        }),
+    )
+    .await;
+    assert_eq!(result.expect_err("parent crashed").code, "PROCESS_FAILED");
 }

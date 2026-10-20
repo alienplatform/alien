@@ -18,10 +18,19 @@ where
     R: RuntimeEnvironmentRenderer<Value = Expression>,
 {
     validate_runtime_environment_user_map(&worker.environment)?;
-    let plan = worker_runtime_environment_contract(platform, &worker.id, &worker.links);
+    let plan =
+        worker_runtime_environment_contract(platform, &worker.id, &worker.runtime_binding_links());
     let mut env = render_runtime_environment_plan(&plan, renderer)?
         .into_iter()
         .collect::<BTreeMap<_, _>>();
+
+    env.insert(
+        "ALIEN_WORKER_TIMEOUT_SECONDS".into(),
+        Expression::String(worker.timeout_seconds.to_string()),
+    );
+    if let Some(batch) = worker.queue_batch_environment()? {
+        env.insert("ALIEN_QUEUE_BATCH_CONFIG".into(), Expression::String(batch));
+    }
 
     for (key, value) in &worker.environment {
         env.insert(key.clone(), Expression::String(value.clone()));

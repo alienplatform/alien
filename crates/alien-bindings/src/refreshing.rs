@@ -485,6 +485,26 @@ impl Queue for RefreshingQueue {
         self.current().await?.ack(queue, receipt_handle).await
     }
 
+    async fn ack_batch(
+        &self,
+        queue: &str,
+        receipts: &[String],
+    ) -> Result<Vec<crate::traits::QueueAckResult>> {
+        self.current().await?.ack_batch(queue, receipts).await
+    }
+
+    async fn renew_lease(
+        &self,
+        queue: &str,
+        receipt_handle: &str,
+        duration_seconds: u32,
+    ) -> Result<()> {
+        self.current()
+            .await?
+            .renew_lease(queue, receipt_handle, duration_seconds)
+            .await
+    }
+
     async fn nack(&self, queue: &str, receipt_handle: &str) -> Result<()> {
         self.current().await?.nack(queue, receipt_handle).await
     }

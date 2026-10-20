@@ -589,7 +589,13 @@ impl Default for PreflightRunner {
 #[cfg(test)]
 mod setup_update_authorization_tests {
     use super::*;
-    use alien_core::{PermissionsConfig, SetupUpdateAuthorization};
+    use alien_core::permissions::{
+        ManagementPermissions, PermissionProfile, PermissionSetReference,
+    };
+    use alien_core::{
+        PermissionsConfig, Queue, QueueBatchConfig, ResourceLifecycle, SetupUpdateAuthorization,
+        Worker, WorkerCode, WorkerTrigger,
+    };
     use indexmap::IndexMap;
 
     fn empty_stack() -> Stack {
@@ -602,6 +608,317 @@ mod setup_update_authorization_tests {
             inputs: vec![],
             permissions: PermissionsConfig::default(),
             supported_platforms: None,
+        }
+    }
+
+    #[cfg(feature = "runtime-checks")]
+    #[tokio::test]
+    async fn batch_metadata_read_requires_setup_without_heartbeat_grants() {
+        let source = |batch, management| {
+            let queue = Queue::new("jobs".into()).build();
+            let trigger = if batch {
+                WorkerTrigger::queue_batch(
+                    &queue,
+                    QueueBatchConfig {
+                        max_messages: 10,
+                        max_window_seconds: 0,
+                    },
+                )
+                .unwrap()
+            } else {
+                WorkerTrigger::queue(&queue)
+            };
+            Stack::new("stack".into())
+                .management(management)
+                .add(queue, ResourceLifecycle::Frozen)
+                .add(
+                    Worker::new("consumer".into())
+                        .code(WorkerCode::Image {
+                            image: "app:v1".into(),
+                        })
+                        .permissions("execution".into())
+                        .commands_enabled(false)
+                        .trigger(trigger)
+                        .build(),
+                    ResourceLifecycle::Live,
+                )
+                .build()
+        };
+        let runner = PreflightRunner::with_registry({
+            let mut registry = PreflightRegistry::new();
+            registry.add_mutation(Box::new(
+                crate::mutations::ManagementPermissionProfileMutation,
+            ));
+            registry.add_compatibility_check(Box::new(
+                crate::compatibility::PermissionProfilesUnchangedCheck,
+            ));
+            registry
+        });
+        let mut config = deployment_config();
+        config.stack_settings.heartbeats =
+            serde_json::from_value(serde_json::json!("off")).unwrap();
+        let state = StackState::new(Platform::Aws);
+        let client = ClientConfig::Local {
+            state_directory: "/unused".into(),
+        };
+        for management in [
+            ManagementPermissions::Auto,
+            ManagementPermissions::Extend(PermissionProfile::new()),
+            ManagementPermissions::Override(PermissionProfile::new().global(["worker/provision"])),
+            ManagementPermissions::Override(
+                PermissionProfile::new()
+                    .global(["worker/provision"])
+                    .resource(
+                        "jobs",
+                        [
+                            "queue/heartbeat",
+                            "queue/management",
+                            "queue/provision",
+                            "queue/data-read",
+                        ],
+                    ),
+            ),
+        ] {
+            let old = runner
+                .apply_mutations(source(false, management.clone()), &state, &config)
+                .await
+                .unwrap();
+            let target_source = source(true, management.clone());
+            let target = runner
+                .apply_mutations(target_source.clone(), &state, &config)
+                .await
+                .unwrap();
+            let profile = match target.management() {
+                ManagementPermissions::Extend(profile)
+                | ManagementPermissions::Override(profile) => profile,
+                _ => panic!("prepared management profile required"),
+            };
+            assert!(profile.0["jobs"]
+                .contains(&PermissionSetReference::from_name("queue/batch-metadata")));
+            assert_eq!(
+                runner
+                    .apply_mutations(target.clone(), &state, &config)
+                    .await
+                    .unwrap()
+                    .permissions,
+                target.permissions
+            );
+            let error = runner
+                .run_deployment_time_preflights(
+                    target_source.clone(),
+                    &state,
+                    &config,
+                    &client,
+                    Some(&old),
+                    None,
+                    None,
+                )
+                .await
+                .expect_err("metadata grant must require setup before cloud access");
+            assert_eq!(error.code, "DEPLOYMENT_SETUP_REQUIRED");
+            let mut approval = authorization(&old);
+            approval.target_frozen_digest = target.setup_update_digest();
+            let (_, _, authorized) = runner
+                .run_deployment_time_preflights(
+                    target_source,
+                    &state,
+                    &config,
+                    &client,
+                    Some(&old),
+                    Some(&approval),
+                    None,
+                )
+                .await
+                .unwrap();
+            assert!(authorized);
+            runner
+                .run_deployment_time_preflights(
+                    source(false, management),
+                    &state,
+                    &config,
+                    &client,
+                    Some(&old),
+                    None,
+                    None,
+                )
+                .await
+                .expect("nonoptin remains unchanged");
+        }
+        // Existing canonical grants cover the prerequisite without changing IAM.
+        for grant in [
+            "queue/heartbeat",
+            "queue/management",
+            "queue/provision",
+            "queue/data-read",
+            "queue/data-write",
+            "queue/publish",
+        ] {
+            let management = ManagementPermissions::Override(
+                PermissionProfile::new().global([grant, "worker/provision"]),
+            );
+            let old = runner
+                .apply_mutations(source(false, management.clone()), &state, &config)
+                .await
+                .unwrap();
+            let new = runner
+                .apply_mutations(source(true, management), &state, &config)
+                .await
+                .unwrap();
+            assert_eq!(old.permissions, new.permissions);
+        }
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            let state = StackState::new(platform);
+            let config = deployment_config();
+            let old = runner
+                .apply_mutations(source(false, ManagementPermissions::Auto), &state, &config)
+                .await
+                .unwrap();
+            let new = runner
+                .apply_mutations(source(true, ManagementPermissions::Auto), &state, &config)
+                .await
+                .unwrap();
+            assert_eq!(
+                old.permissions, new.permissions,
+                "default profile on {platform}"
+            );
+        }
+    }
+
+    #[cfg(feature = "runtime-checks")]
+    #[tokio::test]
+    async fn queue_batch_visibility_requires_matching_setup_handoff() {
+        let stack = |window: Option<u32>, image: &str, lifecycle| {
+            let queue = Queue::new("jobs".into()).build();
+            let trigger = match window {
+                Some(window) => WorkerTrigger::queue_batch(
+                    &queue,
+                    QueueBatchConfig {
+                        max_messages: 10,
+                        max_window_seconds: window,
+                    },
+                )
+                .unwrap(),
+                None => WorkerTrigger::queue(&queue),
+            };
+            Stack::new("stack".into())
+                .add(queue, lifecycle)
+                .add(
+                    Worker::new("consumer".into())
+                        .code(WorkerCode::Image {
+                            image: image.into(),
+                        })
+                        .permissions("execution".into())
+                        .trigger(trigger)
+                        .build(),
+                    ResourceLifecycle::Live,
+                )
+                .build()
+        };
+        // Reload a legacy stack with the omitted batch field, as stored before batching.
+        let old: Stack = serde_json::from_value(
+            serde_json::to_value(stack(None, "app:v1", ResourceLifecycle::Frozen)).unwrap(),
+        )
+        .unwrap();
+        let target = stack(Some(5), "app:v2", ResourceLifecycle::Frozen);
+        let runner = PreflightRunner::with_registry(PreflightRegistry::new());
+        let config = deployment_config();
+        let state = StackState::new(Platform::Aws);
+        // No cloud client is available: the setup gate must run before provider writes.
+        let client = ClientConfig::Local {
+            state_directory: "/unused".into(),
+        };
+        let error = runner
+            .run_deployment_time_preflights(
+                target.clone(),
+                &state,
+                &config,
+                &client,
+                Some(&old),
+                None,
+                None,
+            )
+            .await
+            .expect_err("derived Frozen queue visibility needs setup");
+        assert_eq!(error.code, "DEPLOYMENT_SETUP_REQUIRED");
+        assert!(!error.retryable);
+        assert!(error.message.contains("Frozen queue 'jobs'"));
+        assert_ne!(old.setup_update_digest(), target.setup_update_digest());
+
+        let mut approval = authorization(&old);
+        approval.target_frozen_digest = target.setup_update_digest();
+        let (_, _, authorized) = runner
+            .run_deployment_time_preflights(
+                target.clone(),
+                &state,
+                &config,
+                &client,
+                Some(&old),
+                Some(&approval),
+                None,
+            )
+            .await
+            .expect("matching setup handoff permits the prepared target");
+        assert!(authorized);
+        let error = runner
+            .run_deployment_time_preflights(
+                stack(Some(10), "app:v2", ResourceLifecycle::Frozen),
+                &state,
+                &config,
+                &client,
+                Some(&old),
+                Some(&approval),
+                None,
+            )
+            .await
+            .expect_err("approval for a smaller window cannot authorize a larger one");
+        assert_eq!(error.code, "DEPLOYMENT_SETUP_REQUIRED");
+
+        for (baseline, desired) in [
+            (old.clone(), old.clone()),
+            (
+                old.clone(),
+                stack(None, "app:v2", ResourceLifecycle::Frozen),
+            ),
+            (
+                target.clone(),
+                stack(None, "app:v3", ResourceLifecycle::Frozen),
+            ),
+            (
+                target.clone(),
+                stack(Some(1), "app:v3", ResourceLifecycle::Frozen),
+            ),
+            (
+                stack(None, "app:v1", ResourceLifecycle::Live),
+                stack(Some(5), "app:v2", ResourceLifecycle::Live),
+            ),
+        ] {
+            let (_, _, authorized) = runner
+                .run_deployment_time_preflights(
+                    desired,
+                    &state,
+                    &config,
+                    &client,
+                    Some(&baseline),
+                    None,
+                    None,
+                )
+                .await
+                .expect("unchanged, legacy, decreasing, or Live queue needs no setup");
+            assert!(!authorized);
+        }
+        for platform in [Platform::Gcp, Platform::Azure] {
+            runner
+                .run_deployment_time_preflights(
+                    target.clone(),
+                    &StackState::new(platform),
+                    &config,
+                    &client,
+                    Some(&old),
+                    None,
+                    None,
+                )
+                .await
+                .expect("SQS visibility gate is AWS-only");
         }
     }
 
@@ -747,12 +1064,10 @@ mod setup_update_authorization_tests {
         let Some(ErrorData::ValidationFailed { results, .. }) = error.error else {
             panic!("expected capability validation failure")
         };
-        assert!(
-            results[0]
-                .errors
-                .iter()
-                .any(|message| message.contains("CONTAINER_NETWORK_SETTINGS_UNSUPPORTED"))
-        );
+        assert!(results[0]
+            .errors
+            .iter()
+            .any(|message| message.contains("CONTAINER_NETWORK_SETTINGS_UNSUPPORTED")));
     }
 
     fn authorization(stack: &Stack) -> SetupUpdateAuthorization {

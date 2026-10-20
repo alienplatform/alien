@@ -56,6 +56,7 @@ message Task {
         CronEvent cron_event = 3;
         QueueMessage queue_message = 4;
         ArcCommand arc_command = 5;
+        QueueBatch queue_batch = 6;
     }
 }
 
@@ -134,6 +135,7 @@ message SendTaskResultRequest {
     oneof result {
         TaskSuccess success = 2;
         TaskError error = 3;
+        QueueBatchResult queue_batch = 4;
     }
 }
 
@@ -151,4 +153,30 @@ message TaskError {
 
 message SendTaskResultResponse {
     bool acknowledged = 1;
+}
+
+// A delivery identity belongs to this attempt, independently of provider message IDs.
+message QueueDelivery {
+    string delivery_id = 1;
+    QueueMessage message = 2;
+}
+
+message QueueBatch {
+    string source = 1;
+    repeated QueueDelivery deliveries = 2;
+}
+
+// The application must return exactly one outcome for every delivery.
+message QueueDeliveryOutcome {
+    string delivery_id = 1;
+    enum Disposition {
+        UNSPECIFIED = 0;
+        SUCCESS = 1;
+        RETRY = 2;
+    }
+    Disposition disposition = 2;
+}
+
+message QueueBatchResult {
+    repeated QueueDeliveryOutcome outcomes = 1;
 }

@@ -715,7 +715,9 @@ impl ContainerAppsTestContext {
 
             let identity = Some(ManagedServiceIdentity {
                 type_: ManagedServiceIdentityType::UserAssigned,
-                user_assigned_identities: Some(UserAssignedIdentities(user_assigned_identities)),
+                user_assigned_identities: Some(UserAssignedIdentities(Some(
+                    user_assigned_identities,
+                ))),
                 principal_id: None,
                 tenant_id: None,
             });
@@ -730,6 +732,7 @@ impl ContainerAppsTestContext {
         };
 
         let container_app = ContainerApp {
+            kind: None,
             location: self.location.clone(),
             identity,
             properties: Some(ContainerAppProperties {
@@ -939,6 +942,7 @@ async fn test_update_container_app(ctx: &mut ContainerAppsTestContext) -> Result
     tags.insert("version".to_string(), "2.0".to_string());
 
     let updated_container_app = ContainerApp {
+        kind: None,
         location: ctx.location.clone(),
         tags: Some(tags),
         properties: Some(ContainerAppProperties {
@@ -1101,7 +1105,7 @@ async fn test_container_app_with_secrets_and_env_vars(
 
         let identity = Some(ManagedServiceIdentity {
             type_: ManagedServiceIdentityType::UserAssigned,
-            user_assigned_identities: Some(UserAssignedIdentities(user_assigned_identities)),
+            user_assigned_identities: Some(UserAssignedIdentities(Some(user_assigned_identities))),
             principal_id: None,
             tenant_id: None,
         });
@@ -1116,6 +1120,7 @@ async fn test_container_app_with_secrets_and_env_vars(
     };
 
     let container_app = ContainerApp {
+        kind: None,
         location: ctx.location.clone(),
         identity,
         properties: Some(ContainerAppProperties {
@@ -1286,7 +1291,7 @@ async fn test_container_app_with_init_containers(ctx: &mut ContainerAppsTestCont
 
         let identity = Some(ManagedServiceIdentity {
             type_: ManagedServiceIdentityType::UserAssigned,
-            user_assigned_identities: Some(UserAssignedIdentities(user_assigned_identities)),
+            user_assigned_identities: Some(UserAssignedIdentities(Some(user_assigned_identities))),
             principal_id: None,
             tenant_id: None,
         });
@@ -1301,6 +1306,7 @@ async fn test_container_app_with_init_containers(ctx: &mut ContainerAppsTestCont
     };
 
     let container_app = ContainerApp {
+        kind: None,
         location: ctx.location.clone(),
         identity,
         properties: Some(ContainerAppProperties {
@@ -1538,7 +1544,7 @@ async fn test_comprehensive_lifecycle_managed_environment_and_container_app(
 
         let identity = Some(ManagedServiceIdentity {
             type_: ManagedServiceIdentityType::UserAssigned,
-            user_assigned_identities: Some(UserAssignedIdentities(user_assigned_identities)),
+            user_assigned_identities: Some(UserAssignedIdentities(Some(user_assigned_identities))),
             principal_id: None,
             tenant_id: None,
         });
@@ -1553,6 +1559,7 @@ async fn test_comprehensive_lifecycle_managed_environment_and_container_app(
     };
 
     let container_app = ContainerApp {
+        kind: None,
         location: ctx.location.clone(),
         identity,
         properties: Some(ContainerAppProperties {

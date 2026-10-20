@@ -277,7 +277,7 @@ fn ack_deadline_for(ctx: &EmitContext<'_>) -> u32 {
         if function.triggers.iter().any(|trigger| {
             matches!(
                 trigger,
-                WorkerTrigger::Queue { queue }
+                WorkerTrigger::Queue { queue, .. }
                     if queue.resource_type == Queue::RESOURCE_TYPE && queue.id == ctx.resource_id
             )
         }) {

@@ -148,9 +148,9 @@ impl AsyncTestContext for ContainerAppTestContext {
         let test_app_path = test_utils::get_test_app_path().expect("Failed to get test app path");
         info!(?test_app_path, "Using alien-test-app binary");
 
-        let (application_port, transport_port) = test_utils::distinct_free_local_ports()
-            .expect("Failed to find distinct ports for app and ContainerApp transport");
-        info!(%application_port, %transport_port, "Resolved application and ContainerApp transport ports");
+        let transport_port = test_utils::free_local_transport_port()
+            .expect("Failed to find a port for the ContainerApp transport");
+        info!(%transport_port, "Resolved ContainerApp transport port");
 
         // Build RuntimeConfig directly (no CLI parsing needed)
         let mut env_vars = HashMap::new();
@@ -166,7 +166,9 @@ impl AsyncTestContext for ContainerAppTestContext {
         // worker_grpc_address; its presence is what selects the Worker protocol (Control
         // + wait_until) gRPC channel that this test's server provides.
         env_vars.insert("ALIEN_DEPLOYMENT_TYPE".to_string(), "local".to_string());
-        env_vars.insert("PORT".to_string(), application_port.to_string());
+        // The child binds its own port and registers the actual address over gRPC.
+        // Probing and releasing a port here races other concurrent test processes.
+        env_vars.insert("PORT".to_string(), "0".to_string());
 
         // The event handlers in alien-test-app persist events into the `test-kv`
         // binding and the read-back endpoints load it. With bindings resolved
