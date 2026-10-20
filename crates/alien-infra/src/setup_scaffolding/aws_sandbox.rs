@@ -1394,7 +1394,23 @@ mod tests {
                 ),
                 Platform::Aws
             ),
-            vec!["sandbox 'agents' changes its build role policy"]
+            Vec::<String>::new(),
+            "a Live sandbox reads the release's key from the bucket its setup granted"
+        );
+        assert_eq!(
+            changes(
+                &allow,
+                &stack_of(
+                    with(
+                        SandboxEgress::Allow,
+                        "s3://acme-artifacts/other-prefix/f00dcafe/bundle.zip"
+                    ),
+                    Some("net")
+                ),
+                Platform::Aws
+            ),
+            vec!["sandbox 'agents' changes its build role policy"],
+            "a key outside the granted prefix is another grant"
         );
         let with_base = |image: &str| {
             stack_of(
@@ -1417,8 +1433,8 @@ mod tests {
                 &with_base("123456789012.dkr.ecr.us-east-1.amazonaws.com/acme/other:1.0"),
                 Platform::Aws
             ),
-            vec!["sandbox 'agents' changes its build role policy"],
-            "another repository is another grant"
+            Vec::<String>::new(),
+            "a Live sandbox builds from the repository its setup granted"
         );
         assert_eq!(
             changes(

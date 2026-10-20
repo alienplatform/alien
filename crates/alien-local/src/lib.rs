@@ -62,6 +62,8 @@ mod kv_manager;
 mod local_bindings_provider;
 mod postgres_manager;
 mod queue_manager;
+mod queue_service;
+pub use queue_service::LocalQueueService;
 mod sandbox_identity;
 mod sandbox_manager;
 mod sandbox_route;
@@ -78,7 +80,7 @@ pub use container_manager::{
     LocalPublicEndpoint, LocalRuntimeStatus,
 };
 pub use daemon_supervisor::DaemonLaunchOptions;
-pub use docker_network::start_docker_bridge_proxy;
+pub use docker_network::{start_docker_bridge_proxy, start_docker_bridge_proxy_with_shutdown};
 pub use error::{ErrorData, Result};
 pub use kv_manager::LocalKvManager;
 pub use local_bindings_provider::LocalBindingsProvider;

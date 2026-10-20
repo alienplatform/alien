@@ -78,7 +78,7 @@ async fn main() -> Result<()> {
         if !refresh {
             std::future::pending::<()>().await;
         }
-        let mut interval = tokio::time::interval(Duration::from_secs(60));
+        let mut interval = tokio::time::interval(refresh_interval());
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         interval.tick().await;
         loop {
@@ -116,6 +116,16 @@ async fn main() -> Result<()> {
     })
     .await;
     Ok(())
+}
+
+/// How often the configuration is re-read: 60 seconds, or `ALIEN_EGRESS_GATEWAY_REFRESH_SECONDS`
+/// (at least one) for tests that exercise configuration changes.
+fn refresh_interval() -> Duration {
+    let seconds = env::var("ALIEN_EGRESS_GATEWAY_REFRESH_SECONDS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .map_or(60, |value| value.max(1));
+    Duration::from_secs(seconds)
 }
 
 async fn shutdown_signal() -> Result<()> {

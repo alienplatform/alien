@@ -9,8 +9,8 @@ use tracing::{debug, info, warn};
 
 use crate::{ErrorData, Result};
 
-/// Returns a Docker bridge gateway that belongs to the private range used by
-/// Local services and is bindable by this host.
+/// Returns the selected Docker engine's private bridge gateway when it is
+/// bindable by this host.
 pub(crate) async fn bindable_docker_bridge_gateway() -> Result<Option<Ipv4Addr>> {
     let Some(docker) = crate::docker_connection::connect_optional_docker()? else {
         return Ok(None);
@@ -54,6 +54,14 @@ pub(crate) async fn bindable_docker_bridge_gateway() -> Result<Option<Ipv4Addr>>
 /// host gateway. Hosts where that gateway cannot be bound, such as Docker
 /// Desktop, retain their native `host.docker.internal` behavior.
 pub async fn start_docker_bridge_proxy(target: SocketAddr) -> Result<Option<SocketAddr>> {
+    start_docker_bridge_proxy_with_shutdown(target, std::future::pending()).await
+}
+
+/// Like `start_docker_bridge_proxy`, but releases the listener when its owner stops.
+pub async fn start_docker_bridge_proxy_with_shutdown(
+    target: SocketAddr,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) -> Result<Option<SocketAddr>> {
     let Some(gateway) = bindable_docker_bridge_gateway().await? else {
         return Ok(None);
     };
@@ -67,7 +75,12 @@ pub async fn start_docker_bridge_proxy(target: SocketAddr) -> Result<Option<Sock
             reason: format!("Failed to bind Docker host gateway {listen_addr}"),
         })?;
 
-    tokio::spawn(serve_proxy(listener, target));
+    tokio::spawn(async move {
+        tokio::select! {
+            _ = serve_proxy(listener, target) => {},
+            _ = shutdown => {},
+        }
+    });
     info!(%listen_addr, %target, "Docker bridge proxy started");
     Ok(Some(listen_addr))
 }
@@ -99,8 +112,7 @@ async fn proxy_connection(mut downstream: TcpStream, target: SocketAddr) -> std:
 
 fn docker_bridge_gateway(gateway: &str) -> Option<Ipv4Addr> {
     let gateway = gateway.parse::<Ipv4Addr>().ok()?;
-    let [first, second, ..] = gateway.octets();
-    (first == 172 && (16..=31).contains(&second)).then_some(gateway)
+    gateway.is_private().then_some(gateway)
 }
 
 #[cfg(test)]
@@ -108,7 +120,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn docker_bridge_gateway_accepts_only_the_service_private_range() {
+    fn docker_bridge_gateway_accepts_all_private_ranges() {
         assert_eq!(
             docker_bridge_gateway("172.17.0.1"),
             Some(Ipv4Addr::new(172, 17, 0, 1))
@@ -121,11 +133,21 @@ mod tests {
             docker_bridge_gateway("172.31.255.254"),
             Some(Ipv4Addr::new(172, 31, 255, 254))
         );
+        assert_eq!(
+            docker_bridge_gateway("10.0.0.1"),
+            Some(Ipv4Addr::new(10, 0, 0, 1))
+        );
+        assert_eq!(
+            docker_bridge_gateway("192.168.0.1"),
+            Some(Ipv4Addr::new(192, 168, 0, 1))
+        );
         for rejected in [
             "172.15.0.1",
             "172.32.0.1",
-            "10.0.0.1",
-            "192.168.0.1",
+            "192.169.0.1",
+            "127.0.0.1",
+            "169.254.0.1",
+            "0.0.0.0",
             "8.8.8.8",
             "fd00::1",
             "not-an-ip",

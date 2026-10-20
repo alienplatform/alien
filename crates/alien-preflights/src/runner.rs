@@ -1362,7 +1362,7 @@ mod setup_update_authorization_tests {
             .build()
     }
 
-    /// A blocked repository change must clear on the setup rerun: the rerun's authorization is
+    /// A blocked setup input change must clear on the setup rerun: the rerun's authorization is
     /// minted from the digests of the installed and target stacks, so those must differ.
     #[cfg(feature = "runtime-checks")]
     #[tokio::test]
@@ -1406,8 +1406,8 @@ mod setup_update_authorization_tests {
         for (target, input) in [
             (
                 live_sandbox_stack(
-                    V2,
-                    Some("123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base-b:1"),
+                    "s3://bucket/other-prefix/v2/bundle.zip",
+                    Some(BASE_A),
                     Internet,
                 ),
                 "build role policy",

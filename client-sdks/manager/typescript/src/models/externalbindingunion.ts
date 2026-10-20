@@ -749,6 +749,30 @@ export type ExternalBindingUnion3 =
   | ExternalBindingRedis
   | ExternalBindingLocalKv;
 
+export const TypeQueue5 = {
+  Queue: "queue",
+} as const;
+export type TypeQueue5 = ClosedEnum<typeof TypeQueue5>;
+
+/**
+ * Manager-owned local queue, accessed directly over HTTP.
+ */
+export type ExternalBindingLocalQueueHTTP = {
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  endpoint: BindingValueStringUnion;
+  /**
+   * Queue-scoped credential, injected at process start rather than persisted in stack state.
+   */
+  token?: string | null | undefined;
+  service: "local-queue-http";
+  type: TypeQueue5;
+};
+
 export const TypeQueue4 = {
   Queue: "queue",
 } as const;
@@ -850,7 +874,8 @@ export type ExternalBindingUnion2 =
   | ExternalBindingSqs
   | ExternalBindingPubsub
   | ExternalBindingServicebus
-  | ExternalBindingLocalQueue;
+  | ExternalBindingLocalQueue
+  | ExternalBindingLocalQueueHTTP;
 
 export const TypeStorage4 = {
   Storage: "storage",
@@ -979,6 +1004,7 @@ export type ExternalBindingUnion =
   | ExternalBindingPubsub
   | ExternalBindingServicebus
   | ExternalBindingLocalQueue
+  | ExternalBindingLocalQueueHTTP
   | ExternalBindingDynamodb
   | ExternalBindingFirestore
   | ExternalBindingTablestorage
@@ -2409,6 +2435,62 @@ export function externalBindingUnion3FromJSON(
 }
 
 /** @internal */
+export const TypeQueue5$inboundSchema: z.ZodEnum<typeof TypeQueue5> = z.enum(
+  TypeQueue5,
+);
+/** @internal */
+export const TypeQueue5$outboundSchema: z.ZodEnum<typeof TypeQueue5> =
+  TypeQueue5$inboundSchema;
+
+/** @internal */
+export const ExternalBindingLocalQueueHTTP$inboundSchema: z.ZodType<
+  ExternalBindingLocalQueueHTTP,
+  unknown
+> = z.object({
+  endpoint: BindingValueStringUnion$inboundSchema,
+  token: z.nullable(z.string()).optional(),
+  service: z.literal("local-queue-http"),
+  type: TypeQueue5$inboundSchema,
+});
+/** @internal */
+export type ExternalBindingLocalQueueHTTP$Outbound = {
+  endpoint: BindingValueStringUnion$Outbound;
+  token?: string | null | undefined;
+  service: "local-queue-http";
+  type: string;
+};
+
+/** @internal */
+export const ExternalBindingLocalQueueHTTP$outboundSchema: z.ZodType<
+  ExternalBindingLocalQueueHTTP$Outbound,
+  ExternalBindingLocalQueueHTTP
+> = z.object({
+  endpoint: BindingValueStringUnion$outboundSchema,
+  token: z.nullable(z.string()).optional(),
+  service: z.literal("local-queue-http"),
+  type: TypeQueue5$outboundSchema,
+});
+
+export function externalBindingLocalQueueHTTPToJSON(
+  externalBindingLocalQueueHTTP: ExternalBindingLocalQueueHTTP,
+): string {
+  return JSON.stringify(
+    ExternalBindingLocalQueueHTTP$outboundSchema.parse(
+      externalBindingLocalQueueHTTP,
+    ),
+  );
+}
+export function externalBindingLocalQueueHTTPFromJSON(
+  jsonString: string,
+): SafeParseResult<ExternalBindingLocalQueueHTTP, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExternalBindingLocalQueueHTTP$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExternalBindingLocalQueueHTTP' from JSON`,
+  );
+}
+
+/** @internal */
 export const TypeQueue4$inboundSchema: z.ZodEnum<typeof TypeQueue4> = z.enum(
   TypeQueue4,
 );
@@ -2627,13 +2709,15 @@ export const ExternalBindingUnion2$inboundSchema: z.ZodType<
   z.lazy(() => ExternalBindingPubsub$inboundSchema),
   z.lazy(() => ExternalBindingServicebus$inboundSchema),
   z.lazy(() => ExternalBindingLocalQueue$inboundSchema),
+  z.lazy(() => ExternalBindingLocalQueueHTTP$inboundSchema),
 ]);
 /** @internal */
 export type ExternalBindingUnion2$Outbound =
   | ExternalBindingSqs$Outbound
   | ExternalBindingPubsub$Outbound
   | ExternalBindingServicebus$Outbound
-  | ExternalBindingLocalQueue$Outbound;
+  | ExternalBindingLocalQueue$Outbound
+  | ExternalBindingLocalQueueHTTP$Outbound;
 
 /** @internal */
 export const ExternalBindingUnion2$outboundSchema: z.ZodType<
@@ -2644,6 +2728,7 @@ export const ExternalBindingUnion2$outboundSchema: z.ZodType<
   z.lazy(() => ExternalBindingPubsub$outboundSchema),
   z.lazy(() => ExternalBindingServicebus$outboundSchema),
   z.lazy(() => ExternalBindingLocalQueue$outboundSchema),
+  z.lazy(() => ExternalBindingLocalQueueHTTP$outboundSchema),
 ]);
 
 export function externalBindingUnion2ToJSON(
@@ -2947,6 +3032,7 @@ export const ExternalBindingUnion$inboundSchema: z.ZodType<
     z.lazy(() => ExternalBindingPubsub$inboundSchema),
     z.lazy(() => ExternalBindingServicebus$inboundSchema),
     z.lazy(() => ExternalBindingLocalQueue$inboundSchema),
+    z.lazy(() => ExternalBindingLocalQueueHTTP$inboundSchema),
   ]),
   z.union([
     z.lazy(() => ExternalBindingDynamodb$inboundSchema),
@@ -2988,6 +3074,7 @@ export type ExternalBindingUnion$Outbound =
   | ExternalBindingPubsub$Outbound
   | ExternalBindingServicebus$Outbound
   | ExternalBindingLocalQueue$Outbound
+  | ExternalBindingLocalQueueHTTP$Outbound
   | ExternalBindingDynamodb$Outbound
   | ExternalBindingFirestore$Outbound
   | ExternalBindingTablestorage$Outbound
@@ -3026,6 +3113,7 @@ export const ExternalBindingUnion$outboundSchema: z.ZodType<
     z.lazy(() => ExternalBindingPubsub$outboundSchema),
     z.lazy(() => ExternalBindingServicebus$outboundSchema),
     z.lazy(() => ExternalBindingLocalQueue$outboundSchema),
+    z.lazy(() => ExternalBindingLocalQueueHTTP$outboundSchema),
   ]),
   z.union([
     z.lazy(() => ExternalBindingDynamodb$outboundSchema),

@@ -944,22 +944,6 @@ mod tests {
                 },
                 "a digest",
             ),
-        ] {
-            assert_eq!(
-                installed,
-                unchanged.digest(),
-                "{why} is the runtime's to roll"
-            );
-        }
-
-        for (changed, what) in [
-            (
-                LiveSandbox {
-                    private_base_image: None,
-                    ..LiveSandbox::installed()
-                },
-                "a dropped private base",
-            ),
             (
                 LiveSandbox {
                     private_base_image: Some(
@@ -989,17 +973,33 @@ mod tests {
             ),
             (
                 LiveSandbox {
-                    egress: crate::SandboxEgress::None,
-                    ..LiveSandbox::installed()
-                },
-                "egress allow to deny",
-            ),
-            (
-                LiveSandbox {
                     image: "s3://other-bucket/sandbox-bundle/v1/bundle.zip",
                     ..LiveSandbox::installed()
                 },
                 "another bundle bucket",
+            ),
+        ] {
+            assert_eq!(
+                installed,
+                unchanged.digest(),
+                "{why} is the runtime's to roll: a Live sandbox builds from the store and repository its setup granted"
+            );
+        }
+
+        for (changed, what) in [
+            (
+                LiveSandbox {
+                    private_base_image: None,
+                    ..LiveSandbox::installed()
+                },
+                "a dropped private base",
+            ),
+            (
+                LiveSandbox {
+                    egress: crate::SandboxEgress::None,
+                    ..LiveSandbox::installed()
+                },
+                "egress allow to deny",
             ),
             (
                 LiveSandbox {

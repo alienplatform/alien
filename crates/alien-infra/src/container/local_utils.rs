@@ -16,7 +16,7 @@ use tracing::debug;
 
 /// Rewrites a binding's filesystem path from host path to container path.
 ///
-/// For containers, linked resources (Storage, KV, Queue, Vault) are mounted at different
+/// For containers, linked resources (Storage, KV, Vault) are mounted at different
 /// paths inside the container. This worker updates the binding env var to use
 /// the container-internal path.
 ///
@@ -83,31 +83,6 @@ pub(super) fn rewrite_binding_path_for_container(
         }
     }
 
-    // Queue binding: only Local variant allowed on Local platform
-    if let Ok(mut binding) = serde_json::from_str::<QueueBinding>(binding_json) {
-        match binding {
-            QueueBinding::Local(ref mut local) => {
-                local.queue_path = BindingValue::value(container_path.to_string());
-                let new_json = serde_json::to_string(&binding).into_alien_error().context(
-                    ErrorData::ResourceControllerConfigError {
-                        resource_id: resource_id.to_string(),
-                        message: "Failed to serialize Queue binding".to_string(),
-                    },
-                )?;
-
-                *binding_json = new_json;
-                return Ok(());
-            }
-            _ => {
-                return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
-                    resource_id: resource_id.to_string(),
-                    message: "Local platform containers cannot use cloud queue bindings"
-                        .to_string(),
-                }));
-            }
-        }
-    }
-
     // Vault binding: only Local variant allowed on Local platform
     if let Ok(mut binding) = serde_json::from_str::<VaultBinding>(binding_json) {
         match binding {
@@ -159,6 +134,42 @@ pub(super) fn rewrite_localhost_urls_for_container(
         let Some(binding_json) = env_vars.get_mut(&binding_key) else {
             continue;
         };
+
+        if let Ok(mut binding) = serde_json::from_str::<QueueBinding>(binding_json) {
+            match &mut binding {
+                QueueBinding::LocalHttp(local) => {
+                    if let BindingValue::Value(url) = &mut local.endpoint {
+                        let mut endpoint = reqwest::Url::parse(url).into_alien_error().context(
+                            ErrorData::ResourceControllerConfigError {
+                                resource_id: binding_key.clone(),
+                                message: "Invalid local queue endpoint".into(),
+                            },
+                        )?;
+                        if endpoint.host_str() == Some("localhost")
+                            || endpoint.host_str().is_some_and(|host| {
+                                host.trim_matches(['[', ']'])
+                                    .parse::<std::net::IpAddr>()
+                                    .is_ok_and(|ip| ip.is_loopback())
+                            })
+                        {
+                            endpoint.set_host(Some("host.docker.internal")).into_alien_error().context(
+                                ErrorData::ResourceControllerConfigError {
+                                    resource_id: binding_key.clone(),
+                                    message: "Rewrite local queue endpoint for Docker".into(),
+                                },
+                            )?;
+                        }
+                        *url = endpoint.to_string();
+                    }
+                    *binding_json = serde_json::to_string(&binding).into_alien_error().context(
+                        ErrorData::ResourceControllerConfigError { resource_id: binding_key.clone(), message: "Serialize local queue endpoint".into() })?;
+                    continue;
+                }
+                _ => return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
+                    resource_id: binding_key.clone(), message: "Local containers require a manager-owned local-queue-http binding; rebuild and migrate legacy queues offline".into(),
+                })),
+            }
+        }
 
         // ArtifactRegistry binding: only Local variant allowed
         if let Ok(mut binding) = serde_json::from_str::<ArtifactRegistryBinding>(binding_json) {
@@ -349,31 +360,35 @@ mod tests {
     use alien_core::bindings::{serialize_binding_as_env_var, PostgresBinding, QueueBinding};
 
     #[test]
-    fn local_queue_binding_rewritten_to_container_mount() {
-        let binding =
-            QueueBinding::local(BindingValue::value("/host/alien/queues/jobs".to_string()));
-        let mut env =
-            serialize_binding_as_env_var("jobs", &binding).expect("serialize local Queue binding");
-        let key = binding_env_var_name("jobs");
-
-        rewrite_binding_path_for_container(&mut env, "jobs", "/mnt/queue/jobs")
-            .expect("rewrite should succeed");
-
-        let rewritten: QueueBinding =
-            serde_json::from_str(env.get(&key).unwrap()).expect("rewritten binding deserializes");
-        let QueueBinding::Local(local) = rewritten else {
-            panic!("expected a Local Queue binding after rewrite");
-        };
-        let BindingValue::Value(queue_path) = local.queue_path else {
-            panic!("queue_path is a concrete value")
-        };
-        assert_eq!(queue_path, "/mnt/queue/jobs");
+    fn queue_network_binding_preserves_credentials_and_rewrites_only_loopback_host() {
+        for (host, expected) in [
+            ("localhost", "host.docker.internal"),
+            ("127.0.0.1", "host.docker.internal"),
+            ("127.0.0.2", "host.docker.internal"),
+            ("[::1]", "host.docker.internal"),
+            ("192.0.2.10", "192.0.2.10"),
+            ("[2001:db8::1]", "[2001:db8::1]"),
+        ] {
+            let binding = QueueBinding::LocalHttp(alien_core::bindings::LocalHttpQueueBinding {
+                endpoint: BindingValue::value(format!(
+                    "http://{host}:4318/v1/local/queues/dep/localhost:jobs"
+                )),
+                token: Some("test-credential".into()),
+            });
+            let mut env = serialize_binding_as_env_var("jobs", &binding).unwrap();
+            rewrite_localhost_urls_for_container(&mut env).unwrap();
+            let QueueBinding::LocalHttp(actual) =
+                serde_json::from_str(&env[&binding_env_var_name("jobs")]).unwrap()
+            else {
+                panic!("queue transport changed");
+            };
+            assert_eq!(actual.token.as_deref(), Some("test-credential"));
+            assert!(
+                matches!(actual.endpoint, BindingValue::Value(url) if url == format!("http://{expected}:4318/v1/local/queues/dep/localhost:jobs"))
+            );
+        }
     }
 
-    // A container linked to a Local Postgres must receive the full binding (password inline) with the
-    // host rewritten to a container-reachable address. This runs the exact serialize→rewrite
-    // composition the container controller performs, so it fails if the env-builder ever emits a
-    // password-less binding or the rewrite arm regresses.
     #[test]
     fn local_postgres_binding_rewritten_for_container_keeps_password() {
         let binding = PostgresBinding::local("127.0.0.1", 5432, "mydb", "alien", "s3cr3t-pw");

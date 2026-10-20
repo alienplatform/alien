@@ -334,6 +334,18 @@ impl LocalBindingsProvider {
         binding_name: &str,
         resource_type: &str,
     ) -> alien_bindings::error::Result<Option<std::collections::HashMap<String, String>>> {
+        if resource_type == alien_core::Queue::RESOURCE_TYPE.0 {
+            let binding = self.queue_manager.runtime_binding(binding_name).context(
+                BindingsErrorData::config_invalid(binding_name, "Resolve local queue binding"),
+            )?;
+            return Ok(Some(
+                alien_core::bindings::serialize_binding_as_env_var(binding_name, &binding)
+                    .context(BindingsErrorData::config_invalid(
+                        binding_name,
+                        "Serialize local queue binding",
+                    ))?,
+            ));
+        }
         if resource_type == alien_core::Postgres::RESOURCE_TYPE.0 {
             // Re-reads the password live from the manager's 0600 metadata. `try_get_binding`
             // is `None` for a name absent on recover; external (Remote Access) Postgres is
@@ -576,45 +588,9 @@ impl BindingsProviderApi for LocalBindingsProvider {
         &self,
         binding_name: &str,
     ) -> alien_bindings::error::Result<Arc<dyn Queue>> {
-        use alien_bindings::providers::queue::local::LocalQueue;
-        use alien_core::bindings::QueueBinding;
-
-        // The engine (multi-process WAL mode + busy_timeout) allows concurrent
-        // opens on the same file across handles and processes, so each caller
-        // constructs its own `LocalQueue` directly — no handle cache is needed.
-        let binding = self.queue_manager.get_binding(binding_name).context(
-            BindingsErrorData::config_invalid(
-                binding_name,
-                format!("Queue not found for '{}'", binding_name),
-            ),
+        let queue = self.queue_manager.load_queue(binding_name).await.context(
+            BindingsErrorData::config_invalid(binding_name, "Failed to open manager-owned queue"),
         )?;
-
-        let queue_path = match binding {
-            QueueBinding::Local(config) => {
-                let path_str = config
-                    .queue_path
-                    .into_value(binding_name, "queue_path")
-                    .context(BindingsErrorData::config_invalid(
-                        binding_name,
-                        "Invalid queue_path in binding",
-                    ))?;
-                PathBuf::from(path_str)
-            }
-            _ => {
-                return Err(AlienError::new(BindingsErrorData::config_invalid(
-                    binding_name,
-                    "Expected Local queue binding variant",
-                )));
-            }
-        };
-
-        let queue: Arc<dyn Queue> = Arc::new(LocalQueue::new(queue_path).await.context(
-            BindingsErrorData::BindingSetupFailed {
-                binding_type: "queue".to_string(),
-                reason: format!("Failed to initialize binding for '{}'", binding_name),
-            },
-        )?);
-
         Ok(queue)
     }
 
