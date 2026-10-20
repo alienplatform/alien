@@ -39,8 +39,7 @@ use alien_core::{
     container_resources::keep_volume_sizes_over_setup_source,
     import::{
         ImportContext, ImportedResource, StackImportRequest, StackImportResponse,
-        MAX_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION,
-        MIN_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION,
+        MAX_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION, MIN_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION,
     },
     is_valid_resource_prefix, AwsEnvironmentInfo, AzureEnvironmentInfo, DeploymentConfig,
     DeploymentStatus, EnvironmentInfo, EnvironmentVariablesSnapshot, ExternalBindings,

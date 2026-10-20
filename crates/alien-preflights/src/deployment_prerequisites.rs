@@ -1147,7 +1147,13 @@ mod tests {
         assert!(refused.errors[0].contains("managed container backend"));
 
         config.compute_backend = Some(horizon_backend());
-        assert!(check.check(&prepared, &state, &config).await.unwrap().success);
+        assert!(
+            check
+                .check(&prepared, &state, &config)
+                .await
+                .unwrap()
+                .success
+        );
     }
 
     #[tokio::test]

@@ -42,7 +42,8 @@ async fn request(
     token: &str,
     body: serde_json::Value,
 ) -> (StatusCode, serde_json::Value) {
-    let response = alien_manager::routes::sync::router().merge(alien_manager::routes::sync::initialize_router())
+    let response = alien_manager::routes::sync::router()
+        .merge(alien_manager::routes::sync::initialize_router())
         .with_state(fixture.state.clone())
         .oneshot(
             Request::builder()
@@ -157,16 +158,33 @@ async fn acquisition_filters_unsupported_records_before_its_limit() {
 
 #[tokio::test]
 async fn kubernetes_bootstrap_retains_gcp_protocol_and_base_environment() {
-    let fixture = make_fixture_for_platform(Platform::Kubernetes, Some(Stack::new("kube".into()).build())).await;
-    let (status, body) = request(&fixture, "/v1/initialize", &fixture.dg_token, serde_json::json!({
-        "name": "gcp-kubernetes-bootstrap", "platform": "kubernetes", "basePlatform": "gcp",
-        "setupMethod": "helm", "initialDesiredRelease": "active"
-    })).await;
+    let fixture = make_fixture_for_platform(
+        Platform::Kubernetes,
+        Some(Stack::new("kube".into()).build()),
+    )
+    .await;
+    let (status, body) = request(
+        &fixture,
+        "/v1/initialize",
+        &fixture.dg_token,
+        serde_json::json!({
+            "name": "gcp-kubernetes-bootstrap", "platform": "kubernetes", "basePlatform": "gcp",
+            "setupMethod": "helm", "initialDesiredRelease": "active"
+        }),
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED, "{body:#}");
     let id = body["deploymentId"].as_str().unwrap();
-    let record = fixture.deployment_store.get_deployment(&alien_manager::auth::Subject::system(), id)
-        .await.unwrap().unwrap();
+    let record = fixture
+        .deployment_store
+        .get_deployment(&alien_manager::auth::Subject::system(), id)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(record.platform, Platform::Kubernetes);
     assert_eq!(record.base_platform, Some(Platform::Gcp));
-    assert_eq!(record.deployment_protocol_version, alien_core::GCP_FEDERATION_DEPLOYMENT_PROTOCOL_VERSION);
+    assert_eq!(
+        record.deployment_protocol_version,
+        alien_core::GCP_FEDERATION_DEPLOYMENT_PROTOCOL_VERSION
+    );
 }

@@ -458,7 +458,9 @@ async fn create_deployment(
         Err(e) => return e.into_response(),
     };
 
-    if let Err(error) = super::sync::validate_kubernetes_base_platform(req.platform, req.base_platform) {
+    if let Err(error) =
+        super::sync::validate_kubernetes_base_platform(req.platform, req.base_platform)
+    {
         return error.into_response();
     }
 

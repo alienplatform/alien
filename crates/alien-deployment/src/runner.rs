@@ -1142,6 +1142,8 @@ mod tests {
             let mut state = test_state();
             state.status = initial;
             state.platform = platform;
+            state.protocol_version =
+                alien_core::deployment_protocol_version_for_platform(platform, None);
             // An empty stack must reject an invalid setting too. Test credentials
             // keep this regression independent of cloud services and permissions.
             state.target_release.as_mut().unwrap().stack =

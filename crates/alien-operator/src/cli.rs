@@ -832,7 +832,10 @@ async fn persist_initialized_manager_identity(
     Ok(replacement_token.unwrap_or_else(|| configured_sync_token.to_string()))
 }
 
-fn observe_only_initial_state(platform: Platform, base_platform: Option<Platform>) -> DeploymentState {
+fn observe_only_initial_state(
+    platform: Platform,
+    base_platform: Option<Platform>,
+) -> DeploymentState {
     DeploymentState {
         platform,
         status: DeploymentStatus::Running,
@@ -843,7 +846,10 @@ fn observe_only_initial_state(platform: Platform, base_platform: Option<Platform
         environment_info: None,
         runtime_metadata: None,
         retry_requested: false,
-        protocol_version: alien_core::deployment_protocol_version_for_platform(platform, base_platform),
+        protocol_version: alien_core::deployment_protocol_version_for_platform(
+            platform,
+            base_platform,
+        ),
     }
 }
 

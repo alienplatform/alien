@@ -3131,7 +3131,11 @@ async fn initialize(
                 .create_deployment(
                     &subject,
                     CreateDeploymentParams {
-                        deployment_protocol_version: alien_core::deployment_protocol_version_for_platform(platform, base_platform),
+                        deployment_protocol_version:
+                            alien_core::deployment_protocol_version_for_platform(
+                                platform,
+                                base_platform,
+                            ),
                         name,
                         deployment_group_id: dg_id.clone(),
                         platform,
