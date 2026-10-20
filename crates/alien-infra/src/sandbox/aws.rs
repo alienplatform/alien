@@ -4382,6 +4382,8 @@ mod tests {
                 .await
                 .unwrap();
 
+            run_gateway_on(&mut executor, EMBEDDING_GATEWAY);
+
             executor.step().await.expect("Ready verifies the network");
             let controller = executor.internal_state::<AwsSandboxController>().unwrap();
             assert_eq!(controller.state, AwsSandboxState::RefreshingEgressConfig);
@@ -4410,14 +4412,39 @@ mod tests {
         }
 
         /// One refresh pass of internet sandbox `id` in a stack that also declares `others`,
-        /// against a local secrets vault in `directory`. Returns the controller afterwards.
+        /// against a local secrets vault in `directory`, with the gateway running an image that
+        /// embeds its replica secret. Returns the controller afterwards.
         async fn refresh_pass(
             id: &str,
             others: &[&str],
             controller: AwsSandboxController,
             directory: &std::path::Path,
         ) -> AwsSandboxController {
-            refresh_with(id, others, controller, directory, GatewayFixture::default()).await
+            refresh_with(
+                id,
+                others,
+                controller,
+                directory,
+                GatewayFixture {
+                    image: Some(EMBEDDING_GATEWAY),
+                    ..GatewayFixture::default()
+                },
+            )
+            .await
+        }
+
+        /// Runs the gateway the stack mutations add, whatever image is pinned, on `image`.
+        fn run_gateway_on(executor: &mut SingleControllerExecutor, image: &str) {
+            let id = alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID;
+            executor.insert_saved_resource(
+                id,
+                alien_core::StackResourceState::builder()
+                    .resource_type(alien_core::Container::RESOURCE_TYPE.to_string())
+                    .status(ResourceStatus::Running)
+                    .config(alien_core::Resource::new(gateway_container(image)))
+                    .lifecycle(alien_core::ResourceLifecycle::Live)
+                    .build(),
+            );
         }
 
         /// The running gateway, the replica secret's Secrets Manager answers, and who set up the
@@ -4529,16 +4556,7 @@ mod tests {
                 };
             }
             if let (Some(image), false) = (gateway.image, gateway.fresh) {
-                let container = gateway_container(image);
-                executor.insert_saved_resource(
-                    alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID,
-                    alien_core::StackResourceState::builder()
-                        .resource_type(alien_core::Container::RESOURCE_TYPE.to_string())
-                        .status(ResourceStatus::Running)
-                        .config(alien_core::Resource::new(container))
-                        .lifecycle(alien_core::ResourceLifecycle::Live)
-                        .build(),
-                );
+                run_gateway_on(&mut executor, image);
             }
             executor.step().await.expect("the refresh runs");
             executor
