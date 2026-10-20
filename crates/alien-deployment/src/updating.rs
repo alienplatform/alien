@@ -1060,13 +1060,25 @@ mod tests {
             .await;
         }
 
+        /// The runtime reads each release's bundle key from the bucket setup granted, so a release
+        /// naming another bucket rolls without setup. A key outside the granted prefix still waits.
         #[tokio::test]
-        async fn a_bundle_in_another_bucket_waits_for_setup_to_regrant_the_build_role() {
-            assert_setup_required(
+        async fn a_bundle_in_another_bucket_rolls_but_another_prefix_waits_for_setup() {
+            assert_updates(
+                InitialSetupAuthority::DirectSetup,
                 sandbox(SandboxEgress::Allow, BUNDLE, None),
                 sandbox(
                     SandboxEgress::Allow,
                     "s3://other-artifacts/sandbox-bundle/f00dcafe/bundle.zip",
+                    None,
+                ),
+            )
+            .await;
+            assert_setup_required(
+                sandbox(SandboxEgress::Allow, BUNDLE, None),
+                sandbox(
+                    SandboxEgress::Allow,
+                    "s3://acme-artifacts/other-prefix/f00dcafe/bundle.zip",
                     None,
                 ),
                 Some("changes its build role policy"),
@@ -1136,38 +1148,22 @@ mod tests {
             assert!(cause.message.contains("is new"), "{}", cause.message);
         }
 
-        /// A template setup renders the same build role, so it rolls a new bundle version and is
-        /// held to the same setup inputs, which its runtime never re-reads.
+        /// A template setup renders the same build role and is held to the same setup inputs,
+        /// which its runtime never re-reads: a new bundle version rolls, and so does a new bucket,
+        /// read from the one the template granted.
         #[tokio::test]
-        async fn a_template_setup_rolls_a_new_bundle_but_waits_for_setup_on_a_new_bucket() {
-            assert_updates(
-                InitialSetupAuthority::ImportedHandoff,
-                sandbox(SandboxEgress::Allow, BUNDLE, None),
-                sandbox(
-                    SandboxEgress::Allow,
-                    "s3://acme-artifacts/sandbox-bundle/0ddba11/bundle.zip",
-                    None,
-                ),
-            )
-            .await;
-            let error = update(
-                InitialSetupAuthority::ImportedHandoff,
-                sandbox(SandboxEgress::Allow, BUNDLE, None),
-                sandbox(
-                    SandboxEgress::Allow,
-                    "s3://other-artifacts/sandbox-bundle/f00dcafe/bundle.zip",
-                    None,
-                ),
-            )
-            .await
-            .expect_err("a new bucket needs setup to regrant the build role");
-            let cause = error.source.as_deref().expect("the refusal is the cause");
-            assert_eq!(cause.code, "DEPLOYMENT_SETUP_REQUIRED");
-            assert!(
-                cause.message.contains("build role policy"),
-                "{}",
-                cause.message
-            );
+        async fn a_template_setup_rolls_a_new_bundle_and_a_new_bucket() {
+            for image in [
+                "s3://acme-artifacts/sandbox-bundle/0ddba11/bundle.zip",
+                "s3://other-artifacts/sandbox-bundle/f00dcafe/bundle.zip",
+            ] {
+                assert_updates(
+                    InitialSetupAuthority::ImportedHandoff,
+                    sandbox(SandboxEgress::Allow, BUNDLE, None),
+                    sandbox(SandboxEgress::Allow, image, None),
+                )
+                .await;
+            }
         }
 
         /// Only a Terraform setup grants the manager what replacing a Frozen GCP sandbox's
