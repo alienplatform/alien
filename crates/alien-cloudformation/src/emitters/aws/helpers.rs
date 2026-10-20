@@ -18,6 +18,11 @@ use serde_json::Value as JsonValue;
 use std::collections::{BTreeSet, HashSet};
 
 pub const PARAM_MANAGING_ROLE_ARN: &str = "ManagingRoleArn";
+/// The control plane's ExternalId for this customer. The management and
+/// remote-bindings roles require it as `sts:ExternalId` when it is set.
+pub const PARAM_MANAGEMENT_EXTERNAL_ID: &str = "ManagementExternalId";
+/// True when `ManagementExternalId` is not empty.
+pub const CONDITION_HAS_MANAGEMENT_EXTERNAL_ID: &str = "HasManagementExternalId";
 pub const PARAM_MANAGING_ACCOUNT_ID: &str = "ManagingAccountId";
 pub const PARAM_VPC_CIDR: &str = "VpcCidr";
 pub const PARAM_PUBLIC_SUBNET_IDS: &str = "PublicSubnetIds";
@@ -195,6 +200,51 @@ pub fn tag(key: &str, value: &str) -> CfExpression {
 
 pub fn tag_expr(key: &str, value: CfExpression) -> CfExpression {
     CfExpression::object([("Key", CfExpression::from(key)), ("Value", value)])
+}
+
+/// The `Condition` of a trust statement that lets the managing role assume a
+/// setup-created role.
+///
+/// With `ManagementExternalId` set, the caller must also send it as
+/// `sts:ExternalId`, so the managing role, which many customers trust, cannot
+/// be pointed at this customer's role on behalf of someone else. With it
+/// empty the condition resolves to exactly the trust stacks had before the
+/// parameter existed, so updating an old stack without a value changes nothing.
+pub fn managing_role_trust_condition() -> CfExpression {
+    let principal = || {
+        (
+            "aws:PrincipalArn",
+            CfExpression::ref_(PARAM_MANAGING_ROLE_ARN),
+        )
+    };
+    CfExpression::object([(
+        "StringEquals",
+        CfExpression::if_(
+            CONDITION_HAS_MANAGEMENT_EXTERNAL_ID,
+            CfExpression::object([
+                principal(),
+                (
+                    "sts:ExternalId",
+                    CfExpression::ref_(PARAM_MANAGEMENT_EXTERNAL_ID),
+                ),
+            ]),
+            CfExpression::object([principal()]),
+        ),
+    )])
+}
+
+/// The trust statement that lets the managing role assume a setup-created role.
+pub fn managing_role_trust_statement() -> CfExpression {
+    CfExpression::object([
+        ("Sid", CfExpression::from("AllowManagingRole")),
+        ("Effect", CfExpression::from("Allow")),
+        (
+            "Principal",
+            CfExpression::object([("AWS", CfExpression::ref_(PARAM_MANAGING_ROLE_ARN))]),
+        ),
+        ("Action", CfExpression::from("sts:AssumeRole")),
+        ("Condition", managing_role_trust_condition()),
+    ])
 }
 
 /// `aws:PrincipalArn` plus `Service` trust policy block.

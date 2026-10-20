@@ -16,8 +16,8 @@ use crate::{
     emitter::{TfEmitter, TfFragment},
     emitters::aws::helpers::{
         aws_terraform_permission_context, downcast, emit_iam_managed_policy_chunks,
-        ensure_unique_statement_sids, iam_role_name_template, jsonencode, policy_document_expr,
-        required_label, tags,
+        ensure_unique_statement_sids, iam_role_name_template, jsonencode,
+        managing_role_trust_statement, policy_document_expr, required_label, tags,
     },
     expr,
 };
@@ -186,22 +186,7 @@ fn trust_policy() -> Expression {
         ("Version", Expression::String("2012-10-17".to_string())),
         (
             "Statement",
-            Expression::Array(vec![expr::object([
-                ("Sid", Expression::String("AllowManagingRole".to_string())),
-                ("Effect", Expression::String("Allow".to_string())),
-                (
-                    "Principal",
-                    expr::object([("AWS", expr::raw("var.managing_role_arn"))]),
-                ),
-                ("Action", Expression::String("sts:AssumeRole".to_string())),
-                (
-                    "Condition",
-                    expr::object([(
-                        "StringEquals",
-                        expr::object([("aws:PrincipalArn", expr::raw("var.managing_role_arn"))]),
-                    )]),
-                ),
-            ])]),
+            Expression::Array(vec![managing_role_trust_statement()]),
         ),
     ]))
 }

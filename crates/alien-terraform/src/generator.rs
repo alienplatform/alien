@@ -1965,6 +1965,7 @@ fn variables_body(
             (!setup_only).then(|| Expression::String(String::new())),
             false,
         )));
+        blocks.push(nested(management_external_id_variable_block()));
         if !setup_only {
             blocks.push(nested(variable_block(
                 "managing_account_id",
@@ -2663,6 +2664,47 @@ fn network_mode_variable_block(needs_named_subnets: bool) -> Block {
         identifier: Identifier::sanitized("variable"),
         labels: vec![BlockLabel::String("network_mode".to_string())],
         body: Body::from(body),
+    }
+}
+
+/// `management_external_id`: the ExternalId the management roles require.
+/// Empty keeps the trust modules had before the variable existed.
+fn management_external_id_variable_block() -> Block {
+    Block {
+        identifier: Identifier::sanitized("variable"),
+        labels: vec![BlockLabel::String("management_external_id".to_string())],
+        body: Body::from(vec![
+            attr("type", expr::raw("string")),
+            attr(
+                "description",
+                Expression::String(
+                    "ExternalId from the setup page. The management roles require it on every AssumeRole, so only this installation's control plane can use them. Leave it empty only to update a module applied before this variable existed."
+                        .to_string(),
+                ),
+            ),
+            attr("default", Expression::String(String::new())),
+            attr("sensitive", Expression::Bool(true)),
+            nested(block(
+                "validation",
+                [
+                    attr(
+                        "condition",
+                        expr::raw(format!(
+                            r#"var.management_external_id == "" || can(regex("{}", var.management_external_id))"#,
+                            alien_core::MANAGEMENT_EXTERNAL_ID_PARAMETER_PATTERN
+                                .trim_start_matches("^$|")
+                        )),
+                    ),
+                    attr(
+                        "error_message",
+                        Expression::String(
+                            "management_external_id must be the ExternalId shown on the setup page: 32 to 128 letters and digits."
+                                .to_string(),
+                        ),
+                    ),
+                ]),
+            ),
+        ]),
     }
 }
 
