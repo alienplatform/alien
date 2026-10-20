@@ -232,3 +232,62 @@ async fn azure_management_writes_but_cannot_read_the_secrets_vault() {
     );
     assert!(!workload.is_empty(), "the workload keeps its read");
 }
+
+/// Azure: management assigns roles to the workload identities it runs, so it holds
+/// `roleAssignments/write`. It must not be able to use that to give itself a read on the
+/// secrets vault, nor add `getSecret` to a role it holds. So:
+/// - every unconditioned role management holds leaves out role-assignment writes;
+/// - the role that has them is assigned with a condition that excludes management itself;
+/// - every custom role management holds is also assignable at the subscription, where it
+///   cannot change role definitions.
+#[tokio::test]
+async fn azure_management_cannot_assign_itself_roles_or_change_its_own() {
+    let prepared = prepare(stack(), Platform::Azure).await;
+    let module = render(&prepared, TerraformTarget::Azure, StackSettings::default());
+    assert_terraform_valid(&module, "azure_management_role_assignments");
+    let blocks = resource_blocks(&module);
+    let management = "principal_id = azurerm_user_assigned_identity.management.principal_id";
+    let writes = |block: &Block| {
+        block
+            .body
+            .contains("\"Microsoft.Authorization/roleAssignments/write\"")
+            || block
+                .body
+                .contains("\"Microsoft.Authorization/roleAssignments/*\"")
+            || block.body.contains("\"Microsoft.Authorization/*\"")
+            || block.body.contains("actions = [ \"*\"")
+    };
+
+    let mut conditioned = 0;
+    for assignment in blocks
+        .iter()
+        .filter(|block| block.kind == "azurerm_role_assignment" && block.body.contains(management))
+    {
+        let Some(definition) = custom_role(&blocks, assignment, "azurerm_role_definition") else {
+            continue;
+        };
+        assert!(
+            definition
+                .body
+                .contains("\"/subscriptions/${var.azure_subscription_id}\" ]"),
+            "{} is assignable only where management can change it: {}",
+            definition.label,
+            definition.body
+        );
+        if writes(definition) {
+            assert!(
+                assignment.body.contains(
+                    "@Request[Microsoft.Authorization/roleAssignments:PrincipalId] ForAnyOfAllValues:GuidNotEquals {${azurerm_user_assigned_identity.management.principal_id}}"
+                ) && assignment.body.contains("condition_version = \"2.0\""),
+                "{} lets management assign roles without excluding itself: {}",
+                assignment.label,
+                assignment.body
+            );
+            conditioned += 1;
+        }
+    }
+    assert!(
+        conditioned > 0,
+        "management still assigns roles to workloads"
+    );
+}

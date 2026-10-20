@@ -590,6 +590,28 @@ impl AzurePermissionsHelper {
                 "{}-{} [mgmt]",
                 ctx.resource_prefix, custom_role.role_definition.name
             );
+            // Setup creates these roles assignable at the subscription too, so management cannot
+            // change a role it holds. Rewriting one here would need that subscription-wide right
+            // and would drop the protection, so an existing role is left as setup made it.
+            match authorization_client
+                .get_role_definition(role_definition_scope, role_definition_id.clone())
+                .await
+            {
+                Ok(_) => continue,
+                Err(error)
+                    if matches!(
+                        error.error,
+                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                    ) => {}
+                Err(error) => {
+                    return Err(error.context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to read Azure custom role definition '{role_name}'"
+                        ),
+                        resource_id: Some(permission_set_id.clone()),
+                    }));
+                }
+            }
 
             Self::create_or_update_custom_role_definition(
                 authorization_client,
@@ -880,36 +902,37 @@ impl AzurePermissionsHelper {
         };
 
         let type_prefix = format!("{}/", resource_type);
-
-        let mut combined_refs = Vec::new();
-        if let Some(refs) = management_profile.0.get(resource_id) {
-            combined_refs.extend(
-                refs.iter()
-                    .filter(|r| !is_worker_command_transport_permission(resource_type, r.id()))
-                    .cloned(),
-            );
-        }
-        if let Some(wildcard_refs) = management_profile.0.get("*") {
-            combined_refs.extend(
-                wildcard_refs
-                    .iter()
-                    .filter(|r| r.id().starts_with(&type_prefix))
-                    .filter(|r| !is_worker_command_transport_permission(resource_type, r.id()))
-                    .cloned(),
-            );
-        }
-
-        if combined_refs.is_empty() {
-            return Ok(());
-        }
-
-        // Skip /provision sets — handled by RSM at RG scope
-        let non_provision_refs: Vec<_> = combined_refs
+        // `/provision` sets are bound at the resource group by setup.
+        let keep = |reference: &&alien_core::permissions::PermissionSetReference| {
+            !is_worker_command_transport_permission(resource_type, reference.id())
+                && !reference.id().ends_with("/provision")
+        };
+        // Grants named for this resource. Setup cannot assign them before the resource exists,
+        // so the runtime does, onto the management identity itself.
+        let resource_refs: Vec<_> = management_profile
+            .0
+            .get(resource_id)
             .into_iter()
-            .filter(|r| !r.id().ends_with("/provision"))
+            .flatten()
+            .filter(keep)
+            .cloned()
+            .collect();
+        // Stack-wide grants. Setup assigns these at the resource group, which covers this
+        // resource. Earlier versions also assigned them here, onto the management identity: those
+        // assignments are removed, because a custom role the runtime created for them is one the
+        // identity could change, and a setup that keeps management from assigning roles to itself
+        // would refuse them.
+        let wildcard_refs: Vec<_> = management_profile
+            .0
+            .get("*")
+            .into_iter()
+            .flatten()
+            .filter(|reference| reference.id().starts_with(&type_prefix))
+            .filter(keep)
+            .cloned()
             .collect();
 
-        if non_provision_refs.is_empty() {
+        if resource_refs.is_empty() && wildcard_refs.is_empty() {
             return Ok(());
         }
 
@@ -931,10 +954,111 @@ impl AzurePermissionsHelper {
         let role_definition_scope =
             Self::role_definition_scope_for_assignment_scope(resource_scope);
 
+        // The earlier plan: resource refs, then stack-wide refs, numbered together.
+        let legacy_refs: Vec<_> = resource_refs
+            .iter()
+            .chain(&wildcard_refs)
+            .cloned()
+            .collect();
+        let (_, legacy) = Self::plan_management_self_assignments(
+            ctx,
+            resource_id,
+            resource_scope,
+            permission_context,
+            &legacy_refs,
+            &management_principal_id,
+            &role_definition_scope,
+            "mgmt-res-role-assign",
+        )?;
+        let (custom_roles, assignments) = Self::plan_management_self_assignments(
+            ctx,
+            resource_id,
+            resource_scope,
+            permission_context,
+            &resource_refs,
+            &management_principal_id,
+            &role_definition_scope,
+            "mgmt-res-role-assign-v2",
+        )?;
+
+        if !apply {
+            Self::record_planned_role_assignment_ids(&assignments, role_assignment_ids);
+            return Ok(());
+        }
+
+        // Remove the earlier self-assignments this plan no longer makes. One that grants the
+        // same role at the same scope stays: the new plan finds it already there.
+        for stale in legacy.iter().filter(|stale| {
+            !assignments.iter().any(|kept| {
+                kept.scope == stale.scope && kept.role_definition_id == stale.role_definition_id
+            })
+        }) {
+            let full_id =
+                Self::role_assignment_resource_id(&stale.scope, &stale.role_assignment_id);
+            match authorization_client
+                .delete_role_assignment_by_id(full_id.clone())
+                .await
+            {
+                Ok(_) => info!(
+                    role_assignment_id = %full_id,
+                    permission_set = %stale.permission_set_id,
+                    "Removed a management self-assignment setup now covers"
+                ),
+                Err(error)
+                    if matches!(
+                        error.error,
+                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                    ) => {}
+                Err(error) => {
+                    return Err(error.context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to remove management self-assignment for '{}'",
+                            stale.permission_set_id
+                        ),
+                        resource_id: Some(resource_id.to_string()),
+                    }));
+                }
+            }
+        }
+
+        if assignments.is_empty() {
+            return Ok(());
+        }
+        Self::ensure_management_custom_role_definitions(
+            ctx,
+            &authorization_client,
+            custom_roles,
+            &role_definition_scope,
+            azure_config,
+        )
+        .await?;
+        Self::apply_planned_role_assignments(
+            &authorization_client,
+            resource_id,
+            assignments,
+            role_assignment_ids,
+        )
+        .await
+    }
+
+    /// The role assignments that give the management identity `refs` on this resource, and the
+    /// custom roles they need. `id_namespace` names the assignment ids.
+    #[allow(clippy::too_many_arguments)]
+    fn plan_management_self_assignments(
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+        resource_scope: &Scope,
+        permission_context: &PermissionContext,
+        refs: &[alien_core::permissions::PermissionSetReference],
+        management_principal_id: &str,
+        role_definition_scope: &Scope,
+        id_namespace: &str,
+    ) -> Result<(Vec<(String, AzureCustomRole)>, Vec<PlannedRoleAssignment>)> {
+        let azure_config = ctx.get_azure_config()?;
         let mut custom_roles = Vec::new();
         let mut bindings = Vec::new();
         let generator = AzureRuntimePermissionsGenerator::new();
-        for permission_set_ref in &non_provision_refs {
+        for permission_set_ref in refs {
             let permission_set = permission_set_ref
                 .resolve(|name| alien_permissions::get_permission_set(name).cloned())
                 .ok_or_else(|| {
@@ -957,13 +1081,6 @@ impl AzurePermissionsHelper {
                     resource_id: Some(resource_id.to_string()),
                 })?;
 
-            info!(
-                profile = "management",
-                permission_set = %permission_set.id,
-                bindings_count = grant_plan.bindings.len(),
-                "Generated management role assignments"
-            );
-
             custom_roles.extend(
                 grant_plan
                     .custom_roles
@@ -971,17 +1088,6 @@ impl AzurePermissionsHelper {
                     .map(|custom_role| (permission_set.id.clone(), custom_role)),
             );
             bindings.extend(grant_plan.bindings);
-        }
-
-        if apply {
-            Self::ensure_management_custom_role_definitions(
-                ctx,
-                &authorization_client,
-                custom_roles,
-                &role_definition_scope,
-                azure_config,
-            )
-            .await?;
         }
 
         let assignments = dedupe_azure_role_bindings(bindings)
@@ -1015,7 +1121,7 @@ impl AzurePermissionsHelper {
                 let role_assignment_id = Uuid::new_v5(
                     &Uuid::NAMESPACE_OID,
                     format!(
-                        "deployment:azure:mgmt-res-role-assign:{}:{}:{}",
+                        "deployment:azure:{id_namespace}:{}:{}:{}",
                         ctx.resource_prefix, resource_id, binding_index
                     )
                     .as_bytes(),
@@ -1025,7 +1131,7 @@ impl AzurePermissionsHelper {
                 PlannedRoleAssignment {
                     scope: assignment_scope,
                     role_assignment_id,
-                    principal_id: management_principal_id.clone(),
+                    principal_id: management_principal_id.to_string(),
                     role_definition_id,
                     failure_message: format!(
                         "Failed to create management role assignment for '{}'",
@@ -1035,19 +1141,7 @@ impl AzurePermissionsHelper {
                 }
             })
             .collect();
-
-        if apply {
-            Self::apply_planned_role_assignments(
-                &authorization_client,
-                resource_id,
-                assignments,
-                role_assignment_ids,
-            )
-            .await
-        } else {
-            Self::record_planned_role_assignment_ids(&assignments, role_assignment_ids);
-            Ok(())
-        }
+        Ok((custom_roles, assignments))
     }
 
     /// Get the management UAMI principal ID from the RSM controller
