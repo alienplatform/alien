@@ -389,6 +389,7 @@ async fn setup_scoped_grant_cleanup(
     legacy_capture: bool,
     removed_profile: bool,
     legacy_checkpoint: bool,
+    pruned: bool,
 ) {
     use alien_aws_clients::iam::{
         ListRolePoliciesResponse, ListRolePoliciesResult, MockIamApi, PolicyNames,
@@ -525,6 +526,44 @@ async fn setup_scoped_grant_cleanup(
         pending_prepared_stack: Some(desired),
         ..Default::default()
     });
+    if pruned {
+        // The prepared target excludes a declined gate while the release still
+        // declares it. Exercise the real updater's deletion and pruning path.
+        let mut declared = state
+            .runtime_metadata
+            .as_ref()
+            .unwrap()
+            .prepared_stack
+            .clone()
+            .unwrap();
+        declared.resources.get_mut("jobs").unwrap().enabled_when = Some("queueEnabled".into());
+        state.target_release.as_mut().unwrap().stack = declared;
+        state.status = DeploymentStatus::Updating;
+        for _ in 0..32 {
+            state = alien_deployment::step(state, config(), fake_config(), Some(services.clone()))
+                .await
+                .unwrap()
+                .state;
+            state = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+            if state.status == DeploymentStatus::UpdateFailed {
+                break;
+            }
+        }
+        assert_eq!(state.status, DeploymentStatus::UpdateFailed);
+        assert_eq!(
+            state.error.as_ref().unwrap().code,
+            "DEPLOYMENT_SETUP_REQUIRED"
+        );
+        assert!(!state
+            .stack_state
+            .as_ref()
+            .unwrap()
+            .resources
+            .contains_key("jobs"));
+        assert!(!*exists.lock().unwrap());
+        state.status = DeploymentStatus::InitialSetup;
+        state.error = None;
+    }
     if legacy_checkpoint {
         // Produced by the previous executor's failed update followed by its
         // real direct-setup preparation, before any new-format metadata existed.
@@ -562,17 +601,17 @@ async fn setup_scoped_grant_cleanup(
 
 #[tokio::test]
 async fn setup_drains_live_resources_then_removes_current_and_legacy_owned_grants() {
-    setup_scoped_grant_cleanup(false, false, false).await;
+    setup_scoped_grant_cleanup(false, false, false, false).await;
 }
 
 #[tokio::test]
 async fn setup_reconciles_legacy_uncaptured_inline_grants() {
-    setup_scoped_grant_cleanup(true, false, false).await;
+    setup_scoped_grant_cleanup(true, false, false, false).await;
 }
 
 #[tokio::test]
 async fn setup_removes_profile_grants_from_a_retained_identity() {
-    setup_scoped_grant_cleanup(false, true, false).await;
+    setup_scoped_grant_cleanup(false, true, false, false).await;
 }
 
 async fn live_until(
@@ -976,7 +1015,7 @@ async fn live_workload_permission_probe() {
 
 #[tokio::test]
 async fn setup_resumes_legacy_prepared_desired_and_stale_pending_checkpoint() {
-    setup_scoped_grant_cleanup(false, false, true).await;
+    setup_scoped_grant_cleanup(false, false, true, false).await;
 }
 
 #[tokio::test]
@@ -1018,4 +1057,9 @@ async fn unchanged_running_protocol_one_remains_usable_without_upgrade() {
     .unwrap();
     assert_eq!(result.state.status, alien_core::DeploymentStatus::Running);
     assert_eq!(result.state.protocol_version, 1);
+}
+
+#[tokio::test]
+async fn setup_removes_historical_grants_after_deleted_resource_record_was_pruned() {
+    setup_scoped_grant_cleanup(false, false, false, true).await;
 }

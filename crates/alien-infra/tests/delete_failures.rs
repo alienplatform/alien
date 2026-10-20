@@ -241,3 +241,75 @@ async fn failed_gcp_delete_operation_retries_after_saved_checkpoint() {
     }
     assert_eq!(state.resources["network"].status, ResourceStatus::Deleted);
 }
+
+#[tokio::test]
+async fn denied_gcp_management_policy_read_preserves_cleanup_checkpoint() {
+    use alien_core::{GcpClientConfig, GcpCredentials, RemoteStackManagement};
+    use alien_gcp_clients::resource_manager::MockResourceManagerApi;
+    let mut manager = MockResourceManagerApi::new();
+    manager
+        .expect_get_project_iam_policy()
+        .times(1)
+        .returning(|_, _| {
+            Err(AlienError::new(
+                alien_client_core::ErrorData::RemoteAccessDenied {
+                    resource_type: "project".into(),
+                    resource_name: "synthetic-project".into(),
+                },
+            ))
+        });
+    let manager = Arc::new(manager);
+    let mut services = MockPlatformServiceProvider::new();
+    services
+        .expect_get_gcp_resource_manager_client()
+        .returning(move |_| Ok(manager.clone()));
+    let cfg = ClientConfig::Gcp(Box::new(GcpClientConfig {
+        project_id: "synthetic-project".into(),
+        region: "us-central1".into(),
+        project_number: Some("123456789012".into()),
+        credentials: GcpCredentials::AccessToken {
+            token: "synthetic".into(),
+        },
+        service_overrides: None,
+    }));
+    let config = DeploymentConfig::builder()
+        .stack_settings(StackSettings::default())
+        .environment_variables(EnvironmentVariablesSnapshot {
+            variables: vec![],
+            hash: String::new(),
+            created_at: String::new(),
+        })
+        .external_bindings(ExternalBindings::default())
+        .allow_frozen_changes(false)
+        .build();
+    let mut resource = StackResourceState::new_pending(
+        "remote-stack-management".into(),
+        Resource::new(RemoteStackManagement::new("management".into()).build()),
+        Some(ResourceLifecycle::Frozen),
+        vec![],
+    );
+    resource.status = ResourceStatus::Deleting;
+    resource.set_internal_controller(Some(deserialize_controller(json!({"type":"GcpRemoteStackManagementController","_controllerStateVersion":1,"state":"deleteStart","serviceAccountEmail":"synthetic-management@synthetic-project.iam.gserviceaccount.com","roleBound":true,"impersonationGranted":true})).unwrap())).unwrap();
+    let mut state = StackState::new(Platform::Gcp);
+    state.resources.insert("management".into(), resource);
+    let executor = StackExecutor::for_deletion_with_service_provider(
+        cfg,
+        &config,
+        Arc::new(services),
+        Some(vec![ResourceLifecycle::Frozen]),
+    )
+    .unwrap();
+    state = executor.step(state).await.unwrap().next_state;
+    state = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+    let resource = &state.resources["management"];
+    assert_eq!(resource.status, ResourceStatus::DeleteFailed);
+    assert!(resource.error.is_some());
+    assert_eq!(
+        resource.last_failed_state.as_ref().unwrap()["roleBound"],
+        true
+    );
+    assert_eq!(
+        resource.last_failed_state.as_ref().unwrap()["serviceAccountEmail"],
+        "synthetic-management@synthetic-project.iam.gserviceaccount.com"
+    );
+}

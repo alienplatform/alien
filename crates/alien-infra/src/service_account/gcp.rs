@@ -474,6 +474,49 @@ impl GcpServiceAccountController {
             }
         }
 
+        // A removed predefined role is absent from the desired plan. Recover
+        // its exact role and condition from the installed config retained by
+        // the update checkpoint; generating this plan performs no IAM writes.
+        let mut owned_predefined_bindings = new_bindings.clone();
+        if ctx
+            .state
+            .resources
+            .get(&config.id)
+            .is_some_and(|resource| resource.previous_config.is_some())
+        {
+            let previous = ctx.previous_resource_config::<ServiceAccount>()?;
+            let mut collect =
+                |set: &PermissionSet, target, context: &PermissionContext| -> Result<()> {
+                    if set.platforms.gcp.is_none() {
+                        return Ok(());
+                    }
+                    let plan = generator
+                        .generate_grant_plan(set, target, context)
+                        .context(ErrorData::ResourceConfigInvalid {
+                            message: "Failed to resolve installed account grants for removal"
+                                .to_string(),
+                            resource_id: Some(config.id.clone()),
+                        })?;
+                    owned_predefined_bindings.extend(
+                        plan.bindings_for_target(GcpBindingTargetScope::Project)
+                            .into_iter()
+                            .map(ResourcePermissionsHelper::gcp_policy_binding_from_iam_binding),
+                    );
+                    Ok(())
+                };
+            for set in &previous.stack_permission_sets {
+                collect(set, BindingTarget::Stack, &permission_context)?;
+            }
+            for (id, sets) in &previous.resource_permission_sets {
+                let context = permission_context
+                    .clone()
+                    .with_resource_name(format!("{}-{id}", ctx.resource_prefix));
+                for set in sets {
+                    collect(set, BindingTarget::Resource, &context)?;
+                }
+            }
+        }
+
         let project_id = &gcp_config.project_id;
         let rm_client = ctx
             .service_provider
@@ -495,14 +538,18 @@ impl GcpServiceAccountController {
         let member = format!("serviceAccount:{service_account_email}");
         let owned_role_prefixes =
             vec![ResourcePermissionsHelper::gcp_stack_custom_role_name_prefix(&permission_context)];
-        let owned_exact_roles = ResourcePermissionsHelper::gcp_predefined_role_names(&new_bindings);
         let mut all_bindings = current_policy.bindings;
-        let changed = ResourcePermissionsHelper::reconcile_gcp_project_member_bindings(
+        let mut changed = ResourcePermissionsHelper::remove_recorded_gcp_predefined_bindings(
+            &mut all_bindings,
+            &owned_predefined_bindings,
+            &member,
+        );
+        changed |= ResourcePermissionsHelper::reconcile_gcp_project_member_bindings(
             &mut all_bindings,
             new_bindings,
             &member,
             &owned_role_prefixes,
-            &owned_exact_roles,
+            &[],
         );
 
         if !changed {

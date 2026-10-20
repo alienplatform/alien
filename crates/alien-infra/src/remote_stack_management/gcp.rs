@@ -277,7 +277,6 @@ impl GcpRemoteStackManagementController {
             })?;
 
         let member = format!("serviceAccount:{service_account_email}");
-        let owned_exact_roles = ResourcePermissionsHelper::gcp_predefined_role_names(&new_bindings);
         // Vault controllers own this member's bindings conditioned on their
         // namespace, and they can share predefined roles with the stack-wide
         // grants (e.g. `roles/secretmanager.viewer` from `vault/heartbeat`).
@@ -301,12 +300,17 @@ impl GcpRemoteStackManagementController {
             Some(&[]),
             Some(&[]),
         );
+        changed |= ResourcePermissionsHelper::remove_recorded_gcp_predefined_bindings(
+            &mut all_bindings,
+            &new_bindings,
+            &member,
+        );
         changed |= ResourcePermissionsHelper::reconcile_gcp_project_member_bindings(
             &mut all_bindings,
             new_bindings,
             &member,
             &owned_role_prefixes,
-            &owned_exact_roles,
+            &[],
         );
         all_bindings.extend(vault_bindings);
 
@@ -609,12 +613,18 @@ impl GcpRemoteStackManagementController {
                         "All role bindings removed for management service account at project level"
                     );
                 }
-                Err(_) => {
-                    info!(
-                        config_id = %config.id,
-                        service_account_email = %service_account_email,
-                        "Could not retrieve project IAM policy for unbinding, continuing with deletion"
-                    );
+                Err(error)
+                    if matches!(
+                        error.error,
+                        Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+                    ) => {}
+                Err(error) => {
+                    return Err(error.context(ErrorData::CloudPlatformError {
+                        message:
+                            "Failed to read project IAM policy before unbinding management roles"
+                                .to_string(),
+                        resource_id: Some(config.id.clone()),
+                    }));
                 }
             }
 

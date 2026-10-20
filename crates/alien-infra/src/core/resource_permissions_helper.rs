@@ -756,6 +756,31 @@ impl ResourcePermissionsHelper {
         changed
     }
 
+    /// Remove only the recorded predefined-role grant for this principal.
+    /// Another condition on the same role, and other members, are independent
+    /// grants and must survive permission narrowing.
+    pub(crate) fn remove_recorded_gcp_predefined_bindings(
+        bindings: &mut Vec<Binding>,
+        recorded: &[Binding],
+        member: &str,
+    ) -> bool {
+        let mut changed = false;
+        for binding in bindings.iter_mut() {
+            if binding.role.starts_with("roles/")
+                && recorded.iter().any(|owned| {
+                    owned.role == binding.role
+                        && Self::gcp_conditions_match(&owned.condition, &binding.condition)
+                })
+            {
+                let before = binding.members.len();
+                binding.members.retain(|candidate| candidate != member);
+                changed |= binding.members.len() != before;
+            }
+        }
+        bindings.retain(|binding| !binding.members.is_empty());
+        changed
+    }
+
     /// Remove a service-account member from project IAM bindings. When
     /// `role_name_prefixes` is provided, only bindings for caller-owned custom
     /// roles are touched, except exact `deleted:` aliases for the same service
@@ -1596,6 +1621,136 @@ impl ResourcePermissionsHelper {
         if ctx.platform == alien_core::Platform::Aws {
             Self::remove_stale_aws_policies(ctx, resource_id, resource_type, Some(installed))
                 .await?;
+        } else if ctx.platform == alien_core::Platform::Gcp
+            && resource_type == "remote-stack-management"
+        {
+            Self::remove_stale_gcp_management_bindings(ctx, installed).await?;
+        }
+        Ok(())
+    }
+
+    fn gcp_management_project_bindings(
+        ctx: &ResourceControllerContext<'_>,
+        stack: &alien_core::Stack,
+        service_account_id: &str,
+    ) -> Result<Vec<Binding>> {
+        let Some(profile) = stack.management().profile() else {
+            return Ok(Vec::new());
+        };
+        let global =
+            alien_permissions::management_identity_global_refs(stack.resources.values(), profile);
+        let generator = GcpRuntimePermissionsGenerator::new();
+        let context = Self::gcp_permission_context(ctx)?
+            .with_service_account_name(service_account_id.to_string());
+        let mut bindings = Vec::new();
+        for (scope, references) in &profile.0 {
+            let (target, context) = if scope == "*" {
+                (BindingTarget::Stack, context.clone())
+            } else {
+                // Other concrete grants are bound on their owning resource;
+                // cluster grants are the project-level exception.
+                let Some(cluster) = stack
+                    .resources
+                    .get(scope)
+                    .and_then(|entry| entry.config.downcast_ref::<KubernetesCluster>())
+                else {
+                    continue;
+                };
+                (
+                    BindingTarget::Resource,
+                    Self::gcp_kubernetes_cluster_permission_context(
+                        ctx,
+                        cluster,
+                        Some(service_account_id),
+                    )?,
+                )
+            };
+            for reference in references {
+                if scope == "*" && !global.contains(&reference) {
+                    continue;
+                }
+                let set = reference
+                    .resolve(|name| alien_permissions::get_permission_set(name).cloned())
+                    .ok_or_else(|| {
+                        AlienError::new(ErrorData::ResourceConfigInvalid {
+                            message: format!(
+                                "Cannot resolve recorded management permission '{}'",
+                                reference.id()
+                            ),
+                            resource_id: Some(scope.clone()),
+                        })
+                    })?;
+                if set.platforms.gcp.is_none() {
+                    continue;
+                }
+                let plan = generator
+                    .generate_grant_plan(&set, target, &context)
+                    .context(ErrorData::ResourceConfigInvalid {
+                        message: "Failed to resolve recorded management project grants".to_string(),
+                        resource_id: Some(scope.clone()),
+                    })?;
+                bindings.extend(
+                    plan.bindings_for_target(GcpBindingTargetScope::Project)
+                        .into_iter()
+                        .map(Self::gcp_policy_binding_from_iam_binding),
+                );
+            }
+        }
+        Ok(bindings)
+    }
+
+    async fn remove_stale_gcp_management_bindings(
+        ctx: &ResourceControllerContext<'_>,
+        installed: &alien_core::Stack,
+    ) -> Result<()> {
+        let Some(email) = Self::get_gcp_management_service_account_email(ctx)? else {
+            return Ok(());
+        };
+        let service_account_id = email.split('@').next().unwrap_or(&email);
+        let desired =
+            Self::gcp_management_project_bindings(ctx, ctx.desired_stack, service_account_id)?;
+        let mut removed =
+            Self::gcp_management_project_bindings(ctx, installed, service_account_id)?;
+        removed.retain(|old| {
+            old.role.starts_with("roles/")
+                && !desired.iter().any(|new| {
+                    old.role == new.role
+                        && Self::gcp_conditions_match(&old.condition, &new.condition)
+                })
+        });
+        if removed.is_empty() {
+            return Ok(());
+        }
+        let config = ctx.get_gcp_config()?;
+        let client = ctx
+            .service_provider
+            .get_gcp_resource_manager_client(config)?;
+        let mut policy = client
+            .get_project_iam_policy(
+                config.project_id.clone(),
+                Some(alien_gcp_clients::resource_manager::GetPolicyOptions {
+                    requested_policy_version: Some(3),
+                }),
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message:
+                    "Failed to read project policy before removing installed management grants"
+                        .to_string(),
+                resource_id: None,
+            })?;
+        if Self::remove_recorded_gcp_predefined_bindings(
+            &mut policy.bindings,
+            &removed,
+            &format!("serviceAccount:{email}"),
+        ) {
+            client
+                .set_project_iam_policy(config.project_id.clone(), policy, None)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to remove installed management grants".to_string(),
+                    resource_id: None,
+                })?;
         }
         Ok(())
     }

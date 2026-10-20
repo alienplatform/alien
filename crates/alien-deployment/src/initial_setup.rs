@@ -395,9 +395,27 @@ pub async fn handle_initial_setup(
                 })
         {
             let registry = std::sync::Arc::new(alien_infra::ResourceRegistry::with_built_ins());
-            for (id, resource) in &step_result.next_state.resources {
+            // Declined gated resources are pruned from runtime state after
+            // deletion. Their installed definitions still identify policies
+            // that setup owns on retained identities.
+            let installed = runtime_metadata
+                .prepared_stack
+                .as_ref()
+                .unwrap_or(&target_stack);
+            let mut cleanup_resources: std::collections::BTreeMap<_, _> = step_result
+                .next_state
+                .resources
+                .iter()
+                .map(|(id, resource)| (id.clone(), resource.config.clone()))
+                .collect();
+            for (id, entry) in &installed.resources {
+                cleanup_resources
+                    .entry(id.clone())
+                    .or_insert_with(|| entry.config.clone());
+            }
+            for (id, resource) in cleanup_resources {
                 let context = alien_infra::ResourceControllerContext {
-                    desired_config: &resource.config,
+                    desired_config: &resource,
                     platform: current.platform,
                     client_config: client_config.clone(),
                     state: &step_result.next_state,
@@ -412,12 +430,9 @@ pub async fn handle_initial_setup(
                 if let Err(error) =
                     alien_infra::ResourcePermissionsHelper::reconcile_removed_setup_permissions(
                         &context,
-                        id,
-                        &resource.resource_type,
-                        runtime_metadata
-                            .prepared_stack
-                            .as_ref()
-                            .unwrap_or(&target_stack),
+                        &id,
+                        resource.resource_type().as_ref(),
+                        installed,
                     )
                     .await
                     .context(ErrorData::StackExecutionFailed {
