@@ -58,7 +58,7 @@ fn deployment(id: &str, name: &str, status: &str, group: &str) -> Value {
         "deploymentGroup": {"id": GROUP_ID, "name": group, "externalId": null},
         "purpose": "application",
         "releaseChannel": "production",
-        "retryRequested": false,
+        "retryRequested": false,"updateBlocked":false,
         "createdAt": "2026-01-01T00:00:00Z",
         "updatedAt": "2026-01-01T00:00:00Z",
         "managerId": "mgr_0000000000000000000000000000",
