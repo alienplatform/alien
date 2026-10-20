@@ -1067,6 +1067,18 @@ impl AwsSandboxController {
             let vault = super::egress::deployment_vault(ctx).await?;
             let vault_name = format!("{}-{}", ctx.resource_prefix, alien_core::SECRETS_VAULT_ID);
             super::egress::delete_shared_secrets(vault.as_ref(), &vault_name).await?;
+            // A direct setup has no setup stack to remove the replica secret this controller
+            // created; a setup stack deletes its own.
+            if self.egress_replica_secret_ready
+                && ctx.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
+            {
+                let client = ctx
+                    .service_provider
+                    .get_aws_secrets_manager_client(ctx.get_aws_config()?)
+                    .await?;
+                super::egress::delete_aws_replica_secret(client.as_ref(), ctx.resource_prefix)
+                    .await?;
+            }
             info!(sandbox_id = %config.id, "Deleted the deployment's sandbox egress key and gateway configuration");
         }
         self.egress_public_key = None;
@@ -4399,12 +4411,33 @@ mod tests {
         }
 
         /// The running gateway, the replica secret's Secrets Manager answers, and who set up the
-        /// deployment, for a refresh pass.
+        /// deployment, for a refresh pass. A `fresh` gateway is only in the desired stack: it
+        /// has not been created yet.
         #[derive(Default)]
         struct GatewayFixture {
             image: Option<&'static str>,
             secrets_manager: Option<alien_aws_clients::secrets_manager::MockSecretsManagerApi>,
             direct_setup: bool,
+            fresh: bool,
+        }
+
+        fn gateway_container(image: &str) -> alien_core::Container {
+            alien_core::Container::new(alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.into())
+                .code(alien_core::ContainerCode::Image {
+                    image: image.into(),
+                })
+                .cpu(alien_core::ResourceSpec {
+                    min: "0.25".into(),
+                    desired: "0.25".into(),
+                })
+                .memory(alien_core::ResourceSpec {
+                    min: "512Mi".into(),
+                    desired: "512Mi".into(),
+                })
+                .replicas(2)
+                .permissions(alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.into())
+                .port(3128)
+                .build()
         }
 
         async fn refresh_with(
@@ -4459,6 +4492,10 @@ mod tests {
                 builder = builder
                     .with_stack_resource(internet_sandbox(other), alien_core::ResourceLifecycle::Live);
             }
+            if let (Some(image), true) = (gateway.image, gateway.fresh) {
+                builder = builder
+                    .with_stack_resource(gateway_container(image), alien_core::ResourceLifecycle::Live);
+            }
             let mut executor = builder
                 .with_dependency(sandbox_network(), sandbox_network_controller())
                 .with_dependency(
@@ -4472,25 +4509,8 @@ mod tests {
                 .build()
                 .await
                 .unwrap();
-            if let Some(image) = gateway.image {
-                let container = alien_core::Container::new(
-                    alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.into(),
-                )
-                .code(alien_core::ContainerCode::Image {
-                    image: image.into(),
-                })
-                .cpu(alien_core::ResourceSpec {
-                    min: "0.25".into(),
-                    desired: "0.25".into(),
-                })
-                .memory(alien_core::ResourceSpec {
-                    min: "512Mi".into(),
-                    desired: "512Mi".into(),
-                })
-                .replicas(2)
-                .permissions(alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.into())
-                .port(3128)
-                .build();
+            if let (Some(image), false) = (gateway.image, gateway.fresh) {
+                let container = gateway_container(image);
                 executor.insert_saved_resource(
                     alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID,
                     alien_core::StackResourceState::builder()
@@ -4584,6 +4604,7 @@ mod tests {
                     image: Some(SOURCE_READING_GATEWAY),
                     secrets_manager: Some(describe_answers(secret_exists, 1)),
                     direct_setup: false,
+                    fresh: false,
                 },
             )
             .await;
@@ -4605,6 +4626,7 @@ mod tests {
                     image: Some(SOURCE_READING_GATEWAY),
                     secrets_manager: Some(describe_answers(secret_exists, 0)),
                     direct_setup: false,
+                    fresh: false,
                 },
             )
             .await;
@@ -4636,6 +4658,7 @@ mod tests {
                         image: Some(image),
                         secrets_manager: Some(describe_answers(answer, times)),
                         direct_setup: false,
+                        fresh: false,
                     },
                 )
                 .await;
@@ -4675,11 +4698,40 @@ mod tests {
                     image: Some(SOURCE_READING_GATEWAY),
                     secrets_manager: Some(secrets_manager),
                     direct_setup: true,
+                    fresh: false,
                 },
             )
             .await;
             assert!(controller.egress_replica_secret_ready);
             assert!(stored_gateway_config(directory.path()).await.get("replicaSecret").is_none());
+        }
+
+        /// A fresh install: the gateway is not created yet, so no replica holds an embedded
+        /// secret. The owner publishes the source-only configuration right away, without reading
+        /// the stored entry, which setup forbids the managing identity to read.
+        #[tokio::test]
+        async fn a_fresh_install_publishes_the_source_before_the_gateway_starts() {
+            let directory = tempfile::tempdir().unwrap();
+            let controller = refresh_with(
+                "agents",
+                &[],
+                running_internet_controller(IMAGE_ARN),
+                directory.path(),
+                GatewayFixture {
+                    image: Some(SOURCE_READING_GATEWAY),
+                    secrets_manager: Some(describe_answers(secret_exists, 1)),
+                    direct_setup: false,
+                    fresh: true,
+                },
+            )
+            .await;
+            assert!(controller.egress_replica_secret_ready);
+            let stored = stored_gateway_config(directory.path()).await;
+            assert!(stored.get("replicaSecret").is_none(), "{stored}");
+            assert_eq!(
+                stored["replicaSecretSource"],
+                serde_json::json!({"awsSecretsManager": {"secretId": "test-sandbox-egress-replica-secret"}})
+            );
         }
 
         /// The owner skips republishing an unchanged configuration, so it must forget what it

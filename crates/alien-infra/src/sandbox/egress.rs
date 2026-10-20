@@ -10,7 +10,9 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use ed25519_compact::{KeyPair, SecretKey};
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "aws")]
-use alien_aws_clients::secrets_manager::{CreateSecretRequest, DescribeSecretRequest};
+use alien_aws_clients::secrets_manager::{
+    CreateSecretRequest, DeleteSecretRequest, DescribeSecretRequest, SecretsManagerApi,
+};
 #[cfg(feature = "aws")]
 use alien_client_core::ErrorData as CloudError;
 #[cfg(feature = "aws")]
@@ -484,21 +486,37 @@ pub(crate) fn replica_secret_name(resource_prefix: &str) -> String {
     )
 }
 
-/// Whether every gateway replica runs an image that reads its replica secret from a source:
-/// the gateway container is running, with no roll in progress, on such an image.
+/// Whether every gateway replica runs, or will start on, an image that reads its replica secret
+/// from a source. A running gateway is judged by the image it runs, with no roll in progress. A
+/// gateway that has never run has no replica holding an embedded secret, so the image it is
+/// starting on decides; before it is in the state at all, the desired stack's image does. A
+/// fresh install therefore never needs the stored configuration, which the managing identity
+/// may not read.
 #[cfg(feature = "aws")]
 fn gateway_reads_replica_secret_source(ctx: &crate::core::ResourceControllerContext<'_>) -> bool {
-    ctx.state
-        .resources
-        .get(alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID)
-        .filter(|state| state.status == alien_core::ResourceStatus::Running)
-        .and_then(|state| state.config.downcast_ref::<alien_core::Container>())
-        .is_some_and(|gateway| match &gateway.code {
-            alien_core::ContainerCode::Image { image } => {
-                alien_core::sandbox_egress::gateway_image_reads_replica_secret_source(image)
-            }
-            _ => false,
-        })
+    use alien_core::ResourceStatus::{Pending, ProvisionFailed, Provisioning, Running};
+    let reads_source = |config: &alien_core::Resource| {
+        config
+            .downcast_ref::<alien_core::Container>()
+            .is_some_and(|gateway| match &gateway.code {
+                alien_core::ContainerCode::Image { image } => {
+                    alien_core::sandbox_egress::gateway_image_reads_replica_secret_source(image)
+                }
+                _ => false,
+            })
+    };
+    let id = alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID;
+    match ctx.state.resources.get(id) {
+        Some(state) if matches!(state.status, Running | Pending | Provisioning | ProvisionFailed) => {
+            reads_source(&state.config)
+        }
+        Some(_) => false,
+        None => ctx
+            .desired_stack
+            .resources
+            .get(id)
+            .is_some_and(|entry| reads_source(&entry.config)),
+    }
 }
 
 /// Whether the replica secret exists. Setup creates it; the managing identity may only see
@@ -551,6 +569,35 @@ async fn ensure_aws_replica_secret(ctx: &crate::core::ResourceControllerContext<
         }
         Err(error) => Err(error).context(ErrorData::CloudPlatformError {
             message: format!("Failed to create the sandbox gateway replica secret '{name}'"),
+            resource_id: Some(alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.into()),
+        }),
+    }
+}
+
+/// Deletes the replica secret a direct setup created. Setup stacks own theirs, so this runs only
+/// for a direct setup. Deleted without a recovery window, so the deployment can be recreated
+/// under the same name; an already deleted secret counts as deleted.
+#[cfg(feature = "aws")]
+pub(crate) async fn delete_aws_replica_secret(
+    client: &dyn SecretsManagerApi,
+    resource_prefix: &str,
+) -> Result<()> {
+    let name = replica_secret_name(resource_prefix);
+    match client
+        .delete_secret(
+            DeleteSecretRequest::builder()
+                .secret_id(name.clone())
+                .force_delete_without_recovery(true)
+                .build(),
+        )
+        .await
+    {
+        Ok(_) => Ok(()),
+        Err(error) if matches!(error.error, Some(CloudError::RemoteResourceNotFound { .. })) => {
+            Ok(())
+        }
+        Err(error) => Err(error).context(ErrorData::CloudPlatformError {
+            message: format!("Failed to delete the sandbox gateway replica secret '{name}'"),
             resource_id: Some(alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.into()),
         }),
     }
@@ -865,5 +912,31 @@ mod aws_tests {
         assert!(read.hits_async().await > reads);
         assert_eq!(write.hits_async().await, 2);
         assert_ne!(published.as_deref(), Some(digest.as_str()));
+    }
+    #[cfg(feature = "aws")]
+    #[tokio::test]
+    async fn a_direct_setup_replica_secret_is_deleted_without_recovery() {
+        let mut client = alien_aws_clients::secrets_manager::MockSecretsManagerApi::new();
+        client
+            .expect_delete_secret()
+            .withf(|request| {
+                request.secret_id == "test-sandbox-egress-replica-secret"
+                    && request.force_delete_without_recovery == Some(true)
+            })
+            .times(1)
+            .returning(|_| {
+                Ok(serde_json::from_value(serde_json::json!({"Name": "test-sandbox-egress-replica-secret"}))
+                    .unwrap())
+            });
+        delete_aws_replica_secret(&client, "test").await.unwrap();
+
+        let mut gone = alien_aws_clients::secrets_manager::MockSecretsManagerApi::new();
+        gone.expect_delete_secret().times(1).returning(|_| {
+            Err(AlienError::new(CloudError::RemoteResourceNotFound {
+                resource_type: "secret".into(),
+                resource_name: "test-sandbox-egress-replica-secret".into(),
+            }))
+        });
+        delete_aws_replica_secret(&gone, "test").await.unwrap();
     }
 }

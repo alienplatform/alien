@@ -83,20 +83,25 @@ impl LiveGateway {
     pub async fn refresh(&self, bindings: &Arc<Bindings>) -> Result<()> {
         let result = tokio::time::timeout(Duration::from_secs(10), async {
             let encoded = read_vault_config(bindings).await?;
-            let previous_secrets = self
-                .current
-                .read()
-                .map_err(|_| AlienError::new(unavailable("config lock poisoned")))?
-                .0
-                .replication
-                .secrets()
-                .to_vec();
+            let (previous_secrets, previous_sourced) = {
+                let current = self
+                    .current
+                    .read()
+                    .map_err(|_| AlienError::new(unavailable("config lock poisoned")))?;
+                (
+                    current.0.replication.secrets().to_vec(),
+                    current.0.config.replica_secret_source.is_some(),
+                )
+            };
             let mut gateway = build_after(
                 &encoded,
                 bindings.clone(),
                 self.accepted.clone(),
                 self.denied.clone(),
-                Some(&previous_secrets),
+                Some(Previous {
+                    secrets: &previous_secrets,
+                    sourced: previous_sourced,
+                }),
             )
             .await?;
             gateway.connections = self.connections.clone();
@@ -168,14 +173,21 @@ pub async fn build(
     build_after(encoded, bindings, accepted, denied, None).await
 }
 
-/// Builds a snapshot. A refresh passes the replica secrets the running snapshot accepts as
-/// `previous`; boot passes `None`.
+/// The running snapshot's replica secrets, and whether its configuration named a source.
+#[derive(Clone, Copy)]
+pub struct Previous<'a> {
+    pub secrets: &'a [[u8; 32]],
+    pub sourced: bool,
+}
+
+/// Builds a snapshot. A refresh passes what the running snapshot accepts as `previous`; boot
+/// passes `None`.
 pub async fn build_after(
     encoded: &str,
     bindings: Arc<Bindings>,
     accepted: Arc<AtomicU64>,
     denied: Arc<AtomicU64>,
-    previous: Option<&[[u8; 32]]>,
+    previous: Option<Previous<'_>>,
 ) -> Result<Gateway> {
     let config: Config = serde_json::from_str(encoded)
         .into_alien_error()
@@ -264,18 +276,20 @@ fn sourced_replica_secret(secret: &str) -> Result<[u8; 32]> {
 
 /// The replica secrets a snapshot accepts. A refresh keeps every secret the running snapshot
 /// accepts, so a configuration that moves from an embedded secret to a source keeps verifying
-/// (and signing for) peers that have not refreshed yet. The embedded secret never changes in
-/// place, a replica without a secret does not gain one, and at most two secrets are held:
-/// anything else needs a restart.
+/// (and signing for) peers that have not refreshed yet. That move is the only change a running
+/// replica takes: the embedded secret never changes in place, a source's value never changes
+/// once a running configuration named it, a replica without a secret does not gain one, and at
+/// most two secrets are held. Anything else needs a restart.
 fn replica_secrets(
-    previous: Option<&[[u8; 32]]>,
+    previous: Option<Previous<'_>>,
     embedded: Option<[u8; 32]>,
     sourced: Option<[u8; 32]>,
 ) -> Result<Vec<[u8; 32]>> {
-    let mut secrets = previous.unwrap_or_default().to_vec();
+    let mut secrets = previous.map(|p| p.secrets.to_vec()).unwrap_or_default();
     let refreshing = previous.is_some();
+    let moving_to_source = previous.is_some_and(|p| !p.sourced);
     let restart = || invalid("replica secret changes require a restart");
-    for (secret, may_join) in [(embedded, false), (sourced, true)] {
+    for (secret, may_join) in [(embedded, false), (sourced, moving_to_source)] {
         let Some(secret) = secret else {
             continue;
         };
@@ -348,6 +362,14 @@ mod replica_secret_tests {
     const NEW: [u8; 32] = [2; 32];
     const OTHER: [u8; 32] = [3; 32];
 
+    fn embedded(secrets: &[[u8; 32]]) -> Option<Previous<'_>> {
+        Some(Previous { secrets, sourced: false })
+    }
+
+    fn sourced(secrets: &[[u8; 32]]) -> Option<Previous<'_>> {
+        Some(Previous { secrets, sourced: true })
+    }
+
     #[test]
     fn boot_accepts_what_the_configuration_names() {
         assert_eq!(replica_secrets(None, Some(OLD), None).unwrap(), [OLD]);
@@ -360,21 +382,24 @@ mod replica_secret_tests {
     /// the embedded one, so peers that have not refreshed still verify it.
     #[test]
     fn a_refresh_moves_from_the_embedded_secret_to_a_source_keeping_both() {
-        let moved = replica_secrets(Some(&[OLD]), None, Some(NEW)).unwrap();
+        let moved = replica_secrets(embedded(&[OLD]), None, Some(NEW)).unwrap();
         assert_eq!(moved, [OLD, NEW]);
-        assert_eq!(replica_secrets(Some(&moved), None, Some(NEW)).unwrap(), [OLD, NEW]);
-        assert_eq!(replica_secrets(Some(&[OLD]), Some(OLD), Some(NEW)).unwrap(), [OLD, NEW]);
+        assert_eq!(replica_secrets(sourced(&moved), None, Some(NEW)).unwrap(), [OLD, NEW]);
+        assert_eq!(replica_secrets(embedded(&[OLD]), Some(OLD), Some(NEW)).unwrap(), [OLD, NEW]);
     }
 
     #[test]
     fn every_other_change_needs_a_restart() {
-        for (previous, embedded, sourced) in [
-            (&[OLD][..], Some(NEW), None),
-            (&[OLD, NEW][..], None, Some(OTHER)),
-            (&[][..], Some(OLD), None),
-            (&[][..], None, Some(NEW)),
+        for (previous, embedded_secret, sourced_secret) in [
+            (embedded(&[OLD]), Some(NEW), None),
+            (sourced(&[OLD, NEW]), None, Some(OTHER)),
+            (embedded(&[]), Some(OLD), None),
+            (embedded(&[]), None, Some(NEW)),
+            // A replica that booted on a source does not take a changed value of it, as one
+            // that moved to the source does not.
+            (sourced(&[NEW]), None, Some(OTHER)),
         ] {
-            let error = replica_secrets(Some(previous), embedded, sourced).unwrap_err();
+            let error = replica_secrets(previous, embedded_secret, sourced_secret).unwrap_err();
             assert!(error.message.contains("require a restart"), "{error:?}");
         }
     }
