@@ -2024,9 +2024,17 @@ async fn push_resource_images(
             resource_id: resource_name.to_string(),
             reason: format!("Invalid image reference '{image_uri}'"),
         })?;
-    oci_client
+    let pushed_index = oci_client
         .push_manifest_list(&index_ref, &push_options.auth, index)
-        .await
+        .await;
+    if let Err(error) = &pushed_index {
+        if is_legacy_repository_refusal(error) {
+            return Err(AlienError::new(ErrorData::ImagePushRepositoryRenamed {
+                image: image_uri.clone(),
+            }));
+        }
+    }
+    pushed_index
         .into_alien_error()
         .context(ErrorData::ImagePushFailed {
             image: image_uri.clone(),
@@ -3722,16 +3730,17 @@ fn is_rate_limited(error: &dockdash::Error) -> bool {
     false
 }
 
-/// Whether the registry refused the push with the manager's legacy-prefix `DENIED`. The refusal
-/// reaches the client as a parsed OCI envelope or, for an upload request, as the raw body.
-fn is_legacy_repository_refusal(error: &dockdash::Error) -> bool {
+/// Whether the registry refused the push with the manager's legacy-prefix `DENIED`, anywhere in
+/// `error`'s chain. The refusal reaches the client as a parsed OCI envelope or, for an upload
+/// request, as the raw body.
+fn is_legacy_repository_refusal(error: &(dyn StdError + 'static)) -> bool {
     let is_refusal = |envelope: &oci_client::errors::OciEnvelope| {
         envelope.errors.iter().any(|entry| {
             entry.code == oci_client::errors::OciErrorCode::Denied
                 && entry.message == LEGACY_REPOSITORY_PUSH_REFUSAL
         })
     };
-    let mut current = Some(error as &(dyn StdError + 'static));
+    let mut current = Some(error);
     while let Some(error) = current {
         if let Some(oci_error) = error.downcast_ref::<oci_client::errors::OciDistributionError>() {
             return match oci_error {

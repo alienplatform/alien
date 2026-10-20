@@ -3400,9 +3400,12 @@ mod tests {
 
     /// A manager mid-rollout: its repository resolution names `acme-artifacts/prj_a` until the
     /// registry is renamed after the first resolve, then `artifacts/prj_a`. Its registry refuses
-    /// pushes under the old name exactly as a renamed manager does and serves every other request
-    /// from a real registry. Returns the manager URL and how often the repository was resolved.
-    async fn start_renaming_manager() -> (String, Arc<AtomicUsize>) {
+    /// the writes `refuses` picks under the old name exactly as a renamed manager does, and serves
+    /// every other request from a real registry. Returns the manager URL and how often the
+    /// repository was resolved.
+    async fn start_renaming_manager(
+        refuses: fn(&http::request::Parts) -> bool,
+    ) -> (String, Arc<AtomicUsize>) {
         let registry = container_registry::ContainerRegistry::builder()
             .build_for_testing()
             .run_in_background();
@@ -3430,8 +3433,7 @@ mod tests {
                 let upstream = upstream.clone();
                 async move {
                     let (parts, body) = request.into_parts();
-                    let writes = !matches!(parts.method, http::Method::GET | http::Method::HEAD);
-                    if writes && parts.uri.path().starts_with("/v2/acme-artifacts/") {
+                    if parts.uri.path().starts_with("/v2/acme-artifacts/") && refuses(&parts) {
                         let refusal = serde_json::json!({"errors": [{
                             "code": "DENIED",
                             "message": alien_core::bindings::LEGACY_REPOSITORY_PUSH_REFUSAL,
@@ -3467,73 +3469,101 @@ mod tests {
         (url, resolves)
     }
 
+    fn is_write(parts: &http::request::Parts) -> bool {
+        !matches!(parts.method, http::Method::GET | http::Method::HEAD)
+    }
+
+    /// The rename lands between the per-architecture pushes and the image index that joins them.
+    fn is_image_index_push(parts: &http::request::Parts) -> bool {
+        parts.method == http::Method::PUT
+            && parts
+                .headers
+                .get(http::header::CONTENT_TYPE)
+                .is_some_and(|value| value == "application/vnd.oci.image.index.v1+json")
+    }
+
     /// A push refused because the registry was renamed after the repository was resolved is
-    /// pushed again under the name resolution gives now, and the stack names only that one.
+    /// pushed again under the name resolution gives now, and the stack names only that one:
+    /// whether the rename refuses the first upload of a single-architecture image or only the
+    /// image index of a multi-architecture one.
     #[tokio::test]
     async fn a_push_refused_by_a_registry_rename_is_pushed_again_under_the_current_name() {
-        let (manager_url, resolves) = start_renaming_manager().await;
-        let output = tempfile::tempdir().unwrap();
-        let output_dir = output.path().to_path_buf();
-        let artifact = output_dir.join("build/kubernetes/web-hash");
-        std::fs::create_dir_all(&artifact).unwrap();
-        let layer = dockdash::Layer::builder()
-            .unwrap()
-            .data("/app/web", b"web", Some(0o755))
-            .unwrap()
-            .build()
-            .await
-            .unwrap();
-        dockdash::Image::builder()
-            .platform("linux", &dockdash::Arch::Amd64)
-            .layer(layer)
-            .output_to(artifact.join("linux-x64.oci.tar"))
-            .build()
-            .await
-            .unwrap();
-        let stack = Stack::new("renamed".to_string())
-            .add(
-                test_container("web", artifact.display().to_string()),
-                ResourceLifecycle::Live,
+        let cases: [(fn(&http::request::Parts) -> bool, &[&str]); 2] = [
+            (is_write, &["linux-x64"]),
+            (is_image_index_push, &["linux-x64", "linux-aarch64"]),
+        ];
+        for (refuses, targets) in cases {
+            let (manager_url, resolves) = start_renaming_manager(refuses).await;
+            let output = tempfile::tempdir().unwrap();
+            let output_dir = output.path().to_path_buf();
+            let artifact = output_dir.join("build/kubernetes/web-hash");
+            std::fs::create_dir_all(&artifact).unwrap();
+            for target in targets {
+                let layer = dockdash::Layer::builder()
+                    .unwrap()
+                    .data("/app/web", target.as_bytes(), Some(0o755))
+                    .unwrap()
+                    .build()
+                    .await
+                    .unwrap();
+                let arch = if *target == "linux-x64" {
+                    dockdash::Arch::Amd64
+                } else {
+                    dockdash::Arch::ARM64
+                };
+                dockdash::Image::builder()
+                    .platform("linux", &arch)
+                    .layer(layer)
+                    .output_to(artifact.join(format!("{target}.oci.tar")))
+                    .build()
+                    .await
+                    .unwrap();
+            }
+            let stack = Stack::new("renamed".to_string())
+                .add(
+                    test_container("web", artifact.display().to_string()),
+                    ResourceLifecycle::Live,
+                )
+                .build();
+            let ctx = ExecutionMode::Standalone {
+                server_url: manager_url.clone(),
+                api_key: "test-token".to_string(),
+            };
+            let args = ReleaseArgs::try_parse_from(["release"]).unwrap();
+
+            let pushed = push_platform_stack(
+                &args,
+                &ctx,
+                "prj_a",
+                Platform::Kubernetes,
+                stack,
+                &output_dir,
             )
-            .build();
-        let ctx = ExecutionMode::Standalone {
-            server_url: manager_url.clone(),
-            api_key: "test-token".to_string(),
-        };
-        let args = ReleaseArgs::try_parse_from(["release"]).unwrap();
-
-        let pushed = push_platform_stack(
-            &args,
-            &ctx,
-            "prj_a",
-            Platform::Kubernetes,
-            stack,
-            &output_dir,
-        )
-        .await
-        .expect("the push is retried under the current repository");
-
-        let host = manager_url.trim_start_matches("http://");
-        let images: Vec<String> = pushed
-            .resources()
-            .filter_map(|(_, entry)| entry.config.downcast_ref::<Container>())
-            .map(|container| container_image(container).to_string())
-            .collect();
-        assert_eq!(images.len(), 1);
-        assert!(
-            images[0].starts_with(&format!("{host}/artifacts/prj_a:")),
-            "{images:?}"
-        );
-        assert_eq!(resolves.load(Ordering::SeqCst), 2);
-        let reference = oci_client::Reference::try_from(images[0].as_str()).unwrap();
-        let client = oci_client::Client::new(oci_client::client::ClientConfig {
-            protocol: oci_client::client::ClientProtocol::Http,
-            ..Default::default()
-        });
-        client
-            .fetch_manifest_digest(&reference, &oci_client::secrets::RegistryAuth::Anonymous)
             .await
-            .expect("the released image is in the registry");
+            .unwrap_or_else(|e| panic!("{targets:?}: the push is retried: {e:?}"));
+
+            let host = manager_url.trim_start_matches("http://");
+            let images: Vec<String> = pushed
+                .resources()
+                .filter_map(|(_, entry)| entry.config.downcast_ref::<Container>())
+                .map(|container| container_image(container).to_string())
+                .collect();
+            assert_eq!(images.len(), 1, "{targets:?}");
+            assert!(
+                images[0].starts_with(&format!("{host}/artifacts/prj_a:")),
+                "{targets:?}: {images:?}"
+            );
+            assert_eq!(resolves.load(Ordering::SeqCst), 2, "{targets:?}");
+            let reference = oci_client::Reference::try_from(images[0].as_str()).unwrap();
+            let client = oci_client::Client::new(oci_client::client::ClientConfig {
+                protocol: oci_client::client::ClientProtocol::Http,
+                ..Default::default()
+            });
+            client
+                .fetch_manifest_digest(&reference, &oci_client::secrets::RegistryAuth::Anonymous)
+                .await
+                .unwrap_or_else(|e| panic!("{targets:?}: the released image is missing: {e}"));
+        }
     }
 
     fn test_container(name: &str, image: String) -> Container {
