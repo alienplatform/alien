@@ -212,6 +212,7 @@ impl InstanceTypeSpec {
                 gpu_type: g.gpu_type.to_string(),
                 count: g.count,
             }),
+            data_disk: None,
         }
     }
 

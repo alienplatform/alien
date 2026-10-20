@@ -40,6 +40,16 @@ export type ComputePoolRequirements = {
     type: string
     count: number
   }>
+  /**
+   * An additional empty block device each machine must provide, besides the
+   * disk holding the operating system: no partitions, no filesystem, not
+   * mounted, and at least `size` (for example "50Gi"). Supported on machines
+   * deployments, where `join` refuses a host without one. Other platforms
+   * reject it because Alien does not attach the disk there.
+   */
+  dataDisk?: {
+    size: string
+  }
 }
 
 export type ComputeChoiceRange =
@@ -238,7 +248,18 @@ function machineProfileFromRequirements(requirements: ComputePoolRequirements): 
           count: requirements.accelerators[0].count,
         }
       : undefined,
+    dataDisk: requirements.dataDisk
+      ? { sizeBytes: parsePositiveQuantityBytes("dataDisk.size", requirements.dataDisk.size) }
+      : undefined,
   }
+}
+
+function parsePositiveQuantityBytes(field: string, value: string): number {
+  const bytes = parseQuantityBytes(value)
+  if (bytes <= 0) {
+    throw new Error(`Compute pool ${field} must be greater than zero: ${value}`)
+  }
+  return bytes
 }
 
 function parseQuantityBytes(value: string): number {

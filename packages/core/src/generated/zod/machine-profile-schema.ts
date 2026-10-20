@@ -5,6 +5,7 @@
 
 import * as z from "zod";
 import { ArchitectureSchema } from "./architecture-schema.js";
+import { DataDiskRequirementSchema } from "./data-disk-requirement-schema.js";
 import { GpuSpecSchema } from "./gpu-spec-schema.js";
 
 /**
@@ -15,6 +16,9 @@ export const MachineProfileSchema = z.object({
                 return z.union([ArchitectureSchema, z.null()]).optional()
               },
 "cpu": z.string().describe("CPU cores per machine (hardware total) - stored as string to preserve precision\n(e.g., \"8.0\", \"4.5\")"),
+get "dataDisk"(){
+                return z.union([DataDiskRequirementSchema, z.null()]).optional()
+              },
 "ephemeralStorageBytes": z.int().min(0).describe("Ephemeral storage in bytes (hardware total)"),
 get "gpu"(){
                 return z.union([GpuSpecSchema, z.null()]).optional()

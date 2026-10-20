@@ -4,6 +4,8 @@ use crate::commands::up::read_token_file;
 use crate::error::{ErrorData, Result};
 use crate::output;
 use alien_core::embedded_config::DeployCliConfig;
+use alien_core::instance_catalog::Architecture;
+use alien_core::MachineProfile;
 use alien_error::{AlienError, Context, ContextError, IntoAlienError, IntoAlienErrorDirect};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use clap::Args;
@@ -32,6 +34,14 @@ const DRAIN_POLL_INTERVAL_MS: u64 = 1_000;
 #[cfg(test)]
 const DRAIN_POLL_INTERVAL_MS: u64 = 10;
 const WRAPPED_JOIN_TOKEN_PREFIX: &str = "aj1_";
+/// The machine runtime keeps container images and writable layers under this
+/// directory, so pool ephemeral storage is checked against its free space.
+const EPHEMERAL_STORAGE_DIR: &str = "var/lib";
+/// `MemTotal` excludes memory the firmware and kernel reserve (including a
+/// crash kernel on some distributions), so a host sold as 8 GiB reports less.
+/// Accept hosts reporting at least this share of the pool's memory.
+const MEMORY_TOLERANCE_PERCENT: u64 = 90;
+const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
 
 #[derive(Args, Debug)]
 pub struct JoinArgs {
@@ -173,6 +183,11 @@ struct WrappedJoinToken {
     join_token: String,
     control_plane_url: String,
     cluster_id: String,
+    /// Requirements of each capacity group the stack declares, by group id.
+    /// Absent when the stack declares none, and in tokens minted before
+    /// tokens carried them.
+    #[serde(default)]
+    capacity_groups: Option<BTreeMap<String, MachineProfile>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -356,19 +371,140 @@ struct InstallPaths {
     state_dir: PathBuf,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct HostFacts<'a> {
     os: &'a str,
     arch: &'a str,
     systemd_runtime_dir: &'a Path,
     systemctl_available: bool,
     wireguard_available: bool,
+    /// Read on Linux only; other hosts fail the baseline checks first.
+    capacity: Option<HostCapacity>,
+}
+
+/// Host resources compared with the requirements of the capacity group being joined.
+#[derive(Debug, Clone)]
+struct HostCapacity {
+    cpu_count: u32,
+    memory_bytes: u64,
+    ephemeral_storage_path: PathBuf,
+    ephemeral_storage_free_bytes: u64,
+    /// Whole disks, or why they could not be listed. Only needed when the
+    /// capacity group requires an additional empty disk.
+    disks: std::result::Result<Vec<BlockDevice>, String>,
+}
+
+/// A whole disk as reported by `lsblk`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BlockDevice {
+    path: String,
+    size_bytes: u64,
+    read_only: bool,
+    filesystem: Option<String>,
+    partition_table: Option<String>,
+    mountpoint: Option<String>,
+    /// Types of devices stacked on this disk, such as `part`, `lvm` or `crypt`.
+    children: Vec<String>,
+    /// Why the disk's contents could not be probed for signatures.
+    probe_error: Option<String>,
+}
+
+impl BlockDevice {
+    /// Why this disk cannot serve as the additional empty disk, if it cannot.
+    fn in_use_reason(&self) -> Option<String> {
+        if self.children.iter().any(|child| child == "part") {
+            return Some("has partitions".to_string());
+        }
+        if let Some(child) = self.children.first() {
+            return Some(format!("is in use ({child})"));
+        }
+        if let Some(table) = &self.partition_table {
+            return Some(format!("has a partition table ({table})"));
+        }
+        if let Some(filesystem) = &self.filesystem {
+            return Some(format!("has a filesystem signature ({filesystem})"));
+        }
+        if let Some(mountpoint) = &self.mountpoint {
+            return Some(format!("is mounted at {mountpoint}"));
+        }
+        if self.read_only {
+            return Some("is read-only".to_string());
+        }
+        if let Some(error) = &self.probe_error {
+            return Some(format!("could not be probed: {error}"));
+        }
+        None
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct LsblkOutput {
+    blockdevices: Vec<LsblkDevice>,
+}
+
+/// One `lsblk --json` entry. util-linux before 2.33 prints every value as a string.
+#[derive(Debug, Deserialize)]
+struct LsblkDevice {
+    name: String,
+    #[serde(rename = "type")]
+    device_type: String,
+    size: LsblkValue,
+    ro: LsblkValue,
+    fstype: Option<String>,
+    pttype: Option<String>,
+    mountpoint: Option<String>,
+    #[serde(default)]
+    children: Vec<LsblkDevice>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum LsblkValue {
+    Bool(bool),
+    Number(u64),
+    Text(String),
+}
+
+impl LsblkValue {
+    fn as_u64(&self, field: &str) -> Result<u64> {
+        match self {
+            LsblkValue::Number(value) => Ok(*value),
+            LsblkValue::Text(value) => value
+                .trim()
+                .parse()
+                .map_err(|_| lsblk_value_error(field, value)),
+            LsblkValue::Bool(value) => Err(lsblk_value_error(field, &value.to_string())),
+        }
+    }
+
+    fn as_bool(&self, field: &str) -> Result<bool> {
+        match self {
+            LsblkValue::Bool(value) => Ok(*value),
+            LsblkValue::Number(value) => Ok(*value != 0),
+            LsblkValue::Text(value) => match value.trim() {
+                "0" => Ok(false),
+                "1" => Ok(true),
+                other => Err(lsblk_value_error(field, other)),
+            },
+        }
+    }
+}
+
+fn lsblk_value_error(field: &str, value: &str) -> AlienError<ErrorData> {
+    AlienError::new(ErrorData::ValidationError {
+        field: "lsblk".to_string(),
+        message: format!("unexpected {field} value '{value}'"),
+    })
 }
 
 pub async fn join_command(args: JoinArgs, embedded_config: Option<&DeployCliConfig>) -> Result<()> {
     output::header("Joining machine");
 
-    let request = build_join_request(&args, embedded_config, current_host_facts()?)?;
+    let request = build_join_request(
+        &args,
+        embedded_config,
+        current_host_facts(&args.install_root)?,
+    )?;
 
     if args.dry_run {
         print_join_plan(&request).await?;
@@ -422,7 +558,17 @@ fn build_join_request(
             }));
         }
     }
-    let arch = preflight_host(host)?;
+    let arch = preflight_host(&host)?;
+    let capacity_group = normalize_non_empty("capacity-group", &args.capacity_group)?;
+    let requirements = capacity_group_requirements(wrapped_token.as_ref(), &capacity_group)?;
+    // A joined host has already been admitted, and its runtime and workload now
+    // use the disks being measured, so only a host joining for the first time is
+    // checked against its capacity group.
+    if previous_state.is_none() {
+        if let Some(requirements) = requirements {
+            check_capacity_group_requirements(&capacity_group, requirements, &host, arch)?;
+        }
+    }
     let network_interface = resolve_persisted_override(
         args.network_interface.as_deref(),
         previous_state
@@ -456,7 +602,7 @@ fn build_join_request(
         install_root: args.install_root.clone(),
         plan: JoinPlan {
             token_source,
-            capacity_group: normalize_non_empty("capacity-group", &args.capacity_group)?,
+            capacity_group,
             zone: args
                 .zone
                 .as_deref()
@@ -646,7 +792,7 @@ fn normalize_non_empty(field: &str, value: &str) -> Result<String> {
     Ok(value.to_string())
 }
 
-fn preflight_host(host: HostFacts<'_>) -> Result<MachineArch> {
+fn preflight_host(host: &HostFacts<'_>) -> Result<MachineArch> {
     if host.os != "linux" {
         return Err(AlienError::new(ErrorData::ValidationError {
             field: "host".to_string(),
@@ -681,14 +827,350 @@ fn preflight_host(host: HostFacts<'_>) -> Result<MachineArch> {
     }
 }
 
-fn current_host_facts() -> Result<HostFacts<'static>> {
+fn current_host_facts(install_root: &Path) -> Result<HostFacts<'static>> {
+    let os = std::env::consts::OS;
     Ok(HostFacts {
-        os: std::env::consts::OS,
+        os,
         arch: std::env::consts::ARCH,
         systemd_runtime_dir: Path::new("/run/systemd/system"),
         systemctl_available: which::which("systemctl").is_ok(),
         wireguard_available: wireguard_available(),
+        capacity: if os == "linux" {
+            Some(current_host_capacity(install_root)?)
+        } else {
+            None
+        },
     })
+}
+
+fn current_host_capacity(install_root: &Path) -> Result<HostCapacity> {
+    let cpu_count = std::thread::available_parallelism()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to count the CPUs available to this host".to_string(),
+        })?
+        .get() as u32;
+    let meminfo = std::fs::read_to_string("/proc/meminfo")
+        .into_alien_error()
+        .context(ErrorData::FileOperationFailed {
+            operation: "read".to_string(),
+            file_path: "/proc/meminfo".to_string(),
+            reason: "Failed to read host memory".to_string(),
+        })?;
+    let ephemeral_storage_path = install_root.join(EPHEMERAL_STORAGE_DIR);
+    let measured_path = nearest_existing_ancestor(&ephemeral_storage_path);
+    let ephemeral_storage_free_bytes = fs2::available_space(&measured_path)
+        .into_alien_error()
+        .context(ErrorData::FileOperationFailed {
+            operation: "statvfs".to_string(),
+            file_path: measured_path.display().to_string(),
+            reason: "Failed to measure free disk space".to_string(),
+        })?;
+    Ok(HostCapacity {
+        cpu_count,
+        memory_bytes: parse_meminfo_total(&meminfo)?,
+        ephemeral_storage_path,
+        ephemeral_storage_free_bytes,
+        disks: list_disks().map_err(|error| error.message),
+    })
+}
+
+fn nearest_existing_ancestor(path: &Path) -> PathBuf {
+    path.ancestors()
+        .find(|candidate| candidate.exists())
+        .unwrap_or(Path::new("/"))
+        .to_path_buf()
+}
+
+fn parse_meminfo_total(meminfo: &str) -> Result<u64> {
+    meminfo
+        .lines()
+        .find_map(|line| {
+            let kib = line.strip_prefix("MemTotal:")?.trim().strip_suffix("kB")?;
+            kib.trim().parse::<u64>().ok()
+        })
+        .map(|kib| kib * 1024)
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ValidationError {
+                field: "memory".to_string(),
+                message: "/proc/meminfo has no MemTotal line".to_string(),
+            })
+        })
+}
+
+fn list_disks() -> Result<Vec<BlockDevice>> {
+    let mut disks = list_lsblk_disks()?;
+    // lsblk reports signatures from the udev database, which can be missing or
+    // stale. Probe the device itself before treating a disk as empty.
+    for disk in disks
+        .iter_mut()
+        .filter(|disk| disk.in_use_reason().is_none())
+    {
+        match probe_disk_signatures(&disk.path) {
+            Ok((filesystem, partition_table)) => {
+                disk.filesystem = filesystem;
+                disk.partition_table = partition_table;
+            }
+            Err(error) => disk.probe_error = Some(error),
+        }
+    }
+    Ok(disks)
+}
+
+/// Filesystem and partition-table signatures found by reading the device.
+fn probe_disk_signatures(
+    path: &str,
+) -> std::result::Result<(Option<String>, Option<String>), String> {
+    // blkid reports "nothing found" when it cannot open the device, so check
+    // that the device is readable first.
+    File::open(path).map_err(|error| error.to_string())?;
+    let output = Command::new("blkid")
+        .args(["--probe", "--output", "export", path])
+        .output()
+        .map_err(|error| format!("failed to run blkid (util-linux): {error}"))?;
+    match output.status.code() {
+        Some(0) => Ok(parse_blkid_export(&String::from_utf8_lossy(&output.stdout))),
+        // Exit status 2: no known signature on a readable device.
+        Some(2) => Ok((None, None)),
+        _ => Err(format!(
+            "blkid exited with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )),
+    }
+}
+
+fn parse_blkid_export(output: &str) -> (Option<String>, Option<String>) {
+    let value = |key: &str| {
+        output.lines().find_map(|line| {
+            line.strip_prefix(key)
+                .and_then(|rest| rest.strip_prefix('='))
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        })
+    };
+    (value("TYPE"), value("PTTYPE"))
+}
+
+fn list_lsblk_disks() -> Result<Vec<BlockDevice>> {
+    let output = Command::new("lsblk")
+        .args([
+            "--json",
+            "--bytes",
+            "--paths",
+            "--output",
+            "NAME,TYPE,SIZE,RO,FSTYPE,PTTYPE,MOUNTPOINT",
+        ])
+        .output()
+        .map_err(|error| {
+            AlienError::new(ErrorData::ValidationError {
+                field: "lsblk".to_string(),
+                message: format!("failed to run lsblk (util-linux): {error}"),
+            })
+        })?;
+    if !output.status.success() {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "lsblk".to_string(),
+            message: format!(
+                "lsblk exited with {}: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
+        }));
+    }
+    parse_lsblk_disks(&String::from_utf8_lossy(&output.stdout))
+}
+
+fn parse_lsblk_disks(json: &str) -> Result<Vec<BlockDevice>> {
+    let output: LsblkOutput = serde_json::from_str(json).map_err(|error| {
+        AlienError::new(ErrorData::ValidationError {
+            field: "lsblk".to_string(),
+            message: format!("unexpected lsblk output: {error}"),
+        })
+    })?;
+    output
+        .blockdevices
+        .into_iter()
+        // zram devices are compressed memory, not disks.
+        .filter(|device| device.device_type == "disk" && !device.name.starts_with("/dev/zram"))
+        .map(|device| {
+            Ok(BlockDevice {
+                size_bytes: device.size.as_u64("SIZE")?,
+                read_only: device.ro.as_bool("RO")?,
+                filesystem: device.fstype.filter(|value| !value.is_empty()),
+                partition_table: device.pttype.filter(|value| !value.is_empty()),
+                mountpoint: device.mountpoint.filter(|value| !value.is_empty()),
+                children: device
+                    .children
+                    .into_iter()
+                    .map(|child| child.device_type)
+                    .collect(),
+                probe_error: None,
+                path: device.name,
+            })
+        })
+        // Unconnected network block devices and empty card readers report no size.
+        .filter(|disk| !matches!(disk, Ok(disk) if disk.size_bytes == 0))
+        .collect()
+}
+
+/// Requirements of the capacity group being joined, when the join token carries them.
+fn capacity_group_requirements<'a>(
+    wrapped_token: Option<&'a WrappedJoinToken>,
+    capacity_group: &str,
+) -> Result<Option<&'a MachineProfile>> {
+    let Some(groups) = wrapped_token
+        .and_then(|token| token.capacity_groups.as_ref())
+        .filter(|groups| !groups.is_empty())
+    else {
+        return Ok(None);
+    };
+    groups.get(capacity_group).map(Some).ok_or_else(|| {
+        AlienError::new(ErrorData::ValidationError {
+            field: "capacity-group".to_string(),
+            message: format!(
+                "capacity group '{capacity_group}' is not declared by this deployment; pass --capacity-group with one of: {}",
+                groups.keys().cloned().collect::<Vec<_>>().join(", ")
+            ),
+        })
+    })
+}
+
+/// Refuses a host that lacks what the capacity group declares, naming every
+/// shortfall and what the host has instead.
+fn check_capacity_group_requirements(
+    capacity_group: &str,
+    requirements: &MachineProfile,
+    host: &HostFacts<'_>,
+    arch: MachineArch,
+) -> Result<()> {
+    let capacity = host.capacity.as_ref().ok_or_else(|| {
+        AlienError::new(ErrorData::ValidationError {
+            field: "host".to_string(),
+            message: "host resources could not be read".to_string(),
+        })
+    })?;
+    let mut shortfalls = Vec::new();
+
+    let host_architecture = match arch {
+        MachineArch::X64 => Architecture::X86_64,
+        MachineArch::Arm64 => Architecture::Arm64,
+    };
+    if let Some(required) = requirements.architecture {
+        if required != host_architecture {
+            shortfalls.push(format!(
+                "CPU architecture: needs {}, found {}",
+                architecture_name(required),
+                architecture_name(host_architecture)
+            ));
+        }
+    }
+
+    let required_cpu: f64 = requirements.cpu.trim().parse().map_err(|_| {
+        AlienError::new(ErrorData::ValidationError {
+            field: "token.capacityGroups".to_string(),
+            message: format!(
+                "capacity group '{capacity_group}' has an invalid CPU value '{}'",
+                requirements.cpu
+            ),
+        })
+    })?;
+    if f64::from(capacity.cpu_count) < required_cpu {
+        shortfalls.push(format!(
+            "CPU: needs {} cores, found {}",
+            requirements.cpu.trim(),
+            capacity.cpu_count
+        ));
+    }
+
+    let minimum_memory = requirements.memory_bytes / 100 * MEMORY_TOLERANCE_PERCENT;
+    if capacity.memory_bytes < minimum_memory {
+        shortfalls.push(format!(
+            "memory: needs {} (at least {} reported by the kernel), found {}",
+            format_gib(requirements.memory_bytes),
+            format_gib(minimum_memory),
+            format_gib(capacity.memory_bytes)
+        ));
+    }
+
+    if capacity.ephemeral_storage_free_bytes < requirements.ephemeral_storage_bytes {
+        shortfalls.push(format!(
+            "free space for container storage under {}: needs {}, found {}",
+            capacity.ephemeral_storage_path.display(),
+            format_gib(requirements.ephemeral_storage_bytes),
+            format_gib(capacity.ephemeral_storage_free_bytes)
+        ));
+    }
+
+    if let Some(data_disk) = &requirements.data_disk {
+        if let Some(problem) = missing_data_disk(data_disk.size_bytes, &capacity.disks) {
+            shortfalls.push(problem);
+        }
+    }
+
+    if shortfalls.is_empty() {
+        output::info(&format!(
+            "Host meets the requirements of capacity group '{capacity_group}'"
+        ));
+        return Ok(());
+    }
+    Err(AlienError::new(ErrorData::ValidationError {
+        field: "host".to_string(),
+        message: format!(
+            "this host does not meet the requirements of capacity group '{capacity_group}':\n  - {}",
+            shortfalls.join("\n  - ")
+        ),
+    }))
+}
+
+fn missing_data_disk(
+    size_bytes: u64,
+    disks: &std::result::Result<Vec<BlockDevice>, String>,
+) -> Option<String> {
+    let needs = format!(
+        "additional empty disk: needs a disk of at least {} with no partitions, no filesystem and no mounts",
+        format_gib(size_bytes)
+    );
+    let disks = match disks {
+        Ok(disks) => disks,
+        Err(error) => return Some(format!("{needs}; could not list disks: {error}")),
+    };
+    if disks
+        .iter()
+        .any(|disk| disk.in_use_reason().is_none() && disk.size_bytes >= size_bytes)
+    {
+        return None;
+    }
+    let found = disks
+        .iter()
+        .map(|disk| {
+            let state = disk
+                .in_use_reason()
+                .unwrap_or_else(|| "empty but too small".to_string());
+            format!("{} ({}, {state})", disk.path, format_gib(disk.size_bytes))
+        })
+        .collect::<Vec<_>>();
+    Some(if found.is_empty() {
+        format!("{needs}; found no disks")
+    } else {
+        format!("{needs}; found {}", found.join(", "))
+    })
+}
+
+fn architecture_name(architecture: Architecture) -> &'static str {
+    match architecture {
+        Architecture::X86_64 => "x86_64",
+        Architecture::Arm64 => "arm64",
+    }
+}
+
+fn format_gib(bytes: u64) -> String {
+    let gib = bytes as f64 / GIB;
+    if (gib - gib.round()).abs() < 0.05 {
+        format!("{} GiB", gib.round())
+    } else {
+        format!("{gib:.1} GiB")
+    }
 }
 
 fn wireguard_available() -> bool {
@@ -2561,6 +3043,7 @@ mod tests {
             systemd_runtime_dir,
             systemctl_available: true,
             wireguard_available: true,
+            capacity: None,
         }
     }
 
@@ -3238,9 +3721,10 @@ mod tests {
             systemd_runtime_dir: Path::new("/unused"),
             systemctl_available: true,
             wireguard_available: false,
+            capacity: None,
         };
 
-        let error = preflight_host(host).expect_err("macOS should be rejected");
+        let error = preflight_host(&host).expect_err("macOS should be rejected");
 
         assert_eq!(error.code, "VALIDATION_ERROR");
     }
@@ -3254,9 +3738,13 @@ mod tests {
             systemd_runtime_dir: dir.path(),
             systemctl_available: true,
             wireguard_available: true,
+            capacity: None,
         };
 
-        assert_eq!(preflight_host(host).expect("supported"), MachineArch::Arm64);
+        assert_eq!(
+            preflight_host(&host).expect("supported"),
+            MachineArch::Arm64
+        );
     }
 
     #[test]
@@ -3268,12 +3756,350 @@ mod tests {
             systemd_runtime_dir: dir.path(),
             systemctl_available: true,
             wireguard_available: false,
+            capacity: None,
         };
 
-        let error = preflight_host(host).expect_err("wireguard should be required");
+        let error = preflight_host(&host).expect_err("wireguard should be required");
 
         assert_eq!(error.code, "VALIDATION_ERROR");
         assert!(error.message.contains("WireGuard"));
+    }
+
+    const TEST_GIB: u64 = 1024 * 1024 * 1024;
+
+    fn empty_disk(path: &str, size_gib: u64) -> BlockDevice {
+        BlockDevice {
+            path: path.to_string(),
+            size_bytes: size_gib * TEST_GIB,
+            read_only: false,
+            filesystem: None,
+            partition_table: None,
+            mountpoint: None,
+            children: vec![],
+            probe_error: None,
+        }
+    }
+
+    fn root_disk() -> BlockDevice {
+        BlockDevice {
+            partition_table: Some("gpt".to_string()),
+            children: vec!["part".to_string(), "part".to_string()],
+            ..empty_disk("/dev/nvme0n1", 100)
+        }
+    }
+
+    fn host_with_capacity(
+        systemd_runtime_dir: &Path,
+        cpu_count: u32,
+        memory_gib: u64,
+        free_gib: u64,
+        disks: Vec<BlockDevice>,
+    ) -> HostFacts<'_> {
+        HostFacts {
+            capacity: Some(HostCapacity {
+                cpu_count,
+                memory_bytes: memory_gib * TEST_GIB,
+                ephemeral_storage_path: PathBuf::from("/var/lib"),
+                ephemeral_storage_free_bytes: free_gib * TEST_GIB,
+                disks: Ok(disks),
+            }),
+            ..linux_host(systemd_runtime_dir)
+        }
+    }
+
+    fn pool_requirements(data_disk_gib: Option<u64>) -> MachineProfile {
+        MachineProfile {
+            cpu: "4".to_string(),
+            memory_bytes: 8 * TEST_GIB,
+            ephemeral_storage_bytes: 20 * TEST_GIB,
+            architecture: Some(Architecture::X86_64),
+            gpu: None,
+            data_disk: data_disk_gib.map(|gib| alien_core::DataDiskRequirement {
+                size_bytes: gib * TEST_GIB,
+            }),
+        }
+    }
+
+    fn wrapped_join_token_with_groups(groups: serde_json::Value) -> String {
+        let payload = serde_json::json!({
+            "joinToken": "hj_raw_secret",
+            "controlPlaneUrl": "https://horizon.example.com",
+            "clusterId": "cluster-123",
+            "capacityGroups": groups,
+        });
+        format!(
+            "{WRAPPED_JOIN_TOKEN_PREFIX}{}",
+            URL_SAFE_NO_PAD.encode(payload.to_string())
+        )
+    }
+
+    #[test]
+    fn capacity_check_accepts_a_host_that_meets_the_group() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        // 7.4 GiB reported for an 8 GiB pool is within the kernel reservation allowance.
+        let mut host = host_with_capacity(
+            dir.path(),
+            4,
+            8,
+            25,
+            vec![root_disk(), empty_disk("/dev/nvme1n1", 50)],
+        );
+        host.capacity.as_mut().unwrap().memory_bytes = 7_945_000_000;
+
+        check_capacity_group_requirements(
+            "general",
+            &pool_requirements(Some(50)),
+            &host,
+            MachineArch::X64,
+        )
+        .expect("host should meet the group");
+    }
+
+    #[test]
+    fn capacity_check_names_every_shortfall_and_what_was_found() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let formatted = BlockDevice {
+            filesystem: Some("xfs".to_string()),
+            mountpoint: Some("/data".to_string()),
+            ..empty_disk("/dev/nvme1n1", 100)
+        };
+        let host = host_with_capacity(
+            dir.path(),
+            2,
+            4,
+            12,
+            vec![root_disk(), formatted, empty_disk("/dev/nvme2n1", 10)],
+        );
+
+        let error = check_capacity_group_requirements(
+            "general",
+            &pool_requirements(Some(50)),
+            &host,
+            MachineArch::Arm64,
+        )
+        .expect_err("host should be refused");
+
+        assert_eq!(error.code, "VALIDATION_ERROR");
+        assert_eq!(
+            error.message,
+            "Validation failed for host: this host does not meet the requirements of capacity group 'general':\n  \
+             - CPU architecture: needs x86_64, found arm64\n  \
+             - CPU: needs 4 cores, found 2\n  \
+             - memory: needs 8 GiB (at least 7.2 GiB reported by the kernel), found 4 GiB\n  \
+             - free space for container storage under /var/lib: needs 20 GiB, found 12 GiB\n  \
+             - additional empty disk: needs a disk of at least 50 GiB with no partitions, no filesystem and no mounts; \
+             found /dev/nvme0n1 (100 GiB, has partitions), /dev/nvme1n1 (100 GiB, has a filesystem signature (xfs)), \
+             /dev/nvme2n1 (10 GiB, empty but too small)"
+        );
+    }
+
+    #[test]
+    fn capacity_check_reports_unlistable_disks_only_when_a_disk_is_required() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let mut host = host_with_capacity(dir.path(), 8, 16, 100, vec![]);
+        host.capacity.as_mut().unwrap().disks =
+            Err("failed to run lsblk (util-linux): not found".to_string());
+
+        check_capacity_group_requirements(
+            "general",
+            &pool_requirements(None),
+            &host,
+            MachineArch::X64,
+        )
+        .expect("no disk listing is needed without a data disk requirement");
+        let error = check_capacity_group_requirements(
+            "general",
+            &pool_requirements(Some(50)),
+            &host,
+            MachineArch::X64,
+        )
+        .expect_err("a required disk cannot be confirmed");
+        assert!(error
+            .message
+            .contains("could not list disks: failed to run lsblk (util-linux): not found"));
+    }
+
+    #[test]
+    fn join_refuses_a_new_host_below_the_token_capacity_group() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let args = JoinArgs {
+            token: Some(wrapped_join_token_with_groups(serde_json::json!({
+                "general": pool_requirements(Some(50)),
+            }))),
+            control_plane_url: None,
+            cluster_id: None,
+            ..test_join_args()
+        };
+
+        let error = build_join_request(
+            &args,
+            None,
+            host_with_capacity(dir.path(), 8, 16, 100, vec![root_disk()]),
+        )
+        .expect_err("a host without the additional disk should be refused");
+        assert!(
+            error
+                .message
+                .contains("additional empty disk: needs a disk of at least 50 GiB"),
+            "{}",
+            error.message
+        );
+
+        let request = build_join_request(
+            &args,
+            None,
+            host_with_capacity(
+                dir.path(),
+                8,
+                16,
+                100,
+                vec![root_disk(), empty_disk("/dev/vdb", 64)],
+            ),
+        )
+        .expect("a host with the additional disk should join");
+        assert_eq!(request.token, "hj_raw_secret");
+        assert_eq!(request.plan.capacity_group, "general");
+    }
+
+    #[test]
+    fn join_rejects_a_capacity_group_the_token_does_not_declare() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let args = JoinArgs {
+            token: Some(wrapped_join_token_with_groups(serde_json::json!({
+                "builders": pool_requirements(None),
+                "workers": pool_requirements(None),
+            }))),
+            control_plane_url: None,
+            cluster_id: None,
+            ..test_join_args()
+        };
+
+        let error = build_join_request(&args, None, linux_host(dir.path()))
+            .expect_err("an undeclared group should be rejected");
+        assert_eq!(
+            error.message,
+            "Validation failed for capacity-group: capacity group 'general' is not declared by this deployment; pass --capacity-group with one of: builders, workers"
+        );
+    }
+
+    #[test]
+    fn rejoin_skips_capacity_checks_for_an_admitted_host() {
+        let root = tempfile::tempdir().expect("install root");
+        let state = MachineInstallState {
+            bundle_version: "old".to_string(),
+            bundle_url: None,
+            service_label: "dev.alien.machine".to_string(),
+            executable_path: PathBuf::from("/old/bin"),
+            config_path: PathBuf::from("/old/config.toml"),
+            join_token_path: PathBuf::from("/old/join-token"),
+            machine_id_path: None,
+            machine_token_path: None,
+            control_plane_url: None,
+            cluster_id: Some("cluster-123".to_string()),
+            machine_id: Some("machine-123".to_string()),
+            network_interface: None,
+            wireguard_endpoint: None,
+            public_ip: None,
+        };
+        write_install_state(&install_paths(root.path()), &state).expect("write state");
+        let args = JoinArgs {
+            token: Some(wrapped_join_token_with_groups(serde_json::json!({
+                "general": pool_requirements(Some(50)),
+            }))),
+            control_plane_url: None,
+            cluster_id: None,
+            install_root: root.path().to_path_buf(),
+            ..test_join_args()
+        };
+
+        // The data disk is formatted and mounted once the workload uses it.
+        let mounted = BlockDevice {
+            filesystem: Some("xfs".to_string()),
+            mountpoint: Some("/data".to_string()),
+            ..empty_disk("/dev/vdb", 64)
+        };
+        build_join_request(
+            &args,
+            None,
+            host_with_capacity(root.path(), 8, 16, 100, vec![root_disk(), mounted]),
+        )
+        .expect("an already joined host should not be measured again");
+    }
+
+    #[test]
+    fn lsblk_json_is_read_from_current_and_older_util_linux() {
+        let current = r#"{"blockdevices": [
+            {"name":"/dev/loop0","type":"loop","size":67108864,"ro":true,"fstype":"squashfs","pttype":null,"mountpoint":"/snap/core/1"},
+            {"name":"/dev/nvme0n1","type":"disk","size":107374182400,"ro":false,"fstype":null,"pttype":"gpt","mountpoint":null,
+             "children":[{"name":"/dev/nvme0n1p1","type":"part","size":107373133824,"ro":false,"fstype":"ext4","pttype":"gpt","mountpoint":"/"}]},
+            {"name":"/dev/nvme1n1","type":"disk","size":53687091200,"ro":false,"fstype":null,"pttype":null,"mountpoint":null},
+            {"name":"/dev/zram0","type":"disk","size":4294967296,"ro":false,"fstype":null,"pttype":null,"mountpoint":null},
+            {"name":"/dev/nbd0","type":"disk","size":0,"ro":false,"fstype":null,"pttype":null,"mountpoint":null}
+        ]}"#;
+        let disks = parse_lsblk_disks(current).expect("current lsblk output");
+        assert_eq!(
+            disks,
+            vec![
+                BlockDevice {
+                    path: "/dev/nvme0n1".to_string(),
+                    size_bytes: 107374182400,
+                    read_only: false,
+                    filesystem: None,
+                    partition_table: Some("gpt".to_string()),
+                    mountpoint: None,
+                    children: vec!["part".to_string()],
+                    probe_error: None,
+                },
+                empty_disk("/dev/nvme1n1", 50),
+            ]
+        );
+
+        let older = r#"{"blockdevices": [
+            {"name":"/dev/xvda","type":"disk","size":"8589934592","ro":"0","fstype":"ext4","pttype":null,"mountpoint":"/"},
+            {"name":"/dev/xvdb","type":"disk","size":"53687091200","ro":"0","fstype":"LVM2_member","pttype":null,"mountpoint":null,
+             "children":[{"name":"/dev/mapper/vg-data","type":"lvm","size":"53687091200","ro":"0","fstype":"xfs","pttype":null,"mountpoint":"/data"}]}
+        ]}"#;
+        let disks = parse_lsblk_disks(older).expect("older lsblk output");
+        assert_eq!(
+            disks
+                .iter()
+                .map(|disk| (disk.path.as_str(), disk.in_use_reason()))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    "/dev/xvda",
+                    Some("has a filesystem signature (ext4)".to_string())
+                ),
+                ("/dev/xvdb", Some("is in use (lvm)".to_string())),
+            ]
+        );
+    }
+
+    #[test]
+    fn blkid_probe_output_reports_signatures() {
+        let xfs = "DEVNAME=/dev/nbd3\nUUID=6df2f7c2\nBLOCK_SIZE=512\nTYPE=xfs\nUSAGE=filesystem\n";
+        assert_eq!(parse_blkid_export(xfs), (Some("xfs".to_string()), None));
+        let gpt = "DEVNAME=/dev/vdb\nPTUUID=1a2b\nPTTYPE=gpt\n";
+        assert_eq!(parse_blkid_export(gpt), (None, Some("gpt".to_string())));
+
+        let unprobed = BlockDevice {
+            probe_error: Some("Permission denied (os error 13)".to_string()),
+            ..empty_disk("/dev/vdb", 64)
+        };
+        assert_eq!(
+            unprobed.in_use_reason().as_deref(),
+            Some("could not be probed: Permission denied (os error 13)")
+        );
+    }
+
+    #[test]
+    fn meminfo_total_is_read_in_bytes() {
+        let meminfo = "MemTotal:        8040584 kB\nMemFree:          512000 kB\n";
+        assert_eq!(
+            parse_meminfo_total(meminfo).expect("MemTotal"),
+            8040584 * 1024
+        );
+        assert!(parse_meminfo_total("MemFree: 1 kB\n").is_err());
     }
 
     #[test]
