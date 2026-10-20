@@ -65,18 +65,40 @@ fn new_signing_key() -> Result<(String, GatewayPublicKey)> {
 
 /// Writes a new signing key and returns its public half, which the caller keeps in its own
 /// state. The private key is never read back, so the managing identity needs no read access to
-/// it. A retry before the caller saves its state overwrites a key nothing has used yet.
+/// it.
+///
+/// The write is create-only: an existing key is never replaced. Every session token and stored
+/// policy is signed with it, and the managing identity cannot recover its public half without
+/// reading the private key, so a caller that lost the public half fails here instead of
+/// rotating the deployment's key.
 #[cfg(feature = "aws")]
 pub(crate) async fn create_signing_key(vault: &dyn Vault) -> Result<GatewayPublicKey> {
     let (value, public) = new_signing_key()?;
-    vault
-        .set_secret(SIGNING_KEY, &value)
-        .await
-        .context(ErrorData::ResourceConfigInvalid {
+    match vault.create_secret(SIGNING_KEY, &value).await {
+        Ok(()) => Ok(public),
+        Err(error)
+            if matches!(
+                error.error,
+                Some(alien_bindings::ErrorData::VaultSecretAlreadyExists { .. })
+            ) =>
+        {
+            Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: format!(
+                    "The deployment's sandbox egress signing key '{SIGNING_KEY}' already exists, but \
+                     no sandbox state records its public half. Writing a new key would invalidate \
+                     every session token and stored egress policy, so it is not replaced. Restore \
+                     the sandbox's controller state from the previous deployment state; or, if this \
+                     deployment's first key write was interrupted, or to rotate deliberately, delete \
+                     '{SIGNING_KEY}' and '{GATEWAY_CONFIG}' from the secrets vault and retry."
+                ),
+                resource_id: Some(alien_core::SECRETS_VAULT_ID.into()),
+            }))
+        }
+        Err(error) => Err(error).context(ErrorData::ResourceConfigInvalid {
             message: "Failed to initialize the sandbox egress signing key".into(),
             resource_id: Some(alien_core::SECRETS_VAULT_ID.into()),
-        })?;
-    Ok(public)
+        }),
+    }
 }
 
 /// Called only by the setup-aware shared-key owner. Other Sandbox
@@ -142,6 +164,22 @@ fn public_key(value: &str) -> Result<GatewayPublicKey> {
 mod tests {
     use super::*;
     use alien_bindings::providers::vault::LocalVault;
+
+    /// The safety net under re-registration: an existing signing key is never replaced.
+    #[cfg(feature = "aws")]
+    #[tokio::test]
+    async fn an_existing_signing_key_is_never_replaced() {
+        let directory = tempfile::tempdir().unwrap();
+        let vault = LocalVault::new("secrets".into(), directory.path().into());
+
+        create_signing_key(&vault).await.expect("a new deployment gets a key");
+        let in_use = vault.get_secret(SIGNING_KEY).await.unwrap();
+        let error = create_signing_key(&vault)
+            .await
+            .expect_err("an existing key must not be replaced");
+        assert!(error.message.contains("is not replaced"), "{}", error.message);
+        assert_eq!(vault.get_secret(SIGNING_KEY).await.unwrap(), in_use);
+    }
 
     #[tokio::test]
     async fn resumed_initialization_keeps_the_original_signing_key() {

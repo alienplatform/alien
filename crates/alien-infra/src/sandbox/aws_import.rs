@@ -178,6 +178,16 @@ impl ResourceImporter for AwsSandboxImporter {
         if ctx.resource.lifecycle == ResourceLifecycle::Frozen
             && imported_controller.build_role_arn.is_none()
         {
+            // The registration replaces what setup owns, but not what this controller wrote at
+            // runtime: the signing key's public half, the configuration it published and the
+            // replica secret's readiness. Without the public half the key owner writes a new
+            // signing key, which invalidates every session token and stored policy.
+            if requires_gateway {
+                imported_controller.egress_public_key = existing_controller.egress_public_key;
+                imported_controller.egress_config_digest = existing_controller.egress_config_digest;
+                imported_controller.egress_replica_secret_ready =
+                    existing_controller.egress_replica_secret_ready;
+            }
             return make_imported_state_with_status(imported_controller, ctx, imported.status);
         }
         let gateway = existing_controller
@@ -256,5 +266,96 @@ impl ResourceImporter for AwsSandboxImporter {
             lifecycle: Some(ctx.resource.lifecycle),
             ..existing
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_core::{
+        AwsManagementConfig, ManagementConfig, Resource, ResourceEntry, SandboxCode,
+        SandboxEgress, SandboxLifecyclePolicy, StackSettings,
+    };
+
+    /// A setup update re-registers a template's Frozen internet sandbox with its new image. The
+    /// image is setup's, but the signing key's public half, the published configuration's
+    /// digest and the replica secret's readiness are what the controller wrote at runtime.
+    /// Dropping the public half made the key owner write a new signing key on its next pass.
+    #[test]
+    fn a_frozen_internet_sandbox_reimport_keeps_its_signing_key() {
+        let entry = ResourceEntry {
+            config: Resource::new(
+                Sandbox::new("agents".to_string())
+                    .code(SandboxCode::Image {
+                        image: "manager.example.com/alien-artifacts-proj:base".to_string(),
+                    })
+                    .egress(SandboxEgress::Internet)
+                    .lifecycle(SandboxLifecyclePolicy {
+                        max_lifetime_seconds: Some(1800),
+                        idle_pause_seconds: None,
+                    })
+                    .build(),
+            ),
+            lifecycle: ResourceLifecycle::Frozen,
+            dependencies: vec![],
+            remote_access: true,
+            enabled_when: None,
+        };
+        let settings = StackSettings::default();
+        let management = ManagementConfig::Aws(AwsManagementConfig {
+            managing_role_arn: "arn:aws:iam::123456789012:role/alien-manager".to_string(),
+        });
+        let ctx = ImportContext {
+            resource_id: "agents",
+            platform: Platform::Aws,
+            region: "us-east-2",
+            stack_settings: &settings,
+            management_config: Some(&management),
+            resource: &entry,
+        };
+        let frozen = |version: &str| AwsSandboxImportData {
+            image_identifier: Some(
+                "arn:aws:lambda:us-east-2:123456789012:microvm-image:stack-agents".to_string(),
+            ),
+            image_arn: Some(
+                "arn:aws:lambda:us-east-2:123456789012:microvm-image:stack-agents".to_string(),
+            ),
+            image_version: Some(version.to_string()),
+            build_role_arn: None,
+            bundle_uri: None,
+            egress_connector_arns: vec![
+                "arn:aws:lambda:us-east-2:123456789012:network-connector:nc-1".to_string(),
+            ],
+            allow_egress: false,
+            preview_ports: vec![],
+        };
+        let importer = AwsSandboxImporter;
+        let existing = importer.import(frozen("1.0"), &ctx).expect("first import");
+        let mut existing_internal = existing.internal_state.clone().unwrap();
+        existing_internal["state"] = serde_json::json!("ready");
+        existing_internal["egressPublicKey"] =
+            serde_json::json!({"kid": "kid-in-use", "publicKey": "public-key-in-use"});
+        existing_internal["egressConfigDigest"] = serde_json::json!("digest-published");
+        existing_internal["egressReplicaSecretReady"] = serde_json::json!(true);
+        let existing = StackResourceState {
+            internal_state: Some(existing_internal),
+            status: ResourceStatus::Running,
+            ..existing
+        };
+        let imported = importer.import(frozen("2.0"), &ctx).expect("re-import");
+
+        let merged = importer
+            .merge_reimport(existing, imported, &ctx)
+            .expect("merge should succeed");
+
+        let internal = merged.internal_state.unwrap();
+        assert_eq!(internal["activeVersion"], "2.0", "setup owns the image");
+        assert_eq!(
+            internal["egressPublicKey"],
+            serde_json::json!({"kid": "kid-in-use", "publicKey": "public-key-in-use"}),
+            "the key owner must keep the key every session token is signed with"
+        );
+        assert_eq!(internal["egressConfigDigest"], "digest-published");
+        assert_eq!(internal["egressReplicaSecretReady"], true);
     }
 }

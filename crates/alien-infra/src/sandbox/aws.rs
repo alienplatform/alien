@@ -1965,7 +1965,7 @@ mod tests {
 
     /// The owner initializes the key against real SSM wire calls through a management identity
     /// that may write the vault but not read it, as setup now grants. The key must still be
-    /// created, with one PutParameter and no GetParameter.
+    /// created, with one create-only PutParameter and no GetParameter.
     #[tokio::test]
     async fn the_owner_initializes_the_key_without_reading_the_vault() {
         use crate::{AwsVaultController, AwsVaultState};
@@ -1991,7 +1991,7 @@ mod tests {
                 when.method(POST)
                     .header("x-amz-target", "AmazonSSM.PutParameter")
                     .body_contains("test-secrets-sandbox-egress-signing-key")
-                    .body_contains("\"Overwrite\":true");
+                    .body_contains("\"Overwrite\":false");
                 then.status(200)
                     .json_body(serde_json::json!({"Version": 1, "Tier": "Standard"}));
             })
