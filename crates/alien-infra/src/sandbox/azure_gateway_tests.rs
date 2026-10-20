@@ -13,8 +13,33 @@ use alien_core::{
 };
 use std::sync::Arc;
 
+/// Where the deployment secrets vault lives in a test.
+enum TestVault<'a> {
+    /// A local vault directory, which the test reads to inspect what was written.
+    Local(&'a std::path::Path),
+    /// An Azure Key Vault served at this URL, as the real Key Vault client calls it.
+    KeyVault(String),
+}
+
 async fn executor(
     directory: &std::path::Path,
+    wrong_source: bool,
+    earlier_live: bool,
+    settings: NetworkSettings,
+) -> SingleControllerExecutor {
+    executor_with(
+        TestVault::Local(directory),
+        None,
+        wrong_source,
+        earlier_live,
+        settings,
+    )
+    .await
+}
+
+async fn executor_with(
+    vault: TestVault<'_>,
+    controller: Option<AzureSandboxController>,
     wrong_source: bool,
     earlier_live: bool,
     settings: NetworkSettings,
@@ -58,7 +83,7 @@ async fn executor(
             allow: vec!["api.example.com".into()],
         })
         .build();
-    let controller = AzureSandboxController {
+    let controller = controller.unwrap_or_else(|| AzureSandboxController {
         state: AzureSandboxState::InitializingEgressKey,
         sandbox_group: Some("group".into()),
         region: Some("eastus".into()),
@@ -66,7 +91,7 @@ async fn executor(
         disk_image: Some("ubuntu".into()),
         egress: Some(config.egress.clone().into()),
         ..Default::default()
-    };
+    });
     let mut builder = SingleControllerExecutor::builder()
         .resource(config)
         .controller(controller)
@@ -76,13 +101,6 @@ async fn executor(
         .with_dependency(
             Network::new("network".into()).settings(settings).build(),
             network,
-        )
-        .with_dependency(
-            Vault::new(SECRETS_VAULT_ID.into()).build(),
-            LocalVaultController {
-                vault_path: Some(directory.to_string_lossy().into_owned()),
-                ..Default::default()
-            },
         )
         .with_stack_resource(
             Container::new(alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.into())
@@ -101,6 +119,30 @@ async fn executor(
                 .build(),
             ResourceLifecycle::Live,
         );
+    builder = match vault {
+        TestVault::Local(directory) => builder.with_dependency(
+            Vault::new(SECRETS_VAULT_ID.into()).build(),
+            LocalVaultController {
+                vault_path: Some(directory.to_string_lossy().into_owned()),
+                ..Default::default()
+            },
+        ),
+        TestVault::KeyVault(url) => {
+            let mut azure = alien_core::AzureClientConfig::mock();
+            azure.service_overrides = Some(alien_core::AzureServiceOverrides {
+                endpoints: [("keyvault".to_string(), url)].into_iter().collect(),
+            });
+            builder
+                .client_config(alien_core::ClientConfig::Azure(Box::new(azure)))
+                .with_dependency(
+                    Vault::new(SECRETS_VAULT_ID.into()).build(),
+                    crate::vault::AzureVaultController {
+                        vault_name: Some("test-kv".into()),
+                        ..Default::default()
+                    },
+                )
+        }
+    };
     if earlier_live {
         builder = builder.with_stack_resource(
             Sandbox::new("aaa-live".into())
@@ -186,6 +228,208 @@ async fn actual_controller_initializes_shared_key_and_publishes_only_after_netwo
     );
     assert_eq!(config["keys"][0]["kid"], gateway.kid);
     assert!(config["keys"][0].get("privateKey").is_none());
+    // The gateway reads its replica secret from its own vault entry; none is embedded.
+    assert!(config.get("replicaSecret").is_none());
+    assert_eq!(
+        config["replicaSecretSource"],
+        serde_json::json!({"vault": {"binding": "secrets", "key": "sandbox-egress-replica-secret"}})
+    );
+    assert!(
+        vault
+            .get_secret(crate::sandbox::egress::REPLICA_SECRET)
+            .await
+            .unwrap()
+            .len()
+            >= 32
+    );
+}
+
+/// Key Vault paths the real client calls for one secret.
+fn secret_path(name: &str) -> String {
+    format!("/secrets/{name}")
+}
+
+fn stored_json(request: &httpmock::prelude::HttpMockRequest) -> Option<serde_json::Value> {
+    let body: serde_json::Value = serde_json::from_slice(request.body.as_deref()?).ok()?;
+    serde_json::from_str(body["value"].as_str()?).ok()
+}
+
+fn is_sourced_config(request: &httpmock::prelude::HttpMockRequest) -> bool {
+    stored_json(request).is_some_and(|config| {
+        config.get("replicaSecret").is_none()
+            && config["replicaSecretSource"]
+                == serde_json::json!({"vault": {"binding": "secrets", "key": "sandbox-egress-replica-secret"}})
+            && config["audiences"] == serde_json::json!(["test/sandbox"])
+    })
+}
+
+/// The management identity's Key Vault grant is write-only (`setSecret`, `readMetadata`,
+/// `delete`): every value read answers 403, as Key Vault RBAC does. The owner still creates the
+/// key and the replica secret, publishes, skips an unchanged configuration, writes a changed
+/// one, and deletes, without reading a value. Before this change the owner read the key back
+/// and failed.
+#[tokio::test]
+async fn the_owner_never_reads_a_value_from_key_vault() {
+    use httpmock::Method::{GET, PUT};
+    let server = httpmock::MockServer::start_async().await;
+    let forbidden = serde_json::json!({"error": {
+        "code": "Forbidden",
+        "message": "Caller is not authorized to perform action on resource. Action: 'Microsoft.KeyVault/vaults/secrets/getSecret/action'",
+        "innererror": {"code": "ForbiddenByRbac"}
+    }});
+    let mut value_reads = Vec::new();
+    let mut metadata = Vec::new();
+    let mut writes = Vec::new();
+    for name in [
+        "sandbox-egress-signing-key",
+        "sandbox-egress-replica-secret",
+        "sandbox-egress-gateway-config",
+    ] {
+        let forbidden = forbidden.clone();
+        value_reads.push(
+            server
+                .mock_async(|when, then| {
+                    when.method(GET).path(secret_path(name));
+                    then.status(403).json_body(forbidden);
+                })
+                .await,
+        );
+        metadata.push(
+            server
+                .mock_async(|when, then| {
+                    when.method(GET).path(format!("{}/versions", secret_path(name)));
+                    then.status(404).json_body(serde_json::json!({"error": {
+                        "code": "SecretNotFound",
+                        "message": format!("A secret with (name/id) {name} was not found in this key vault.")
+                    }}));
+                })
+                .await,
+        );
+    }
+    for name in [
+        "sandbox-egress-signing-key",
+        "sandbox-egress-replica-secret",
+    ] {
+        writes.push(
+            server
+                .mock_async(|when, then| {
+                    when.method(PUT).path(secret_path(name));
+                    then.status(200).json_body(serde_json::json!({
+                        "id": format!("https://test-kv.vault.azure.net/secrets/{name}/1"),
+                        "attributes": {"enabled": true}
+                    }));
+                })
+                .await,
+        );
+    }
+    let config_write = server
+        .mock_async(|when, then| {
+            when.method(PUT)
+                .path(secret_path("sandbox-egress-gateway-config"))
+                .matches(is_sourced_config);
+            then.status(200).json_body(serde_json::json!({
+                "id": "https://test-kv.vault.azure.net/secrets/sandbox-egress-gateway-config/1",
+                "attributes": {"enabled": true}
+            }));
+        })
+        .await;
+
+    let mut run = executor_with(
+        TestVault::KeyVault(server.base_url()),
+        None,
+        false,
+        false,
+        created(),
+    )
+    .await;
+    run.step().await.expect("the key is created without a read");
+    run.step()
+        .await
+        .expect("the configuration is published without a read");
+    let controller = run
+        .internal_state::<AzureSandboxController>()
+        .unwrap()
+        .clone();
+    assert_eq!(controller.state, AzureSandboxState::Ready);
+    let key = controller
+        .egress_public_key
+        .clone()
+        .expect("public key recorded");
+    let Some(alien_core::bindings::SandboxEgressBinding::Gateway(gateway)) = &controller.egress
+    else {
+        panic!("gateway binding")
+    };
+    assert_eq!(gateway.kid, key.kid);
+    assert_eq!(
+        (
+            writes[0].hits_async().await,
+            writes[1].hits_async().await,
+            config_write.hits_async().await
+        ),
+        (1, 1, 1)
+    );
+
+    // An update republishes the same configuration: no request to Key Vault.
+    run.update(
+        Sandbox::new("sandbox".into())
+            .code(SandboxCode::Image {
+                image: "ubuntu".into(),
+            })
+            .egress(SandboxEgress::Internet)
+            .lifecycle(alien_core::SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .default_policy(alien_core::EgressPolicy::Allow {
+                allow: vec!["other.example.com".into()],
+            })
+            .build(),
+    )
+    .unwrap();
+    run.run_until_status(alien_core::ResourceStatus::Running)
+        .await
+        .unwrap();
+    assert_eq!(config_write.hits_async().await, 1);
+    let updated = run
+        .internal_state::<AzureSandboxController>()
+        .unwrap()
+        .clone();
+    assert_eq!(updated.egress_public_key, Some(key.clone()));
+
+    // A sandbox whose last published configuration differs writes it, still without a read.
+    let mut changed = executor_with(
+        TestVault::KeyVault(server.base_url()),
+        Some(AzureSandboxController {
+            state: AzureSandboxState::InitializingEgressKey,
+            egress_config_digest: Some("a configuration published earlier".into()),
+            ..updated
+        }),
+        false,
+        false,
+        created(),
+    )
+    .await;
+    changed.step().await.unwrap();
+    changed.step().await.unwrap();
+    assert_eq!(config_write.hits_async().await, 2);
+
+    changed.delete().unwrap();
+    changed.run_until_terminal().await.expect("delete");
+    for read in &value_reads {
+        assert_eq!(read.hits_async().await, 0, "a secret value was read");
+    }
+    assert_eq!(
+        (writes[0].hits_async().await, writes[1].hits_async().await),
+        (1, 1),
+        "the key and the replica secret are written once"
+    );
+    assert_eq!(
+        (
+            metadata[0].hits_async().await,
+            metadata[1].hits_async().await
+        ),
+        (1, 1)
+    );
 }
 
 #[tokio::test]

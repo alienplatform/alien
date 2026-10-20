@@ -77,4 +77,4 @@ mod gcp_import;
 pub use gcp_import::*;
 
 #[cfg(feature = "kubernetes")]
-mod kubernetes_egress;
+pub(crate) mod kubernetes_egress;

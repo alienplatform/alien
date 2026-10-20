@@ -7,8 +7,9 @@ admin addresses (exclude the current replica). Service discovery uses
 `peers: {"dns": "gateway.svc", "port": 3129}`. Omit `peers` for a single replica.
 `replicaSecret` is a base64-encoded 32-byte secret shared only by gateway replicas.
 Instead of embedding it, the configuration can name `replicaSecretSource`, which the
-gateway reads with its own identity: `{"awsSecretsManager": {"secretId": "..."}}` or
-`{"vault": {"binding": "secrets", "key": "..."}}`. A sourced value is any string of at
+gateway reads with its own identity: `{"awsSecretsManager": {"secretId": "..."}}`,
+`{"vault": {"binding": "secrets", "key": "..."}}`, or `{"file": {"path": "..."}}` for a
+file such as a mounted Kubernetes Secret. A sourced value is any string of at
 least 32 characters; its SHA-256 is the key. Each peer request carries one
 `x-alien-replica-signature` value per accepted secret, comma-separated, and any match
 authenticates. When a running replica's configuration moves from an embedded secret to a
@@ -18,6 +19,11 @@ in place, and a replica holds at most two secrets; any other change needs a rest
 replica that boots after the move knows only the sourced secret: peers that still sign
 with the embedded one alone are refused by it until they refresh (at most one refresh
 interval).
+A gateway refreshes its configuration from its `secrets` vault binding, or from the file
+`ALIEN_EGRESS_GATEWAY_CONFIG_FILE` names when that is set. On Kubernetes both the
+configuration and the replica secret are Secrets the kubelet mounts and updates in place,
+so the controller that writes them never reads them back. An inline
+`ALIEN_EGRESS_GATEWAY_CONFIG` or a configuration path argument is static.
 The optional `policyMemoryBytes` overrides half the finite cgroup v2 `memory.max`
 limit (256 MiB for the default 512 MiB container). Without a finite limit or explicit override,
 startup fails. Local processes in an unbounded host must set an override.

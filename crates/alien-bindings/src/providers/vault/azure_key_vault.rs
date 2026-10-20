@@ -174,6 +174,76 @@ impl crate::traits::Vault for AzureKeyVault {
         Ok(())
     }
 
+    /// Key Vault has no conditional write, so this lists the secret's versions (metadata, no
+    /// values) and writes only when there is none. A secret that exists, or was deleted and is
+    /// still recoverable, is left unchanged. The check and the write are not atomic: callers
+    /// must be the secret's only writer.
+    async fn create_secret(&self, secret_name: &str, value: &str) -> Result<()> {
+        let sanitized = Self::sanitize_secret_name(secret_name);
+        let exists = match self
+            .client
+            .list_secret_versions(self.vault_base_url.clone(), sanitized.clone())
+            .await
+        {
+            Ok(versions) => !versions.is_empty(),
+            Err(error)
+                if matches!(
+                    error.error,
+                    Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+                ) =>
+            {
+                false
+            }
+            Err(error) => {
+                return Err(error.context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to list versions of secret '{}' in vault '{}'",
+                        sanitized, self.vault_base_url
+                    ),
+                    resource_id: None,
+                }))
+            }
+        };
+        let already_exists = || {
+            alien_error::AlienError::new(ErrorData::VaultSecretAlreadyExists {
+                vault: self.vault_base_url.clone(),
+                secret_name: secret_name.to_string(),
+            })
+        };
+        if exists {
+            return Err(already_exists());
+        }
+        let parameters = SecretSetParameters {
+            value: value.to_string(),
+            content_type: None,
+            attributes: None,
+            tags: std::collections::HashMap::new(),
+        };
+        match self
+            .client
+            .set_secret(self.vault_base_url.clone(), sanitized, parameters)
+            .await
+        {
+            Ok(_) => Ok(()),
+            // A deleted secret that is still recoverable keeps its name.
+            Err(error)
+                if matches!(
+                    error.error,
+                    Some(alien_client_core::ErrorData::RemoteResourceConflict { .. })
+                ) =>
+            {
+                Err(already_exists())
+            }
+            Err(error) => Err(error.context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to create secret '{}' in vault '{}'",
+                    secret_name, self.vault_base_url
+                ),
+                resource_id: None,
+            })),
+        }
+    }
+
     /// Delete a secret
     async fn delete_secret(&self, secret_name: &str) -> Result<()> {
         let sanitized = Self::sanitize_secret_name(secret_name);

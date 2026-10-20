@@ -7727,6 +7727,9 @@ mod tests {
                 idle_pause_seconds: None,
                 limits: None,
                 egress_network_verified: false,
+                egress_public_key: None,
+                egress_config_digest: None,
+                egress_replica_secret_ready: false,
                 default_policy: None,
                 _internal_stay_count: None,
             }

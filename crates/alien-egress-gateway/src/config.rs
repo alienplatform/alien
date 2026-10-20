@@ -72,6 +72,12 @@ pub enum ReplicaSecretSource {
         /// Secret name within the vault.
         key: String,
     },
+    /// A file holding the value, such as a Kubernetes Secret the kubelet mounts into the pod.
+    #[serde(rename_all = "camelCase")]
+    File {
+        /// Path of the file.
+        path: String,
+    },
 }
 
 /// One signing key accepted during key rotation.

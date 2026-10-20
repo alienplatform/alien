@@ -81,6 +81,9 @@ impl ResourceImporter for AzureSandboxImporter {
             idle_pause_seconds: sandbox.lifecycle.idle_pause_seconds,
             limits: sandbox.limits.clone(),
             egress_network_verified: false,
+            egress_public_key: None,
+            egress_config_digest: None,
+            egress_replica_secret_ready: false,
             default_policy: sandbox.default_policy.clone(),
             _internal_stay_count: None,
         };

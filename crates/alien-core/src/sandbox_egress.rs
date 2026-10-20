@@ -17,7 +17,9 @@ use crate::{
 pub const SANDBOX_EGRESS_GATEWAY_ID: &str = "sandbox-egress-gateway";
 
 /// The gateway's replica secret, named `{resource prefix}-sandbox-egress-replica-secret` in
-/// AWS Secrets Manager. Setup generates it; only the gateway reads it.
+/// AWS Secrets Manager, where setup generates it. On Azure and Kubernetes it is this entry of
+/// the deployment secrets vault, written once and never read back by its writer. Only the
+/// gateway reads it.
 pub const SANDBOX_EGRESS_REPLICA_SECRET: &str = "sandbox-egress-replica-secret";
 
 /// Gateway images pinned before gateways read their replica secret from a source. A gateway on
@@ -31,11 +33,28 @@ pub const EMBEDDED_REPLICA_SECRET_GATEWAY_DIGESTS: &[&str] = &[
     "sha256:b252a1b423b95385e5df0c57a37daae6937daa274e3c7783c71704584b18483d",
 ];
 
-/// Whether a gateway running `image` reads its replica secret from a source.
-pub fn gateway_image_reads_replica_secret_source(image: &str) -> bool {
-    !EMBEDDED_REPLICA_SECRET_GATEWAY_DIGESTS
+/// Gateway images pinned after gateways read a replica secret source but before they read their
+/// configuration and replica secret from mounted files. The list never grows.
+pub const NO_CONFIG_FILE_GATEWAY_DIGESTS: &[&str] =
+    &["sha256:8538880f99141888e54bedc7d290194dfee5bfe11910266b309dde53de2601b0"];
+
+fn is_pinned_to(image: &str, digests: &[&str]) -> bool {
+    digests
         .iter()
         .any(|digest| image.ends_with(&format!("@{digest}")))
+}
+
+/// Whether a gateway running `image` reads its replica secret from a source.
+pub fn gateway_image_reads_replica_secret_source(image: &str) -> bool {
+    !is_pinned_to(image, EMBEDDED_REPLICA_SECRET_GATEWAY_DIGESTS)
+}
+
+/// Whether a gateway running `image` reads its configuration from a file it refreshes and its
+/// replica secret from a file. Kubernetes mounts both from Secrets the gateway's managing
+/// identity writes and never reads.
+pub fn gateway_image_reads_config_files(image: &str) -> bool {
+    gateway_image_reads_replica_secret_source(image)
+        && !is_pinned_to(image, NO_CONFIG_FILE_GATEWAY_DIGESTS)
 }
 
 /// Whether preflight installed the managed gateway for this deployment.

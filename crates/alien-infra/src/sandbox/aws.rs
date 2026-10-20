@@ -18,9 +18,7 @@ use std::time::Duration;
 
 use tracing::{debug, info};
 
-use crate::core::{
-    state_utils::StackResourceStateExt, ResourceControllerContext, ResourcePermissionsHelper,
-};
+use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
 use crate::error::{ErrorData, Result};
 use alien_aws_clients::lambda_microvms::{
     CreateMicrovmImageRequest, MicrovmCodeArtifact, MicrovmCpuConfiguration, MicrovmImageBuild,
@@ -148,62 +146,10 @@ pub struct AwsSandboxController {
     pub(crate) max_lifetime_seconds: Option<u32>,
 }
 
-/// The signing key's public half as the owner sandbox recorded it. Every other internet sandbox
-/// depends on the owner, so the owner has initialized it first; the vault is not read.
-fn owner_egress_public_key(
-    ctx: &ResourceControllerContext<'_>,
-    owner: &str,
-) -> Result<super::egress::GatewayPublicKey> {
-    let not_ready = || {
-        AlienError::new(ErrorData::DependencyNotReady {
-            resource_id: ctx.desired_config.id().to_string(),
-            dependency_id: owner.to_string(),
-        })
-    };
-    let state = ctx
-        .state
-        .resources
-        .get(owner)
-        .filter(|state| state.internal_state.is_some())
-        .ok_or_else(not_ready)?;
-    state
-        .get_internal_controller_typed::<AwsSandboxController>()?
-        .egress_public_key
-        .ok_or_else(not_ready)
-}
-
-/// A key another internet sandbox of this deployment already recorded, for an owner that has
-/// none: one added with a lower id than the previous owner, or one whose state was replaced.
-/// Adopting it keeps every sandbox and the gateway on the key the vault holds.
-fn recorded_egress_public_key(
-    ctx: &ResourceControllerContext<'_>,
-) -> Result<Option<super::egress::GatewayPublicKey>> {
-    let mut peers: Vec<_> = ctx
-        .state
-        .resources
-        .iter()
-        .filter(|(id, resource)| {
-            id.as_str() != ctx.desired_config.id()
-                && resource.status != ResourceStatus::Deleted
-                && resource.internal_state.is_some()
-                && resource
-                    .config
-                    .downcast_ref::<Sandbox>()
-                    .is_some_and(|sandbox| {
-                        matches!(sandbox.egress, alien_core::SandboxEgress::Internet)
-                    })
-        })
-        .collect();
-    peers.sort_by(|(left, _), (right, _)| left.cmp(right));
-    for (_, peer) in peers {
-        if let Some(key) = peer
-            .get_internal_controller_typed::<AwsSandboxController>()?
-            .egress_public_key
-        {
-            return Ok(Some(key));
-        }
+impl super::egress::RecordsEgressKey for AwsSandboxController {
+    fn egress_public_key(&self) -> Option<&super::egress::GatewayPublicKey> {
+        self.egress_public_key.as_ref()
     }
-    Ok(None)
 }
 
 #[controller]
@@ -546,7 +492,8 @@ impl AwsSandboxController {
                 // Keep the key this deployment already uses, whichever sandbox recorded it;
                 // only a deployment with none writes one. The private key is never read.
                 if self.egress_public_key.is_none() {
-                    self.egress_public_key = match recorded_egress_public_key(ctx)? {
+                    self.egress_public_key = match super::egress::recorded_public_key::<Self>(ctx)?
+                    {
                         Some(key) => Some(key),
                         None => {
                             let vault = super::egress::deployment_vault(ctx).await?;
@@ -555,7 +502,7 @@ impl AwsSandboxController {
                     };
                 }
             } else {
-                self.egress_public_key = Some(owner_egress_public_key(ctx, owner)?);
+                self.egress_public_key = Some(super::egress::owner_public_key::<Self>(ctx, owner)?);
             }
             let key = self
                 .egress_public_key
@@ -1740,8 +1687,8 @@ mod tests {
     use super::*;
     use crate::core::controller_test::SingleControllerExecutor;
     use crate::core::{
-        deserialize_controller, serialize_controller, MockPlatformServiceProvider,
-        ResourceController,
+        deserialize_controller, serialize_controller, state_utils::StackResourceStateExt,
+        MockPlatformServiceProvider, ResourceController,
     };
     use alien_aws_clients::iam::MockIamApi;
     use alien_aws_clients::lambda_microvms::{
@@ -2058,7 +2005,7 @@ mod tests {
 
         let directory = tempfile::tempdir().unwrap();
         let vault = LocalVault::new("secrets".into(), directory.path().into());
-        let key = super::super::egress::ensure_signing_key(&vault)
+        let key = super::super::egress::create_signing_key(&vault)
             .await
             .unwrap();
         vault
