@@ -4411,8 +4411,8 @@ mod tests {
         }
 
         /// The running gateway, the replica secret's Secrets Manager answers, and who set up the
-        /// deployment, for a refresh pass. A `fresh` gateway is only in the desired stack: it
-        /// has not been created yet.
+        /// deployment, for a refresh pass. A `fresh` gateway is only in the desired stack, on
+        /// `image`: it has not been created yet.
         #[derive(Default)]
         struct GatewayFixture {
             image: Option<&'static str>,
@@ -4492,10 +4492,6 @@ mod tests {
                 builder = builder
                     .with_stack_resource(internet_sandbox(other), alien_core::ResourceLifecycle::Live);
             }
-            if let (Some(image), true) = (gateway.image, gateway.fresh) {
-                builder = builder
-                    .with_stack_resource(gateway_container(image), alien_core::ResourceLifecycle::Live);
-            }
             let mut executor = builder
                 .with_dependency(sandbox_network(), sandbox_network_controller())
                 .with_dependency(
@@ -4509,6 +4505,19 @@ mod tests {
                 .build()
                 .await
                 .unwrap();
+            if let (Some(image), true) = (gateway.image, gateway.fresh) {
+                // The stack mutations add the managed gateway; this release starts it on `image`
+                // and it has never been created.
+                let id = alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID;
+                executor.remove_saved_resource(id);
+                executor
+                    .desired_resource_config_mut(id)
+                    .and_then(|config| config.downcast_mut::<alien_core::Container>())
+                    .expect("the stack mutations add the gateway")
+                    .code = alien_core::ContainerCode::Image {
+                    image: image.into(),
+                };
+            }
             if let (Some(image), false) = (gateway.image, gateway.fresh) {
                 let container = gateway_container(image);
                 executor.insert_saved_resource(

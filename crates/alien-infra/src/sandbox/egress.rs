@@ -457,6 +457,9 @@ pub(crate) async fn publish_aws_config(
     }
     let vault = deployment_vault(ctx).await?;
     if !*replica_secret_ready {
+        if gateway_not_created(ctx) {
+            return publish_new_gateway_config(vault.as_ref(), value, published).await;
+        }
         return publish_changed_gateway_config(vault.as_ref(), value, published).await;
     }
     value["replicaSecretSource"] = serde_json::json!({
@@ -507,7 +510,12 @@ fn gateway_reads_replica_secret_source(ctx: &crate::core::ResourceControllerCont
     };
     let id = alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID;
     match ctx.state.resources.get(id) {
-        Some(state) if matches!(state.status, Running | Pending | Provisioning | ProvisionFailed) => {
+        Some(state)
+            if matches!(
+                state.status,
+                Running | Pending | Provisioning | ProvisionFailed
+            ) =>
+        {
             reads_source(&state.config)
         }
         Some(_) => false,
@@ -517,6 +525,15 @@ fn gateway_reads_replica_secret_source(ctx: &crate::core::ResourceControllerCont
             .get(id)
             .is_some_and(|entry| reads_source(&entry.config)),
     }
+}
+
+/// Whether the gateway has not been created yet: no replica holds a replica secret.
+#[cfg(feature = "aws")]
+fn gateway_not_created(ctx: &crate::core::ResourceControllerContext<'_>) -> bool {
+    ctx.state
+        .resources
+        .get(alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID)
+        .is_none_or(|state| state.status == alien_core::ResourceStatus::Pending)
 }
 
 /// Whether the replica secret exists. Setup creates it; the managing identity may only see
@@ -601,6 +618,45 @@ pub(crate) async fn delete_aws_replica_secret(
             resource_id: Some(alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.into()),
         }),
     }
+}
+
+/// The first configuration of a gateway that has not been created and embeds its replica
+/// secret: no replica holds a secret yet, so it carries a new one and is written without reading
+/// the stored entry, which setup forbids the managing identity to read. A later change to it
+/// needs that read ([`publish_gateway_config`]) until the gateway reads its secret from a source.
+#[cfg(feature = "aws")]
+pub(crate) async fn publish_new_gateway_config(
+    vault: &dyn Vault,
+    mut value: serde_json::Value,
+    published: &mut Option<String>,
+) -> Result<()> {
+    let digest = config_digest(&value);
+    if published.as_deref() == Some(digest.as_str()) {
+        return Ok(());
+    }
+    value
+        .as_object_mut()
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "The sandbox gateway configuration must be an object".into(),
+                resource_id: Some(alien_core::SECRETS_VAULT_ID.into()),
+            })
+        })?
+        .insert(
+            "replicaSecret".into(),
+            STANDARD
+                .encode(ed25519_compact::Seed::generate().as_ref())
+                .into(),
+        );
+    vault
+        .set_secret(GATEWAY_CONFIG, &value.to_string())
+        .await
+        .context(ErrorData::ResourceConfigInvalid {
+            message: "Failed to publish the sandbox gateway configuration".into(),
+            resource_id: Some(alien_core::SECRETS_VAULT_ID.into()),
+        })?;
+    *published = Some(digest);
+    Ok(())
 }
 
 /// Publishes `value` unless its digest equals `published`, then records the new digest. Only a
@@ -913,6 +969,54 @@ mod aws_tests {
         assert_eq!(write.hits_async().await, 2);
         assert_ne!(published.as_deref(), Some(digest.as_str()));
     }
+    /// A fresh install whose gateway image still embeds its replica secret, under a managing
+    /// identity that may not read the secrets vault. The first configuration is written with a
+    /// new secret and no read. A later change needs the stored secret, so it fails with what to
+    /// do (roll the gateway image) instead of dropping the secret the replicas embed.
+    #[tokio::test]
+    async fn a_new_legacy_gateway_gets_a_first_configuration_and_later_changes_fail_loudly() {
+        let server = MockServer::start_async().await;
+        let read = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .header("x-amz-target", "AmazonSSM.GetParameter");
+                then.status(400).json_body(serde_json::json!({
+                    "__type": "AccessDeniedException",
+                    "message": "User: arn:aws:sts::111122223333:assumed-role/test-management/session is not authorized to perform: ssm:GetParameter with an explicit deny in an identity-based policy"
+                }));
+            })
+            .await;
+        let write = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .header("x-amz-target", "AmazonSSM.PutParameter")
+                    .body_contains("test-secrets-sandbox-egress-gateway-config")
+                    .body_contains("replicaSecret");
+                then.status(200)
+                    .json_body(serde_json::json!({"Version": 1, "Tier": "Standard"}));
+            })
+            .await;
+        let vault = parameter_store(&server);
+        let config = |audiences: &[&str]| serde_json::json!({"audiences": audiences});
+        let mut published = None;
+
+        publish_new_gateway_config(&vault, config(&["first"]), &mut published)
+            .await
+            .expect("the first configuration is written without a read");
+        assert_eq!((read.hits_async().await, write.hits_async().await), (0, 1));
+
+        let error =
+            publish_changed_gateway_config(&vault, config(&["first", "second"]), &mut published)
+                .await
+                .expect_err("a change needs the stored secret, which may not be read");
+        assert!(
+            error.message.contains("Roll the sandbox gateway"),
+            "{}",
+            error.message
+        );
+        assert_eq!(write.hits_async().await, 1, "nothing is written without the secret");
+    }
+
     #[cfg(feature = "aws")]
     #[tokio::test]
     async fn a_direct_setup_replica_secret_is_deleted_without_recovery() {
