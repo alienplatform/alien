@@ -318,7 +318,15 @@ pub fn generate_cloudformation_template_with_profile(
     // CloudFormation packages always register push deployments.
     stack_settings.deployment_model = DeploymentModel::Push;
     if stack_settings.network.is_none() {
-        stack_settings.network = Network::preflight_settings(stack);
+        stack_settings.network = Network::preflight_settings(stack).or_else(|| {
+            // The existing-VPC emitter reads the VPC from parameters, and those are declared from
+            // the settings. Terraform declares the matching variables from the stack's network.
+            stack
+                .resources()
+                .find_map(|(_, entry)| entry.config.downcast_ref::<Network>())
+                .filter(|network| matches!(network.settings, NetworkSettings::ByoVpcAws { .. }))
+                .map(|network| network.settings.clone())
+        });
     }
     if options.target.is_kubernetes() && stack_settings.network.is_none() {
         stack_settings.network = Some(NetworkSettings::Create {

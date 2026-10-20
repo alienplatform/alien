@@ -125,3 +125,46 @@ fn network_added_by_the_preflight_declares_its_inputs() {
         );
     }
 }
+
+/// A stack can name its own existing VPC rather than take one from the settings. The template
+/// reads that VPC from the same inputs either way, defaulting to the stack's IDs, as Terraform does.
+#[test]
+fn existing_vpc_declared_by_the_stack_renders_as_its_settings() {
+    let existing = NetworkSettings::ByoVpcAws {
+        vpc_id: "vpc-0123456789abcdef0".to_string(),
+        public_subnet_ids: vec!["subnet-public-a".to_string(), "subnet-public-b".to_string()],
+        private_subnet_ids: vec![
+            "subnet-private-a".to_string(),
+            "subnet-private-b".to_string(),
+        ],
+        security_group_ids: vec!["sg-0123456789abcdef0".to_string()],
+    };
+    let stack = Stack::new("existing-vpc".to_string())
+        .add(
+            Network::new("default-network".to_string())
+                .settings(existing.clone())
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+
+    // cfn-lint runs inside each render and fails on any ref to an undeclared parameter.
+    let render = |settings| {
+        render_built_ins_template(
+            &stack,
+            settings,
+            RegistrationMode::OutputsFallback,
+            CloudFormationTarget::Aws,
+            "aws",
+            "existing vpc declared by the stack",
+        )
+        .1
+    };
+    assert_eq!(
+        render(StackSettings::default()),
+        render(StackSettings {
+            network: Some(existing),
+            ..StackSettings::default()
+        })
+    );
+}
