@@ -28,6 +28,10 @@ export type ReconcileRequest = {
   capabilities?: Array<OperatorCapabilityReport> | undefined;
   deploymentId: string;
   executionClaim?: ExecutionClaim | null | undefined;
+  /**
+   * Reader ceiling advertised before upgrading a deployment checkpoint.
+   */
+  maxSupportedDeploymentProtocolVersion?: number | null | undefined;
   observedInventoryBatches?: Array<ObservedInventoryBatch> | undefined;
   operatorVersion?: string | null | undefined;
   resourceHeartbeats?: Array<ResourceHeartbeat> | undefined;
@@ -42,6 +46,7 @@ export type ReconcileRequest$Outbound = {
   capabilities?: Array<OperatorCapabilityReport$Outbound> | undefined;
   deploymentId: string;
   executionClaim?: ExecutionClaim$Outbound | null | undefined;
+  maxSupportedDeploymentProtocolVersion?: number | null | undefined;
   observedInventoryBatches?: Array<ObservedInventoryBatch$Outbound> | undefined;
   operatorVersion?: string | null | undefined;
   resourceHeartbeats?: Array<ResourceHeartbeat$Outbound> | undefined;
@@ -59,6 +64,7 @@ export const ReconcileRequest$outboundSchema: z.ZodType<
   capabilities: z.array(OperatorCapabilityReport$outboundSchema).optional(),
   deploymentId: z.string(),
   executionClaim: z.nullable(ExecutionClaim$outboundSchema).optional(),
+  maxSupportedDeploymentProtocolVersion: z.nullable(z.int()).optional(),
   observedInventoryBatches: z.array(ObservedInventoryBatch$outboundSchema)
     .optional(),
   operatorVersion: z.nullable(z.string()).optional(),

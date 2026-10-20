@@ -14438,6 +14438,13 @@
               }
             ]
           },
+          "maxSupportedDeploymentProtocolVersion": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Reader ceiling advertised before upgrading a deployment checkpoint.",
+            "minimum": 0,
+            "nullable": true
+          },
           "observedInventoryBatches": {
             "type": "array",
             "items": {

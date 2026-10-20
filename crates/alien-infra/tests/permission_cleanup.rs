@@ -299,3 +299,30 @@ async fn setup_removes_recorded_gcp_management_role_after_its_last_resource_is_r
 async fn setup_preserves_gcp_management_role_still_needed_by_another_resource() {
     management_grant_cleanup(true).await;
 }
+
+#[test]
+fn legacy_management_checkpoint_does_not_claim_federation_access() {
+    let controller = deserialize_controller(json!({
+        "type":"GcpRemoteStackManagementController", "_controllerStateVersion":1,
+        "state":"ready", "serviceAccountEmail":"synthetic-management@synthetic-project.iam.gserviceaccount.com",
+        "roleBound":true, "impersonationGranted":true
+    })).unwrap();
+    assert!(
+        controller.get_outputs().is_none(),
+        "legacy impersonation is not a usable federation grant"
+    );
+    let mut resource = StackResourceState::new_pending(
+        "remote-stack-management".into(),
+        Resource::new(alien_core::RemoteStackManagement::new("management".into()).build()),
+        Some(ResourceLifecycle::Frozen),
+        vec![],
+    );
+    resource.set_internal_controller(Some(controller)).unwrap();
+    let saved = resource.internal_state.unwrap();
+    assert_eq!(saved["state"], "ready");
+    assert_eq!(saved["federationGranted"], false);
+    assert_eq!(
+        saved["serviceAccountEmail"],
+        "synthetic-management@synthetic-project.iam.gserviceaccount.com"
+    );
+}

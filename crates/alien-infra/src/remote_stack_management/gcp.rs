@@ -37,6 +37,8 @@ pub struct GcpRemoteStackManagementController {
     /// Whether the management service account has its resource permissions.
     pub(crate) role_bound: bool,
     /// Whether the deployment's exact federated principal has been granted access.
+    /// Older checkpoints used impersonation; loading them must not claim federation.
+    #[serde(default)]
     pub(crate) federation_granted: bool,
     #[serde(default)]
     pub(crate) federation_setup: crate::gcp_federation::GcpFederationSetup,

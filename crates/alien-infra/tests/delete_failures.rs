@@ -309,6 +309,11 @@ async fn denied_gcp_management_policy_read_preserves_cleanup_checkpoint() {
         true
     );
     assert_eq!(
+        resource.last_failed_state.as_ref().unwrap()["federationGranted"],
+        false,
+        "legacy impersonation must not imply a federation grant"
+    );
+    assert_eq!(
         resource.last_failed_state.as_ref().unwrap()["serviceAccountEmail"],
         "synthetic-management@synthetic-project.iam.gserviceaccount.com"
     );

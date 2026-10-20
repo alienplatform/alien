@@ -127,6 +127,11 @@ impl DeploymentLoopTransport for ManagerApiTransport {
 
         #[cfg(feature = "openapi")]
         let body = alien_manager_api::types::ReconcileRequest {
+            max_supported_deployment_protocol_version: Some(
+                alien_core::MAX_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION
+                    .try_into()
+                    .expect("reader version fits the OpenAPI integer"),
+            ),
             deployment_id: deployment_id.to_string(),
             session: self.session.clone(),
             state: state_json,
@@ -144,6 +149,11 @@ impl DeploymentLoopTransport for ManagerApiTransport {
         };
         #[cfg(not(feature = "openapi"))]
         let body = alien_manager_api::types::ReconcileRequest {
+            max_supported_deployment_protocol_version: Some(
+                alien_core::MAX_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION
+                    .try_into()
+                    .expect("reader version fits the OpenAPI integer"),
+            ),
             deployment_id: deployment_id.to_string(),
             session: self.session.clone(),
             state: state_json,
@@ -803,6 +813,11 @@ pub async fn final_reconcile(
         client
             .reconcile()
             .body(alien_manager_api::types::ReconcileRequest {
+                max_supported_deployment_protocol_version: Some(
+                    alien_core::MAX_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION
+                        .try_into()
+                        .expect("reader version fits the OpenAPI integer"),
+                ),
                 deployment_id: deployment_id.to_string(),
                 session: session.to_string(),
                 state: state_json,

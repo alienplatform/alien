@@ -2441,6 +2441,7 @@ async fn a_state_write_back_without_the_answer_map_does_not_erase_the_record() {
         serde_json::json!({
             "deploymentId": persisted.id,
             "currentState": serde_json::to_value(&state_without_map).unwrap(),
+            "maxSupportedDeploymentProtocolVersion": alien_core::MAX_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION,
         }),
     )
     .await;

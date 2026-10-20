@@ -3310,7 +3310,7 @@ async fn prepare_setup_update(
             message: "Failed to retry failed setup-owned resources".to_string(),
         })?;
     current.runtime_metadata = Some(runtime_metadata);
-    current.protocol_version = alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION;
+    current.protocol_version = alien_core::CLEANUP_SETUP_DEPLOYMENT_PROTOCOL_VERSION;
     current.status = DeploymentStatus::InitialSetup;
     Ok(())
 }

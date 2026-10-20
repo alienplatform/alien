@@ -222,7 +222,7 @@ pub async fn handle_update_pending(
         };
         next.stack_state = Some(stack_state);
         next.runtime_metadata = Some(metadata);
-        next.protocol_version = alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION;
+        next.protocol_version = alien_core::CLEANUP_SETUP_DEPLOYMENT_PROTOCOL_VERSION;
         next.error = None;
         next.retry_requested = false;
         return Ok(DeploymentStepResult {
@@ -351,7 +351,7 @@ pub async fn handle_update_pending(
     let pending_prepared_release_id = target_release_id.map(str::to_string);
     let mut runtime_metadata = current.runtime_metadata.unwrap_or_default();
     runtime_metadata.pending_prepared_stack = Some(mutated_stack);
-    next.protocol_version = alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION;
+    next.protocol_version = alien_core::CLEANUP_SETUP_DEPLOYMENT_PROTOCOL_VERSION;
     runtime_metadata.pending_prepared_release_id = pending_prepared_release_id;
     runtime_metadata.persisted_gate_answers = persisted_gate_answers;
 
@@ -1011,7 +1011,7 @@ mod tests {
                 ..Default::default()
             }),
             retry_requested: false,
-            protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+            protocol_version: alien_core::CLEANUP_SETUP_DEPLOYMENT_PROTOCOL_VERSION,
         };
         let mut current = handle_update_pending(
             current,
@@ -1163,7 +1163,7 @@ mod tests {
                     ..Default::default()
                 }),
                 retry_requested: false,
-                protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                protocol_version: alien_core::CLEANUP_SETUP_DEPLOYMENT_PROTOCOL_VERSION,
             };
             handle_update_pending(
                 state,
@@ -1283,7 +1283,7 @@ mod tests {
                     ..Default::default()
                 }),
                 retry_requested: false,
-                protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                protocol_version: alien_core::CLEANUP_SETUP_DEPLOYMENT_PROTOCOL_VERSION,
             };
 
             let error = handle_update_pending(
@@ -1371,7 +1371,7 @@ mod tests {
                         ..Default::default()
                     }),
                     retry_requested: false,
-                    protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                    protocol_version: alien_core::CLEANUP_SETUP_DEPLOYMENT_PROTOCOL_VERSION,
                 };
                 handle_update_pending(
                     state,

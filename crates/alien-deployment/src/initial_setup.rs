@@ -13,10 +13,10 @@ use alien_infra::{ImporterRegistry, RunningResourcePolicy, StackExecutor, StackS
 use tracing::{debug, info};
 
 fn normalize_legacy_setup_metadata(metadata: &mut RuntimeMetadata, protocol_version: &mut u32) {
-    if *protocol_version < 2 {
+    if *protocol_version < alien_core::CLEANUP_SETUP_DEPLOYMENT_PROTOCOL_VERSION {
         if let Some(installed) = metadata.pending_prepared_stack.take() {
             metadata.pending_prepared_stack = metadata.prepared_stack.replace(installed);
-            *protocol_version = alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION;
+            *protocol_version = alien_core::CLEANUP_SETUP_DEPLOYMENT_PROTOCOL_VERSION;
         }
     }
 }
@@ -840,7 +840,7 @@ pub async fn handle_initial_setup_failed(
             )
             .await?,
         );
-        next.protocol_version = alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION;
+        next.protocol_version = alien_core::CLEANUP_SETUP_DEPLOYMENT_PROTOCOL_VERSION;
     }
     if current.platform == alien_core::Platform::Local {
         if let Some(metadata) = next.runtime_metadata.as_mut().filter(|metadata| {

@@ -90,6 +90,9 @@ pub struct AcquiredDeploymentResponse {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct ReconcileRequest {
+    /// Reader ceiling advertised before upgrading a deployment checkpoint.
+    #[serde(default)]
+    pub max_supported_deployment_protocol_version: Option<u32>,
     pub deployment_id: String,
     pub session: String,
     pub state: serde_json::Value,
@@ -553,6 +556,20 @@ async fn acquired_deployment_response(
     })
 }
 
+// An authorized actor may introduce the known setup representation. It must
+// never downgrade a stored checkpoint or introduce an unknown future protocol.
+fn accepts_reported_protocol(registered: u32, reported: u32, supported: Option<u32>) -> bool {
+    (alien_core::MIN_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION
+        ..=alien_core::MAX_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION)
+        .contains(&reported)
+        && (reported == registered
+            || (reported == alien_core::CLEANUP_SETUP_DEPLOYMENT_PROTOCOL_VERSION
+                && supported.unwrap_or(1) >= reported
+                && (alien_core::MIN_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION
+                    ..alien_core::CLEANUP_SETUP_DEPLOYMENT_PROTOCOL_VERSION)
+                    .contains(&registered)))
+}
+
 /// `POST /v1/sync/reconcile` — Inbound: workspace / dg / deployment
 /// bearer. `caller: &Subject` is threaded into `DeploymentStore::reconcile`.
 #[cfg_attr(feature = "openapi", utoipa::path(
@@ -603,9 +620,11 @@ async fn reconcile(
         }
     };
 
-    if deployment_state.protocol_version != deployment.deployment_protocol_version
-        || deployment_state.protocol_version > alien_core::MAX_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION
-    {
+    if !accepts_reported_protocol(
+        deployment.deployment_protocol_version,
+        deployment_state.protocol_version,
+        req.max_supported_deployment_protocol_version,
+    ) {
         return ErrorData::bad_request(
             "A deployment report must preserve its registered protocol version. Update the deployment actor or manager before retrying.",
         ).into_response();
@@ -2007,9 +2026,16 @@ async fn agent_sync(
         let version = reported
             .get("protocolVersion")
             .and_then(serde_json::Value::as_u64);
-        if version
-            .is_some_and(|version| version != u64::from(deployment.deployment_protocol_version))
-            || (version.is_none() && deployment.deployment_protocol_version > 1)
+        if version.is_some_and(|version| {
+            u32::try_from(version).map_or(true, |version| {
+                version > supported_protocol
+                    || !accepts_reported_protocol(
+                        deployment.deployment_protocol_version,
+                        version,
+                        Some(supported_protocol),
+                    )
+            })
+        }) || (version.is_none() && deployment.deployment_protocol_version > 1)
         {
             return ErrorData::bad_request(
                 "A deployment report must preserve its registered protocol version",

@@ -389,7 +389,7 @@ pub async fn handle_provisioning_failed(
             )
             .await?,
         );
-        next.protocol_version = alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION;
+        next.protocol_version = alien_core::CLEANUP_SETUP_DEPLOYMENT_PROTOCOL_VERSION;
     }
 
     if local_setup_retry {

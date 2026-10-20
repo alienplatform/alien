@@ -1,7 +1,7 @@
 lockVersion: 2.0.0
 id: 8940d7e8-6d5d-4ea9-9632-85457ecd75f0
 management:
-  docChecksum: 9e184d4eb3d621217791b132c4df1299
+  docChecksum: 56fc72bba6f2c408e59aabc7aab8fb33
   docVersion: 1.0.0
   speakeasyVersion: 1.680.11
   generationVersion: 2.788.15
@@ -10,9 +10,9 @@ management:
   repoURL: https://github.com/alienplatform/alien.git
   repoSubDirectory: client-sdks/manager/typescript
 persistentEdits:
-  generation_id: da639bf6-60b6-4d78-9efe-2b3e0b147c33
-  pristine_commit_hash: fcc4974023b6097002e902527eabe9d6cd657ac8
-  pristine_tree_hash: 06be9b49ba858f60da8be49cb1efce287ad0dc33
+  generation_id: 673a8636-df16-4f93-9abb-85c5352ea55c
+  pristine_commit_hash: 4fbb207057bc421a38b94e7b2e54909d349136dd
+  pristine_tree_hash: 99118090bd3196ab7f8c82adbd390d52deb7484c
 features:
   typescript:
     additionalDependencies: 0.1.0
@@ -1533,8 +1533,8 @@ trackedFiles:
     pristine_git_object: 347eaf27d64469a70a1eb290f283acfe6254c19f
   docs/models/reconcilerequest.md:
     id: 5395aa25e7b9
-    last_write_checksum: sha1:b1647e7aa5c2ce8b632994a6ea6d4e4353f9c153
-    pristine_git_object: c1a17efac567d1dff9754654b2cb3e3c4f79983c
+    last_write_checksum: sha1:db39ccee99ae7ab50490a3aa5ec44ca5f8b7824d
+    pristine_git_object: 197d80d315abb52f3e51ece4756c38dc27cbecad
   docs/models/reconcileresponse.md:
     id: f8da51a1114f
     last_write_checksum: sha1:ee9c0489f1ac741c5d3bc9fcdb6439b2c3bbc834
@@ -3689,8 +3689,8 @@ trackedFiles:
     pristine_git_object: 72e3e9585ac2bde1643c0c49ee1900e8566e0fc2
   src/models/reconcilerequest.ts:
     id: 36e98a4ce6a4
-    last_write_checksum: sha1:2e4c808e97324e2723d3e479971fa83b2df0c5ce
-    pristine_git_object: 7685ba0c35daaacb903167bd517a19f067d9f91b
+    last_write_checksum: sha1:33132f52726cbea80095921bf2b404403a291fe6
+    pristine_git_object: d46938c0cd36475c934dbdc5e7df91fedf82909f
   src/models/reconcileresponse.ts:
     id: 50e6a290722b
     last_write_checksum: sha1:e6c83d77e9eaf21bc07a0588578319c45e902451

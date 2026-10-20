@@ -188,3 +188,96 @@ async fn kubernetes_bootstrap_retains_gcp_protocol_and_base_environment() {
         alien_core::GCP_FEDERATION_DEPLOYMENT_PROTOCOL_VERSION
     );
 }
+
+#[tokio::test]
+async fn setup_checkpoint_protocol_upgrade_persists_and_blocks_older_actors() {
+    for path in ["/v1/sync", "/v1/sync/reconcile"] {
+        for previous in [1, 2] {
+            let fixture = make_fixture_for_platform(
+                Platform::Gcp,
+                Some(source_stack_without_setup_resources()),
+            )
+            .await;
+            let id = protocol_record(&fixture, "setup-upgrade", previous).await;
+            let token = mint_token(
+                &fixture.token_store,
+                TokenType::Deployment,
+                "ax_dep_",
+                Some(fixture.deployment_group_id.clone()),
+                Some(id.clone()),
+            )
+            .await;
+            let old = fixture
+                .deployment_store
+                .get_deployment(&alien_manager::auth::Subject::system(), &id)
+                .await
+                .unwrap()
+                .unwrap();
+            let stack = source_stack_without_setup_resources();
+            let checkpoint = DeploymentState {
+                status: DeploymentStatus::InitialSetup,
+                platform: Platform::Gcp,
+                current_release: None,
+                target_release: None,
+                stack_state: old.stack_state,
+                error: None,
+                environment_info: None,
+                runtime_metadata: Some(RuntimeMetadata {
+                    prepared_stack: Some(stack.clone()),
+                    pending_prepared_stack: Some(stack),
+                    ..Default::default()
+                }),
+                retry_requested: false,
+                protocol_version: alien_core::CLEANUP_SETUP_DEPLOYMENT_PROTOCOL_VERSION,
+            };
+            let state_field = if path == "/v1/sync" {
+                "currentState"
+            } else {
+                "state"
+            };
+            let mut body = serde_json::json!({"deploymentId":id,"session":"new-reader","maxSupportedDeploymentProtocolVersion":alien_core::MAX_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION});
+            body[state_field] = serde_json::to_value(&checkpoint).unwrap();
+            let mut unadvertised = body.clone();
+            unadvertised
+                .as_object_mut()
+                .unwrap()
+                .remove("maxSupportedDeploymentProtocolVersion");
+            let (status, response) = request(&fixture, path, &token, unadvertised).await;
+            assert_eq!(
+                status,
+                StatusCode::BAD_REQUEST,
+                "upgrade requires an advertised reader ceiling: {response:#}"
+            );
+            let (status, response) = request(&fixture, path, &token, body).await;
+            assert_eq!(
+                status,
+                StatusCode::OK,
+                "{path} upgrade from {previous}: {response:#}"
+            );
+            let saved = fixture
+                .deployment_store
+                .get_deployment(&alien_manager::auth::Subject::system(), &id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                saved.deployment_protocol_version,
+                alien_core::CLEANUP_SETUP_DEPLOYMENT_PROTOCOL_VERSION
+            );
+            let (status, response) = request(
+                &fixture,
+                "/v1/sync",
+                &token,
+                serde_json::json!({"deploymentId":id,"maxSupportedDeploymentProtocolVersion":2}),
+            )
+            .await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "old reader: {response:#}");
+            let mut downgrade = checkpoint;
+            downgrade.protocol_version = previous;
+            let mut body = serde_json::json!({"deploymentId":id,"session":"new-reader","maxSupportedDeploymentProtocolVersion":alien_core::MAX_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION});
+            body[state_field] = serde_json::to_value(downgrade).unwrap();
+            let (status, response) = request(&fixture, path, &token, body).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "downgrade: {response:#}");
+        }
+    }
+}

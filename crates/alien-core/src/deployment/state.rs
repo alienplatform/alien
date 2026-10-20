@@ -351,14 +351,17 @@ pub const MIN_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION: u32 = 1;
 /// Deployment protocol version this binary writes.
 /// Bump when making incompatible changes to DeploymentState semantics.
 ///
-/// Version 2 preserves installed and desired stacks separately during setup.
-/// Version 1 readers must refuse these checkpoints rather than interpreting the
-/// installed baseline as the desired setup target. Version 1 remains readable.
-pub const CURRENT_DEPLOYMENT_PROTOCOL_VERSION: u32 = 2;
+/// Unchanged state semantics retain the original writer version. Setup updates
+/// opt into CLEANUP_SETUP_DEPLOYMENT_PROTOCOL_VERSION when writing separate
+/// installed and desired definitions.
+pub const CURRENT_DEPLOYMENT_PROTOCOL_VERSION: u32 = 1;
 
-/// Latest state protocol this binary can execute. Provider-specific changes
-/// must not force unrelated deployments onto a newer writer protocol.
-pub const MAX_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION: u32 = 2;
+/// Latest state protocol this binary can execute.
+pub const MAX_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION: u32 = 3;
+
+/// Installed and desired setup definitions have distinct meanings. Versions 1
+/// and 2 predate this representation; version 2 is reserved for GCP federation.
+pub const CLEANUP_SETUP_DEPLOYMENT_PROTOCOL_VERSION: u32 = 3;
 
 /// GCP federation changes setup ownership and target credential semantics.
 pub const GCP_FEDERATION_DEPLOYMENT_PROTOCOL_VERSION: u32 = 2;

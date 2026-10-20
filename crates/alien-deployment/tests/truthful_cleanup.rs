@@ -68,7 +68,7 @@ fn deployment(stack: StackState) -> alien_core::DeploymentState {
         environment_info: None,
         runtime_metadata: None,
         retry_requested: false,
-        protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        protocol_version: alien_core::CLEANUP_SETUP_DEPLOYMENT_PROTOCOL_VERSION,
     }
 }
 async fn run_steps(
@@ -388,7 +388,7 @@ async fn live_denied_delete_preserves_checkpoint() {
 async fn setup_scoped_grant_cleanup(
     legacy_capture: bool,
     removed_profile: bool,
-    legacy_checkpoint: bool,
+    legacy_checkpoint: Option<u32>,
     pruned: bool,
 ) {
     use alien_aws_clients::iam::{
@@ -564,10 +564,11 @@ async fn setup_scoped_grant_cleanup(
         state.status = DeploymentStatus::InitialSetup;
         state.error = None;
     }
-    if legacy_checkpoint {
+    if let Some(version) = legacy_checkpoint {
         // Produced by the previous executor's failed update followed by its
         // real direct-setup preparation, before any new-format metadata existed.
         state = serde_json::from_str(include_str!("fixtures/legacy_cleanup_setup.json")).unwrap();
+        state.protocol_version = version;
         state.status = DeploymentStatus::InitialSetupFailed;
         state.retry_requested = true;
         state = alien_deployment::step(state, config(), fake_config(), Some(services.clone()))
@@ -587,8 +588,11 @@ async fn setup_scoped_grant_cleanup(
         assert_ne!(state.status, DeploymentStatus::InitialSetupFailed);
     }
     assert_eq!(state.status, DeploymentStatus::Provisioning);
-    if legacy_checkpoint {
-        assert_eq!(state.protocol_version, 2);
+    if legacy_checkpoint.is_some() {
+        assert_eq!(
+            state.protocol_version,
+            alien_core::CLEANUP_SETUP_DEPLOYMENT_PROTOCOL_VERSION
+        );
     }
     assert!(!*exists.lock().unwrap());
     assert_eq!(*policies.lock().unwrap(), ["unrelated-metadata-control"]);
@@ -601,17 +605,17 @@ async fn setup_scoped_grant_cleanup(
 
 #[tokio::test]
 async fn setup_drains_live_resources_then_removes_current_and_legacy_owned_grants() {
-    setup_scoped_grant_cleanup(false, false, false, false).await;
+    setup_scoped_grant_cleanup(false, false, None, false).await;
 }
 
 #[tokio::test]
 async fn setup_reconciles_legacy_uncaptured_inline_grants() {
-    setup_scoped_grant_cleanup(true, false, false, false).await;
+    setup_scoped_grant_cleanup(true, false, None, false).await;
 }
 
 #[tokio::test]
 async fn setup_removes_profile_grants_from_a_retained_identity() {
-    setup_scoped_grant_cleanup(false, true, false, false).await;
+    setup_scoped_grant_cleanup(false, true, None, false).await;
 }
 
 async fn live_until(
@@ -1015,14 +1019,14 @@ async fn live_workload_permission_probe() {
 
 #[tokio::test]
 async fn setup_resumes_legacy_prepared_desired_and_stale_pending_checkpoint() {
-    setup_scoped_grant_cleanup(false, false, true, false).await;
+    setup_scoped_grant_cleanup(false, false, Some(1), false).await;
 }
 
 #[tokio::test]
 async fn future_protocol_is_rejected_before_any_provider_access() {
     let mut state = deployment(StackState::new(Platform::Aws));
     state.status = alien_core::DeploymentStatus::InitialSetup;
-    state.protocol_version = alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION + 1;
+    state.protocol_version = alien_core::MAX_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION + 1;
     let version = state.protocol_version;
     let error = alien_deployment::step(
         state,
@@ -1061,5 +1065,10 @@ async fn unchanged_running_protocol_one_remains_usable_without_upgrade() {
 
 #[tokio::test]
 async fn setup_removes_historical_grants_after_deleted_resource_record_was_pruned() {
-    setup_scoped_grant_cleanup(false, false, false, true).await;
+    setup_scoped_grant_cleanup(false, false, None, true).await;
+}
+
+#[tokio::test]
+async fn setup_resumes_protocol_two_legacy_setup_representation() {
+    setup_scoped_grant_cleanup(false, false, Some(2), false).await;
 }
