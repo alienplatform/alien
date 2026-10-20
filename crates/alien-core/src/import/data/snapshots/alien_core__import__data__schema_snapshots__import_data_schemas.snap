@@ -2100,8 +2100,72 @@ expression: schemas
   },
   "gcp_remote_stack_management": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "description": "GCP RemoteStackManagement ImportData — cross-project service account the manager impersonates.",
+    "additionalProperties": false,
+    "definitions": {
+      "GcpFederationAccess": {
+        "additionalProperties": false,
+        "description": "Setup-owned federation access. Contains no assertions, keys or access tokens.",
+        "properties": {
+          "assertionAudience": {
+            "description": "Installation- and purpose-specific assertion audience, independently checked by the manager against its authorized deployment record.",
+            "type": "string"
+          },
+          "poolId": {
+            "type": "string"
+          },
+          "projectNumber": {
+            "type": "string"
+          },
+          "providerId": {
+            "type": "string"
+          },
+          "serviceAccountEmail": {
+            "type": "string"
+          },
+          "trust": {
+            "$ref": "#/definitions/GcpFederationTrust"
+          }
+        },
+        "required": [
+          "assertionAudience",
+          "poolId",
+          "projectNumber",
+          "providerId",
+          "serviceAccountEmail",
+          "trust"
+        ],
+        "type": "object"
+      },
+      "GcpFederationTrust": {
+        "additionalProperties": false,
+        "description": "The exact manager identity trusted by a deployment-owned identity pool.",
+        "properties": {
+          "issuer": {
+            "description": "OIDC issuer; Google or the manager's Kubernetes issuer.",
+            "type": "string"
+          },
+          "subject": {
+            "description": "Exact immutable Google account ID or Kubernetes service-account subject.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "issuer",
+          "subject"
+        ],
+        "type": "object"
+      }
+    },
+    "description": "Setup-owned GCP management account and customer-owned federation trust.",
     "properties": {
+      "federation": {
+        "allOf": [
+          {
+            "$ref": "#/definitions/GcpFederationAccess"
+          }
+        ],
+        "description": "Setup-owned customer pool and exact manager trust."
+      },
       "managementPermissionsApplied": {
         "description": "Whether the management role binding was attached by the generated stack.",
         "type": "boolean"
@@ -2117,13 +2181,6 @@ expression: schemas
           "null"
         ]
       },
-      "remoteBindingsServiceAccountEmail": {
-        "description": "Setup-owned service account used only for opted-in remote bindings.",
-        "type": [
-          "string",
-          "null"
-        ]
-      },
       "serviceAccountEmail": {
         "description": "Service account email the manager impersonates.",
         "type": "string"
@@ -2134,6 +2191,7 @@ expression: schemas
       }
     },
     "required": [
+      "federation",
       "managementPermissionsApplied",
       "projectId",
       "serviceAccountEmail",
