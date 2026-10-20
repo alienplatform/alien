@@ -1451,6 +1451,18 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
     deploy_task_with_environment(args, ctx, &environment).await
 }
 
+/// The protocol the manager records for a deployment. Every report about the
+/// deployment must keep it, so it is never replaced by this binary's default.
+pub(crate) fn recorded_protocol_version(deployment_id: &str, recorded: i32) -> Result<u32> {
+    u32::try_from(recorded)
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: format!(
+                "The manager reported an invalid protocol version {recorded} for deployment {deployment_id}"
+            ),
+        })
+}
+
 async fn deploy_task_with_environment(
     mut args: DeployArgs,
     ctx: ExecutionMode,
@@ -2159,7 +2171,11 @@ async fn deploy_task_with_environment(
                 message: "Failed to deserialize runtime_metadata".to_string(),
             })?,
         retry_requested: deployment.retry_requested,
-        protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+        // The manager rejects a report that changes the recorded protocol.
+        protocol_version: recorded_protocol_version(
+            &deployment.id,
+            deployment.deployment_protocol_version,
+        )?,
     };
 
     // Deployment records intentionally omit the release stack. Resolve it
