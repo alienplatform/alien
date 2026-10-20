@@ -1414,6 +1414,38 @@ mod project_policy_writer_tests {
         });
         iam.expect_create_role()
             .returning(|_, request| Ok(request.role));
+        // The management identity is already installed. Permission-only repairs
+        // observe its existing trust while this test exercises shared project-policy writes.
+        let scope = alien_core::GcpFederationScope {
+            deployment_id: "dep_mock_fixture".to_string(),
+        };
+        let audience = scope
+            .assertion_audience(&RemoteStackManagement::RESOURCE_TYPE)
+            .unwrap();
+        let expected_pool = scope
+            .pool_id(&RemoteStackManagement::RESOURCE_TYPE)
+            .unwrap();
+        let pool_audience = audience.clone();
+        let pool_id = expected_pool.clone();
+        iam.expect_get_workload_identity_pool().returning(move |id| {
+            assert_eq!(id, pool_id);
+            Ok(serde_json::from_value(serde_json::json!({
+                "name": format!("projects/{PROJECT_NUMBER}/locations/global/workloadIdentityPools/{id}"),
+                "state": "ACTIVE", "disabled": false,
+                "description": format!("Deployment identity pool. Scope: {pool_audience}"),
+            })).unwrap())
+        });
+        iam.expect_get_workload_identity_provider().returning(move |pool, provider| {
+            assert_eq!(pool, expected_pool);
+            assert_eq!(provider, "manager");
+            Ok(serde_json::from_value(serde_json::json!({
+                "name": format!("projects/{PROJECT_NUMBER}/locations/global/workloadIdentityPools/{pool}/providers/{provider}"),
+                "state": "ACTIVE", "disabled": false,
+                "attributeMapping": {"google.subject": "assertion.sub"},
+                "attributeCondition": r#"assertion.sub == "123456789012345678901""#,
+                "oidc": {"issuerUri": "https://accounts.google.com", "allowedAudiences": [audience]},
+            })).unwrap())
+        });
         iam.expect_get_service_account_iam_policy()
             .returning(|_| Ok(IamPolicy::builder().etag("sa-etag".to_string()).build()));
         iam.expect_set_service_account_iam_policy()
@@ -1458,8 +1490,14 @@ mod project_policy_writer_tests {
             .external_bindings(ExternalBindings::default())
             .setup_run(true)
             .allow_frozen_changes(true)
+            .gcp_federation_scope(alien_core::GcpFederationScope {
+                deployment_id: "dep_mock_fixture".to_string(),
+            })
             .management_config(ManagementConfig::Gcp(GcpManagementConfig {
-                federation_trust: None,
+                federation_trust: Some(alien_core::GcpFederationTrust {
+                    issuer: "https://accounts.google.com".to_string(),
+                    subject: "123456789012345678901".to_string(),
+                }),
                 service_account_email: "control-plane@vendor.iam.gserviceaccount.com".to_string(),
             }))
             .build();
@@ -1503,6 +1541,11 @@ mod project_policy_writer_tests {
         // The identity's own grants name it by the mock client's project.
         controller.service_account_email =
             Some("manager@test-project-123.iam.gserviceaccount.com".to_string());
+        controller
+            .federation_access
+            .as_mut()
+            .unwrap()
+            .service_account_email = "manager@test-project-123.iam.gserviceaccount.com".to_string();
         let registry = Arc::new(crate::core::ResourceRegistry::default());
         let desired_config = Resource::new(account.clone());
         controller.management_permissions_revision =

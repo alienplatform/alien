@@ -240,6 +240,8 @@ export type { GcpComputeClusterImportData } from "./gcp-compute-cluster-import-d
 export type { GcpCondition } from "./gcp-condition-schema.js";
 export type { GcpCustomCertificateConfig } from "./gcp-custom-certificate-config-schema.js";
 export type { GcpDaemonHeartbeatData } from "./gcp-daemon-heartbeat-data-schema.js";
+export type { GcpFederationAccess } from "./gcp-federation-access-schema.js";
+export type { GcpFederationTrust } from "./gcp-federation-trust-schema.js";
 export type { GcpFirestoreKvHeartbeatData } from "./gcp-firestore-kv-heartbeat-data-schema.js";
 export type { GcpKeyImportData } from "./gcp-key-import-data-schema.js";
 export type { GcpKvImportData } from "./gcp-kv-import-data-schema.js";
@@ -758,6 +760,8 @@ export { GcpComputeClusterImportDataSchema } from "./gcp-compute-cluster-import-
 export { GcpConditionSchema } from "./gcp-condition-schema.js";
 export { GcpCustomCertificateConfigSchema } from "./gcp-custom-certificate-config-schema.js";
 export { GcpDaemonHeartbeatDataSchema } from "./gcp-daemon-heartbeat-data-schema.js";
+export { GcpFederationAccessSchema } from "./gcp-federation-access-schema.js";
+export { GcpFederationTrustSchema } from "./gcp-federation-trust-schema.js";
 export { GcpFirestoreKvHeartbeatDataSchema } from "./gcp-firestore-kv-heartbeat-data-schema.js";
 export { GcpKeyImportDataSchema } from "./gcp-key-import-data-schema.js";
 export { GcpKvImportDataSchema } from "./gcp-kv-import-data-schema.js";

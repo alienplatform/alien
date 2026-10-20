@@ -97,15 +97,31 @@ mod tests {
         authority: InitialSetupAuthority,
         setup_run: bool,
     ) -> SingleControllerExecutor {
-        SingleControllerExecutor::builder()
+        let builder = SingleControllerExecutor::builder()
             .resource(RemoteStackManagement::new("management".to_string()).build())
             .controller(controller)
             .platform(platform)
             .initial_setup_authority(authority)
-            .setup_run(setup_run)
-            .build()
-            .await
-            .expect("executor builds")
+            .setup_run(setup_run);
+        let builder = if platform == Platform::Gcp {
+            builder
+                .gcp_federation_scope(alien_core::GcpFederationScope {
+                    deployment_id: "dep_mock_fixture".to_string(),
+                })
+                .management_config(alien_core::ManagementConfig::Gcp(
+                    alien_core::GcpManagementConfig {
+                        service_account_email: "manager@example.iam.gserviceaccount.com"
+                            .to_string(),
+                        federation_trust: Some(alien_core::GcpFederationTrust {
+                            issuer: "https://accounts.google.com".to_string(),
+                            subject: "123456789012345678901".to_string(),
+                        }),
+                    },
+                ))
+        } else {
+            builder
+        };
+        builder.build().await.expect("executor builds")
     }
 
     /// Per cloud: a controller that applied `applied` revision.

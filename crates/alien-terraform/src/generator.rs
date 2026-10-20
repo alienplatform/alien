@@ -2045,14 +2045,15 @@ fn variables_body(
             Some(Expression::String("us-central1".to_string())),
             false,
         )));
-        // The reserved control-plane ID is allocated before cloud setup.
-        // Only packages that create remote access need manager trust inputs.
-        {
+        // Keep the reservation input on every GCP package as its setup contract marker.
+        blocks.push(nested(variable_block(
+            "deployment_id",
+            "Immutable deployment ID returned by registration before cloud setup.",
+            (!needs_gcp_federation).then(|| Expression::String(String::new())),
+            false,
+        )));
+        if needs_gcp_federation {
             for (name, description) in [
-                (
-                    "deployment_id",
-                    "Immutable deployment ID returned by registration before cloud setup.",
-                ),
                 (
                     "managing_oidc_issuer",
                     "OIDC issuer of the management identity.",
@@ -2062,12 +2063,7 @@ fn variables_body(
                     "Exact immutable subject of the management identity.",
                 ),
             ] {
-                blocks.push(nested(variable_block(
-                    name,
-                    description,
-                    (!needs_gcp_federation).then(|| Expression::String(String::new())),
-                    false,
-                )));
+                blocks.push(nested(variable_block(name, description, None, false)));
             }
         }
         blocks.push(nested(variable_block(

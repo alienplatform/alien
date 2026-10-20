@@ -4,12 +4,16 @@
 */
 
 import * as z from "zod";
+import { GcpFederationTrustSchema } from "./gcp-federation-trust-schema.js";
 
 /**
  * @description GCP management configuration extracted from stack settings
  */
 export const GcpManagementConfigSchema = z.object({
-    "serviceAccountEmail": z.string().describe("Service account email for management roles")
+    get "federationTrust"(){
+                return z.union([GcpFederationTrustSchema, z.null()]).optional()
+              },
+"serviceAccountEmail": z.string().describe("Linked source account metadata; never a direct target trust grant.")
     }).describe("GCP management configuration extracted from stack settings")
 
 export type GcpManagementConfig = z.infer<typeof GcpManagementConfigSchema>
