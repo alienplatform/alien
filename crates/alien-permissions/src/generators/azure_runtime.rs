@@ -189,6 +189,106 @@ pub fn custom_roles_by_scope(plan: &AzureGrantPlan) -> Result<Vec<AzureScopedCus
         .collect()
 }
 
+const ROLE_ASSIGNMENT_WRITE: &str = "Microsoft.Authorization/roleAssignments/write";
+const ROLE_ASSIGNMENT_DELETE: &str = "Microsoft.Authorization/roleAssignments/delete";
+
+/// Whether an Azure action pattern (`*` wildcards allowed, case-insensitive) covers `action`.
+fn azure_action_covers(pattern: &str, action: &str) -> bool {
+    let pattern = pattern.to_ascii_lowercase();
+    let action = action.to_ascii_lowercase();
+    match pattern.split_once('*') {
+        None => pattern == action,
+        Some((prefix, rest)) => {
+            action.starts_with(prefix)
+                && (rest.is_empty()
+                    || (0..=action.len() - prefix.len())
+                        .any(|start| azure_action_covers(rest, &action[prefix.len() + start..])))
+        }
+    }
+}
+
+/// Whether an Azure action pattern lets its holder create or remove role assignments.
+fn grants_role_assignment_writes(action: &str) -> bool {
+    azure_action_covers(action, ROLE_ASSIGNMENT_WRITE)
+        || azure_action_covers(action, ROLE_ASSIGNMENT_DELETE)
+}
+
+/// The management roles for each scope, with every action that writes role assignments moved
+/// into a role of its own.
+///
+/// The management identity may assign roles to the identities it runs workloads as, but never
+/// to itself: with that it could grant itself a read on the deployment's secrets vault. Azure
+/// can only express "not to itself" as a condition on the role assignment that grants
+/// `roleAssignments/write`, so those actions must sit in a role assigned on its own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AzureManagementRoles {
+    /// The management roles without role-assignment writes. A scope whose grants were only
+    /// role-assignment writes has none.
+    pub roles: Vec<AzureScopedCustomRole>,
+    /// One role per scope holding the role-assignment writes bound there, to assign with
+    /// [`azure_role_assignment_delegation_condition`].
+    pub role_assignment_roles: Vec<AzureScopedCustomRole>,
+}
+
+/// Splits [`custom_roles_by_scope`] into the management roles and their role-assignment roles.
+pub fn management_roles_by_scope(plan: &AzureGrantPlan) -> Result<AzureManagementRoles> {
+    let mut roles = Vec::new();
+    let mut role_assignment_roles = Vec::new();
+    for role in custom_roles_by_scope(plan)? {
+        let (writes, actions): (Vec<String>, Vec<String>) = role
+            .actions
+            .into_iter()
+            .partition(|action| grants_role_assignment_writes(action));
+        if !writes.is_empty() {
+            role_assignment_roles.push(AzureScopedCustomRole {
+                scope: role.scope.clone(),
+                scope_kind: role.scope_kind,
+                actions: writes,
+                data_actions: Vec::new(),
+            });
+        }
+        if !actions.is_empty() || !role.data_actions.is_empty() {
+            roles.push(AzureScopedCustomRole { actions, ..role });
+        }
+    }
+    Ok(AzureManagementRoles {
+        roles,
+        role_assignment_roles,
+    })
+}
+
+/// The condition on the management identity's role-assignment role: it may create role
+/// assignments for any principal except itself.
+///
+/// Deleting assignments stays unconditioned: it removes access, and it lets the runtime clean
+/// up assignments it made for itself before this condition existed.
+///
+/// Azure treats a role-assignment write that carries a condition as restricted, so the same
+/// condition also keeps the identity from switching a Key Vault from RBAC to access policies,
+/// which needs unrestricted `roleAssignments/write`.
+pub fn azure_role_assignment_delegation_condition(management_principal_id: &str) -> String {
+    format!(
+        "((!(ActionMatches{{'{ROLE_ASSIGNMENT_WRITE}'}})) OR (@Request[Microsoft.Authorization/roleAssignments:PrincipalId] ForAnyOfAllValues:GuidNotEquals {{{management_principal_id}}}))"
+    )
+}
+
+/// Assignable scopes for a role setup creates for the management identity.
+///
+/// Changing a custom role needs `roleDefinitions/write` on every scope it is assignable at.
+/// Management holds that only at the deployment resource group (to create workload roles), so
+/// listing the subscription too keeps it from adding actions, such as `secrets/getSecret`, to a
+/// role it is assigned.
+pub fn protected_management_assignable_scopes(
+    scope: &str,
+    subscription_scope: &str,
+) -> Vec<String> {
+    if scope.eq_ignore_ascii_case(subscription_scope) {
+        vec![scope.to_string()]
+    } else {
+        vec![scope.to_string(), subscription_scope.to_string()]
+    }
+}
+
 /// Azure runtime permissions generator for role definitions and role assignments
 pub struct AzureRuntimePermissionsGenerator;
 

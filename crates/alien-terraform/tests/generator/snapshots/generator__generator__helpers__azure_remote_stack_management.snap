@@ -279,9 +279,7 @@ resource "azurerm_role_definition" "management_management_resource_group_role" {
       "Microsoft.App/managedEnvironments/join/action",
       "Microsoft.App/managedEnvironments/read",
       "Microsoft.App/sandboxGroups/vnetConnections/read",
-      "Microsoft.Authorization/roleAssignments/delete",
       "Microsoft.Authorization/roleAssignments/read",
-      "Microsoft.Authorization/roleAssignments/write",
       "Microsoft.Authorization/roleDefinitions/read",
       "Microsoft.Authorization/roleDefinitions/write",
       "Microsoft.ContainerRegistry/registries/delete",
@@ -314,7 +312,33 @@ resource "azurerm_role_definition" "management_management_resource_group_role" {
   }
 
   assignable_scopes = [
-    "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
+    "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}",
+    "/subscriptions/${var.azure_subscription_id}"
+  ]
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_role_definition" "management_management_role_assignments_resource_group_role" {
+  name               = "${local.resource_prefix}-management-role-assignments-resource-group-role"
+  role_definition_id = uuidv5("oid", "deployment:azure:mgmt-role-assignments-role-def:${local.resource_prefix}:/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}")
+  scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
+  description        = "Role assignments the management identity of Terraform resource 'management' makes for workloads, never for itself. Scope: resource-group."
+
+  permissions {
+    actions = [
+      "Microsoft.Authorization/roleAssignments/delete",
+      "Microsoft.Authorization/roleAssignments/write"
+    ]
+    data_actions     = []
+    not_actions      = []
+    not_data_actions = []
+  }
+
+  assignable_scopes = [
+    "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}",
+    "/subscriptions/${var.azure_subscription_id}"
   ]
   depends_on = [
     azurerm_resource_group.default_resource_group
@@ -326,6 +350,18 @@ resource "azurerm_role_assignment" "management_management_uami_assignment_0" {
   scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
   role_definition_id = azurerm_role_definition.management_management_resource_group_role.role_definition_resource_id
   principal_id       = azurerm_user_assigned_identity.management.principal_id
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_role_assignment" "management_management_role_assignments_assignment_0" {
+  name               = uuidv5("oid", "deployment:azure:mgmt-role-assignments-assign:${local.resource_prefix}:/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}")
+  scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
+  role_definition_id = azurerm_role_definition.management_management_role_assignments_resource_group_role.role_definition_resource_id
+  principal_id       = azurerm_user_assigned_identity.management.principal_id
+  condition          = "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR (@Request[Microsoft.Authorization/roleAssignments:PrincipalId] ForAnyOfAllValues:GuidNotEquals {${azurerm_user_assigned_identity.management.principal_id}}))"
+  condition_version  = "2.0"
   depends_on = [
     azurerm_resource_group.default_resource_group
   ]
@@ -378,7 +414,9 @@ resource "terraform_data" "deployment_registration" {
     azurerm_user_assigned_identity.management,
     azurerm_role_assignment.management_self_read,
     azurerm_role_definition.management_management_resource_group_role,
+    azurerm_role_definition.management_management_role_assignments_resource_group_role,
     azurerm_role_assignment.management_management_uami_assignment_0,
+    azurerm_role_assignment.management_management_role_assignments_assignment_0,
     azurerm_role_assignment.management_management_uami_assignment_3,
     azurerm_federated_identity_credential.management_fic
   ]
