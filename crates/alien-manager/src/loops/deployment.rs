@@ -1017,14 +1017,12 @@ impl DeploymentLoop {
                 .credential_retry = None;
             recorded_state.runtime_metadata = deployment.runtime_metadata.clone();
             recorded_state.error = deployment_record_error(&deployment.error);
-            // Persist recovery even when a Running deployment requires no deployment step.
-            self.checkpoint_without_step(
-                &deployment_id,
-                session,
-                recorded_state.clone(),
-                execution_claim.clone(),
-            )
-            .await?;
+            // The cleared retry window is persisted by exactly one checkpoint: the
+            // runner's own step checkpoint, or the one below when no step runs.
+            // A separate checkpoint before the step would be a second write under
+            // the same claim, and a checkpoint that settles a Running or
+            // RefreshFailed heartbeat ends that claim, so the step's checkpoint
+            // would then be refused as a lost claim.
         }
 
         if needs_provision_capability(status) && !resolved_credentials.has_provision_capability {
@@ -1037,7 +1035,7 @@ impl DeploymentLoop {
             // Acquisition consumes the persisted retry. If we cannot run setup,
             // return it while we still own the lease so a setup-capable driver
             // can acquire the same failed deployment after we release it.
-            if deployment.retry_requested {
+            if deployment.retry_requested || had_credential_retry {
                 self.checkpoint_without_step(
                     &deployment_id,
                     session,
@@ -1182,7 +1180,7 @@ impl DeploymentLoop {
             self.server_bindings.target_bindings_providers.clone(),
             deployment.project_id.clone(),
             session.to_string(),
-            execution_claim,
+            execution_claim.clone(),
         );
 
         let mut config = config;
@@ -1234,6 +1232,15 @@ impl DeploymentLoop {
                     "Deployment step loop failed"
                 );
             }
+        }
+
+        // A runner that ran no step wrote no checkpoint, so the cleared credential
+        // retry window still needs its single write.
+        if had_credential_retry
+            && matches!(&runner_result, Ok(result) if result.steps_executed == 0)
+        {
+            self.checkpoint_without_step(&deployment_id, session, recorded_state, execution_claim)
+                .await?;
         }
 
         // 8. Handle deleted deployments — clean up the record. Loop
@@ -3164,6 +3171,123 @@ mod tests {
                     response.assert_hits_async(1).await;
                 }
                 response.delete_async().await;
+            }
+        }
+
+        /// A control plane ends a heartbeat's execution claim on the first
+        /// checkpoint that settles it (Running or RefreshFailed) and refuses any
+        /// later checkpoint under that claim. Recovering from a credential retry
+        /// must therefore persist the cleared window in that one checkpoint.
+        #[tokio::test]
+        async fn credential_recovery_checkpoints_a_heartbeat_claim_once() {
+            for (status, options, steps) in [
+                (
+                    DeploymentStatus::Running,
+                    ProcessOptions::heartbeat_tick(),
+                    true,
+                ),
+                (
+                    DeploymentStatus::RefreshFailed,
+                    ProcessOptions::heartbeat_tick(),
+                    true,
+                ),
+                (
+                    DeploymentStatus::Running,
+                    ProcessOptions::deployment_tick(),
+                    false,
+                ),
+            ] {
+                let fixture = Fixture::new(status, transient_error()).await;
+                fixture
+                    .credentials
+                    .unavailable
+                    .store(false, Ordering::SeqCst);
+                let mut record = fixture.record().await;
+                record.runtime_metadata.as_mut().unwrap().credential_retry =
+                    Some(alien_core::CredentialRetry {
+                        started_at: Utc::now() - chrono::Duration::minutes(1),
+                        status,
+                    });
+                let claim = crate::traits::deployment_store::ExecutionClaim {
+                    operation_id: "operation_test".to_string(),
+                    attempt_id: "attempt_test".to_string(),
+                };
+                let accepted = Arc::new(Mutex::new(Vec::<
+                    crate::traits::deployment_store::ReconcileData,
+                >::new()));
+                let refused = Arc::new(AtomicUsize::new(0));
+                let claim_live = Arc::new(AtomicBool::new(true));
+                let mut store = crate::traits::deployment_store::MockDeploymentStore::new();
+                let returned = record.clone();
+                let (saved, rejected, live) =
+                    (accepted.clone(), refused.clone(), claim_live.clone());
+                store.expect_reconcile().returning(move |_, data| {
+                    assert_eq!(
+                        data.execution_claim
+                            .as_ref()
+                            .map(|claim| claim.attempt_id.as_str()),
+                        Some("attempt_test")
+                    );
+                    if !live.load(Ordering::SeqCst) {
+                        rejected.fetch_add(1, Ordering::SeqCst);
+                        let mut error = AlienError::new(alien_error::GenericError {
+                            message: "The execution attempt is no longer live.".to_string(),
+                        });
+                        error.code = "DEPLOYMENT_UPDATE_CLAIM_LOST".to_string();
+                        error.retryable = false;
+                        return Err(error);
+                    }
+                    if matches!(
+                        data.state.status,
+                        DeploymentStatus::Running | DeploymentStatus::RefreshFailed
+                    ) {
+                        live.store(false, Ordering::SeqCst);
+                    }
+                    let mut record = returned.clone();
+                    record.status = deployment_status_str(data.state.status).to_string();
+                    record.runtime_metadata = data.state.runtime_metadata.clone();
+                    saved.lock().unwrap().push(data);
+                    Ok(crate::traits::deployment_store::ReconcileOutcome {
+                        record,
+                        target_operations_bundle_set: None,
+                        target_dynamic_containers: None,
+                    })
+                });
+                let mut runner = fixture.runner();
+                runner.deployment_store = Arc::new(store);
+
+                let result = runner
+                    .process_deployment_inner(record, Some(claim), "test-session", options)
+                    .await;
+
+                assert!(
+                    result.is_ok(),
+                    "{status:?} recovery failed: {:?}",
+                    result.err()
+                );
+                assert_eq!(
+                    refused.load(Ordering::SeqCst),
+                    0,
+                    "{status:?}: a checkpoint reused a claim the control plane had ended"
+                );
+                let accepted = accepted.lock().unwrap();
+                assert_eq!(accepted.len(), 1, "{status:?}: one checkpoint per claim");
+                let checkpoint = &accepted[0];
+                assert!(checkpoint
+                    .state
+                    .runtime_metadata
+                    .as_ref()
+                    .unwrap()
+                    .credential_retry
+                    .is_none());
+                assert_eq!(
+                    checkpoint.update_heartbeat, steps,
+                    "{status:?}: the checkpoint must be the step's own when a step runs"
+                );
+                assert!(
+                    !claim_live.load(Ordering::SeqCst),
+                    "{status:?}: the single checkpoint must settle the claim"
+                );
             }
         }
 
