@@ -143,3 +143,4 @@ pub use alien_gcp_clients::GcpClientConfig;
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
+#[cfg(test)] mod compat_scratch;

@@ -31,5 +31,6 @@ mod generator {
     pub mod gcp_identity_tests;
     pub mod k8s_overlay_tests;
     pub mod secrets_vault_management_tests;
+    pub mod dump_tests;
     pub mod stack_input_tests;
 }

@@ -292,3 +292,7 @@ async fn azure_management_cannot_assign_itself_roles_or_change_its_own() {
         "management still assigns roles to workloads"
     );
 }
+
+pub async fn prepare_stack_for_dump(stack: Stack, platform: Platform) -> Stack {
+    prepare(stack, platform).await
+}
