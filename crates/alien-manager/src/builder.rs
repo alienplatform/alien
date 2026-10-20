@@ -983,9 +983,13 @@ async fn finalize(
     };
 
     // --- Router ---
-    let mut router = crate::routes::create_router_inner(app_state.clone(), router_options)
-        .merge(server_bindings.local_queues.clone().router())
-        .layer(crate::routes::cors_layer(&config));
+    let mut router = crate::routes::create_router_inner(app_state.clone(), router_options);
+    // Only a manager that reconciles Local deployments ever registers a queue owner. Elsewhere
+    // the routes stay unmounted so they answer 404, not a retryable "owner not ready".
+    if config.hosts_local_deployments() {
+        router = router.merge(server_bindings.local_queues.clone().router());
+    }
+    let mut router = router.layer(crate::routes::cors_layer(&config));
     if let Some(platform) = platform_routes {
         router = router.merge(platform.with_state(app_state.clone()));
     }
