@@ -221,6 +221,17 @@ impl crate::traits::Vault for LocalVault {
         self.save_secrets(&secrets).await
     }
 
+    /// Create a secret only if none by this name exists.
+    async fn create_secret(&self, secret_name: &str, value: &str) -> Result<()> {
+        if self.load_secrets().await?.contains_key(secret_name) {
+            return Err(AlienError::new(ErrorData::VaultSecretAlreadyExists {
+                vault: self.vault_name.clone(),
+                secret_name: secret_name.to_string(),
+            }));
+        }
+        self.set_secret(secret_name, value).await
+    }
+
     /// Delete a secret
     async fn delete_secret(&self, secret_name: &str) -> Result<()> {
         let mut secrets = self.load_secrets().await?;

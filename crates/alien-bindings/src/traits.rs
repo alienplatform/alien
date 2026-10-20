@@ -476,6 +476,16 @@ pub trait Vault: Binding {
     /// Sets a secret value, creating it if it doesn't exist or updating it if it does.
     async fn set_secret(&self, secret_name: &str, value: &str) -> Result<()>;
 
+    /// Creates a secret that must not exist yet, without reading anything. A secret by this name
+    /// already in the vault is left unchanged and answered with `VaultSecretAlreadyExists`.
+    /// Vaults that cannot write create-only answer `OperationNotSupported`.
+    async fn create_secret(&self, secret_name: &str, _value: &str) -> Result<()> {
+        Err(alien_error::AlienError::new(crate::error::ErrorData::OperationNotSupported {
+            operation: format!("create-only write of secret '{secret_name}'"),
+            reason: "this vault cannot write a secret only if it is absent".to_string(),
+        }))
+    }
+
     /// Deletes a secret by name.
     async fn delete_secret(&self, secret_name: &str) -> Result<()>;
 

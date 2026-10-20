@@ -261,6 +261,42 @@ fn claims(delivery: &EgressDelivery) -> crate::sandbox_egress_token::EgressToken
     )
     .unwrap()
 }
+/// A linked workload's binding records the signing key id at render time, and the workload is
+/// not re-rendered when the deployment's key changes. Tokens must carry the key the vault (and
+/// so the gateway configuration) holds now, not fail on the stale copy.
+#[tokio::test]
+async fn a_binding_rendered_before_the_key_changed_signs_with_the_current_key() {
+    let h = Harness::new().await;
+    let rotated = KeyPair::from_seed(Seed::new([31; 32]));
+    h.vault
+        .set_secret(
+            "signing-key",
+            &serde_json::json!({"kid":"key-2","privateKey":base64::engine::general_purpose::STANDARD.encode(rotated.sk.to_der())}).to_string(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(h.config.kid, "key-1", "the binding still names the old key");
+
+    let token = h
+        .manager
+        .mint_identity("s1", now_unix().unwrap() + 1000)
+        .await
+        .expect("the workload signs with the vault's current key");
+
+    let mut parts = token.split('.');
+    let header: serde_json::Value =
+        serde_json::from_slice(&URL_SAFE_NO_PAD.decode(parts.next().unwrap()).unwrap()).unwrap();
+    assert_eq!(header["kid"], "key-2");
+    let payload = parts.next().unwrap();
+    let signature = Signature::from_slice(&URL_SAFE_NO_PAD.decode(parts.next().unwrap()).unwrap()).unwrap();
+    let signed = &token[..token.rfind('.').unwrap()];
+    assert!(payload.len() > 0);
+    rotated
+        .pk
+        .verify(signed.as_bytes(), &signature)
+        .expect("signed by the rotated key");
+}
+
 #[tokio::test]
 async fn policy_updates_and_renewal_use_one_gateway_store() {
     let h = Harness::new().await;
