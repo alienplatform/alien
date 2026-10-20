@@ -2503,10 +2503,7 @@ impl AwsWorkerController {
                         name: rule_name.clone(),
                         schedule_expression,
                         state: Some("ENABLED".to_string()),
-                        description: Some(format!(
-                            "Alien schedule trigger for worker '{}'",
-                            config.id
-                        )),
+                        description: Some(format!("Schedule trigger for worker '{}'", config.id)),
                         tags: Some(eventbridge_tags(ctx.resource_prefix, &config.id)),
                     })
                     .await
@@ -4020,7 +4017,7 @@ impl AwsWorkerController {
                             schedule_expression,
                             state: Some("ENABLED".to_string()),
                             description: Some(format!(
-                                "Alien schedule trigger for worker '{}'",
+                                "Schedule trigger for worker '{}'",
                                 current_config.id
                             )),
                             tags: Some(eventbridge_tags(ctx.resource_prefix, &current_config.id)),

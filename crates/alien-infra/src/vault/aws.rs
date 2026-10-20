@@ -407,7 +407,9 @@ mod permission_update_tests {
 
     const CONSUMER_ROLE: &str = "test-consumer-sa";
     const FORMER_ROLE: &str = "test-former-sa";
-    const READ_POLICY: &str = "alien-secrets-vault-data-read";
+    const READ_POLICY: &str = "deployment-secrets-vault-data-read";
+    /// The read grant's name on roles set up before the policy rename.
+    const LEGACY_READ_POLICY: &str = "alien-secrets-vault-data-read";
 
     /// Which IAM response the fake loses or refuses.
     #[derive(Clone, Copy, PartialEq)]
@@ -473,7 +475,7 @@ mod permission_update_tests {
         mock.expect_put_role_policy()
             .returning(move |role, name, document| {
                 assert_eq!(role, CONSUMER_ROLE);
-                assert_eq!(name, READ_POLICY);
+                assert!(name == READ_POLICY || name == LEGACY_READ_POLICY, "{name}");
                 assert_read_policy(document, &vault_prefix);
                 let mut iam = put.lock().unwrap();
                 iam.calls.push(format!("put {role} {name}"));
@@ -915,6 +917,36 @@ mod permission_update_tests {
             .unwrap()
             .updates
             .contains_key("secrets"));
+    }
+
+    /// Roles set up before the policy rename hold their grants as `alien-*`. A role keeps the
+    /// name it holds (rewriting it under the new name would hold the grant twice against the
+    /// inline quota), and a grant a release removed is revoked under its previous name too.
+    #[tokio::test]
+    async fn grants_held_under_their_previous_names_are_kept_or_revoked_there() {
+        let (executor, mut state, iam) = fixture(
+            ResourceLifecycle::Frozen,
+            InitialSetupAuthority::DirectSetup,
+            Fault::None,
+            &[
+                (FORMER_ROLE, LEGACY_READ_POLICY),
+                (CONSUMER_ROLE, LEGACY_READ_POLICY),
+            ],
+        );
+        set_revision(&mut state, "previous-grants");
+        let state = executor.step(state).await.unwrap().next_state;
+        assert_eq!(state.resources["secrets"].status, ResourceStatus::Running);
+        let iam = iam.lock().unwrap();
+        assert_eq!(iam.policies(CONSUMER_ROLE), vec![LEGACY_READ_POLICY]);
+        assert!(iam.policies(FORMER_ROLE).is_empty());
+        assert!(
+            iam.calls
+                .iter()
+                .any(|call| call == &format!("put {CONSUMER_ROLE} {LEGACY_READ_POLICY}")),
+            "calls: {:?}",
+            iam.calls
+        );
+        assert!(!iam.calls.iter().any(|call| call.contains(READ_POLICY)));
     }
 
     /// A `"*"` grant is already written on the role as its stack-level policy. Writing it again

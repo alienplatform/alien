@@ -5387,10 +5387,16 @@ mod tests {
             <item><cidrBlock>10.0.0.0/16</cidrBlock></item>
             <item><cidrBlock>198.18.0.0/16</cidrBlock></item>
             </cidrBlockAssociationSet></item></vpcSet></DescribeVpcsResponse>"#,
-        ).unwrap();
+        )
+        .unwrap();
         let vpc = response.vpc_set.unwrap().items.remove(0);
-        let ranges: Vec<_> = vpc.cidr_block_association_set.unwrap().items.into_iter()
-            .map(|association| association.cidr_block).collect();
+        let ranges: Vec<_> = vpc
+            .cidr_block_association_set
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|association| association.cidr_block)
+            .collect();
         assert_eq!(ranges, ["10.0.0.0/16", "198.18.0.0/16"]);
     }
 

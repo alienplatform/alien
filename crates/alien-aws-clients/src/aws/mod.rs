@@ -135,7 +135,7 @@ impl AwsClientConfigExt for AwsClientConfig {
 
         let session_name = config
             .session_name
-            .unwrap_or_else(|| format!("alien-impersonation-{}", Uuid::new_v4().simple()));
+            .unwrap_or_else(|| format!("deployment-impersonation-{}", Uuid::new_v4().simple()));
 
         let assume_role_request = AssumeRoleRequest::builder()
             .role_arn(config.role_arn)
@@ -236,10 +236,9 @@ impl AwsClientConfigExt for AwsClientConfig {
 
                 let sts_client = StsClient::new(Client::new(), temp_config);
 
-                let session_name = config
-                    .session_name
-                    .clone()
-                    .unwrap_or_else(|| format!("alien-web-identity-{}", Uuid::new_v4().simple()));
+                let session_name = config.session_name.clone().unwrap_or_else(|| {
+                    format!("deployment-web-identity-{}", Uuid::new_v4().simple())
+                });
 
                 let assume_role_request = AssumeRoleWithWebIdentityRequest::builder()
                     .role_arn(config.role_arn.clone())

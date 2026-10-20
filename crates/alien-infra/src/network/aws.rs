@@ -4240,7 +4240,7 @@ impl AwsNetworkController {
                 CreateSecurityGroupRequest::builder()
                     .group_name(group_name.clone())
                     .description(
-                        "Alien managed security group for VPC internal communication".to_string(),
+                        "Managed security group for VPC internal communication".to_string(),
                     )
                     .vpc_id(vpc_id.clone())
                     .tag_specifications(self.create_tags(

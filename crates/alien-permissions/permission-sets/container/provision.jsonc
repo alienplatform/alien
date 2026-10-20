@@ -357,6 +357,8 @@
         }
       },
       // Restore: the restored volume's marker tag is removed once it replaces the old one.
+      // Installations set up before the marker was renamed grant only its previous key; the
+      // runtime keeps using that key for them and leaves the new marker in place.
       {
         "grant": {
           "actions": ["ec2:DeleteTags"]
@@ -370,7 +372,7 @@
                 "aws:ResourceTag/${managedByTag}": "runtime"
               },
               "ForAllValues:StringEquals": {
-                "aws:TagKeys": "alien-restore-request"
+                "aws:TagKeys": "deployment-restore-request"
               }
             }
           },
@@ -383,7 +385,7 @@
                 "aws:ResourceTag/${managedByTag}": "runtime"
               },
               "ForAllValues:StringEquals": {
-                "aws:TagKeys": "alien-restore-request"
+                "aws:TagKeys": "deployment-restore-request"
               }
             }
           }

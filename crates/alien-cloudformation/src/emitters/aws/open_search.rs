@@ -313,7 +313,7 @@ fn data_access_policy(
     }
 
     let policy = AossDataAccessPolicy {
-        description: format!("Alien-managed data access for '{}'", search.id()),
+        description: format!("Managed data access for '{}'", search.id()),
         rules: [
             AossPolicyRule {
                 resource_type: "collection",

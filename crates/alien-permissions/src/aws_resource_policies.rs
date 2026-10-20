@@ -189,9 +189,14 @@ pub fn render_aws_resource_policy(
     })
 }
 
+/// Prefix of the inline policy names the runtime writes.
+const POLICY_NAME_PREFIX: &str = "deployment";
+/// Prefix those names carried before; roles set up earlier may still hold them.
+const LEGACY_POLICY_NAME_PREFIX: &str = "alien";
+
 /// Stable inline policy name for a published resource's Remote Bindings grant.
 pub fn aws_remote_access_policy_name(resource_id: &str) -> String {
-    format!("alien-{resource_id}-remote-access")
+    format!("{POLICY_NAME_PREFIX}-{resource_id}-remote-access")
 }
 
 /// Render the registered Remote Bindings grant using the resource writer's context.
@@ -275,8 +280,7 @@ fn iam_pattern_contains(pattern: &str, narrow: &str) -> bool {
 /// Inline policy a resource attaches to a profile's service-account role.
 pub fn aws_resource_policy_name(resource_id: &str, permission_set_id: &str) -> String {
     format!(
-        "alien-{}-{}",
-        resource_id,
+        "{POLICY_NAME_PREFIX}-{resource_id}-{}",
         permission_set_id.replace('/', "-")
     )
 }
@@ -284,15 +288,65 @@ pub fn aws_resource_policy_name(resource_id: &str, permission_set_id: &str) -> S
 /// Inline policy a resource attaches to the management role.
 pub fn aws_management_resource_policy_name(resource_id: &str, permission_set_id: &str) -> String {
     format!(
-        "alien-mgmt-{}-{}",
-        resource_id,
+        "{POLICY_NAME_PREFIX}-mgmt-{resource_id}-{}",
         permission_set_id.replace('/', "-")
     )
+}
+
+/// The name an inline policy named by this module had before the rename: the same name under
+/// the previous prefix. `None` for a name this module does not produce.
+pub fn legacy_policy_name(name: &str) -> Option<String> {
+    name.strip_prefix(POLICY_NAME_PREFIX)
+        .filter(|rest| rest.starts_with('-'))
+        .map(|rest| format!("{LEGACY_POLICY_NAME_PREFIX}{rest}"))
+}
+
+/// The name a grant is written under on a role whose inline policies are `existing`.
+///
+/// A role that already holds the grant under its previous name keeps that name: writing the new
+/// name first would hold the grant twice against the role's 10,240-character inline quota, and
+/// deleting first would leave the workload without it while IAM propagates. Every other role gets
+/// the current name.
+pub fn retained_policy_name(name: String, existing: &[String]) -> String {
+    match legacy_policy_name(&name) {
+        Some(legacy) if existing.contains(&legacy) && !existing.contains(&name) => legacy,
+        _ => name,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every name family maps to its previous name, and a role keeps whichever one it holds.
+    #[test]
+    fn a_role_keeps_the_name_it_already_holds_a_grant_under() {
+        for (current, legacy) in [
+            (
+                aws_resource_policy_name("files", "storage/data-read"),
+                "alien-files-storage-data-read",
+            ),
+            (
+                aws_management_resource_policy_name("files", "storage/management"),
+                "alien-mgmt-files-storage-management",
+            ),
+            (
+                aws_remote_access_policy_name("files"),
+                "alien-files-remote-access",
+            ),
+        ] {
+            assert!(current.starts_with("deployment-"), "{current}");
+            assert_eq!(legacy_policy_name(&current).as_deref(), Some(legacy));
+            let held = vec!["unrelated".to_string(), legacy.to_string()];
+            assert_eq!(retained_policy_name(current.clone(), &held), legacy);
+            assert_eq!(retained_policy_name(current.clone(), &[]), current);
+            // Once the current name exists (e.g. a later rerun), it wins over a leftover.
+            let both = vec![legacy.to_string(), current.clone()];
+            assert_eq!(retained_policy_name(current.clone(), &both), current);
+        }
+        assert_eq!(legacy_policy_name("deploymentx-files"), None);
+        assert_eq!(legacy_policy_name("customer-policy"), None);
+    }
 
     #[test]
     fn named_documents_preserve_setup_rendering_and_resolved_resources() {
@@ -304,7 +358,7 @@ mod tests {
             let expected = generator
                 .generate_policy(set, BindingTarget::Resource, &context)
                 .unwrap();
-            assert_eq!(named.name, "alien-objects-storage-data-read");
+            assert_eq!(named.name, "deployment-objects-storage-data-read");
             assert_eq!(
                 named.document,
                 serde_json::to_string_pretty(&expected).unwrap()
