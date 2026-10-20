@@ -3,6 +3,12 @@
 use super::BindingValue;
 use serde::{Deserialize, Serialize};
 
+/// The OCI `DENIED` message a manager answers a push to a repository under a legacy prefix with.
+/// A client that resolved its repository before the registry was renamed matches it exactly to
+/// tell this refusal apart from any other and resolve the current repository again.
+pub const LEGACY_REPOSITORY_PUSH_REFUSAL: &str =
+    "Repository is under a legacy prefix, which is read-only; push under the current prefix.";
+
 /// AWS ECR (Elastic Container Registry) binding configuration
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]

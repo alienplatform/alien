@@ -20,8 +20,9 @@ pub mod toolchain;
 pub use source_input::docker_source_input_hash;
 
 use alien_core::{
-    alien_event, AlienEvent, BinaryTarget, Container, ContainerCode, Daemon, DaemonCode, Platform,
-    Sandbox, SandboxCode, Stack, ToolchainConfig, Worker, WorkerCode,
+    alien_event, bindings::LEGACY_REPOSITORY_PUSH_REFUSAL, AlienEvent, BinaryTarget, Container,
+    ContainerCode, Daemon, DaemonCode, Platform, Sandbox, SandboxCode, Stack, ToolchainConfig,
+    Worker, WorkerCode,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_preflights::runner::PreflightRunner;
@@ -3673,7 +3674,11 @@ async fn push_image_with_retry(
 }
 
 fn image_push_error(image_uri: &str, error: &dockdash::Error) -> AlienError<ErrorData> {
-    if is_retryable_dockdash_transport_error(error) {
+    if is_legacy_repository_refusal(error) {
+        AlienError::new(ErrorData::ImagePushRepositoryRenamed {
+            image: image_uri.to_string(),
+        })
+    } else if is_retryable_dockdash_transport_error(error) {
         let cause = if is_rate_limited(error) {
             "Registry was rate limiting requests"
         } else {
@@ -3709,6 +3714,35 @@ fn is_rate_limited(error: &dockdash::Error) -> bool {
                 oci_client::errors::OciDistributionError::RequestError(request) => request
                     .status()
                     .is_some_and(|status| status.as_u16() == 429),
+                _ => false,
+            };
+        }
+        current = error.source();
+    }
+    false
+}
+
+/// Whether the registry refused the push with the manager's legacy-prefix `DENIED`. The refusal
+/// reaches the client as a parsed OCI envelope or, for an upload request, as the raw body.
+fn is_legacy_repository_refusal(error: &dockdash::Error) -> bool {
+    let is_refusal = |envelope: &oci_client::errors::OciEnvelope| {
+        envelope.errors.iter().any(|entry| {
+            entry.code == oci_client::errors::OciErrorCode::Denied
+                && entry.message == LEGACY_REPOSITORY_PUSH_REFUSAL
+        })
+    };
+    let mut current = Some(error as &(dyn StdError + 'static));
+    while let Some(error) = current {
+        if let Some(oci_error) = error.downcast_ref::<oci_client::errors::OciDistributionError>() {
+            return match oci_error {
+                oci_client::errors::OciDistributionError::RegistryError { envelope, .. } => {
+                    is_refusal(envelope)
+                }
+                oci_client::errors::OciDistributionError::ServerError { code, message, .. } => {
+                    *code == 403
+                        && serde_json::from_str::<oci_client::errors::OciEnvelope>(message)
+                            .is_ok_and(|envelope| is_refusal(&envelope))
+                }
                 _ => false,
             };
         }
@@ -4732,6 +4766,53 @@ mod tests {
             reason(&unavailable),
             format!("Registry connection was interrupted after {IMAGE_PUSH_MAX_ATTEMPTS} attempts")
         );
+    }
+
+    /// Only the manager's legacy-prefix refusal names a renamed repository, whether it arrives as
+    /// the raw body of a refused upload or as a parsed envelope. Any other refusal stays rejected.
+    #[test]
+    fn only_the_legacy_prefix_refusal_names_a_renamed_repository() {
+        let generic = |source: oci_client::errors::OciDistributionError| dockdash::Error::Generic {
+            message: "push failed".to_string(),
+            source: Some(Box::new(source)),
+        };
+        let body = |message: &str| {
+            serde_json::json!({"errors": [{"code": "DENIED", "message": message}]}).to_string()
+        };
+        let upload = |code: u16, message: String| {
+            generic(oci_client::errors::OciDistributionError::ServerError {
+                code,
+                url: "https://manager.example.com/v2/acme-artifacts-prj_a/blobs/uploads/"
+                    .to_string(),
+                message,
+            })
+        };
+        let envelope = |message: &str| {
+            generic(oci_client::errors::OciDistributionError::RegistryError {
+                envelope: serde_json::from_str(&body(message)).unwrap(),
+                url: "https://manager.example.com/v2/acme-artifacts-prj_a/manifests/v1".to_string(),
+            })
+        };
+        let code = |error: &dockdash::Error| {
+            image_push_error("manager.example.com/acme-artifacts-prj_a:v1", error).code
+        };
+
+        assert_eq!(
+            code(&upload(403, body(LEGACY_REPOSITORY_PUSH_REFUSAL))),
+            "IMAGE_PUSH_REPOSITORY_RENAMED"
+        );
+        assert_eq!(
+            code(&envelope(LEGACY_REPOSITORY_PUSH_REFUSAL)),
+            "IMAGE_PUSH_REPOSITORY_RENAMED"
+        );
+        for refused in [
+            upload(403, body("Caller cannot push images to this project.")),
+            upload(404, body(LEGACY_REPOSITORY_PUSH_REFUSAL)),
+            upload(403, LEGACY_REPOSITORY_PUSH_REFUSAL.to_string()),
+            envelope("Repository does not belong to a project the caller can access."),
+        ] {
+            assert_eq!(code(&refused), "IMAGE_PUSH_REJECTED", "{refused:?}");
+        }
     }
 
     #[test]
