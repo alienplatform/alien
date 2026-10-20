@@ -1287,7 +1287,8 @@ fn sandbox_image_name(resource_prefix: &str, resource_id: &str) -> String {
 ///
 /// AWS builds a MicroVM image only from a bucket in the image's own region, so a vendor's one
 /// stored URI resolves per region here exactly as the emitters resolve it.
-fn desired_bundle_uri(config: &Sandbox, region: &str) -> Result<String> {
+/// The bundle the desired release names for this sandbox, with a `{region}` token resolved.
+pub(crate) fn desired_bundle_uri(config: &Sandbox, region: &str) -> Result<String> {
     let SandboxCode::Image { image } = &config.code else {
         return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
             message: "an AWS sandbox is built from a prebuilt s3:// bundle, not from source"
@@ -4350,5 +4351,158 @@ mod tests {
             managed_base_image_arn("eu-west-1"),
             "arn:aws:lambda:eu-west-1:aws:microvm-image:al2023-1"
         );
+    }
+
+    /// A Live registration may leave its bundle out, because the build role grants the store's
+    /// stable prefix and the bundle is the one the desired release declares. These hold the
+    /// importer to that: the controller it seeds, and what a stack update does to a serving
+    /// sandbox, must be the same whether or not the template names the bundle.
+    mod registration_without_bundle {
+        use super::*;
+        use crate::import::ResourceImporter;
+        use crate::sandbox::AwsSandboxImporter;
+        use alien_core::{
+            import::{data::AwsSandboxImportData, ImportContext},
+            Resource, ResourceEntry, ResourceLifecycle, StackResourceState, StackSettings,
+        };
+
+        const REGIONAL_BUNDLE: &str = "s3://bundles-{region}/sandbox-bundle/f00d/bundle.zip";
+
+        fn entry(sandbox: Sandbox, lifecycle: ResourceLifecycle) -> ResourceEntry {
+            ResourceEntry {
+                config: Resource::new(sandbox),
+                lifecycle,
+                dependencies: vec![],
+                remote_access: true,
+                enabled_when: None,
+            }
+        }
+
+        fn registration(bundle_uri: Option<&str>) -> AwsSandboxImportData {
+            AwsSandboxImportData {
+                image_identifier: None,
+                image_arn: None,
+                image_version: None,
+                build_role_arn: Some(BUILD_ROLE_ARN.to_string()),
+                bundle_uri: bundle_uri.map(str::to_string),
+                egress_connector_arns: vec![DENY_CONNECTOR_ARN.to_string()],
+                preview_ports: vec![8080],
+                allow_egress: false,
+            }
+        }
+
+        fn import(
+            entry: &ResourceEntry,
+            bundle_uri: Option<&str>,
+        ) -> alien_core::Result<StackResourceState> {
+            let settings = StackSettings::default();
+            AwsSandboxImporter.import(
+                registration(bundle_uri),
+                &ImportContext {
+                    resource_id: "agents",
+                    platform: Platform::Aws,
+                    region: "us-east-1",
+                    stack_settings: &settings,
+                    management_config: None,
+                    resource: entry,
+                },
+            )
+        }
+
+        fn merge(
+            entry: &ResourceEntry,
+            existing: StackResourceState,
+            imported: StackResourceState,
+        ) -> StackResourceState {
+            let settings = StackSettings::default();
+            AwsSandboxImporter
+                .merge_reimport(
+                    existing,
+                    imported,
+                    &ImportContext {
+                        resource_id: "agents",
+                        platform: Platform::Aws,
+                        region: "us-east-1",
+                        stack_settings: &settings,
+                        management_config: None,
+                        resource: entry,
+                    },
+                )
+                .expect("re-import merges")
+        }
+
+        fn controller(state: &StackResourceState) -> AwsSandboxController {
+            AwsSandboxController::from_persisted(
+                state.internal_state.clone().expect("controller state"),
+            )
+            .expect("typed controller")
+        }
+
+        #[test]
+        fn a_live_registration_without_its_bundle_seeds_the_controller_it_would_have_named() {
+            for (declared, resolved) in [
+                (BUNDLE_URI, BUNDLE_URI),
+                (
+                    REGIONAL_BUNDLE,
+                    "s3://bundles-us-east-1/sandbox-bundle/f00d/bundle.zip",
+                ),
+            ] {
+                let entry = entry(sandbox_with_bundle(declared), ResourceLifecycle::Live);
+                let named = import(&entry, Some(resolved)).expect("a named bundle imports");
+                let omitted = import(&entry, None).expect("an omitted bundle imports");
+
+                assert_eq!(omitted.status, ResourceStatus::Provisioning);
+                assert_eq!(
+                    omitted.internal_state, named.internal_state,
+                    "{declared}: the importer must seed what a registration naming it seeds"
+                );
+                let seeded = controller(&omitted);
+                assert_eq!(seeded.state, AwsSandboxState::CreatingImage);
+                assert_eq!(seeded.bundle_uri.as_deref(), Some(resolved));
+                assert_eq!(seeded.granted_bundle_uri.as_deref(), Some(resolved));
+            }
+        }
+
+        /// A Frozen role grants one exact object, so the registration still has to say which.
+        #[test]
+        fn a_frozen_registration_must_still_name_its_bundle() {
+            let error = import(&entry(sandbox(), ResourceLifecycle::Frozen), None)
+                .expect_err("a Frozen registration with build inputs but no bundle is refused");
+            assert_eq!(error.code, "IMPORT_DATA_INVALID");
+        }
+
+        /// The stack update that moves an installed stack to a template without the bundle
+        /// re-registers a sandbox that is already serving. It must land exactly where a
+        /// re-registration from the old template lands, and the update that follows must not
+        /// rebuild the image: the expectation-free mock panics on any MicroVM call.
+        #[tokio::test]
+        async fn re_registering_a_serving_sandbox_without_its_bundle_does_not_roll_it() {
+            let entry = entry(sandbox(), ResourceLifecycle::Live);
+            let mut serving = import(&entry, Some(BUNDLE_URI)).expect("installed registration");
+            serving.internal_state = Some(serialize_controller(&ready_controller()).unwrap());
+            serving.status = ResourceStatus::Running;
+
+            let old_template = merge(
+                &entry,
+                serving.clone(),
+                import(&entry, Some(BUNDLE_URI)).unwrap(),
+            );
+            let new_template = merge(&entry, serving, import(&entry, None).unwrap());
+            assert_eq!(new_template.status, ResourceStatus::Running);
+            assert_eq!(
+                new_template.internal_state, old_template.internal_state,
+                "a template without the bundle must re-register exactly like one with it"
+            );
+
+            let mut executor =
+                executor(controller(&new_template), MockLambdaMicrovmsApi::new()).await;
+            executor.update(sandbox()).expect("transition to update");
+            executor.step().await.expect("updating_sandbox");
+            let after = executor
+                .internal_state::<AwsSandboxController>()
+                .expect("typed controller");
+            assert_eq!(after.active_version.as_deref(), Some("1.0"));
+            assert_eq!(after.pending_version, None, "no roll may start");
+        }
     }
 }

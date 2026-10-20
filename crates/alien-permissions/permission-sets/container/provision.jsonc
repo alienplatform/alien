@@ -357,6 +357,8 @@
         }
       },
       // Restore: the restored volume's marker tag is removed once it replaces the old one.
+      // The key pattern matches the marker with or without a prefix, so the policy does not name
+      // the runtime's exact key. Every other tag key, and volumes outside this stack, stay denied.
       {
         "grant": {
           "actions": ["ec2:DeleteTags"]
@@ -369,8 +371,8 @@
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
                 "aws:ResourceTag/${managedByTag}": "runtime"
               },
-              "ForAllValues:StringEquals": {
-                "aws:TagKeys": "alien-restore-request"
+              "ForAllValues:StringLike": {
+                "aws:TagKeys": "*restore-request"
               }
             }
           },
@@ -382,8 +384,8 @@
                 "aws:ResourceTag/${resourceTag}": "${resourceId}",
                 "aws:ResourceTag/${managedByTag}": "runtime"
               },
-              "ForAllValues:StringEquals": {
-                "aws:TagKeys": "alien-restore-request"
+              "ForAllValues:StringLike": {
+                "aws:TagKeys": "*restore-request"
               }
             }
           }

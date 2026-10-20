@@ -5,12 +5,12 @@ use alien_core::{
     ErrorData as CoreErrorData, Platform, ResourceLifecycle, ResourceStatus, Result, Sandbox,
     StackResourceState,
 };
-use alien_error::AlienError;
+use alien_error::{AlienError, Context};
 
 use crate::core::{serialize_controller, ResourceController};
 use crate::import::ResourceImporter;
 use crate::import_helpers::make_imported_state_with_status;
-use crate::sandbox::{AwsSandboxController, AwsSandboxState};
+use crate::sandbox::{aws::desired_bundle_uri, AwsSandboxController, AwsSandboxState};
 
 /// AWS Sandbox importer.
 ///
@@ -18,6 +18,11 @@ use crate::sandbox::{AwsSandboxController, AwsSandboxState};
 /// first initializes its gateway configuration. A Live sandbox, or a Frozen one a direct setup
 /// registers, names the build role and bundle and starts the create flow, so the deployment loop
 /// builds the image once; later bundles roll via update.
+///
+/// A Live registration may leave the bundle out. Its build role grants the bundle store's stable
+/// prefix rather than one object, and the bundle it would have named is the one the desired
+/// release declares, so the importer takes that one. A Frozen registration must still name its
+/// bundle: the role grants that exact object.
 #[derive(Debug, Default)]
 pub struct AwsSandboxImporter;
 
@@ -97,7 +102,26 @@ impl ResourceImporter for AwsSandboxImporter {
             // Setup registered the build inputs; the controller builds the image once
             // the deployment loop steps it, which is why this imports Provisioning at the
             // create entry state rather than Running.
-            (None, None, None, Some(build_role_arn), Some(bundle_uri)) => {
+            (None, None, None, Some(build_role_arn), bundle_uri) => {
+                let bundle_uri = match bundle_uri {
+                    Some(bundle_uri) => bundle_uri,
+                    None if ctx.resource.lifecycle == ResourceLifecycle::Live => {
+                        desired_bundle_uri(sandbox, ctx.region).context(
+                            CoreErrorData::ImportDataInvalid {
+                                resource_id: ctx.resource_id.to_string(),
+                                resource_type: Sandbox::RESOURCE_TYPE,
+                                platform: Platform::Aws,
+                            },
+                        )?
+                    }
+                    None => {
+                        return Err(AlienError::new(CoreErrorData::ImportDataInvalid {
+                            resource_id: ctx.resource_id.to_string(),
+                            resource_type: Sandbox::RESOURCE_TYPE,
+                            platform: Platform::Aws,
+                        }))
+                    }
+                };
                 let controller = AwsSandboxController {
                     state: AwsSandboxState::CreatingImage,
                     build_role_arn: Some(build_role_arn),
