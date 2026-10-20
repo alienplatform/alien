@@ -451,6 +451,7 @@ async fn setup_scoped_grant_cleanup(
     let current = "deployment-jobs-queue-data-write".to_string();
     let legacy = "alien-jobs-queue-data-write".to_string();
     let policies = Arc::new(Mutex::new(vec![
+        "deployment-permissions".into(),
         current,
         legacy,
         "deployment-jobs-queue-custom-send".into(),
@@ -547,6 +548,9 @@ async fn setup_scoped_grant_cleanup(
         assert_ne!(state.status, DeploymentStatus::InitialSetupFailed);
     }
     assert_eq!(state.status, DeploymentStatus::Provisioning);
+    if legacy_checkpoint {
+        assert_eq!(state.protocol_version, 2);
+    }
     assert!(!*exists.lock().unwrap());
     assert_eq!(*policies.lock().unwrap(), ["unrelated-metadata-control"]);
     assert!(state
@@ -610,13 +614,35 @@ async fn live_until(
     panic!("live deployment did not reach the expected terminal status");
 }
 
+async fn assert_live_queue_absent(client: &dyn SqsApi, url: &str) {
+    // DeleteQueue is asynchronous and may take up to 60 seconds. Only the
+    // provider's explicit absence response satisfies the observer assertion.
+    tokio::time::timeout(std::time::Duration::from_secs(65), async {
+        loop {
+            match client
+                .get_queue_attributes(
+                    url,
+                    alien_aws_clients::sqs::GetQueueAttributesRequest::builder()
+                        .attribute_names(vec!["QueueArn".into()])
+                        .build(),
+                )
+                .await
+            {
+                Err(error) if error.code == "REMOTE_RESOURCE_NOT_FOUND" => return,
+                Err(error) => panic!("absence observer failed: code={}", error.code),
+                Ok(_) => tokio::time::sleep(std::time::Duration::from_secs(1)).await,
+            }
+        }
+    })
+    .await
+    .expect("observer must confirm queue absence within the deletion window");
+}
+
 #[tokio::test]
 #[ignore = "mutates only an explicitly supplied disposable queue and sender role; requires scoped setup and preissued workload credentials"]
 async fn live_setup_removes_permissions_after_cleanup() {
     use alien_aws_clients::iam::{IamApi, IamClient};
-    use alien_aws_clients::sqs::{
-        CreateQueueRequest, GetQueueAttributesRequest, GetQueueUrlRequest, SendMessageRequest,
-    };
+    use alien_aws_clients::sqs::{CreateQueueRequest, GetQueueUrlRequest, SendMessageRequest};
     use alien_core::permissions::{PermissionProfile, PermissionSet, PermissionsConfig};
     use alien_core::{
         DeploymentStatus, InitialSetupAuthority, ReleaseInfo, RuntimeMetadata, ServiceAccount,
@@ -814,18 +840,7 @@ async fn live_setup_removes_permissions_after_cleanup() {
         state.stack_state.as_ref().unwrap().resources["jobs"].status,
         ResourceStatus::Deleted
     );
-    let absent = allowed
-        .get_queue_attributes(
-            url,
-            GetQueueAttributesRequest::builder()
-                .attribute_names(vec!["QueueArn".into()])
-                .build(),
-        )
-        .await;
-    assert!(
-        absent.is_err_and(|error| error.code == "REMOTE_RESOURCE_NOT_FOUND"),
-        "observer must confirm absence"
-    );
+    assert_live_queue_absent(allowed.as_ref(), url).await;
     println!("runtime removed queue and retained setup obligation; independent observer confirmed absence");
     tokio::time::sleep(std::time::Duration::from_secs(61)).await;
     assert!(
@@ -928,15 +943,7 @@ async fn live_setup_removes_permissions_after_cleanup() {
         allowed.delete_queue(url).await.is_ok(),
         "clean up exact disposable queue"
     );
-    let absent = allowed
-        .get_queue_attributes(
-            url,
-            GetQueueAttributesRequest::builder()
-                .attribute_names(vec!["QueueArn".into()])
-                .build(),
-        )
-        .await;
-    assert!(absent.is_err_and(|error| error.code == "REMOTE_RESOURCE_NOT_FOUND"));
+    assert_live_queue_absent(allowed.as_ref(), url).await;
     println!("actual InitialSetup removed stack/current/legacy grants; unchanged session Send denied; unrelated GetQueueUrl succeeded; queue cleanup confirmed");
 }
 
@@ -970,4 +977,45 @@ async fn live_workload_permission_probe() {
 #[tokio::test]
 async fn setup_resumes_legacy_prepared_desired_and_stale_pending_checkpoint() {
     setup_scoped_grant_cleanup(false, false, true).await;
+}
+
+#[tokio::test]
+async fn future_protocol_is_rejected_before_any_provider_access() {
+    let mut state = deployment(StackState::new(Platform::Aws));
+    state.status = alien_core::DeploymentStatus::InitialSetup;
+    state.protocol_version = alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION + 1;
+    let version = state.protocol_version;
+    let error = alien_deployment::step(
+        state,
+        config(),
+        fake_config(),
+        Some(Arc::new(MockPlatformServiceProvider::new())),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.code, "INCOMPATIBLE_DEPLOYMENT_PROTOCOL");
+    println!("protocol {version} rejected before provider access");
+}
+
+#[tokio::test]
+async fn unchanged_running_protocol_one_remains_usable_without_upgrade() {
+    let stack = alien_core::Stack::new("synthetic".into()).build();
+    let mut state = deployment(StackState::new(Platform::Test));
+    state.platform = Platform::Test;
+    state.status = alien_core::DeploymentStatus::Running;
+    state.protocol_version = 1;
+    state.runtime_metadata = Some(alien_core::RuntimeMetadata {
+        prepared_stack: Some(stack),
+        ..Default::default()
+    });
+    let result = alien_deployment::step(
+        state,
+        config(),
+        ClientConfig::Test,
+        Some(Arc::new(MockPlatformServiceProvider::new())),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.state.status, alien_core::DeploymentStatus::Running);
+    assert_eq!(result.state.protocol_version, 1);
 }

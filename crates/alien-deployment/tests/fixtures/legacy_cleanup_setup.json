@@ -105,14 +105,10 @@
                     {
                       "binding": {
                         "resource": {
-                          "resources": [
-                            "arn:aws:sqs:${awsRegion}:${awsAccountId}:${resourceName}"
-                          ]
+                          "resources": ["arn:aws:sqs:${awsRegion}:${awsAccountId}:${resourceName}"]
                         },
                         "stack": {
-                          "resources": [
-                            "arn:aws:sqs:${awsRegion}:${awsAccountId}:${stackPrefix}-*"
-                          ]
+                          "resources": ["arn:aws:sqs:${awsRegion}:${awsAccountId}:${stackPrefix}-*"]
                         }
                       },
                       "description": "Send, acknowledge, and inspect messages in application-owned SQS queues.",
@@ -140,9 +136,7 @@
                       },
                       "description": "Send messages to application-owned Azure Service Bus queues.",
                       "grant": {
-                        "predefinedRoles": [
-                          "Azure Service Bus Data Sender"
-                        ]
+                        "predefinedRoles": ["Azure Service Bus Data Sender"]
                       },
                       "label": "send-service-bus-messages"
                     }
@@ -159,9 +153,7 @@
                       },
                       "description": "Publish messages to application-owned Pub/Sub topics.",
                       "grant": {
-                        "predefinedRoles": [
-                          "roles/pubsub.publisher"
-                        ]
+                        "predefinedRoles": ["roles/pubsub.publisher"]
                       },
                       "label": "publish-pubsub-messages"
                     },
@@ -176,10 +168,7 @@
                       },
                       "description": "Acknowledge and inspect messages on application-owned Pub/Sub subscriptions.",
                       "grant": {
-                        "predefinedRoles": [
-                          "roles/pubsub.subscriber",
-                          "roles/pubsub.viewer"
-                        ]
+                        "predefinedRoles": ["roles/pubsub.subscriber", "roles/pubsub.viewer"]
                       },
                       "label": "acknowledge-pubsub-messages"
                     }
@@ -194,14 +183,10 @@
                     {
                       "binding": {
                         "resource": {
-                          "resources": [
-                            "arn:aws:sqs:${awsRegion}:${awsAccountId}:${resourceName}"
-                          ]
+                          "resources": ["arn:aws:sqs:${awsRegion}:${awsAccountId}:${resourceName}"]
                         },
                         "stack": {
-                          "resources": [
-                            "arn:aws:sqs:${awsRegion}:${awsAccountId}:${stackPrefix}-*"
-                          ]
+                          "resources": ["arn:aws:sqs:${awsRegion}:${awsAccountId}:${stackPrefix}-*"]
                         }
                       },
                       "description": "Send, acknowledge, and inspect messages in application-owned SQS queues.",
@@ -229,9 +214,7 @@
                       },
                       "description": "Send messages to application-owned Azure Service Bus queues.",
                       "grant": {
-                        "predefinedRoles": [
-                          "Azure Service Bus Data Sender"
-                        ]
+                        "predefinedRoles": ["Azure Service Bus Data Sender"]
                       },
                       "label": "send-service-bus-messages"
                     }
@@ -248,9 +231,7 @@
                       },
                       "description": "Publish messages to application-owned Pub/Sub topics.",
                       "grant": {
-                        "predefinedRoles": [
-                          "roles/pubsub.publisher"
-                        ]
+                        "predefinedRoles": ["roles/pubsub.publisher"]
                       },
                       "label": "publish-pubsub-messages"
                     },
@@ -265,10 +246,7 @@
                       },
                       "description": "Acknowledge and inspect messages on application-owned Pub/Sub subscriptions.",
                       "grant": {
-                        "predefinedRoles": [
-                          "roles/pubsub.subscriber",
-                          "roles/pubsub.viewer"
-                        ]
+                        "predefinedRoles": ["roles/pubsub.subscriber", "roles/pubsub.viewer"]
                       },
                       "label": "acknowledge-pubsub-messages"
                     }
@@ -308,10 +286,7 @@
         },
         "management": {
           "extend": {
-            "*": [
-              "service-account/heartbeat",
-              "remote-stack-management/protect-management-role"
-            ]
+            "*": ["service-account/heartbeat", "remote-stack-management/protect-management-role"]
           }
         }
       }
@@ -367,9 +342,7 @@
                         },
                         "description": "Send messages to application-owned Azure Service Bus queues.",
                         "grant": {
-                          "predefinedRoles": [
-                            "Azure Service Bus Data Sender"
-                          ]
+                          "predefinedRoles": ["Azure Service Bus Data Sender"]
                         },
                         "label": "send-service-bus-messages"
                       }
@@ -386,9 +359,7 @@
                         },
                         "description": "Publish messages to application-owned Pub/Sub topics.",
                         "grant": {
-                          "predefinedRoles": [
-                            "roles/pubsub.publisher"
-                          ]
+                          "predefinedRoles": ["roles/pubsub.publisher"]
                         },
                         "label": "publish-pubsub-messages"
                       },
@@ -403,10 +374,7 @@
                         },
                         "description": "Acknowledge and inspect messages on application-owned Pub/Sub subscriptions.",
                         "grant": {
-                          "predefinedRoles": [
-                            "roles/pubsub.subscriber",
-                            "roles/pubsub.viewer"
-                          ]
+                          "predefinedRoles": ["roles/pubsub.subscriber", "roles/pubsub.viewer"]
                         },
                         "label": "acknowledge-pubsub-messages"
                       }
@@ -456,9 +424,7 @@
                         },
                         "description": "Send messages to application-owned Azure Service Bus queues.",
                         "grant": {
-                          "predefinedRoles": [
-                            "Azure Service Bus Data Sender"
-                          ]
+                          "predefinedRoles": ["Azure Service Bus Data Sender"]
                         },
                         "label": "send-service-bus-messages"
                       }
@@ -475,9 +441,7 @@
                         },
                         "description": "Publish messages to application-owned Pub/Sub topics.",
                         "grant": {
-                          "predefinedRoles": [
-                            "roles/pubsub.publisher"
-                          ]
+                          "predefinedRoles": ["roles/pubsub.publisher"]
                         },
                         "label": "publish-pubsub-messages"
                       },
@@ -492,10 +456,7 @@
                         },
                         "description": "Acknowledge and inspect messages on application-owned Pub/Sub subscriptions.",
                         "grant": {
-                          "predefinedRoles": [
-                            "roles/pubsub.subscriber",
-                            "roles/pubsub.viewer"
-                          ]
+                          "predefinedRoles": ["roles/pubsub.subscriber", "roles/pubsub.viewer"]
                         },
                         "label": "acknowledge-pubsub-messages"
                       }
