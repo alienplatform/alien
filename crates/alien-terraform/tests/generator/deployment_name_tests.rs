@@ -92,12 +92,15 @@ fn registered_module_defaults_name_to_the_display_name_slug() {
     let module = registered_module(Some("Acme Analytics"));
 
     assert_eq!(name_default(&module), "acme-analytics");
-    // Only `token` is supplied, so the plan evaluates the default against the
+    // `name` is not supplied, so the plan evaluates the default against the
     // module's own validation rule.
     assert_variable_plan_passes(
         &module,
         "registered module with the default name",
-        &[("token", "example-token")],
+        &[
+            ("token", "example-token"),
+            ("management_url", "https://manager.example.com"),
+        ],
     );
     let readme = module.get("README.md").expect("README.md should render");
     assert!(
@@ -135,7 +138,11 @@ fn name_variable_accepts_only_names_registration_accepts() {
         assert_variable_plan_passes(
             &module,
             &format!("name = {name:?}"),
-            &[("name", name), ("token", "example-token")],
+            &[
+                ("name", name),
+                ("token", "example-token"),
+                ("management_url", "https://manager.example.com"),
+            ],
         );
     }
 
@@ -154,7 +161,11 @@ fn name_variable_accepts_only_names_registration_accepts() {
         assert_terraform_variable_plan_invalid_contains(
             &module,
             &format!("name = {name:?}"),
-            &[("name", name), ("token", "example-token")],
+            &[
+                ("name", name),
+                ("token", "example-token"),
+                ("management_url", "https://manager.example.com"),
+            ],
             NAME_ERROR,
         );
     }

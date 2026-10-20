@@ -1890,15 +1890,9 @@ fn variables_body(
         None,
         true,
     )));
-    blocks.push(nested(variable_block(
-        "management_url",
-        if setup_only {
-            "Management endpoint used to register this deployment."
-        } else {
-            "Optional management endpoint used by pull-style runtimes."
-        },
-        Some(Expression::String("".to_string())),
-        false,
+    blocks.push(nested(management_url_variable_block(
+        registration.is_some(),
+        setup_only,
     )));
     if !setup_only {
         blocks.push(nested(string_enum_variable_block(
@@ -2405,6 +2399,54 @@ fn deployment_name_variable_block(default: Option<String>) -> Block {
         identifier: Identifier::sanitized("variable"),
         labels: vec![BlockLabel::String("name".to_string())],
         body: Body::from(body),
+    }
+}
+
+/// A self-registering module sends `management_url` to its provider resource, which
+/// registers the deployment with that endpoint, so the variable is required there. Without
+/// registration the value is only recorded for pull-style runtimes and stays optional.
+fn management_url_variable_block(registered: bool, setup_only: bool) -> Block {
+    if !registered {
+        return variable_block(
+            "management_url",
+            if setup_only {
+                "Management endpoint used to register this deployment."
+            } else {
+                "Optional management endpoint used by pull-style runtimes."
+            },
+            Some(Expression::String(String::new())),
+            false,
+        );
+    }
+    Block {
+        identifier: Identifier::sanitized("variable"),
+        labels: vec![BlockLabel::String("management_url".to_string())],
+        body: Body::from(vec![
+            attr("type", expr::raw("string")),
+            attr(
+                "description",
+                Expression::String(
+                    "Management endpoint this deployment registers with. The generated installation snippet supplies it."
+                        .to_string(),
+                ),
+            ),
+            nested(block(
+                "validation",
+                [
+                    attr(
+                        "condition",
+                        expr::raw("can(regex(\"^https?://[^/?#]+\", var.management_url))"),
+                    ),
+                    attr(
+                        "error_message",
+                        Expression::String(
+                            "management_url must be the http(s) management endpoint from the installation snippet."
+                                .to_string(),
+                        ),
+                    ),
+                ],
+            )),
+        ]),
     }
 }
 
@@ -4464,6 +4506,7 @@ fn readme_md(
             .is_some()
             .then_some(deployment_name_default.as_str()),
     )];
+    let registered = registration.is_some();
     let setup_only = stack_settings.setup_management != alien_core::SetupManagement::Automatic
         && stack
             .resources
@@ -4473,7 +4516,12 @@ fn readme_md(
             .resources
             .values()
             .any(|entry| entry.lifecycle == ResourceLifecycle::Live);
-    input_sections.push(readme_common_inputs(setup_only, profile, stack_settings));
+    input_sections.push(readme_common_inputs(
+        registered,
+        setup_only,
+        profile,
+        stack_settings,
+    ));
     if matches!(target.cloud_platform(), alien_core::Platform::Aws) {
         input_sections.push(readme_aws_inputs());
     }
@@ -4564,28 +4612,63 @@ Use your organization's normal backend and approval workflow. A typical local re
 }
 
 fn readme_required_inputs(deployment_name_default: Option<&str>) -> String {
-    let name = match deployment_name_default {
+    match deployment_name_default {
         Some(default) => format!(
-            "- `name`: optional deployment name: lowercase letters, numbers, and single hyphens. Defaults to `{default}`."
+            "Required:\n\n- `token`: install token from the setup page.\n- `management_url`: management endpoint this deployment registers with. The generated installation snippet supplies it.\n- `name`: optional deployment name: lowercase letters, numbers, and single hyphens. Defaults to `{default}`."
         ),
-        None => "- `name`: deployment name to include in the registration metadata: lowercase letters, numbers, and single hyphens.".to_string(),
-    };
-    format!("Required:\n\n- `token`: install token from the setup page.\n{name}")
+        None => "Required:\n\n- `token`: install token from the setup page.\n- `name`: deployment name to include in the registration metadata: lowercase letters, numbers, and single hyphens.".to_string(),
+    }
 }
 
+/// Optional inputs. `management_url` is listed here only for modules without registration;
+/// a self-registering module lists it as required.
 fn readme_common_inputs(
+    registered: bool,
     setup_only: bool,
     profile: alien_core::SetupConfigurationProfile,
     settings: &StackSettings,
 ) -> String {
+    let resource_prefix =
+        "- `resource_prefix`: stable physical-name prefix. Leave empty to generate one.";
+    let management_url = |line: &'static str| (!registered).then_some(line);
     if setup_only {
-        return "Common optional settings:\n\n- `resource_prefix`: stable physical-name prefix. Leave empty to generate one.\n- `management_url`: management endpoint used to register this deployment. The generated installation snippet supplies the endpoint selected for the deployment target."
-            .to_string();
+        let lines = [
+            Some(resource_prefix),
+            management_url("- `management_url`: management endpoint used to register this deployment. The generated installation snippet supplies the endpoint selected for the deployment target."),
+        ];
+        return format!(
+            "Common optional settings:\n\n{}",
+            lines.into_iter().flatten().collect::<Vec<_>>().join("\n")
+        );
     }
     if profile == alien_core::SetupConfigurationProfile::Standard {
-        return format!("Standard configuration exposes compute, network, endpoint access, and application inputs.\n\nOperational defaults: updates `{}`, telemetry `{}`, heartbeats `{}`. Use the Advanced package to customize these settings.\n\n- `resource_prefix`: stable physical-name prefix. Leave empty to generate one.\n- `management_url`: management endpoint for registration.\n- `deployment_model`: `push` or `pull`.", updates_mode(settings.updates), telemetry_mode(settings.telemetry), heartbeats_mode(settings.heartbeats));
+        let lines = [
+            Some(resource_prefix),
+            management_url("- `management_url`: management endpoint for registration."),
+            Some("- `deployment_model`: `push` or `pull`."),
+        ];
+        return format!(
+            "Standard configuration exposes compute, network, endpoint access, and application inputs.\n\nOperational defaults: updates `{}`, telemetry `{}`, heartbeats `{}`. Use the Advanced package to customize these settings.\n\n{}",
+            updates_mode(settings.updates),
+            telemetry_mode(settings.telemetry),
+            heartbeats_mode(settings.heartbeats),
+            lines.into_iter().flatten().collect::<Vec<_>>().join("\n")
+        );
     }
-    "Common optional settings:\n\n- `resource_prefix`: stable physical-name prefix. Leave empty to generate one.\n- `management_url`: optional management endpoint used by pull-style runtimes.\n- `deployment_model`: `push` or `pull`.\n- `updates_mode`: `auto` or `approval-required`.\n- `telemetry_mode`: `off`, `auto`, or `approval-required`.\n- `heartbeats_mode`: `off` or `on`.\n- `advanced_settings_json`: complete advanced deployment settings JSON. Most installs should keep the generated default.\n- `advanced_settings_overlay_json`: partial advanced settings merged over package defaults, preserving generated values such as compute selections.".to_string()
+    let lines = [
+        Some(resource_prefix),
+        management_url("- `management_url`: optional management endpoint used by pull-style runtimes."),
+        Some("- `deployment_model`: `push` or `pull`."),
+        Some("- `updates_mode`: `auto` or `approval-required`."),
+        Some("- `telemetry_mode`: `off`, `auto`, or `approval-required`."),
+        Some("- `heartbeats_mode`: `off` or `on`."),
+        Some("- `advanced_settings_json`: complete advanced deployment settings JSON. Most installs should keep the generated default."),
+        Some("- `advanced_settings_overlay_json`: partial advanced settings merged over package defaults, preserving generated values such as compute selections."),
+    ];
+    format!(
+        "Common optional settings:\n\n{}",
+        lines.into_iter().flatten().collect::<Vec<_>>().join("\n")
+    )
 }
 
 fn readme_stack_inputs(inputs: &[StackInputDefinition]) -> String {
