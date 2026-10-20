@@ -6,8 +6,8 @@ license-file.workspace = true
 
 [features]
 default = []
-aws = ["alien-bindings/aws"]
-cloud = ["alien-bindings/aws", "alien-bindings/gcp", "alien-bindings/azure", "alien-bindings/kubernetes"]
+aws = ["alien-bindings/aws", "dep:alien-aws-clients", "dep:alien-client-config", "alien-client-config/aws"]
+cloud = ["aws", "alien-bindings/gcp", "alien-bindings/azure", "alien-bindings/kubernetes"]
 local = ["alien-bindings/local"]
 
 [dependencies]
@@ -15,6 +15,8 @@ axum = { workspace = true, features = ["tokio", "http1", "json", "query"] }
 alien-core = { workspace = true }
 alien-error = { workspace = true }
 alien-bindings = { workspace = true }
+alien-aws-clients = { workspace = true, optional = true }
+alien-client-config = { workspace = true, optional = true }
 base64 = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }

@@ -2,12 +2,12 @@ use crate::compatibility::narrowing::{management_narrowed, profile_narrowed};
 use crate::error::Result;
 use crate::mutations::management_permission_profile::{
     GATE_DERIVED_GLOBAL_SUFFIXES, KEY_AVAILABILITY_PERMISSION_SET_ID,
-    sandbox_signing_key_guard, NATIVE_VOLUME_MANAGEMENT_PERMISSION_SET_ID,
+    replica_secret_existence, secrets_guard, NATIVE_VOLUME_MANAGEMENT_PERMISSION_SET_ID,
 };
-use crate::mutations::sandbox_gateway_permissions::management_gateway_config_read;
 use crate::{CheckResult, StackCompatibilityCheck};
 use alien_core::permissions::{ManagementPermissions, PermissionProfile, PermissionSetReference};
-use alien_core::{Key, Stack, SECRETS_VAULT_ID};
+use alien_core::{sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID, Key, Stack};
+use crate::mutations::sandbox_gateway_permissions::replica_secret_read;
 use alien_permissions::{MANAGEMENT_ROLE_GUARD, SANDBOX_SETUP_ROLES_GUARD};
 use std::collections::HashSet;
 
@@ -175,12 +175,11 @@ fn management_differs_outside_gates(
 ///   when setup reports that it installed it (`availabilityProbe` in the key's import data), so a
 ///   setup that predates it keeps its metadata-only health check until setup is rerun. Only the
 ///   canonical reference in that key's own scope.
-/// - the canonical AWS sandbox signing-key Deny: a Deny only narrows. Stack scope only.
+/// - the canonical AWS sandbox secrets Deny (a Deny only narrows) and the replica secret's
+///   existence check, which the sandbox controller treats as "no replica secret yet" while
+///   the installed role lacks it. Stack scope only.
 /// - `key/native-volume-management` on a Key whose installed scope holds `key/native-volume`:
 ///   the same EC2 key use without `kms:Decrypt`, so the installed role already covers it.
-/// - the canonical exact gateway-configuration read on the secrets vault, where the installed profile
-///   already holds `vault/data-read` on that vault: the installed role reads the whole vault,
-///   so the runtime keeps every read it needs until setup narrows it.
 ///
 /// Anything else still reads as drift, and a grant the old profile held may not leave.
 fn without_added_migration_grants(
@@ -224,17 +223,10 @@ fn without_added_migration_grants(
             .into_iter()
             .collect::<Vec<_>>()
     };
-    let signing_key_guard = added_canonical("*", sandbox_signing_key_guard().ok());
-    let installed_reads_secrets = old_scope(SECRETS_VAULT_ID).is_some_and(|grants| {
-        grants
-            .iter()
-            .any(|grant| grant == &PermissionSetReference::from_name("vault/data-read"))
-    });
-    let gateway_config_read = if installed_reads_secrets {
-        added_canonical(SECRETS_VAULT_ID, management_gateway_config_read().ok())
-    } else {
-        Vec::new()
-    };
+    let sandbox_secrets = [secrets_guard().ok(), replica_secret_existence().ok()]
+        .into_iter()
+        .flat_map(|grant| added_canonical("*", grant))
+        .collect::<Vec<_>>();
     let installed_volume_use = PermissionSetReference::from_name("key/native-volume");
     let volume_management =
         PermissionSetReference::from_name(NATIVE_VOLUME_MANAGEMENT_PERMISSION_SET_ID);
@@ -251,8 +243,7 @@ fn without_added_migration_grants(
     let without = |profile: &PermissionProfile| {
         let mut profile = profile.clone();
         strip(&mut profile, "*", &added_guards);
-        strip(&mut profile, "*", &signing_key_guard);
-        strip(&mut profile, SECRETS_VAULT_ID, &gateway_config_read);
+        strip(&mut profile, "*", &sandbox_secrets);
         for scope in &keys_with_installed_volume_use {
             strip(&mut profile, scope, std::slice::from_ref(&volume_management));
         }
@@ -276,6 +267,33 @@ fn without_added_migration_grants(
             ManagementPermissions::Override(without(profile))
         }
     }
+}
+
+/// The gateway profile without its canonical replica-secret read where the installed profile
+/// lacks it. Until setup installs the read, the gateway keeps the replica secret embedded in its
+/// configuration, which it already reads, so the update runs before setup is rerun.
+fn without_added_gateway_grants(
+    profile_name: &str,
+    old: &PermissionProfile,
+    new: &PermissionProfile,
+) -> PermissionProfile {
+    let mut new = new.clone();
+    if profile_name != SANDBOX_EGRESS_GATEWAY_ID {
+        return new;
+    }
+    let Ok(read) = replica_secret_read().map(PermissionSetReference::from_inline) else {
+        return new;
+    };
+    if old.0.get("*").is_some_and(|grants| grants.contains(&read)) {
+        return new;
+    }
+    if let Some(grants) = new.0.get_mut("*") {
+        grants.retain(|grant| grant != &read);
+        if grants.is_empty() && !old.0.contains_key("*") {
+            new.0.shift_remove("*");
+        }
+    }
+    new
 }
 
 /// Accepts the one-way profile migration caused by registering the formerly
@@ -392,6 +410,7 @@ fn check_permission_profiles(
     // Check for modified or added profiles
     for (profile_name, new_profile) in new_profiles {
         if let Some(old_profile) = old_profiles.get(profile_name) {
+            let new_profile = &without_added_gateway_grants(profile_name, old_profile, new_profile);
             // Profile exists in both - check if it was modified
             if profiles_differ_outside_gates(old_profile, new_profile, &gated)
                 && !(allow_narrowing && profile_narrowed(old_profile, new_profile))
@@ -441,6 +460,7 @@ fn check_permission_profiles(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_core::SECRETS_VAULT_ID;
     use crate::mutations::management_permission_profile::ManagementPermissionProfileMutation;
     use crate::StackMutation;
     use alien_core::permissions::PermissionsConfig;
@@ -458,24 +478,18 @@ mod tests {
                 .resource(SECRETS_VAULT_ID, ["vault/data-read", "vault/data-write"])
         } else {
             let mut global = global;
-            global.push(sandbox_signing_key_guard().unwrap());
-            let mut profile = PermissionProfile::new().global(global);
-            profile.0.insert(
-                SECRETS_VAULT_ID.to_string(),
-                vec![
-                    PermissionSetReference::from_name("vault/data-write"),
-                    management_gateway_config_read().unwrap(),
-                ],
-            );
-            profile
+            global.push(secrets_guard().unwrap());
+            global.push(replica_secret_existence().unwrap());
+            PermissionProfile::new()
+                .global(global)
+                .resource(SECRETS_VAULT_ID, ["vault/data-write"])
         };
         ManagementPermissions::Extend(profile)
     }
 
     /// An installed setup granted management `vault/data-read` on the whole secrets vault. The
-    /// new preparation keeps only the gateway configuration read and adds a Deny on the
-    /// signing key: both are within what the installed role allows, so the update runs before
-    /// setup is rerun.
+    /// new preparation drops it, adds a Deny on the vault and the replica secret, and an
+    /// existence check the controller tolerates missing: the update runs before setup is rerun.
     #[tokio::test]
     async fn narrowing_the_secrets_vault_read_does_not_need_setup() {
         assert!(
@@ -487,30 +501,26 @@ mod tests {
         );
     }
 
-    /// An author's grant that reuses the gateway-read id but asks for more is not the canonical
-    /// read, so it still needs setup even where the installed profile reads the vault.
+    /// An author's grant that reuses the existence check's id but asks for more is not the
+    /// canonical grant, so it still needs setup.
     #[tokio::test]
-    async fn a_grant_reusing_the_gateway_read_id_still_needs_setup() {
+    async fn a_grant_reusing_the_existence_check_id_still_needs_setup() {
         let mut broader = secrets_vault_management(false);
         if let ManagementPermissions::Extend(profile) = &mut broader {
             let set: alien_core::permissions::PermissionSet = serde_json::from_value(
                 serde_json::json!({
-                    "id": "vault/sandbox-egress-gateway-config-read",
-                    "description": "not the canonical read",
+                    "id": "sandbox/egress-replica-secret-exists",
+                    "description": "not the canonical check",
                     "platforms": { "aws": [{
-                        "grant": { "actions": ["ssm:GetParameter", "ssm:DeleteParameter"] },
-                        "binding": { "resource": { "resources": ["arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${resourceName}-*"] } }
+                        "grant": { "actions": ["secretsmanager:DescribeSecret", "secretsmanager:GetSecretValue"] },
+                        "binding": { "stack": { "resources": ["*"] } }
                     }] }
                 }),
             )
             .unwrap();
-            profile.0.insert(
-                SECRETS_VAULT_ID.to_string(),
-                vec![
-                    PermissionSetReference::from_name("vault/data-write"),
-                    PermissionSetReference::from_inline(set),
-                ],
-            );
+            let global = profile.0.get_mut("*").unwrap();
+            global.retain(|grant| grant.id() != "sandbox/egress-replica-secret-exists");
+            global.push(PermissionSetReference::from_inline(set));
         }
         assert!(!update_passes(secrets_vault_management(true), broader).await);
     }
@@ -540,20 +550,6 @@ mod tests {
             )
             .await
         );
-    }
-
-    /// Without an installed `vault/data-read`, the gateway configuration read is a new grant
-    /// the installed role does not have, so the update still waits for setup.
-    #[tokio::test]
-    async fn a_gateway_configuration_read_the_installed_role_lacks_needs_setup() {
-        let mut installed = secrets_vault_management(true);
-        if let ManagementPermissions::Extend(profile) = &mut installed {
-            profile.0.insert(
-                SECRETS_VAULT_ID.to_string(),
-                vec![PermissionSetReference::from_name("vault/data-write")],
-            );
-        }
-        assert!(!update_passes(installed, secrets_vault_management(false)).await);
     }
 
     fn guarded_sandbox_stack(management: ManagementPermissions) -> Stack {

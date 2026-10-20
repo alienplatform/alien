@@ -1,12 +1,9 @@
 //! Exact vault-entry access for the gateway and sandbox-management workloads.
 
 use alien_core::{
-    permissions::{
-        ManagementPermissions, PermissionProfile, PermissionSet, PermissionSetReference,
-    },
+    permissions::{PermissionProfile, PermissionSet, PermissionSetReference},
     sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID,
-    Build, Container, Daemon, RemoteStackManagement, ResourceRef, Stack, Vault, Worker,
-    SECRETS_VAULT_ID,
+    Build, Container, Daemon, ResourceRef, Stack, Vault, Worker, SECRETS_VAULT_ID,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 
@@ -118,6 +115,10 @@ pub(crate) fn configure_aws_gateway_permissions(stack: &mut Stack) -> Result<()>
             "sandbox-egress-gateway-config",
         )?)],
     );
+    gateway_profile.0.insert(
+        "*".into(),
+        vec![PermissionSetReference::from_inline(replica_secret_read()?)],
+    );
     if stack
         .permissions
         .profiles
@@ -125,7 +126,7 @@ pub(crate) fn configure_aws_gateway_permissions(stack: &mut Stack) -> Result<()>
         .is_some_and(|profile| !profile.0.is_empty() && profile != &gateway_profile)
     {
         return Err(AlienError::new(invalid(
-            "The sandbox gateway profile must grant only its exact gateway config entry",
+            "The sandbox gateway profile must grant only its exact gateway config entry and replica secret",
         )));
     }
     stack
@@ -169,46 +170,6 @@ pub(crate) fn configure_aws_gateway_permissions(stack: &mut Stack) -> Result<()>
     Ok(())
 }
 
-/// The managing identity's only read in the AWS secrets vault: the gateway configuration. The
-/// shared-key owner reads it back only when the configuration it publishes changed, to carry the
-/// gateway's replica secret into the new value. Everything else in the vault, the signing key
-/// included, management writes without reading.
-pub(crate) fn grant_management_gateway_config_read(stack: &mut Stack) -> Result<()> {
-    if !alien_core::sandbox_egress::has_sandbox_gateway(stack)
-        || !stack
-            .resources
-            .values()
-            .any(|entry| entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE)
-    {
-        return Ok(());
-    }
-    let read = management_gateway_config_read()?;
-    let profile = match &mut stack.permissions.management {
-        // An override is the author's complete grant; nothing is added to it.
-        ManagementPermissions::Override(_) => return Ok(()),
-        ManagementPermissions::Auto => {
-            stack.permissions.management = ManagementPermissions::Extend(PermissionProfile::new());
-            match &mut stack.permissions.management {
-                ManagementPermissions::Extend(profile) => profile,
-                _ => unreachable!("just set to Extend"),
-            }
-        }
-        ManagementPermissions::Extend(profile) => profile,
-    };
-    let grants = profile.0.entry(SECRETS_VAULT_ID.into()).or_default();
-    // An author's grant cannot take the read's place by reusing its id.
-    grants.retain(|existing| existing.id() != read.id());
-    grants.push(read);
-    Ok(())
-}
-
-/// The managing identity's exact read of the gateway configuration entry.
-pub(crate) fn management_gateway_config_read() -> Result<PermissionSetReference> {
-    Ok(PermissionSetReference::from_inline(exact_read(
-        "sandbox-egress-gateway-config",
-    )?))
-}
-
 /// Only the built-in management grant carries the signing key. An inline set counts only
 /// when its contents equal the built-in set: an ID alone can be reused for a narrower,
 /// deliberately restricted grant that must not be able to sign policy writes.
@@ -219,6 +180,24 @@ fn grants_sandbox_management(set: &PermissionSetReference) -> bool {
             alien_permissions::get_permission_set("sandbox/management") == Some(inline)
         }
     }
+}
+
+/// The gateway reads its replica secret, which setup generates in Secrets Manager.
+pub(crate) fn replica_secret_read() -> Result<PermissionSet> {
+    let arn = format!(
+        "arn:aws:secretsmanager:${{awsRegion}}:${{awsAccountId}}:secret:${{stackPrefix}}-{}-??????",
+        alien_core::sandbox_egress::SANDBOX_EGRESS_REPLICA_SECRET
+    );
+    serde_json::from_value(serde_json::json!({
+        "id": "sandbox/egress-replica-secret-read",
+        "description": "Read the sandbox gateway's replica secret",
+        "platforms": {"aws": [{
+            "grant": {"actions": ["secretsmanager:GetSecretValue"]},
+            "binding": {"stack": {"resources": [arn]}, "resource": {"resources": [arn]}}
+        }]}
+    }))
+    .into_alien_error()
+    .context(invalid("Failed to construct the sandbox gateway replica secret grant"))
 }
 
 fn exact_read(key: &str) -> Result<PermissionSet> {

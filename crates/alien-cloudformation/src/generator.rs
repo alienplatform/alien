@@ -562,6 +562,7 @@ pub fn generate_cloudformation_template_with_profile(
     );
     apply_resource_dependencies(stack, &emitted_resource_ids, &mut template);
     apply_network_iam_dependencies(stack, &emitted_resource_ids, &mut template);
+    add_sandbox_gateway_replica_secret(&mut template, stack, options.target);
     consolidate_role_inline_policies(&mut template)?;
 
     add_deployer_secret_outputs(
@@ -1508,6 +1509,44 @@ fn add_standard_parameters(
         );
     }
     Ok(())
+}
+
+/// Setup generates the sandbox gateway's replica secret in the customer account, so no vendor
+/// identity ever writes or reads its value: only the gateway's role may read it, and the
+/// management role is denied. The secret goes with the stack.
+fn add_sandbox_gateway_replica_secret(
+    template: &mut CfTemplate,
+    stack: &Stack,
+    target: CloudFormationTarget,
+) {
+    if target.is_kubernetes() || !alien_core::sandbox_egress::has_sandbox_gateway(stack) {
+        return;
+    }
+    let mut secret = CfResource::new(
+        "SandboxEgressReplicaSecret".to_string(),
+        "AWS::SecretsManager::Secret".to_string(),
+    );
+    secret.properties.insert(
+        "Name".to_string(),
+        CfExpression::sub(format!(
+            "${{AWS::StackName}}-{}",
+            alien_core::sandbox_egress::SANDBOX_EGRESS_REPLICA_SECRET
+        )),
+    );
+    secret.properties.insert(
+        "Description".to_string(),
+        CfExpression::from("Sandbox egress gateway replica secret, readable only by the gateway"),
+    );
+    secret.properties.insert(
+        "GenerateSecretString".to_string(),
+        CfExpression::object([
+            ("PasswordLength", CfExpression::from(64u32)),
+            ("ExcludePunctuation", CfExpression::from(true)),
+        ]),
+    );
+    template
+        .resources
+        .insert(secret.logical_id.clone(), secret);
 }
 
 fn add_network_parameters(

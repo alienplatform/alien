@@ -126,7 +126,7 @@ impl StackMutation for ManagementPermissionProfileMutation {
             }
         }
         protect_deployer_secrets(&mut stack, stack_state.platform, config)?;
-        protect_sandbox_signing_key(&mut stack, stack_state.platform)?;
+        protect_sandbox_secrets(&mut stack, stack_state.platform)?;
         add_role_guards(
             &mut stack,
             stack_state.platform,
@@ -266,39 +266,85 @@ fn protect_deployer_secrets(
     Ok(())
 }
 
-/// Id of the Deny that keeps the managing identity from reading the sandbox egress signing key.
-pub(crate) const SANDBOX_SIGNING_KEY_GUARD_ID: &str = "vault/protect-sandbox-egress-signing-key";
+/// Id of the Deny that keeps the managing identity from reading the AWS secrets vault or the
+/// gateway's replica secret.
+pub(crate) const SECRETS_GUARD_ID: &str = "vault/protect-sandbox-egress-secrets";
 
-/// The Deny that keeps the managing identity from reading the AWS sandbox egress signing key,
-/// whatever else it is granted on the stack's parameters: automatic setup's stack-wide vault
-/// grant, or an author's own. The sandbox controllers only write the key.
-pub(crate) fn sandbox_signing_key_guard() -> Result<PermissionSetReference> {
-    let parameter = alien_core::vault_naming::parameter_store_parameter_name(
-        &format!("${{stackPrefix}}-{}", alien_core::SECRETS_VAULT_ID),
-        "sandbox-egress-signing-key",
+/// Id of the managing identity's existence check on the gateway's replica secret.
+pub(crate) const REPLICA_SECRET_EXISTENCE_ID: &str = "sandbox/egress-replica-secret-exists";
+
+/// The replica secret's ARN pattern; Secrets Manager appends six random characters.
+fn replica_secret_arn() -> String {
+    format!(
+        "arn:aws:secretsmanager:${{awsRegion}}:${{awsAccountId}}:secret:${{stackPrefix}}-{}-??????",
+        alien_core::sandbox_egress::SANDBOX_EGRESS_REPLICA_SECRET
+    )
+}
+
+/// The Deny that keeps the managing identity from reading anything in the AWS secrets vault
+/// (the sandbox egress signing key, the gateway configuration, environment secrets) or the
+/// gateway's replica secret, whatever else it is granted: automatic setup's stack-wide vault
+/// grant, or an author's own. The controllers only write the vault, and setup creates the
+/// replica secret.
+pub(crate) fn secrets_guard() -> Result<PermissionSetReference> {
+    let parameters = format!(
+        "arn:aws:ssm:${{awsRegion}}:${{awsAccountId}}:parameter/{}",
+        alien_core::vault_naming::parameter_store_parameter_name(
+            &format!("${{stackPrefix}}-{}", alien_core::SECRETS_VAULT_ID),
+            "*",
+        )
     );
-    let arn = format!("arn:aws:ssm:${{awsRegion}}:${{awsAccountId}}:parameter/{parameter}");
+    let secret = replica_secret_arn();
     inline_vault_permission(serde_json::json!({
-        "id": SANDBOX_SIGNING_KEY_GUARD_ID,
-        "description": "Management cannot read the sandbox egress signing key",
+        "id": SECRETS_GUARD_ID,
+        "description": "Management cannot read the deployment's secrets vault or the gateway's replica secret",
         "platforms": { "aws": [{
             "effect": "Deny",
             "grant": { "actions": ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParameterHistory"] },
-            "binding": { "stack": { "resources": [arn] }, "resource": { "resources": [arn] } }
+            "binding": { "stack": { "resources": [parameters] }, "resource": { "resources": [parameters] } }
         }, {
             "effect": "Deny",
             "grant": { "actions": ["ssm:GetParametersByPath"] },
             "binding": { "stack": { "resources": ["*"] }, "resource": { "resources": ["*"] } }
+        }, {
+            "effect": "Deny",
+            "grant": { "actions": [
+                "secretsmanager:GetSecretValue", "secretsmanager:PutSecretValue",
+                "secretsmanager:UpdateSecret", "secretsmanager:UpdateSecretVersionStage",
+                "secretsmanager:RotateSecret", "secretsmanager:CancelRotateSecret",
+                "secretsmanager:RestoreSecret", "secretsmanager:DeleteSecret",
+                "secretsmanager:PutResourcePolicy", "secretsmanager:DeleteResourcePolicy"
+            ] },
+            "binding": { "stack": { "resources": [secret] }, "resource": { "resources": [secret] } }
         }] }
     }))
 }
 
-fn protect_sandbox_signing_key(stack: &mut Stack, platform: Platform) -> Result<()> {
+/// Lets the managing identity see whether the replica secret exists, never its value: the
+/// sandbox controller stops embedding the secret once it does.
+pub(crate) fn replica_secret_existence() -> Result<PermissionSetReference> {
+    let secret = replica_secret_arn();
+    inline_vault_permission(serde_json::json!({
+        "id": REPLICA_SECRET_EXISTENCE_ID,
+        "description": "See whether the sandbox gateway's replica secret exists",
+        "platforms": { "aws": [{
+            "grant": { "actions": ["secretsmanager:DescribeSecret"] },
+            "binding": { "stack": { "resources": [secret] }, "resource": { "resources": [secret] } }
+        }] }
+    }))
+}
+
+fn protect_sandbox_secrets(stack: &mut Stack, platform: Platform) -> Result<()> {
     if platform != Platform::Aws || !alien_core::sandbox_egress::has_sandbox_gateway(stack) {
         return Ok(());
     }
-    let guard = sandbox_signing_key_guard()?;
-    // A Deny only narrows the identity, so an Override profile gets it too.
+    let override_profile = matches!(stack.permissions.management, ManagementPermissions::Override(_));
+    // A Deny only narrows the identity, so an Override profile gets it too; the existence check
+    // is a grant, which an Override profile, the author's complete grant, does not receive.
+    let mut grants = vec![secrets_guard()?];
+    if !override_profile {
+        grants.push(replica_secret_existence()?);
+    }
     let profile = match &mut stack.permissions.management {
         ManagementPermissions::Auto => {
             stack.permissions.management = ManagementPermissions::Extend(PermissionProfile::new());
@@ -312,9 +358,11 @@ fn protect_sandbox_signing_key(stack: &mut Stack, platform: Platform) -> Result<
         }
     };
     let global = profile.0.entry("*".to_string()).or_default();
-    // A user-authored inline permission cannot shadow the guard by id.
-    global.retain(|existing| existing.id() != guard.id());
-    global.push(guard);
+    for grant in grants {
+        // A user-authored inline permission cannot shadow a reserved grant by id.
+        global.retain(|existing| existing.id() != grant.id());
+        global.push(grant);
+    }
     Ok(())
 }
 
