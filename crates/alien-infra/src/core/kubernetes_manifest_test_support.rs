@@ -158,6 +158,30 @@ impl KubernetesManifestTestHarness {
         self
     }
 
+    /// Adds a linked resource the deployment binds to pre-existing infrastructure: Running, with
+    /// no controller state, and `binding` in the deployment's external bindings.
+    pub(crate) fn with_external_linked_resource<R: alien_core::ResourceDefinition>(
+        mut self,
+        resource: R,
+        binding: alien_core::ExternalBinding,
+    ) -> Self {
+        let resource = Resource::new(resource);
+        let state = alien_core::StackResourceState::builder()
+            .resource_type(resource.resource_type().to_string())
+            .status(alien_core::ResourceStatus::Running)
+            .config(resource.clone())
+            .lifecycle(alien_core::ResourceLifecycle::Live)
+            .dependencies(vec![])
+            .build();
+        self.state
+            .resources
+            .insert(resource.id().to_string(), state);
+        self.deployment_config
+            .external_bindings
+            .insert(resource.id().to_string(), binding);
+        self
+    }
+
     pub(crate) fn with_cloud(mut self, cloud: ClientConfig) -> Self {
         self.cloud = Some(cloud);
         self

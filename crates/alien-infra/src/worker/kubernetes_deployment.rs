@@ -456,4 +456,92 @@ mod tests {
             "a sandbox in its own flow has not reached the value to compare against"
         );
     }
+
+    /// A binding's secret is projected as a `secretKeyRef` beside the binding variable. A
+    /// template rendered with the current reference shows no drift, and a reference that moved
+    /// to another Secret shows as drift on that variable alone.
+    #[tokio::test]
+    async fn a_moved_secret_reference_shows_drift_on_its_secret_key_ref() {
+        use crate::core::linked_bindings::{kubernetes_linked_binding_drift, pod_template_env};
+        use alien_core::bindings::{BindingValue, KvBinding, RedisKvBinding, SecretReference};
+        use alien_core::{ExternalBinding, Kv};
+
+        let cache = Kv::new("cache".to_string()).build();
+        let redis = |secret: &str| {
+            ExternalBinding::Kv(KvBinding::Redis(RedisKvBinding {
+                connection_url: BindingValue::SecretRef {
+                    secret_ref: SecretReference {
+                        name: secret.to_string(),
+                        key: "url".to_string(),
+                    },
+                },
+                key_prefix: None,
+                database: None,
+            }))
+        };
+        let worker = Worker::new("api".to_string())
+            .code(WorkerCode::Image {
+                image: "registry.example.com/api:1".to_string(),
+            })
+            .permissions("default".to_string())
+            .link(&cache)
+            .build();
+        let links = worker.runtime_binding_links();
+
+        let current = KubernetesManifestTestHarness::new(Resource::new(worker.clone()), Vec::new())
+            .with_external_linked_resource(cache.clone(), redis("redis-creds"));
+        let manifest = build_worker_deployment(
+            &KubernetesWorkerController::default(),
+            &worker,
+            "api",
+            "test-ns",
+            "api-sa",
+            None,
+            None,
+            &current.ctx(),
+        )
+        .await
+        .unwrap();
+        let live: k8s_openapi::api::apps::v1::Deployment =
+            serde_json::from_value(serde_json::to_value(&manifest).unwrap()).unwrap();
+        let env = pod_template_env(
+            live.spec
+                .as_ref()
+                .and_then(|spec| spec.template.spec.as_ref()),
+            super::WORKER_CONTAINER_NAME,
+        )
+        .expect("the worker container is in the template");
+        let secret_vars: Vec<&str> = env
+            .iter()
+            .filter(|var| {
+                var.value_from
+                    .as_ref()
+                    .and_then(|source| source.secret_key_ref.as_ref())
+                    .is_some_and(|reference| reference.name == "redis-creds")
+            })
+            .map(|var| var.name.as_str())
+            .collect();
+        assert_eq!(
+            secret_vars.len(),
+            1,
+            "the manifest projects the binding's secret as one secretKeyRef: {env:?}"
+        );
+
+        assert!(
+            kubernetes_linked_binding_drift(&current.ctx(), &links, "api", env)
+                .await
+                .unwrap()
+                .is_empty(),
+            "a template rendered with the current secret reference must not drift"
+        );
+
+        let moved = KubernetesManifestTestHarness::new(Resource::new(worker.clone()), Vec::new())
+            .with_external_linked_resource(cache, redis("redis-creds-rotated"));
+        assert_eq!(
+            kubernetes_linked_binding_drift(&moved.ctx(), &links, "api", env)
+                .await
+                .unwrap(),
+            vec![secret_vars[0].to_string()]
+        );
+    }
 }

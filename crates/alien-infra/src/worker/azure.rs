@@ -2494,8 +2494,8 @@ impl AzureWorkerController {
         {
             Some(ContainerAppPropertiesProvisioningState::Succeeded) => {
                 Ok(HandlerAction::Continue {
-                    state: Ready,
-                    suggested_delay: Some(Duration::from_secs(30)),
+                    state: RefreshingLinkedBindingsReadinessProbe,
+                    suggested_delay: None,
                 })
             }
             Some(ContainerAppPropertiesProvisioningState::Failed) => {
@@ -3073,38 +3073,41 @@ impl AzureWorkerController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
-        // Re‑use the same readiness‑probe helper.
-        let func_cfg = ctx.desired_resource_config::<Worker>()?;
-        if func_cfg.readiness_probe.is_none() || func_cfg.public_endpoints.is_empty() {
-            return Ok(HandlerAction::Continue {
+        if self.readiness_probe_passes(ctx).await? {
+            Ok(HandlerAction::Continue {
                 state: Ready,
                 suggested_delay: None,
-            });
+            })
+        } else {
+            // Probe failed, let the framework handle retries
+            Ok(HandlerAction::Stay {
+                max_times: Some(READINESS_PROBE_MAX_ATTEMPTS as u32),
+                suggested_delay: Some(Duration::from_secs(5)),
+            })
         }
+    }
 
-        let url = self
-            .url
-            .as_ref()
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::ResourceControllerConfigError {
-                    resource_id: func_cfg.id.clone(),
-                    message: "Readiness probe configured but URL missing after update".to_string(),
-                })
-            })?
-            .clone();
-
-        match run_readiness_probe(ctx, &url).await {
-            Ok(()) => Ok(HandlerAction::Continue {
+    /// A linked binding refresh can hand the app a changed endpoint or credential, so it passes
+    /// the same readiness probe an update does before the worker reports Running again.
+    #[handler(
+        state = RefreshingLinkedBindingsReadinessProbe,
+        on_failure = RefreshFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn refreshing_linked_bindings_readiness_probe(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        if self.readiness_probe_passes(ctx).await? {
+            Ok(HandlerAction::Continue {
                 state: Ready,
-                suggested_delay: None,
-            }),
-            Err(_) => {
-                // Probe failed, let the framework handle retries
-                Ok(HandlerAction::Stay {
-                    max_times: Some(READINESS_PROBE_MAX_ATTEMPTS as u32),
-                    suggested_delay: Some(Duration::from_secs(5)),
-                })
-            }
+                suggested_delay: Some(Duration::from_secs(30)),
+            })
+        } else {
+            Ok(HandlerAction::Stay {
+                max_times: Some(READINESS_PROBE_MAX_ATTEMPTS as u32),
+                suggested_delay: Some(Duration::from_secs(5)),
+            })
         }
     }
 
@@ -4201,6 +4204,21 @@ impl AzureWorkerController {
 
         self.pending_operation_url = None;
         self.pending_operation_retry_after = None;
+    }
+
+    /// Whether the worker's configured readiness probe passes, or there is none to run.
+    async fn readiness_probe_passes(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        let func_cfg = ctx.desired_resource_config::<Worker>()?;
+        if func_cfg.readiness_probe.is_none() || func_cfg.public_endpoints.is_empty() {
+            return Ok(true);
+        }
+        let url = self.url.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: func_cfg.id.clone(),
+                message: "Readiness probe configured but URL missing after update".to_string(),
+            })
+        })?;
+        Ok(run_readiness_probe(ctx, &url).await.is_ok())
     }
 
     /// The Container App an update applies: the full spec rendered now, with the custom domain
@@ -7726,9 +7744,19 @@ mod tests {
             sandbox_controller: AzureSandboxController,
             previous: Option<Worker>,
         ) -> SingleControllerExecutor {
+            executor_for(linked_worker(), apps, controller, sandbox_controller, previous).await
+        }
+
+        async fn executor_for(
+            worker: Worker,
+            apps: MockContainerAppsApi,
+            controller: AzureWorkerController,
+            sandbox_controller: AzureSandboxController,
+            previous: Option<Worker>,
+        ) -> SingleControllerExecutor {
             let image = sandbox_controller.disk_image.clone().unwrap();
             let mut builder = SingleControllerExecutor::builder()
-                .resource(linked_worker())
+                .resource(worker)
                 .controller(controller)
                 .platform(Platform::Azure)
                 .service_provider(setup_mock_service_provider(Arc::new(apps), None))
@@ -7852,6 +7880,7 @@ mod tests {
             );
             executor.step().await.expect("the refresh applies the binding");
             executor.step().await.expect("the refresh settles");
+            executor.step().await.expect("the refresh passes the readiness probe");
             let controller = executor.internal_state::<AzureWorkerController>().unwrap();
             assert_eq!(controller.state, AzureWorkerState::Ready);
             assert_eq!(executor.status(), ResourceStatus::Running);
@@ -7860,6 +7889,55 @@ mod tests {
                 own_binding,
                 "a refresh must not change the worker's own binding, or its dependents would follow"
             );
+        }
+
+        /// A refresh hands the app a changed binding, so the worker reports Running again only
+        /// once its readiness probe passes, as after an update.
+        #[tokio::test]
+        async fn a_refresh_reports_running_only_after_the_readiness_probe_passes() {
+            let server = httpmock::MockServer::start();
+            let mut failing = server.mock(|when, then| {
+                when.method(httpmock::Method::GET).path("/health/ready");
+                then.status(503);
+            });
+            let mut worker = function_with_readiness_probe();
+            worker.id = "basic-func".to_string();
+            worker.links = vec![ResourceRef::new(Sandbox::RESOURCE_TYPE, "sb")];
+            let mut apps = MockContainerAppsApi::new();
+            serving(rendered_app(NEW_IMAGE).await, &mut apps);
+            let mut executor = executor_for(
+                worker,
+                apps,
+                AzureWorkerController {
+                    state: AzureWorkerState::RefreshingLinkedBindingsWaitForApp,
+                    url: Some(server.base_url()),
+                    ..AzureWorkerController::mock_ready("basic-func")
+                },
+                sandbox_on(NEW_IMAGE, AzureSandboxState::Ready),
+                None,
+            )
+            .await;
+
+            executor.step().await.expect("the refreshed app is provisioned");
+            executor.step().await.expect("a failed probe is retried");
+            assert_eq!(
+                executor.internal_state::<AzureWorkerController>().unwrap().state,
+                AzureWorkerState::RefreshingLinkedBindingsReadinessProbe
+            );
+            assert_eq!(executor.status(), ResourceStatus::Updating);
+            assert!(failing.hits() >= 1);
+
+            failing.delete();
+            server.mock(|when, then| {
+                when.method(httpmock::Method::GET).path("/health/ready");
+                then.status(200);
+            });
+            executor.step().await.expect("the probe passes");
+            assert_eq!(
+                executor.internal_state::<AzureWorkerController>().unwrap().state,
+                AzureWorkerState::Ready
+            );
+            assert_eq!(executor.status(), ResourceStatus::Running);
         }
 
         /// No fleet churn: a live app that already matches, even with the binding's JSON

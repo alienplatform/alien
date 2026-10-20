@@ -2468,8 +2468,8 @@ impl GcpWorkerController {
         }
         self.operation_name = None;
         Ok(HandlerAction::Continue {
-            state: Ready,
-            suggested_delay: Some(Duration::from_secs(30)),
+            state: RefreshingLinkedBindingsReadinessProbe,
+            suggested_delay: None,
         })
     }
 
@@ -3604,40 +3604,41 @@ impl GcpWorkerController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
-        let cfg = ctx.desired_resource_config::<Worker>()?;
-
-        // Only run readiness probe if configured and we have a URL
-        if cfg.readiness_probe.is_some() {
-            if let Some(url) = self.url.as_ref() {
-                match run_readiness_probe(ctx, url).await {
-                    Ok(()) => {
-                        // Probe succeeded, proceed to Ready
-                    }
-                    Err(error) => {
-                        // Recorded, not discarded: when the budget runs out the caller is told
-                        // only "timed out after N attempts", which cannot tell a container that
-                        // never started from one still warming up.
-                        warn!(
-                            name=%ctx.desired_config.id(),
-                            %url,
-                            "readiness probe attempt failed: {error}"
-                        );
-                        return Ok(HandlerAction::Stay {
-                            max_times: Some(GCP_READINESS_PROBE_MAX_ATTEMPTS),
-                            suggested_delay: Some(Duration::from_secs(5)),
-                        });
-                    }
-                }
-            }
+        if self.readiness_probe_passes(ctx).await? {
+            Ok(HandlerAction::Continue {
+                state: Ready,
+                suggested_delay: None,
+            })
         } else {
-            debug!(name=%ctx.desired_config.id(), "No readiness probe configured, proceeding to Ready");
+            Ok(HandlerAction::Stay {
+                max_times: Some(GCP_READINESS_PROBE_MAX_ATTEMPTS),
+                suggested_delay: Some(Duration::from_secs(5)),
+            })
         }
+    }
 
-        // Either no readiness probe needed, or probe succeeded - proceed to Ready
-        Ok(HandlerAction::Continue {
-            state: Ready,
-            suggested_delay: None,
-        })
+    /// A linked binding refresh can hand the app a changed endpoint or credential, so it passes
+    /// the same readiness probe an update does before the worker reports Running again.
+    #[handler(
+        state = RefreshingLinkedBindingsReadinessProbe,
+        on_failure = RefreshFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn refreshing_linked_bindings_readiness_probe(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        if self.readiness_probe_passes(ctx).await? {
+            Ok(HandlerAction::Continue {
+                state: Ready,
+                suggested_delay: Some(Duration::from_secs(30)),
+            })
+        } else {
+            Ok(HandlerAction::Stay {
+                max_times: Some(GCP_READINESS_PROBE_MAX_ATTEMPTS),
+                suggested_delay: Some(Duration::from_secs(5)),
+            })
+        }
     }
 
     // ─────────────── DELETE FLOW ──────────────────────────────
@@ -5059,6 +5060,29 @@ impl GcpWorkerController {
                 .network_interfaces(vec![network_interface])
                 .build(),
         ))
+    }
+
+    /// Whether the worker's configured readiness probe passes, or there is none to run.
+    async fn readiness_probe_passes(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        let cfg = ctx.desired_resource_config::<Worker>()?;
+        let (Some(_), Some(url)) = (cfg.readiness_probe.as_ref(), self.url.as_ref()) else {
+            debug!(name=%ctx.desired_config.id(), "No readiness probe configured, proceeding to Ready");
+            return Ok(true);
+        };
+        Ok(match run_readiness_probe(ctx, url).await {
+            Ok(()) => true,
+            Err(error) => {
+                // Recorded, not discarded: when the budget runs out the caller is told only
+                // "timed out after N attempts", which cannot tell a container that never started
+                // from one still warming up.
+                warn!(
+                    name=%ctx.desired_config.id(),
+                    %url,
+                    "readiness probe attempt failed: {error}"
+                );
+                false
+            }
+        })
     }
 
     async fn prepare_environment_variables(
@@ -8698,8 +8722,18 @@ mod tests {
             sandbox_controller: GcpAgentPlatformTemplateController,
             previous: Option<Worker>,
         ) -> SingleControllerExecutor {
+            executor_for(linked_worker(), cloudrun, controller, sandbox_controller, previous).await
+        }
+
+        async fn executor_for(
+            worker: Worker,
+            cloudrun: MockCloudRunApi,
+            controller: GcpWorkerController,
+            sandbox_controller: GcpAgentPlatformTemplateController,
+            previous: Option<Worker>,
+        ) -> SingleControllerExecutor {
             let mut builder = SingleControllerExecutor::builder()
-                .resource(linked_worker())
+                .resource(worker)
                 .controller(controller)
                 .platform(Platform::Gcp)
                 .service_provider(setup_mock_service_provider(Arc::new(cloudrun), None))
@@ -8822,6 +8856,7 @@ mod tests {
             );
             executor.step().await.expect("the refresh patches the service");
             executor.step().await.expect("the refresh settles");
+            executor.step().await.expect("the refresh passes the readiness probe");
             let controller = executor.internal_state::<GcpWorkerController>().unwrap();
             assert_eq!(controller.state, GcpWorkerState::Ready);
             assert_eq!(controller.operation_name, None);
@@ -8830,6 +8865,58 @@ mod tests {
                 own_binding,
                 "a refresh must not change the worker's own binding, or its dependents would follow"
             );
+        }
+
+        /// A refresh hands the app a changed binding, so the worker reports Running again only
+        /// once its readiness probe passes, as after an update.
+        #[tokio::test]
+        async fn a_refresh_reports_running_only_after_the_readiness_probe_passes() {
+            let server = MockServer::start();
+            let mut failing = server.mock(|when, then| {
+                when.method(GET).path("/health/ready");
+                then.status(503);
+            });
+            let mut worker = function_with_readiness_probe();
+            worker.id = "basic-func".to_string();
+            worker.links = vec![ResourceRef::new(Sandbox::RESOURCE_TYPE, "sb")];
+            let mut cloudrun = MockCloudRunApi::new();
+            cloudrun
+                .expect_get_operation()
+                .returning(|_, name| Ok(create_completed_operation_response(&name)));
+            let mut executor = executor_for(
+                worker,
+                cloudrun,
+                GcpWorkerController {
+                    state: GcpWorkerState::RefreshingLinkedBindingsWaitForOperation,
+                    operation_name: Some("refresh-1".to_string()),
+                    url: Some(server.base_url()),
+                    ..GcpWorkerController::mock_ready("basic-func")
+                },
+                sandbox_on(false, GcpAgentPlatformTemplateState::Ready),
+                None,
+            )
+            .await;
+
+            executor.step().await.expect("the refresh operation completes");
+            executor.step().await.expect("a failed probe is retried");
+            assert_eq!(
+                executor.internal_state::<GcpWorkerController>().unwrap().state,
+                GcpWorkerState::RefreshingLinkedBindingsReadinessProbe
+            );
+            assert_eq!(executor.status(), ResourceStatus::Updating);
+            assert!(failing.hits() >= 1);
+
+            failing.delete();
+            server.mock(|when, then| {
+                when.method(GET).path("/health/ready");
+                then.status(200);
+            });
+            executor.step().await.expect("the probe passes");
+            assert_eq!(
+                executor.internal_state::<GcpWorkerController>().unwrap().state,
+                GcpWorkerState::Ready
+            );
+            assert_eq!(executor.status(), ResourceStatus::Running);
         }
 
         /// No churn and no new state: a service that already matches makes no write, and the

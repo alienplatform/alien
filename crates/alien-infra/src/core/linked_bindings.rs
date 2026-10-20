@@ -126,7 +126,7 @@ mod kubernetes {
     use k8s_openapi::api::core::v1::EnvVar;
 
     use super::{render_linked_bindings, same_binding_value};
-    use crate::core::{ResourceControllerContext, projected_env_vars};
+    use crate::core::{projected_env_vars, ResourceControllerContext};
     use crate::error::Result;
 
     /// The linked binding entries of a pod's environment that differ from what the workload
@@ -246,8 +246,8 @@ mod cluster {
     };
 
     use crate::container::KubernetesContainerController;
-    use crate::core::ResourceController;
     use crate::core::controller_test::SingleControllerExecutor;
+    use crate::core::ResourceController;
     use crate::daemon::KubernetesDaemonController;
     use crate::sandbox::{KubernetesSandboxController, KubernetesSandboxState};
     use crate::worker::KubernetesWorkerController;
@@ -350,11 +350,11 @@ mod cluster {
             .and_then(|var| var["value"].as_str())
             .expect("the sandbox binding")
             .to_string();
-        let broker =
-            serde_json::from_str::<serde_json::Value>(&binding).expect("binding JSON")["brokerUrl"]
-                .as_str()
-                .expect("a broker URL")
-                .to_string();
+        let broker = serde_json::from_str::<serde_json::Value>(&binding).expect("binding JSON")
+            ["brokerUrl"]
+            .as_str()
+            .expect("a broker URL")
+            .to_string();
         (generation, broker)
     }
 
