@@ -4386,7 +4386,10 @@ fn readme_md(
         input_sections.push(readme_aws_inputs());
     }
     if matches!(target.cloud_platform(), alien_core::Platform::Gcp) {
-        input_sections.push(readme_gcp_inputs());
+        input_sections.push(readme_gcp_inputs(
+            stack_has_resource_type(stack, RemoteStackManagement::RESOURCE_TYPE)
+                || stack_has_resource_type(stack, RemoteBindings::RESOURCE_TYPE),
+        ));
     }
     if matches!(target.cloud_platform(), alien_core::Platform::Azure) {
         input_sections.push(readme_azure_inputs(target));
@@ -4514,8 +4517,13 @@ fn readme_aws_inputs() -> String {
     "AWS settings:\n\n- `aws_region`: AWS region used by the provider.\n- `managing_role_arn`: management identity allowed to assume setup-created roles.\n- `managing_account_id`: account that hosts application container images. Empty disables scoped cross-account image-pull grants.".to_string()
 }
 
-fn readme_gcp_inputs() -> String {
-    "GCP settings:\n\n- `gcp_project`: target GCP project ID.\n- `gcp_region`: target GCP region.\n- `managing_service_account_email`: management service account metadata.\n- `deployment_id`: immutable deployment ID reserved before setup.\n- `managing_oidc_issuer` and `managing_oidc_subject`: exact management identity trusted by the customer-owned pool.\n- `gcp_manage_custom_roles`: whether this module creates project custom roles.\n- `gcp_custom_role_prefix`: custom role ID prefix when roles are managed outside this module.".to_string()
+fn readme_gcp_inputs(needs_federation: bool) -> String {
+    let federation = if needs_federation {
+        "\n- `deployment_id`: immutable deployment ID reserved before setup.\n- `managing_oidc_issuer` and `managing_oidc_subject`: exact management identity trusted by the customer-owned pool."
+    } else {
+        ""
+    };
+    format!("GCP settings:\n\n- `gcp_project`: target GCP project ID.\n- `gcp_region`: target GCP region.\n- `managing_service_account_email`: management service account metadata.{federation}\n- `gcp_manage_custom_roles`: whether this module creates project custom roles.\n- `gcp_custom_role_prefix`: custom role ID prefix when roles are managed outside this module.")
 }
 
 fn readme_azure_inputs(target: TerraformTarget) -> String {
