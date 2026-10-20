@@ -251,6 +251,14 @@ fn generate_terraform_module_internal(
             }
         }
     }
+    // Without network settings, the network preflight adds a network for the resources that need
+    // one. The generated setup builds that network, so it must declare the inputs the network reads.
+    if stack_settings.network.is_none() {
+        stack_settings.network = stack
+            .resources()
+            .find_map(|(_, entry)| entry.config.downcast_ref::<Network>())
+            .map(|network| network.settings.clone());
+    }
     if target.is_kubernetes()
         && matches!(
             target.cloud_platform(),

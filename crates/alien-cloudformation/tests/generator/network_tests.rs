@@ -91,3 +91,45 @@ fn optional_security_groups_accept_an_empty_default() {
     assert_eq!(parameter.parameter_type, "CommaDelimitedList");
     assert_eq!(parameter.default, Some("".into()));
 }
+
+/// With no network settings, the network preflight adds `default-network` for resources that need
+/// a VPC. The template builds that network, so it must declare the inputs the network reads;
+/// otherwise CreateStack rejects refs to undeclared parameters.
+#[test]
+fn network_added_by_the_preflight_declares_its_inputs() {
+    let stack = Stack::new("auto-network".to_string())
+        .add(
+            Network::new("default-network".to_string())
+                .settings(NetworkSettings::Create {
+                    cidr: None,
+                    availability_zones: 2,
+                })
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+
+    // cfn-lint runs inside the render and fails on any ref to an undeclared parameter.
+    let (template, _yaml) = render_built_ins_template(
+        &stack,
+        StackSettings::default(),
+        RegistrationMode::OutputsFallback,
+        CloudFormationTarget::Aws,
+        "aws",
+        "network added by the preflight",
+    );
+    for parameter in [
+        "NetworkMode",
+        "VpcCidr",
+        "AvailabilityZones",
+        "VpcId",
+        "PublicSubnetIds",
+        "PrivateSubnetIds",
+        "SecurityGroupIds",
+    ] {
+        assert!(
+            template.parameters.contains_key(parameter),
+            "{parameter} is declared"
+        );
+    }
+}
