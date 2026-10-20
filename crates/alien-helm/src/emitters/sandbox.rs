@@ -13,7 +13,9 @@
 
 use crate::emitter::{HelmEmitter, HelmFragment};
 use alien_core::sandbox_image::AGENT_PORT;
-use alien_core::{import::EmitContext, ErrorData, Result, Sandbox, SandboxEgress};
+use alien_core::{
+    import::EmitContext, ErrorData, ResourceRef, Result, Sandbox, SandboxEgress, Stack,
+};
 use alien_error::AlienError;
 
 /// Label the operator puts on every pod backing a session, and what the policy selects on.
@@ -53,7 +55,7 @@ impl HelmEmitter for SandboxEmitter {
         let mut fragment = HelmFragment::empty();
         fragment.extra_templates.insert(
             format!("sandbox-{}-networkpolicy.yaml", sandbox.id()),
-            network_policy(sandbox)?,
+            network_policy(sandbox, ctx.stack)?,
         );
         fragment
             .extra_templates
@@ -70,13 +72,32 @@ impl HelmEmitter for SandboxEmitter {
 
 /// The policy that makes a sandbox's declared egress real.
 ///
-/// Inbound is the agent port and nothing else, reachable only from pods in this release: that is
-/// the port the application drives a session over, and denying it outright leaves every exec and
-/// file call dropped on a cluster whose CNI enforces policy. A preview port stays unreachable,
+/// Inbound is the agent port and nothing else, reachable from the operator and from the
+/// workloads that link the sandbox: that is the port an application drives a session over
+/// (commands, files, policy delivery), and denying it leaves every such call dropped on a cluster
+/// whose CNI enforces policy. A workload that does not link the sandbox gets no reach. A preview port stays unreachable,
 /// because that needs a gateway validating a session-and-port capability and none exists. Under
 /// `deny`, `Egress` is listed with no rules — a listed policy type with no rule is how
 /// NetworkPolicy spells "none", where omitting the type would mean "unrestricted".
-fn network_policy(sandbox: &Sandbox) -> Result<String> {
+fn network_policy(sandbox: &Sandbox, stack: &Stack) -> Result<String> {
+    // Runtime pods carry the operator's resource prefix as their deployment label, and their
+    // resource id under the same label domain. The id is quoted: a valid id such as `true`
+    // would otherwise be read as a YAML boolean, which `matchLabels` refuses.
+    let linkers: String = stack
+        .linkers(&ResourceRef::new(Sandbox::RESOURCE_TYPE, sandbox.id()))
+        .iter()
+        .map(|linker| {
+            format!(
+                r#"        - podSelector:
+            matchLabels:
+              {{{{ $scopeKey }}}}: {{{{ $scopeValue | quote }}}}
+              {{{{ printf "%s/resource" (trimSuffix "/deployment" $scopeKey) }}}}: "{id}"
+              managed-by: runtime
+"#,
+                id = linker.id()
+            )
+        })
+        .collect();
     let egress = match sandbox.egress {
         SandboxEgress::None => String::new(),
         // Select the Service's backing pods in this namespace and release. Kubernetes
@@ -142,7 +163,7 @@ spec:
             matchLabels:
               app.kubernetes.io/name: {{{{ include "deployment.name" . }}}}
               app.kubernetes.io/instance: {{{{ .Release.Name }}}}
-      ports:
+{linkers}      ports:
         - protocol: TCP
           port: {agent_port}
 {egress}"#,

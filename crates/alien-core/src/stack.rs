@@ -110,7 +110,14 @@ impl Stack {
     /// Explicit consumers whose links grant access to every port on a container.
     /// Cluster-wide reach is separate and remains the backend's existing behavior.
     pub fn container_linkers(&self, container_id: &str) -> Vec<ResourceRef> {
-        let target = ResourceRef::new(crate::Container::RESOURCE_TYPE, container_id);
+        self.linkers(&ResourceRef::new(
+            crate::Container::RESOURCE_TYPE,
+            container_id,
+        ))
+    }
+
+    /// Workloads whose links name `target`, which are the ones that use it at runtime.
+    pub fn linkers(&self, target: &ResourceRef) -> Vec<ResourceRef> {
         self.resources
             .iter()
             .filter_map(|(id, entry)| {
@@ -128,7 +135,7 @@ impl Stack {
                     return None;
                 };
                 links
-                    .contains(&target)
+                    .contains(target)
                     .then(|| ResourceRef::new(entry.config.resource_type(), id.clone()))
             })
             .collect()
