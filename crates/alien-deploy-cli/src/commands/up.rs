@@ -1248,6 +1248,308 @@ mod tests {
         release.assert_hits_async(1).await;
     }
 
+    fn gcp_client_config() -> ClientConfig {
+        ClientConfig::Gcp(Box::new(alien_core::GcpClientConfig {
+            project_id: "test-project".to_string(),
+            region: "us-central1".to_string(),
+            credentials: alien_core::GcpCredentials::AccessToken {
+                token: "test-token".to_string(),
+            },
+            service_overrides: None,
+            project_number: None,
+        }))
+    }
+
+    fn aws_client_config() -> ClientConfig {
+        ClientConfig::Aws(Box::new(alien_core::AwsClientConfig {
+            account_id: "123456789012".to_string(),
+            region: "us-east-1".to_string(),
+            credentials: alien_core::AwsCredentials::AccessKeys {
+                access_key_id: "test-access-key".to_string(),
+                secret_access_key: "test-secret-key".to_string(),
+                session_token: None,
+            },
+            service_overrides: None,
+        }))
+    }
+
+    fn azure_client_config() -> ClientConfig {
+        ClientConfig::Azure(Box::new(alien_core::AzureClientConfig {
+            subscription_id: "00000000-0000-0000-0000-000000000001".to_string(),
+            tenant_id: "00000000-0000-0000-0000-000000000002".to_string(),
+            region: Some("eastus".to_string()),
+            credentials: alien_core::AzureCredentials::AccessToken {
+                token: "test-token".to_string(),
+            },
+            service_overrides: None,
+        }))
+    }
+
+    fn kubernetes_client_config() -> ClientConfig {
+        ClientConfig::Kubernetes(Box::new(alien_core::KubernetesClientConfig::InCluster {
+            namespace: None,
+            additional_headers: None,
+        }))
+    }
+
+    /// A record the manager reports, with the protocol it stores for the deployment.
+    fn recorded_deployment(
+        status: &str,
+        platform: Platform,
+        protocol: u32,
+        desired_release_id: Option<&str>,
+    ) -> serde_json::Value {
+        let mut record = installed_deployment(status, desired_release_id);
+        record["platform"] = serde_json::json!(platform.as_str());
+        record["deploymentProtocolVersion"] = serde_json::json!(protocol);
+        record["currentReleaseId"] = serde_json::Value::Null;
+        record["stackState"] = serde_json::to_value(alien_core::StackState::new(platform)).unwrap();
+        record
+    }
+
+    /// Accepts reconciles that keep `protocol` and refuses any other report, the way the
+    /// manager refuses a report that changes a deployment's registered protocol.
+    async fn reconcile_requires_protocol<'a>(
+        server: &'a MockServer,
+        protocol: u32,
+        accepted: serde_json::Value,
+    ) -> (httpmock::Mock<'a>, httpmock::Mock<'a>) {
+        let kept = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .path("/v1/sync/reconcile")
+                    .json_body_partial(
+                        serde_json::json!({"state": {"protocolVersion": protocol}}).to_string(),
+                    );
+                then.status(200).json_body(accepted);
+            })
+            .await;
+        let changed = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .path("/v1/sync/reconcile");
+                then.status(409).json_body(serde_json::json!({
+                    "code": "DEPLOYMENT_PROTOCOL_MISMATCH",
+                    "message": "A deployment report must preserve its registered protocol version.",
+                    "retryable": false, "internal": false
+                }));
+            })
+            .await;
+        (kept, changed)
+    }
+
+    async fn run_teardown(
+        platform: Platform,
+        client_config: ClientConfig,
+        protocol: u32,
+    ) -> (Result<()>, usize, usize) {
+        let server = MockServer::start_async().await;
+        let record = recorded_deployment("teardown-required", platform, protocol, None);
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/v1/deployments/dep_demo");
+                then.status(200).json_body(record);
+            })
+            .await;
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .path("/v1/sync/acquire")
+                    .json_body_partial(r#"{"acquireMode":"setup-teardown"}"#);
+                then.status(200)
+                    .json_body(serde_json::json!({"deployments": [{
+                        "deployment": {"id": "dep_demo"}, "executionClaim": null
+                    }]}));
+            })
+            .await;
+        let (kept, changed) = reconcile_requires_protocol(
+            &server,
+            protocol,
+            serde_json::json!({"success": true, "current": null}),
+        )
+        .await;
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST).path("/v1/sync/release");
+                then.status(200);
+            })
+            .await;
+        let client = create_manager_client("setup-token", &server.base_url()).unwrap();
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            push_deletion(&client, "dep_demo", platform, client_config),
+        )
+        .await
+        .expect("teardown finishes");
+        (result, kept.hits_async().await, changed.hits_async().await)
+    }
+
+    /// A GCP deployment registered at the federation protocol is torn down at that protocol.
+    /// Reporting the default protocol made the step refuse the deployment and the manager
+    /// refuse the report.
+    #[tokio::test]
+    async fn teardown_of_a_federated_gcp_deployment_reports_its_recorded_protocol() {
+        let (result, kept, changed) = run_teardown(
+            Platform::Gcp,
+            gcp_client_config(),
+            alien_core::GCP_FEDERATION_DEPLOYMENT_PROTOCOL_VERSION,
+        )
+        .await;
+        result.expect("a teardown with nothing left to delete finishes");
+        assert!(kept >= 1, "the teardown reported progress at protocol 2");
+        assert_eq!(changed, 0, "no report changed the recorded protocol");
+    }
+
+    /// Deployments on the default protocol keep reporting it.
+    #[tokio::test]
+    async fn teardown_keeps_the_default_protocol_for_other_platforms() {
+        for (platform, client_config) in [
+            (Platform::Aws, aws_client_config()),
+            (Platform::Azure, azure_client_config()),
+            (Platform::Kubernetes, kubernetes_client_config()),
+            (Platform::Machines, ClientConfig::Machines),
+        ] {
+            let (result, kept, changed) = run_teardown(
+                platform,
+                client_config,
+                alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+            )
+            .await;
+            result.unwrap_or_else(|error| panic!("{platform:?} teardown: {error:?}"));
+            assert!(kept >= 1, "{platform:?} reported progress at protocol 1");
+            assert_eq!(changed, 0, "{platform:?} kept protocol 1");
+        }
+    }
+
+    /// A GCP deployment from before federation can still be torn down, and every report
+    /// keeps its protocol 1. The recorded protocol is never upgraded on the way.
+    #[tokio::test]
+    async fn teardown_of_a_pre_federation_gcp_deployment_keeps_protocol_1() {
+        let (result, kept, changed) = run_teardown(
+            Platform::Gcp,
+            gcp_client_config(),
+            alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        )
+        .await;
+        result.expect("a teardown with nothing left to delete finishes");
+        assert!(kept >= 1, "the teardown reported progress at protocol 1");
+        assert_eq!(changed, 0, "every report kept protocol 1");
+    }
+
+    /// Setup of a GCP deployment registered at the federation protocol runs and checkpoints
+    /// at that protocol. The first checkpoint is refused here only to end the test there.
+    #[tokio::test]
+    async fn setup_of_a_federated_gcp_deployment_checkpoints_its_recorded_protocol() {
+        let server = MockServer::start_async().await;
+        let mut record = recorded_deployment(
+            "preflights-failed",
+            Platform::Gcp,
+            alien_core::GCP_FEDERATION_DEPLOYMENT_PROTOCOL_VERSION,
+            Some("rel_target"),
+        );
+        record["environmentInfo"] = serde_json::Value::Null;
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/v1/deployments/dep_demo");
+                then.status(200).json_body(record);
+            })
+            .await;
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST).path("/v1/sync/acquire");
+                then.status(200).json_body(serde_json::json!({"deployments": [{
+                    "deployment": {"id": "dep_demo", "status": "pending", "retryRequested": false},
+                    "executionClaim": {"operationId": "op_1", "attemptId": "attempt_1"}
+                }]}));
+            })
+            .await;
+        let mut target = mock_release("rel_target");
+        target["stack"]["gcp"] = target["stack"]["aws"].take();
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/v1/releases/rel_target");
+                then.status(200).json_body(target);
+            })
+            .await;
+        let kept = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .path("/v1/sync/reconcile")
+                    .json_body_partial(r#"{"state":{"protocolVersion":2}}"#);
+                then.status(409).json_body(serde_json::json!({
+                    "code": "CHECKPOINT_REFUSED", "message": "first checkpoint kept protocol 2",
+                    "retryable": false, "internal": false
+                }));
+            })
+            .await;
+        let changed = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .path("/v1/sync/reconcile");
+                then.status(409).json_body(serde_json::json!({
+                    "code": "DEPLOYMENT_PROTOCOL_MISMATCH",
+                    "message": "A deployment report must preserve its registered protocol version.",
+                    "retryable": false, "internal": false
+                }));
+            })
+            .await;
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST).path("/v1/sync/release");
+                then.status(200);
+            })
+            .await;
+        // Environment collection reads the project before the step runs. Any other Google
+        // request reaches this server too and fails fast.
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path_contains("projects/test-project");
+                then.status(200).json_body(serde_json::json!({
+                    "projectId": "test-project", "projectNumber": "123456789012"
+                }));
+            })
+            .await;
+        let ClientConfig::Gcp(mut gcp) = gcp_client_config() else {
+            unreachable!()
+        };
+        gcp.service_overrides = Some(alien_core::GcpServiceOverrides {
+            endpoints: HashMap::from([(
+                "resourcemanager".to_string(),
+                format!("{}/v1", server.base_url()),
+            )]),
+        });
+        let client = create_manager_client("setup-token", &server.base_url()).unwrap();
+        let error = tokio::time::timeout(
+            std::time::Duration::from_secs(60),
+            push_initial_setup(
+                &client,
+                "dep_demo",
+                Platform::Gcp,
+                None,
+                ClientConfig::Gcp(gcp),
+                None,
+                &server.base_url(),
+                "deployment-token",
+                None,
+                None,
+                Some("setup-revision-2"),
+            ),
+        )
+        .await
+        .expect("setup finishes")
+        .expect_err("stop at the first checkpoint");
+        assert!(
+            !format!("{error:?}").contains("INCOMPATIBLE_DEPLOYMENT_PROTOCOL"),
+            "the step accepted the recorded protocol: {error:?}"
+        );
+        assert!(kept.hits_async().await >= 1, "{error:?}");
+        changed.assert_hits_async(0).await;
+    }
+
     #[test]
     fn setup_refresh_prefers_desired_release_and_falls_back_to_current() {
         assert_eq!(
@@ -5613,6 +5915,18 @@ async fn update_hosted_settings(
     Ok(())
 }
 
+/// The protocol the manager records for a deployment. Every report about the
+/// deployment must keep it, so it is never replaced by this binary's default.
+fn recorded_protocol_version(deployment_id: &str, recorded: i32) -> Result<u32> {
+    u32::try_from(recorded)
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: format!(
+                "The manager reported an invalid protocol version {recorded} for deployment {deployment_id}"
+            ),
+        })
+}
+
 fn parse_deployment_status(raw_status: &str) -> Result<DeploymentStatus> {
     match raw_status.to_ascii_lowercase().as_str() {
         "pending" => Ok(DeploymentStatus::Pending),
@@ -6735,7 +7049,11 @@ async fn push_initial_setup_targeted(
         environment_info,
         runtime_metadata: None,
         retry_requested: deployment.retry_requested,
-        protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+        // The manager rejects a report that changes the recorded protocol.
+        protocol_version: recorded_protocol_version(
+            &deployment.id,
+            deployment.deployment_protocol_version,
+        )?,
     };
 
     // Always override environment_info with the target client_config.
@@ -7267,7 +7585,11 @@ pub async fn push_deletion(
         environment_info,
         runtime_metadata,
         retry_requested: deployment.retry_requested,
-        protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+        // The manager rejects a report that changes the recorded protocol.
+        protocol_version: recorded_protocol_version(
+            &deployment.id,
+            deployment.deployment_protocol_version,
+        )?,
     };
 
     let stack_settings: StackSettings = deployment
