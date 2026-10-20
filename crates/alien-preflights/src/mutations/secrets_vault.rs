@@ -127,11 +127,10 @@ impl StackMutation for SecretsVaultMutation {
         // see ManagementPermissionProfileMutation. A vault-scoped grant would make the
         // runtime write a policy onto its own management role, which is denied.
         //
-        // On AWS, GCP and Azure management only writes here: environment sync and the AWS
-        // sandbox egress key are write-only, so the vendor-side identity cannot read the
-        // deployment's secrets back. The one exception is the AWS sandbox gateway configuration
-        // (see `grant_management_gateway_config_read`). GCP and Azure refuse internet sandboxes
-        // at plan time (`SandboxPlatformSupportCheck`), so no controller there reads this vault.
+        // On AWS, GCP and Azure management only writes here: environment sync, the AWS sandbox
+        // egress key and the gateway configuration are write-only, so the vendor-side identity
+        // cannot read the deployment's secrets back. GCP and Azure refuse internet sandboxes at
+        // plan time (`SandboxPlatformSupportCheck`), so no controller there reads this vault.
         // Kubernetes keeps the read: its gateway controllers read the configuration back.
         if !(stack_state.platform == Platform::Aws
             && config.stack_settings.setup_management == alien_core::SetupManagement::Automatic)
@@ -142,7 +141,6 @@ impl StackMutation for SecretsVaultMutation {
                         || entry.config.downcast_ref::<Daemon>().is_some())
                         && azure_resource_needs_vault(entry)
                 });
-            let aws = stack_state.platform == Platform::Aws;
             let write_only = matches!(
                 stack_state.platform,
                 Platform::Aws | Platform::Gcp | Platform::Azure
@@ -153,11 +151,6 @@ impl StackMutation for SecretsVaultMutation {
                 !infrastructure_only && !write_only,
                 needs_certificates,
             )?;
-            if aws {
-                super::sandbox_gateway_permissions::grant_management_gateway_config_read(
-                    &mut stack,
-                )?;
-            }
         }
 
         match stack_state.platform {

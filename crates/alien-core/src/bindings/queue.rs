@@ -19,6 +19,9 @@ pub enum QueueBinding {
     /// Local development queue binding
     #[serde(rename = "local-queue", rename_all = "camelCase")]
     Local(LocalQueueBinding),
+    /// Manager-owned local queue, accessed directly over HTTP.
+    #[serde(rename = "local-queue-http")]
+    LocalHttp(LocalHttpQueueBinding),
 }
 
 impl QueueBinding {
@@ -98,4 +101,17 @@ pub struct LocalQueueBinding {
     /// Path to the queue's data directory; the `localqueue.v1` SQLite database
     /// (`localqueue.sqlite`) lives inside it
     pub queue_path: BindingValue<String>,
+}
+
+/// Connection to one manager-owned local queue. Old SDKs reject its distinct service tag.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "jsonschema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct LocalHttpQueueBinding {
+    /// Queue operation endpoint on the existing manager listener.
+    pub endpoint: BindingValue<String>,
+    /// Queue-scoped credential, injected at process start rather than persisted in stack state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
 }

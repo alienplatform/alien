@@ -326,76 +326,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn queue_delegates_to_local_provider_and_performs_real_io() {
+    async fn legacy_queue_binding_is_rejected_before_opening_files() {
         let temp_dir = TempDir::new().expect("tempdir");
+        let path = temp_dir.path().join("queue.db");
         let json = format!(
             r#"{{"service":"local-queue","queuePath":"{}"}}"#,
-            temp_dir.path().join("queue.db").display()
+            path.display()
         );
-        let env = with_binding(base_env(), "jobs", &json);
-        let bindings = Bindings::from_env_map(env).expect("valid env should construct Bindings");
-
-        let queue = bindings
-            .queue("jobs")
-            .await
-            .expect("queue binding should load");
-
-        queue
-            .send(MessagePayload::Text("hello".to_string()))
-            .await
-            .expect("send should succeed");
-        let messages = queue.receive(1).await.expect("receive should succeed");
-        assert_eq!(messages.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn bound_queue_uses_its_configured_name_for_every_operation() {
-        let temp_dir = TempDir::new().expect("tempdir");
-        let json = format!(
-            r#"{{"service":"local-queue","queuePath":"{}"}}"#,
-            temp_dir.path().join("queue.db").display()
-        );
-        let env = with_binding(base_env(), "jobs", &json);
-        let bindings = Bindings::from_env_map(env).expect("valid env should construct Bindings");
-
-        let queue = bindings
-            .queue("jobs")
-            .await
-            .expect("queue binding should load");
-
-        // nack: an in-flight message under the default lease is hidden, but a
-        // nack makes it immediately redeliverable.
-        queue
-            .send(MessagePayload::Text("retry".to_string()))
-            .await
-            .expect("send should succeed");
-        let first = queue.receive(1).await.expect("receive should succeed");
-        assert_eq!(first.len(), 1);
-        assert!(
-            queue
-                .receive(1)
-                .await
-                .expect("receive should succeed")
-                .is_empty(),
-            "in-flight message must be hidden before nack"
-        );
-        queue
-            .nack(&first[0].receipt_handle)
-            .await
-            .expect("nack should succeed");
-        let redelivered = queue.receive(1).await.expect("receive should succeed");
-        assert_eq!(redelivered.len(), 1, "nacked message must be redelivered");
-
-        // purge: clears everything, in flight or visible.
-        queue.purge().await.expect("purge should succeed");
-        assert!(
-            queue
-                .receive(1)
-                .await
-                .expect("receive should succeed")
-                .is_empty(),
-            "purge must empty the queue"
-        );
+        let bindings = Bindings::from_env_map(with_binding(base_env(), "jobs", &json)).unwrap();
+        let error = bindings.queue("jobs").await.unwrap_err();
+        assert!(error.to_string().contains("Legacy file-backed"));
+        assert!(!path.exists(), "rejection must not create a legacy store");
     }
 
     #[tokio::test]

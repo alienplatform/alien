@@ -736,6 +736,20 @@ impl SingleControllerExecutor {
             .insert(resource_id.to_string(), state);
     }
 
+    /// Removes another resource from the saved stack state, as before it was first created.
+    pub fn remove_saved_resource(&mut self, resource_id: &str) {
+        self.stack_state.resources.remove(resource_id);
+    }
+
+    /// The desired stack's configuration of another resource, to change after the stack
+    /// mutations ran, as a later release would.
+    pub fn desired_resource_config_mut(&mut self, resource_id: &str) -> Option<&mut Resource> {
+        self.desired_stack
+            .resources
+            .get_mut(resource_id)
+            .map(|entry| &mut entry.config)
+    }
+
     /// Gets a reference to the controller internal state.
     /// Attempts to downcast the controller to a specific type for typed access.
     /// Returns None if the controller is not of the expected type.

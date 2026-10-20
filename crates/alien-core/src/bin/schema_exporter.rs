@@ -15,6 +15,8 @@ use utoipa::OpenApi;
     Worker,
     WorkerCode,
     QueueBatchConfig,
+    QueueBinding,
+    LocalHttpQueueBinding,
     WorkerOutputs,
     ComputeCluster,
     CapacityGroup,

@@ -11,6 +11,8 @@ on:
       - "crates/alien-ai-gateway/**"
       - "crates/alien-core/src/bindings/**"
       - "crates/alien-bindings-python/**"
+      - "crates/alien-local/**"
+      - "scripts/queue-test-server.py"
       - "examples/python-bindings/**"
       - ".github/workflows/python-bindings.yml"
   push:
@@ -24,6 +26,8 @@ on:
       - "crates/alien-ai-gateway/**"
       - "crates/alien-core/src/bindings/**"
       - "crates/alien-bindings-python/**"
+      - "crates/alien-local/**"
+      - "scripts/queue-test-server.py"
       - "examples/python-bindings/**"
       - ".github/workflows/python-bindings.yml"
 
@@ -56,6 +60,11 @@ jobs:
           cache: pip
       - name: Install test tools
         run: python -m pip install 'maturin>=1.9,<2' 'mypy>=1.18,<2' 'pytest>=8,<10' 'pytest-asyncio>=1,<2' 'ruff>=0.13,<1' types-grpcio types-protobuf
+      - name: Install protoc for the real local queue owner fixture
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "35.x"
+          repo-token: ${{ github.token }}
       - name: Build and install local-provider wheel
         run: |
           maturin build --manifest-path crates/alien-bindings-python/Cargo.toml --no-default-features --features local --out dist

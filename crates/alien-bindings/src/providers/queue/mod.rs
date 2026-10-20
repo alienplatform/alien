@@ -8,6 +8,8 @@ pub mod gcp_pubsub;
 pub mod azure_service_bus;
 #[cfg(feature = "local")]
 pub mod local;
+#[cfg(feature = "local")]
+pub mod local_http;
 
 #[cfg(feature = "aws")]
 pub use aws_sqs::AwsSqsQueue;

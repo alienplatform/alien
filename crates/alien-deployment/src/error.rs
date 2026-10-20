@@ -152,7 +152,7 @@ pub enum ErrorData {
     /// and is not waiting for setup.
     #[error(
         code = "SETUP_RUN_AFTER_FAILED_OPERATION",
-        message = "Setup has nothing to apply to deployment '{deployment_id}': its last operation failed ({status}) and is not waiting for setup. Retry the deployment first (`alien deployments retry {deployment_id}`, or Retry in the dashboard). If the retry fails with an error that asks for setup, rerun setup then",
+        message = "Setup has nothing to apply to deployment '{deployment_id}': its last operation failed ({status}) and is not waiting for setup. Run `alien deployments retry {deployment_id}` (or click Retry in the dashboard) to retry it. If the retry stops with an error that asks for setup, rerun this command",
         retryable = "false",
         internal = "false",
         http_status_code = 409
@@ -162,6 +162,21 @@ pub enum ErrorData {
         deployment_id: String,
         /// Its failed status.
         status: String,
+    },
+
+    /// A setup run could not resume a failed first install. Current managers resume it when the
+    /// setup actor reruns setup; this refusal means the caller may not retry the deployment or
+    /// the manager predates that.
+    #[error(
+        code = "SETUP_RUN_CANNOT_RESUME_FAILED_INSTALL",
+        message = "Setup could not resume the failed install of deployment '{deployment_id}'. Rerun this command with the setup token that created the deployment (it is saved on the machine that ran the original setup). If it is still refused, run `alien deployments retry {deployment_id}` and then rerun this command",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    SetupRunCannotResumeFailedInstall {
+        /// Deployment the setup run targeted.
+        deployment_id: String,
     },
 
     /// Required deployer secrets are not in the customer's secret store yet;
