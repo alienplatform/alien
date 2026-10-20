@@ -10,6 +10,7 @@ mod recovery;
 pub use probe::command_path_is_closed;
 mod redirect;
 mod transport;
+mod upstream;
 
 use std::{
     collections::BTreeMap,
@@ -630,14 +631,6 @@ impl GatewayEgress {
         Ok(())
     }
 
-    async fn send_connect(&self, upstream: &mut TcpStream, authority: &str) -> Result<()> {
-        let token = self.current_token()?;
-        if token.is_empty() {
-            return Err(invalid("egress token pending"));
-        }
-        upstream.write_all(format!("CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\nProxy-Authorization: Bearer {token}\r\n\r\n").as_bytes()).await.into_alien_error().context(failed("send gateway CONNECT"))
-    }
-
     async fn serve(self: Arc<Self>, listener: TcpListener, transparent: bool) -> Result<()> {
         let limit = Arc::new(Semaphore::new(256));
         let mut tasks = JoinSet::new();
@@ -657,8 +650,7 @@ impl GatewayEgress {
     async fn forward(&self, guest: TcpStream, transparent: bool) -> Result<()> {
         self.ensure_ready()?;
         let mut guest = BufReader::new(guest);
-        let mut upstream = BufReader::new(self.connect(self.gateway_address()?).await?);
-        if transparent {
+        let mut upstream = if transparent {
             let destination = redirect::original_destination(guest.get_ref())
                 .into_alien_error()
                 .context(failed("read original destination"))?;
@@ -666,18 +658,17 @@ impl GatewayEgress {
                 .names
                 .name(*destination.ip())
                 .unwrap_or_else(|| destination.ip().to_string());
-            self.send_connect(
-                upstream.get_mut(),
-                &format!("{name}:{}", destination.port()),
-            )
-            .await?;
-            let response = timeout(TIMEOUT, read_header(&mut upstream))
-                .await
-                .into_alien_error()
-                .context(failed("CONNECT response timeout"))??;
-            if !response.starts_with(b"HTTP/1.1 200 ") {
+            let authority = format!("{name}:{}", destination.port());
+            let token = self.current_token()?;
+            if token.is_empty() {
+                return Err(invalid("egress token pending"));
+            }
+            let request = format!("CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\nProxy-Authorization: Bearer {token}\r\n\r\n");
+            let (answer, upstream) = self.open_tunnel(request.as_bytes()).await?;
+            if !answer.starts_with(b"HTTP/1.1 200 ") {
                 return Err(invalid("gateway refused transparent CONNECT"));
             }
+            upstream
         } else {
             let request = timeout(TIMEOUT, read_header(&mut guest))
                 .await
@@ -692,9 +683,9 @@ impl GatewayEgress {
             else {
                 return Err(invalid("incomplete proxy request"));
             };
+            let method = parsed.method.ok_or_else(|| invalid("missing method"))?;
             let mut head = format!(
-                "{} {} HTTP/1.1\r\n",
-                parsed.method.ok_or_else(|| invalid("missing method"))?,
+                "{method} {} HTTP/1.1\r\n",
                 parsed.path.ok_or_else(|| invalid("missing URI"))?
             );
             for header in parsed.headers {
@@ -711,17 +702,31 @@ impl GatewayEgress {
                 "Proxy-Authorization: Bearer {}\r\n\r\n",
                 self.current_token()?
             ));
-            upstream
-                .write_all(head.as_bytes())
-                .await
-                .into_alien_error()
-                .context(failed("forward proxy headers"))?;
-            upstream
-                .write_all(&request[end..])
-                .await
-                .into_alien_error()
-                .context(failed("forward buffered body"))?;
-        }
+            if method == "CONNECT" {
+                // A CONNECT head carries no body, and tunnel bytes stay buffered in `guest`
+                // until a gateway answers, so an unanswered attempt can be repeated.
+                let (answer, upstream) = self.open_tunnel(head.as_bytes()).await?;
+                guest
+                    .write_all(&answer)
+                    .await
+                    .into_alien_error()
+                    .context(failed("relay gateway CONNECT answer"))?;
+                upstream
+            } else {
+                let mut upstream = BufReader::new(self.connect_forwarded().await?);
+                upstream
+                    .write_all(head.as_bytes())
+                    .await
+                    .into_alien_error()
+                    .context(failed("forward proxy headers"))?;
+                upstream
+                    .write_all(&request[end..])
+                    .await
+                    .into_alien_error()
+                    .context(failed("forward buffered body"))?;
+                upstream
+            }
+        };
         tokio::io::copy_bidirectional(&mut guest, &mut upstream)
             .await
             .into_alien_error()
@@ -777,6 +782,35 @@ impl GatewayEgress {
                     if let Some(Err(error)) = result { tracing::error!(%error, "DNS task failed"); }
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+impl GatewayEgress {
+    /// An agent with a delivered token and verified path that has not passed a policy check.
+    fn for_test(address: SocketAddr) -> Self {
+        Self {
+            address: RwLock::new(Some(address)),
+            token: RwLock::new("token".into()),
+            policy: RwLock::new(None),
+            awaiting_delivery: AtomicBool::new(false),
+            path_verified: AtomicBool::new(true),
+            privileged: false,
+            command_identity: crate::exec::ExecIdentity {
+                uid: 60000,
+                gid: 60000,
+            },
+            routing_ready: AtomicBool::new(true),
+            declared_none: false,
+            ready: AtomicBool::new(false),
+            listeners_live: AtomicBool::new(true),
+            names: Names::default(),
+            image_started: AtomicBool::new(false),
+            ca_path: RwLock::new(None),
+            identity: RwLock::new(Some(("p/r".into(), "box".into()))),
+            update_lock: tokio::sync::Mutex::new(()),
+            unanswered_since: std::sync::Mutex::new(None),
         }
     }
 }

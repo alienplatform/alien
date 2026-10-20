@@ -237,36 +237,16 @@ impl MonitorTiming {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gateway_egress::dns::Names;
-    use std::sync::{atomic::AtomicBool, RwLock};
+    use std::sync::atomic::AtomicBool;
     use tokio::{io::AsyncReadExt, net::TcpListener};
 
     fn record(version: u64) -> String {
         format!("e30.{}.eA", URL_SAFE_NO_PAD.encode(serde_json::to_vec(&serde_json::json!({"v":1,"aud":"p/r","sub":"box","ver":[version,"00000000000000000000000000000000"],"policy":"internet"})).unwrap()))
     }
     fn agent(address: std::net::SocketAddr) -> GatewayEgress {
-        GatewayEgress {
-            address: RwLock::new(Some(address)),
-            token: RwLock::new("token".into()),
-            policy: RwLock::new(Some(record(2))),
-            awaiting_delivery: AtomicBool::new(false),
-            path_verified: AtomicBool::new(true),
-            privileged: false,
-            command_identity: crate::exec::ExecIdentity {
-                uid: 60000,
-                gid: 60000,
-            },
-            routing_ready: AtomicBool::new(true),
-            declared_none: false,
-            ready: AtomicBool::new(false),
-            listeners_live: AtomicBool::new(true),
-            names: Names::default(),
-            image_started: AtomicBool::new(false),
-            ca_path: RwLock::new(None),
-            identity: RwLock::new(Some(("p/r".into(), "box".into()))),
-            update_lock: tokio::sync::Mutex::new(()),
-            unanswered_since: std::sync::Mutex::new(None),
-        }
+        let agent = GatewayEgress::for_test(address);
+        *agent.policy.write().unwrap() = Some(record(2));
+        agent
     }
     #[tokio::test]
     async fn only_missing_state_triggers_reregistration_with_the_retained_record() {
