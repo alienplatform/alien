@@ -991,11 +991,12 @@ impl AzurePermissionsHelper {
                 .delete_role_assignment_by_id(full_id.clone())
                 .await
             {
-                Ok(_) => info!(
+                Ok(Some(_)) => info!(
                     role_assignment_id = %full_id,
                     permission_set = %stale.permission_set_id,
                     "Removed a management self-assignment setup now covers"
                 ),
+                Ok(None) => {}
                 Err(error)
                     if matches!(
                         error.error,
@@ -1012,6 +1013,48 @@ impl AzurePermissionsHelper {
                 }
             }
         }
+
+        // A grant an earlier version already assigned stays in place under its earlier id.
+        // Asking for it again under the new id would fail once setup keeps management from
+        // assigning roles to itself, even though nothing changes, so it is left alone.
+        let mut missing = Vec::new();
+        for assignment in assignments {
+            let existing = legacy.iter().find(|earlier| {
+                earlier.scope == assignment.scope
+                    && earlier.role_definition_id == assignment.role_definition_id
+            });
+            if let Some(earlier) = existing {
+                let full_id =
+                    Self::role_assignment_resource_id(&earlier.scope, &earlier.role_assignment_id);
+                match authorization_client
+                    .get_role_assignment_by_id(full_id.clone())
+                    .await
+                {
+                    Ok(_) => {
+                        if !role_assignment_ids.contains(&full_id) {
+                            role_assignment_ids.push(full_id);
+                        }
+                        continue;
+                    }
+                    Err(error)
+                        if matches!(
+                            error.error,
+                            Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                        ) => {}
+                    Err(error) => {
+                        return Err(error.context(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Failed to read management role assignment for '{}'",
+                                assignment.permission_set_id
+                            ),
+                            resource_id: Some(resource_id.to_string()),
+                        }));
+                    }
+                }
+            }
+            missing.push(assignment);
+        }
+        let assignments = missing;
 
         if assignments.is_empty() {
             return Ok(());

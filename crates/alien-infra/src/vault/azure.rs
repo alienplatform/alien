@@ -1006,4 +1006,173 @@ mod permission_update_tests {
         assert!(deleted[0]
             .contains("/vaults/test-secrets/providers/Microsoft.Authorization/roleAssignments/"));
     }
+
+    /// A grant named for a Live vault that an earlier version already assigned onto management
+    /// stays as it is. Asking for it again would be refused once setup keeps management from
+    /// assigning roles to itself, so an existing one is not requested again; a missing one is.
+    #[tokio::test]
+    async fn a_grant_an_earlier_version_assigned_is_not_requested_again() {
+        for exists in [true, false] {
+            const MANAGEMENT: &str = "11111111-2222-3333-4444-555555555555";
+            const WORKLOAD: &str = "87654321-4321-4321-4321-210987654321";
+            let created = Arc::new(Mutex::new(Vec::new()));
+            let deleted = Arc::new(Mutex::new(Vec::new()));
+            let mut authorization = MockAuthorizationApi::new();
+            let saved = created.clone();
+            authorization
+                .expect_create_or_update_role_assignment_by_id()
+                .returning(move |id, assignment| {
+                    let principal = assignment.properties.as_ref().unwrap().principal_id.clone();
+                    saved.lock().unwrap().push((id.to_string(), principal));
+                    Ok(assignment.clone())
+                });
+            let removed = deleted.clone();
+            authorization
+                .expect_delete_role_assignment_by_id()
+                .returning(move |id| {
+                    removed.lock().unwrap().push(id);
+                    Ok(None)
+                });
+            authorization
+                .expect_create_or_update_role_definition()
+                .returning(|_, _, definition| Ok(definition.clone()));
+            authorization
+            .expect_get_role_definition()
+            .returning(|_, _| {
+                Ok(alien_azure_clients::models::authorization_role_definitions::RoleDefinition::default())
+            });
+            authorization
+            .expect_get_role_assignment_by_id()
+            .returning(move |id| {
+                if exists {
+                    Ok(alien_azure_clients::models::authorization_role_assignments::RoleAssignment {
+                        id: Some(id),
+                        name: None,
+                        type_: None,
+                        properties: None,
+                    })
+                } else {
+                    Err(AlienError::new(CloudError::RemoteResourceNotFound {
+                        resource_type: "Role assignment".to_string(),
+                        resource_name: id,
+                    }))
+                }
+            });
+            let authorization = Arc::new(authorization);
+            let mut provider = MockPlatformServiceProvider::new();
+            provider
+                .expect_get_azure_authorization_client()
+                .returning(move |_| Ok(authorization.clone()));
+
+            let vault = Vault::new("secrets".to_string()).build();
+            let account = ServiceAccount::new("consumer-sa".to_string()).build();
+            let management =
+                alien_core::RemoteStackManagement::new("management".to_string()).build();
+            let group = AzureResourceGroup::new("default-resource-group".to_string()).build();
+            let stack = Stack::new("test".to_string())
+                .add_with_dependencies(
+                    vault.clone(),
+                    ResourceLifecycle::Live,
+                    vec![ResourceRef::new(
+                        ServiceAccount::RESOURCE_TYPE,
+                        "consumer-sa",
+                    )],
+                )
+                .add(account.clone(), ResourceLifecycle::Frozen)
+                .add(management.clone(), ResourceLifecycle::Frozen)
+                .add(group.clone(), ResourceLifecycle::Frozen)
+                .permission(
+                    "consumer",
+                    PermissionProfile::new().resource("secrets", ["vault/data-read"]),
+                )
+                .management(alien_core::ManagementPermissions::Extend(
+                    PermissionProfile::new().resource("secrets", ["vault/data-write"]),
+                ))
+                .build();
+            let config = DeploymentConfig::builder()
+                .stack_settings(StackSettings::default())
+                .environment_variables(EnvironmentVariablesSnapshot {
+                    variables: vec![],
+                    hash: String::new(),
+                    created_at: String::new(),
+                })
+                .external_bindings(ExternalBindings::default())
+                .allow_frozen_changes(true)
+                .build();
+            let executor = StackExecutor::builder(
+                &stack,
+                ClientConfig::Azure(Box::new(AzureClientConfig::mock())),
+            )
+            .deployment_config(&config)
+            .service_provider(Arc::new(provider))
+            .initial_setup_authority(InitialSetupAuthority::ImportedHandoff)
+            .step_running_resources(false)
+            .build()
+            .unwrap();
+
+            let mut state = StackState::with_resource_prefix(Platform::Azure, "test".to_string());
+            let mut insert =
+                |id: &str, resource: Resource, controller: Box<dyn ResourceController>| {
+                    let lifecycle = if id == "secrets" {
+                        ResourceLifecycle::Live
+                    } else {
+                        ResourceLifecycle::Frozen
+                    };
+                    let mut resource_state = StackResourceState::new_pending(
+                        resource.resource_type().to_string(),
+                        resource,
+                        Some(lifecycle),
+                        vec![],
+                    );
+                    resource_state.status = ResourceStatus::Running;
+                    resource_state.outputs = controller.get_outputs();
+                    resource_state
+                        .set_internal_controller(Some(controller))
+                        .unwrap();
+                    state.resources.insert(id.to_string(), resource_state);
+                };
+            insert(
+                "secrets",
+                Resource::new(vault),
+                Box::new(AzureVaultController::mock_ready("secrets")),
+            );
+            insert(
+                "consumer-sa",
+                Resource::new(account),
+                Box::new(AzureServiceAccountController::mock_ready(
+                    "test-consumer-sa",
+                )),
+            );
+            let mut management_controller =
+                crate::remote_stack_management::AzureRemoteStackManagementController::mock_ready(
+                    "test",
+                );
+            management_controller.uami_principal_id = Some(MANAGEMENT.to_string());
+            insert(
+                "management",
+                Resource::new(management),
+                Box::new(management_controller),
+            );
+            insert(
+                "default-resource-group",
+                Resource::new(group),
+                Box::new(AzureResourceGroupController::mock_ready("test-rg")),
+            );
+
+            let state = executor.step(state).await.unwrap().next_state;
+            assert_eq!(state.resources["secrets"].status, ResourceStatus::Running);
+            let created = created.lock().unwrap();
+            let to_management = created
+                .iter()
+                .filter(|(_, principal)| principal == MANAGEMENT)
+                .count();
+            assert_eq!(
+                to_management,
+                usize::from(!exists),
+                "exists={exists}: {created:?}"
+            );
+            assert!(created.iter().any(|(_, principal)| principal == WORKLOAD));
+            assert!(deleted.lock().unwrap().is_empty());
+        }
+    }
 }
