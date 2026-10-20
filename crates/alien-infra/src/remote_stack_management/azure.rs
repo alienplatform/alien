@@ -1631,7 +1631,8 @@ mod tests {
         let mut rebuilt = saved;
         rebuilt.role_assignment_role_definition_ids = BTreeMap::from([(
             "/subscriptions/sub-123/resourceGroups/rg-123".to_string(),
-            "/subscriptions/sub-123/providers/Microsoft.Authorization/roleDefinitions/ra".to_string(),
+            "/subscriptions/sub-123/providers/Microsoft.Authorization/roleDefinitions/ra"
+                .to_string(),
         )]);
         assert!(!rebuilt.role_layout_outdated(&desired));
 
