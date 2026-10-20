@@ -251,6 +251,9 @@ fn generate_terraform_module_internal(
             }
         }
     }
+    if stack_settings.network.is_none() {
+        stack_settings.network = Network::preflight_settings(stack);
+    }
     if target.is_kubernetes()
         && matches!(
             target.cloud_platform(),

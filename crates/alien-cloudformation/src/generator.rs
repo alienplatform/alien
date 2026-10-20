@@ -317,6 +317,9 @@ pub fn generate_cloudformation_template_with_profile(
     }
     // CloudFormation packages always register push deployments.
     stack_settings.deployment_model = DeploymentModel::Push;
+    if stack_settings.network.is_none() {
+        stack_settings.network = Network::preflight_settings(stack);
+    }
     if options.target.is_kubernetes() && stack_settings.network.is_none() {
         stack_settings.network = Some(NetworkSettings::Create {
             cidr: None,
