@@ -11,6 +11,7 @@ import { spawnSync } from "node:child_process"
 import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { startQueueServer } from "./queue-test-server.mjs"
 
 const root = mkdtempSync(join(tmpdir(), "alien-bindings-bun-tests-"))
 const env = {
@@ -37,7 +38,11 @@ function addBindings(prefix, count, binding) {
 }
 
 addBindings("kv", 10, name => ({ service: "local-kv", dataDir: dataDir(name) }))
-addBindings("queue", 6, name => ({ service: "local-queue", queuePath: dataDir(name) }))
+const queueServer = startQueueServer(
+  root,
+  Array.from({ length: 8 }, (_, i) => `bun-queue-${i}`),
+)
+addBindings("queue", 8, name => queueServer.bindings[name])
 addBindings("storage", 5, name => ({ service: "local-storage", storagePath: dataDir(name) }))
 addBindings("vault", 5, name => ({
   service: "local-vault",
@@ -111,5 +116,6 @@ try {
   }
   process.exitCode = status
 } finally {
+  queueServer.process.kill()
   rmSync(root, { recursive: true, force: true })
 }

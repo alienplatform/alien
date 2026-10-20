@@ -444,6 +444,13 @@ impl DeploymentLoop {
         )
         .await;
 
+        for (deployment_id, _) in &providers {
+            self.server_bindings
+                .local_queues
+                .unregister(deployment_id)
+                .await;
+        }
+
         if !self.config.stop_local_containers_on_shutdown {
             return Ok(());
         }
@@ -852,6 +859,14 @@ impl DeploymentLoop {
             .await
             .map_err(|error| error.into_generic())?;
             if state_after.status == DeploymentStatus::Deleted {
+                self.server_bindings
+                    .local_queues
+                    .unregister(&deployment_id)
+                    .await;
+                self.local_bindings_cache
+                    .lock()
+                    .expect("local_bindings_cache poisoned")
+                    .remove(&deployment_id);
                 self.deployment_store
                     .delete_deployment(&system, &deployment_id)
                     .await?;
@@ -1224,6 +1239,14 @@ impl DeploymentLoop {
         // 8. Handle deleted deployments — clean up the record. Loop
         // context — no inbound caller; pass `Subject::system()`.
         if state.status == DeploymentStatus::Deleted {
+            self.server_bindings
+                .local_queues
+                .unregister(&deployment_id)
+                .await;
+            self.local_bindings_cache
+                .lock()
+                .expect("local_bindings_cache poisoned")
+                .remove(&deployment_id);
             info!(deployment_id = %deployment_id, "Deployment deleted, removing record");
             let caller = Subject::system();
             if let Err(e) = self

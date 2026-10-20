@@ -1,4 +1,5 @@
-//! Local disk-persisted queue backed by turso (`localqueue.v1`), multi-process safe.
+//! Local disk-persisted queue backed by turso (`localqueue.v1`).
+//! Deployed queues are opened only by their manager owner through `single_process`.
 //!
 //! # Connection strategy
 //!
@@ -9,11 +10,9 @@
 //! when the operation completes, so no statement state leaks between
 //! operations.
 //!
-//! Correctness under concurrent access (multiple handles on one file, i.e.
-//! multiple processes) comes from turso's multi-process WAL mode — enabled
-//! explicitly, experimental upstream, and gated by the multi-handle tests
-//! below — plus a `busy_timeout` (writers wait for the write lock instead of
-//! failing with `Busy`).
+//! Applications use the direct HTTP provider; they do not open deployed queue files.
+//! `new` retains the legacy multiprocess constructor for explicit standalone use and
+//! offline migration tests. It does not establish safety across a VM filesystem boundary.
 //!
 //! # Receive design: one `BEGIN IMMEDIATE` transaction per batch
 //!
@@ -62,9 +61,8 @@ static QUEUE_SPEC: StoreSpec = StoreSpec {
 /// Local disk-persisted queue on turso (`localqueue.v1`).
 ///
 /// Implements the `Queue` trait (send/receive/ack/nack/purge). Messages
-/// survive process restarts, and multiple `LocalQueue`
-/// handles — including handles in different OS processes — can safely share
-/// one data directory.
+/// survive process restarts. Deployed queues use `single_process`; applications
+/// communicate with that owner through the HTTP provider.
 #[derive(Debug)]
 pub struct LocalQueue {
     store: LocalStore,

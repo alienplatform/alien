@@ -285,6 +285,21 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
         operations_sync_handler.is_some(),
     );
 
+    // Local pull deployments use their existing Operator listener as the queue owner.
+    let local_queue_service = service_provider
+        .as_ref()
+        .and_then(|provider| provider.get_local_queue_manager())
+        .map(|manager| {
+            let service = Arc::new(alien_local::LocalQueueService::default());
+            service.register(
+                "local",
+                manager,
+                &format!("http://localhost:{}", config.otlp_server_port),
+            );
+            service
+        });
+    let local_queues_enabled = local_queue_service.is_some();
+
     // Create shared state
     let state = Arc::new(OperatorState {
         config: config.clone(),
@@ -296,7 +311,11 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
 
     // Start OTLP server (for local functions to send telemetry).
     // This is best-effort — a port conflict should not take down the operator.
-    let otlp_host = config.otlp_server_host;
+    let otlp_host = if local_queues_enabled && config.otlp_server_host.is_loopback() {
+        std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)
+    } else {
+        config.otlp_server_host
+    };
     let otlp_port = config.otlp_server_port;
     let otlp_db = db.clone();
     let otlp_namespace = config.namespace.clone();
@@ -313,9 +332,13 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
         runtime_options.runtime_deployment_scope.as_ref(),
     )
     .await;
+    let sandbox_broker = match local_queue_service {
+        Some(service) => Some(sandbox_broker.unwrap_or_default().merge(service.router())),
+        None => sandbox_broker,
+    };
     let otlp_cancel = cancel.clone();
-    tokio::spawn(async move {
-        if let Err(e) = otlp_server::start_otlp_server(
+    let mut otlp_handle = tokio::spawn(async move {
+        let result = otlp_server::start_otlp_server(
             otlp_host,
             otlp_port,
             otlp_db,
@@ -325,10 +348,13 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
             sandbox_broker,
             otlp_cancel,
         )
-        .await
-        {
-            warn!(error = %e, "OTLP server failed (telemetry collection disabled)");
+        .await;
+        if !local_queues_enabled {
+            if let Err(ref error) = result {
+                warn!(%error, "OTLP server failed (telemetry collection disabled)");
+            }
         }
+        result
     });
 
     // Start deployment loop (always runs)
@@ -540,6 +566,13 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
         _ = cancel.cancelled() => {
             info!("Shutdown signal received, waiting for loops to finish...");
             Ok(None)
+        },
+        result = &mut otlp_handle, if local_queues_enabled => match result {
+            Ok(Ok(())) => Ok(loop_exit(&cancel, "local-queue-http")),
+            Ok(Err(error)) => Err(error),
+            Err(error) => Err(alien_error::AlienError::new(error::ErrorData::ConfigurationError {
+                message: format!("Local queue HTTP server task failed: {error}"),
+            })),
         },
         result = readiness_server => match result {
             Ok(()) => Ok(loop_exit(&cancel, "readiness")),

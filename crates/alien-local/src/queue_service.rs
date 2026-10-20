@@ -41,6 +41,17 @@ impl LocalQueueService {
             .layer(DefaultBodyLimit::max(8 * 1024 * 1024))
             .with_state(self)
     }
+    /// Stop accepting operations and release the deployment's database handles.
+    pub async fn unregister(&self, deployment: &str) {
+        let manager = self
+            .managers
+            .write()
+            .expect("queue registry poisoned")
+            .remove(deployment);
+        if let Some(manager) = manager {
+            manager.close().await;
+        }
+    }
 }
 fn error(reason: impl Into<String>) -> ErrorData {
     ErrorData::QueueOperationFailed {
@@ -77,14 +88,8 @@ async fn execute(
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
-        .ok_or_else(|| AlienError::new(error("Missing queue credential")))?;
-    manager
-        .authorize(name, token)
-        .context(error("Invalid queue credential"))?;
-    let queue = manager
-        .load_queue(name)
-        .await
-        .context(error("Queue is unavailable"))?;
+        .ok_or_else(|| AlienError::new(ErrorData::LocalQueueUnauthorized))?;
+    let queue = manager.authenticated_queue(name, token).await?;
     let value = match request {
         Request::Send { message } => serde_json::to_value(queue.send(name, message.into()).await?),
         Request::SendBatch { messages } => serde_json::to_value(

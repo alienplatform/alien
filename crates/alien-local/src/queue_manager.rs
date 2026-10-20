@@ -8,12 +8,13 @@ use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
 use std::io::Write;
-#[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
 use std::{
     collections::HashMap,
     path::PathBuf,
-    sync::{Arc, RwLock},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, RwLock,
+    },
 };
 use tokio::sync::Mutex;
 
@@ -23,6 +24,7 @@ pub struct LocalQueueManager {
     state_dir: PathBuf,
     endpoint: RwLock<Option<String>>,
     queues: Mutex<HashMap<String, Arc<ManagedQueue>>>,
+    closed: AtomicBool,
 }
 
 /// A revocable handle: deletion waits for in-flight operations and closes the store
@@ -152,6 +154,7 @@ impl LocalQueueManager {
             state_dir,
             endpoint: RwLock::new(None),
             queues: Mutex::new(HashMap::new()),
+            closed: AtomicBool::new(false),
         }
     }
 
@@ -173,12 +176,19 @@ impl LocalQueueManager {
     }
 
     pub async fn create_queue(&self, id: &str) -> Result<PathBuf> {
+        let mut queues = self.queues.lock().await;
+        if self.closed.load(Ordering::Relaxed) {
+            return Err(AlienError::new(queue_error(
+                id,
+                "Queue owner has shut down",
+            )));
+        }
         let path = self.path(id)?;
         tokio::fs::create_dir_all(&path)
             .await
             .into_alien_error()
             .context(queue_error(id, "Create queue directory"))?;
-        self.load_queue(id).await?;
+        self.load_locked(id, &mut queues).await?;
         Ok(path)
     }
 
@@ -194,11 +204,41 @@ impl LocalQueueManager {
     }
 
     pub async fn load_queue(&self, id: &str) -> Result<Arc<ManagedQueue>> {
-        let path = self.get_queue_path(id)?;
         let mut queues = self.queues.lock().await;
+        self.load_locked(id, &mut queues).await
+    }
+
+    /// Authentication and handle selection share deletion's lock. A credential
+    /// from a deleted generation must never authorize its replacement.
+    pub(crate) async fn authenticated_queue(
+        &self,
+        id: &str,
+        token: &str,
+    ) -> alien_bindings::error::Result<Arc<ManagedQueue>> {
+        let mut queues = self.queues.lock().await;
+        self.authorize(id, token)
+            .context(alien_bindings::error::ErrorData::LocalQueueUnauthorized)?;
+        self.load_locked(id, &mut queues).await.context(
+            alien_bindings::error::ErrorData::config_invalid("queue", "Queue is unavailable"),
+        )
+    }
+
+    async fn load_locked(
+        &self,
+        id: &str,
+        queues: &mut HashMap<String, Arc<ManagedQueue>>,
+    ) -> Result<Arc<ManagedQueue>> {
+        if self.closed.load(Ordering::Relaxed) {
+            return Err(AlienError::new(queue_error(
+                id,
+                "Queue owner has shut down",
+            )));
+        }
+        let path = self.get_queue_path(id)?;
         if let Some(queue) = queues.get(id) {
             return Ok(queue.clone());
         }
+        self.token(id, true)?;
         let queue = Arc::new(ManagedQueue {
             queue: Mutex::new(Some(
                 LocalQueue::single_process(path)
@@ -210,8 +250,20 @@ impl LocalQueueManager {
         Ok(queue)
     }
 
+    /// Revoke outstanding handles without deleting durable data.
+    pub(crate) async fn close(&self) {
+        let mut queues = self.queues.lock().await;
+        self.closed.store(true, Ordering::Relaxed);
+        for (_, queue) in queues.drain() {
+            queue.queue.lock().await.take();
+        }
+    }
+
     pub async fn delete_queue(&self, id: &str) -> Result<()> {
-        let path = self.path(id)?;
+        if id.is_empty() || id == "." || id == ".." || id.contains(['/', '\\']) {
+            return Err(AlienError::new(queue_error(id, "Invalid queue identifier")));
+        }
+        let path = self.state_dir.join("queue-owned").join(id);
         let mut queues = self.queues.lock().await;
         if let Some(queue) = queues.remove(id) {
             queue.queue.lock().await.take();
@@ -221,6 +273,14 @@ impl LocalQueueManager {
                 .await
                 .into_alien_error()
                 .context(queue_error(id, "Delete queue directory"))?;
+        }
+        // Explicit resource deletion also removes unmigrated data, after dependents stop.
+        let legacy = self.state_dir.join("queue").join(id);
+        if legacy.exists() {
+            tokio::fs::remove_dir_all(legacy)
+                .await
+                .into_alien_error()
+                .context(queue_error(id, "Delete legacy queue directory"))?;
         }
         Ok(())
     }
@@ -238,34 +298,42 @@ impl LocalQueueManager {
         Ok(())
     }
 
-    fn token(&self, id: &str) -> Result<String> {
+    fn token(&self, id: &str, create: bool) -> Result<String> {
         let path = self.get_queue_path(id)?.join("access-token");
-        if !path.exists() {
+        if create && !path.exists() {
             let token = format!(
                 "ax_lq_{}{}",
                 uuid::Uuid::new_v4().simple(),
                 uuid::Uuid::new_v4().simple()
             );
-            let mut options = std::fs::OpenOptions::new();
-            options.write(true).create_new(true);
-            #[cfg(unix)]
-            options.mode(0o600);
-            match options.open(&path) {
-                Ok(mut file) => {
-                    file.write_all(token.as_bytes())
+            let directory = self.get_queue_path(id)?;
+            // NamedTempFile is private (0600). Publish only a complete, synced credential;
+            // a crash before publication leaves no partially initialized final file.
+            let mut temporary = tempfile::NamedTempFile::new_in(&directory)
+                .into_alien_error()
+                .context(queue_error(id, "Create private queue credential"))?;
+            temporary
+                .write_all(token.as_bytes())
+                .into_alien_error()
+                .context(queue_error(id, "Write queue credential"))?;
+            temporary
+                .as_file()
+                .sync_all()
+                .into_alien_error()
+                .context(queue_error(id, "Sync queue credential"))?;
+            match temporary.persist_noclobber(&path) {
+                Ok(_) => {}
+                Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => {
+                    return Err(error.error)
                         .into_alien_error()
-                        .context(queue_error(id, "Write queue credential"))?;
-                    file.sync_all()
-                        .into_alien_error()
-                        .context(queue_error(id, "Sync queue credential"))?;
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-                Err(e) => {
-                    return Err(e)
-                        .into_alien_error()
-                        .context(queue_error(id, "Create queue credential"))
+                        .context(queue_error(id, "Publish queue credential"))
                 }
             }
+            std::fs::File::open(directory)
+                .and_then(|file| file.sync_all())
+                .into_alien_error()
+                .context(queue_error(id, "Sync queue credential directory"))?;
         }
         let token = std::fs::read_to_string(path)
             .into_alien_error()
@@ -280,7 +348,7 @@ impl LocalQueueManager {
     }
 
     pub(crate) fn authorize(&self, id: &str, token: &str) -> Result<()> {
-        let expected = Sha256::digest(self.token(id)?.as_bytes());
+        let expected = Sha256::digest(self.token(id, false)?.as_bytes());
         let actual = Sha256::digest(token.as_bytes());
         // Compare hashes, never retain or log a request's bearer credential.
         if expected
@@ -297,7 +365,7 @@ impl LocalQueueManager {
     pub fn runtime_binding(&self, id: &str) -> Result<QueueBinding> {
         let mut binding = self.get_binding(id)?;
         if let QueueBinding::LocalHttp(config) = &mut binding {
-            config.token = Some(self.token(id)?);
+            config.token = Some(self.token(id, false)?);
         }
         Ok(binding)
     }
@@ -324,5 +392,117 @@ impl LocalQueueManager {
             )),
             token: None,
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
+    #[tokio::test]
+    async fn waiting_open_cannot_recreate_a_deleted_queue() {
+        let directory = tempfile::tempdir().unwrap();
+        let manager = Arc::new(LocalQueueManager::new(directory.path().to_owned()));
+        let path = manager.create_queue("jobs").await.unwrap();
+        let mut queues = manager.queues.lock().await;
+        let queue = queues.remove("jobs").unwrap();
+        queue.queue.lock().await.take();
+        let mut opening = std::pin::pin!(manager.load_queue("jobs"));
+        assert!(
+            futures::poll!(&mut opening).is_pending(),
+            "open must wait for deletion's lock"
+        );
+        tokio::fs::remove_dir_all(&path).await.unwrap();
+        drop(queues);
+        assert!(opening.await.is_err());
+        assert!(
+            !path.exists(),
+            "waiting open must not resurrect deleted data"
+        );
+    }
+
+    #[tokio::test]
+    async fn abandoned_temporary_credential_does_not_block_restart() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("queue-owned/jobs");
+        std::fs::create_dir_all(&path).unwrap();
+        // Simulate a crash before the temporary credential was fully written or published.
+        std::fs::write(path.join(".tmp-interrupted-token"), "ax_lq_partial").unwrap();
+        let manager = LocalQueueManager::new(directory.path().to_owned());
+        manager.create_queue("jobs").await.unwrap();
+        manager.set_endpoint("http://localhost:1234/v1/local/queues/test".into());
+        let QueueBinding::LocalHttp(binding) = manager.runtime_binding("jobs").unwrap() else {
+            panic!("HTTP binding")
+        };
+        let token = binding.token.unwrap();
+        assert_eq!(token.len(), 70);
+        manager.authorize("jobs", &token).unwrap();
+        #[cfg(unix)]
+        {
+            assert_eq!(
+                std::fs::metadata(path.join("access-token"))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
+        assert!(manager.authorize("jobs", "incorrect").is_err());
+    }
+
+    #[tokio::test]
+    async fn waiting_old_credential_cannot_access_recreated_queue() {
+        let directory = tempfile::tempdir().unwrap();
+        let manager = LocalQueueManager::new(directory.path().to_owned());
+        let path = manager.create_queue("jobs").await.unwrap();
+        let old_token = manager.token("jobs", false).unwrap();
+        let old_handle = manager.load_queue("jobs").await.unwrap();
+        let mut queues = manager.queues.lock().await;
+        let mut request = std::pin::pin!(manager.authenticated_queue("jobs", &old_token));
+        assert!(futures::poll!(&mut request).is_pending());
+        queues.remove("jobs").unwrap().queue.lock().await.take();
+        std::fs::remove_dir_all(&path).unwrap();
+        std::fs::create_dir_all(&path).unwrap();
+        let replacement = manager.load_locked("jobs", &mut queues).await.unwrap();
+        replacement
+            .send("jobs", MessagePayload::Text("preserve".into()))
+            .await
+            .unwrap();
+        drop(queues);
+        let error = request.await.unwrap_err();
+        assert_eq!(error.code, "LOCAL_QUEUE_UNAUTHORIZED");
+        assert!(old_handle.purge("jobs").await.is_err());
+        assert_eq!(replacement.stats().await.unwrap().total, 1);
+        let new_token = manager.token("jobs", false).unwrap();
+        assert_ne!(old_token, new_token);
+        assert!(manager
+            .authenticated_queue("jobs", &new_token)
+            .await
+            .is_ok());
+    }
+
+    #[tokio::test]
+    async fn unregister_revokes_handles_and_releases_store_for_restart() {
+        let directory = tempfile::tempdir().unwrap();
+        let manager = Arc::new(LocalQueueManager::new(directory.path().to_owned()));
+        let service = crate::LocalQueueService::default();
+        service.register("dep", manager.clone(), "http://localhost:1234");
+        manager.create_queue("jobs").await.unwrap();
+        let token = manager.token("jobs", false).unwrap();
+        let handle = manager.authenticated_queue("jobs", &token).await.unwrap();
+        handle
+            .send("jobs", MessagePayload::Text("durable".into()))
+            .await
+            .unwrap();
+        service.unregister("dep").await;
+        assert!(handle.purge("jobs").await.is_err());
+        assert!(manager.authenticated_queue("jobs", &token).await.is_err());
+        let restarted = LocalQueueManager::new(directory.path().to_owned());
+        let recovered = restarted.load_queue("jobs").await.unwrap();
+        assert_eq!(recovered.stats().await.unwrap().total, 1);
+        assert_eq!(restarted.token("jobs", false).unwrap(), token);
     }
 }

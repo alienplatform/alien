@@ -135,6 +135,7 @@ impl LocalHttpQueue {
             ))
         })?;
         let client = reqwest::Client::builder()
+            .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
             .retry(reqwest::retry::never())
             .timeout(Duration::from_secs(30))
@@ -200,28 +201,52 @@ impl Queue for LocalHttpQueue {
         _: &str,
         messages: Vec<MessagePayload>,
     ) -> Result<Vec<QueueSendResult>> {
-        let count = messages.len();
-        match self
-            .request::<Vec<QueueSendResult>>(Request::SendBatch {
-                messages: messages.into_iter().map(Into::into).collect(),
+        // Validate all payloads before any request. Ten maximum-size messages fit
+        // below the 8 MiB route limit even with JSON's worst-case sixfold escaping.
+        let (_, mut results) = super::encode_batch(messages.clone())?;
+        let mut pending = messages
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, message)| {
+                (!matches!(results[index], QueueSendResult::Rejected { .. }))
+                    .then_some((index, message.into()))
             })
-            .await
-        {
-            Ok(results) if results.len() == count => Ok(results),
-            Ok(_) => Ok((0..count)
-                .map(|_| QueueSendResult::Unknown {
-                    code: "QUEUE_BATCH_RESPONSE_INVALID".into(),
-                    message: "Response count did not match input count".into(),
-                })
-                .collect()),
-            Err(error) => Ok((0..count)
-                .map(|_| QueueSendResult::Unknown {
-                    code: error.code.clone(),
-                    message: error.to_string(),
-                })
-                .collect()),
+            .collect::<Vec<(usize, Payload)>>()
+            .into_iter();
+        loop {
+            let chunk = pending
+                .by_ref()
+                .take(crate::traits::MAX_BATCH_SIZE)
+                .collect::<Vec<_>>();
+            if chunk.is_empty() {
+                break;
+            }
+            let (indices, messages): (Vec<_>, Vec<_>) = chunk.into_iter().unzip();
+            match self
+                .request::<Vec<QueueSendResult>>(Request::SendBatch { messages })
+                .await
+            {
+                Ok(outcomes) if outcomes.len() == indices.len() => {
+                    for (index, outcome) in indices.into_iter().zip(outcomes) {
+                        results[index] = outcome;
+                    }
+                }
+                Ok(_) => {
+                    // Keep the prefilled Unknown outcome for each unconfirmed input.
+                }
+                Err(error) => {
+                    for index in indices {
+                        results[index] = QueueSendResult::Unknown {
+                            code: error.code.clone(),
+                            message: error.to_string(),
+                        };
+                    }
+                }
+            }
         }
+        Ok(results)
     }
+
     async fn receive(&self, _: &str, max_messages: usize) -> Result<Vec<QueueMessage>> {
         let messages: Vec<Message> = self.request(Request::Receive { max_messages }).await?;
         Ok(messages.into_iter().map(Into::into).collect())
@@ -233,29 +258,28 @@ impl Queue for LocalHttpQueue {
         .await
     }
     async fn ack_batch(&self, _: &str, receipts: &[String]) -> Result<Vec<QueueAckResult>> {
-        match self
-            .request::<Vec<QueueAckResult>>(Request::AckBatch {
-                receipts: receipts.to_vec(),
-            })
-            .await
-        {
-            Ok(results) if results.len() == receipts.len() => Ok(results),
-            Ok(_) => Ok(receipts
-                .iter()
-                .map(|_| QueueAckResult::Failed {
+        let mut results = Vec::with_capacity(receipts.len());
+        for chunk in receipts.chunks(crate::traits::MAX_BATCH_SIZE) {
+            match self
+                .request::<Vec<QueueAckResult>>(Request::AckBatch {
+                    receipts: chunk.to_vec(),
+                })
+                .await
+            {
+                Ok(outcomes) if outcomes.len() == chunk.len() => results.extend(outcomes),
+                Ok(_) => results.extend(chunk.iter().map(|_| QueueAckResult::Failed {
                     code: "QUEUE_BATCH_RESPONSE_INVALID".into(),
                     message: "Response count did not match input count".into(),
-                })
-                .collect()),
-            Err(error) => Ok(receipts
-                .iter()
-                .map(|_| QueueAckResult::Failed {
+                })),
+                Err(error) => results.extend(chunk.iter().map(|_| QueueAckResult::Failed {
                     code: error.code.clone(),
                     message: error.to_string(),
-                })
-                .collect()),
+                })),
+            }
         }
+        Ok(results)
     }
+
     async fn nack(&self, _: &str, receipt: &str) -> Result<()> {
         self.request(Request::Nack {
             receipt: receipt.into(),
