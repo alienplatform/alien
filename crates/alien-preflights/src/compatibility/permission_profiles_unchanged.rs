@@ -6,8 +6,7 @@ use crate::mutations::management_permission_profile::{
 };
 use crate::{CheckResult, StackCompatibilityCheck};
 use alien_core::permissions::{ManagementPermissions, PermissionProfile, PermissionSetReference};
-use alien_core::{sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID, Key, Stack};
-use crate::mutations::sandbox_gateway_permissions::replica_secret_read;
+use alien_core::{Key, Stack};
 use alien_permissions::{MANAGEMENT_ROLE_GUARD, SANDBOX_SETUP_ROLES_GUARD};
 use std::collections::HashSet;
 
@@ -269,33 +268,6 @@ fn without_added_migration_grants(
     }
 }
 
-/// The gateway profile without its canonical replica-secret read where the installed profile
-/// lacks it. Until setup installs the read, the gateway keeps the replica secret embedded in its
-/// configuration, which it already reads, so the update runs before setup is rerun.
-fn without_added_gateway_grants(
-    profile_name: &str,
-    old: &PermissionProfile,
-    new: &PermissionProfile,
-) -> PermissionProfile {
-    let mut new = new.clone();
-    if profile_name != SANDBOX_EGRESS_GATEWAY_ID {
-        return new;
-    }
-    let Ok(read) = replica_secret_read().map(PermissionSetReference::from_inline) else {
-        return new;
-    };
-    if old.0.get("*").is_some_and(|grants| grants.contains(&read)) {
-        return new;
-    }
-    if let Some(grants) = new.0.get_mut("*") {
-        grants.retain(|grant| grant != &read);
-        if grants.is_empty() && !old.0.contains_key("*") {
-            new.0.shift_remove("*");
-        }
-    }
-    new
-}
-
 /// Accepts the one-way profile migration caused by registering the formerly
 /// unresolved built-in Email heartbeat permission. Existing prepared stacks
 /// omitted this reference because unresolved built-ins are skipped. The first
@@ -410,7 +382,6 @@ fn check_permission_profiles(
     // Check for modified or added profiles
     for (profile_name, new_profile) in new_profiles {
         if let Some(old_profile) = old_profiles.get(profile_name) {
-            let new_profile = &without_added_gateway_grants(profile_name, old_profile, new_profile);
             // Profile exists in both - check if it was modified
             if profiles_differ_outside_gates(old_profile, new_profile, &gated)
                 && !(allow_narrowing && profile_narrowed(old_profile, new_profile))
@@ -550,6 +521,34 @@ mod tests {
             )
             .await
         );
+    }
+
+    /// The gateway's replica-secret read is a grant its installed identity lacks: the update
+    /// waits for setup, which also creates the secret the read names.
+    #[tokio::test]
+    async fn the_gateway_gaining_the_replica_secret_read_needs_setup() {
+        let gateway = |grants: Vec<PermissionSetReference>| {
+            let mut stack = guarded_sandbox_stack(ManagementPermissions::Auto);
+            let mut profile = PermissionProfile::new();
+            profile.0.insert("*".to_string(), grants);
+            stack.permissions.profiles.insert(
+                alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.to_string(),
+                profile,
+            );
+            stack
+        };
+        let config_read = PermissionSetReference::from_name("vault/data-read");
+        let read = PermissionSetReference::from_inline(
+            crate::mutations::sandbox_gateway_permissions::replica_secret_read().unwrap(),
+        );
+        let result = PermissionProfilesUnchangedCheck
+            .check(
+                &gateway(vec![config_read.clone()]),
+                &gateway(vec![config_read, read]),
+            )
+            .await
+            .expect("check should run");
+        assert!(!result.success);
     }
 
     fn guarded_sandbox_stack(management: ManagementPermissions) -> Stack {
