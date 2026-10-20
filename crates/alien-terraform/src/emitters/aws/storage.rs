@@ -105,7 +105,17 @@ fn emit_storage_key_iam(
     let context = aws_terraform_permission_context()
         .with_resource_name(format!("${{terraform_data.{key_label}_key_identity.output}}"));
 
-    for (owner_label, _) in storage_permission_owners(ctx) {
+    // Only object readers and writers use the bucket key. A health check or provisioning
+    // grant must not turn into kms:Decrypt on the deployment's key.
+    for (owner_label, refs) in storage_permission_owners(ctx) {
+        let uses_object_data = refs.iter().any(|permission_ref| {
+            permission_ref
+                .resolve(|name| alien_permissions::get_permission_set(name).cloned())
+                .is_some_and(|set| alien_permissions::permission_set_uses_aws_object_data(&set))
+        });
+        if !uses_object_data {
+            continue;
+        }
         emit_iam_role_policy_for_target_with_label(
             fragment,
             &owner_label,

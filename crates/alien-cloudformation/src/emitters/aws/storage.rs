@@ -413,10 +413,18 @@ fn storage_iam_policies(
             resources.push(policy_resource);
         }
 
+        // Only object readers and writers use the bucket key. A health check or provisioning
+        // grant must not turn into kms:Decrypt on the deployment's key.
+        let uses_object_data = permission_refs.iter().any(|permission_ref| {
+            permission_ref
+                .resolve(|name| alien_permissions::get_permission_set(name).cloned())
+                .is_some_and(|set| alien_permissions::permission_set_uses_aws_object_data(&set))
+        });
         if let Some(key_id) = storage
             .encryption_key
             .as_ref()
             .and_then(|key| ctx.name_for(&key.id))
+            .filter(|_| uses_object_data)
         {
             let policy_id = format!("{bucket_id}{role_id}NativeEncryption{owner_index}");
             let mut policy_resource = CfResource::new(policy_id, "AWS::IAM::Policy".to_string());

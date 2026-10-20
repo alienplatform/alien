@@ -14,9 +14,10 @@ use alien_cloudformation::{
 use alien_core::{
     import::EmitContext, sandbox_egress::has_sandbox_gateway, AwsManagementConfig, ComputeCluster,
     Container, ContainerCode, DeploymentConfig, EnvironmentVariablesSnapshot, ExternalBindings,
-    ManagementConfig, Network, NetworkSettings, PermissionProfile, Platform, ResourceLifecycle,
-    ResourceSpec, Result, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy, Stack,
-    StackSettings, StackState, Worker, WorkerCode,
+    Key, ManagementConfig, Network, NetworkSettings, PermissionProfile, PersistentStorage, Platform,
+    ResourceLifecycle, ResourceRef, ResourceSpec, Result, Sandbox,
+    SandboxCode, SandboxEgress, SandboxLifecyclePolicy, Stack, StackSettings, StackState, Storage,
+    VolumeBackups, Worker, WorkerCode,
 };
 use alien_preflights::runner::PreflightRunner;
 
@@ -437,4 +438,221 @@ async fn the_third_gateway_subnet_condition_resolves_for_any_cidr_list() {
             .unwrap_or_else(|error| panic!("{cidrs:?}: the condition must resolve: {error}"));
         assert_eq!(value, serde_json::Value::Bool(expected), "{cidrs:?}");
     }
+}
+
+/// Every statement attached to `role` in the rendered template, from its inline policies and
+/// from the standalone and managed policies that name it.
+fn role_statements(template: &CfTemplate, role: &str) -> Vec<serde_json::Value> {
+    let role_ref = serde_json::json!({ "Ref": role });
+    let mut statements = Vec::new();
+    for (logical_id, resource) in &template.resources {
+        let properties = serde_json::to_value(&resource.properties).expect("properties serialize");
+        let documents: Vec<serde_json::Value> = match resource.resource_type.as_str() {
+            "AWS::IAM::Role" if logical_id == role => properties["Policies"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|policy| policy["PolicyDocument"].clone())
+                .collect(),
+            "AWS::IAM::Policy" | "AWS::IAM::ManagedPolicy"
+                if properties["Roles"]
+                    .as_array()
+                    .is_some_and(|roles| roles.contains(&role_ref)) =>
+            {
+                vec![properties["PolicyDocument"].clone()]
+            }
+            _ => Vec::new(),
+        };
+        for document in documents {
+            statements.extend(document["Statement"].as_array().cloned().unwrap_or_default());
+        }
+    }
+    statements
+}
+
+fn as_strings(value: &serde_json::Value) -> Vec<String> {
+    match value {
+        serde_json::Value::Array(items) => items.iter().flat_map(as_strings).collect(),
+        serde_json::Value::Null => Vec::new(),
+        other => vec![other.to_string()],
+    }
+}
+
+fn actions(statement: &serde_json::Value) -> Vec<String> {
+    as_strings(&statement["Action"])
+        .into_iter()
+        .map(|action| action.trim_matches('"').to_string())
+        .collect()
+}
+
+/// A deployment with its own key: a bucket encrypted with it, an application that reads and
+/// writes the bucket and drives an internet sandbox, and the vendor's management identity. The
+/// management role may check the bucket's health and write the deployment's secrets vault, but
+/// it may not use the key to decrypt and may read nothing from the vault except the gateway
+/// configuration. The application keeps its own key and vault access.
+#[tokio::test]
+async fn the_management_role_cannot_decrypt_or_read_the_deployments_secrets() {
+    let sandbox = Sandbox::new("agents".to_string())
+        .code(SandboxCode::Image {
+            image: "s3://acme-artifacts/sandbox-bundle/f00dcafe/bundle.zip".to_string(),
+        })
+        .egress(SandboxEgress::Internet)
+        .lifecycle(SandboxLifecyclePolicy {
+            max_lifetime_seconds: None,
+            idle_pause_seconds: None,
+        })
+        .build();
+    let stack = Stack::new("acme".to_string())
+        .permission(
+            "api",
+            PermissionProfile::new()
+                .resource("files", ["storage/data-read", "storage/data-write"])
+                .global(["sandbox/execute", "sandbox/management"]),
+        )
+        .permission("none", PermissionProfile::new())
+        .add(
+            Key::new("cell-key".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Storage::new("files".to_string())
+                .encryption_key(ResourceRef::new(Key::RESOURCE_TYPE, "cell-key"))
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(sandbox, ResourceLifecycle::Live)
+        .add(
+            Container::new("api".to_string())
+                .code(ContainerCode::Image {
+                    image: "123456789012.dkr.ecr.us-east-1.amazonaws.com/api:1".to_string(),
+                })
+                .cpu(ResourceSpec {
+                    min: "0.25".to_string(),
+                    desired: "0.25".to_string(),
+                })
+                .memory(ResourceSpec {
+                    min: "512Mi".to_string(),
+                    desired: "512Mi".to_string(),
+                })
+                .replicas(1)
+                .permissions("api".to_string())
+                .port(8080)
+                .build(),
+            ResourceLifecycle::Live,
+        )
+        .add(
+            Container::new("redis".to_string())
+                .code(ContainerCode::Image {
+                    image: "redis:7.4-alpine".to_string(),
+                })
+                .cpu(ResourceSpec {
+                    min: "0.25".to_string(),
+                    desired: "0.25".to_string(),
+                })
+                .memory(ResourceSpec {
+                    min: "512Mi".to_string(),
+                    desired: "512Mi".to_string(),
+                })
+                .replicas(1)
+                .stateful(true)
+                .persistent_storage(PersistentStorage {
+                    size: "10Gi".to_string(),
+                    mount_path: "/data".to_string(),
+                    encryption_key: Some(ResourceRef::new(Key::RESOURCE_TYPE, "cell-key")),
+                    backups: VolumeBackups::default(),
+                })
+                .permissions("none".to_string())
+                .port(6379)
+                .build(),
+            ResourceLifecycle::Live,
+        )
+        .build();
+    let settings = settings();
+    let prepared = prepare_for_setup_template(stack, &settings).await;
+    let template = render(&prepared, settings, "deployment key and internet sandbox")
+        .expect("template renders");
+    cfn_lint(&to_yaml(&template).expect("template serializes"))
+        .assert_ok("deployment key and internet sandbox");
+
+    let gateway_config = "${AWS::StackName}-secrets-sandbox-egress-gateway-config";
+    let management = role_statements(&template, "ManagementRole");
+    assert!(!management.is_empty(), "the management role has grants");
+    for statement in management.iter().filter(|s| s["Effect"] == "Allow") {
+        let actions = actions(statement);
+        let resources = as_strings(&statement["Resource"]);
+        let key_use = actions.iter().any(|action| {
+            matches!(
+                action.as_str(),
+                "kms:Decrypt" | "kms:GenerateDataKey" | "kms:GenerateDataKey*" | "kms:*"
+            )
+        });
+        assert!(!key_use, "management may not decrypt with a key: {statement}");
+        let reads_parameters = actions
+            .iter()
+            .any(|action| action.starts_with("ssm:GetParameter") || action == "ssm:*");
+        if reads_parameters {
+            for resource in &resources {
+                assert!(
+                    !resource.contains(":parameter/") || resource.contains(gateway_config),
+                    "management may read only the gateway configuration: {statement}"
+                );
+            }
+        }
+    }
+    let denies_signing_key = management.iter().any(|statement| {
+        let actions = actions(statement);
+        statement["Effect"] == "Deny"
+            && ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParameterHistory"]
+                .iter()
+                .all(|action| actions.iter().any(|granted| granted == action))
+            && statement["Resource"]
+                .to_string()
+                .contains("${AWS::StackName}-secrets-sandbox-egress-signing-key")
+    });
+    assert!(
+        denies_signing_key,
+        "management is explicitly denied reading the signing key: {management:#?}"
+    );
+    assert!(
+        management.iter().any(|statement| statement["Effect"] == "Deny"
+            && actions(statement).contains(&"ssm:GetParametersByPath".to_string())),
+        "management is explicitly denied reading parameters by path"
+    );
+    assert!(
+        management.iter().any(|statement| statement["Effect"] == "Allow"
+            && actions(statement).contains(&"kms:GenerateDataKeyWithoutPlaintext".to_string())
+            && statement["Condition"].to_string().contains("kms:ViaService")),
+        "management still creates volumes encrypted with the key"
+    );
+    assert!(
+        management.iter().any(|statement| statement["Effect"] == "Allow"
+            && actions(statement).iter().any(|a| a == "ssm:PutParameter")
+            && statement["Resource"].to_string().contains("-secrets-")),
+        "management still writes the secrets vault"
+    );
+
+    // The application keeps the key for its objects and the gateway keeps its configuration.
+    let api = role_statements(&template, "ApiSaRole");
+    assert!(
+        api.iter().any(|statement| statement["Effect"] == "Allow"
+            && actions(statement).contains(&"kms:Decrypt".to_string())
+            && statement["Condition"].is_null()),
+        "the application decrypts its objects: {api:#?}"
+    );
+    let gateway = template
+        .resources
+        .iter()
+        .find(|(id, resource)| {
+            resource.resource_type == "AWS::IAM::Role" && id.contains("EgressGateway")
+        })
+        .map(|(id, _)| id.clone())
+        .expect("gateway role renders");
+    assert!(
+        role_statements(&template, &gateway).iter().any(|statement| {
+            statement["Effect"] == "Allow"
+                && actions(statement).contains(&"ssm:GetParameter".to_string())
+                && statement["Resource"].to_string().contains(gateway_config)
+        }),
+        "the gateway reads its configuration"
+    );
 }

@@ -1,9 +1,12 @@
 //! Exact vault-entry access for the gateway and sandbox-management workloads.
 
 use alien_core::{
-    permissions::{PermissionProfile, PermissionSet, PermissionSetReference},
+    permissions::{
+        ManagementPermissions, PermissionProfile, PermissionSet, PermissionSetReference,
+    },
     sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID,
-    Build, Container, Daemon, ResourceRef, Stack, Vault, Worker, SECRETS_VAULT_ID,
+    Build, Container, Daemon, RemoteStackManagement, ResourceRef, Stack, Vault, Worker,
+    SECRETS_VAULT_ID,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 
@@ -164,6 +167,46 @@ pub(crate) fn configure_aws_gateway_permissions(stack: &mut Stack) -> Result<()>
         }
     }
     Ok(())
+}
+
+/// The managing identity's only read in the AWS secrets vault: the gateway configuration. The
+/// shared-key owner reads it back only when the configuration it publishes changed, to carry the
+/// gateway's replica secret into the new value. Everything else in the vault, the signing key
+/// included, management writes without reading.
+pub(crate) fn grant_management_gateway_config_read(stack: &mut Stack) -> Result<()> {
+    if !alien_core::sandbox_egress::has_sandbox_gateway(stack)
+        || !stack
+            .resources
+            .values()
+            .any(|entry| entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE)
+    {
+        return Ok(());
+    }
+    let read = management_gateway_config_read()?;
+    let profile = match &mut stack.permissions.management {
+        // An override is the author's complete grant; nothing is added to it.
+        ManagementPermissions::Override(_) => return Ok(()),
+        ManagementPermissions::Auto => {
+            stack.permissions.management = ManagementPermissions::Extend(PermissionProfile::new());
+            match &mut stack.permissions.management {
+                ManagementPermissions::Extend(profile) => profile,
+                _ => unreachable!("just set to Extend"),
+            }
+        }
+        ManagementPermissions::Extend(profile) => profile,
+    };
+    let grants = profile.0.entry(SECRETS_VAULT_ID.into()).or_default();
+    // An author's grant cannot take the read's place by reusing its id.
+    grants.retain(|existing| existing.id() != read.id());
+    grants.push(read);
+    Ok(())
+}
+
+/// The managing identity's exact read of the gateway configuration entry.
+pub(crate) fn management_gateway_config_read() -> Result<PermissionSetReference> {
+    Ok(PermissionSetReference::from_inline(exact_read(
+        "sandbox-egress-gateway-config",
+    )?))
 }
 
 /// Only the built-in management grant carries the signing key. An inline set counts only
