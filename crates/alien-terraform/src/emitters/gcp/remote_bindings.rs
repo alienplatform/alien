@@ -21,36 +21,18 @@ impl TfEmitter for GcpRemoteBindingsEmitter {
             attr("display_name", expr::template("${local.deployment_name}: application access".to_string())),
             attr("description", expr::template("Data-plane identity for explicitly published resources in ${local.deployment_name}.".to_string())),
         ]));
-        for (suffix, role) in [
-            ("token_creator", "roles/iam.serviceAccountTokenCreator"),
-            ("user", "roles/iam.serviceAccountUser"),
-        ] {
-            fragment.resource_blocks.push(resource_block(
-                "google_service_account_iam_member",
-                &format!("{label}_manager_{suffix}"),
-                [
-                    attr(
-                        "for_each",
-                        expr::raw("toset(compact([var.managing_service_account_email]))"),
-                    ),
-                    attr(
-                        "service_account_id",
-                        expr::traversal(["google_service_account", label, "id"]),
-                    ),
-                    attr("role", Expression::String(role.to_string())),
-                    attr(
-                        "member",
-                        expr::template("serviceAccount:${each.value}".to_string()),
-                    ),
-                ],
-            ));
-        }
+        super::federation::emit(&mut fragment, label, &RemoteBindings::RESOURCE_TYPE);
+
         Ok(fragment)
     }
 
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {
         let label = required_label(ctx)?;
         Ok(expr::object([
+            (
+                "federation",
+                super::federation::import_ref(label, &RemoteBindings::RESOURCE_TYPE),
+            ),
             ("projectId", expr::raw("var.gcp_project")),
             (
                 "serviceAccountEmail",

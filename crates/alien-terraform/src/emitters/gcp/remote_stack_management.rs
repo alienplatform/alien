@@ -1,15 +1,4 @@
-//! GCP management access — service account the manager impersonates.
-//!
-//! Mirrors `GcpRemoteStackManagementController`:
-//!
-//! 1. Create a `google_service_account` for the management identity.
-//! 2. For every permission set in `ctx.stack.management().profile()`,
-//!    emit matching custom-role `google_project_iam_member` bindings.
-//! 3. Grant `roles/iam.serviceAccountTokenCreator` +
-//!    `roles/iam.serviceAccountUser` on the management SA to the
-//!    caller-supplied manager identity (`var.managing_service_account_email`).
-//!    The variable defaults to `""` so the bindings are no-ops in
-//!    pure-OSS scenarios where there's no central manager.
+//! Setup-owned management account and customer-owned federation trust.
 
 use crate::{
     block::{attr, data_block, resource_block},
@@ -120,33 +109,7 @@ impl TfEmitter for GcpRemoteStackManagementEmitter {
             }
         }
 
-        // Allow the configured manager identity to mint tokens for the
-        // management SA + attach it. `for_each(toset(compact([...])))`
-        // makes the bindings no-ops when the variable is empty (default).
-        for (suffix, role) in [
-            ("token_creator", "roles/iam.serviceAccountTokenCreator"),
-            ("user", "roles/iam.serviceAccountUser"),
-        ] {
-            fragment.resource_blocks.push(resource_block(
-                "google_service_account_iam_member",
-                &format!("{label}_manager_{suffix}"),
-                [
-                    attr(
-                        "for_each",
-                        expr::raw("toset(compact([var.managing_service_account_email]))"),
-                    ),
-                    attr(
-                        "service_account_id",
-                        expr::traversal(["google_service_account", label, "id"]),
-                    ),
-                    attr("role", Expression::String(role.to_string())),
-                    attr(
-                        "member",
-                        expr::template("serviceAccount:${each.value}".to_string()),
-                    ),
-                ],
-            ));
-        }
+        super::federation::emit(&mut fragment, label, &RemoteStackManagement::RESOURCE_TYPE);
 
         Ok(fragment)
     }
@@ -154,6 +117,10 @@ impl TfEmitter for GcpRemoteStackManagementEmitter {
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {
         let label = required_label(ctx)?;
         let fields = vec![
+            (
+                "federation",
+                super::federation::import_ref(label, &RemoteStackManagement::RESOURCE_TYPE),
+            ),
             ("projectId", expr::raw("var.gcp_project")),
             (
                 "projectNumber",

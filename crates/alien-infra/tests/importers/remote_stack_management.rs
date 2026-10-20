@@ -1,3 +1,20 @@
+fn federation_fixture(email: &str, purpose: &ResourceType) -> alien_core::GcpFederationAccess {
+    let scope = alien_core::GcpFederationScope {
+        deployment_id: "dep_import_fixture".into(),
+    };
+    alien_core::GcpFederationAccess {
+        project_number: "123456789012".into(),
+        pool_id: scope.pool_id(purpose).unwrap(),
+        provider_id: "manager".into(),
+        service_account_email: email.into(),
+        assertion_audience: scope.assertion_audience(purpose).unwrap(),
+        trust: alien_core::GcpFederationTrust {
+            issuer: "https://accounts.google.com".into(),
+            subject: "123456789012345678901".into(),
+        },
+    }
+}
+
 use super::*;
 
 #[test]
@@ -46,6 +63,10 @@ fn aws_remote_stack_management_import_preserves_setup_ownership() {
 fn gcp_remote_stack_management_import_preserves_setup_ownership() {
     let entry = entry(RemoteStackManagement::new("rsm".to_string()).build());
     let data = GcpRemoteStackManagementImportData {
+        federation: federation_fixture(
+            "management@my-project.iam.gserviceaccount.com",
+            &RemoteStackManagement::RESOURCE_TYPE,
+        ),
         project_id: "my-project".to_string(),
         project_number: Some("123456789012".to_string()),
         service_account_email: "management@my-project.iam.gserviceaccount.com".to_string(),
@@ -65,12 +86,15 @@ fn gcp_remote_stack_management_import_preserves_setup_ownership() {
     assert_eq!(internal_state(&state)["state"], "ready");
     let internal = internal_state(&state);
     assert_eq!(internal["roleBound"], true);
-    assert_eq!(internal["impersonationGranted"], true);
-    state
+    assert_eq!(internal["federationGranted"], true);
+    let outputs = state
         .outputs
         .as_ref()
         .and_then(|outputs| outputs.downcast_ref::<RemoteStackManagementOutputs>())
         .expect("GCP remote-stack-management import must produce outputs");
+    let access: alien_core::GcpFederationAccess =
+        serde_json::from_str(&outputs.access_configuration).unwrap();
+    assert_eq!(access, data.federation);
 }
 
 #[test]
@@ -131,6 +155,7 @@ fn remote_bindings_imports_are_first_class_on_every_cloud() {
         (
             Platform::Gcp,
             serde_json::to_value(GcpRemoteBindingsImportData {
+                federation: federation_fixture("bindings@my-project.iam.gserviceaccount.com", &RemoteBindings::RESOURCE_TYPE),
                 project_id: "my-project".to_string(),
                 service_account_email: "bindings@my-project.iam.gserviceaccount.com".to_string(),
                 service_account_unique_id: "123456789012345678901".to_string(),

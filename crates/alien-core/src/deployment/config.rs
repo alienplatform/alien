@@ -36,7 +36,7 @@ pub struct DeploymentConfig {
     /// Derived from Manager's ServiceAccount, not user-specified.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub management_config: Option<ManagementConfig>,
-    /// Authenticated logical installation scope for target federation setup.
+    /// Registered installation identity for target federation setup.
     /// Callers derive this from registration, separately from display metadata.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gcp_federation_scope: Option<crate::GcpFederationScope>,

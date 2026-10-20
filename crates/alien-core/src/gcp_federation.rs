@@ -182,19 +182,15 @@ fn invalid(field: &str, reason: &str) -> AlienError<ErrorData> {
     })
 }
 
-/// Control-plane namespace of an installation. The runtime must construct this
-/// from its authenticated deployment record, not from target import metadata.
+/// Identity of one installation. The runtime constructs this from its
+/// authenticated deployment record, never names or imported target metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GcpFederationScope {
-    /// Control-plane workspace ID, not a Google Cloud organization.
-    pub workspace_id: String,
-    /// Control-plane project ID, not the Google Cloud project ID.
-    pub project_id: String,
-    pub deployment_group_id: String,
-    /// Registered logical name; separate from editable cloud display metadata.
-    pub deployment_name: String,
+    /// Immutable ID allocated by the control plane before cloud setup.
+    /// Names, display metadata and imported resource identifiers cannot replace it.
+    pub deployment_id: String,
 }
 
 impl GcpFederationScope {
@@ -214,19 +210,36 @@ impl GcpFederationScope {
         Ok(())
     }
 
-    /// Binds an assertion to one logical installation and access purpose.
+    /// Binds an assertion to one immutable installation and access purpose.
     /// Base64 components keep the cross-language hash unambiguous without
     /// depending on JSON escaping rules in setup engines.
     pub fn assertion_audience(&self, resource_type: &crate::ResourceType) -> Result<String> {
-        let name = self.deployment_name.trim();
-        if self.workspace_id.is_empty()
-            || self.project_id.is_empty()
-            || self.deployment_group_id.is_empty()
-            || name.is_empty()
+        Ok(format!(
+            "urn:deployment-access:v1:{}",
+            self.scope_hash(resource_type)?
+        ))
+    }
+
+    /// A fresh installation gets a fresh pool name even while a deleted
+    /// installation's pool remains reserved during Google's recovery period.
+    pub fn pool_id(&self, resource_type: &crate::ResourceType) -> Result<String> {
+        Ok(format!(
+            "deployment-{}",
+            &self.scope_hash(resource_type)?[..20]
+        ))
+    }
+
+    fn scope_hash(&self, resource_type: &crate::ResourceType) -> Result<String> {
+        if self.deployment_id.is_empty()
+            || self.deployment_id.len() > 128
+            || !self
+                .deployment_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"_-".contains(&byte))
         {
             return Err(invalid(
                 "scope",
-                "requires workspace, project, deployment group and logical deployment name",
+                "requires the immutable registered deployment ID",
             ));
         }
         if resource_type != &crate::RemoteStackManagement::RESOURCE_TYPE
@@ -237,16 +250,10 @@ impl GcpFederationScope {
                 "requires a management or published-resource access purpose",
             ));
         }
-        let encoded = [
-            self.workspace_id.as_str(),
-            self.project_id.as_str(),
-            self.deployment_group_id.as_str(),
-            name,
-            resource_type.as_ref(),
-        ]
-        .map(|part| STANDARD.encode(part));
+        let encoded =
+            [self.deployment_id.as_str(), resource_type.as_ref()].map(|part| STANDARD.encode(part));
         let hash = Sha256::digest(format!("gcp-deployment-access-v1:{}", encoded.join(":")));
-        Ok(format!("urn:deployment-access:v1:{hash:x}"))
+        Ok(format!("{hash:x}"))
     }
 }
 
@@ -284,10 +291,7 @@ mod tests {
             provider_id: "manager".to_string(),
             service_account_email: "management@example-project.iam.gserviceaccount.com".to_string(),
             assertion_audience: GcpFederationScope {
-                workspace_id: "workspace".to_string(),
-                deployment_name: "production".to_string(),
-                project_id: "project".to_string(),
-                deployment_group_id: "group".to_string(),
+                deployment_id: "deployment-production".to_string(),
             }
             .assertion_audience(&crate::RemoteStackManagement::RESOURCE_TYPE)
             .unwrap(),
@@ -301,10 +305,7 @@ mod tests {
     #[test]
     fn broker_rejects_foreign_installation_and_access_purpose() {
         let scope = GcpFederationScope {
-            workspace_id: "workspace".to_string(),
-            project_id: "project".to_string(),
-            deployment_group_id: "group".to_string(),
-            deployment_name: "production".to_string(),
+            deployment_id: "deployment-production".to_string(),
         };
         let access = access();
         scope
@@ -314,8 +315,7 @@ mod tests {
             .validate_access(&access, &crate::RemoteBindings::RESOURCE_TYPE)
             .is_err());
         let other = GcpFederationScope {
-            deployment_group_id: "other-group".to_string(),
-            ..scope.clone()
+            deployment_id: "deployment-recreated".to_string(),
         };
         assert!(other
             .validate_access(&access, &crate::RemoteStackManagement::RESOURCE_TYPE)
@@ -422,46 +422,48 @@ mod tests {
     }
 
     #[test]
-    fn assertion_scope_separates_authorization_realms_names_and_access_purposes() {
+    fn immutable_installations_and_access_purposes_have_distinct_audiences() {
         let scope = GcpFederationScope {
-            workspace_id: "workspace".to_string(),
-            project_id: "project".to_string(),
-            deployment_group_id: "customer-a".to_string(),
-            deployment_name: "production".to_string(),
+            deployment_id: "deployment-original".to_string(),
         };
         let management = &crate::RemoteStackManagement::RESOURCE_TYPE;
-        let expected = scope.assertion_audience(management).unwrap();
-        let trimmed = GcpFederationScope {
-            deployment_name: " production ".to_string(),
-            ..scope.clone()
+        let original = scope.assertion_audience(management).unwrap();
+        // Recreating the same logical name allocates a new ID. Old cloud trust
+        // cannot be selected by copying an orphaned installation's descriptor.
+        let recreated = GcpFederationScope {
+            deployment_id: "deployment-recreated".to_string(),
         };
-        assert_eq!(expected, trimmed.assertion_audience(management).unwrap());
-        for other in [
-            GcpFederationScope {
-                workspace_id: "other-workspace".to_string(),
-                ..scope.clone()
-            },
-            GcpFederationScope {
-                project_id: "other-project".to_string(),
-                ..scope.clone()
-            },
-            GcpFederationScope {
-                deployment_group_id: "customer-b".to_string(),
-                ..scope.clone()
-            },
-            GcpFederationScope {
-                deployment_name: "other-installation".to_string(),
-                ..scope.clone()
-            },
-        ] {
-            assert_ne!(expected, other.assertion_audience(management).unwrap());
-        }
+        assert_ne!(original, recreated.assertion_audience(management).unwrap());
         assert_ne!(
-            expected,
+            scope.pool_id(management).unwrap(),
+            recreated.pool_id(management).unwrap()
+        );
+        assert_ne!(
+            scope.pool_id(management).unwrap(),
+            scope
+                .pool_id(&crate::RemoteBindings::RESOURCE_TYPE)
+                .unwrap()
+        );
+        assert!(scope.pool_id(management).unwrap().len() <= 32);
+        assert_ne!(
+            original,
             scope
                 .assertion_audience(&crate::RemoteBindings::RESOURCE_TYPE)
                 .unwrap()
         );
+        for id in [
+            "",
+            " deployment-original",
+            "deployment-original ",
+            "other/path",
+            "other:namespace",
+        ] {
+            assert!(GcpFederationScope {
+                deployment_id: id.to_string()
+            }
+            .assertion_audience(management)
+            .is_err());
+        }
     }
 
     #[test]

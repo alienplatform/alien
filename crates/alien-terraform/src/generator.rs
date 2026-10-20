@@ -510,6 +510,8 @@ fn generate_terraform_module_internal(
             product_remote_operator,
             &deployment_name_default,
             needs_azure_management_inputs,
+            target.cloud_platform() == alien_core::Platform::Gcp
+                && (has_remote_management || has_remote_bindings),
             setup_only,
             &options.supported_aws_regions,
             &stack_inputs,
@@ -1865,6 +1867,7 @@ fn variables_body(
     product_remote_operator: bool,
     deployment_name_default: &str,
     needs_azure_management_inputs: bool,
+    needs_gcp_federation: bool,
     setup_only: bool,
     supported_aws_regions: &[String],
     stack_inputs: &[StackInputDefinition],
@@ -2042,10 +2045,35 @@ fn variables_body(
             Some(Expression::String("us-central1".to_string())),
             false,
         )));
+        // The reserved control-plane ID is allocated before cloud setup.
+        // Only packages that create remote access need manager trust inputs.
+        {
+            for (name, description) in [
+                (
+                    "deployment_id",
+                    "Immutable deployment ID returned by registration before cloud setup.",
+                ),
+                (
+                    "managing_oidc_issuer",
+                    "OIDC issuer of the management identity.",
+                ),
+                (
+                    "managing_oidc_subject",
+                    "Exact immutable subject of the management identity.",
+                ),
+            ] {
+                blocks.push(nested(variable_block(
+                    name,
+                    description,
+                    (!needs_gcp_federation).then(|| Expression::String(String::new())),
+                    false,
+                )));
+            }
+        }
         blocks.push(nested(variable_block(
             "managing_service_account_email",
-            "Email of the management service account allowed to impersonate setup-created identities.",
-            (!setup_only).then(|| Expression::String(String::new())),
+            "Management service account metadata; federation controls remote access.",
+            Some(Expression::String(String::new())),
             false,
         )));
         blocks.push(nested(bool_variable_block(
@@ -3328,6 +3356,7 @@ fn management_config_expression(target: TerraformTarget, setup_only: bool) -> Ex
   platform            = "gcp"
   projectId           = var.gcp_project
   serviceAccountEmail = var.managing_service_account_email
+  federationTrust = var.managing_oidc_issuer != "" ? { issuer = var.managing_oidc_issuer, subject = var.managing_oidc_subject } : null
 }"#,
         ),
         (alien_core::Platform::Azure, true) => expr::raw(
@@ -3349,6 +3378,7 @@ fn management_config_expression(target: TerraformTarget, setup_only: bool) -> Ex
   platform            = "gcp"
   projectId           = var.gcp_project
   serviceAccountEmail = var.managing_service_account_email
+  federationTrust = var.managing_oidc_issuer != "" ? { issuer = var.managing_oidc_issuer, subject = var.managing_oidc_subject } : null
 } : null"#,
         ),
         (alien_core::Platform::Azure, false) => expr::raw(
@@ -4447,7 +4477,7 @@ fn readme_aws_inputs() -> String {
 }
 
 fn readme_gcp_inputs() -> String {
-    "GCP settings:\n\n- `gcp_project`: target GCP project ID.\n- `gcp_region`: target GCP region.\n- `managing_service_account_email`: management service account allowed to impersonate setup-created identities.\n- `gcp_manage_custom_roles`: whether this module creates project custom roles.\n- `gcp_custom_role_prefix`: custom role ID prefix when roles are managed outside this module.".to_string()
+    "GCP settings:\n\n- `gcp_project`: target GCP project ID.\n- `gcp_region`: target GCP region.\n- `managing_service_account_email`: management service account metadata.\n- `deployment_id`: immutable deployment ID reserved before setup.\n- `managing_oidc_issuer` and `managing_oidc_subject`: exact management identity trusted by the customer-owned pool.\n- `gcp_manage_custom_roles`: whether this module creates project custom roles.\n- `gcp_custom_role_prefix`: custom role ID prefix when roles are managed outside this module.".to_string()
 }
 
 fn readme_azure_inputs(target: TerraformTarget) -> String {

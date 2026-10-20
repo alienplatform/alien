@@ -432,6 +432,12 @@ impl GcpRemoteStackManagementController {
 
         // Reconcile the exact pool-local principal for this installation.
         let mut all_bindings = current_policy.bindings;
+        let obsolete_removed = crate::gcp_federation::remove_obsolete_subject_grants(
+            &mut all_bindings,
+            self.federation_access
+                .as_ref()
+                .expect("reconciled federation access"),
+        )?;
         let member = management_principal;
         let desired_bindings = vec![Binding::builder()
             .role("roles/iam.workloadIdentityUser".to_string())
@@ -439,13 +445,14 @@ impl GcpRemoteStackManagementController {
             .build()];
         let owned_exact_roles =
             ResourcePermissionsHelper::gcp_predefined_role_names(&desired_bindings);
-        let mut changed = ResourcePermissionsHelper::reconcile_gcp_project_member_bindings(
-            &mut all_bindings,
-            desired_bindings,
-            &member,
-            &[],
-            &owned_exact_roles,
-        );
+        let mut changed = obsolete_removed
+            | ResourcePermissionsHelper::reconcile_gcp_project_member_bindings(
+                &mut all_bindings,
+                desired_bindings,
+                &member,
+                &[],
+                &owned_exact_roles,
+            );
 
         changed |= ResourcePermissionsHelper::reconcile_gcp_project_member_bindings(
             &mut all_bindings,
@@ -682,6 +689,8 @@ impl GcpRemoteStackManagementController {
         }
 
         self.service_account_email = None;
+        self.federation_access = None;
+        self.federation_granted = false;
         self.service_account_unique_id = None;
         self.role_bound = false;
         self.federation_granted = false;
@@ -707,10 +716,14 @@ impl GcpRemoteStackManagementController {
     );
 
     fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
-        super::management_permissions_need_refresh(
+        Ok(super::management_permissions_need_refresh(
             ctx,
             self.management_permissions_revision.as_deref(),
-        )
+        )? || crate::gcp_federation::GcpFederationSetup::needs_refresh(
+            ctx,
+            self.federation_access.as_ref(),
+            &RemoteStackManagement::RESOURCE_TYPE,
+        )?)
     }
 
     fn build_outputs(&self) -> Option<ResourceOutputs> {
@@ -996,6 +1009,26 @@ impl GcpRemoteStackManagementController {
     /// Creates a controller in a ready state with mock values for testing purposes.
     #[cfg(feature = "test-utils")]
     pub fn mock_ready(service_account_name: &str) -> Self {
+        let scope = alien_core::GcpFederationScope {
+            deployment_id: "dep_mock_fixture".into(),
+        };
+        let access = alien_core::GcpFederationAccess {
+            project_number: "123456789012".into(),
+            pool_id: scope
+                .pool_id(&alien_core::RemoteStackManagement::RESOURCE_TYPE)
+                .expect("mock scope"),
+            provider_id: "manager".into(),
+            service_account_email: format!(
+                "{service_account_name}@mock-project.iam.gserviceaccount.com"
+            ),
+            assertion_audience: scope
+                .assertion_audience(&alien_core::RemoteStackManagement::RESOURCE_TYPE)
+                .expect("mock scope"),
+            trust: alien_core::GcpFederationTrust {
+                issuer: "https://accounts.google.com".into(),
+                subject: "123456789012345678901".into(),
+            },
+        };
         Self {
             state: GcpRemoteStackManagementState::Ready,
             service_account_email: Some(format!(
@@ -1005,8 +1038,9 @@ impl GcpRemoteStackManagementController {
             service_account_unique_id: Some("123456789012345678901".to_string()),
             role_bound: true,
             federation_granted: true,
-            federation_setup: Default::default(),
-            federation_access: None,
+            federation_setup: crate::gcp_federation::GcpFederationSetup::from_access(&access)
+                .expect("mock access"),
+            federation_access: Some(access),
             custom_role_naming: Some(GcpCustomRoleNaming::HashedLongPrefix),
             management_permissions_revision: None,
             _internal_stay_count: None,

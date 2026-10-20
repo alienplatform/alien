@@ -824,10 +824,7 @@ impl DeploymentRecord {
     /// Authorization namespace from the registered record, never imported target metadata.
     pub fn gcp_federation_scope(&self) -> alien_core::GcpFederationScope {
         alien_core::GcpFederationScope {
-            workspace_id: self.workspace_id.clone(),
-            project_id: self.project_id.clone(),
-            deployment_group_id: self.deployment_group_id.clone(),
-            deployment_name: self.name.clone(),
+            deployment_id: self.id.clone(),
         }
     }
 }

@@ -13,7 +13,7 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 #[cfg(feature = "gcp")]
-use alien_gcp_clients::{GcpClientConfigExt, GcpImpersonationConfig};
+use alien_gcp_clients::GcpClientConfigExt;
 use std::collections::HashMap;
 use tracing::info;
 use uuid::Uuid;
@@ -72,12 +72,10 @@ impl RemoteAccessResolver {
                 .await
             }
             Platform::Gcp => {
-                self.resolve_gcp_impersonation(
-                    base_config,
-                    &remote_mgmt_outputs,
-                    target_environment,
-                )
-                .await
+                Err(AlienError::new(ErrorData::RemoteAccessInvalid {
+                    message: "GCP target access requires the manager's assertion source and authenticated installation scope".to_string(),
+                    field_name: Some("federation".to_string()),
+                }))
             }
             Platform::Azure => {
                 self.resolve_azure_impersonation(
@@ -123,8 +121,10 @@ impl RemoteAccessResolver {
                 .await
             }
             Platform::Gcp => {
-                self.resolve_gcp_impersonation(base_config, &access, target_environment)
-                    .await
+                Err(AlienError::new(ErrorData::RemoteAccessInvalid {
+                    message: "GCP target access requires the manager's assertion source and authenticated installation scope".to_string(),
+                    field_name: Some("federation".to_string()),
+                }))
             }
             Platform::Azure => {
                 self.resolve_azure_impersonation(base_config, &access, target_environment)
@@ -200,70 +200,114 @@ impl RemoteAccessResolver {
         )
     }
 
-    /// Resolve GCP impersonation using RemoteStackManagement outputs
-    async fn resolve_gcp_impersonation(
+    /// Resolve GCP target access using a trusted local assertion source and the
+    /// authenticated installation record. Neither comes from import outputs.
+    pub async fn resolve_gcp_federation(
         &self,
-        base_config: ClientConfig,
-        outputs: &RemoteStackManagementOutputs,
+        source: alien_core::GcpFederationSource,
+        scope: &alien_core::GcpFederationScope,
+        stack_state: &StackState,
         target_environment: Option<&EnvironmentInfo>,
     ) -> Result<ClientConfig> {
-        let service_account_email = &outputs.access_configuration;
-        info!(
-            "Resolving GCP impersonation for service account: {}",
-            service_account_email
-        );
+        let outputs = self.find_remote_stack_management_outputs(stack_state)?;
+        self.gcp_federated_config(
+            &outputs,
+            &RemoteStackManagement::RESOURCE_TYPE,
+            source,
+            scope,
+            target_environment,
+        )
+        .await
+    }
 
-        // Extract target project/region from environment info if available.
-        let (target_project_id, target_region) = match target_environment {
-            Some(EnvironmentInfo::Gcp(info)) => {
-                (Some(info.project_id.clone()), Some(info.region.clone()))
-            }
-            _ => (None, None),
+    /// Published-resource access uses its separate target identity and purpose.
+    pub async fn resolve_gcp_remote_bindings(
+        &self,
+        source: alien_core::GcpFederationSource,
+        scope: &alien_core::GcpFederationScope,
+        outputs: &RemoteBindingsOutputs,
+        target_environment: Option<&EnvironmentInfo>,
+    ) -> Result<ClientConfig> {
+        let access = RemoteStackManagementOutputs {
+            management_resource_id: outputs.resource_id.clone(),
+            access_configuration: outputs.access_configuration.clone(),
+            legacy_remote_bindings_access: None,
         };
+        self.gcp_federated_config(
+            &access,
+            &alien_core::RemoteBindings::RESOURCE_TYPE,
+            source,
+            scope,
+            target_environment,
+        )
+        .await
+    }
 
-        let impersonation_config = ImpersonationConfig::Gcp(GcpImpersonationConfig {
-            service_account_email: service_account_email.clone(),
-            scopes: vec!["https://www.googleapis.com/auth/cloud-platform".to_string()],
-            delegates: None,
-            lifetime: Some("3600s".to_string()),
-            target_project_id,
-            target_region,
-        });
-
-        let resolved = base_config
-            .impersonate(impersonation_config)
-            .await
-            .context(ErrorData::AuthenticationFailed {
-                message: format!(
-                    "Failed to impersonate GCP service account: {}",
-                    service_account_email
-                ),
-                method: Some("service_account_impersonation".to_string()),
+    async fn gcp_federated_config(
+        &self,
+        outputs: &RemoteStackManagementOutputs,
+        purpose: &alien_core::ResourceType,
+        source: alien_core::GcpFederationSource,
+        scope: &alien_core::GcpFederationScope,
+        target_environment: Option<&EnvironmentInfo>,
+    ) -> Result<ClientConfig> {
+        let access: alien_core::GcpFederationAccess =
+            serde_json::from_str(&outputs.access_configuration)
+                .into_alien_error()
+                .context(ErrorData::RemoteAccessInvalid {
+                    message: "GCP access requires a federation descriptor; regenerate setup"
+                        .to_string(),
+                    field_name: Some("accessConfiguration".to_string()),
+                })?;
+        scope
+            .validate_access(&access, purpose)
+            .context(ErrorData::RemoteAccessInvalid {
+                message: "GCP access does not match the authorized installation and purpose"
+                    .to_string(),
+                field_name: Some("assertionAudience".to_string()),
             })?;
-
-        let ClientConfig::Gcp(gcp_config) = resolved else {
+        let Some(EnvironmentInfo::Gcp(environment)) = target_environment else {
             return Err(AlienError::new(ErrorData::RemoteAccessInvalid {
-                message: "GCP impersonation returned a non-GCP client configuration".to_string(),
-                field_name: Some("platform".to_string()),
+                message: "GCP federation requires the recorded target project and region"
+                    .to_string(),
+                field_name: Some("environmentInfo".to_string()),
             }));
         };
-
-        // GCP impersonation configs are refreshable and lazy: constructing one
-        // does not call IAMCredentials. Materialize the token at the credential
-        // handoff boundary so propagation failures are reported to the caller
-        // before any deployment operation starts.
-        gcp_config
+        if outputs.management_resource_id != access.service_account_email
+            || environment.project_number != access.project_number
+            || !access.service_account_email.ends_with(&format!(
+                "@{}.iam.gserviceaccount.com",
+                environment.project_id
+            ))
+        {
+            return Err(AlienError::new(ErrorData::RemoteAccessInvalid {
+                message: "GCP federation must identify the installed target account and project"
+                    .to_string(),
+                field_name: Some("accessConfiguration".to_string()),
+            }));
+        }
+        let config = alien_core::GcpClientConfig {
+            project_id: environment.project_id.clone(),
+            region: environment.region.clone(),
+            project_number: Some(access.project_number.clone()),
+            service_overrides: None,
+            credentials: alien_core::GcpCredentials::Federated {
+                access,
+                source,
+                lifetime_seconds: None,
+            },
+        };
+        // Keep the existing handoff proof before the deployment loop starts.
+        // The returned configuration renews through the same source thereafter.
+        config
             .get_bearer_token(GCP_CLOUD_PLATFORM_SCOPE)
             .await
             .context(ErrorData::AuthenticationFailed {
-                message: format!(
-                    "Failed to materialize GCP service account credentials: {}",
-                    service_account_email
-                ),
-                method: Some("service_account_impersonation".to_string()),
+                message: "Cannot acquire deployment credentials through its federation trust"
+                    .to_string(),
+                method: Some("workload_identity_federation".to_string()),
             })?;
-
-        Ok(ClientConfig::Gcp(gcp_config))
+        Ok(ClientConfig::Gcp(Box::new(config)))
     }
 
     /// Resolve Azure impersonation using target-side UAMI Workload Identity.

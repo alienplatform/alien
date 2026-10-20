@@ -9,7 +9,6 @@ use alien_gcp_clients::iam::{
 };
 use alien_gcp_clients::longrunning::{Operation, OperationResult};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use crate::core::ResourceControllerContext;
 use crate::{ErrorData, Result};
@@ -85,11 +84,9 @@ impl GcpFederationSetup {
         let assertion_audience = scope
             .assertion_audience(purpose)
             .context(problem("Invalid installation federation scope"))?;
-        let digest = format!(
-            "{:x}",
-            Sha256::digest(format!("{}:{}", ctx.resource_prefix, purpose.as_ref()).as_bytes())
-        );
-        let pool_id = format!("deployment-{}", &digest[..20]);
+        let pool_id = scope
+            .pool_id(purpose)
+            .context(problem("Invalid installation federation pool identity"))?;
         let marker = format!("Deployment identity pool. Scope: {assertion_audience}");
         if self.pool_id.as_ref().is_some_and(|old| old != &pool_id)
             || self
@@ -247,6 +244,32 @@ impl GcpFederationSetup {
         Ok(Some(access))
     }
 
+    pub(crate) fn needs_refresh(
+        ctx: &ResourceControllerContext<'_>,
+        access: Option<&GcpFederationAccess>,
+        purpose: &ResourceType,
+    ) -> Result<bool> {
+        if ctx.initial_setup_authority != alien_core::InitialSetupAuthority::DirectSetup
+            || !ctx.deployment_config.setup_run
+        {
+            return Ok(false);
+        }
+        let Some(access) = access else {
+            return Ok(true);
+        };
+        let trust = Self::validate_installation(ctx, purpose)?;
+        let scope = ctx
+            .deployment_config
+            .gcp_federation_scope
+            .as_ref()
+            .expect("validated installation scope");
+        Ok(access.trust != trust
+            || access.assertion_audience
+                != scope
+                    .assertion_audience(purpose)
+                    .context(problem("Invalid installation federation scope"))?)
+    }
+
     pub(crate) async fn delete(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
         let Some(pool_id) = self.pool_id.clone() else {
             return Ok(true);
@@ -348,4 +371,33 @@ fn problem(message: &str) -> ErrorData {
         message: message.to_string(),
         resource_id: None,
     }
+}
+
+/// Subject grants in this deployment-owned pool are ours to reconcile. Keep
+/// unrelated pools and all other roles, including the account's self-grants.
+pub(crate) fn remove_obsolete_subject_grants(
+    bindings: &mut Vec<alien_gcp_clients::iam::Binding>,
+    access: &GcpFederationAccess,
+) -> Result<bool> {
+    let principal = access
+        .principal()
+        .context(problem("Invalid deployment federation principal"))?;
+    let namespace = format!("principal://iam.googleapis.com/projects/{}/locations/global/workloadIdentityPools/{}/subject/", access.project_number, access.pool_id);
+    let mut changed = false;
+    for binding in bindings
+        .iter_mut()
+        .filter(|binding| binding.role == "roles/iam.workloadIdentityUser")
+    {
+        let previous = binding.members.len();
+        binding
+            .members
+            .retain(|member| !member.starts_with(&namespace) || member == &principal);
+        changed |= previous != binding.members.len();
+    }
+    if changed {
+        bindings.retain(|binding| {
+            binding.role != "roles/iam.workloadIdentityUser" || !binding.members.is_empty()
+        });
+    }
+    Ok(changed)
 }

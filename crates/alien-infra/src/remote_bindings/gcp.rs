@@ -154,6 +154,14 @@ impl GcpRemoteBindingsController {
     );
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
 
+    fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        crate::gcp_federation::GcpFederationSetup::needs_refresh(
+            ctx,
+            self.federation_access.as_ref(),
+            &RemoteBindings::RESOURCE_TYPE,
+        )
+    }
+
     fn build_outputs(&self) -> Option<ResourceOutputs> {
         let access = self.federation_access.as_ref()?;
         Some(ResourceOutputs::new(RemoteBindingsOutputs {
@@ -200,14 +208,18 @@ async fn reconcile_federation(
         .members(vec![member.clone()])
         .build()];
     let mut bindings = current.bindings;
+    let obsolete_removed =
+        crate::gcp_federation::remove_obsolete_subject_grants(&mut bindings, &access)?;
     let owned_roles = ResourcePermissionsHelper::gcp_predefined_role_names(&desired);
-    if ResourcePermissionsHelper::reconcile_gcp_project_member_bindings(
-        &mut bindings,
-        desired,
-        &member,
-        &[],
-        &owned_roles,
-    ) {
+    if obsolete_removed
+        | ResourcePermissionsHelper::reconcile_gcp_project_member_bindings(
+            &mut bindings,
+            desired,
+            &member,
+            &[],
+            &owned_roles,
+        )
+    {
         client
             .set_service_account_iam_policy(
                 email,

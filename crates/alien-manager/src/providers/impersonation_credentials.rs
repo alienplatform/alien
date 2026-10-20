@@ -98,21 +98,32 @@ impl ImpersonationCredentialResolver {
         // in the stack state (two-hop: management SA → target identity).
         if let Some(ref stack_state) = deployment.stack_state {
             let provider = self.provider_for_target(platform);
-            let base_config = impersonate_management_sa(&**provider, platform).await?;
-
-            let resolver = alien_infra::RemoteAccessResolver::new(env);
-            let resolved = resolver
-                .resolve(
-                    base_config,
-                    stack_state,
-                    deployment.environment_info.as_ref(),
-                )
-                .await
-                .context(ErrorData::RemoteCredentialHandoffFailed {
-                    deployment_id: deployment.id.clone(),
-                    platform,
-                })
-                .map_err(|error| classify_credential_error(error.into_generic()))?;
+            let resolver = alien_infra::RemoteAccessResolver::new(env.clone());
+            let resolved = if platform == Platform::Gcp {
+                let source = super::gcp_federation::assertion_source(&**provider, &env).await?;
+                resolver
+                    .resolve_gcp_federation(
+                        source,
+                        &deployment.gcp_federation_scope(),
+                        stack_state,
+                        deployment.environment_info.as_ref(),
+                    )
+                    .await
+            } else {
+                let base_config = impersonate_management_sa(&**provider, platform).await?;
+                resolver
+                    .resolve(
+                        base_config,
+                        stack_state,
+                        deployment.environment_info.as_ref(),
+                    )
+                    .await
+            }
+            .context(ErrorData::RemoteCredentialHandoffFailed {
+                deployment_id: deployment.id.clone(),
+                platform,
+            })
+            .map_err(|error| classify_credential_error(error.into_generic()))?;
 
             return Ok(resolved);
         }
@@ -210,6 +221,16 @@ impl CredentialResolver for ImpersonationCredentialResolver {
             .and_then(|state| state.outputs.as_ref())
             .and_then(|outputs| outputs.downcast_ref::<alien_core::RemoteStackManagementOutputs>())
             .and_then(|outputs| outputs.legacy_remote_bindings_access.as_ref());
+        if deployment.platform == Platform::Gcp && first_class_outputs.is_none() {
+            return Err(
+                AlienError::new(alien_core::ErrorData::GcpFederationInvalid {
+                    field: "remoteBindings".to_string(),
+                    reason: "requires its separate installed federation identity; regenerate setup"
+                        .to_string(),
+                })
+                .into_generic(),
+            );
+        }
         let outputs = first_class_outputs.or(legacy_outputs).ok_or_else(|| {
             AlienError::new(GenericError {
                 message: format!(
@@ -220,20 +241,34 @@ impl CredentialResolver for ImpersonationCredentialResolver {
         })?;
 
         let provider = self.provider_for_target(deployment.platform);
-        let base = impersonate_management_sa(&**provider, deployment.platform).await?;
-        let resolved = alien_infra::RemoteAccessResolver::new(std::env::vars().collect())
-            .resolve_remote_bindings(
-                base,
-                outputs,
-                deployment.environment_info.as_ref(),
-                Some(remote_bindings_session_name(&deployment.id, resource_id)),
-            )
-            .await
-            .context(ErrorData::RemoteCredentialHandoffFailed {
-                deployment_id: deployment.id.clone(),
-                platform: deployment.platform,
-            })
-            .map_err(|error| classify_credential_error(error.into_generic()))?;
+        let env: HashMap<String, String> = std::env::vars().collect();
+        let resolver = alien_infra::RemoteAccessResolver::new(env.clone());
+        let resolved = if deployment.platform == Platform::Gcp {
+            let source = super::gcp_federation::assertion_source(&**provider, &env).await?;
+            resolver
+                .resolve_gcp_remote_bindings(
+                    source,
+                    &deployment.gcp_federation_scope(),
+                    outputs,
+                    deployment.environment_info.as_ref(),
+                )
+                .await
+        } else {
+            let base = impersonate_management_sa(&**provider, deployment.platform).await?;
+            resolver
+                .resolve_remote_bindings(
+                    base,
+                    outputs,
+                    deployment.environment_info.as_ref(),
+                    Some(remote_bindings_session_name(&deployment.id, resource_id)),
+                )
+                .await
+        }
+        .context(ErrorData::RemoteCredentialHandoffFailed {
+            deployment_id: deployment.id.clone(),
+            platform: deployment.platform,
+        })
+        .map_err(|error| classify_credential_error(error.into_generic()))?;
         Ok(RemoteStorageCredentialSource::Direct(resolved))
     }
 
@@ -328,7 +363,11 @@ fn management_config_from_info(
         }
         ServiceAccountInfo::Gcp(gcp_info) => {
             Ok(ManagementConfig::Gcp(alien_core::GcpManagementConfig {
-                federation_trust: None,
+                federation_trust: super::gcp_federation::federation_trust(
+                    Some(&gcp_info.unique_id),
+                    &std::env::vars().collect(),
+                )
+                .map_err(|error| error.into_generic())?,
                 service_account_email: gcp_info.email,
             }))
         }

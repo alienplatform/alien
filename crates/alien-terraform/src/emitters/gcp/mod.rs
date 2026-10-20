@@ -9,6 +9,7 @@ pub mod agent_platform_engine;
 pub mod ai;
 pub mod artifact_registry;
 pub mod build;
+mod federation;
 pub mod helpers;
 pub mod key;
 pub mod kv;

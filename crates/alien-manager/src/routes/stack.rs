@@ -346,6 +346,9 @@ pub async fn stack_import(
                 return ErrorData::forbidden("Cannot update imported deployment in this group")
                     .into_response();
             }
+            if let Err(error) = validate_gcp_federation_handoff(&req, Some(&existing.id)) {
+                return error.into_response();
+            }
             if existing.stack_settings.as_ref().is_some_and(|settings| {
                 settings.endpoint_access != req.stack_settings.endpoint_access
             }) {
@@ -607,6 +610,10 @@ pub async fn stack_import(
         }
         Ok(None) => {}
         Err(e) => return e.into_response(),
+    }
+
+    if let Err(error) = validate_gcp_federation_handoff(&req, None) {
+        return error.into_response();
     }
 
     // The deployment could have been deleted during preparation. Do not turn
@@ -1659,6 +1666,44 @@ fn build_stack_state(
     Ok(stack_state)
 }
 
+/// Remote access is bound to the authenticated record allocated before setup.
+/// A resource prefix, display name, or identifier supplied by an import cannot
+/// authorize access on behalf of a different installation.
+fn validate_gcp_federation_handoff(
+    req: &StackImportRequest,
+    deployment_id: Option<&str>,
+) -> crate::error::Result<()> {
+    if req.base_platform.unwrap_or(req.platform) != Platform::Gcp {
+        return Ok(());
+    }
+    for resource in &req.resources {
+        if resource.resource_type != alien_core::RemoteStackManagement::RESOURCE_TYPE
+            && resource.resource_type != alien_core::RemoteBindings::RESOURCE_TYPE
+        {
+            continue;
+        }
+        let deployment_id = deployment_id.ok_or_else(|| ErrorData::bad_request(
+            "GCP remote access requires a deployment reserved before setup. Regenerate and rerun the setup artifact.",
+        ))?;
+        let access: alien_core::GcpFederationAccess = serde_json::from_value(
+            resource
+                .import_data
+                .get("federation")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
+        )
+        .map_err(|_| {
+            ErrorData::bad_request(
+                "GCP setup requires valid federation metadata. Regenerate and rerun setup.",
+            )
+        })?;
+        alien_core::GcpFederationScope { deployment_id: deployment_id.to_string() }
+            .validate_access(&access, &resource.resource_type)
+            .map_err(|_| ErrorData::bad_request("GCP federation access does not match the registered deployment and purpose. Regenerate and rerun setup."))?;
+    }
+    Ok(())
+}
+
 fn validate_import_handoff(req: &StackImportRequest, stack: &Stack) -> crate::error::Result<()> {
     let delivered: std::collections::HashSet<&str> = req
         .resources
@@ -1754,6 +1799,46 @@ mod setup_update_authorization_tests {
             input_values: HashMap::new(),
             resources: vec![],
         }
+    }
+
+    #[test]
+    fn federation_import_is_bound_to_reserved_identity_and_access_purpose() {
+        let mut req = request();
+        req.platform = Platform::Gcp;
+        let purpose = RemoteStackManagement::RESOURCE_TYPE;
+        let scope = alien_core::GcpFederationScope {
+            deployment_id: "dep_reserved".into(),
+        };
+        let access = alien_core::GcpFederationAccess {
+            project_number: "123456789012".into(),
+            pool_id: scope.pool_id(&purpose).unwrap(),
+            provider_id: "manager".into(),
+            service_account_email: "management@example.iam.gserviceaccount.com".into(),
+            assertion_audience: scope.assertion_audience(&purpose).unwrap(),
+            trust: alien_core::GcpFederationTrust {
+                issuer: "https://accounts.google.com".into(),
+                subject: "123456789012345678901".into(),
+            },
+        };
+        req.resources.push(ImportedResource {
+            id: "management".into(),
+            resource_type: purpose,
+            import_data: serde_json::json!({ "federation": access }),
+        });
+        validate_gcp_federation_handoff(&req, Some("dep_reserved")).unwrap();
+        // User-visible names are mutable and carry no authorization.
+        req.deployment_name = "renamed".into();
+        req.resource_prefix = "another-prefix".into();
+        validate_gcp_federation_handoff(&req, Some("dep_reserved")).unwrap();
+        assert!(validate_gcp_federation_handoff(&req, None).is_err());
+        assert!(validate_gcp_federation_handoff(&req, Some("dep_recreated")).is_err());
+        req.resources[0].resource_type = alien_core::RemoteBindings::RESOURCE_TYPE;
+        assert!(validate_gcp_federation_handoff(&req, Some("dep_reserved")).is_err());
+        req.platform = Platform::Kubernetes;
+        req.base_platform = Some(Platform::Gcp);
+        assert!(validate_gcp_federation_handoff(&req, Some("dep_reserved")).is_err());
+        req.base_platform = Some(Platform::Aws);
+        validate_gcp_federation_handoff(&req, None).unwrap();
     }
 
     /// Registration must expect exactly what the generators render, and a Live sandbox is the
