@@ -359,6 +359,24 @@ pub const MIN_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION: u32 = 1;
 /// customer-scheduled pull agent the moment a newer manager writes state.
 pub const CURRENT_DEPLOYMENT_PROTOCOL_VERSION: u32 = 1;
 
+/// Latest state protocol this binary can execute. Provider-specific changes
+/// must not force unrelated deployments onto a newer writer protocol.
+pub const MAX_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION: u32 = 2;
+
+/// GCP federation changes setup ownership and target credential semantics.
+pub const GCP_FEDERATION_DEPLOYMENT_PROTOCOL_VERSION: u32 = 2;
+
+pub fn deployment_protocol_version_for_platform(
+    platform: crate::Platform,
+    base_platform: Option<crate::Platform>,
+) -> u32 {
+    if base_platform.unwrap_or(platform) == crate::Platform::Gcp {
+        GCP_FEDERATION_DEPLOYMENT_PROTOCOL_VERSION
+    } else {
+        CURRENT_DEPLOYMENT_PROTOCOL_VERSION
+    }
+}
+
 /// Backwards-compatible alias for older call sites.
 pub const DEPLOYMENT_PROTOCOL_VERSION: u32 = CURRENT_DEPLOYMENT_PROTOCOL_VERSION;
 

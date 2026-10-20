@@ -295,6 +295,8 @@ pub struct DeploymentFilter {
     pub deployment_ids: Option<Vec<String>>,
     /// IDs acquisition must skip, applied before its limit.
     pub excluded_deployment_ids: Vec<String>,
+    /// Filter unsupported records before discovery acquisition applies its limit.
+    pub max_deployment_protocol_version: Option<u32>,
     pub statuses: Option<Vec<String>>,
     pub platforms: Option<Vec<Platform>>,
     pub setup_method: Option<String>,

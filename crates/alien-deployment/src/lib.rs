@@ -35,10 +35,10 @@ pub use alien_core::{
 };
 
 // Re-export helper functions
-pub use helpers::{check_deployer_secrets, collect_environment_info};
 pub use helpers::create_aggregated_error_from_stack_state;
 pub use helpers::deployment_headline_error_from_state;
 pub use helpers::deployment_state_error_from_headline;
+pub use helpers::{check_deployer_secrets, collect_environment_info};
 pub use observe::run_observe_pass;
 
 use tracing::{debug, info, warn};
@@ -107,13 +107,13 @@ pub async fn step(
     let mut current = current;
 
     if current.protocol_version < alien_core::MIN_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION
-        || current.protocol_version > alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION
+        || current.protocol_version > alien_core::MAX_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION
     {
         return Err(alien_error::AlienError::new(
             ErrorData::IncompatibleDeploymentProtocol {
                 found_version: current.protocol_version,
                 min_supported_version: alien_core::MIN_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION,
-                current_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                current_version: alien_core::MAX_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION,
                 repair:
                     "Upgrade the deployment actor or repair the deployment state before retrying."
                         .to_string(),

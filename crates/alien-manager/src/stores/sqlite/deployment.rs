@@ -1034,6 +1034,9 @@ impl DeploymentStore for SqliteDeploymentStore {
                         .is_not_in(filter.excluded_deployment_ids.iter().map(String::as_str)),
                 );
             }
+            if let Some(max_version) = filter.max_deployment_protocol_version {
+                query.and_where(Expr::col(Deployments::DeploymentProtocolVersion).lte(max_version));
+            }
             if let Some(platforms) = &filter.platforms {
                 let platform_strs: Vec<&str> = platforms.iter().map(|p| p.as_str()).collect();
                 query.and_where(Expr::col(Deployments::Platform).is_in(platform_strs));
@@ -1328,6 +1331,9 @@ impl DeploymentStore for SqliteDeploymentStore {
                     Expr::col(Deployments::Id)
                         .is_not_in(filter.excluded_deployment_ids.iter().map(String::as_str)),
                 );
+            }
+            if let Some(max_version) = filter.max_deployment_protocol_version {
+                query.and_where(Expr::col(Deployments::DeploymentProtocolVersion).lte(max_version));
             }
             if let Some(platforms) = &filter.platforms {
                 let platform_strs: Vec<&str> = platforms.iter().map(|p| p.as_str()).collect();
