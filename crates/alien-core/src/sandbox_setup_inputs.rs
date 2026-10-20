@@ -82,8 +82,25 @@ pub fn aws_sandbox_remote_grant(
         .and_then(remote_binding_for_entry)
 }
 
+/// Stands in for a Live sandbox's bundle store in its setup inputs; see [`aws_sandbox_setup_inputs`].
+const SETUP_GRANTED_STORE: &str = "setup-granted-store";
+/// Stands in for a Live sandbox's private base image repository in its setup inputs.
+const SETUP_GRANTED_BASE_IMAGE: &str =
+    "000000000000.dkr.ecr.us-east-1.amazonaws.com/setup-granted-repository:base";
+
+/// `image` with its bucket replaced by [`SETUP_GRANTED_STORE`], keeping the key.
+fn setup_granted_bundle(image: &str) -> std::result::Result<String, String> {
+    image
+        .strip_prefix("s3://")
+        .and_then(|path| path.split_once('/'))
+        .map(|(_, key)| format!("s3://{SETUP_GRANTED_STORE}/{key}"))
+        .ok_or_else(|| format!("bundle '{image}' is not an s3://bucket/key URI"))
+}
+
 /// Each setup input with the name a refused update reports it by. A new bundle under the same
-/// stable prefix, or a new tag in the same private repository, leaves them unchanged.
+/// stable prefix, or a new tag in the same private repository, leaves them unchanged. For a Live
+/// sandbox the bundle's store and the base image's repository are not inputs at all: they are
+/// fixed by the setup that granted them.
 pub fn aws_sandbox_setup_inputs(
     stack: &Stack,
     sandbox: &Sandbox,
@@ -101,7 +118,21 @@ pub fn aws_sandbox_setup_inputs(
             "an AWS sandbox is built from a prebuilt s3:// bundle, not from source".to_string(),
         ));
     };
-    let policy = aws_sandbox_build_role(sandbox, image, lifecycle, account).policy()?;
+    let policy = if lifecycle == ResourceLifecycle::Live {
+        // A Live sandbox's store and base image repository are fixed by its setup: the runtime
+        // reads each release's bundle key from the store this setup granted, and the publisher
+        // puts a bundle there whose base image this role can pull. Only the shape of the grant
+        // (stable prefix, whether a private base exists) is a setup input.
+        let mut granted = sandbox.clone();
+        granted.private_base_image = sandbox
+            .private_base_image
+            .as_ref()
+            .map(|_| SETUP_GRANTED_BASE_IMAGE.to_string());
+        let bundle = setup_granted_bundle(image).map_err(refuse)?;
+        aws_sandbox_build_role(&granted, &bundle, lifecycle, account).policy()?
+    } else {
+        aws_sandbox_build_role(sandbox, image, lifecycle, account).policy()?
+    };
     let network = aws_sandbox_egress_network_id(stack, sandbox).map_err(refuse)?;
     // An update that stops publishing keeps the setup-owned Remote Bindings role, so without
     // this the grant would outlive the declaration.

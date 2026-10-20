@@ -251,7 +251,7 @@ impl AwsSandboxController {
             ctx.resource_prefix,
             &config.id,
         );
-        let bundle_uri = desired_bundle_uri(config, &aws_config.region)?;
+        let bundle_uri = self.bundle_to_build(ctx, config, &aws_config.region)?;
         let client = ctx
             .service_provider
             .get_aws_microvms_client(aws_config)
@@ -772,7 +772,7 @@ impl AwsSandboxController {
         }
 
         let aws_config = ctx.get_aws_config()?;
-        let desired_bundle = desired_bundle_uri(&config, &aws_config.region)?;
+        let desired_bundle = self.bundle_to_build(ctx, config, &aws_config.region)?;
 
         if self.bundle_uri.as_deref() == Some(desired_bundle.as_str())
             && self.supervisor_environment
@@ -817,7 +817,7 @@ impl AwsSandboxController {
         })?;
 
         let aws_config = ctx.get_aws_config()?;
-        let desired_bundle = desired_bundle_uri(&config, &aws_config.region)?;
+        let desired_bundle = self.bundle_to_build(ctx, config, &aws_config.region)?;
         if resource_lifecycle(ctx, &config.id) == Some(alien_core::ResourceLifecycle::Frozen)
             && self.granted_bundle_uri.as_deref() != Some(desired_bundle.as_str())
         {
@@ -1378,6 +1378,45 @@ fn image_build_inputs(
         client_token: build_client_token(image_name, bundle_uri),
         environment: agent_environment(),
         additional_os_capabilities: vec![],
+    }
+}
+
+impl AwsSandboxController {
+    /// The bundle this sandbox builds from: the release's bundle, read from the store its setup
+    /// granted.
+    ///
+    /// A Live build role grants one store's stable prefix, and every bundle is published to each
+    /// store under the same key. A release naming another store (stores moved after this setup ran)
+    /// is therefore read from the granted one, which this role can read and which still holds the
+    /// key. A Frozen role grants one exact object, so its bundle is taken as declared.
+    fn bundle_to_build(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        config: &Sandbox,
+        region: &str,
+    ) -> Result<String> {
+        let desired = desired_bundle_uri(config, region)?;
+        if resource_lifecycle(ctx, &config.id) == Some(alien_core::ResourceLifecycle::Frozen) {
+            return Ok(desired);
+        }
+        let split = |uri: &str| {
+            uri.strip_prefix("s3://")
+                .and_then(|path| path.split_once('/'))
+                .map(|(bucket, key)| (bucket.to_string(), key.to_string()))
+        };
+        Ok(
+            match (
+                self.granted_bundle_uri.as_deref().and_then(split),
+                split(&desired),
+            ) {
+                (Some((granted_bucket, _)), Some((desired_bucket, key)))
+                    if granted_bucket != desired_bucket =>
+                {
+                    format!("s3://{granted_bucket}/{key}")
+                }
+                _ => desired,
+            },
+        )
     }
 }
 
@@ -3489,6 +3528,86 @@ mod tests {
                 .as_deref(),
             Some("3.0")
         );
+    }
+
+    /// Stores move: a release may name a new bundle store while this sandbox's setup granted the
+    /// old one. The build role can read only the granted store, which holds the same key, so the
+    /// roll reads it there.
+    #[tokio::test]
+    async fn a_release_naming_another_store_rolls_from_the_store_setup_granted() {
+        const GRANTED: &str = "s3://old-store-us-east-1/sandbox-bundle/v1/bundle.zip";
+        const NEXT: &str = "s3://new-store-us-east-1/sandbox-bundle/v2/bundle.zip";
+        let mut client = MockLambdaMicrovmsApi::new();
+        client
+            .expect_update_microvm_image()
+            .withf(|identifier, request| {
+                identifier == IMAGE_ARN
+                    && request.code_artifact.uri
+                        == "s3://old-store-us-east-1/sandbox-bundle/v2/bundle.zip"
+            })
+            .times(1)
+            .returning(|_, _| {
+                Ok(UpdateMicrovmImageResponse {
+                    image_arn: Some(IMAGE_ARN.to_string()),
+                    name: Some("test-agents".to_string()),
+                    state: Some("UPDATING".to_string()),
+                    image_version: Some("2.0".to_string()),
+                })
+            });
+        let mut controller = ready_controller();
+        controller.bundle_uri = Some(GRANTED.to_string());
+        controller.granted_bundle_uri = Some(GRANTED.to_string());
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(sandbox_with_bundle(GRANTED))
+            .controller(controller)
+            .platform(Platform::Aws)
+            .service_provider(provider(client))
+            .build()
+            .await
+            .expect("executor should build");
+
+        executor
+            .update(sandbox_with_bundle(NEXT))
+            .expect("transition to update");
+        executor.step().await.expect("updating_sandbox");
+        executor.step().await.expect("updating_image");
+        let rolled = executor
+            .internal_state::<AwsSandboxController>()
+            .expect("typed controller");
+        assert_eq!(
+            rolled.pending_bundle_uri.as_deref(),
+            Some("s3://old-store-us-east-1/sandbox-bundle/v2/bundle.zip")
+        );
+    }
+
+    /// The same release seen through the granted store is not a change: a store move alone must
+    /// not rebuild the image. The expectation-free mock panics on any MicroVM call.
+    #[tokio::test]
+    async fn a_store_move_alone_rebuilds_nothing() {
+        const GRANTED: &str = "s3://old-store-us-east-1/sandbox-bundle/v1/bundle.zip";
+        let mut controller = ready_controller();
+        controller.bundle_uri = Some(GRANTED.to_string());
+        controller.granted_bundle_uri = Some(GRANTED.to_string());
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(sandbox_with_bundle(GRANTED))
+            .controller(controller)
+            .platform(Platform::Aws)
+            .service_provider(provider(MockLambdaMicrovmsApi::new()))
+            .build()
+            .await
+            .expect("executor should build");
+
+        executor
+            .update(sandbox_with_bundle(
+                "s3://new-store-us-east-1/sandbox-bundle/v1/bundle.zip",
+            ))
+            .expect("transition to update");
+        executor.step().await.expect("updating_sandbox");
+        let after = executor
+            .internal_state::<AwsSandboxController>()
+            .expect("typed controller");
+        assert_eq!(after.active_version.as_deref(), Some("1.0"));
+        assert_eq!(after.pending_version, None);
     }
 
     /// An update that changes nothing about the bundle must not rebuild: an image build is
