@@ -1,0 +1,372 @@
+//! What the management identity and the volume-backup execution role can reach, checked by
+//! evaluating concrete requests against the rendered policies the way IAM does: an explicit Deny
+//! wins, otherwise any matching Allow allows, otherwise the request is denied.
+//!
+//! The requests are the ones that matter for EBS data: creating or rewriting a role DLM may run
+//! as, passing a role to DLM, stamping a volume with the stack's tags, and snapshotting, sharing
+//! or copying a volume or snapshot. The live check of the same requests against AWS is described
+//! in the pull request that introduced this file.
+
+use alien_core::{ALIEN_MANAGED_BY_TAG_KEY, ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY};
+use alien_permissions::{
+    generators::{AwsIamStatement, AwsRuntimePermissionsGenerator},
+    get_permission_set, BindingTarget, PermissionContext,
+};
+use std::collections::HashMap;
+
+const ACCOUNT: &str = "123456789012";
+const REGION: &str = "us-east-1";
+const PREFIX: &str = "app";
+
+#[derive(Debug, PartialEq, Eq)]
+enum Decision {
+    Allowed,
+    ExplicitlyDenied,
+    NotAllowed,
+}
+
+struct Request {
+    action: &'static str,
+    resource: String,
+    context: HashMap<String, String>,
+}
+
+impl Request {
+    fn new(action: &'static str, resource: impl Into<String>) -> Self {
+        Self {
+            action,
+            resource: resource.into(),
+            context: HashMap::new(),
+        }
+    }
+
+    fn with(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.context.insert(key.into(), value.into());
+        self
+    }
+
+    /// Adds the tags a resource already carries as `aws:ResourceTag/*` keys.
+    fn resource_tags(mut self, tags: &[(&str, &str)]) -> Self {
+        for (key, value) in tags {
+            self.context
+                .insert(format!("aws:ResourceTag/{key}"), value.to_string());
+        }
+        self
+    }
+
+    /// Adds the tags a request writes as `aws:RequestTag/*` keys.
+    fn request_tags(mut self, tags: &[(&str, &str)]) -> Self {
+        for (key, value) in tags {
+            self.context
+                .insert(format!("aws:RequestTag/{key}"), value.to_string());
+        }
+        self
+    }
+}
+
+/// IAM's ARN and action wildcard: `*` matches any run of characters, `?` one character.
+fn wildcard_match(pattern: &str, value: &str) -> bool {
+    let pattern: Vec<char> = pattern.chars().collect();
+    let value: Vec<char> = value.chars().collect();
+    let mut matches = vec![vec![false; value.len() + 1]; pattern.len() + 1];
+    matches[0][0] = true;
+    for p in 1..=pattern.len() {
+        if pattern[p - 1] == '*' {
+            matches[p][0] = matches[p - 1][0];
+        }
+        for v in 1..=value.len() {
+            matches[p][v] = match pattern[p - 1] {
+                '*' => matches[p - 1][v] || matches[p][v - 1],
+                '?' => matches[p - 1][v - 1],
+                c => matches[p - 1][v - 1] && c == value[v - 1],
+            };
+        }
+    }
+    matches[pattern.len()][value.len()]
+}
+
+fn conditions_hold(statement: &AwsIamStatement, request: &Request) -> bool {
+    let Some(conditions) = &statement.condition else {
+        return true;
+    };
+    conditions.iter().all(|(operator, entries)| {
+        entries.iter().all(|(key, expected)| {
+            let actual = request.context.get(key);
+            match operator.as_str() {
+                "StringEquals" | "Bool" => actual == Some(expected),
+                // A negated operator holds when the key is absent.
+                "StringNotEquals" => actual != Some(expected),
+                "StringLike" => actual.is_some_and(|actual| wildcard_match(expected, actual)),
+                "ForAllValues:StringEquals" => {
+                    panic!("the evaluator doesn't model {operator}; no request here sets tag keys")
+                }
+                other => panic!("the evaluator doesn't model condition operator {other}"),
+            }
+        })
+    })
+}
+
+fn statement_matches(statement: &AwsIamStatement, request: &Request) -> bool {
+    assert!(
+        statement.not_resource.is_empty(),
+        "the evaluator doesn't model NotResource ({})",
+        statement.sid
+    );
+    statement
+        .action
+        .iter()
+        .any(|action| wildcard_match(&action.to_lowercase(), &request.action.to_lowercase()))
+        && statement
+            .resource
+            .iter()
+            .any(|resource| wildcard_match(resource, &request.resource))
+        && conditions_hold(statement, request)
+}
+
+fn evaluate(statements: &[AwsIamStatement], request: &Request) -> Decision {
+    let matching: Vec<_> = statements
+        .iter()
+        .filter(|statement| statement_matches(statement, request))
+        .collect();
+    if matching.iter().any(|statement| statement.effect == "Deny") {
+        Decision::ExplicitlyDenied
+    } else if matching.iter().any(|statement| statement.effect == "Allow") {
+        Decision::Allowed
+    } else {
+        Decision::NotAllowed
+    }
+}
+
+fn context() -> PermissionContext {
+    PermissionContext::new()
+        .with_stack_prefix(PREFIX)
+        .with_aws_account_id(ACCOUNT)
+        .with_aws_region(REGION)
+}
+
+fn rendered(set_ids: &[&str]) -> Vec<AwsIamStatement> {
+    let generator = AwsRuntimePermissionsGenerator::new();
+    set_ids
+        .iter()
+        .flat_map(|id| {
+            let set = get_permission_set(id).unwrap_or_else(|| panic!("missing set {id}"));
+            generator
+                .generate_policy(set, BindingTarget::Stack, &context())
+                .unwrap_or_else(|error| panic!("{id} should render: {error}"))
+                .statement
+        })
+        .collect()
+}
+
+/// The container and compute-cluster grants the management identity holds together. IAM unions
+/// them, so a narrow grant in one set is only as narrow as the widest overlapping grant elsewhere.
+fn management() -> Vec<AwsIamStatement> {
+    rendered(&[
+        "container/provision",
+        "compute-cluster/provision",
+        "compute-cluster/management",
+    ])
+}
+
+fn role_arn(name: &str) -> String {
+    format!("arn:aws:iam::{ACCOUNT}:role/{name}")
+}
+
+fn volume_arn(id: &str) -> String {
+    format!("arn:aws:ec2:{REGION}:{ACCOUNT}:volume/{id}")
+}
+
+fn snapshot_arn(id: &str) -> String {
+    format!("arn:aws:ec2:{REGION}::snapshot/{id}")
+}
+
+fn stack_volume_tags() -> [(&'static str, &'static str); 3] {
+    [
+        (ALIEN_STACK_TAG_KEY, PREFIX),
+        (ALIEN_RESOURCE_TAG_KEY, "db"),
+        (ALIEN_MANAGED_BY_TAG_KEY, "runtime"),
+    ]
+}
+
+const DLM_SERVICE_POLICY: &str =
+    "arn:aws:iam::aws:policy/service-role/AWSDataLifecycleManagerServiceRole";
+
+#[test]
+fn management_cannot_make_or_rewrite_a_role_dlm_runs_as() {
+    let management = management();
+    let legacy = role_arn("app-dlm-0123456789abcdef");
+    let setup_role = role_arn("app-compute-volume-backups");
+
+    for target in [&legacy, &setup_role] {
+        let create =
+            Request::new("iam:CreateRole", target.clone()).request_tags(&stack_volume_tags());
+        assert_ne!(
+            evaluate(&management, &create),
+            Decision::Allowed,
+            "management could create {target} with any trust policy"
+        );
+        let attach = Request::new("iam:AttachRolePolicy", target.clone())
+            .with("iam:PolicyARN", DLM_SERVICE_POLICY);
+        assert_ne!(
+            evaluate(&management, &attach),
+            Decision::Allowed,
+            "management could attach the DLM service policy to {target}"
+        );
+    }
+    for action in [
+        "iam:PutRolePolicy",
+        "iam:UpdateAssumeRolePolicy",
+        "iam:AttachRolePolicy",
+        "iam:DeleteRole",
+        "iam:TagRole",
+        "iam:UntagRole",
+        "iam:DeleteRolePermissionsBoundary",
+    ] {
+        assert_eq!(
+            evaluate(&management, &Request::new(action, setup_role.clone())),
+            Decision::ExplicitlyDenied,
+            "{action} on the setup-created execution role must be denied"
+        );
+    }
+}
+
+#[test]
+fn management_passes_dlm_only_the_setup_role() {
+    let management = management();
+    // IAM doesn't evaluate a role's tags for PassRole, so the request carries none: a grant
+    // that relied on them would deny here as it does in AWS.
+    let pass = |role: &str, service: &str| {
+        evaluate(
+            &management,
+            &Request::new("iam:PassRole", role_arn(role)).with("iam:PassedToService", service),
+        )
+    };
+
+    assert_eq!(
+        pass("app-compute-volume-backups", "dlm.amazonaws.com"),
+        Decision::Allowed
+    );
+    // A role earlier releases made at runtime still carries the AWS managed DLM policy, which
+    // may share or copy any snapshot. The compute cluster's prefix-wide PassRole names it too.
+    assert_eq!(
+        pass("app-dlm-0123456789abcdef", "dlm.amazonaws.com"),
+        Decision::ExplicitlyDenied
+    );
+    for statement in &management {
+        let passes_role = statement
+            .action
+            .iter()
+            .any(|action| wildcard_match(&action.to_lowercase(), "iam:passrole"));
+        let uses_role_tags = statement.condition.iter().flatten().any(|(_, entries)| {
+            entries.keys().any(|key| {
+                key.starts_with("aws:ResourceTag/") || key.starts_with("iam:ResourceTag/")
+            })
+        });
+        assert!(
+            !(passes_role && uses_role_tags),
+            "{}: IAM doesn't evaluate role tags for PassRole",
+            statement.sid
+        );
+    }
+}
+
+#[test]
+fn management_can_tag_only_volumes_the_stack_owns() {
+    let management = management();
+    let ownership = stack_volume_tags();
+
+    // An existing volume of someone else's, stamped with this stack's tags, would then fall
+    // under every stack-scoped snapshot grant.
+    let stamp_foreign = Request::new("ec2:CreateTags", volume_arn("vol-foreign"))
+        .request_tags(&ownership)
+        .resource_tags(&[("Name", "prod-db")]);
+    assert_ne!(evaluate(&management, &stamp_foreign), Decision::Allowed);
+
+    // The runtime's tag writes on existing volumes, on a volume the stack owns: the
+    // backup-policy tag, and the tags a restored volume gets once it replaces the old one.
+    for extra in [("alien-backup-policy", "app/db"), ("Ordinal", "0")] {
+        let mut tags = ownership.to_vec();
+        tags.push(extra);
+        let retag = Request::new("ec2:CreateTags", volume_arn("vol-owned"))
+            .request_tags(&tags)
+            .resource_tags(&ownership);
+        assert_eq!(
+            evaluate(&management, &retag),
+            Decision::Allowed,
+            "the runtime must keep tagging its own volume with {extra:?}"
+        );
+    }
+
+    // Tags written while creating a volume (a new replica's volume, or a restore's).
+    let create = Request::new("ec2:CreateVolume", volume_arn("*")).request_tags(&ownership);
+    assert_eq!(evaluate(&management, &create), Decision::Allowed);
+    let tag_on_create = Request::new("ec2:CreateTags", volume_arn("vol-new"))
+        .request_tags(&ownership)
+        .with("ec2:CreateAction", "CreateVolume");
+    assert_eq!(evaluate(&management, &tag_on_create), Decision::Allowed);
+
+    let snapshot_foreign = Request::new("ec2:CreateSnapshot", volume_arn("vol-foreign"))
+        .resource_tags(&[("Name", "prod-db")]);
+    assert_ne!(evaluate(&management, &snapshot_foreign), Decision::Allowed);
+}
+
+#[test]
+fn the_execution_role_snapshots_only_stack_volumes_and_never_shares() {
+    let role = rendered(&["container/volume-backups"]);
+    let ownership = stack_volume_tags();
+
+    let own_volume =
+        Request::new("ec2:CreateSnapshot", volume_arn("vol-owned")).resource_tags(&ownership);
+    assert_eq!(evaluate(&role, &own_volume), Decision::Allowed);
+    let new_snapshot =
+        Request::new("ec2:CreateSnapshot", snapshot_arn("snap-new")).request_tags(&ownership);
+    assert_eq!(evaluate(&role, &new_snapshot), Decision::Allowed);
+    let tag_new = Request::new("ec2:CreateTags", snapshot_arn("snap-new"))
+        .request_tags(&ownership)
+        .with("ec2:CreateAction", "CreateSnapshot");
+    assert_eq!(evaluate(&role, &tag_new), Decision::Allowed);
+    let expire =
+        Request::new("ec2:DeleteSnapshot", snapshot_arn("snap-old")).resource_tags(&ownership);
+    assert_eq!(evaluate(&role, &expire), Decision::Allowed);
+
+    // A DLM policy can target any tag. The role must refuse the volumes it reaches that way.
+    let foreign_volume = Request::new("ec2:CreateSnapshot", volume_arn("vol-foreign"))
+        .resource_tags(&[("Name", "prod-db")]);
+    assert_eq!(evaluate(&role, &foreign_volume), Decision::NotAllowed);
+    let foreign_snapshot = Request::new("ec2:DeleteSnapshot", snapshot_arn("snap-foreign"));
+    assert_eq!(evaluate(&role, &foreign_snapshot), Decision::NotAllowed);
+    let retag_foreign =
+        Request::new("ec2:CreateTags", snapshot_arn("snap-foreign")).request_tags(&ownership);
+    assert_eq!(evaluate(&role, &retag_foreign), Decision::NotAllowed);
+
+    // Share and copy rules in a DLM policy run as this role.
+    for action in [
+        "ec2:ModifySnapshotAttribute",
+        "ec2:CopySnapshot",
+        "ec2:ModifySnapshotTier",
+        "ec2:EnableFastSnapshotRestores",
+        "ec2:CreateImage",
+    ] {
+        let request = Request::new(action, snapshot_arn("snap-owned")).resource_tags(&ownership);
+        assert_eq!(
+            evaluate(&role, &request),
+            Decision::NotAllowed,
+            "the execution role must not be granted {action}"
+        );
+    }
+}
+
+#[test]
+fn wildcard_matching_follows_iam() {
+    assert!(wildcard_match(
+        "arn:aws:iam::1:role/app-*",
+        "arn:aws:iam::1:role/app-x/y"
+    ));
+    assert!(wildcard_match("ec2:*", "ec2:createtags"));
+    assert!(wildcard_match("a?c", "abc"));
+    assert!(!wildcard_match(
+        "arn:aws:iam::1:role/app-*-volume-backups",
+        "arn:aws:iam::1:role/app-dlm-1"
+    ));
+    assert!(!wildcard_match("app", "app-x"));
+}
