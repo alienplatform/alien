@@ -516,6 +516,11 @@ pub async fn acquire_setup_delete_deployment(
         let response = client
             .acquire()
             .body(alien_manager_api::types::AcquireRequest {
+                max_supported_deployment_protocol_version: Some(
+                    alien_core::MAX_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION
+                        .try_into()
+                        .expect("reader version fits the OpenAPI integer"),
+                ),
                 acquire_mode: Some("setup-teardown".to_string()),
                 session: session.to_string(),
                 deployment_ids: Some(vec![deployment_id.to_string()]),
@@ -635,6 +640,11 @@ async fn acquire_deployment_with_statuses(
         let resp = client
             .acquire()
             .body(alien_manager_api::types::AcquireRequest {
+                max_supported_deployment_protocol_version: Some(
+                    alien_core::MAX_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION
+                        .try_into()
+                        .expect("reader version fits the OpenAPI integer"),
+                ),
                 acquire_mode: acquire_mode.clone(),
                 session: session.to_string(),
                 deployment_ids: Some(vec![deployment_id.to_string()]),

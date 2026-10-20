@@ -3,6 +3,11 @@
  */
 
 import * as z from "zod/v4";
+import {
+  GcpFederationTrust,
+  GcpFederationTrust$Outbound,
+  GcpFederationTrust$outboundSchema,
+} from "./gcpfederationtrust.js";
 
 /**
  * Kubernetes management configuration (minimal for now)
@@ -34,8 +39,9 @@ export type ManagementConfigAzure = {
  * GCP management configuration
  */
 export type ManagementConfigGcp = {
+  federationTrust?: GcpFederationTrust | null | undefined;
   /**
-   * Service account email for management roles
+   * Linked source account metadata; never a direct target trust grant.
    */
   serviceAccountEmail: string;
   platform: "gcp";
@@ -116,6 +122,7 @@ export function managementConfigAzureToJSON(
 
 /** @internal */
 export type ManagementConfigGcp$Outbound = {
+  federationTrust?: GcpFederationTrust$Outbound | null | undefined;
   serviceAccountEmail: string;
   platform: "gcp";
 };
@@ -125,6 +132,7 @@ export const ManagementConfigGcp$outboundSchema: z.ZodType<
   ManagementConfigGcp$Outbound,
   ManagementConfigGcp
 > = z.object({
+  federationTrust: z.nullable(GcpFederationTrust$outboundSchema).optional(),
   serviceAccountEmail: z.string(),
   platform: z.literal("gcp"),
 });

@@ -17,6 +17,10 @@ export type AcquireRequest = {
    */
   deploymentModel: DeploymentModel;
   limit?: number | undefined;
+  /**
+   * Missing on protocol1 actors. Advertise the reader ceiling before taking ownership.
+   */
+  maxSupportedDeploymentProtocolVersion?: number | null | undefined;
   platforms?: Array<PlatformEnum> | null | undefined;
   session: string;
   setupMethod?: string | null | undefined;
@@ -29,6 +33,7 @@ export type AcquireRequest$Outbound = {
   deploymentIds?: Array<string> | null | undefined;
   deploymentModel: string;
   limit?: number | undefined;
+  maxSupportedDeploymentProtocolVersion?: number | null | undefined;
   platforms?: Array<string> | null | undefined;
   session: string;
   setupMethod?: string | null | undefined;
@@ -44,6 +49,7 @@ export const AcquireRequest$outboundSchema: z.ZodType<
   deploymentIds: z.nullable(z.array(z.string())).optional(),
   deploymentModel: DeploymentModel$outboundSchema,
   limit: z.int().optional(),
+  maxSupportedDeploymentProtocolVersion: z.nullable(z.int()).optional(),
   platforms: z.nullable(z.array(PlatformEnum$outboundSchema)).optional(),
   session: z.string(),
   setupMethod: z.nullable(z.string()).optional(),

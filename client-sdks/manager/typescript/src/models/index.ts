@@ -108,6 +108,7 @@ export * from "./externalpostgressslmode.js";
 export * from "./failuredomainselection.js";
 export * from "./gcpcloudkmskeyheartbeatdata.js";
 export * from "./gcpcustomcertificateconfig.js";
+export * from "./gcpfederationtrust.js";
 export * from "./getsecretresponse.js";
 export * from "./gitmetadata.js";
 export * from "./gitmetadataresponse.js";
