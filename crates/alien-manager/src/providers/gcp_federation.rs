@@ -8,41 +8,52 @@ use alien_error::AlienError;
 
 /// Older manager metadata can omit the capability. New GCP setup must require
 /// it; absence never selects direct target-account impersonation.
+///
+/// A configured Kubernetes issuer selects the manager's own Kubernetes service
+/// account (the hosted manager). Without one, the linked Google account is the
+/// trusted identity, including for private managers that run in Kubernetes.
 pub fn federation_trust(
     google_unique_id: Option<&str>,
     env: &HashMap<String, String>,
 ) -> alien_core::Result<Option<GcpFederationTrust>> {
-    let trust = if env.contains_key("KUBERNETES_SERVICE_HOST") {
-        match (env.get("GCP_MANAGEMENT_OIDC_ISSUER"), env.get("GCP_MANAGEMENT_OIDC_SUBJECT")) {
-            (None, None) => return Ok(None),
-            (Some(issuer), Some(subject)) => {
-                kubernetes_account(subject)?;
-                GcpFederationTrust { issuer: issuer.clone(), subject: subject.clone() }
+    let trust = match kubernetes_trust(env)? {
+        Some(trust) => trust,
+        None => {
+            let Some(subject) = google_unique_id else {
+                return Ok(None);
+            };
+            GcpFederationTrust {
+                issuer: "https://accounts.google.com".to_string(),
+                subject: subject.to_string(),
             }
-            _ => return Err(invalid("managerSource", "Kubernetes federation requires both GCP_MANAGEMENT_OIDC_ISSUER and GCP_MANAGEMENT_OIDC_SUBJECT")),
-        }
-    } else {
-        let Some(subject) = google_unique_id else {
-            return Ok(None);
-        };
-        GcpFederationTrust {
-            issuer: "https://accounts.google.com".to_string(),
-            subject: subject.to_string(),
         }
     };
     trust.validate()?;
     Ok(Some(trust))
 }
 
-/// Hosted acquisition does not load or impersonate a vendor Google account.
-/// Private GCP acquisition retains the existing container-to-linked-account grant.
+/// The Kubernetes identity named by `GCP_MANAGEMENT_OIDC_ISSUER` and
+/// `GCP_MANAGEMENT_OIDC_SUBJECT`, or `None` when neither is set.
+fn kubernetes_trust(env: &HashMap<String, String>) -> alien_core::Result<Option<GcpFederationTrust>> {
+    match (env.get("GCP_MANAGEMENT_OIDC_ISSUER"), env.get("GCP_MANAGEMENT_OIDC_SUBJECT")) {
+        (None, None) => Ok(None),
+        (Some(issuer), Some(subject)) => {
+            kubernetes_account(subject)?;
+            Ok(Some(GcpFederationTrust { issuer: issuer.clone(), subject: subject.clone() }))
+        }
+        _ => Err(invalid("managerSource", "Kubernetes federation requires both GCP_MANAGEMENT_OIDC_ISSUER and GCP_MANAGEMENT_OIDC_SUBJECT")),
+    }
+}
+
+/// A configured Kubernetes identity (the hosted manager) does not load or
+/// impersonate a vendor Google account. Otherwise acquisition uses the linked
+/// Google account through the existing container-to-linked-account grant.
 pub async fn assertion_source(
     provider: &dyn BindingsProviderApi,
     env: &HashMap<String, String>,
 ) -> Result<GcpFederationSource, AlienError> {
-    if env.contains_key("KUBERNETES_SERVICE_HOST") {
-        let trust = federation_trust(None, env).map_err(|error| error.into_generic())?
-            .ok_or_else(|| invalid("managerSource", "the selected Kubernetes manager does not advertise GCP federation; update its deployment configuration").into_generic())?;
+    if let Some(trust) = kubernetes_trust(env).map_err(|error| error.into_generic())? {
+        trust.validate().map_err(|error| error.into_generic())?;
         let (namespace, service_account) =
             kubernetes_account(&trust.subject).map_err(|error| error.into_generic())?;
         return Ok(GcpFederationSource::KubernetesServiceAccount {
@@ -196,6 +207,63 @@ mod binding_tests {
             );
             assert_eq!(service_account_unique_id, "123456789012345678901");
         }
+    }
+
+    fn in_cluster(extra: &[(&str, &str)]) -> HashMap<String, String> {
+        let mut env = HashMap::from([(
+            "KUBERNETES_SERVICE_HOST".to_string(),
+            "10.0.0.1".to_string(),
+        )]);
+        env.extend(extra.iter().map(|(k, v)| (k.to_string(), v.to_string())));
+        env
+    }
+
+    #[tokio::test]
+    async fn manager_in_kubernetes_without_an_issuer_uses_its_linked_google_account() {
+        let bindings = provider(HashMap::from([("management".to_string(), account())]));
+        let env = in_cluster(&[]);
+        let source = assertion_source(&bindings, &env).await.unwrap();
+        assert!(matches!(
+            source,
+            GcpFederationSource::GoogleServiceAccount { .. }
+        ));
+        let trust = federation_trust(Some("123456789012345678901"), &env)
+            .unwrap()
+            .expect("the linked account is advertised");
+        assert_eq!(trust.issuer, "https://accounts.google.com");
+        assert_eq!(trust.subject, "123456789012345678901");
+    }
+
+    #[tokio::test]
+    async fn configured_kubernetes_issuer_selects_the_manager_service_account() {
+        let bindings = provider(HashMap::from([("management".to_string(), account())]));
+        let env = in_cluster(&[
+            ("GCP_MANAGEMENT_OIDC_ISSUER", "https://oidc.example.com/cluster"),
+            ("GCP_MANAGEMENT_OIDC_SUBJECT", "system:serviceaccount:platform:manager"),
+        ]);
+        let GcpFederationSource::KubernetesServiceAccount {
+            issuer,
+            namespace,
+            service_account,
+            ..
+        } = assertion_source(&bindings, &env).await.unwrap()
+        else {
+            panic!("Kubernetes source required")
+        };
+        assert_eq!(issuer, "https://oidc.example.com/cluster");
+        assert_eq!((namespace.as_str(), service_account.as_str()), ("platform", "manager"));
+        let trust = federation_trust(Some("123456789012345678901"), &env)
+            .unwrap()
+            .unwrap();
+        assert_eq!(trust.subject, "system:serviceaccount:platform:manager");
+    }
+
+    #[tokio::test]
+    async fn half_configured_kubernetes_issuer_is_refused() {
+        let bindings = provider(HashMap::from([("management".to_string(), account())]));
+        let env = in_cluster(&[("GCP_MANAGEMENT_OIDC_ISSUER", "https://oidc.example.com/cluster")]);
+        assert!(assertion_source(&bindings, &env).await.is_err());
+        assert!(federation_trust(Some("123456789012345678901"), &env).is_err());
     }
 
     #[tokio::test]

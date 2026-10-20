@@ -682,7 +682,7 @@ async fn create_deployment(
         let params = CreateDeploymentParams {
             deployment_protocol_version: alien_core::deployment_protocol_version_for_platform(
                 req.platform,
-                None,
+                req.base_platform,
             ),
             name: req.name.clone(),
             deployment_group_id: deployment_group_id.clone(),

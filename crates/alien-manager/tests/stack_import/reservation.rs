@@ -135,3 +135,33 @@ async fn reservation_rejects_changed_inputs_and_retains_the_original_token() {
     assert_eq!(replay["deployment"]["id"], first["deployment"]["id"]);
     assert_eq!(replay["token"], first["token"]);
 }
+
+#[tokio::test]
+async fn creating_a_gcp_backed_kubernetes_deployment_records_the_gcp_protocol() {
+    let fixture = make_fixture_for_platform(
+        Platform::Kubernetes,
+        Some(Stack::new("fixture".into()).build()),
+    )
+    .await;
+    let (status, created) = create(
+        &fixture,
+        &fixture.dg_token,
+        serde_json::json!({"name":"gke-fixture", "platform":"kubernetes", "basePlatform":"gcp"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created:#}");
+    let record = fixture
+        .deployment_store
+        .get_deployment(
+            &alien_manager::auth::Subject::system(),
+            created["deployment"]["id"].as_str().unwrap(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(record.base_platform, Some(Platform::Gcp));
+    assert_eq!(
+        record.deployment_protocol_version,
+        alien_core::GCP_FEDERATION_DEPLOYMENT_PROTOCOL_VERSION
+    );
+}
