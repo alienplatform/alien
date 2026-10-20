@@ -11605,6 +11605,24 @@
           }
         }
       },
+      "LocalHttpQueueBinding": {
+        "type": "object",
+        "description": "Connection to one manager-owned local queue. Old SDKs reject its distinct service tag.",
+        "required": [
+          "endpoint"
+        ],
+        "properties": {
+          "endpoint": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "Queue operation endpoint on the existing manager listener."
+          },
+          "token": {
+            "type": "string",
+            "description": "Queue-scoped credential, injected at process start rather than persisted in stack state.",
+            "nullable": true
+          }
+        }
+      },
       "LocalKvBinding": {
         "type": "object",
         "description": "Local development KV binding configuration",
@@ -14086,6 +14104,29 @@
               }
             ],
             "description": "Local development queue binding"
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LocalHttpQueueBinding",
+                "description": "Manager-owned local queue, accessed directly over HTTP."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "service"
+                ],
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "enum": [
+                      "local-queue-http"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Manager-owned local queue, accessed directly over HTTP."
           }
         ],
         "description": "Binding parameters for Queue at runtime or in templates."

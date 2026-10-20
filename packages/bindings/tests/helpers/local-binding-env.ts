@@ -7,11 +7,7 @@
  *   → `{"service":"local-storage","storagePath":"<dir>"}`
  * - Kv: `crates/alien-core/src/bindings/kv.rs::LocalKvBinding`
  *   → `{"service":"local-kv","dataDir":"<dir>","keyPrefix"?:"<prefix>"}`
- * - Queue: `crates/alien-core/src/bindings/queue.rs::LocalQueueBinding`
- *   → `{"service":"local-queue","queuePath":"<dir>"}` — a *directory*; the
- *     `localqueue.v1` sqlite file (`localqueue.sqlite`) is created inside it
- *     (see the doc comment on `LocalQueueBinding::queue_path` and
- *     `crates/alien-bindings/src/providers/local_store.rs::LocalStore::open`).
+ * - Queue: a real manager-owned HTTP fixture, with the generated runtime binding.
  * - Vault: `crates/alien-core/src/bindings/vault.rs::LocalVaultBinding`
  *   → `{"service":"local-vault","vaultName":"<name>","dataDir":"<dir>"}` —
  *     secrets live at `<dir>/secrets.json`
@@ -35,9 +31,11 @@
  * with `ENVIRONMENT_VARIABLE_MISSING` before it ever reaches the binding.
  */
 
+import type { ChildProcess } from "node:child_process"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { startQueueServer } from "../../scripts/queue-test-server.mjs"
 
 /** The env var every binding operation needs in addition to its own JSON. */
 export const LOCAL_DEPLOYMENT_ENV: Record<string, string> = {
@@ -62,6 +60,7 @@ export function bindingEnvVarName(bindingName: string): string {
  * instance across files (Bun's single-process test runner does; Vitest's
  * per-file isolation doesn't, but the same call is a harmless no-op there).
  */
+const queueServers: ChildProcess[] = []
 const createdDirs = new Set<string>()
 const createdEnvKeys = new Set<string>()
 
@@ -86,6 +85,8 @@ export function makeTempDir(label: string): string {
  * this helper, so `os.tmpdir()` doesn't accumulate one directory per test run.
  */
 export function cleanupTempDirs(): void {
+  for (const server of queueServers) server.kill()
+  queueServers.length = 0
   for (const dir of createdDirs) {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -139,19 +140,18 @@ export function localKvBindingEnv(
   return fixture
 }
 
-/** Build the env for a `local-queue` binding rooted at a fresh temp dir. */
+/** Start a real HTTP queue owner for this SDK fixture. */
 export function localQueueBindingEnv(
   bindingName: string,
   dir = makeTempDir(`queue-${bindingName}`),
 ): LocalBindingFixture {
+  const server = startQueueServer(dir, [bindingName])
+  queueServers.push(server.process)
   const fixture = {
     dir,
     env: {
       ...LOCAL_DEPLOYMENT_ENV,
-      [bindingEnvVarName(bindingName)]: JSON.stringify({
-        service: "local-queue",
-        queuePath: dir,
-      }),
+      [bindingEnvVarName(bindingName)]: JSON.stringify(server.bindings[bindingName]),
     },
   }
   installBindingEnv(fixture.env)

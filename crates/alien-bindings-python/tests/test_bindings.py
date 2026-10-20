@@ -5,7 +5,9 @@ import gc
 import json
 import os
 import ssl
+import subprocess
 import threading
+import time
 import weakref
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -26,6 +28,30 @@ from alienplatform import (
     worker,
 )
 from alienplatform.bindings import AiConnection, PostgresConnection, SandboxPreview
+
+
+@pytest.fixture(scope="session")
+def queue_server_binary() -> str:
+    root = Path(__file__).resolve().parents[3]
+    return subprocess.check_output(
+        ["python3", str(root / "scripts/queue-test-server.py")], text=True
+    ).strip()
+
+
+@pytest.fixture
+def local_queue_binding(tmp_path: Path, queue_server_binary: str):
+    process = subprocess.Popen([queue_server_binary, str(tmp_path), "jobs", "batch-jobs"])
+    try:
+        deadline = time.monotonic() + 10
+        bindings_file = tmp_path / "bindings.json"
+        while not bindings_file.exists():
+            assert process.poll() is None, "queue owner exited before ready"
+            assert time.monotonic() < deadline, "queue owner readiness timeout"
+            time.sleep(0.01)
+        yield json.loads(bindings_file.read_text())
+    finally:
+        process.terminate()
+        process.wait(timeout=10)
 
 
 def bind(name: str, value: dict[str, object]) -> None:
@@ -68,9 +94,11 @@ async def test_storage_conditional_create_is_atomic(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_kv_queue_and_vault_real_local_providers(tmp_path: Path) -> None:
+async def test_kv_queue_and_vault_real_local_providers(
+    tmp_path: Path, local_queue_binding: dict[str, dict[str, object]]
+) -> None:
     bind("cache", {"service": "local-kv", "dataDir": str(tmp_path / "kv")})
-    bind("jobs", {"service": "local-queue", "queuePath": str(tmp_path / "queue")})
+    bind("jobs", local_queue_binding["jobs"])
     bind(
         "secrets",
         {"service": "local-vault", "vaultName": "test", "dataDir": str(tmp_path / "vault")},
@@ -98,8 +126,10 @@ async def test_kv_queue_and_vault_real_local_providers(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_queue_batches_preserve_outcomes_and_payloads(tmp_path: Path) -> None:
-    bind("batch-jobs", {"service": "local-queue", "queuePath": str(tmp_path / "queue")})
+async def test_queue_batches_preserve_outcomes_and_payloads(
+    local_queue_binding: dict[str, dict[str, object]]
+) -> None:
+    bind("batch-jobs", local_queue_binding["batch-jobs"])
     jobs = queue("batch-jobs")
     assert await jobs.send_batch([{"order": 1}]) == [{"status": "sent"}]
     results = await jobs.send_batch_text(["plain", "x" * (64 * 1024 + 1), "last"])

@@ -16,6 +16,9 @@ use chrono::Utc;
 pub struct LocalQueueController {
     /// Path to the queue database directory on the local filesystem
     pub(crate) queue_path: Option<String>,
+    /// Non-secret HTTP binding topology, refreshed on manager restart.
+    #[serde(default)]
+    pub(crate) binding: Option<alien_core::bindings::QueueBinding>,
 }
 
 #[controller]
@@ -55,6 +58,12 @@ impl LocalQueueController {
         );
 
         self.queue_path = Some(queue_path.display().to_string());
+        self.binding = Some(queue_manager.get_binding(&config.id).context(
+            ErrorData::CloudPlatformError {
+                message: "Resolve local queue endpoint".into(),
+                resource_id: Some(config.id.clone()),
+            },
+        )?);
 
         Ok(HandlerAction::Continue {
             state: Ready,
@@ -97,6 +106,12 @@ impl LocalQueueController {
                 })?;
 
         self.queue_path = Some(queue_path.display().to_string());
+        self.binding = Some(queue_manager.get_binding(&config.id).context(
+            ErrorData::CloudPlatformError {
+                message: "Resolve local queue endpoint".into(),
+                resource_id: Some(config.id.clone()),
+            },
+        )?);
 
         emit_local_queue_heartbeat(ctx, &config.id, self.queue_path.as_deref());
 
@@ -154,6 +169,7 @@ impl LocalQueueController {
         }
 
         self.queue_path = None;
+        self.binding = None;
 
         Ok(HandlerAction::Continue {
             state: Deleted,
@@ -188,21 +204,17 @@ impl LocalQueueController {
     }
 
     fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
-        use alien_core::bindings::{BindingValue, QueueBinding};
-
-        if let Some(queue_path) = &self.queue_path {
-            let binding = QueueBinding::local(BindingValue::value(queue_path.clone()));
-            Ok(Some(
+        self.binding
+            .as_ref()
+            .map(|binding| {
                 serde_json::to_value(binding).into_alien_error().context(
                     ErrorData::ResourceStateSerializationFailed {
-                        resource_id: "binding".to_string(),
-                        message: "Failed to serialize binding parameters".to_string(),
+                        resource_id: "binding".into(),
+                        message: "Serialize local queue binding".into(),
                     },
-                )?,
-            ))
-        } else {
-            Ok(None)
-        }
+                )
+            })
+            .transpose()
     }
 }
 

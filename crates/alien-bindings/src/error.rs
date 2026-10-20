@@ -879,6 +879,16 @@ pub enum ErrorData {
         reason: String,
     },
 
+    /// The caller does not hold the credential for this local queue.
+    #[error(
+        code = "LOCAL_QUEUE_UNAUTHORIZED",
+        message = "Local queue credential is missing or invalid",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 401
+    )]
+    LocalQueueUnauthorized,
+
     /// Queue operation failed.
     #[error(
         code = "QUEUE_OPERATION_FAILED",

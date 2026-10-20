@@ -332,6 +332,7 @@ export type { LocalArtifactRegistryHeartbeatData } from "./local-artifact-regist
 export type { LocalComputeClusterHeartbeatData } from "./local-compute-cluster-heartbeat-data-schema.js";
 export type { LocalContainerHeartbeatData } from "./local-container-heartbeat-data-schema.js";
 export type { LocalDaemonHeartbeatData } from "./local-daemon-heartbeat-data-schema.js";
+export type { LocalHttpQueueBinding } from "./local-http-queue-binding-schema.js";
 export type { LocalKvBinding } from "./local-kv-binding-schema.js";
 export type { LocalKvHeartbeatData } from "./local-kv-heartbeat-data-schema.js";
 export type { LocalOperation } from "./local-operation-schema.js";
@@ -851,6 +852,7 @@ export { LocalArtifactRegistryHeartbeatDataSchema } from "./local-artifact-regis
 export { LocalComputeClusterHeartbeatDataSchema } from "./local-compute-cluster-heartbeat-data-schema.js";
 export { LocalContainerHeartbeatDataSchema } from "./local-container-heartbeat-data-schema.js";
 export { LocalDaemonHeartbeatDataSchema } from "./local-daemon-heartbeat-data-schema.js";
+export { LocalHttpQueueBindingSchema } from "./local-http-queue-binding-schema.js";
 export { LocalKvBindingSchema } from "./local-kv-binding-schema.js";
 export { LocalKvHeartbeatDataSchema } from "./local-kv-heartbeat-data-schema.js";
 export { LocalOperationSchema } from "./local-operation-schema.js";
