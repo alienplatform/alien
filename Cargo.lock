@@ -774,7 +774,9 @@ dependencies = [
 name = "alien-egress-gateway"
 version = "3.3.37"
 dependencies = [
+ "alien-aws-clients",
  "alien-bindings",
+ "alien-client-config",
  "alien-core",
  "alien-error",
  "async-trait",

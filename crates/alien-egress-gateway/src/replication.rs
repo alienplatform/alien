@@ -24,7 +24,10 @@ use std::{
 pub const MAX_SNAPSHOT: usize = 128 * 1024 * 1024;
 pub struct Replication {
     service: Option<crate::config::Peers>,
-    secret: Option<[u8; 32]>,
+    /// Every replica secret this process accepts, the current one first. Requests carry one
+    /// signature per secret and any match authenticates, so replicas that know different
+    /// subsets during a secret change still verify each other.
+    secrets: Vec<[u8; 32]>,
     port: u16,
     resolver: hickory_resolver::TokioResolver,
     client: reqwest::Client,
@@ -32,11 +35,11 @@ pub struct Replication {
 impl Replication {
     pub fn new(
         service: Option<crate::config::Peers>,
-        secret: Option<[u8; 32]>,
+        secrets: Vec<[u8; 32]>,
         port: u16,
         resolver: hickory_resolver::TokioResolver,
     ) -> Result<Self> {
-        if service.is_some() && secret.is_none() {
+        if service.is_some() && secrets.is_empty() {
             return Err(invalid("peers requires replicaSecret"));
         }
         let client = reqwest::Client::builder()
@@ -47,7 +50,7 @@ impl Replication {
             .context(unavailable("build replica client"))?;
         Ok(Self {
             service,
-            secret,
+            secrets,
             port,
             resolver,
             client,
@@ -56,13 +59,19 @@ impl Replication {
     pub fn enabled(&self) -> bool {
         self.service.is_some()
     }
-    fn mac(&self, method: &str, path: &str, time: u64, body: &[u8]) -> Result<Hmac<Sha256>> {
-        let mut mac = Hmac::<Sha256>::new_from_slice(
-            &self
-                .secret
-                .ok_or_else(|| denied("replica exchange disabled"))?,
-        )
-        .map_err(|_| invalid("invalid replicaSecret"))?;
+    /// The replica secrets this process accepts, the current one first.
+    pub fn secrets(&self) -> &[[u8; 32]] {
+        &self.secrets
+    }
+    fn mac(
+        secret: &[u8; 32],
+        method: &str,
+        path: &str,
+        time: u64,
+        body: &[u8],
+    ) -> Result<Hmac<Sha256>> {
+        let mut mac =
+            Hmac::<Sha256>::new_from_slice(secret).map_err(|_| invalid("invalid replicaSecret"))?;
         mac.update(b"alien-egress-replica-v1\n");
         mac.update(method.as_bytes());
         mac.update(b"\n");
@@ -71,6 +80,22 @@ impl Replication {
         mac.update(&time.to_be_bytes());
         mac.update(&Sha256::digest(body));
         Ok(mac)
+    }
+    /// One base64 signature per accepted secret, comma-separated. A replica that knows a
+    /// single secret sends one signature, the format every gateway version reads.
+    fn signatures(&self, method: &str, path: &str, time: u64, body: &[u8]) -> Result<String> {
+        if self.secrets.is_empty() {
+            return Err(denied("replica exchange disabled"));
+        }
+        let mut signatures = Vec::with_capacity(self.secrets.len());
+        for secret in &self.secrets {
+            signatures.push(STANDARD.encode(
+                Self::mac(secret, method, path, time, body)?
+                    .finalize()
+                    .into_bytes(),
+            ));
+        }
+        Ok(signatures.join(","))
     }
     pub fn authenticate(
         &self,
@@ -88,16 +113,27 @@ impl Replication {
         if now.abs_diff(time) > 60 {
             return Err(denied("replica timestamp expired"));
         }
-        let signature = headers
+        let signatures = headers
             .get("x-alien-replica-signature")
             .and_then(|v| v.to_str().ok())
             .ok_or_else(|| denied("replica signature missing"))?;
-        let signature = STANDARD
-            .decode(signature)
-            .map_err(|_| denied("invalid replica signature"))?;
-        self.mac(method, path, time, body)?
-            .verify_slice(&signature)
-            .map_err(|_| denied("invalid replica signature"))
+        if self.secrets.is_empty() {
+            return Err(denied("replica exchange disabled"));
+        }
+        for signature in signatures.split(',').take(4) {
+            let Ok(signature) = STANDARD.decode(signature.trim()) else {
+                continue;
+            };
+            for secret in &self.secrets {
+                if Self::mac(secret, method, path, time, body)?
+                    .verify_slice(&signature)
+                    .is_ok()
+                {
+                    return Ok(());
+                }
+            }
+        }
+        Err(denied("invalid replica signature"))
     }
     async fn peers(&self) -> Result<Vec<SocketAddr>> {
         let Some(service) = &self.service else {
@@ -178,8 +214,7 @@ impl Replication {
     }
     async fn send(&self, peer: SocketAddr, path: &str, body: Vec<u8>) -> Result<reqwest::Response> {
         let time = chrono::Utc::now().timestamp().max(0) as u64;
-        let signature =
-            STANDARD.encode(self.mac("POST", path, time, &body)?.finalize().into_bytes());
+        let signature = self.signatures("POST", path, time, &body)?;
         self.client
             .post(format!("http://{peer}{path}"))
             .header("content-type", "application/json")
@@ -457,7 +492,7 @@ mod tests {
                     dns: "empty.test".into(),
                     port: 3129,
                 })),
-                Some([7; 32]),
+                vec![[7; 32]],
                 3129,
                 builder.build().unwrap(),
             )

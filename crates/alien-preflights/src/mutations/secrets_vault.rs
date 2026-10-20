@@ -127,10 +127,9 @@ impl StackMutation for SecretsVaultMutation {
         // see ManagementPermissionProfileMutation. A vault-scoped grant would make the
         // runtime write a policy onto its own management role, which is denied.
         //
-        // On AWS management only writes here: environment sync and the sandbox egress key are
-        // write-only, so the vendor-side identity cannot read the deployment's secrets back.
-        // The one exception is the sandbox gateway configuration (see
-        // `grant_management_gateway_config_read`).
+        // On AWS management only writes here: environment sync, the sandbox egress key and the
+        // gateway configuration are write-only, so the vendor-side identity cannot read the
+        // deployment's secrets back.
         if !(stack_state.platform == Platform::Aws
             && config.stack_settings.setup_management == alien_core::SetupManagement::Automatic)
         {
@@ -147,11 +146,6 @@ impl StackMutation for SecretsVaultMutation {
                 !infrastructure_only && !aws,
                 needs_certificates,
             )?;
-            if aws {
-                super::sandbox_gateway_permissions::grant_management_gateway_config_read(
-                    &mut stack,
-                )?;
-            }
         }
 
         match stack_state.platform {

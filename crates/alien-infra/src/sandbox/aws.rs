@@ -75,6 +75,10 @@ pub struct AwsSandboxController {
     /// secret. An unchanged configuration is not read or rewritten.
     #[serde(default)]
     pub(crate) egress_config_digest: Option<String>,
+    /// The gateway reads its replica secret from Secrets Manager and that secret exists, so the
+    /// published configuration names the source and never embeds or reads the secret.
+    #[serde(default)]
+    pub(crate) egress_replica_secret_ready: bool,
     /// Resource default retained independently of the gateway metadata.
     #[serde(default)]
     pub(crate) default_policy: Option<alien_core::EgressPolicy>,
@@ -573,6 +577,7 @@ impl AwsSandboxController {
         } else {
             self.egress_public_key = None;
             self.egress_config_digest = None;
+            self.egress_replica_secret_ready = false;
             self.egress_network_verified = false;
             self.egress = Some(config.into());
         }
@@ -590,8 +595,13 @@ impl AwsSandboxController {
         if let Some(key) = &self.egress_public_key {
             self.egress_network_verified = false;
             if super::egress::is_declared(ctx) {
-                super::egress::publish_aws_config(ctx, key, &mut self.egress_config_digest)
-                    .await?;
+                super::egress::publish_aws_config(
+                    ctx,
+                    key,
+                    &mut self.egress_config_digest,
+                    &mut self.egress_replica_secret_ready,
+                )
+                .await?;
                 self.egress_network_verified = true;
             }
         }
@@ -714,8 +724,13 @@ impl AwsSandboxController {
         if let Some(key) = &self.egress_public_key {
             self.egress_network_verified = false;
             if super::egress::is_declared(ctx) {
-                super::egress::publish_aws_config(ctx, key, &mut self.egress_config_digest)
-                    .await?;
+                super::egress::publish_aws_config(
+                    ctx,
+                    key,
+                    &mut self.egress_config_digest,
+                    &mut self.egress_replica_secret_ready,
+                )
+                .await?;
                 self.egress_network_verified = true;
             }
         }
@@ -1052,10 +1067,23 @@ impl AwsSandboxController {
             let vault = super::egress::deployment_vault(ctx).await?;
             let vault_name = format!("{}-{}", ctx.resource_prefix, alien_core::SECRETS_VAULT_ID);
             super::egress::delete_shared_secrets(vault.as_ref(), &vault_name).await?;
+            // A direct setup has no setup stack to remove the replica secret this controller
+            // created; a setup stack deletes its own.
+            if self.egress_replica_secret_ready
+                && ctx.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
+            {
+                let client = ctx
+                    .service_provider
+                    .get_aws_secrets_manager_client(ctx.get_aws_config()?)
+                    .await?;
+                super::egress::delete_aws_replica_secret(client.as_ref(), ctx.resource_prefix)
+                    .await?;
+            }
             info!(sandbox_id = %config.id, "Deleted the deployment's sandbox egress key and gateway configuration");
         }
         self.egress_public_key = None;
         self.egress_config_digest = None;
+        self.egress_replica_secret_ready = false;
         Ok(HandlerAction::Continue {
             state: Deleted,
             suggested_delay: None,
@@ -4389,6 +4417,46 @@ mod tests {
             controller: AwsSandboxController,
             directory: &std::path::Path,
         ) -> AwsSandboxController {
+            refresh_with(id, others, controller, directory, GatewayFixture::default()).await
+        }
+
+        /// The running gateway, the replica secret's Secrets Manager answers, and who set up the
+        /// deployment, for a refresh pass. A `fresh` gateway is only in the desired stack, on
+        /// `image`: it has not been created yet.
+        #[derive(Default)]
+        struct GatewayFixture {
+            image: Option<&'static str>,
+            secrets_manager: Option<alien_aws_clients::secrets_manager::MockSecretsManagerApi>,
+            direct_setup: bool,
+            fresh: bool,
+        }
+
+        fn gateway_container(image: &str) -> alien_core::Container {
+            alien_core::Container::new(alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.into())
+                .code(alien_core::ContainerCode::Image {
+                    image: image.into(),
+                })
+                .cpu(alien_core::ResourceSpec {
+                    min: "0.25".into(),
+                    desired: "0.25".into(),
+                })
+                .memory(alien_core::ResourceSpec {
+                    min: "512Mi".into(),
+                    desired: "512Mi".into(),
+                })
+                .replicas(2)
+                .permissions(alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.into())
+                .port(3128)
+                .build()
+        }
+
+        async fn refresh_with(
+            id: &str,
+            others: &[&str],
+            controller: AwsSandboxController,
+            directory: &std::path::Path,
+            gateway: GatewayFixture,
+        ) -> AwsSandboxController {
             use crate::{LocalVaultController, LocalVaultState};
             use alien_core::{Vault, SECRETS_VAULT_ID};
 
@@ -4408,6 +4476,13 @@ mod tests {
             provider
                 .expect_get_aws_ec2_client()
                 .returning(move |_| Ok(ec2.clone()));
+            if let Some(secrets_manager) = gateway.secrets_manager {
+                let secrets_manager: Arc<dyn alien_aws_clients::secrets_manager::SecretsManagerApi> =
+                    Arc::new(secrets_manager);
+                provider
+                    .expect_get_aws_secrets_manager_client()
+                    .returning(move |_| Ok(secrets_manager.clone()));
+            }
             let mut builder = SingleControllerExecutor::builder()
                 .resource(internet_sandbox(id))
                 .controller(AwsSandboxController {
@@ -4416,6 +4491,13 @@ mod tests {
                 })
                 .platform(Platform::Aws)
                 .service_provider(Arc::new(provider));
+            if gateway.image.is_some() {
+                builder = builder.initial_setup_authority(if gateway.direct_setup {
+                    alien_core::InitialSetupAuthority::DirectSetup
+                } else {
+                    alien_core::InitialSetupAuthority::ImportedHandoff
+                });
+            }
             for other in others {
                 builder = builder
                     .with_stack_resource(internet_sandbox(other), alien_core::ResourceLifecycle::Live);
@@ -4433,11 +4515,242 @@ mod tests {
                 .build()
                 .await
                 .unwrap();
+            if let (Some(image), true) = (gateway.image, gateway.fresh) {
+                // The stack mutations add the managed gateway; this release starts it on `image`
+                // and it has never been created.
+                let id = alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID;
+                executor.remove_saved_resource(id);
+                executor
+                    .desired_resource_config_mut(id)
+                    .and_then(|config| config.downcast_mut::<alien_core::Container>())
+                    .expect("the stack mutations add the gateway")
+                    .code = alien_core::ContainerCode::Image {
+                    image: image.into(),
+                };
+            }
+            if let (Some(image), false) = (gateway.image, gateway.fresh) {
+                let container = gateway_container(image);
+                executor.insert_saved_resource(
+                    alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID,
+                    alien_core::StackResourceState::builder()
+                        .resource_type(alien_core::Container::RESOURCE_TYPE.to_string())
+                        .status(ResourceStatus::Running)
+                        .config(alien_core::Resource::new(container))
+                        .lifecycle(alien_core::ResourceLifecycle::Live)
+                        .build(),
+                );
+            }
             executor.step().await.expect("the refresh runs");
             executor
                 .internal_state::<AwsSandboxController>()
                 .unwrap()
                 .clone()
+        }
+
+        const SOURCE_READING_GATEWAY: &str =
+            "ghcr.io/alienplatform/alien-egress-gateway@sha256:0000000000000000000000000000000000000000000000000000000000000001";
+        const EMBEDDING_GATEWAY: &str = "ghcr.io/alienplatform/alien-egress-gateway@sha256:b252a1b423b95385e5df0c57a37daae6937daa274e3c7783c71704584b18483d";
+
+        async fn stored_gateway_config(directory: &std::path::Path) -> serde_json::Value {
+            use alien_bindings::{providers::vault::LocalVault, Vault as _};
+            let vault = LocalVault::new("secrets".into(), directory.into());
+            serde_json::from_str(
+                &vault
+                    .get_secret(crate::sandbox::egress::GATEWAY_CONFIG)
+                    .await
+                    .unwrap(),
+            )
+            .unwrap()
+        }
+
+        fn describe_answers(
+            answer: fn() -> alien_client_core::Result<
+                alien_aws_clients::secrets_manager::DescribeSecretResponse,
+            >,
+            times: usize,
+        ) -> alien_aws_clients::secrets_manager::MockSecretsManagerApi {
+            let mut secrets_manager =
+                alien_aws_clients::secrets_manager::MockSecretsManagerApi::new();
+            secrets_manager
+                .expect_describe_secret()
+                .withf(|request| request.secret_id == "test-sandbox-egress-replica-secret")
+                .times(times)
+                .returning(move |_| answer());
+            secrets_manager
+        }
+
+        fn secret_exists() -> alien_client_core::Result<
+            alien_aws_clients::secrets_manager::DescribeSecretResponse,
+        > {
+            Ok(serde_json::from_value(serde_json::json!({"Name": "test-sandbox-egress-replica-secret"}))
+                .unwrap())
+        }
+
+        fn secret_absent() -> alien_client_core::Result<
+            alien_aws_clients::secrets_manager::DescribeSecretResponse,
+        > {
+            Err(AlienError::new(alien_client_core::ErrorData::RemoteResourceNotFound {
+                resource_type: "secret".into(),
+                resource_name: "test-sandbox-egress-replica-secret".into(),
+            }))
+        }
+
+        fn existence_denied() -> alien_client_core::Result<
+            alien_aws_clients::secrets_manager::DescribeSecretResponse,
+        > {
+            Err(AlienError::new(alien_client_core::ErrorData::RemoteAccessDenied {
+                resource_type: "secret".into(),
+                resource_name: "test-sandbox-egress-replica-secret".into(),
+            }))
+        }
+
+        /// Once every gateway replica reads its replica secret from Secrets Manager and setup
+        /// has created it, the owner publishes a configuration that names the source and holds
+        /// no secret, and checks the secret's existence only once.
+        #[tokio::test]
+        async fn a_gateway_that_reads_the_source_gets_a_configuration_without_the_secret() {
+            let directory = tempfile::tempdir().unwrap();
+            let embedded =
+                refresh_pass("agents", &[], running_internet_controller(IMAGE_ARN), directory.path()).await;
+            assert!(stored_gateway_config(directory.path()).await["replicaSecret"].is_string());
+
+            let moved = refresh_with(
+                "agents",
+                &[],
+                embedded,
+                directory.path(),
+                GatewayFixture {
+                    image: Some(SOURCE_READING_GATEWAY),
+                    secrets_manager: Some(describe_answers(secret_exists, 1)),
+                    direct_setup: false,
+                    fresh: false,
+                },
+            )
+            .await;
+            assert!(moved.egress_replica_secret_ready);
+            let stored = stored_gateway_config(directory.path()).await;
+            assert!(stored.get("replicaSecret").is_none(), "{stored}");
+            assert_eq!(
+                stored["replicaSecretSource"],
+                serde_json::json!({"awsSecretsManager": {"secretId": "test-sandbox-egress-replica-secret"}})
+            );
+
+            // Later refreshes neither look the secret up again nor rewrite the entry.
+            refresh_with(
+                "agents",
+                &["other"],
+                moved,
+                directory.path(),
+                GatewayFixture {
+                    image: Some(SOURCE_READING_GATEWAY),
+                    secrets_manager: Some(describe_answers(secret_exists, 0)),
+                    direct_setup: false,
+                    fresh: false,
+                },
+            )
+            .await;
+            assert_eq!(
+                stored_gateway_config(directory.path()).await["audiences"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                2
+            );
+        }
+
+        /// A gateway on an image that predates sourced secrets, or a setup that has not created
+        /// the secret (or predates the existence check), keeps the embedded secret.
+        #[tokio::test]
+        async fn the_embedded_secret_stays_until_the_gateway_and_setup_are_ready() {
+            for (image, answer, times) in [
+                (EMBEDDING_GATEWAY, secret_exists as fn() -> _, 0),
+                (SOURCE_READING_GATEWAY, secret_absent as fn() -> _, 1),
+                (SOURCE_READING_GATEWAY, existence_denied as fn() -> _, 1),
+            ] {
+                let directory = tempfile::tempdir().unwrap();
+                let controller = refresh_with(
+                    "agents",
+                    &[],
+                    running_internet_controller(IMAGE_ARN),
+                    directory.path(),
+                    GatewayFixture {
+                        image: Some(image),
+                        secrets_manager: Some(describe_answers(answer, times)),
+                        direct_setup: false,
+                        fresh: false,
+                    },
+                )
+                .await;
+                assert!(!controller.egress_replica_secret_ready, "{image}");
+                let stored = stored_gateway_config(directory.path()).await;
+                assert!(stored["replicaSecret"].is_string(), "{image}: {stored}");
+                assert!(stored.get("replicaSecretSource").is_none());
+            }
+        }
+
+        /// A direct setup has no setup stack to generate the secret, so the controller creates
+        /// it once with a value it never reads back.
+        #[tokio::test]
+        async fn a_direct_setup_creates_the_replica_secret_once() {
+            let directory = tempfile::tempdir().unwrap();
+            let mut secrets_manager = describe_answers(secret_absent, 1);
+            secrets_manager
+                .expect_create_secret()
+                .withf(|request| {
+                    request.name == "test-sandbox-egress-replica-secret"
+                        && request.secret_string.as_ref().is_some_and(|value| value.len() >= 32)
+                })
+                .times(1)
+                .returning(|_| {
+                    Ok(serde_json::from_value(
+                        serde_json::json!({"Name": "test-sandbox-egress-replica-secret"}),
+                    )
+                    .unwrap())
+                });
+            secrets_manager.expect_get_secret_value().times(0);
+            let controller = refresh_with(
+                "agents",
+                &[],
+                running_internet_controller(IMAGE_ARN),
+                directory.path(),
+                GatewayFixture {
+                    image: Some(SOURCE_READING_GATEWAY),
+                    secrets_manager: Some(secrets_manager),
+                    direct_setup: true,
+                    fresh: false,
+                },
+            )
+            .await;
+            assert!(controller.egress_replica_secret_ready);
+            assert!(stored_gateway_config(directory.path()).await.get("replicaSecret").is_none());
+        }
+
+        /// A fresh install: the gateway is not created yet, so no replica holds an embedded
+        /// secret. The owner publishes the source-only configuration right away, without reading
+        /// the stored entry, which setup forbids the managing identity to read.
+        #[tokio::test]
+        async fn a_fresh_install_publishes_the_source_before_the_gateway_starts() {
+            let directory = tempfile::tempdir().unwrap();
+            let controller = refresh_with(
+                "agents",
+                &[],
+                running_internet_controller(IMAGE_ARN),
+                directory.path(),
+                GatewayFixture {
+                    image: Some(SOURCE_READING_GATEWAY),
+                    secrets_manager: Some(describe_answers(secret_exists, 1)),
+                    direct_setup: false,
+                    fresh: true,
+                },
+            )
+            .await;
+            assert!(controller.egress_replica_secret_ready);
+            let stored = stored_gateway_config(directory.path()).await;
+            assert!(stored.get("replicaSecret").is_none(), "{stored}");
+            assert_eq!(
+                stored["replicaSecretSource"],
+                serde_json::json!({"awsSecretsManager": {"secretId": "test-sandbox-egress-replica-secret"}})
+            );
         }
 
         /// The owner skips republishing an unchanged configuration, so it must forget what it
