@@ -96,6 +96,38 @@ impl ManagerConfig {
 #[cfg(test)]
 mod tests {
     use super::ManagerConfig;
+    use alien_core::Platform;
+    use std::path::PathBuf;
+
+    /// The deployment loop reconciles Local deployments only with a state directory and
+    /// when `targets` admits Local, so only then can a local queue owner ever register.
+    #[test]
+    fn hosts_local_deployments_requires_state_dir_and_a_local_target() {
+        let state_dir = Some(PathBuf::from("alien-data"));
+        for (state_dir, targets, expected) in [
+            (state_dir.clone(), vec![], true),
+            (state_dir.clone(), vec![Platform::Local], true),
+            (
+                state_dir.clone(),
+                vec![Platform::Aws, Platform::Local],
+                true,
+            ),
+            (state_dir.clone(), vec![Platform::Aws, Platform::Gcp], false),
+            (None, vec![], false),
+            (None, vec![Platform::Local], false),
+        ] {
+            let config = ManagerConfig {
+                state_dir: state_dir.clone(),
+                targets: targets.clone(),
+                ..Default::default()
+            };
+            assert_eq!(
+                config.hosts_local_deployments(),
+                expected,
+                "state_dir = {state_dir:?}, targets = {targets:?}"
+            );
+        }
+    }
 
     #[test]
     fn commands_base_url_normalizes_trailing_slash() {
