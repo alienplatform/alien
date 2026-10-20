@@ -16,7 +16,7 @@ use crate::{
     StackMutation,
 };
 
-const GATEWAY_IMAGE: &str = "ghcr.io/alienplatform/alien-egress-gateway@sha256:8538880f99141888e54bedc7d290194dfee5bfe11910266b309dde53de2601b0";
+const GATEWAY_IMAGE: &str = "ghcr.io/alienplatform/alien-egress-gateway@sha256:d29e0abb15bcf05d3c50d87d8ebc7e8f474e668304aad4a8396daabbaafd53f1";
 
 /// AWS and Kubernetes deployments run the gateway with the same compute and
 /// service-account machinery as application containers. AWS setup templates are prepared

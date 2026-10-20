@@ -7,7 +7,14 @@ import time
 from pathlib import Path
 
 
-def check_denied_range_refresh(suite, config, docker, containers, prefix, audience, origin, proxy):
+def publish_to_vault(suite, config):
+    secret_file = suite.output / "vault/secrets.json"
+    replacement = secret_file.with_suffix(".next")
+    replacement.write_text(json.dumps({"test": "fake-test-secret", "sandbox-egress-gateway-config": json.dumps(config)}))
+    replacement.replace(secret_file)
+
+
+def check_denied_range_refresh(suite, config, docker, containers, prefix, audience, origin, proxy, publish=publish_to_vault):
     control = "93.184.216.6"
     name = prefix + "-range-control"
     docker("run", "-d", "--name", name, "--network", prefix, "--ip", control,
@@ -56,10 +63,7 @@ def check_denied_range_refresh(suite, config, docker, containers, prefix, audien
                 echo(stream)
 
             config["deniedRanges"].append(origin + "/32")
-            secret_file = suite.output / "vault/secrets.json"
-            replacement = secret_file.with_suffix(".next")
-            replacement.write_text(json.dumps({"test": "fake-test-secret", "sandbox-egress-gateway-config": json.dumps(config)}))
-            replacement.replace(secret_file)
+            publish(suite, config)
             pending, closed = set(addresses), set()
             # Configuration polls every 60s and authorization sweeps every 30s.
             deadline = time.monotonic() + 100

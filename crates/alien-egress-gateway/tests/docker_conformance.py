@@ -766,6 +766,14 @@ print("curl passed")
         self.record("unprivileged localhost HTTP remains local", lambda: check_loopback_http(name))
 
 
+def publish_to_file(suite, config):
+    """Replaces the mounted configuration whole, as the kubelet swaps a mounted Secret's files."""
+    staged = suite.output / "files/config.json.next"
+    staged.write_text(json.dumps(config))
+    staged.chmod(0o644)
+    staged.replace(suite.output / "files/config.json")
+
+
 def main():
     global AGENT_UID
     parser = argparse.ArgumentParser(description=__doc__)
@@ -775,6 +783,8 @@ def main():
     parser.add_argument("--agent-uid", type=int, default=60000, help="command UID/GID configured in the agent fixture image")
     parser.add_argument("--gateway-binary", type=Path)
     parser.add_argument("--vault-config", action="store_true")
+    parser.add_argument("--file-config", action="store_true",
+                        help="read the configuration from a mounted file it refreshes, and the replica secret from a mounted file, as on Kubernetes")
     parser.add_argument("--replica-bootstrap-only", action="store_true")
     parser.add_argument("--connect-port80-only", action="store_true")
     parser.add_argument("--range-refresh-only", action="store_true")
@@ -788,6 +798,8 @@ def main():
     args = parser.parse_args()
     if args.range_refresh_only and not args.vault_config:
         parser.error("--range-refresh-only requires --vault-config")
+    if args.vault_config and args.file_config:
+        parser.error("--vault-config and --file-config are exclusive")
     if args.resume_only and not args.agent_image:
         parser.error("--resume-only requires --agent-image")
     if args.dns_limit_only and not args.agent_image:
@@ -802,7 +814,7 @@ def main():
     AGENT_UID = args.agent_uid
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
-    for name in ["origin", "vault"]:
+    for name in ["origin", "vault", "files"]:
         (output / name).mkdir(mode=0o777)
         (output / name).chmod(0o777)
     ca = certificates(output / "origin")
@@ -816,6 +828,12 @@ def main():
     config = dict(listen="0.0.0.0:3128", audiences=[AUD], defaultPolicies={AUD: "internet"}, peers={"dns":"replicas.test","port":3129}, replicaSecret=base64.b64encode(bytes([7])*32).decode(), keys=[dict(kid="test", publicKey=public)], deniedRanges=["93.184.217.0/24", "10.244.0.0/16"], credentials=rules, upstreamCaCertificates=[ca])
     if args.vault_config:
         (output / "vault/secrets.json").write_text(json.dumps({"test":"fake-test-secret", "sandbox-egress-gateway-config":json.dumps(config)}))
+    if args.file_config:
+        # The configuration names the mounted replica secret and embeds none.
+        del config["replicaSecret"]
+        config["replicaSecretSource"] = {"file": {"path": "/files/replica-secret"}}
+        (output / "files/replica-secret").write_text(base64.b64encode(bytes([9])*32).decode())
+        publish_to_file(suite, config)
     containers, networks, images = [], [], []
     try:
         docker("network", "create", "--internal", "--subnet", "93.184.216.0/24", PREFIX)
@@ -832,7 +850,12 @@ def main():
             ip = f"93.184.216.{number + 2}"
             name = PREFIX + f"-proxy{number}"
             binary = ["-v", f"{args.gateway_binary.resolve()}:/usr/local/bin/alien-egress-gateway:ro"] if args.gateway_binary else []
-            config_env = ["-e", "ALIEN_SECRETS_BINDING=" + json.dumps({"service":"local-vault","dataDir":"/vault","vaultName":"secrets"})] if args.vault_config else ["-e", "ALIEN_EGRESS_GATEWAY_CONFIG=" + json.dumps(config)]
+            if args.vault_config:
+                config_env = ["-e", "ALIEN_SECRETS_BINDING=" + json.dumps({"service":"local-vault","dataDir":"/vault","vaultName":"secrets"})]
+            elif args.file_config:
+                config_env = ["-v", f"{output / 'files'}:/files:ro", "-e", "ALIEN_EGRESS_GATEWAY_CONFIG_FILE=/files/config.json"]
+            else:
+                config_env = ["-e", "ALIEN_EGRESS_GATEWAY_CONFIG=" + json.dumps(config)]
             docker("run", "-d", "--read-only", "--memory", "512m", "--cap-drop", "ALL", *binary, "--name", name, "--network", PREFIX, "--ip", ip, "--dns", ORIGIN,
                    "-v", f"{output / 'vault'}:/vault:ro",
                    "-e", "ALIEN_DEPLOYMENT_TYPE=local",
@@ -905,11 +928,14 @@ def main():
                 suite.proxy_only(guest, containers, networks, label=f"-py{version}", ip=f"172.29.91.{20 + index}")
             from run_hook_egress import check_run_hook_agents
             check_run_hook_agents(suite, args.agent_image, containers, AGENT_UID)
-        if not args.vault_config:
+        if not args.vault_config and not args.file_config:
             check_graceful_shutdown(suite, AUD, ORIGIN, "93.184.216.4", docker, PREFIX)
         if args.vault_config:
             from denied_ranges import check_denied_range_refresh
             check_denied_range_refresh(suite, config, docker, containers, PREFIX, AUD, ORIGIN, PROXY)
+        if args.file_config:
+            from denied_ranges import check_denied_range_refresh
+            check_denied_range_refresh(suite, config, docker, containers, PREFIX, AUD, ORIGIN, PROXY, publish=publish_to_file)
     finally:
         secret_in_logs = False
         for name in reversed(containers):
