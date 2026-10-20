@@ -5189,6 +5189,220 @@ mod tests {
             .await;
             assert_runtime_cleanup_finished(&state, &deleted);
         }
+
+        /// The upgrade release: setup has removed the managing identity's read of the gateway
+        /// configuration, the gateway still runs an image that embeds its replica secret, and the
+        /// same release changes the configuration. Failing that publish kept this sandbox from
+        /// Running, and the gateway, which depends on it, never rolled. The change must wait
+        /// instead, then reach the gateway right after the roll.
+        mod deferred_until_the_roll {
+            use super::*;
+            use crate::{AwsVaultController, AwsVaultState};
+            use alien_core::{
+                AwsClientConfig, AwsCredentials, AwsServiceOverrides, ClientConfig, Vault,
+                SECRETS_VAULT_ID,
+            };
+            use httpmock::{Method::POST, MockServer};
+            use std::collections::HashMap;
+
+            /// Management may write the vault but not read it, as setup now grants. Returns the
+            /// read and write mocks.
+            async fn denied_reads(
+                server: &MockServer,
+            ) -> (httpmock::Mock<'_>, httpmock::Mock<'_>) {
+                let read = server
+                    .mock_async(|when, then| {
+                        when.method(POST).header("x-amz-target", "AmazonSSM.GetParameter");
+                        then.status(400).json_body(serde_json::json!({
+                            "__type": "AccessDeniedException",
+                            "message": "User: arn:aws:sts::123456789012:assumed-role/test-management/session is not authorized to perform: ssm:GetParameter with an explicit deny"
+                        }));
+                    })
+                    .await;
+                let write = server
+                    .mock_async(|when, then| {
+                        when.method(POST)
+                            .header("x-amz-target", "AmazonSSM.PutParameter")
+                            .body_contains("test-secrets-sandbox-egress-gateway-config");
+                        then.status(200)
+                            .json_body(serde_json::json!({"Version": 2, "Tier": "Standard"}));
+                    })
+                    .await;
+                (read, write)
+            }
+
+            /// One refresh pass of the key owner `agents` beside `others`, with the gateway running
+            /// `gateway_image`. Returns the controller and its status afterwards.
+            async fn pass(
+                ssm: &MockServer,
+                controller: AwsSandboxController,
+                others: &[&str],
+                gateway_image: &str,
+                secrets_manager: alien_aws_clients::secrets_manager::MockSecretsManagerApi,
+            ) -> (AwsSandboxController, ResourceStatus) {
+                let mut microvms = MockLambdaMicrovmsApi::new();
+                microvms
+                    .expect_get_microvm_image()
+                    .returning(|_| Ok(served_image(IMAGE_ARN)));
+                microvms
+                    .expect_list_microvm_image_versions()
+                    .returning(|_| Ok(vec![]));
+                let microvms = Arc::new(microvms);
+                let ec2 = Arc::new(valid_sandbox_network_ec2());
+                let secrets_manager: Arc<dyn alien_aws_clients::secrets_manager::SecretsManagerApi> =
+                    Arc::new(secrets_manager);
+                let mut provider = MockPlatformServiceProvider::new();
+                provider
+                    .expect_get_aws_microvms_client()
+                    .returning(move |_| Ok(microvms.clone()));
+                provider
+                    .expect_get_aws_ec2_client()
+                    .returning(move |_| Ok(ec2.clone()));
+                provider
+                    .expect_get_aws_secrets_manager_client()
+                    .returning(move |_| Ok(secrets_manager.clone()));
+                let mut builder = SingleControllerExecutor::builder()
+                    .resource(internet_sandbox("agents"))
+                    .controller(AwsSandboxController {
+                        state: AwsSandboxState::RefreshingEgressConfig,
+                        ..controller
+                    })
+                    .platform(Platform::Aws)
+                    .client_config(ClientConfig::Aws(Box::new(AwsClientConfig {
+                        account_id: "123456789012".to_string(),
+                        region: "us-east-1".to_string(),
+                        credentials: AwsCredentials::AccessKeys {
+                            access_key_id: "test".to_string(),
+                            secret_access_key: "test".to_string(),
+                            session_token: None,
+                        },
+                        service_overrides: Some(AwsServiceOverrides {
+                            endpoints: HashMap::from([(
+                                "ssm".to_string(),
+                                ssm.base_url(),
+                            )]),
+                        }),
+                    })))
+                    .service_provider(Arc::new(provider))
+                    .initial_setup_authority(alien_core::InitialSetupAuthority::ImportedHandoff);
+                for other in others {
+                    builder = builder.with_stack_resource(
+                        internet_sandbox(other),
+                        alien_core::ResourceLifecycle::Live,
+                    );
+                }
+                let mut executor = builder
+                    .with_dependency(sandbox_network(), sandbox_network_controller())
+                    .with_dependency(
+                        Vault::new(SECRETS_VAULT_ID.into()).build(),
+                        AwsVaultController {
+                            state: AwsVaultState::Ready,
+                            account_id: Some("123456789012".to_string()),
+                            region: Some("us-east-1".to_string()),
+                            vault_prefix: Some("test-secrets".to_string()),
+                            ..Default::default()
+                        },
+                    )
+                    .build()
+                    .await
+                    .unwrap();
+                run_gateway_on(&mut executor, gateway_image);
+                executor.step().await.expect("the refresh pass never fails");
+                (
+                    executor.internal_state::<AwsSandboxController>().unwrap().clone(),
+                    executor.status(),
+                )
+            }
+
+            /// The owner as it was before the upgrade release: Running, with the configuration it
+            /// published for the agents alone.
+            fn owner_before_the_release() -> AwsSandboxController {
+                AwsSandboxController {
+                    egress_config_digest: Some("digest-published-before-the-release".to_string()),
+                    ..running_internet_controller(IMAGE_ARN)
+                }
+            }
+
+            /// The release that brings the setup update also adds an internet sandbox (a new
+            /// audience). On the legacy gateway the change waits: the pass succeeds, the sandbox
+            /// stays Running, nothing is read or written, and its state is unchanged pass after
+            /// pass, so a deferral costs no state writes. After the gateway rolls, the next pass
+            /// publishes the new audience source-only.
+            #[tokio::test]
+            async fn a_change_in_the_upgrade_release_waits_for_the_roll_then_publishes() {
+                let ssm = MockServer::start_async().await;
+                let (read, write) = denied_reads(&ssm).await;
+                let mut owner = owner_before_the_release();
+                for _ in 0..3 {
+                    let (after, status) = pass(
+                        &ssm,
+                        owner.clone(),
+                        &["workers"],
+                        EMBEDDING_GATEWAY,
+                        describe_answers(secret_exists, 0),
+                    )
+                    .await;
+                    assert_eq!(status, ResourceStatus::Running, "deferral is not a failure");
+                    let unchanged = |controller: &AwsSandboxController| {
+                        let mut value = serialize_controller(controller).unwrap();
+                        value.as_object_mut().unwrap().remove("state");
+                        value
+                    };
+                    assert_eq!(
+                        unchanged(&after),
+                        unchanged(&owner),
+                        "a deferred change leaves the controller state unchanged"
+                    );
+                    owner = after;
+                }
+                assert_eq!(write.hits_async().await, 0, "nothing is written while deferred");
+
+                // The gateway rolled to an image that reads its replica secret from its source.
+                let reads = read.hits_async().await;
+                let (after, status) = pass(
+                    &ssm,
+                    owner,
+                    &["workers"],
+                    SOURCE_READING_GATEWAY,
+                    describe_answers(secret_exists, 1),
+                )
+                .await;
+                assert_eq!(status, ResourceStatus::Running);
+                assert!(after.egress_replica_secret_ready);
+                assert_eq!(read.hits_async().await, reads, "the source-only publish reads nothing");
+                assert_eq!(write.hits_async().await, 1);
+                assert_ne!(
+                    after.egress_config_digest.as_deref(),
+                    Some("digest-published-before-the-release")
+                );
+            }
+
+            /// The key-rotation trigger: a different signing key changes the configuration on the
+            /// legacy gateway, and the change waits for the roll the same way.
+            #[tokio::test]
+            async fn a_new_signing_key_on_the_legacy_gateway_waits_for_the_roll() {
+                let ssm = MockServer::start_async().await;
+                let (_read, write) = denied_reads(&ssm).await;
+                let owner = AwsSandboxController {
+                    egress_public_key: Some(crate::sandbox::egress::GatewayPublicKey {
+                        kid: "kid-rotated".to_string(),
+                        public_key: "public-key-rotated".to_string(),
+                    }),
+                    ..owner_before_the_release()
+                };
+                let (after, status) = pass(
+                    &ssm,
+                    owner.clone(),
+                    &[],
+                    EMBEDDING_GATEWAY,
+                    describe_answers(secret_exists, 0),
+                )
+                .await;
+                assert_eq!(status, ResourceStatus::Running);
+                assert_eq!(after.egress_config_digest, owner.egress_config_digest);
+                assert_eq!(write.hits_async().await, 0);
+            }
+        }
     }
 
     #[test]

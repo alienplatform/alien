@@ -697,8 +697,10 @@ pub(crate) async fn publish_new_gateway_config(
     Ok(())
 }
 
-/// Publishes `value` unless its digest equals `published`, then records the new digest. Only a
-/// changed configuration touches the vault.
+/// Publishes `value`, carrying the replica secret the stored configuration embeds, unless its
+/// digest equals `published`, then records the new digest. Only a changed configuration touches
+/// the vault. When setup has removed the managing identity's read, the change is deferred, never
+/// failed: see the comment below.
 #[cfg(feature = "aws")]
 pub(crate) async fn publish_changed_gateway_config(
     vault: &dyn Vault,
@@ -709,7 +711,26 @@ pub(crate) async fn publish_changed_gateway_config(
     if published.as_deref() == Some(digest.as_str()) {
         return Ok(());
     }
-    publish_gateway_config(vault, value).await?;
+    let current = match read_stored_config(vault).await? {
+        StoredConfig::Present(current) => Some(current),
+        StoredConfig::Missing => None,
+        StoredConfig::ReadDenied => {
+            // Setup removed the managing identity's read while the gateway still embeds its
+            // replica secret. Failing here would keep this sandbox from Running, and the gateway
+            // rolls to an image that reads its secret from the source only after that: a
+            // deadlock. So the change waits. The gateway keeps serving the last configuration
+            // it loaded, and once it runs a source-reading image the next pass publishes the
+            // current configuration without a read. The digest stays unchanged so that pass
+            // still sees the change.
+            tracing::warn!(
+                reason = "gateway config deferred",
+                "Deferred the sandbox gateway configuration change until the gateway reads its \
+                 replica secret from Secrets Manager; it keeps serving its current configuration"
+            );
+            return Ok(());
+        }
+    };
+    write_embedded_config(vault, value, current).await?;
     *published = Some(digest);
     Ok(())
 }
@@ -783,45 +804,72 @@ fn gateway_config(
     }))
 }
 
-/// Only the shared-key owner publishes this entry. The replica secret stays in the
-/// vault and never enters controller state, bindings, logs or generated packages.
+/// The stored gateway configuration, as the managing identity can see it.
 #[cfg(any(feature = "aws", feature = "azure", feature = "kubernetes", test))]
-pub(crate) async fn publish_gateway_config(
-    vault: &dyn Vault,
-    mut value: serde_json::Value,
-) -> Result<()> {
-    let invalid = || {
-        AlienError::new(ErrorData::ResourceConfigInvalid {
-            message: "The sandbox gateway configuration must be an object with a valid 32-byte base64 replicaSecret".into(),
-            resource_id: Some(alien_core::SECRETS_VAULT_ID.into()),
-        })
-    };
-    let current = match vault.get_secret(GATEWAY_CONFIG).await {
-        Ok(current) => Some(current),
+enum StoredConfig {
+    Present(String),
+    Missing,
+    /// Setup removed the managing identity's read: the gateway reads its replica secret from
+    /// its source once it runs an image that can.
+    #[cfg(feature = "aws")]
+    ReadDenied,
+}
+
+#[cfg(any(feature = "aws", feature = "azure", feature = "kubernetes", test))]
+async fn read_stored_config(vault: &dyn Vault) -> Result<StoredConfig> {
+    match vault.get_secret(GATEWAY_CONFIG).await {
+        Ok(current) => Ok(StoredConfig::Present(current)),
         Err(error)
             if matches!(
                 error.error,
                 Some(alien_bindings::ErrorData::VaultSecretNotFound { .. })
             ) =>
         {
-            None
+            Ok(StoredConfig::Missing)
         }
-        Err(error) => {
-            #[cfg(feature = "aws")]
-            if is_access_denied(&error) {
-                // Setup has removed the managing identity's read before the gateway reads its
-                // replica secret from the source: changing the configuration now would drop
-                // the secret the running gateways embed.
-                return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
-                    message: "The sandbox gateway configuration can no longer be read to carry its replica secret forward. Roll the sandbox gateway to an image that reads its replica secret from Secrets Manager; the configuration cannot change until then.".into(),
-                    resource_id: Some(alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.into()),
-                }));
-            }
-            return Err(error).context(ErrorData::ResourceConfigInvalid {
-                message: "Failed to read the sandbox gateway configuration".into(),
-                resource_id: Some(alien_core::SECRETS_VAULT_ID.into()),
-            });
+        #[cfg(feature = "aws")]
+        Err(error) if is_access_denied(&error) => Ok(StoredConfig::ReadDenied),
+        Err(error) => Err(error).context(ErrorData::ResourceConfigInvalid {
+            message: "Failed to read the sandbox gateway configuration".into(),
+            resource_id: Some(alien_core::SECRETS_VAULT_ID.into()),
+        }),
+    }
+}
+
+/// Only the shared-key owner publishes this entry. The replica secret stays in the
+/// vault and never enters controller state, bindings, logs or generated packages.
+#[cfg(any(feature = "aws", feature = "azure", feature = "kubernetes", test))]
+pub(crate) async fn publish_gateway_config(
+    vault: &dyn Vault,
+    value: serde_json::Value,
+) -> Result<()> {
+    let current = match read_stored_config(vault).await? {
+        StoredConfig::Present(current) => Some(current),
+        StoredConfig::Missing => None,
+        #[cfg(feature = "aws")]
+        StoredConfig::ReadDenied => {
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "The sandbox gateway configuration can no longer be read to carry its replica secret forward. Roll the sandbox gateway to an image that reads its replica secret from Secrets Manager; the configuration cannot change until then.".into(),
+                resource_id: Some(alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.into()),
+            }))
         }
+    };
+    write_embedded_config(vault, value, current).await
+}
+
+/// Writes `value` with the replica secret the stored configuration `current` embeds, or a new
+/// one when nothing is stored.
+#[cfg(any(feature = "aws", feature = "azure", feature = "kubernetes", test))]
+async fn write_embedded_config(
+    vault: &dyn Vault,
+    mut value: serde_json::Value,
+    current: Option<String>,
+) -> Result<()> {
+    let invalid = || {
+        AlienError::new(ErrorData::ResourceConfigInvalid {
+            message: "The sandbox gateway configuration must be an object with a valid 32-byte base64 replicaSecret".into(),
+            resource_id: Some(alien_core::SECRETS_VAULT_ID.into()),
+        })
     };
     let stored = current
         .as_deref()
@@ -1009,10 +1057,11 @@ mod aws_tests {
     }
     /// A fresh install whose gateway image still embeds its replica secret, under a managing
     /// identity that may not read the secrets vault. The first configuration is written with a
-    /// new secret and no read. A later change needs the stored secret, so it fails with what to
-    /// do (roll the gateway image) instead of dropping the secret the replicas embed.
+    /// new secret and no read. A later change needs the stored secret, so it waits (no write, the
+    /// digest unchanged, no error) until the gateway reads its secret from the source; failing it
+    /// would keep the sandbox from Running and the gateway from rolling.
     #[tokio::test]
-    async fn a_new_legacy_gateway_gets_a_first_configuration_and_later_changes_fail_loudly() {
+    async fn a_new_legacy_gateway_gets_a_first_configuration_and_later_changes_wait() {
         let server = MockServer::start_async().await;
         let read = server
             .mock_async(|when, then| {
@@ -1043,16 +1092,12 @@ mod aws_tests {
             .expect("the first configuration is written without a read");
         assert_eq!((read.hits_async().await, write.hits_async().await), (0, 1));
 
-        let error =
-            publish_changed_gateway_config(&vault, config(&["first", "second"]), &mut published)
-                .await
-                .expect_err("a change needs the stored secret, which may not be read");
-        assert!(
-            error.message.contains("Roll the sandbox gateway"),
-            "{}",
-            error.message
-        );
+        let first = published.clone();
+        publish_changed_gateway_config(&vault, config(&["first", "second"]), &mut published)
+            .await
+            .expect("a change the identity cannot read for waits instead of failing");
         assert_eq!(write.hits_async().await, 1, "nothing is written without the secret");
+        assert_eq!(published, first, "the change stays pending for the next pass");
     }
 
     #[cfg(feature = "aws")]
