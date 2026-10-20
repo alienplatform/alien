@@ -1899,9 +1899,25 @@ fn setup_rerun_hint(deployment: &serde_json::Value) -> Option<SetupRerunHint> {
         _ => None,
     };
     Some(SetupRerunHint {
-        command: format!("alien-deploy deploy --name {name} --platform {platform}"),
+        command: format!(
+            "alien-deploy deploy --name {} --platform {platform}",
+            shell_argument(name)
+        ),
         environment,
     })
+}
+
+/// Quote a value for a copyable shell command, leaving plain names readable.
+#[cfg_attr(not(feature = "platform"), allow(dead_code))]
+fn shell_argument(value: &str) -> String {
+    if !value.is_empty()
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    {
+        return value.to_string();
+    }
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
 #[cfg_attr(not(feature = "platform"), allow(dead_code))]
@@ -3495,6 +3511,17 @@ mod tests {
                 "> Success! Retry requested.".to_string(),
                 "Next alien deployments get dep_demo".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn setup_rerun_command_quotes_a_name_the_shell_would_split() {
+        let mut deployment = failed_cli_first_install();
+        deployment["name"] = serde_json::json!("acme prod's");
+        let hint = setup_rerun_hint(&deployment).expect("setup must rerun");
+        assert_eq!(
+            hint.command,
+            r#"alien-deploy deploy --name 'acme prod'"'"'s' --platform gcp"#
         );
     }
 
