@@ -5,6 +5,8 @@
 //! enables the `server` feature to host the Control and WaitUntil services.
 
 /// Generated Control service client, server stub, and message types.
+pub mod batch;
+
 pub mod control {
     tonic::include_proto!("alien_worker.control");
 

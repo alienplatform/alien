@@ -20,8 +20,8 @@ use alien_gcp_clients::iam::{
 };
 use alien_permissions::{
     aws_resource_policies::{
-        aws_management_resource_policy_name, aws_resource_policy_name, render_aws_resource_policy,
-        without_refs_the_stack_policy_grants,
+        aws_management_resource_policy_name, aws_resource_policy_name, legacy_policy_name,
+        render_aws_resource_policy, retained_policy_name, without_refs_the_stack_policy_grants,
     },
     generators::*,
     BindingTarget, PermissionContext,
@@ -1447,31 +1447,42 @@ impl ResourcePermissionsHelper {
         } else {
             return Ok(());
         };
-        let policy_name = aws_remote_access_policy_name(resource_id);
+        let current_name = aws_remote_access_policy_name(resource_id);
         let iam = ctx
             .service_provider
             .get_aws_iam_client(ctx.get_aws_config()?)
             .await?;
 
         let Some(definition) = definition else {
-            return match iam.delete_role_policy(&role_name, &policy_name).await {
-                Ok(()) => Ok(()),
-                Err(error)
-                    if matches!(
-                        error.error,
-                        Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
-                    Ok(())
+            // Either name may carry the grant, depending on when the role was set up.
+            for policy_name in [
+                Some(current_name.clone()),
+                legacy_policy_name(&current_name),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                match iam.delete_role_policy(&role_name, &policy_name).await {
+                    Ok(()) => {}
+                    Err(error)
+                        if matches!(
+                            error.error,
+                            Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+                        ) => {}
+                    Err(error) => {
+                        return Err(error.context(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Failed to revoke Remote Bindings policy '{policy_name}' from role '{role_name}'"
+                            ),
+                            resource_id: Some(resource_id.to_string()),
+                        }))
+                    }
                 }
-                Err(error) => Err(error.context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to revoke Remote Bindings policy from role '{role_name}'"
-                    ),
-                    resource_id: Some(resource_id.to_string()),
-                })),
-            };
+            }
+            return Ok(());
         };
+        let existing = Self::aws_inline_policy_names(&iam, &role_name, resource_id).await?;
+        let policy_name = retained_policy_name(current_name, &existing);
         let policy =
             aws_remote_access_policy(generator, definition, permission_context, resource_id)?;
         let policy_json = serde_json::to_string_pretty(&policy)
@@ -1515,8 +1526,9 @@ impl ResourcePermissionsHelper {
     ///
     /// The upsert path never deletes, so without this a dropped grant (or a
     /// dropped permission set) stays on the role. Only exact owned names are
-    /// removed: `alien-<resource>-<set>` on service-account roles and
-    /// `alien-mgmt-<resource>-<set>` on the management role, for registered
+    /// removed: `deployment-<resource>-<set>` on service-account roles and
+    /// `deployment-mgmt-<resource>-<set>` on the management role (or the same names under their
+    /// previous `alien-` prefix), for registered
     /// `<resource_type>/` permission sets. A role that no longer exists has
     /// nothing to remove.
     pub async fn remove_stale_aws_resource_scoped_permissions(
@@ -1630,10 +1642,22 @@ impl ResourcePermissionsHelper {
                     resource_id: Some(resource_id.to_string()),
                 }));
             }
-            let stale = listed
+            let listed: Vec<String> = listed
                 .policy_names
                 .map(|names| names.member)
-                .unwrap_or_default()
+                .unwrap_or_default();
+            // A grant may be held under its previous name (see `retained_policy_name`), so both
+            // names are owned, and the desired one is whichever the role keeps.
+            let owned: HashSet<String> = owned
+                .iter()
+                .flat_map(|name| [Some(name.clone()), legacy_policy_name(name)])
+                .flatten()
+                .collect();
+            let desired: HashSet<String> = desired
+                .into_iter()
+                .map(|name| retained_policy_name(name, &listed))
+                .collect();
+            let stale = listed
                 .into_iter()
                 .filter(|name| owned.contains(name) && !desired.contains(name));
             for policy_name in stale {
@@ -1676,6 +1700,46 @@ impl ResourcePermissionsHelper {
             }
         }
         Ok(())
+    }
+
+    /// The inline policy names `role_name` holds now: a grant is written under the name the role
+    /// already uses for it. A missing role holds none.
+    async fn aws_inline_policy_names(
+        iam: &std::sync::Arc<dyn alien_aws_clients::iam::IamApi>,
+        role_name: &str,
+        resource_id: &str,
+    ) -> Result<Vec<String>> {
+        let listed = match iam.list_role_policies(role_name).await {
+            Ok(response) => response.list_role_policies_result,
+            Err(error)
+                if matches!(
+                    error.error,
+                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                ) =>
+            {
+                return Ok(Vec::new());
+            }
+            Err(error) => {
+                return Err(error.context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to list inline policies of role '{role_name}' before granting '{resource_id}'"
+                    ),
+                    resource_id: Some(resource_id.to_string()),
+                }));
+            }
+        };
+        if listed.is_truncated == Some(true) {
+            return Err(AlienError::new(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Role '{role_name}' has more inline policies than one ListRolePolicies page; cannot tell which name its '{resource_id}' grants use"
+                ),
+                resource_id: Some(resource_id.to_string()),
+            }));
+        }
+        Ok(listed
+            .policy_names
+            .map(|names| names.member)
+            .unwrap_or_default())
     }
 
     /// The role of a profile's service account, if setup has created it.
@@ -1777,7 +1841,11 @@ impl ResourcePermissionsHelper {
             permission_context,
         )?;
         let iam_client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
+        let existing =
+            Self::aws_inline_policy_names(&iam_client, &service_account_role_name, resource_id)
+                .await?;
         for (policy_name, document) in policies {
+            let policy_name = retained_policy_name(policy_name, &existing);
             iam_client
                 .put_role_policy(&service_account_role_name, &policy_name, &document)
                 .await
@@ -1907,6 +1975,12 @@ impl ResourcePermissionsHelper {
         );
 
         let aws_config = ctx.get_aws_config()?;
+        let existing = Self::aws_inline_policy_names(
+            &ctx.service_provider.get_aws_iam_client(aws_config).await?,
+            &management_role_name,
+            resource_id,
+        )
+        .await?;
 
         for permission_set_ref in &combined_refs {
             let permission_set = permission_set_ref
@@ -1944,7 +2018,10 @@ impl ResourcePermissionsHelper {
                     resource_id: Some(resource_id.to_string()),
                 })?;
 
-            let policy_name = aws_management_resource_policy_name(resource_id, &permission_set.id);
+            let policy_name = retained_policy_name(
+                aws_management_resource_policy_name(resource_id, &permission_set.id),
+                &existing,
+            );
 
             let iam_client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
             iam_client
@@ -2368,7 +2445,7 @@ mod tests {
         assert_eq!(policies.len(), 1);
         let set = grants[1].resolve(|_| None).unwrap();
         let expected = render_aws_resource_policy("objects", &set, &generator, &context).unwrap();
-        assert_eq!(policies["alien-objects-same"], expected.document);
+        assert_eq!(policies["deployment-objects-same"], expected.document);
     }
 
     #[test]

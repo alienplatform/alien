@@ -18,10 +18,10 @@ use crate::{
 
 const GATEWAY_IMAGE: &str = "ghcr.io/alienplatform/alien-egress-gateway@sha256:b252a1b423b95385e5df0c57a37daae6937daa274e3c7783c71704584b18483d";
 
-/// Managed AWS deployments use the same compute and service-account machinery
-/// as application containers. Setup templates are prepared before any compute backend
-/// exists, so the gateway is installed regardless; `SandboxEgressGatewayCheck` refuses a
-/// deployment that has no backend to run it.
+/// AWS and Kubernetes deployments run the gateway with the same compute and
+/// service-account machinery as application containers. AWS setup templates are prepared
+/// before any compute backend exists, so the gateway is installed regardless;
+/// `SandboxEgressGatewayCheck` refuses an AWS deployment that has no backend to run it.
 pub struct SandboxGatewayMutation;
 
 #[async_trait]
@@ -31,7 +31,7 @@ impl StackMutation for SandboxGatewayMutation {
     }
 
     fn should_run(&self, stack: &Stack, state: &StackState, _config: &DeploymentConfig) -> bool {
-        state.platform == Platform::Aws
+        matches!(state.platform, Platform::Aws | Platform::Kubernetes)
             && stack.resources().any(|(_, entry)| {
                 entry
                     .config
@@ -43,7 +43,7 @@ impl StackMutation for SandboxGatewayMutation {
     async fn mutate(
         &self,
         mut stack: Stack,
-        _state: &StackState,
+        state: &StackState,
         _config: &DeploymentConfig,
     ) -> Result<Stack> {
         let invalid = |message: String| {
@@ -114,6 +114,14 @@ impl StackMutation for SandboxGatewayMutation {
             })
             .commands_enabled(false)
             .build();
+        let mut gateway = gateway;
+        if state.platform == Platform::Kubernetes {
+            // A replica joins the Services only once it has copied the stored policies.
+            gateway.kubernetes_readiness_probe = Some(alien_core::KubernetesHttpProbe {
+                path: "/health".into(),
+                port: 3129,
+            });
+        }
         gateway
             .validate_network_settings()
             .map_err(|error| invalid(error.to_string()))?;

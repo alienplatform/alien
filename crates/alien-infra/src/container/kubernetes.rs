@@ -32,8 +32,8 @@ use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec, StatefulSet, Statef
 use k8s_openapi::api::core::v1::{
     Capabilities, Container as K8sContainer, ContainerPort, HTTPGetAction, LocalObjectReference,
     PersistentVolumeClaim, PersistentVolumeClaimSpec, PodSecurityContext, PodSpec, PodTemplateSpec,
-    Probe, ResourceRequirements, SeccompProfile, SecretVolumeSource, SecurityContext, Service,
-    ServicePort, ServiceSpec, Volume, VolumeMount,
+    Probe, ResourceRequirements, SeccompProfile, SecretVolumeSource, SecurityContext, Volume,
+    VolumeMount,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta};
@@ -112,6 +112,9 @@ fn image_needing_pull_secret<'a>(
     (image_host == manager_host).then_some(image.as_str())
 }
 
+/// Longer than the gateway's 30 s resynchronization interval plus resolver caching.
+const GATEWAY_READY_DELAY_SECONDS: i32 = 45;
+
 fn first_declared_container_port(config: &Container) -> Option<u16> {
     config.ports.first().map(|port| port.port)
 }
@@ -159,12 +162,8 @@ fn statefulset_rollout_complete(
         && status.current_revision == status.update_revision
 }
 
-fn kubernetes_port_name(port: &alien_core::ContainerPort) -> String {
-    if false {
-        "http".to_string()
-    } else {
-        format!("tcp-{}", port.port)
-    }
+pub(super) fn kubernetes_port_name(port: &alien_core::ContainerPort) -> String {
+    format!("tcp-{}", port.port)
 }
 
 #[controller]
@@ -177,8 +176,13 @@ pub struct KubernetesContainerController {
     pub(crate) namespace: Option<String>,
     /// The service name for the container (for binding construction)
     pub(crate) service_name: Option<String>,
+    /// Headless discovery for the ready replicas of an internet-only Container.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) peer_service_name: Option<String>,
     /// The first declared service port for binding construction.
     pub(crate) service_port: Option<u16>,
+    #[serde(default)]
+    pub(crate) network_policy_name: Option<String>,
     /// All declared ports, retained for per-port internal binding URLs.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) service_ports: Vec<u16>,
@@ -376,6 +380,8 @@ impl KubernetesContainerController {
             )
             .await?;
         self.env_secret.record(env_secret_plan.as_ref());
+        self.reconcile_network_policy(config, &container_name, &namespace, ctx)
+            .await?;
         self.reconcile_internal_service(config, &container_name, &namespace, ctx)
             .await?;
 
@@ -699,7 +705,27 @@ impl KubernetesContainerController {
         let config = ctx.desired_resource_config::<Container>()?;
 
         // Heartbeat check: verify workload status
-        if let (Some(workload_name), Some(namespace)) = (&self.workload_name, &self.namespace) {
+        if let (Some(workload_name), Some(namespace)) =
+            (self.workload_name.clone(), self.namespace.clone())
+        {
+            let workload_name = &workload_name;
+            let namespace = &namespace;
+            // Gateway configuration is read from the vault, so its changes are detected
+            // here rather than by the synchronous deployment-snapshot check.
+            if config.id == alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID {
+                let secrets = self.additional_environment_secrets(config, ctx).await?;
+                if self.env_secret.drifted_with_additional_secrets(
+                    &config.id,
+                    workload_name,
+                    &ctx.deployment_config.environment_variables.variables,
+                    &secrets,
+                ) {
+                    return Ok(HandlerAction::Continue {
+                        state: UpdateStart,
+                        suggested_delay: None,
+                    });
+                }
+            }
             let deployment_client = ctx
                 .service_provider
                 .get_kubernetes_deployment_client(kubernetes_config)
@@ -783,6 +809,8 @@ impl KubernetesContainerController {
             )
             .await?;
 
+            self.reconcile_network_policy(config, workload_name, namespace, ctx)
+                .await?;
             self.reconcile_internal_service(config, workload_name, namespace, ctx)
                 .await?;
 
@@ -982,6 +1010,8 @@ impl KubernetesContainerController {
                 message: "Workload name not set in state".to_string(),
             })
         })?;
+        let workload_name_owned = workload_name.clone();
+        let workload_name = &workload_name_owned;
 
         let namespace = self.namespace.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceControllerConfigError {
@@ -989,6 +1019,8 @@ impl KubernetesContainerController {
                 message: "Namespace not set in state".to_string(),
             })
         })?;
+        let namespace_owned = namespace.clone();
+        let namespace = &namespace_owned;
 
         let workload_type = if self.is_stateful {
             "StatefulSet"
@@ -1133,6 +1165,8 @@ impl KubernetesContainerController {
             .await?;
         self.env_secret.record(env_secret_plan.as_ref());
         self.service_port = first_declared_container_port(config);
+        self.reconcile_network_policy(config, workload_name, namespace, ctx)
+            .await?;
         self.service_ports = config.ports.iter().map(|port| port.port).collect();
         self.reconcile_internal_service(config, workload_name, namespace, ctx)
             .await?;
@@ -1471,6 +1505,11 @@ impl KubernetesContainerController {
             &mut self.public_endpoint,
         )
         .await?;
+        if let Some(peer) = self.peer_service_name.clone() {
+            self.delete_internal_service(namespace, &peer, &config.id, ctx, false)
+                .await?;
+            self.peer_service_name = None;
+        }
         if let Some(service_name) = &self.service_name {
             self.delete_internal_service(
                 namespace,
@@ -1574,6 +1613,12 @@ impl KubernetesContainerController {
                     false,
                 )
                 .await?;
+                if self.network_policy_name.is_some() {
+                    return Ok(HandlerAction::Continue {
+                        state: WaitingForNetworkPolicyDeletion,
+                        suggested_delay: Some(Duration::from_secs(2)),
+                    });
+                }
                 self.workload_name = None;
                 self.namespace = None;
                 return Ok(HandlerAction::Continue {
@@ -1619,6 +1664,12 @@ impl KubernetesContainerController {
                     )
                     .await?;
 
+                    if self.network_policy_name.is_some() {
+                        return Ok(HandlerAction::Continue {
+                            state: WaitingForNetworkPolicyDeletion,
+                            suggested_delay: Some(Duration::from_secs(2)),
+                        });
+                    }
                     self.workload_name = None;
                     self.namespace = None;
 
@@ -1702,6 +1753,12 @@ impl KubernetesContainerController {
                     )
                     .await?;
 
+                    if self.network_policy_name.is_some() {
+                        return Ok(HandlerAction::Continue {
+                            state: WaitingForNetworkPolicyDeletion,
+                            suggested_delay: Some(Duration::from_secs(2)),
+                        });
+                    }
                     self.workload_name = None;
                     self.namespace = None;
 
@@ -1722,6 +1779,47 @@ impl KubernetesContainerController {
         Ok(HandlerAction::Stay {
             max_times: Some(60), // 60 attempts * 5 seconds = 5 minutes max wait for deletion
             suggested_delay: Some(Duration::from_secs(5)),
+        })
+    }
+
+    #[handler(state = WaitingForNetworkPolicyDeletion, on_failure = DeleteFailed, status = ResourceStatus::Deleting)]
+    async fn waiting_for_network_policy_deletion(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<Container>()?;
+        let namespace = self.get_kubernetes_namespace(ctx)?;
+        let client = ctx
+            .service_provider
+            .get_kubernetes_pod_client(ctx.get_kubernetes_config()?)
+            .await?;
+        let pods = client
+            .list_pods(
+                &namespace,
+                Some(label_selector(&kubernetes_branded_resource_labels(
+                    ctx, &config.id,
+                ))),
+                None,
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to inspect Container pods before removing network restrictions"
+                    .into(),
+                resource_id: Some(config.id.clone()),
+            })?;
+        if !pods.items.is_empty() {
+            return Ok(HandlerAction::Stay {
+                max_times: Some(120),
+                suggested_delay: Some(Duration::from_secs(5)),
+            });
+        }
+        self.delete_network_policy(&namespace, &config.id, ctx)
+            .await?;
+        self.workload_name = None;
+        self.namespace = None;
+        Ok(HandlerAction::Continue {
+            state: Deleted,
+            suggested_delay: None,
         })
     }
 
@@ -1796,6 +1894,10 @@ impl KubernetesContainerController {
             return Ok(false);
         };
         let config = ctx.desired_resource_config::<Container>()?;
+        if config.id == alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID {
+            // Ready checks the vault value alongside the deployment snapshot.
+            return Ok(false);
+        }
         let monitoring_headers = direct_monitoring_auth_headers(ctx);
         Ok(self.env_secret.drifted_with_additional_secrets(
             &config.id,
@@ -1829,6 +1931,8 @@ impl KubernetesContainerController {
             };
 
             // Serialize to JSON
+            // Bindings are tagged by backend; the SDK refuses an untagged container binding.
+            let binding = alien_core::bindings::ContainerBinding::Kubernetes(binding);
             Ok(Some(
                 serde_json::to_value(binding).into_alien_error().context(
                     ErrorData::ResourceStateSerializationFailed {
@@ -1866,6 +1970,8 @@ mod output_tests {
             service_name: Some("test-container".to_string()),
             service_ports: vec![3000, 3129],
             service_port: Some(3000),
+            network_policy_name: None,
+            peer_service_name: None,
             container_id: Some("container".to_string()),
             public_endpoint,
             env_secret: EnvSecretRotationTracker::default(),
@@ -1883,7 +1989,7 @@ mod output_tests {
                 .internal_urls
                 .get(&3129)
                 .map(String::as_str),
-            Some("http://test-container.test-namespace.svc.cluster.local:3129")
+            Some("http://test-container.test-namespace.svc:3129")
         );
 
         assert_eq!(
@@ -1892,6 +1998,25 @@ mod output_tests {
                 .get("default")
                 .map(|endpoint| endpoint.url.as_str()),
             Some("https://container.example.test")
+        );
+
+        // Linked workloads load this through the SDK, which needs the backend tag.
+        use crate::core::ResourceController as _;
+        let binding: alien_core::bindings::ContainerBinding = serde_json::from_value(
+            controller
+                .get_binding_params()
+                .expect("binding")
+                .expect("binding params"),
+        )
+        .expect("a tagged container binding");
+        let alien_core::bindings::ContainerBinding::Kubernetes(binding) = binding else {
+            panic!("Kubernetes container binding")
+        };
+        assert_eq!(
+            binding.internal_urls.get(&3129),
+            Some(&alien_core::BindingValue::value(
+                "http://test-container.test-namespace.svc:3129".to_string()
+            ))
         );
     }
 
@@ -1912,6 +2037,8 @@ mod output_tests {
             service_name: Some("test-container".to_string()),
             service_ports: Vec::new(),
             service_port: Some(3000),
+            network_policy_name: None,
+            peer_service_name: None,
             container_id: Some("container".to_string()),
             public_endpoint,
             env_secret: EnvSecretRotationTracker::default(),
@@ -1925,8 +2052,11 @@ mod output_tests {
             .expect("container outputs");
 
         assert_eq!(
-            container_outputs.internal_urls.get(&3000).map(String::as_str),
-            Some("http://test-container.test-namespace.svc.cluster.local:3000")
+            container_outputs
+                .internal_urls
+                .get(&3000)
+                .map(String::as_str),
+            Some("http://test-container.test-namespace.svc:3000")
         );
 
         assert_eq!(
@@ -1954,7 +2084,9 @@ impl KubernetesContainerController {
             .map(|port| {
                 (
                     port,
-                    format!("http://{service}.{namespace}.svc.cluster.local:{port}"),
+                    // Resolved through the workload's search path, whatever the cluster
+                    // DNS domain is.
+                    format!("http://{service}.{namespace}.svc:{port}"),
                 )
             })
             .collect()
@@ -1971,12 +2103,34 @@ impl KubernetesContainerController {
             service_name: Some(container_name.to_string()),
             service_ports: Vec::new(),
             service_port: Some(80),
+            network_policy_name: None,
+            peer_service_name: None,
             container_id: Some("test-container".to_string()),
             public_endpoint: KubernetesPublicEndpointState::default(),
             env_secret: EnvSecretRotationTracker::default(),
             update_generation: None,
             _internal_stay_count: None,
         }
+    }
+
+    async fn additional_environment_secrets(
+        &self,
+        config: &Container,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<BTreeMap<String, String>> {
+        let mut secrets = direct_monitoring_auth_headers(ctx);
+        if config.id == alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID {
+            let vault = crate::sandbox::egress::deployment_vault(ctx).await?;
+            let value = vault
+                .get_secret(crate::sandbox::egress::GATEWAY_CONFIG)
+                .await
+                .context(ErrorData::ResourceConfigInvalid {
+                    message: "The sandbox gateway configuration is not ready".into(),
+                    resource_id: Some(config.id.clone()),
+                })?;
+            secrets.insert("ALIEN_EGRESS_GATEWAY_CONFIG".into(), value);
+        }
+        Ok(secrets)
     }
 
     async fn reconcile_environment_secret(
@@ -1987,7 +2141,7 @@ impl KubernetesContainerController {
         legacy_owner_proven: bool,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<Option<KubernetesEnvSecretPlan>> {
-        let monitoring_headers = direct_monitoring_auth_headers(ctx);
+        let monitoring_headers = self.additional_environment_secrets(config, ctx).await?;
         reconcile_environment_secret_with_additional_secrets(
             "container",
             &config.id,
@@ -1998,194 +2152,6 @@ impl KubernetesContainerController {
             ctx,
         )
         .await
-    }
-
-    async fn reconcile_internal_service(
-        &self,
-        config: &Container,
-        service_name: &str,
-        namespace: &str,
-        ctx: &ResourceControllerContext<'_>,
-    ) -> Result<()> {
-        let kubernetes_config = ctx.get_kubernetes_config()?;
-        let service_client = ctx
-            .service_provider
-            .get_kubernetes_service_client(kubernetes_config)
-            .await?;
-
-        let Some(mut service) = self.build_internal_service(config, service_name, namespace, ctx)
-        else {
-            self.delete_internal_service(namespace, service_name, &config.id, ctx, true)
-                .await?;
-            return Ok(());
-        };
-
-        match service_client.create_service(namespace, &service).await {
-            Ok(_) => Ok(()),
-            Err(e) if is_remote_resource_conflict(&e) => {
-                let existing = service_client
-                    .get_service(namespace, service_name)
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to get internal Service '{}' before update",
-                            service_name
-                        ),
-                        resource_id: Some(config.id.clone()),
-                    })?;
-                let desired_labels = service
-                    .metadata
-                    .labels
-                    .as_ref()
-                    .cloned()
-                    .unwrap_or_default();
-                if !crate::core::kubernetes_labels_match_identity(
-                    existing.metadata.labels.as_ref(),
-                    &desired_labels,
-                    &["managed-by", "component", "app"],
-                ) || !crate::core::kubernetes_labels_have_compatible_scope(
-                    existing.metadata.labels.as_ref(),
-                    &desired_labels,
-                ) {
-                    return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
-                        message: format!(
-                            "Refusing to mutate Kubernetes Service '{service_name}' because it is not owned by Container '{}' in this deployment",
-                            config.id
-                        ),
-                        resource_id: Some(config.id.clone()),
-                    }));
-                }
-                service.metadata.resource_version = existing.metadata.resource_version;
-                service_client
-                    .update_service(namespace, service_name, &service)
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!("Failed to update internal Service '{}'", service_name),
-                        resource_id: Some(config.id.clone()),
-                    })?;
-                Ok(())
-            }
-            Err(e) => Err(e.context(ErrorData::CloudPlatformError {
-                message: format!("Failed to create internal Service '{}'", service_name),
-                resource_id: Some(config.id.clone()),
-            })),
-        }
-    }
-
-    async fn delete_internal_service(
-        &self,
-        namespace: &str,
-        service_name: &str,
-        resource_id: &str,
-        ctx: &ResourceControllerContext<'_>,
-        legacy_owner_proven: bool,
-    ) -> Result<()> {
-        let kubernetes_config = ctx.get_kubernetes_config()?;
-        let service_client = ctx
-            .service_provider
-            .get_kubernetes_service_client(kubernetes_config)
-            .await?;
-
-        let existing = match service_client.get_service(namespace, service_name).await {
-            Ok(existing) => existing,
-            Err(e)
-                if matches!(
-                    e.error,
-                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                ) =>
-            {
-                return Ok(());
-            }
-            Err(e) => {
-                return Err(e.context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to get internal Service '{service_name}' before deletion"
-                    ),
-                    resource_id: Some(resource_id.to_string()),
-                }));
-            }
-        };
-        let mut desired_labels = self.build_labels(service_name);
-        desired_labels.extend(kubernetes_cleanup_resource_labels(ctx, resource_id));
-        if !crate::core::kubernetes_labels_match_identity(
-            existing.metadata.labels.as_ref(),
-            &desired_labels,
-            &["managed-by", "component", "app"],
-        ) || !(crate::core::kubernetes_labels_match_current_scope(
-            existing.metadata.labels.as_ref(),
-            &desired_labels,
-        ) || (legacy_owner_proven
-            && crate::core::kubernetes_labels_have_compatible_scope(
-                existing.metadata.labels.as_ref(),
-                &desired_labels,
-            )))
-        {
-            debug!(
-                service_name,
-                resource_id,
-                "Leaving same-name Kubernetes Service untouched because it is not owned by this Container deployment"
-            );
-            return Ok(());
-        }
-
-        match service_client.delete_service(namespace, service_name).await {
-            Ok(()) => Ok(()),
-            Err(e)
-                if matches!(
-                    e.error,
-                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                ) =>
-            {
-                Ok(())
-            }
-            Err(e) => Err(e.context(ErrorData::CloudPlatformError {
-                message: format!("Failed to delete internal Service '{}'", service_name),
-                resource_id: Some(service_name.to_string()),
-            })),
-        }
-    }
-
-    fn build_internal_service(
-        &self,
-        config: &Container,
-        service_name: &str,
-        namespace: &str,
-        ctx: &ResourceControllerContext<'_>,
-    ) -> Option<Service> {
-        if config.ports.is_empty() {
-            return None;
-        }
-
-        let selector_labels = self.build_labels(service_name);
-        let mut labels = selector_labels.clone();
-        labels.extend(kubernetes_cleanup_resource_labels(ctx, &config.id));
-        Some(Service {
-            metadata: ObjectMeta {
-                name: Some(service_name.to_string()),
-                namespace: Some(namespace.to_string()),
-                labels: Some(labels.clone()),
-                ..Default::default()
-            },
-            spec: Some(ServiceSpec {
-                type_: Some("ClusterIP".to_string()),
-                selector: Some(selector_labels),
-                ports: Some(
-                    config
-                        .ports
-                        .iter()
-                        .map(|port| ServicePort {
-                            name: Some(kubernetes_port_name(port)),
-                            port: port.port as i32,
-                            protocol: Some("TCP".to_string()),
-                            target_port: Some(IntOrString::Int(port.port as i32)),
-                            ..Default::default()
-                        })
-                        .collect(),
-                ),
-                ..Default::default()
-            }),
-            ..Default::default()
-        })
     }
 
     /// Builds a Kubernetes Deployment for stateless containers.
@@ -2450,11 +2416,21 @@ impl KubernetesContainerController {
             .as_ref()
             .map(http_probe)
             .transpose()?;
-        let readiness_probe = config
+        let gateway = config.id == alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID;
+        let mut readiness_probe = config
             .kubernetes_readiness_probe
             .as_ref()
             .map(http_probe)
             .transpose()?;
+        if gateway {
+            if let Some(probe) = readiness_probe.as_mut() {
+                // A writer's DNS can lag a starting replica's address by a few seconds, so a
+                // write in that window reaches the other replicas only. The replica
+                // resynchronizes from every peer 30 s after its first synchronization; it
+                // takes traffic only after that second pass has the write.
+                probe.initial_delay_seconds = Some(GATEWAY_READY_DELAY_SECONDS);
+            }
+        }
         let security = config.security.as_ref();
         if security.is_some_and(|settings| settings.run_as_user <= 0 || settings.run_as_group <= 0)
         {
@@ -2563,6 +2539,8 @@ impl KubernetesContainerController {
         let pod_spec = PodSpec {
             node_selector,
             service_account_name: Some(service_account_name.to_string()),
+            // The gateway never calls the Kubernetes API; its configuration is projected.
+            automount_service_account_token: gateway.then_some(false),
             security_context: security.map(|settings| PodSecurityContext {
                 run_as_non_root: Some(true),
                 run_as_user: Some(settings.run_as_user),
@@ -2593,7 +2571,7 @@ impl KubernetesContainerController {
     }
 
     /// Builds standard labels for Kubernetes resources.
-    fn build_labels(&self, container_name: &str) -> BTreeMap<String, String> {
+    pub(super) fn build_labels(&self, container_name: &str) -> BTreeMap<String, String> {
         let mut labels = BTreeMap::new();
         labels.insert("app".to_string(), container_name.to_string());
         labels.insert("managed-by".to_string(), "runtime".to_string());
@@ -2917,6 +2895,8 @@ mod tests {
             service_name: Some("api".to_string()),
             service_ports: Vec::new(),
             service_port: Some(3000),
+            network_policy_name: None,
+            peer_service_name: None,
             container_id: Some("api".to_string()),
             public_endpoint: KubernetesPublicEndpointState::default(),
             env_secret: EnvSecretRotationTracker::default(),
@@ -3001,6 +2981,46 @@ mod tests {
             container_id: Some("web".to_string()),
             ..Default::default()
         }
+    }
+
+    #[tokio::test]
+    async fn gateway_replicas_wait_out_a_resynchronization_and_get_no_api_token() {
+        let mut gateway = manifest_test_container(&[], false);
+        gateway.id = alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.to_string();
+        let mut ordinary = manifest_test_container(&[], false);
+        for config in [&mut gateway, &mut ordinary] {
+            config.kubernetes_readiness_probe = Some(KubernetesHttpProbe {
+                path: "/health".to_string(),
+                port: 8080,
+            });
+        }
+        for (config, delay, automount) in [
+            (&gateway, Some(GATEWAY_READY_DELAY_SECONDS), Some(false)),
+            (&ordinary, None, None),
+        ] {
+            let harness =
+                KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
+            let pod = manifest_test_controller()
+                .build_deployment(config, "web", "test-ns", "web-sa", None, None, &harness.ctx())
+                .await
+                .expect("deployment manifest")
+                .spec
+                .expect("deployment spec")
+                .template
+                .spec
+                .expect("pod spec");
+            assert_eq!(pod.automount_service_account_token, automount, "{}", config.id);
+            assert_eq!(
+                pod.containers[0]
+                    .readiness_probe
+                    .as_ref()
+                    .and_then(|probe| probe.initial_delay_seconds),
+                delay,
+                "{}",
+                config.id
+            );
+        }
+        assert!(GATEWAY_READY_DELAY_SECONDS > 30);
     }
 
     #[tokio::test]

@@ -1,7 +1,7 @@
 //! Sandbox resource controllers.
 
-#[cfg(any(feature = "aws", feature = "azure", feature = "local"))]
-mod egress;
+#[cfg(any(feature = "aws", feature = "azure", feature = "local", feature = "kubernetes"))]
+pub(crate) mod egress;
 
 #[cfg(feature = "aws")]
 mod aws;
@@ -75,3 +75,6 @@ pub use gcp_agent_platform_engine::*;
 mod gcp_import;
 #[cfg(feature = "gcp")]
 pub use gcp_import::*;
+
+#[cfg(feature = "kubernetes")]
+mod kubernetes_egress;

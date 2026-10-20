@@ -23,7 +23,8 @@ pub use bundle_sources::{
     ToolDownload,
 };
 pub use credential_resolver::{
-    CredentialResolver, RemoteStorageCredentialSource, ResolvedCredentials,
+    CredentialResolver, ManagementExternalIdSource, RemoteStorageCredentialSource,
+    ResolvedCredentials,
 };
 pub(crate) use deployment_store::deployment_status_from_record;
 pub use deployment_store::{

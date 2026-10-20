@@ -11,9 +11,9 @@ use alien_core::{
         sandbox_egress_name, sandbox_egress_operator_policy, sandbox_egress_operator_trust_policy,
         SandboxEgressConnector, LOOPBACK_ONLY_CIDR, SANDBOX_EGRESS_POLICY_NAME,
     },
-    ManagementPermissions, Network, NetworkSettings, PermissionProfile, RemoteStackManagement,
-    ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy, ServiceAccount,
-    Stack, StackSettings, Worker, WorkerCode,
+    ManagementPermissions, Network, NetworkSettings, PermissionProfile, RemoteBindings,
+    RemoteStackManagement, ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress,
+    SandboxLifecyclePolicy, ServiceAccount, Stack, StackSettings, Worker, WorkerCode,
 };
 use alien_terraform::TerraformTarget;
 use hcl::{
@@ -1933,4 +1933,110 @@ fn aws_internet_sandbox_without_its_gateway_is_refused() {
         .expect_err("an internet sandbox without its gateway must not render");
     assert_eq!(error.code, "SANDBOX_INTERNET_GATEWAY_MISSING");
     assert!(error.message.contains("'agents'"), "{}", error.message);
+}
+
+/// The trust each managing-role role gets, evaluated the way Terraform would
+/// for both values of `management_external_id`. Empty must give exactly the
+/// trust modules had before the variable existed; a value must be required as
+/// `sts:ExternalId`.
+#[test]
+fn management_roles_require_the_external_id_once_it_is_set() {
+    const MANAGING_ROLE: &str = "arn:aws:iam::111122223333:role/manager";
+    const EXTERNAL_ID: &str = "0123456789abcdef0123456789abcdef";
+    let stack = Stack::new("acme-mgmt".to_string())
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            RemoteBindings::new("access".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
+    let roles: Vec<(String, hcl::Expression)> = module
+        .iter()
+        .filter(|(path, _)| path.ends_with(".tf"))
+        .flat_map(|(_, contents)| {
+            let body = hcl::parse(contents).expect("rendered Terraform parses");
+            resource_blocks(&body, "aws_iam_role")
+                .filter_map(|block| {
+                    let trust = block
+                        .body()
+                        .attributes()
+                        .find(|attribute| attribute.key() == "assume_role_policy")?;
+                    trust
+                        .expr()
+                        .to_string()
+                        .contains("var.managing_role_arn")
+                        .then(|| {
+                            (
+                                block.labels()[1].as_str().to_string(),
+                                jsonencoded(trust).clone(),
+                            )
+                        })
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let labels: Vec<&str> = roles.iter().map(|(label, _)| label.as_str()).collect();
+    assert_eq!(
+        labels.len(),
+        2,
+        "management and remote-bindings roles: {labels:?}"
+    );
+
+    let evaluate = |expression: &hcl::Expression, external_id: &str| {
+        let mut context = Context::new();
+        context.declare_var(
+            "var",
+            hcl::to_value(serde_json::json!({
+                "managing_role_arn": MANAGING_ROLE,
+                "management_external_id": external_id,
+            }))
+            .unwrap(),
+        );
+        context.declare_func(
+            "merge",
+            FuncDef::builder()
+                .variadic_param(ParamType::Any)
+                .build(|args| {
+                    let mut merged = hcl::Map::new();
+                    for arg in args.iter() {
+                        merged.extend(arg.as_object().expect("merge takes objects").clone());
+                    }
+                    Ok(hcl::Value::Object(merged))
+                }),
+        );
+        serde_json::to_value(
+            expression
+                .evaluate(&context)
+                .expect("trust policy evaluates"),
+        )
+        .unwrap()
+    };
+    for (label, trust) in &roles {
+        assert_eq!(
+            evaluate(trust, ""),
+            serde_json::json!({
+                "Version": "2012-10-17",
+                "Statement": [{
+                    "Sid": "AllowManagingRole",
+                    "Effect": "Allow",
+                    "Principal": { "AWS": MANAGING_ROLE },
+                    "Action": "sts:AssumeRole",
+                    "Condition": { "StringEquals": { "aws:PrincipalArn": MANAGING_ROLE } }
+                }]
+            }),
+            "{label}: an empty value must leave the old trust unchanged"
+        );
+        assert_eq!(
+            evaluate(trust, EXTERNAL_ID)["Statement"][0]["Condition"],
+            serde_json::json!({ "StringEquals": {
+                "aws:PrincipalArn": MANAGING_ROLE,
+                "sts:ExternalId": EXTERNAL_ID
+            }}),
+            "{label}: a set value must be required as sts:ExternalId"
+        );
+    }
 }

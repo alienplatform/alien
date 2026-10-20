@@ -1,7 +1,7 @@
 use crate::error::{ErrorData, Result};
 use crate::resource::{ResourceDefinition, ResourceOutputsDefinition, ResourceRef, ResourceType};
 use crate::{PublicEndpointOutput, WorkerPublicEndpoint, APEX_HOST_LABEL};
-use alien_error::AlienError;
+use alien_error::{AlienError, Context, IntoAlienError};
 use bon::Builder;
 use serde::{Deserialize, Serialize};
 use std::any::Any;
@@ -76,15 +76,66 @@ pub enum ToolchainConfig {
     },
 }
 
+/// Opt-in queue batching. Counts and windows are upper bounds, not guarantees.
+/// Providers may deliver smaller batches. Delivery remains at least once and unordered.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct QueueBatchConfig {
+    /// Maximum deliveries per batch (1–100).
+    #[cfg_attr(feature = "openapi", schema(minimum = 1, maximum = 100))]
+    pub max_messages: u32,
+    /// Maximum collection window in seconds (0–300).
+    /// AWS may wait up to 20 seconds with sparse traffic even with a shorter window.
+    #[cfg_attr(feature = "openapi", schema(minimum = 0, maximum = 300))]
+    pub max_window_seconds: u32,
+}
+
+impl QueueBatchConfig {
+    /// Reject settings outside the portable range.
+    pub fn validate(&self) -> Result<()> {
+        if !(1..=100).contains(&self.max_messages)
+            || self.max_window_seconds > 300
+            || (self.max_messages > 10 && self.max_window_seconds == 0)
+        {
+            return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
+                resource_id: "queue trigger".to_string(),
+                reason: "batch maxMessages must be 1–100, maxWindowSeconds 0–300, and counts above 10 require a nonzero window".to_string(),
+            }));
+        }
+        Ok(())
+    }
+}
+
+fn deserialize_queue_batch<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<QueueBatchConfig>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let batch = Option::<QueueBatchConfig>::deserialize(deserializer)?;
+    if let Some(batch) = &batch {
+        batch.validate().map_err(serde::de::Error::custom)?;
+    }
+    Ok(batch)
+}
+
 /// Defines what triggers a worker execution.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum WorkerTrigger {
-    /// Worker triggered by queue messages (always 1 message per invocation)
+    /// Worker triggered by queue messages. Single delivery unless batching is configured.
     Queue {
         /// Reference to the queue resource
         queue: ResourceRef,
+        /// Optional batch delivery configuration; omitted preserves single-message handlers.
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_queue_batch"
+        )]
+        batch: Option<QueueBatchConfig>,
     },
     /// Worker triggered by storage events (object created, deleted, etc.)
     Storage {
@@ -109,7 +160,22 @@ impl WorkerTrigger {
         for<'a> &'a R: Into<ResourceRef>,
     {
         let queue_ref: ResourceRef = queue.into();
-        WorkerTrigger::Queue { queue: queue_ref }
+        WorkerTrigger::Queue {
+            queue: queue_ref,
+            batch: None,
+        }
+    }
+
+    /// Creates an opt-in batch trigger after validating portable limits.
+    pub fn queue_batch<R: ?Sized>(queue: &R, batch: QueueBatchConfig) -> Result<Self>
+    where
+        for<'a> &'a R: Into<ResourceRef>,
+    {
+        batch.validate()?;
+        Ok(Self::Queue {
+            queue: queue.into(),
+            batch: Some(batch),
+        })
     }
 
     /// Creates a storage trigger for the specified storage resource.
@@ -225,6 +291,84 @@ pub struct Worker {
 impl Worker {
     /// The resource type identifier for Workers
     pub const RESOURCE_TYPE: ResourceType = ResourceType::from_static("worker");
+
+    /// Bindings needed by explicit links and queue delivery source routing.
+    pub fn runtime_binding_links(&self) -> Vec<ResourceRef> {
+        let mut links = self.links.clone();
+        for trigger in &self.triggers {
+            if let WorkerTrigger::Queue {
+                queue,
+                batch: Some(_),
+            } = trigger
+            {
+                if !links.contains(queue) {
+                    links.push(queue.clone());
+                }
+            }
+        }
+        links
+    }
+
+    /// Whether the worker explicitly opts into queue batching.
+    pub fn has_queue_batches(&self) -> bool {
+        self.triggers
+            .iter()
+            .any(|trigger| matches!(trigger, WorkerTrigger::Queue { batch: Some(_), .. }))
+    }
+
+    /// Batch routing is emitted only for workers that explicitly opt into batching.
+    pub fn queue_batch_environment(&self) -> Result<Option<String>> {
+        if !self.has_queue_batches() {
+            return Ok(None);
+        }
+        let mut batches = std::collections::BTreeMap::new();
+        for trigger in &self.triggers {
+            if let WorkerTrigger::Queue { queue, batch } = trigger {
+                if let Some(batch) = batch {
+                    batch.validate()?;
+                }
+                if batches.insert(&queue.id, batch).is_some() {
+                    return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
+                        resource_id: self.id.clone(),
+                        reason: "Duplicate queue trigger".into(),
+                    }));
+                }
+            }
+        }
+        if batches.is_empty() {
+            return Ok(None);
+        }
+        serde_json::to_string(&batches)
+            .map(Some)
+            .into_alien_error()
+            .context(ErrorData::GenericError {
+                message: "Failed to serialize queue batch configuration".into(),
+            })
+    }
+
+    /// Batch settings for a queue trigger, absent for legacy single-message delivery.
+    pub fn queue_batch_config(&self, queue_id: &str) -> Option<&QueueBatchConfig> {
+        self.triggers.iter().find_map(|trigger| match trigger {
+            WorkerTrigger::Queue { queue, batch } if queue.id == queue_id => batch.as_ref(),
+            _ => None,
+        })
+    }
+
+    /// Allocate SQS admission across queue mappings. Commands invoke Lambda directly.
+    /// AWS requires at least two per mapping. Below that threshold the function's
+    /// reserved concurrency remains the compute cap; it is not a distributed lock.
+    pub fn queue_source_maximum_concurrency(&self) -> Option<u32> {
+        if !self.has_queue_batches() {
+            return None;
+        }
+        let sources = self
+            .triggers
+            .iter()
+            .filter(|trigger| matches!(trigger, WorkerTrigger::Queue { .. }))
+            .count() as u32;
+        let capacity = self.concurrency_limit?.checked_div(sources)?;
+        (capacity >= 2).then_some(capacity.min(1000))
+    }
 
     /// Returns the permission profile name for this worker.
     pub fn get_permissions(&self) -> &str {
@@ -412,7 +556,7 @@ impl ResourceDefinition for Worker {
         // Add trigger dependencies
         for trigger in &self.triggers {
             match trigger {
-                WorkerTrigger::Queue { queue } => {
+                WorkerTrigger::Queue { queue, .. } => {
                     dependencies.push(queue.clone());
                 }
                 WorkerTrigger::Storage { storage, .. } => {
@@ -668,7 +812,10 @@ mod tests {
             .build();
 
         assert_eq!(worker.triggers.len(), 1);
-        if let WorkerTrigger::Queue { queue: queue_ref } = &worker.triggers[0] {
+        if let WorkerTrigger::Queue {
+            queue: queue_ref, ..
+        } = &worker.triggers[0]
+        {
             assert_eq!(queue_ref.resource_type, Queue::RESOURCE_TYPE);
             assert_eq!(queue_ref.id, "test-queue");
         } else {
@@ -709,7 +856,10 @@ mod tests {
         // Test the helper method
         let trigger = WorkerTrigger::queue(&queue);
 
-        if let WorkerTrigger::Queue { queue: queue_ref } = trigger {
+        if let WorkerTrigger::Queue {
+            queue: queue_ref, ..
+        } = trigger
+        {
             assert_eq!(queue_ref.resource_type, Queue::RESOURCE_TYPE);
             assert_eq!(queue_ref.id, "my-queue");
         } else {
@@ -737,14 +887,20 @@ mod tests {
         assert_eq!(worker.triggers.len(), 3);
 
         // Check first queue trigger
-        if let WorkerTrigger::Queue { queue: queue_ref } = &worker.triggers[0] {
+        if let WorkerTrigger::Queue {
+            queue: queue_ref, ..
+        } = &worker.triggers[0]
+        {
             assert_eq!(queue_ref.id, "queue-1");
         } else {
             panic!("Expected first trigger to be queue-1");
         }
 
         // Check second queue trigger
-        if let WorkerTrigger::Queue { queue: queue_ref } = &worker.triggers[1] {
+        if let WorkerTrigger::Queue {
+            queue: queue_ref, ..
+        } = &worker.triggers[1]
+        {
             assert_eq!(queue_ref.id, "queue-2");
         } else {
             panic!("Expected second trigger to be queue-2");

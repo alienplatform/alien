@@ -20,6 +20,9 @@ classifiers = [
   "Typing :: Typed",
 ]
 
+[project.optional-dependencies]
+worker = ["grpcio>=1.84,<2", "protobuf>=7.35.1,<8"]
+
 [tool.maturin]
 module-name = "alienplatform._native"
 python-source = "python"
@@ -27,11 +30,14 @@ features = ["pyo3/extension-module"]
 
 [dependency-groups]
 test = [
+  "grpcio-tools==1.84.0",
   "maturin>=1.9,<2",
   "mypy>=1.18,<2",
   "pytest>=8,<10",
   "pytest-asyncio>=1,<2",
   "ruff>=0.13,<1",
+  "types-grpcio",
+  "types-protobuf",
 ]
 
 [tool.pytest.ini_options]
@@ -40,6 +46,8 @@ asyncio_mode = "auto"
 [tool.ruff]
 target-version = "py310"
 line-length = 100
+# protoc owns these files; regenerate them instead of applying style rewrites.
+extend-exclude = ["python/alienplatform/_worker_protocol"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "ASYNC"]

@@ -464,7 +464,10 @@ mod tests {
                 image: "example.com/consumer:latest".to_string(),
             })
             .link(&queue)
-            .trigger(alien_core::WorkerTrigger::Queue { queue: queue_ref })
+            .trigger(alien_core::WorkerTrigger::Queue {
+                queue: queue_ref,
+                batch: None,
+            })
             .build();
 
         let stack = Stack::new("test-stack".to_string())
@@ -555,6 +558,7 @@ mod tests {
                 image: "example.com/consumer:latest".to_string(),
             })
             .trigger(alien_core::WorkerTrigger::Queue {
+                batch: None,
                 queue: alien_core::ResourceRef {
                     resource_type: alien_core::Queue::RESOURCE_TYPE.clone(),
                     id: "jobs".to_string(),
@@ -582,6 +586,7 @@ mod tests {
                 image: "example.com/consumer:latest".to_string(),
             })
             .trigger(alien_core::WorkerTrigger::Queue {
+                batch: None,
                 queue: alien_core::ResourceRef {
                     resource_type: alien_core::Queue::RESOURCE_TYPE.clone(),
                     id: "jobs".to_string(),

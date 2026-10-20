@@ -29,9 +29,11 @@ impl CompileTimeCheck for SandboxPlatformSupportCheck {
             .resources()
             .filter_map(|(_, entry)| entry.config.downcast_ref::<Sandbox>())
             .filter_map(|sandbox| {
-                // Runtime bindings may carry an explicitly configured gateway, but these
+                // AWS and Kubernetes deployments install and configure the gateway. Other
                 // deployment backends cannot yet create and publish one.
-                if sandbox.egress == SandboxEgress::Internet && platform != Platform::Aws {
+                if sandbox.egress == SandboxEgress::Internet
+                    && !matches!(platform, Platform::Aws | Platform::Kubernetes)
+                {
                     return Some(format!(
                         "Sandbox '{}': SANDBOX_EGRESS_GATEWAY_UNAVAILABLE: {platform} does not yet \
                          provide gateway hosting for egress internet",

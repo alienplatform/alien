@@ -1,7 +1,10 @@
 use crate::{
     block::{attr, resource_block},
     emitter::{TfEmitter, TfFragment},
-    emitters::aws::helpers::{downcast, iam_role_name_template, jsonencode, required_label, tags},
+    emitters::aws::helpers::{
+        downcast, iam_role_name_template, jsonencode, managing_role_trust_statement,
+        required_label, tags,
+    },
     expr,
 };
 use alien_core::{import::EmitContext, RemoteBindings, Result};
@@ -41,22 +44,7 @@ fn trust_policy() -> Expression {
         ("Version", Expression::String("2012-10-17".to_string())),
         (
             "Statement",
-            Expression::Array(vec![expr::object([
-                ("Sid", Expression::String("AllowManagingRole".to_string())),
-                ("Effect", Expression::String("Allow".to_string())),
-                (
-                    "Principal",
-                    expr::object([("AWS", expr::raw("var.managing_role_arn"))]),
-                ),
-                ("Action", Expression::String("sts:AssumeRole".to_string())),
-                (
-                    "Condition",
-                    expr::object([(
-                        "StringEquals",
-                        expr::object([("aws:PrincipalArn", expr::raw("var.managing_role_arn"))]),
-                    )]),
-                ),
-            ])]),
+            Expression::Array(vec![managing_role_trust_statement()]),
         ),
     ]))
 }

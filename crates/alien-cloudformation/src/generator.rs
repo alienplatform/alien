@@ -1,6 +1,12 @@
 use crate::{
     dependencies::validate_acyclic,
-    emitters::{aws::helpers::list_parameter_value, enabled},
+    emitters::{
+        aws::helpers::{
+            list_parameter_value, CONDITION_HAS_MANAGEMENT_EXTERNAL_ID,
+            PARAM_MANAGEMENT_EXTERNAL_ID,
+        },
+        enabled,
+    },
     inline_policy::{
         consolidate_role_inline_policies, expression_references, validate_role_policy_limits,
     },
@@ -21,7 +27,7 @@ use alien_core::{
     KubernetesCluster, KubernetesSettings, Network, NetworkSettings, Platform, RemoteBindings,
     ResourceLifecycle, Result, Sandbox, Stack, StackInputDefaultValue, StackInputDefinition,
     StackInputKind, StackInputProvider, StackSettings, Storage, TelemetryMode, UpdatesMode, Worker,
-    WorkerCode,
+    WorkerCode, MANAGEMENT_EXTERNAL_ID_MAX_LENGTH, MANAGEMENT_EXTERNAL_ID_PARAMETER_PATTERN,
 };
 use alien_error::AlienError;
 use indexmap::{indexmap, IndexMap};
@@ -560,6 +566,7 @@ pub fn generate_cloudformation_template_with_profile(
         access_only,
         profile,
     );
+    add_management_external_id_parameter(&mut template);
     apply_resource_dependencies(stack, &emitted_resource_ids, &mut template);
     apply_network_iam_dependencies(stack, &emitted_resource_ids, &mut template);
     consolidate_role_inline_policies(&mut template)?;
@@ -2434,6 +2441,66 @@ fn insert_parameter_label(
     labels.insert(parameter.to_string(), json!({ "default": label }));
 }
 
+/// Declare `ManagementExternalId` when an emitted role trusts the managing
+/// role through [`managing_role_trust_condition`].
+///
+/// The parameter defaults to empty so a stack created before it existed can
+/// be updated to this template with no new input and keep its old trust. New
+/// installations get the value from the setup page, and registration refuses
+/// a new installation that leaves it empty.
+///
+/// [`managing_role_trust_condition`]: crate::emitters::aws::helpers::managing_role_trust_condition
+fn add_management_external_id_parameter(template: &mut CfTemplate) {
+    let trusts_managing_role = template.resources.values().any(|resource| {
+        resource
+            .properties
+            .values()
+            .any(|value| expression_references(value, CONDITION_HAS_MANAGEMENT_EXTERNAL_ID))
+    });
+    if !trusts_managing_role {
+        return;
+    }
+    template.parameters.insert(
+        PARAM_MANAGEMENT_EXTERNAL_ID.to_string(),
+        CfParameter {
+            allowed_pattern: Some(MANAGEMENT_EXTERNAL_ID_PARAMETER_PATTERN.to_string()),
+            constraint_description: Some(
+                "Paste the ExternalId shown on the setup page: 32 to 128 letters and digits."
+                    .to_string(),
+            ),
+            max_length: Some(MANAGEMENT_EXTERNAL_ID_MAX_LENGTH as u32),
+            ..string_parameter(
+                "ExternalId from the setup page. The management roles require it on every \
+                 AssumeRole, so only this installation's control plane can use them. Leave it \
+                 empty only to update a stack created before this parameter existed.",
+                Some(String::new()),
+                None,
+                true,
+            )
+        },
+    );
+    template.conditions.insert(
+        CONDITION_HAS_MANAGEMENT_EXTERNAL_ID.to_string(),
+        CfExpression::not(CfExpression::equals(
+            CfExpression::ref_(PARAM_MANAGEMENT_EXTERNAL_ID),
+            CfExpression::from(""),
+        )),
+    );
+    if let Some(interface) = template.metadata.get_mut("AWS::CloudFormation::Interface") {
+        if let Some(Value::Array(registration)) =
+            interface.pointer_mut("/ParameterGroups/0/Parameters")
+        {
+            registration.push(json!(PARAM_MANAGEMENT_EXTERNAL_ID));
+        }
+        if let Some(Value::Object(labels)) = interface.get_mut("ParameterLabels") {
+            labels.insert(
+                PARAM_MANAGEMENT_EXTERNAL_ID.to_string(),
+                json!({ "default": "ExternalId" }),
+            );
+        }
+    }
+}
+
 fn add_custom_resource(
     template: &mut CfTemplate,
     service_token: CfExpression,
@@ -2479,6 +2546,19 @@ fn add_custom_resource(
         resource
             .properties
             .insert("InputValues".to_string(), input_values);
+    }
+    // Registration compares this with the value the control plane issued, so
+    // a typo fails the install with a clear message instead of a later
+    // AccessDenied. It is never copied to Outputs: CloudFormation does not
+    // mask NoEcho values there.
+    if template
+        .parameters
+        .contains_key(PARAM_MANAGEMENT_EXTERNAL_ID)
+    {
+        resource.properties.insert(
+            PARAM_MANAGEMENT_EXTERNAL_ID.to_string(),
+            CfExpression::ref_(PARAM_MANAGEMENT_EXTERNAL_ID),
+        );
     }
     if let Some(base_platform) = options.target.base_platform() {
         resource.properties.insert(

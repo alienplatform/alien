@@ -12,7 +12,10 @@ Metadata:
       Parameters:
       - Token
       - ManagingRoleArn
+      - ManagementExternalId
     ParameterLabels:
+      ManagementExternalId:
+        default: ExternalId
       ManagingRoleArn:
         default: Management role ARN
       Token:
@@ -27,6 +30,20 @@ Parameters:
     Description: ARN of the management identity allowed to assume setup-created roles.
     AllowedPattern: ^[^"\\\x00-\x1F]*$
     ConstraintDescription: must not contain double quotes, backslashes or control characters
+  ManagementExternalId:
+    Type: String
+    Description: ExternalId from the setup page. The management roles require it on every AssumeRole, so only this installation's control plane can use them. Leave it empty only to update a stack created before this parameter existed.
+    Default: ''
+    AllowedPattern: ^$|^[A-Za-z0-9]{32,128}$
+    ConstraintDescription: 'Paste the ExternalId shown on the setup page: 32 to 128 letters and digits.'
+    MaxLength: 128
+    NoEcho: true
+Conditions:
+  HasManagementExternalId:
+    Fn::Not:
+    - Fn::Equals:
+      - Ref: ManagementExternalId
+      - ''
 Resources:
   AgentsBuildRole:
     Type: AWS::IAM::Role
@@ -166,8 +183,14 @@ Resources:
           Action: sts:AssumeRole
           Condition:
             StringEquals:
-              aws:PrincipalArn:
-                Ref: ManagingRoleArn
+              Fn::If:
+              - HasManagementExternalId
+              - aws:PrincipalArn:
+                  Ref: ManagingRoleArn
+                sts:ExternalId:
+                  Ref: ManagementExternalId
+              - aws:PrincipalArn:
+                  Ref: ManagingRoleArn
       Tags:
       - Key: managed-by
         Value: setup
@@ -233,6 +256,8 @@ Resources:
             Fn::GetAtt:
             - AccessRole
             - Arn
+      ManagementExternalId:
+        Ref: ManagementExternalId
     DependsOn:
     - AgentsBuildRole
     - Agents

@@ -55,11 +55,13 @@ jobs:
           python-version: ${{ matrix.python }}
           cache: pip
       - name: Install test tools
-        run: python -m pip install 'maturin>=1.9,<2' 'mypy>=1.18,<2' 'pytest>=8,<10' 'pytest-asyncio>=1,<2' 'ruff>=0.13,<1'
+        run: python -m pip install 'maturin>=1.9,<2' 'mypy>=1.18,<2' 'pytest>=8,<10' 'pytest-asyncio>=1,<2' 'ruff>=0.13,<1' types-grpcio types-protobuf
       - name: Build and install local-provider wheel
         run: |
           maturin build --manifest-path crates/alien-bindings-python/Cargo.toml --no-default-features --features local --out dist
-          python -m pip install --force-reinstall dist/*.whl
+          for wheel in dist/*.whl; do
+            python -m pip install --force-reinstall "${wheel}[worker]"
+          done
       - name: Check Python sources
         run: |
           ruff check crates/alien-bindings-python/python crates/alien-bindings-python/tests examples/python-bindings

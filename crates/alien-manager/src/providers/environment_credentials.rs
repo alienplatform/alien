@@ -83,6 +83,8 @@ impl EnvironmentCredentialResolver {
                 base_config,
                 stack_state,
                 deployment.environment_info.as_ref(),
+                // Only Azure reaches this hop; ExternalIds are AWS-only.
+                None,
             )
             .await
             .context(crate::error::ErrorData::CredentialMaterializationFailed {

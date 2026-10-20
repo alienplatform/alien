@@ -136,6 +136,18 @@ variable "managing_role_arn" {
   default     = ""
 }
 
+variable "management_external_id" {
+  type        = string
+  description = "ExternalId from the setup page. The management roles require it on every AssumeRole, so only this installation's control plane can use them. Leave it empty only to update a module applied before this variable existed."
+  default     = ""
+  sensitive   = true
+
+  validation {
+    condition     = var.management_external_id == "" || can(regex("^[A-Za-z0-9]{32,128}$", var.management_external_id))
+    error_message = "management_external_id must be the ExternalId shown on the setup page: 32 to 128 letters and digits."
+  }
+}
+
 variable "managing_account_id" {
   type        = string
   description = "AWS account ID that hosts application container images. Empty disables scoped cross-account image-pull grants."

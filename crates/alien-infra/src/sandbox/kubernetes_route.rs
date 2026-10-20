@@ -1,7 +1,8 @@
 //! The sandbox session broker, served by the operator.
 //!
-//! Mounted on the operator's existing HTTP server, which the Helm chart already exposes through
-//! a Service, so this adds no deployment surface and no chart change.
+//! Mounted on the operator's existing HTTP server. A chart with a sandbox always renders the
+//! Service in front of that server and passes its address to the operator, which the controller
+//! publishes as the binding's broker URL.
 //!
 //! **Why a route at all.** Claiming a warm pod is a `PATCH` on pods. Putting that in the binding
 //! would give the customer's application pod-write on the namespace, and `pods/exec` on top of
@@ -126,6 +127,8 @@ pub struct ClaimRequest {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClaimResponse {
+    /// Immutable pod identity used for signed egress policies.
+    pub agent_session_id: String,
     /// Session id, which every later call addresses
     pub session_id: String,
     /// `http://<pod ip>:<agent port>`
@@ -270,6 +273,7 @@ async fn claim(
     .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
 
     Ok(Json(ClaimResponse {
+        agent_session_id: claimed.agent_session_id,
         session_id: claimed.session_id,
         endpoint: claimed.endpoint,
         capability: claimed.capability,

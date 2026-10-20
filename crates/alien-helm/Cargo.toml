@@ -25,6 +25,8 @@ tar = { workspace = true }
 tempfile = { workspace = true, optional = true }
 
 [dev-dependencies]
+alien-preflights = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }
 alien-terraform = { workspace = true }
 insta = { workspace = true }
 tempfile = { workspace = true }

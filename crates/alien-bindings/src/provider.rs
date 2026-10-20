@@ -1878,7 +1878,10 @@ impl BindingsProviderApi for BindingsProvider {
         // Do not silently treat a gateway binding as a legacy policy-only binding on backends
         // whose authenticated token-delivery path has not landed yet.
         if gateway.is_some()
-            && !matches!(&binding, SandboxBinding::Aws(_) | SandboxBinding::Azure(_))
+            && !matches!(
+                &binding,
+                SandboxBinding::Aws(_) | SandboxBinding::Azure(_) | SandboxBinding::Kubernetes(_)
+            )
         {
             return Err(crate::providers::sandbox::egress::unsupported(
                 "gateway-backed sandbox",
@@ -1930,10 +1933,11 @@ impl BindingsProviderApi for BindingsProvider {
             SandboxBinding::Kubernetes(kubernetes_binding) => {
                 use crate::providers::sandbox::kubernetes::KubernetesSandbox;
 
-                let sandbox: Arc<dyn crate::traits::Sandbox> = Arc::new(KubernetesSandbox::new(
+                let sandbox: Arc<dyn crate::traits::Sandbox> = Arc::new(KubernetesSandbox::new_with_egress_manager(
                     binding_name,
                     &kubernetes_binding,
                     binding_name,
+                    egress_manager,
                 )?);
                 Ok(sandbox)
             }

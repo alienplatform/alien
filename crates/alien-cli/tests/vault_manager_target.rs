@@ -36,7 +36,7 @@ fn check_platform_vault(selector: &str, action: &str, ambiguous: bool, missing_u
     let deployment = json!({"id":DEPLOYMENT,"name":"app","status":"running",
                 "projectId":PROJECT,"platform":"aws","deploymentProtocolVersion":1,
                 "deploymentGroupId":GROUP,"purpose":"application","stackSettings":{},
-                "releaseChannel":"production","retryRequested":false,
+                "releaseChannel":"production","retryRequested":false,"updateBlocked":false,
                 "createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z",
                 "managerId":MANAGER,"workspaceId":"ws_000000000000000000000000"});
     let list = api.mock(|when, then| {

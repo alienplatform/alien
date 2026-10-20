@@ -77,7 +77,7 @@ pub struct RuntimeConfig {
     /// How to export captured application logs
     #[builder(default = LogExporter::None)]
     pub log_exporter: LogExporter,
-    /// Maximum time to wait for a pushed command to finish in the application.
+    /// Maximum time to wait for a command or event task to finish in the application.
     #[builder(default = Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECONDS))]
     pub command_timeout: Duration,
 }

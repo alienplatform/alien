@@ -1,6 +1,8 @@
 use crate::{
     emitter::CfEmitter,
-    emitters::aws::helpers::{required_logical_id, resource_config, tags, PARAM_MANAGING_ROLE_ARN},
+    emitters::aws::helpers::{
+        managing_role_trust_statement, required_logical_id, resource_config, tags,
+    },
     template::{CfExpression, CfResource},
 };
 use alien_core::{import::EmitContext, RemoteBindings, Result};
@@ -39,25 +41,7 @@ fn trust_policy() -> CfExpression {
         ("Version", CfExpression::from("2012-10-17")),
         (
             "Statement",
-            CfExpression::list([CfExpression::object([
-                ("Sid", CfExpression::from("AllowManagingRole")),
-                ("Effect", CfExpression::from("Allow")),
-                (
-                    "Principal",
-                    CfExpression::object([("AWS", CfExpression::ref_(PARAM_MANAGING_ROLE_ARN))]),
-                ),
-                ("Action", CfExpression::from("sts:AssumeRole")),
-                (
-                    "Condition",
-                    CfExpression::object([(
-                        "StringEquals",
-                        CfExpression::object([(
-                            "aws:PrincipalArn",
-                            CfExpression::ref_(PARAM_MANAGING_ROLE_ARN),
-                        )]),
-                    )]),
-                ),
-            ])]),
+            CfExpression::list([managing_role_trust_statement()]),
         ),
     ])
 }

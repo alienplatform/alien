@@ -12,3 +12,12 @@ pub use kubernetes::*;
 
 #[cfg(feature = "local")]
 mod local_utils;
+
+#[cfg(feature = "kubernetes")]
+mod kubernetes_network;
+
+#[cfg(feature = "kubernetes")]
+mod kubernetes_service;
+
+#[cfg(feature = "kubernetes")]
+pub(crate) use kubernetes_service::peer_service_name;

@@ -20,7 +20,7 @@ pub struct AwsServiceOverrides {
 }
 
 /// Configuration for AWS role impersonation
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AwsImpersonationConfig {
@@ -37,6 +37,22 @@ pub struct AwsImpersonationConfig {
     /// cross-region impersonation (e.g., management in us-east-1 targeting us-east-2).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_region: Option<String>,
+}
+
+impl std::fmt::Debug for AwsImpersonationConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AwsImpersonationConfig")
+            .field("role_arn", &self.role_arn)
+            .field("session_name", &self.session_name)
+            .field("duration_seconds", &self.duration_seconds)
+            // The ExternalId gates access to a customer's role; never print it.
+            .field(
+                "external_id",
+                &self.external_id.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("target_region", &self.target_region)
+            .finish()
+    }
 }
 
 /// Configuration for AWS Web Identity Token authentication

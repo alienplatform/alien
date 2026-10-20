@@ -189,13 +189,15 @@ fn controller_platform_for_entry(
         return Platform::Kubernetes;
     }
 
-    // Compute pools describe placement in the existing Kubernetes namespace,
-    // even when other Frozen resources use an underlying cloud provider.
+    // Compute pools and sandbox parents are Kubernetes-native, including on
+    // managed cloud clusters. Setup omits their cloud infrastructure; only other
+    // Frozen resources use the underlying cloud provider.
     if stack_platform == Platform::Kubernetes
         && resource.is_some_and(|resource| {
             resource
                 .downcast_ref::<alien_core::ComputeCluster>()
                 .is_some()
+                || resource.downcast_ref::<alien_core::Sandbox>().is_some()
         })
     {
         return Platform::Kubernetes;
@@ -225,37 +227,53 @@ mod controller_platform_tests {
     use alien_core::{KubernetesClusterProvider, KubernetesHeartbeatMode, Storage};
 
     #[test]
-    fn kubernetes_compute_never_uses_the_underlying_cloud_controller() {
-        let compute = Resource::new(alien_core::ComputeCluster::new("compute".to_string()).build());
-        for base_platform in [
-            None,
-            Some(Platform::Aws),
-            Some(Platform::Gcp),
-            Some(Platform::Azure),
-        ] {
-            for lifecycle in [ResourceLifecycle::Frozen, ResourceLifecycle::Live] {
-                assert_eq!(
-                    controller_platform_for_entry(
+    fn kubernetes_pools_and_sandboxes_never_use_the_underlying_cloud_controller() {
+        let resources = [
+            Resource::new(alien_core::ComputeCluster::new("compute".to_string()).build()),
+            Resource::new(
+                alien_core::Sandbox::new("sandbox".to_string())
+                    .code(alien_core::SandboxCode::Image {
+                        image: "python:3.13-slim".to_string(),
+                    })
+                    .egress(alien_core::SandboxEgress::Deny)
+                    .lifecycle(alien_core::SandboxLifecyclePolicy {
+                        max_lifetime_seconds: None,
+                        idle_pause_seconds: None,
+                    })
+                    .build(),
+            ),
+        ];
+        for resource in &resources {
+            for base_platform in [
+                None,
+                Some(Platform::Aws),
+                Some(Platform::Gcp),
+                Some(Platform::Azure),
+            ] {
+                for lifecycle in [ResourceLifecycle::Frozen, ResourceLifecycle::Live] {
+                    assert_eq!(
+                        controller_platform_for_entry(
+                            Platform::Kubernetes,
+                            base_platform,
+                            lifecycle,
+                            Some(resource),
+                        ),
                         Platform::Kubernetes,
-                        base_platform,
-                        lifecycle,
-                        Some(&compute),
-                    ),
-                    Platform::Kubernetes,
-                    "Kubernetes pools must not create a cloud machine fleet"
-                );
+                        "{} must run on Kubernetes, base={base_platform:?}, lifecycle={lifecycle:?}",
+                        resource.resource_type(),
+                    );
+                }
+            }
+            for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+                for lifecycle in [ResourceLifecycle::Frozen, ResourceLifecycle::Live] {
+                    assert_eq!(
+                        controller_platform_for_entry(platform, None, lifecycle, Some(resource)),
+                        platform,
+                        "a cloud deployment must retain its cloud controller",
+                    );
+                }
             }
         }
-        assert_eq!(
-            controller_platform_for_entry(
-                Platform::Gcp,
-                None,
-                ResourceLifecycle::Frozen,
-                Some(&compute),
-            ),
-            Platform::Gcp,
-            "a cloud deployment must retain cloud capacity provisioning"
-        );
     }
 
     #[test]

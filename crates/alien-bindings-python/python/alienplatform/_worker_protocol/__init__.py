@@ -1,0 +1,1 @@
+"""Generated Worker control protocol."""

@@ -42,3 +42,7 @@ tokio-stream = { workspace = true, optional = true }
 
 # OpenAPI schema derives on the wait_until types
 utoipa = { workspace = true, optional = true }
+
+[dev-dependencies]
+alien-worker-protocol = { workspace = true, features = ["server"] }
+tokio-stream = { workspace = true, features = ["net"] }

@@ -125,7 +125,9 @@ impl StackMutation for ManagementPermissionProfileMutation {
                 stack.permissions.management = ManagementPermissions::Override(override_profile);
             }
         }
+        add_batch_queue_metadata_permissions(&mut stack, stack_state.platform);
         protect_deployer_secrets(&mut stack, stack_state.platform, config)?;
+        protect_sandbox_signing_key(&mut stack, stack_state.platform)?;
         add_role_guards(
             &mut stack,
             stack_state.platform,
@@ -133,6 +135,78 @@ impl StackMutation for ManagementPermissionProfileMutation {
         );
 
         Ok(stack)
+    }
+}
+
+/// Batch reconciliation reads setup-owned SQS visibility even when periodic
+/// heartbeats are disabled. Author that prerequisite in the setup contract so
+/// existing installations require setup before runtime attempts the new read.
+fn add_batch_queue_metadata_permissions(stack: &mut Stack, platform: Platform) {
+    if platform != Platform::Aws {
+        return;
+    }
+    let queues: BTreeSet<String> = stack
+        .resources()
+        .filter_map(|(_, entry)| entry.config.downcast_ref::<Worker>())
+        .flat_map(|worker| &worker.triggers)
+        .filter_map(|trigger| match trigger {
+            WorkerTrigger::Queue {
+                queue,
+                batch: Some(_),
+            } if stack
+                .resources
+                .get(&queue.id)
+                .is_some_and(|entry| entry.lifecycle == ResourceLifecycle::Frozen) =>
+            {
+                Some(queue.id.clone())
+            }
+            _ => None,
+        })
+        .collect();
+    if queues.is_empty() {
+        return;
+    }
+    if matches!(stack.permissions.management, ManagementPermissions::Auto) {
+        stack.permissions.management = ManagementPermissions::Extend(PermissionProfile::new());
+    }
+    let profile = match &mut stack.permissions.management {
+        ManagementPermissions::Auto => unreachable!(),
+        ManagementPermissions::Extend(profile) | ManagementPermissions::Override(profile) => {
+            profile
+        }
+    };
+    for queue in queues {
+        // Frozen scoped heartbeat/management grants are omitted by bootstrap
+        // emitters. Only global reads or the post-queue metadata policy count.
+        let already_readable = ["*", queue.as_str()].iter().any(|scope| {
+            profile.0.get(*scope).is_some_and(|grants| {
+                grants.iter().any(|grant| {
+                    let PermissionSetReference::Name(name) = grant else {
+                        return false;
+                    };
+                    if *scope == "*" {
+                        matches!(
+                            name.as_str(),
+                            "queue/heartbeat"
+                                | "queue/management"
+                                | "queue/provision"
+                                | "queue/data-read"
+                                | "queue/data-write"
+                                | "queue/publish"
+                        )
+                    } else {
+                        name == "queue/batch-metadata"
+                    }
+                })
+            })
+        });
+        if !already_readable {
+            profile
+                .0
+                .entry(queue)
+                .or_default()
+                .push(PermissionSetReference::from_name("queue/batch-metadata"));
+        }
     }
 }
 
@@ -262,6 +336,58 @@ fn protect_deployer_secrets(
         global.retain(|existing| existing.id() != grant.id());
         global.push(grant);
     }
+    Ok(())
+}
+
+/// Id of the Deny that keeps the managing identity from reading the sandbox egress signing key.
+pub(crate) const SANDBOX_SIGNING_KEY_GUARD_ID: &str = "vault/protect-sandbox-egress-signing-key";
+
+/// The Deny that keeps the managing identity from reading the AWS sandbox egress signing key,
+/// whatever else it is granted on the stack's parameters: automatic setup's stack-wide vault
+/// grant, or an author's own. The sandbox controllers only write the key.
+pub(crate) fn sandbox_signing_key_guard() -> Result<PermissionSetReference> {
+    let parameter = alien_core::vault_naming::parameter_store_parameter_name(
+        &format!("${{stackPrefix}}-{}", alien_core::SECRETS_VAULT_ID),
+        "sandbox-egress-signing-key",
+    );
+    let arn = format!("arn:aws:ssm:${{awsRegion}}:${{awsAccountId}}:parameter/{parameter}");
+    inline_vault_permission(serde_json::json!({
+        "id": SANDBOX_SIGNING_KEY_GUARD_ID,
+        "description": "Management cannot read the sandbox egress signing key",
+        "platforms": { "aws": [{
+            "effect": "Deny",
+            "grant": { "actions": ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParameterHistory"] },
+            "binding": { "stack": { "resources": [arn] }, "resource": { "resources": [arn] } }
+        }, {
+            "effect": "Deny",
+            "grant": { "actions": ["ssm:GetParametersByPath"] },
+            "binding": { "stack": { "resources": ["*"] }, "resource": { "resources": ["*"] } }
+        }] }
+    }))
+}
+
+fn protect_sandbox_signing_key(stack: &mut Stack, platform: Platform) -> Result<()> {
+    if platform != Platform::Aws || !alien_core::sandbox_egress::has_sandbox_gateway(stack) {
+        return Ok(());
+    }
+    let guard = sandbox_signing_key_guard()?;
+    // A Deny only narrows the identity, so an Override profile gets it too.
+    let profile = match &mut stack.permissions.management {
+        ManagementPermissions::Auto => {
+            stack.permissions.management = ManagementPermissions::Extend(PermissionProfile::new());
+            match &mut stack.permissions.management {
+                ManagementPermissions::Extend(profile) => profile,
+                _ => unreachable!("just set to Extend"),
+            }
+        }
+        ManagementPermissions::Extend(profile) | ManagementPermissions::Override(profile) => {
+            profile
+        }
+    };
+    let global = profile.0.entry("*".to_string()).or_default();
+    // A user-authored inline permission cannot shadow the guard by id.
+    global.retain(|existing| existing.id() != guard.id());
+    global.push(guard);
     Ok(())
 }
 
@@ -451,7 +577,7 @@ fn generate_auto_management_profile(
                 resource_permission_set_ids
                     .entry(key.id().to_string())
                     .or_default()
-                    .insert("key/native-volume".to_string());
+                    .insert(NATIVE_VOLUME_MANAGEMENT_PERMISSION_SET_ID.to_string());
             }
         }
 
@@ -731,6 +857,10 @@ fn add_cloud_heartbeat_permission(
 
 /// Lets the AWS Key controller probe a customer key's availability.
 pub(crate) const KEY_AVAILABILITY_PERMISSION_SET_ID: &str = "key/availability";
+
+/// Management's use of a volume key: it creates, grows, restores and deletes the volumes but
+/// never decrypts with the key. The node that attaches a volume holds `key/native-volume`.
+pub(crate) const NATIVE_VOLUME_MANAGEMENT_PERMISSION_SET_ID: &str = "key/native-volume-management";
 
 /// The `'*'`-scope grant suffixes this derivation emits per resource type
 /// (the `format!("{}/…")` inserts above). A check exempting gate-derived

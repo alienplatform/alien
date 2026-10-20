@@ -229,6 +229,11 @@ export interface QueueMessage {
 }
 
 /** One outcome per input. Retrying unknown delivery can produce duplicates. */
+/** One completion outcome, in input order. Failed completion may be uncertain. */
+export type QueueAckResult =
+  | { status: "acknowledged" }
+  | { status: "failed"; code: string; message: string }
+
 export type QueueSendResult =
   | { status: "sent" }
   | { status: "rejected"; code: string; message: string }
@@ -251,6 +256,10 @@ export interface Queue {
   receive(max: number): Promise<QueueMessage[]>
   /** Acknowledge a message by its receipt handle. */
   ack(receipt: string): Promise<void>
+  /** Complete independently; this is not an atomic operation. */
+  ackBatch(receipts: string[]): Promise<QueueAckResult[]>
+  /** Reset remaining lease to 1–600 seconds, which may shorten it. Azure renews its configured lock instead. */
+  renewLease(receipt: string, durationSeconds: number): Promise<void>
   /** Negative-acknowledge a message, making it immediately redeliverable. */
   nack(receipt: string): Promise<void>
   /** Delete every message in the queue. */

@@ -407,6 +407,28 @@ impl Queue for LocalQueue {
             .await
     }
 
+    async fn renew_lease(
+        &self,
+        _queue: &str,
+        receipt_handle: &str,
+        duration_seconds: u32,
+    ) -> Result<()> {
+        crate::traits::validate_lease_duration(duration_seconds)?;
+        let (id, receipt) = Self::parse_receipt_handle(receipt_handle)
+            .ok_or_else(|| stale_receipt_error(0, "renew"))?;
+        self.store.with_conn(|conn| async move {
+            let now = Utc::now().timestamp_millis();
+            let updated = conn.execute(
+                "UPDATE messages SET visible_at = ?1 WHERE id = ?2 AND receipt_handle = ?3 AND visible_at > ?4",
+                (now + i64::from(duration_seconds) * 1000, id, receipt.as_str(), now),
+            ).await.into_alien_error().context(queue_error("renew", "failed to renew delivery lease".to_string()))?;
+            if updated != 1 {
+                return Err(stale_receipt_error(id, "renew"));
+            }
+            Ok(())
+        }).await
+    }
+
     /// Negative-acknowledge a message: make it immediately visible again.
     ///
     /// Same receipt rules as `ack`: a stale receipt (the message was
@@ -504,6 +526,170 @@ mod tests {
             .await
             .expect("Failed to create LocalQueue");
         (queue, temp_dir)
+    }
+
+    #[tokio::test]
+    async fn lease_renewal_and_batch_completion_preserve_delivery_ownership() {
+        let (queue, _dir) = create_test_queue().await;
+        for text in ["first", "second"] {
+            queue
+                .send("q", MessagePayload::Text(text.to_string()))
+                .await
+                .expect("send");
+        }
+        let first = queue.receive("q", 1).await.expect("receive first");
+        let second = queue.receive("q", 1).await.expect("receive second");
+        assert_eq!(first.len(), 1);
+        assert_eq!(second.len(), 1);
+        queue
+            .renew_lease("q", &first[0].receipt_handle, 30)
+            .await
+            .expect("renew current delivery");
+        assert!(queue
+            .receive("q", 10)
+            .await
+            .expect("hidden deliveries")
+            .is_empty());
+        queue
+            .nack("q", &second[0].receipt_handle)
+            .await
+            .expect("release second");
+        let renewed = queue.receive("q", 1).await.expect("redelivery");
+        assert_eq!(renewed.len(), 1);
+        assert_eq!(renewed[0].attempt, 2);
+        assert_ne!(second[0].receipt_handle, renewed[0].receipt_handle);
+        queue
+            .renew_lease("q", &second[0].receipt_handle, 30)
+            .await
+            .expect_err("superseded lease");
+        let outcomes = queue
+            .ack_batch(
+                "q",
+                &[
+                    first[0].receipt_handle.clone(),
+                    second[0].receipt_handle.clone(),
+                ],
+            )
+            .await
+            .expect("batch outcomes");
+        assert_eq!(outcomes.len(), 2);
+        assert_eq!(outcomes[0], crate::traits::QueueAckResult::Acknowledged);
+        assert!(matches!(
+            &outcomes[1],
+            crate::traits::QueueAckResult::Failed { .. }
+        ));
+        queue
+            .renew_lease("q", &first[0].receipt_handle, 30)
+            .await
+            .expect_err("deleted delivery");
+        queue
+            .nack("q", &renewed[0].receipt_handle)
+            .await
+            .expect("release survivor");
+        let survivor = queue
+            .receive("q", 10)
+            .await
+            .expect("only failed completion survives");
+        assert_eq!(survivor.len(), 1);
+        assert_eq!(payload_text(&survivor[0]), payload_text(&second[0]));
+        assert_eq!(survivor[0].attempt, 3);
+        let outcomes = queue
+            .ack_batch("q", &[survivor[0].receipt_handle.clone()])
+            .await
+            .expect("complete");
+        assert_eq!(outcomes, vec![crate::traits::QueueAckResult::Acknowledged]);
+        assert!(queue.receive("q", 10).await.expect("empty").is_empty());
+        assert!(queue
+            .ack_batch("q", &[])
+            .await
+            .expect("empty batch")
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn explicit_lease_duration_extends_and_can_intentionally_shorten() {
+        let (queue, _dir) = create_test_queue().await;
+        queue
+            .send("q", MessagePayload::Text("work".into()))
+            .await
+            .expect("send");
+        let messages = queue
+            .receive_inner(1, Duration::from_secs(600))
+            .await
+            .expect("long lease");
+        assert_eq!(messages.len(), 1);
+        queue
+            .renew_lease("q", &messages[0].receipt_handle, 600)
+            .await
+            .expect("renew long lease");
+        // Advance the persisted visibility clock, without a wall-clock sleep.
+        queue
+            .store
+            .with_conn(|conn| async move {
+                conn.execute("UPDATE messages SET visible_at = visible_at - 45000", ())
+                    .await
+                    .into_alien_error()
+                    .context(queue_error("test_clock", "Advance visibility clock".into()))?;
+                Ok(())
+            })
+            .await
+            .expect("advance 45 seconds");
+        assert!(queue
+            .receive("q", 1)
+            .await
+            .expect("still leased")
+            .is_empty());
+        queue
+            .renew_lease("q", &messages[0].receipt_handle, 1)
+            .await
+            .expect("explicitly shorten lease");
+        queue
+            .store
+            .with_conn(|conn| async move {
+                conn.execute("UPDATE messages SET visible_at = visible_at - 2000", ())
+                    .await
+                    .into_alien_error()
+                    .context(queue_error("test_clock", "Advance visibility clock".into()))?;
+                Ok(())
+            })
+            .await
+            .expect("advance two seconds");
+        let redelivered = queue
+            .receive("q", 1)
+            .await
+            .expect("shortened lease expired");
+        assert_eq!(redelivered.len(), 1);
+        assert_eq!(redelivered[0].attempt, 2);
+        assert_ne!(messages[0].receipt_handle, redelivered[0].receipt_handle);
+        queue
+            .ack("q", &redelivered[0].receipt_handle)
+            .await
+            .expect("complete");
+    }
+
+    #[tokio::test]
+    async fn expired_lease_cannot_be_renewed_before_redelivery() {
+        let (queue, _dir) = create_test_queue().await;
+        queue
+            .send("q", MessagePayload::Text("expired".to_string()))
+            .await
+            .expect("send");
+        let messages = queue
+            .receive_inner(1, Duration::ZERO)
+            .await
+            .expect("expired delivery");
+        assert_eq!(messages.len(), 1);
+        queue
+            .renew_lease("q", &messages[0].receipt_handle, 30)
+            .await
+            .expect_err("expired lease");
+        let redelivered = queue.receive("q", 1).await.expect("redelivery");
+        assert_eq!(redelivered.len(), 1);
+        assert_eq!(redelivered[0].attempt, 2);
+        queue
+            .ack("q", &redelivered[0].receipt_handle)
+            .await
+            .expect("complete");
     }
 
     #[tokio::test]

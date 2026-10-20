@@ -245,6 +245,33 @@ impl Queue for AzureServiceBusQueue {
             })
     }
 
+    async fn renew_lease(
+        &self,
+        _queue: &str,
+        receipt_handle: &str,
+        duration_seconds: u32,
+    ) -> Result<()> {
+        crate::traits::validate_lease_duration(duration_seconds)?;
+        let (message_id, lock_token) = receipt_handle.split_once('\n').ok_or_else(|| {
+            alien_error::AlienError::new(ErrorData::BindingSetupFailed {
+                binding_type: "queue.servicebus".to_string(),
+                reason: "Invalid receipt handle format".to_string(),
+            })
+        })?;
+        self.client
+            .renew_message_lock(
+                self.namespace.clone(),
+                self.queue_name.clone(),
+                message_id.to_string(),
+                lock_token.to_string(),
+            )
+            .await
+            .context(ErrorData::BindingSetupFailed {
+                binding_type: "queue.servicebus".to_string(),
+                reason: "Failed to renew delivery lock".to_string(),
+            })
+    }
+
     async fn nack(&self, _queue: &str, receipt_handle: &str) -> Result<()> {
         // Service Bus nack = Abandon: release the peek-lock so the message is
         // immediately redeliverable. Same "message_id\nlock_token" receipt

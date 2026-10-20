@@ -34,6 +34,9 @@ pub struct KubernetesSandboxController {
     /// Bound installed with the parent and published to runtime bindings.
     #[serde(default)]
     pub(crate) egress: Option<alien_core::bindings::SandboxEgressBinding>,
+    /// Default policy supplied to newly created sessions.
+    #[serde(default)]
+    pub(crate) default_policy: Option<alien_core::EgressPolicy>,
     /// Sandbox this controller owns, and the enumeration scope for its pods.
     pub(crate) sandbox_id: Option<String>,
     /// Namespace the Helm chart created for this sandbox's pods.
@@ -45,8 +48,8 @@ pub struct KubernetesSandboxController {
     /// Public half of the sandbox's capability keypair, base64. Only the public half: a pod's
     /// environment is readable by the untrusted code inside it.
     pub(crate) capability_public_key: Option<String>,
-    /// Where the application reaches the session broker. Set from the operator's own service
-    /// address, because the broker is served by the operator.
+    /// Where the application reaches the session broker, which the operator serves. Read on
+    /// every pass from the address the chart gives the operator.
     pub(crate) broker_url: Option<String>,
     /// Deployment ownership selector used by the broker and deletion paths.
     #[serde(default)]
@@ -96,8 +99,8 @@ impl KubernetesSandboxController {
 
         self.runtime_class = Some(runtime_class);
         self.sandbox_id = Some(config.id.clone());
-        self.egress = Some(config.into());
-        self.broker_url = broker_url();
+        self.default_policy = config.default_policy.clone();
+        self.broker_url = Some(broker_url(&config.id)?);
 
         // Recorded as soon as it is known, because the binding and the outputs both read it
         // directly rather than through the fallback: leaving it unset publishes no binding at
@@ -112,6 +115,8 @@ impl KubernetesSandboxController {
             self.capability_public_key =
                 Some(ensure_capability_keypair(ctx, &config.id, &namespace).await?);
         }
+
+        self.egress = Some(super::kubernetes_egress::configure(ctx, config, &namespace).await?);
 
         info!(sandbox_id = %config.id, "Cluster can run sandboxes");
 
@@ -130,11 +135,13 @@ impl KubernetesSandboxController {
         let config = ctx.desired_resource_config::<Sandbox>()?;
 
         let namespace = deployment_namespace(ctx.get_kubernetes_config()?)?;
+        self.broker_url = Some(broker_url(&config.id)?);
         let (deployment_label_key, deployment_label_value) = kubernetes_deployment_scope_label(ctx);
         self.deployment_label_key = Some(deployment_label_key);
         self.deployment_label_value = Some(deployment_label_value);
         self.capability_public_key =
             Some(ensure_capability_keypair(ctx, &config.id, &namespace).await?);
+        self.egress = Some(super::kubernetes_egress::configure(ctx, config, &namespace).await?);
         let sessions = list_session_pods(ctx, &namespace, &config.id).await?;
 
         let pool = replenish_warm_pool(
@@ -194,7 +201,10 @@ impl KubernetesSandboxController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
-        self.egress = Some(config.into());
+        self.default_policy = config.default_policy.clone();
+        self.broker_url = Some(broker_url(&config.id)?);
+        let namespace = deployment_namespace(ctx.get_kubernetes_config()?)?;
+        self.egress = Some(super::kubernetes_egress::configure(ctx, config, &namespace).await?);
 
         // Config applies to pods created after it. Running sessions are not rolled: a session
         // is a unit of work someone is waiting on, not a replica.
@@ -322,8 +332,8 @@ impl KubernetesSandboxController {
     fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
         use alien_core::bindings::{BindingValue, SandboxBinding};
 
-        // Nothing to publish until the broker has an address and the pool has a key: a binding
-        // pointing at neither would fail on first use rather than fail to appear.
+        // Every field is recorded by the first provisioning step, which fails rather than
+        // proceed without a broker address, so this is only `None` before that step ran.
         let (
             Some(sandbox_id),
             Some(namespace),
@@ -361,10 +371,8 @@ impl KubernetesSandboxController {
         );
 
         if let SandboxBinding::Kubernetes(value) = &mut binding {
-            value.default_policy = self
-                .egress
-                .as_ref()
-                .and_then(|value| value.default_policy().cloned());
+            value.egress = self.egress.clone();
+            value.default_policy = self.default_policy.clone();
         }
 
         Ok(Some(
@@ -455,9 +463,23 @@ async fn replenish_warm_pool(
     let waiting = idle.items.len();
     let deficit = pool_deficit(target, waiting);
     let mut created = 0;
+    if deficit == 0 {
+        return Ok(WarmPool {
+            idle: waiting,
+            created,
+        });
+    }
+    let Some(egress_environment) =
+        super::kubernetes_egress::bootstrap_environment(ctx, sandbox, namespace).await?
+    else {
+        return Ok(WarmPool {
+            idle: waiting,
+            created,
+        });
+    };
 
     for _ in 0..deficit {
-        let pod = idle_pool_pod_with_labels(
+        let mut pod = idle_pool_pod_with_labels(
             sandbox,
             namespace,
             runtime_class,
@@ -465,6 +487,14 @@ async fn replenish_warm_pool(
             capability_public_key,
             kubernetes_cleanup_resource_labels(ctx, &sandbox.id),
         );
+
+        pod.spec
+            .as_mut()
+            .expect("generated pod has a spec")
+            .containers[0]
+            .env
+            .get_or_insert_default()
+            .extend(egress_environment.clone());
 
         // Best effort per pod: a pool that is one short is slower, not broken, and failing the
         // health tick over it would take a working sandbox out of Running. The reason is logged
@@ -497,10 +527,9 @@ fn deployment_namespace(config: &alien_core::KubernetesClientConfig) -> Result<S
     use alien_core::KubernetesClientConfig as Config;
 
     let namespace = match config {
-        Config::InCluster { namespace, .. } | Config::Kubeconfig { namespace, .. } => {
-            namespace.clone()
-        }
-        _ => None,
+        Config::InCluster { namespace, .. }
+        | Config::Kubeconfig { namespace, .. }
+        | Config::Manual { namespace, .. } => namespace.clone(),
     };
 
     namespace.ok_or_else(|| {
@@ -545,29 +574,49 @@ async fn list_session_pods(
 
 #[cfg(test)]
 mod tests {
-    /// A binding pointing at no broker would fail on first use rather than fail to appear, so
-    /// nothing is published until the address and the key are both known.
+    /// An operator without the chart's broker address must fail the sandbox rather than let it
+    /// reach Running with no binding: a linked workload would then start without
+    /// `ALIEN_<SANDBOX>_BINDING`, which is the failure this guards against.
     #[test]
-    fn no_binding_is_published_before_the_broker_has_an_address() {
+    fn a_missing_broker_address_fails_instead_of_withholding_the_binding() {
+        for value in [None, Some(String::new()), Some("  ".to_string())] {
+            let error = broker_url_from("sbx", value.clone()).expect_err("no address is an error");
+            assert_eq!(error.code, "RESOURCE_CONTROLLER_CONFIG_ERROR", "{value:?}");
+            assert!(
+                error.message.contains(alien_core::ENV_ALIEN_SANDBOX_BROKER_URL),
+                "the error names the missing setting: {}",
+                error.message
+            );
+        }
+        assert_eq!(
+            broker_url_from(
+                "sbx",
+                Some("http://alien-operator.alien.svc:8080".to_string())
+            )
+            .expect("an address"),
+            "http://alien-operator.alien.svc:8080"
+        );
+    }
+
+    #[test]
+    fn the_binding_carries_the_broker_address_and_no_key_material() {
         use crate::core::ResourceController;
 
-        let mut controller = KubernetesSandboxController {
+        let controller = KubernetesSandboxController {
             egress: None,
+            default_policy: None,
             state: KubernetesSandboxState::Ready,
             sandbox_id: Some("sbx".to_string()),
             namespace: Some("alien-sandbox-sbx".to_string()),
             runtime_class: Some("gvisor".to_string()),
             warm_pool_size: None,
             capability_public_key: Some("cHVibGlj".to_string()),
-            broker_url: None,
+            broker_url: Some("http://alien-operator.alien:8080".to_string()),
             deployment_label_key: Some("alien.dev/deployment".to_string()),
             deployment_label_value: Some("release-a".to_string()),
             _internal_stay_count: None,
         };
 
-        assert!(controller.get_binding_params().expect("params").is_none());
-
-        controller.broker_url = Some("http://alien-operator.alien:8080".to_string());
         let params = controller
             .get_binding_params()
             .expect("params")
@@ -592,6 +641,48 @@ mod tests {
 
     use super::*;
     use crate::core::{deserialize_controller, serialize_controller, ResourceController};
+
+    #[test]
+    fn gateway_binding_keeps_its_descriptor_and_creation_default() {
+        use alien_core::bindings::{
+            SandboxEgressBinding, SandboxEgressGateway, SandboxEgressSigningKey,
+        };
+        let gateway = SandboxEgressBinding::Gateway(SandboxEgressGateway {
+            container: alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.into(),
+            audience: "deployment/subject".into(),
+            signing_key: SandboxEgressSigningKey {
+                vault: "secrets".into(),
+                key: "sandbox-egress-signing-key".into(),
+            },
+            kid: "one".into(),
+            admin_ca_pem: None,
+            replicas: None,
+        });
+        let policy = serde_json::from_value(serde_json::json!({"allow":["example.com"]})).unwrap();
+        let controller = KubernetesSandboxController {
+            egress: Some(gateway.clone()),
+            default_policy: Some(policy),
+            sandbox_id: Some("subject".into()),
+            namespace: Some("deployment".into()),
+            runtime_class: Some("gvisor".into()),
+            broker_url: Some("http://broker:8080".into()),
+            deployment_label_key: Some("alien.dev/deployment".into()),
+            deployment_label_value: Some("deployment".into()),
+            ..Default::default()
+        };
+        let binding: alien_core::bindings::SandboxBinding =
+            serde_json::from_value(controller.get_binding_params().unwrap().unwrap()).unwrap();
+        let alien_core::bindings::SandboxBinding::Kubernetes(binding) = binding else {
+            panic!("Kubernetes binding")
+        };
+        assert_eq!(binding.egress, Some(gateway));
+        assert_eq!(binding.default_policy, controller.default_policy);
+        let restored = deserialize_controller(serialize_controller(&controller).unwrap()).unwrap();
+        assert_eq!(
+            restored.get_binding_params().unwrap(),
+            controller.get_binding_params().unwrap()
+        );
+    }
 
     #[test]
     fn controller_round_trips_by_tag() {
@@ -852,18 +943,32 @@ const SERVICE_ACCOUNT_TOKEN_PATH: &str = "/var/run/secrets/kubernetes.io/service
 
 /// Where the application reaches the session broker.
 ///
-/// Derived from the operator's own identity rather than configured: the broker is served by the
-/// operator, and the Helm chart already gives it a Service named after `OPERATOR_NAME` in
-/// `KUBERNETES_NAMESPACE`. A separate setting would be a second place for the same fact to be
-/// wrong.
-///
-/// `None` when the operator is not running in a cluster, which is also when there is no Service
-/// to address and therefore nothing to publish.
+/// The broker is served by the operator, and the chart that installs the operator also renders
+/// the Service in front of it, so the chart passes that Service's address in rather than this
+/// controller guessing it from the operator's identity. An operator installed without it cannot
+/// publish a usable binding, so the sandbox fails here instead of coming up Running with no
+/// binding that any linked workload could load.
 #[cfg(feature = "kubernetes")]
-fn broker_url() -> Option<String> {
-    let name = std::env::var("OPERATOR_NAME").ok()?;
-    let namespace = std::env::var("KUBERNETES_NAMESPACE").ok()?;
-    let port = std::env::var("OTLP_PORT").unwrap_or_else(|_| "8080".to_string());
+fn broker_url(sandbox_id: &str) -> Result<String> {
+    broker_url_from(
+        sandbox_id,
+        std::env::var(alien_core::ENV_ALIEN_SANDBOX_BROKER_URL).ok(),
+    )
+}
 
-    Some(format!("http://{name}.{namespace}.svc:{port}"))
+#[cfg(feature = "kubernetes")]
+fn broker_url_from(sandbox_id: &str, value: Option<String>) -> Result<String> {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: sandbox_id.to_string(),
+                message: format!(
+                    "the operator has no sandbox broker address ({} is unset); upgrade the Helm \
+                     chart, which renders the operator Service and passes its address",
+                    alien_core::ENV_ALIEN_SANDBOX_BROKER_URL
+                ),
+            })
+        })
 }

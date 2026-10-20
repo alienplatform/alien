@@ -89,9 +89,9 @@ use alien_gcp_clients::{
 #[cfg(feature = "kubernetes")]
 use alien_k8s_clients::{
     deployments::DeploymentApi, events::EventApi, jobs::JobApi,
-    kubernetes_client::KubernetesClient, metrics::MetricsApi, nodes::NodeApi, pods::PodApi,
-    routes::RouteApi, runtime_classes::RuntimeClassApi, secrets::SecretsApi, services::ServiceApi,
-    version::VersionApi, KubernetesClientConfig,
+    kubernetes_client::KubernetesClient, metrics::MetricsApi, network_policies::NetworkPolicyApi,
+    nodes::NodeApi, pods::PodApi, routes::RouteApi, runtime_classes::RuntimeClassApi,
+    secrets::SecretsApi, services::ServiceApi, version::VersionApi, KubernetesClientConfig,
 };
 use std::sync::Arc;
 
@@ -401,6 +401,11 @@ pub trait PlatformServiceProvider: Send + Sync {
         &'a self,
         config: &'a KubernetesClientConfig,
     ) -> Result<Arc<dyn ServiceApi>>;
+    #[cfg(feature = "kubernetes")]
+    async fn get_kubernetes_network_policy_client<'a>(
+        &'a self,
+        config: &'a KubernetesClientConfig,
+    ) -> Result<Arc<dyn NetworkPolicyApi>>;
     #[cfg(feature = "kubernetes")]
     async fn get_kubernetes_route_client<'a>(
         &'a self,
@@ -1511,6 +1516,20 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         let client = kubernetes_client(config).await.context(
             crate::error::ErrorData::CloudPlatformError {
                 message: "Failed to create Kubernetes service client".to_string(),
+                resource_id: None,
+            },
+        )?;
+        Ok(Arc::new(client))
+    }
+
+    #[cfg(feature = "kubernetes")]
+    async fn get_kubernetes_network_policy_client<'a>(
+        &'a self,
+        config: &'a KubernetesClientConfig,
+    ) -> Result<Arc<dyn NetworkPolicyApi>> {
+        let client = kubernetes_client(config).await.context(
+            crate::error::ErrorData::CloudPlatformError {
+                message: "Failed to create Kubernetes network policy client".to_string(),
                 resource_id: None,
             },
         )?;

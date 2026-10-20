@@ -875,6 +875,7 @@ dependencies = [
  "alien-error",
  "alien-operations-sdk",
  "alien-permissions",
+ "alien-preflights",
  "alien-terraform",
  "flate2",
  "indexmap 2.14.1",
@@ -885,6 +886,7 @@ dependencies = [
  "sha2 0.10.9",
  "tar",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]
@@ -1550,6 +1552,7 @@ dependencies = [
  "opentelemetry_sdk",
  "pin-project-lite",
  "port_check",
+ "prost 0.13.5",
  "prost-types",
  "regex",
  "reqwest 0.12.28",

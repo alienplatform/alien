@@ -1,3 +1,6 @@
+#[cfg(feature = "kubernetes")]
+pub(crate) mod k8s_network;
+
 mod controller;
 pub use controller::*;
 

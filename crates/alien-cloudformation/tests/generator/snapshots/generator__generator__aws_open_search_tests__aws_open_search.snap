@@ -229,7 +229,7 @@ Resources:
       Type: data
       Policy:
         Fn::Sub:
-        - '[{"Description":"Alien-managed data access for ''articles''","Rules":[{"ResourceType":"collection","Resource":["collection/${Name}"],"Permission":["aoss:CreateCollectionItems","aoss:DeleteCollectionItems","aoss:UpdateCollectionItems","aoss:DescribeCollectionItems"]},{"ResourceType":"index","Resource":["index/${Name}/*"],"Permission":["aoss:CreateIndex","aoss:DeleteIndex","aoss:UpdateIndex","aoss:DescribeIndex","aoss:ReadDocument","aoss:WriteDocument"]}],"Principal":["${Principal0}"]}]'
+        - '[{"Description":"Managed data access for ''articles''","Rules":[{"ResourceType":"collection","Resource":["collection/${Name}"],"Permission":["aoss:CreateCollectionItems","aoss:DeleteCollectionItems","aoss:UpdateCollectionItems","aoss:DescribeCollectionItems"]},{"ResourceType":"index","Resource":["index/${Name}/*"],"Permission":["aoss:CreateIndex","aoss:DeleteIndex","aoss:UpdateIndex","aoss:DescribeIndex","aoss:ReadDocument","aoss:WriteDocument"]}],"Principal":["${Principal0}"]}]'
         - Name:
             Fn::Join:
             - '-'

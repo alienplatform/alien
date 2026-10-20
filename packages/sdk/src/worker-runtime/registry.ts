@@ -109,7 +109,7 @@ export interface EventRegistration {
   /** Handler ID */
   id: string
   /** Event type */
-  type: "storage" | "cron" | "queue"
+  type: "storage" | "cron" | "queue" | "queueBatch"
   /** Source filter (bucket name, queue name, etc.) */
   source: string
   /** Optional prefix filter (for storage events) */
@@ -119,7 +119,7 @@ export interface EventRegistration {
 /** A single registered event handler. */
 export interface EventHandlerEntry {
   registration: EventRegistration
-  handler: (event: unknown) => Promise<void>
+  handler: (event: unknown) => Promise<void> | Promise<QueueDeliveryOutcome[]>
 }
 
 /**
@@ -317,6 +317,39 @@ export function onQueueMessage<T = unknown>(
   state.eventHandlers.set(id, {
     registration: { id, type: "queue", source: queueName },
     handler: handler as (event: unknown) => Promise<void>,
+  })
+  return () => {
+    state.eventHandlers.delete(id)
+  }
+}
+
+/** A delivery attempt identity, distinct from the provider message ID. */
+export interface QueueDelivery<T = unknown> {
+  deliveryId: string
+  message: QueueMessageEvent<T>
+}
+
+/** Return one outcome for each delivery; retries do not roll back other deliveries. */
+export interface QueueDeliveryOutcome {
+  deliveryId: string
+  disposition: "success" | "retry"
+}
+
+export interface QueueBatchEvent<T = unknown> {
+  source: string
+  deliveries: QueueDelivery<T>[]
+}
+
+/** Register an opt-in batch handler. Batches may contain fewer than the configured maximum. */
+export function onQueueBatch<T = unknown>(
+  queueName: string,
+  handler: (batch: QueueBatchEvent<T>) => Promise<QueueDeliveryOutcome[]>,
+): () => void {
+  const state = registry()
+  const id = `queue-batch-${++state.counters.handler}`
+  state.eventHandlers.set(id, {
+    registration: { id, type: "queueBatch", source: queueName },
+    handler: handler as (event: unknown) => Promise<QueueDeliveryOutcome[]>,
   })
   return () => {
     state.eventHandlers.delete(id)

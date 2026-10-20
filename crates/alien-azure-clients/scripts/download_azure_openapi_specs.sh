@@ -18,7 +18,7 @@ trap "rm -rf $TEMP_DIR" EXIT
 BASE_URL=https://raw.githubusercontent.com/Azure/azure-rest-api-specs/refs/heads/main/specification
 
 npx --yes @redocly/cli bundle -o "$TEMP_DIR" \
-    $BASE_URL/app/resource-manager/Microsoft.App/ContainerApps/stable/2025-01-01/ContainerApps.json \
+    $BASE_URL/app/resource-manager/Microsoft.App/ContainerApps/stable/2025-07-01/ContainerApps.json \
     $BASE_URL/app/resource-manager/Microsoft.App/ContainerApps/stable/2025-01-01/ManagedEnvironments.json \
     $BASE_URL/app/resource-manager/Microsoft.App/ContainerApps/stable/2025-01-01/Jobs.json \
     $BASE_URL/app/resource-manager/Microsoft.App/ContainerApps/stable/2025-01-01/ManagedEnvironmentsDaprComponents.json \

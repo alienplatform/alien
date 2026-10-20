@@ -126,6 +126,11 @@ impl StackMutation for SecretsVaultMutation {
         // stack-wide vault grant with the management role;
         // see ManagementPermissionProfileMutation. A vault-scoped grant would make the
         // runtime write a policy onto its own management role, which is denied.
+        //
+        // On AWS management only writes here: environment sync and the sandbox egress key are
+        // write-only, so the vendor-side identity cannot read the deployment's secrets back.
+        // The one exception is the sandbox gateway configuration (see
+        // `grant_management_gateway_config_read`).
         if !(stack_state.platform == Platform::Aws
             && config.stack_settings.setup_management == alien_core::SetupManagement::Automatic)
         {
@@ -135,16 +140,30 @@ impl StackMutation for SecretsVaultMutation {
                         || entry.config.downcast_ref::<Daemon>().is_some())
                         && azure_resource_needs_vault(entry)
                 });
+            let aws = stack_state.platform == Platform::Aws;
             add_vault_permissions_to_management(
                 &mut stack,
                 secrets_vault_id,
-                !infrastructure_only,
+                !infrastructure_only && !aws,
                 needs_certificates,
             )?;
+            if aws {
+                super::sandbox_gateway_permissions::grant_management_gateway_config_read(
+                    &mut stack,
+                )?;
+            }
         }
 
-        if stack_state.platform == Platform::Aws {
-            super::sandbox_gateway_permissions::configure_aws_gateway_permissions(&mut stack)?;
+        match stack_state.platform {
+            Platform::Aws => {
+                super::sandbox_gateway_permissions::configure_aws_gateway_permissions(&mut stack)?
+            }
+            Platform::Kubernetes => {
+                super::sandbox_gateway_permissions::configure_kubernetes_gateway_permissions(
+                    &mut stack,
+                )?
+            }
+            _ => {}
         }
 
         Ok(stack)
@@ -2694,10 +2713,10 @@ mod tests {
                 );
                 let vault_permissions = profile.0.get("secrets").unwrap();
                 assert!(
-                    vault_permissions
+                    !vault_permissions
                         .iter()
                         .any(|p| p.id() == "vault/data-read"),
-                    "Management profile should have vault/data-read for secrets vault"
+                    "On AWS management writes the secrets vault but must not read it"
                 );
                 assert!(
                     vault_permissions
@@ -2865,13 +2884,13 @@ mod tests {
                     "Explicit global vault/data-write should be preserved"
                 );
                 assert!(
-                    profile
+                    !profile
                         .0
                         .get("secrets")
                         .unwrap()
                         .iter()
                         .any(|p| p.id() == "vault/data-read"),
-                    "vault/data-read should be added to the secrets vault resource"
+                    "On AWS vault/data-read must not be added to the secrets vault resource"
                 );
                 assert!(
                     profile

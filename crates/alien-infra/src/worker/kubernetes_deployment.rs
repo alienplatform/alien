@@ -48,7 +48,7 @@ pub(super) async fn build_worker_deployment(
     // IMPORTANT: Start with config.environment which includes injected vars from DeploymentConfig
     let env_builder = EnvironmentVariableBuilder::try_new(&config.environment)?
         .add_worker_runtime_env_vars(ctx, &config.id, config.timeout_seconds)?
-        .add_linked_resources(&config.links, ctx, &config.id)
+        .add_linked_resources(&config.runtime_binding_links(), ctx, &config.id)
         .await?
         .add_self_worker_binding(&config.id, controller.get_binding_params()?.as_ref())?;
 

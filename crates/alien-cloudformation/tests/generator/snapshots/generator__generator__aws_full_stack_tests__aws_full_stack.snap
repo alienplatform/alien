@@ -13,6 +13,7 @@ Metadata:
       - Token
       - ManagingRoleArn
       - ManagingAccountId
+      - ManagementExternalId
     - Label:
         default: Network
       Parameters:
@@ -46,6 +47,8 @@ Metadata:
         default: Heartbeats
       HostedZoneId:
         default: Hosted zone ID
+      ManagementExternalId:
+        default: ExternalId
       ManagingAccountId:
         default: Image account ID
       ManagingRoleArn:
@@ -172,6 +175,14 @@ Parameters:
     AllowedValues:
     - "off"
     - "on"
+  ManagementExternalId:
+    Type: String
+    Description: ExternalId from the setup page. The management roles require it on every AssumeRole, so only this installation's control plane can use them. Leave it empty only to update a stack created before this parameter existed.
+    Default: ''
+    AllowedPattern: ^$|^[A-Za-z0-9]{32,128}$
+    ConstraintDescription: 'Paste the ExternalId shown on the setup page: 32 to 128 letters and digits.'
+    MaxLength: 128
+    NoEcho: true
 Conditions:
   HasPublicSubnetIds:
     Fn::Not:
@@ -232,6 +243,11 @@ Conditions:
     Fn::Not:
     - Fn::Equals:
       - Ref: DomainName
+      - ''
+  HasManagementExternalId:
+    Fn::Not:
+    - Fn::Equals:
+      - Ref: ManagementExternalId
       - ''
 Rules:
   CustomDomainCertificate:
@@ -722,8 +738,14 @@ Resources:
           Action: sts:AssumeRole
           Condition:
             StringEquals:
-              aws:PrincipalArn:
-                Ref: ManagingRoleArn
+              Fn::If:
+              - HasManagementExternalId
+              - aws:PrincipalArn:
+                  Ref: ManagingRoleArn
+                sts:ExternalId:
+                  Ref: ManagementExternalId
+              - aws:PrincipalArn:
+                  Ref: ManagingRoleArn
       Tags:
       - Key: managed-by
         Value: setup
@@ -2038,6 +2060,8 @@ Resources:
             - Arn
           buildEnvVars:
             PROFILE: release
+      ManagementExternalId:
+        Ref: ManagementExternalId
     DependsOn:
     - ExecutionSaRole
     - ManagementRole

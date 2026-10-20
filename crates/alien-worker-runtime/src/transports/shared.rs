@@ -9,9 +9,7 @@ use std::{future::Future, sync::Arc, time::Duration};
 
 use alien_commands::Envelope;
 #[cfg(any(feature = "gcp", feature = "azure"))]
-use alien_worker_protocol::control::{
-    CronEvent, QueueMessage as ProtoQueueMessage, StorageEvent as ProtoStorageEvent,
-};
+use alien_worker_protocol::control::{CronEvent, StorageEvent as ProtoStorageEvent};
 use alien_worker_protocol::{
     control::{self, ArcCommand, Task},
     ControlGrpcServer,
@@ -33,6 +31,22 @@ use prost_types::Timestamp;
 use tokio::{net::TcpListener, sync::broadcast, sync::Semaphore, time::Instant};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, warn};
+
+/// Preserve existing physical registrations and wildcard payloads for single delivery.
+pub(super) async fn single_queue_source(
+    control: &ControlGrpcServer,
+    original: &str,
+    logical: &str,
+) -> String {
+    if original != logical
+        && !control.has_handler("queue", original).await
+        && control.has_handler("queue", logical).await
+    {
+        logical.to_owned()
+    } else {
+        original.to_owned()
+    }
+}
 
 fn http_server_join_result(
     joined: std::result::Result<std::io::Result<()>, tokio::task::JoinError>,
@@ -95,10 +109,6 @@ pub(super) async fn serve_with_bounded_shutdown(
     }
 }
 
-/// Timeout for event (queue/storage/cron) `send_task` round-trips.
-#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
-pub(crate) const EVENT_TASK_TIMEOUT: Duration = Duration::from_secs(300);
-
 /// Bound one pushed command by both its configured Worker timeout and the
 /// envelope deadline. `None` means the deadline has already elapsed and the
 /// application must not receive the command.
@@ -144,7 +154,7 @@ impl CommandBudget {
         })
     }
 
-    fn remaining(self) -> Option<Duration> {
+    pub(crate) fn remaining(self) -> Option<Duration> {
         self.deadline
             .checked_duration_since(Instant::now())
             .filter(|remaining| !remaining.is_zero())
@@ -439,7 +449,7 @@ pub(crate) async fn handle_command(
         }
         Some(timeout) => {
             let task = Task {
-                task_id: command.command_id.clone(),
+                task_id: uuid::Uuid::new_v4().to_string(),
                 payload: Some(control::task::Payload::ArcCommand(command.clone())),
             };
 
@@ -491,32 +501,40 @@ pub(crate) async fn handle_command(
 
 /// Send a queue message to the application.
 #[cfg(any(feature = "gcp", feature = "azure"))]
+pub(crate) fn queue_message_to_proto(
+    qm: &alien_core::QueueMessage,
+) -> alien_worker_protocol::control::QueueMessage {
+    alien_worker_protocol::control::QueueMessage {
+        id: qm.id.clone(),
+        source: qm.source.clone(),
+        payload: match &qm.payload {
+            alien_core::MessagePayload::Json(value) => value.to_string().into_bytes(),
+            alien_core::MessagePayload::Text(value) => value.as_bytes().to_vec(),
+        },
+        receipt_handle: qm.receipt_handle.clone(),
+        attempt_count: qm.attempt_count.unwrap_or(1),
+        timestamp: Some(Timestamp {
+            seconds: qm.timestamp.timestamp(),
+            nanos: qm.timestamp.timestamp_subsec_nanos() as i32,
+        }),
+        attributes: qm.attributes.clone(),
+    }
+}
+
+#[cfg(any(feature = "gcp", feature = "azure"))]
 pub(crate) async fn send_queue_message(
     qm: &alien_core::QueueMessage,
     control_server: &ControlGrpcServer,
+    timeout: Duration,
 ) -> std::result::Result<(), String> {
-    let payload_bytes = match &qm.payload {
-        alien_core::MessagePayload::Json(v) => v.to_string().into_bytes(),
-        alien_core::MessagePayload::Text(s) => s.clone().into_bytes(),
-    };
-
     let task = Task {
-        task_id: qm.id.clone(),
-        payload: Some(control::task::Payload::QueueMessage(ProtoQueueMessage {
-            id: qm.id.clone(),
-            source: qm.source.clone(),
-            payload: payload_bytes,
-            receipt_handle: qm.receipt_handle.clone(),
-            attempt_count: qm.attempt_count.unwrap_or(1),
-            timestamp: Some(Timestamp {
-                seconds: qm.timestamp.timestamp(),
-                nanos: qm.timestamp.timestamp_subsec_nanos() as i32,
-            }),
-            attributes: qm.attributes.clone(),
-        })),
+        task_id: uuid::Uuid::new_v4().to_string(),
+        payload: Some(control::task::Payload::QueueMessage(
+            queue_message_to_proto(qm),
+        )),
     };
 
-    match control_server.send_task(task, EVENT_TASK_TIMEOUT).await {
+    match control_server.send_task(task, timeout).await {
         Ok(result) => {
             if result.success {
                 Ok(())
@@ -542,11 +560,24 @@ pub(crate) async fn dispatch_queue_messages(
     queue_messages: Vec<alien_core::QueueMessage>,
     control_server: &ControlGrpcServer,
     command_timeout: Duration,
+    collectors: &std::collections::HashMap<String, super::queue_batch::QueueCollector>,
 ) -> Response<Body> {
+    let deadline = Instant::now() + command_timeout;
     for qm in queue_messages {
         if let Some(envelope) = try_parse_envelope(&qm) {
             process_received_command(&envelope, control_server, command_timeout).await;
-        } else if let Err(e) = send_queue_message(&qm, control_server).await {
+        } else if let Some(collector) = collectors.get(&qm.source) {
+            if !collector
+                .deliver(queue_message_to_proto(&qm), deadline)
+                .await
+            {
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Queue delivery not completed",
+                )
+                    .into_response();
+            }
+        } else if let Err(e) = send_queue_message(&qm, control_server, command_timeout).await {
             error!(error = %e, "Failed to send queue message");
             return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to process event").into_response();
         }
@@ -559,6 +590,7 @@ pub(crate) async fn dispatch_queue_messages(
 pub(crate) async fn send_storage_events(
     storage_events: alien_core::StorageEvents,
     control_server: &ControlGrpcServer,
+    timeout: Duration,
 ) -> Response<Body> {
     for se in storage_events.0 {
         let task = Task {
@@ -581,7 +613,7 @@ pub(crate) async fn send_storage_events(
             })),
         };
 
-        match control_server.send_task(task, EVENT_TASK_TIMEOUT).await {
+        match control_server.send_task(task, timeout).await {
             Ok(result) => {
                 if !result.success {
                     error!(
@@ -615,6 +647,7 @@ pub(crate) async fn send_cron_event(
     schedule_name: String,
     schedule_time: DateTime<Utc>,
     control_server: &ControlGrpcServer,
+    timeout: Duration,
 ) -> Response<Body> {
     let task = Task {
         task_id: uuid::Uuid::new_v4().to_string(),
@@ -627,7 +660,7 @@ pub(crate) async fn send_cron_event(
         })),
     };
 
-    match control_server.send_task(task, EVENT_TASK_TIMEOUT).await {
+    match control_server.send_task(task, timeout).await {
         Ok(result) => {
             if result.success {
                 StatusCode::OK.into_response()
@@ -834,10 +867,72 @@ mod tests {
     };
 
     use alien_core::presigned::{PresignedOperation, PresignedRequest};
+    use alien_worker_protocol::control::{
+        control_service_server::ControlService, send_task_result_request, SendTaskResultRequest,
+        TaskSuccess, WaitForTasksRequest,
+    };
     use axum::{routing::get, Router};
     use chrono::Duration as ChronoDuration;
+    use tonic::Request as GrpcRequest;
 
     use super::*;
+
+    #[cfg(any(feature = "gcp", feature = "azure"))]
+    #[tokio::test(start_paused = true)]
+    async fn event_delivery_can_complete_after_three_hundred_seconds() {
+        let server = Arc::new(ControlGrpcServer::new());
+        let mut tasks = server
+            .wait_for_tasks(GrpcRequest::new(WaitForTasksRequest {
+                application_id: "app".to_string(),
+            }))
+            .await
+            .expect("subscribe")
+            .into_inner();
+        let message = alien_core::QueueMessage {
+            id: "provider-message".to_string(),
+            payload: alien_core::MessagePayload::Text("work".to_string()),
+            receipt_handle: "receipt".to_string(),
+            timestamp: Utc::now(),
+            source: "jobs".to_string(),
+            attributes: HashMap::new(),
+            attempt_count: Some(1),
+        };
+        let first = tokio::spawn({
+            let server = server.clone();
+            let message = message.clone();
+            async move { send_queue_message(&message, &server, Duration::from_secs(600)).await }
+        });
+        let first_task = tasks.next().await.expect("task").expect("first delivery");
+        let second = tokio::spawn({
+            let server = server.clone();
+            async move { send_queue_message(&message, &server, Duration::from_secs(600)).await }
+        });
+        let second_task = tasks.next().await.expect("task").expect("second delivery");
+        assert_ne!(
+            first_task.task_id, second_task.task_id,
+            "provider IDs cannot identify a delivery"
+        );
+        tokio::time::advance(Duration::from_secs(301)).await;
+        assert!(!first.is_finished());
+        assert!(!second.is_finished());
+        for task in [first_task, second_task] {
+            let response = server
+                .send_task_result(GrpcRequest::new(SendTaskResultRequest {
+                    task_id: task.task_id,
+                    result: Some(send_task_result_request::Result::Success(TaskSuccess {
+                        response_data: vec![],
+                    })),
+                }))
+                .await
+                .expect("completion");
+            assert!(response.into_inner().acknowledged);
+        }
+        first.await.expect("first waiter").expect("first success");
+        second
+            .await
+            .expect("second waiter")
+            .expect("second success");
+    }
 
     #[test]
     fn command_timeout_supports_full_worker_window() {

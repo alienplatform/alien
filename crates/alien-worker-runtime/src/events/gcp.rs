@@ -323,6 +323,14 @@ fn extract_topic_name_from_ce_source<T: AsRef<str>>(source: T) -> String {
 
 // Convert Pub/Sub CloudEvents to QueueMessage
 pub fn pubsub_cloudevent_to_queue_messages(event: Event) -> Result<Vec<QueueMessage>, Error> {
+    pubsub_cloudevent_to_queue_messages_with_source(event, |_| None)
+}
+
+/// Resolve an exact subscription identity before applying legacy single-message naming.
+pub(crate) fn pubsub_cloudevent_to_queue_messages_with_source(
+    event: Event,
+    resolve_source: impl FnOnce(&str) -> Option<String>,
+) -> Result<Vec<QueueMessage>, Error> {
     let event_type_str = event.ty();
 
     // Only handle Pub/Sub events
@@ -373,7 +381,9 @@ pub fn pubsub_cloudevent_to_queue_messages(event: Event) -> Result<Vec<QueueMess
     };
 
     // Extract source queue name from subscription or CloudEvent source
-    let source = if !pubsub_data.subscription.is_empty() {
+    let source = if let Some(source) = resolve_source(&pubsub_data.subscription) {
+        source
+    } else if !pubsub_data.subscription.is_empty() {
         extract_topic_name_from_subscription(&pubsub_data.subscription)
     } else {
         extract_topic_name_from_ce_source(event.source())
