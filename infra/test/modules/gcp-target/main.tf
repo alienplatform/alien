@@ -134,6 +134,7 @@ locals {
     "roles/iam.serviceAccountKeyAdmin",
     "roles/iam.serviceAccountUser",
     "roles/iam.roleAdmin",
+    "roles/iam.workloadIdentityPoolAdmin", # GCP setup creates the deployment's own identity pool and provider
     "roles/resourcemanager.projectIamAdmin",
     "roles/cloudkms.admin", # Key setup and key-version lifecycle
     "roles/secretmanager.admin",
