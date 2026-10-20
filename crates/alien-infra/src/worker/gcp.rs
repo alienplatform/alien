@@ -4244,10 +4244,11 @@ impl GcpWorkerController {
                 Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
             )
         }) {
-            // An expired operation is not proof the service is gone. Confirm the
-            // service itself before completing its deletion.
+            // An expired operation is not proof the service is gone. Reissue the
+            // idempotent delete; its handler also accepts a genuinely missing service.
+            self.operation_name = None;
             return Ok(HandlerAction::Continue {
-                state: WaitingForServiceDeletion,
+                state: DeletingService,
                 suggested_delay: None,
             });
         }

@@ -2508,6 +2508,7 @@ async fn setup_retry_creates_a_failed_setup_owned_store_again_with_the_new_confi
         .await
         .expect("setup update should prepare"),
     );
+    state.protocol_version = alien_core::CLEANUP_SETUP_DEPLOYMENT_PROTOCOL_VERSION;
     state.target_release = Some(release_of("rel_v2", stack_v2));
     request_retry(&mut state);
     let state = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
@@ -2722,6 +2723,7 @@ async fn declining_a_linked_gate_deprovisions_the_store_before_the_update_comple
         .await
         .unwrap(),
     );
+    state.protocol_version = alien_core::CLEANUP_SETUP_DEPLOYMENT_PROTOCOL_VERSION;
     state.status = DeploymentStatus::InitialSetup;
     state = run_to_completion(state, config_with_store_enabled(false)).await;
     assert_eq!(state.status, DeploymentStatus::Running);
@@ -3977,6 +3979,7 @@ async fn rerun_setup(mut state: DeploymentState, config: &DeploymentConfig) -> D
     )
     .expect("setup-owned failures should be retried");
     state.runtime_metadata = Some(metadata);
+    state.protocol_version = alien_core::CLEANUP_SETUP_DEPLOYMENT_PROTOCOL_VERSION;
     state.status = DeploymentStatus::InitialSetup;
     // The setup CLIs rebuild the state from the manager without its deployment error.
     state.error = None;

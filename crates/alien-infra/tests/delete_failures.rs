@@ -318,3 +318,166 @@ async fn denied_gcp_management_policy_read_preserves_cleanup_checkpoint() {
         "synthetic-management@synthetic-project.iam.gserviceaccount.com"
     );
 }
+
+#[tokio::test]
+async fn expired_cloud_run_delete_operation_reissues_delete_after_reload_and_retry() {
+    use alien_core::{GcpClientConfig, GcpCredentials, Worker, WorkerCode};
+    use alien_gcp_clients::{
+        cloudrun::{MockCloudRunApi, Service},
+        longrunning::Operation,
+    };
+    use alien_infra::StackStateExt;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    let exists = Arc::new(AtomicBool::new(true));
+    let deletes = Arc::new(AtomicUsize::new(0));
+    let mut cloudrun = MockCloudRunApi::new();
+    cloudrun.expect_get_operation().returning(|_, operation| {
+        if operation == "expired-operation" {
+            Err(AlienError::new(
+                alien_client_core::ErrorData::RemoteResourceNotFound {
+                    resource_type: "operation".into(),
+                    resource_name: operation,
+                },
+            ))
+        } else {
+            assert_eq!(operation, "fresh-operation");
+            Ok(Operation::builder().name(operation).done(true).build())
+        }
+    });
+    let observed = exists.clone();
+    cloudrun.expect_get_service().returning(move |_, name| {
+        if observed.load(Ordering::SeqCst) {
+            Ok(Service::builder().name(name).build())
+        } else {
+            Err(AlienError::new(
+                alien_client_core::ErrorData::RemoteResourceNotFound {
+                    resource_type: "service".into(),
+                    resource_name: name,
+                },
+            ))
+        }
+    });
+    let deleted = exists.clone();
+    let attempts = deletes.clone();
+    cloudrun
+        .expect_delete_service()
+        .returning(move |_, name, _, _| {
+            assert_eq!(name, "synthetic-service");
+            if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                let mut error = AlienError::new(alien_client_core::ErrorData::RemoteAccessDenied {
+                    resource_type: "service".into(),
+                    resource_name: name,
+                });
+                error.retryable = false;
+                return Err(error);
+            }
+            deleted.store(false, Ordering::SeqCst);
+            Ok(Operation::builder()
+                .name("fresh-operation".to_string())
+                .done(false)
+                .build())
+        });
+    let cloudrun = Arc::new(cloudrun);
+    let mut services = MockPlatformServiceProvider::new();
+    services
+        .expect_get_gcp_cloudrun_client()
+        .returning(move |_| Ok(cloudrun.clone()));
+    let cfg = ClientConfig::Gcp(Box::new(GcpClientConfig {
+        project_id: "synthetic-project".into(),
+        region: "us-central1".into(),
+        project_number: Some("123456789012".into()),
+        credentials: GcpCredentials::AccessToken {
+            token: "synthetic".into(),
+        },
+        service_overrides: None,
+    }));
+    let config = DeploymentConfig::builder()
+        .stack_settings(StackSettings::default())
+        .environment_variables(EnvironmentVariablesSnapshot {
+            variables: vec![],
+            hash: String::new(),
+            created_at: String::new(),
+        })
+        .external_bindings(ExternalBindings::default())
+        .allow_frozen_changes(false)
+        .build();
+    let mut resource = StackResourceState::new_pending(
+        "worker".into(),
+        Resource::new(
+            Worker::new("worker".into())
+                .code(WorkerCode::Image {
+                    image: "example.invalid/worker:latest".into(),
+                })
+                .permissions("synthetic-profile".into())
+                .build(),
+        ),
+        Some(ResourceLifecycle::Live),
+        vec![],
+    );
+    resource.status = ResourceStatus::Deleting;
+    resource
+        .set_internal_controller(Some(
+            deserialize_controller(json!({
+                "type":"GcpWorkerController", "_controllerStateVersion":1,
+                "state":"waitingForDeleteOperation", "serviceName":"synthetic-service",
+                "operationName":"expired-operation", "pushSubscriptions":[],
+                "storageNotificationTopics":[], "gcsNotificationIds":[], "schedulerJobNames":[],
+                "usesCustomDomain":false
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+    let mut state = StackState::new(Platform::Gcp);
+    state.resources.insert("worker".into(), resource);
+    let executor = StackExecutor::for_deletion_with_service_provider(
+        cfg,
+        &config,
+        Arc::new(services),
+        Some(vec![ResourceLifecycle::Live]),
+    )
+    .unwrap();
+    for _ in 0..30 {
+        state = executor.step(state).await.unwrap().next_state;
+        if state.resources["worker"].status == ResourceStatus::DeleteFailed {
+            break;
+        }
+    }
+    assert_eq!(
+        deletes.load(Ordering::SeqCst),
+        1,
+        "an expired operation must reissue deletion, not poll the existing service forever"
+    );
+    assert!(exists.load(Ordering::SeqCst));
+    assert_eq!(
+        state.resources["worker"].status,
+        ResourceStatus::DeleteFailed
+    );
+    assert_eq!(
+        state.resources["worker"]
+            .last_failed_state
+            .as_ref()
+            .unwrap()["serviceName"],
+        "synthetic-service"
+    );
+    let disk = tempfile::tempdir().unwrap();
+    let checkpoint = disk.path().join("checkpoint.json");
+    std::fs::write(&checkpoint, serde_json::to_vec(&state).unwrap()).unwrap();
+    state = serde_json::from_slice(&std::fs::read(&checkpoint).unwrap()).unwrap();
+    state = executor.step(state).await.unwrap().next_state;
+    assert_eq!(
+        deletes.load(Ordering::SeqCst),
+        1,
+        "saved denial requires explicit retry"
+    );
+    state.retry_failed().unwrap();
+    for _ in 0..8 {
+        state = executor.step(state).await.unwrap().next_state;
+        if state.resources["worker"].status == ResourceStatus::Deleted {
+            break;
+        }
+    }
+    assert_eq!(state.resources["worker"].status, ResourceStatus::Deleted);
+    assert_eq!(deletes.load(Ordering::SeqCst), 2);
+    assert!(!exists.load(Ordering::SeqCst));
+}

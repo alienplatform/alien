@@ -163,7 +163,7 @@ async fn external_machines_storage_setup_and_repeat_never_create_a_storage_contr
         environment_info: None,
         error: None,
         retry_requested: false,
-        protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+        protocol_version: alien_core::CLEANUP_SETUP_DEPLOYMENT_PROTOCOL_VERSION,
     };
     for _ in 0..10 {
         if deployment.status == DeploymentStatus::Provisioning {

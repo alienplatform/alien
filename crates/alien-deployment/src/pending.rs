@@ -11,6 +11,11 @@ use tracing::info;
 
 /// Prepare a re-runnable direct setup without replacing the existing cloud
 /// state. The caller must hold the deployment lock and supply setup credentials.
+///
+/// This returns metadata in the installed/desired setup representation. Before
+/// persisting or executing it, the caller must set the enclosing state's
+/// `protocol_version` to `alien_core::CLEANUP_SETUP_DEPLOYMENT_PROTOCOL_VERSION`.
+/// This helper returns only metadata and cannot update that enclosing state.
 pub async fn prepare_direct_setup_update(
     target_stack: Stack,
     stack_state: &StackState,
