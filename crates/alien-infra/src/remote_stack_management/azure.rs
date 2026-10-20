@@ -1056,11 +1056,18 @@ impl AzureRemoteStackManagementController {
         // The combined role earlier versions created is assigned at every binding scope, so it
         // can reach the whole subscription. Replace it on the next direct setup even when the
         // permissions themselves did not change.
-        if self.role_definition_id.is_some()
-            && ctx.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
+        if ctx.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
             && ctx.deployment_config.setup_run
         {
-            return Ok(true);
+            if self.role_definition_id.is_some() {
+                return Ok(true);
+            }
+            // A setup from before role-assignment writes had their own conditioned role keeps
+            // them, and its roles management can change, until the roles are rebuilt. The
+            // permission sets did not change, so the revision alone would not rebuild them.
+            if self.role_layout_outdated(&self.generate_management_role_definitions(ctx)?) {
+                return Ok(true);
+            }
         }
         super::management_permissions_need_refresh(
             ctx,
@@ -1592,6 +1599,63 @@ mod tests {
     /// contributes `network/heartbeat`. The join grants therefore have to come from the
     /// container and daemon sets, at a scope that covers the network's App Gateway subnet and
     /// the gateway's public IP and stops at the deployment resource group.
+    /// A direct setup saved before role-assignment writes had their own role rebuilds its roles
+    /// on the next setup run, although its permission sets and their revision are unchanged.
+    #[test]
+    fn a_setup_saved_before_the_role_assignment_role_rebuilds_its_roles() {
+        let profile = PermissionProfile::new().global([
+            PermissionSetReference::from_name("worker/provision"),
+            PermissionSetReference::from_name("worker/heartbeat"),
+        ]);
+        let grant_plan = generate_stack_management_grant_plan(
+            &profile,
+            std::iter::empty(),
+            &permission_context(),
+            &Default::default(),
+        )
+        .unwrap();
+        let desired = management_role_definitions(
+            &grant_plan,
+            "test",
+            "Management role.",
+            "sub-123",
+            "rg-123",
+        )
+        .unwrap();
+        assert!(desired.iter().any(|role| role.role_assignments));
+
+        let saved = AzureRemoteStackManagementController::mock_ready("test");
+        assert!(saved.role_assignment_role_definition_ids.is_empty());
+        assert!(saved.role_layout_outdated(&desired));
+
+        let mut rebuilt = saved;
+        rebuilt.role_assignment_role_definition_ids = BTreeMap::from([(
+            "/subscriptions/sub-123/resourceGroups/rg-123".to_string(),
+            "/subscriptions/sub-123/providers/Microsoft.Authorization/roleDefinitions/ra".to_string(),
+        )]);
+        assert!(!rebuilt.role_layout_outdated(&desired));
+
+        // A stack whose management holds no role-assignment writes has nothing to rebuild.
+        let reader_only = management_role_definitions(
+            &generate_stack_management_grant_plan(
+                &PermissionProfile::new().global([PermissionSetReference::from_name(
+                    "compute-cluster/management",
+                )]),
+                std::iter::empty(),
+                &permission_context(),
+                &Default::default(),
+            )
+            .unwrap(),
+            "test",
+            "Management role.",
+            "sub-123",
+            "rg-123",
+        )
+        .unwrap();
+        assert!(!AzureRemoteStackManagementController::mock_ready("test")
+            .role_layout_outdated(&reader_only));
+    }
+
     #[test]
     fn management_role_can_link_gateways_to_the_app_gateway_subnet_and_public_ip() {
         let resource_group_scope = "/subscriptions/sub-123/resourceGroups/rg-123";
@@ -2185,6 +2249,13 @@ impl AzureRemoteStackManagementController {
             &azure_cfg.subscription_id,
             &resource_group_name,
         )
+    }
+
+    /// Whether the saved roles predate the role-assignment role: the desired layout has one
+    /// but none was created.
+    fn role_layout_outdated(&self, desired: &[ManagementRoleDefinition]) -> bool {
+        desired.iter().any(|role| role.role_assignments)
+            && self.role_assignment_role_definition_ids.is_empty()
     }
 
     /// The role reported in the heartbeat: a combined role still left from an earlier version,
