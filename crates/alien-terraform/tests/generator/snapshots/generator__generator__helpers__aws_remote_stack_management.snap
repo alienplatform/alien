@@ -128,6 +128,18 @@ variable "managing_role_arn" {
   default     = ""
 }
 
+variable "management_external_id" {
+  type        = string
+  description = "ExternalId from the setup page. The management roles require it on every AssumeRole, so only this installation's control plane can use them. Leave it empty only to update a module applied before this variable existed."
+  default     = ""
+  sensitive   = true
+
+  validation {
+    condition     = var.management_external_id == "" || can(regex("^[A-Za-z0-9]{32,128}$", var.management_external_id))
+    error_message = "management_external_id must be the ExternalId shown on the setup page: 32 to 128 letters and digits."
+  }
+}
+
 variable "managing_account_id" {
   type        = string
   description = "AWS account ID that hosts application container images. Empty disables scoped cross-account image-pull grants."
@@ -176,7 +188,7 @@ locals {
 === management.tf ===
 resource "aws_iam_role" "management" {
   name               = length(format("%s-%s", local.resource_prefix, "management")) <= 64 ? format("%s-%s", local.resource_prefix, "management") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "management"), 0, 55), substr(sha1(format("%s-%s", local.resource_prefix, "management")), 0, 8))
-  assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "AllowManagingRole", Effect = "Allow", Principal = { AWS = var.managing_role_arn }, Action = "sts:AssumeRole", Condition = { StringEquals = { "aws:PrincipalArn" = var.managing_role_arn } } }] })
+  assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "AllowManagingRole", Effect = "Allow", Principal = { AWS = var.managing_role_arn }, Action = "sts:AssumeRole", Condition = { StringEquals = merge({ "aws:PrincipalArn" = var.managing_role_arn }, var.management_external_id == "" ? {} : { "sts:ExternalId" = var.management_external_id }) } }] })
   tags = {
     "managed-by"    = "setup"
     deployment      = local.resource_prefix

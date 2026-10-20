@@ -21,7 +21,7 @@ use axum::{
 };
 use chrono::Utc;
 use cloudevents::AttributesReader;
-use http_body_util::BodyExt;
+
 use tokio::net::TcpListener;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
@@ -83,7 +83,11 @@ impl ContainerAppTransport {
         info!(port = self.port, "Starting Container App transport");
 
         let proxy_shutdown = CancellationToken::new();
+        let collectors =
+            super::queue_batch::QueueCollectors::from_env(self.control_server.clone())?;
         let state = TransportState {
+            received_at: tokio::time::Instant::now(),
+            collector: collectors.clients.clone(),
             control_server: self.control_server,
             app_http_port: self.app_http_port,
             command_timeout: self.command_timeout,
@@ -113,9 +117,11 @@ impl ContainerAppTransport {
             proxy_shutdown,
             self.http_shutdown_grace,
             "containerapp",
-            || {},
+            || collectors.stop(),
         )
         .await;
+        let collector_result = collectors.join().await;
+        collector_result?;
         server_result
             .into_alien_error()
             .context(ErrorData::TransportStartupFailed {
@@ -131,6 +137,8 @@ impl ContainerAppTransport {
 
 #[derive(Clone)]
 struct TransportState {
+    received_at: tokio::time::Instant,
+    collector: std::collections::HashMap<String, super::queue_batch::QueueCollector>,
     control_server: Arc<ControlGrpcServer>,
     app_http_port: Option<u16>,
     command_timeout: Duration,
@@ -138,12 +146,34 @@ struct TransportState {
     proxy_shutdown: CancellationToken,
 }
 
+impl TransportState {
+    fn remaining_timeout(&self) -> Duration {
+        self.command_timeout
+            .saturating_sub(self.received_at.elapsed())
+    }
+}
+
 async fn handle_request(
-    State(state): State<TransportState>,
+    State(mut state): State<TransportState>,
     request: Request<Body>,
 ) -> impl IntoResponse {
+    state.received_at = tokio::time::Instant::now();
     let path = request.uri().path().to_string();
     let method = request.method().clone();
+
+    // Dapr pauses input bindings while this probe fails, including before the
+    // application subscribes and after cancellation. Do not proxy app health:
+    // an HTTP server can be alive while its task stream is disconnected.
+    if path == "/__alien/health" {
+        return if state.control_server.task_application_ready()
+            && !state.proxy_shutdown.is_cancelled()
+        {
+            StatusCode::NO_CONTENT
+        } else {
+            StatusCode::SERVICE_UNAVAILABLE
+        }
+        .into_response();
+    }
 
     debug!(path = %path, method = %method, "Received request");
 
@@ -151,8 +181,10 @@ async fn handle_request(
     let is_timer_trigger =
         request.headers().get("X-Azure-Timer").is_some() || path.starts_with("/api/timer");
     let is_dapr_cron = path.starts_with("/cron-");
-    let is_dapr_input_binding =
-        is_dapr_cron || path.starts_with("/servicebus-") || path.starts_with("/blobstorage-");
+    let is_dapr_input_binding = is_dapr_cron
+        || path.starts_with("/__alien/queue/")
+        || path.starts_with("/servicebus-")
+        || path.starts_with("/blobstorage-");
 
     // Check for CloudEvents (Azure Blob events)
     let ce_type = request
@@ -168,7 +200,8 @@ async fn handle_request(
     // `events::azure::dapr_cloudevent_to_queue_messages`), with no other
     // Dapr-specific header or path marker present — that must route here too,
     // not fall through to the blob-only CloudEvent handler.
-    let is_dapr = request.headers().get("dapr-content-type").is_some()
+    let is_dapr = path.starts_with("/__alien/queue/")
+        || request.headers().get("dapr-content-type").is_some()
         || path.contains("/pubsub/")
         || path.starts_with("/servicebus-")
         || path.starts_with("/blobstorage-")
@@ -218,7 +251,13 @@ async fn handle_request(
 async fn handle_dapr_cron_trigger(path: &str, state: &TransportState) -> Response<Body> {
     let schedule_name = path.trim_start_matches('/').to_string();
     info!(%schedule_name, "Dapr cron trigger received");
-    send_cron_event(schedule_name, Utc::now(), &state.control_server).await
+    send_cron_event(
+        schedule_name,
+        Utc::now(),
+        &state.control_server,
+        state.remaining_timeout(),
+    )
+    .await
 }
 
 /// Handle Azure Timer trigger events
@@ -240,7 +279,13 @@ async fn handle_timer_trigger(request: Request<Body>, state: &TransportState) ->
 
     info!(schedule_name = %schedule_name, "Azure Timer trigger received");
 
-    send_cron_event(schedule_name, schedule_time, &state.control_server).await
+    send_cron_event(
+        schedule_name,
+        schedule_time,
+        &state.control_server,
+        state.remaining_timeout(),
+    )
+    .await
 }
 
 /// Handle Dapr messages (input bindings and pub/sub from Service Bus)
@@ -253,8 +298,8 @@ async fn handle_dapr_message(request: Request<Body>, state: &TransportState) -> 
 
     // Collect body for CloudEvent parsing
     let (parts, body) = request.into_parts();
-    let body_bytes = match body.collect().await {
-        Ok(collected) => collected.to_bytes(),
+    let body_bytes = match axum::body::to_bytes(body, 4 * 1024 * 1024).await {
+        Ok(collected) => collected,
         Err(e) => {
             error!(error = %e, "Failed to read request body");
             return (StatusCode::BAD_REQUEST, "Failed to read body").into_response();
@@ -268,15 +313,25 @@ async fn handle_dapr_message(request: Request<Body>, state: &TransportState) -> 
         Err(e) => {
             warn!(error = %e, "Failed to parse CloudEvent from Dapr, treating as raw message");
             // Try to handle as raw JSON message
-            return handle_raw_dapr_message(&body_bytes, state).await;
+            return handle_raw_dapr_message(
+                &body_bytes,
+                state,
+                parts.uri.path().strip_prefix("/__alien/queue/"),
+            )
+            .await;
         }
     };
 
     // Process as Dapr CloudEvent (Service Bus message)
     match dapr_cloudevent_to_queue_messages(cloud_event) {
         Ok(queue_messages) => {
-            dispatch_queue_messages(queue_messages, &state.control_server, state.command_timeout)
-                .await
+            dispatch_queue_messages(
+                queue_messages,
+                &state.control_server,
+                state.remaining_timeout(),
+                &state.collector,
+            )
+            .await
         }
         Err(e) => {
             error!(error = %e, "Failed to parse Dapr CloudEvent");
@@ -290,8 +345,8 @@ async fn handle_dapr_storage_message(
     request: Request<Body>,
     state: &TransportState,
 ) -> Response<Body> {
-    let body_bytes = match request.into_body().collect().await {
-        Ok(collected) => collected.to_bytes(),
+    let body_bytes = match axum::body::to_bytes(request.into_body(), 4 * 1024 * 1024).await {
+        Ok(collected) => collected,
         Err(error) => {
             error!(%error, "Failed to read Dapr storage-trigger request body");
             return (StatusCode::BAD_REQUEST, "Failed to read body").into_response();
@@ -331,7 +386,12 @@ async fn handle_dapr_storage_message(
                 return (StatusCode::BAD_REQUEST, "Invalid storage event").into_response();
             }
         };
-        let response = send_storage_events(storage_events, &state.control_server).await;
+        let response = send_storage_events(
+            storage_events,
+            &state.control_server,
+            state.remaining_timeout(),
+        )
+        .await;
         if !response.status().is_success() {
             return response;
         }
@@ -344,7 +404,11 @@ async fn handle_dapr_storage_message(
 ///
 /// Dapr input bindings POST the raw message body (not wrapped in CloudEvent).
 /// We first check if the body is a command envelope; if not, treat as queue message.
-async fn handle_raw_dapr_message(body_bytes: &Bytes, state: &TransportState) -> Response<Body> {
+async fn handle_raw_dapr_message(
+    body_bytes: &Bytes,
+    state: &TransportState,
+    logical_source: Option<&str>,
+) -> Response<Body> {
     // Parse as JSON
     let json_value: serde_json::Value = match serde_json::from_slice(body_bytes) {
         Ok(v) => v,
@@ -358,7 +422,7 @@ async fn handle_raw_dapr_message(body_bytes: &Bytes, state: &TransportState) -> 
     if let Ok(envelope) = serde_json::from_value::<alien_commands::Envelope>(json_value.clone()) {
         if !envelope.command_id.is_empty() {
             info!(command_id = %envelope.command_id, "Received command via Dapr input binding");
-            if process_received_command(&envelope, &state.control_server, state.command_timeout)
+            if process_received_command(&envelope, &state.control_server, state.remaining_timeout())
                 .await
             {
                 return StatusCode::OK.into_response();
@@ -374,12 +438,19 @@ async fn handle_raw_dapr_message(body_bytes: &Bytes, state: &TransportState) -> 
         .map(str::to_string)
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-    let source = json_value
+    let original_source = json_value
         .get("topic")
         .or_else(|| json_value.get("pubsubname"))
         .and_then(|v| v.as_str())
-        .unwrap_or("unknown")
-        .to_string();
+        .unwrap_or("unknown");
+    let source = match logical_source {
+        Some(logical) if state.collector.contains_key(logical) => logical.to_owned(),
+        Some(logical) => {
+            super::shared::single_queue_source(&state.control_server, original_source, logical)
+                .await
+        }
+        None => original_source.to_owned(),
+    };
 
     let qm = alien_core::QueueMessage {
         id: message_id,
@@ -391,7 +462,25 @@ async fn handle_raw_dapr_message(body_bytes: &Bytes, state: &TransportState) -> 
         attempt_count: None,
     };
 
-    if let Err(e) = send_queue_message(&qm, &state.control_server).await {
+    if let Some(collector) = state.collector.get(&qm.source) {
+        return if collector
+            .deliver(
+                super::shared::queue_message_to_proto(&qm),
+                tokio::time::Instant::now() + state.remaining_timeout(),
+            )
+            .await
+        {
+            StatusCode::OK.into_response()
+        } else {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Queue delivery not completed",
+            )
+                .into_response()
+        };
+    }
+    if let Err(e) = send_queue_message(&qm, &state.control_server, state.remaining_timeout()).await
+    {
         error!(error = %e, "Failed to send raw Dapr message to application");
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -412,8 +501,8 @@ async fn handle_cloudevent(
     debug!(event_type = %event_type, "Processing CloudEvent");
 
     let (parts, body) = request.into_parts();
-    let body_bytes = match body.collect().await {
-        Ok(collected) => collected.to_bytes(),
+    let body_bytes = match axum::body::to_bytes(body, 4 * 1024 * 1024).await {
+        Ok(collected) => collected,
         Err(e) => {
             error!(error = %e, "Failed to read request body");
             return (StatusCode::BAD_REQUEST, "Failed to read body").into_response();
@@ -446,10 +535,154 @@ async fn handle_azure_storage_cloudevent(
     let event_type = cloud_event.ty().to_string();
 
     match azure_storage_cloudevent_to_storage_events(cloud_event) {
-        Ok(storage_events) => send_storage_events(storage_events, &state.control_server).await,
+        Ok(storage_events) => {
+            send_storage_events(
+                storage_events,
+                &state.control_server,
+                state.remaining_timeout(),
+            )
+            .await
+        }
         Err(e) => {
             error!(error = %e, event_type = %event_type, "Failed to parse Azure storage CloudEvent");
             (StatusCode::BAD_REQUEST, "Invalid storage event").into_response()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_worker_protocol::control::{
+        control_service_server::ControlService, WaitForTasksRequest,
+    };
+
+    #[tokio::test]
+    async fn single_dapr_routes_preserve_existing_sources() {
+        for registration in ["physical-jobs", "jobs", "*"] {
+            let control = Arc::new(ControlGrpcServer::new());
+            control
+                .register_event_handler(tonic::Request::new(
+                    alien_worker_protocol::control::RegisterEventHandlerRequest {
+                        handler_type: "queue".into(),
+                        resource_name: registration.into(),
+                    },
+                ))
+                .await
+                .expect("register");
+            let mut tasks = control
+                .wait_for_tasks(tonic::Request::new(WaitForTasksRequest {
+                    application_id: "worker".into(),
+                }))
+                .await
+                .expect("subscribe")
+                .into_inner();
+            let state = TransportState {
+                received_at: tokio::time::Instant::now(),
+                collector: Default::default(),
+                control_server: control.clone(),
+                app_http_port: None,
+                command_timeout: Duration::from_secs(30),
+                http_client: create_forward_client(),
+                proxy_shutdown: CancellationToken::new(),
+            };
+            let request = Request::builder()
+                .method("POST")
+                .uri("/__alien/queue/jobs")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"id":"provider-id","topic":"physical-jobs"}"#,
+                ))
+                .expect("request");
+            let response =
+                tokio::spawn(
+                    async move { handle_request(State(state), request).await.into_response() },
+                );
+            let task = tokio::time::timeout(
+                Duration::from_secs(2),
+                tokio_stream::StreamExt::next(&mut tasks),
+            )
+            .await
+            .expect("dispatch")
+            .expect("stream")
+            .expect("task");
+            let Some(alien_worker_protocol::control::task::Payload::QueueMessage(message)) =
+                task.payload
+            else {
+                panic!("single expected")
+            };
+            assert_eq!(
+                message.source,
+                if registration == "jobs" {
+                    "jobs"
+                } else {
+                    "physical-jobs"
+                }
+            );
+            assert_eq!(message.id, "provider-id");
+            assert!(!response.is_finished());
+            control.send_task_result(tonic::Request::new(alien_worker_protocol::control::SendTaskResultRequest {
+                task_id: task.task_id,
+                result: Some(alien_worker_protocol::control::send_task_result_request::Result::Success(
+                    alien_worker_protocol::control::TaskSuccess { response_data: Vec::new() },
+                )),
+            })).await.expect("result");
+            assert!(response.await.expect("response").status().is_success());
+        }
+    }
+
+    async fn health(state: &TransportState) -> StatusCode {
+        handle_request(
+            State(state.clone()),
+            Request::builder()
+                .uri("/__alien/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .into_response()
+        .status()
+    }
+
+    #[tokio::test]
+    async fn dapr_health_tracks_subscription_disconnect_cancellation_and_shutdown() {
+        let control = Arc::new(ControlGrpcServer::new());
+        let state = TransportState {
+            received_at: tokio::time::Instant::now(),
+            collector: Default::default(),
+            control_server: control.clone(),
+            app_http_port: None,
+            command_timeout: Duration::from_secs(600),
+            http_client: create_forward_client(),
+            proxy_shutdown: CancellationToken::new(),
+        };
+        assert_eq!(health(&state).await, StatusCode::SERVICE_UNAVAILABLE);
+        let stream = control
+            .wait_for_tasks(tonic::Request::new(WaitForTasksRequest {
+                application_id: "worker".into(),
+            }))
+            .await
+            .unwrap();
+        assert_eq!(health(&state).await, StatusCode::NO_CONTENT);
+        drop(stream);
+        assert_eq!(health(&state).await, StatusCode::SERVICE_UNAVAILABLE);
+        let _stream = control
+            .wait_for_tasks(tonic::Request::new(WaitForTasksRequest {
+                application_id: "worker".into(),
+            }))
+            .await
+            .unwrap();
+        assert_eq!(health(&state).await, StatusCode::NO_CONTENT);
+        state.proxy_shutdown.cancel();
+        assert_eq!(health(&state).await, StatusCode::SERVICE_UNAVAILABLE);
+        let state = TransportState {
+            proxy_shutdown: CancellationToken::new(),
+            ..state
+        };
+        assert_eq!(health(&state).await, StatusCode::NO_CONTENT);
+        control.cancel_application().await;
+        assert_eq!(health(&state).await, StatusCode::SERVICE_UNAVAILABLE);
+        control.application_stopped();
+        assert_eq!(health(&state).await, StatusCode::SERVICE_UNAVAILABLE);
     }
 }

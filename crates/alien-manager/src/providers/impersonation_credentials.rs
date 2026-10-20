@@ -9,14 +9,18 @@ use std::sync::Arc;
 
 use alien_bindings::traits::ImpersonationRequest;
 use alien_bindings::{BindingsProviderApi, ServiceAccountInfo};
-use alien_core::{ClientConfig, DeploymentStatus, EnvironmentInfo, ManagementConfig, Platform};
+use alien_core::{
+    ClientConfig, DeploymentStatus, EnvironmentInfo, ManagementConfig, ManagementExternalId,
+    Platform,
+};
 use alien_error::{AlienError, Context, GenericError};
 use async_trait::async_trait;
 
 use super::credential_errors::classify_credential_error;
 use crate::error::ErrorData;
 use crate::traits::{
-    CredentialResolver, DeploymentRecord, RemoteStorageCredentialSource, ResolvedCredentials,
+    CredentialResolver, DeploymentRecord, ManagementExternalIdSource,
+    RemoteStorageCredentialSource, ResolvedCredentials,
 };
 
 /// Resolves cloud credentials for push-model deployments via service account impersonation.
@@ -29,6 +33,7 @@ pub struct ImpersonationCredentialResolver {
     target_providers: HashMap<Platform, Arc<dyn BindingsProviderApi>>,
     management_binding_platforms: HashSet<Platform>,
     environment_resolver: super::environment_credentials::EnvironmentCredentialResolver,
+    management_external_ids: Option<Arc<dyn ManagementExternalIdSource>>,
 }
 
 impl ImpersonationCredentialResolver {
@@ -43,6 +48,29 @@ impl ImpersonationCredentialResolver {
             management_binding_platforms,
             environment_resolver:
                 super::environment_credentials::EnvironmentCredentialResolver::new(),
+            management_external_ids: None,
+        }
+    }
+
+    /// Send each deployment's ExternalId when assuming its AWS management and
+    /// remote-bindings roles.
+    pub fn with_management_external_ids(
+        mut self,
+        source: Arc<dyn ManagementExternalIdSource>,
+    ) -> Self {
+        self.management_external_ids = Some(source);
+        self
+    }
+
+    /// The ExternalId for an AWS deployment. Other platforms have no
+    /// equivalent, so they never trigger a lookup.
+    async fn management_external_id(
+        &self,
+        deployment: &DeploymentRecord,
+    ) -> Result<Option<ManagementExternalId>, AlienError> {
+        match (&self.management_external_ids, deployment.platform) {
+            (Some(source), Platform::Aws) => source.management_external_id(deployment).await,
+            _ => Ok(None),
         }
     }
 
@@ -100,12 +128,14 @@ impl ImpersonationCredentialResolver {
             let provider = self.provider_for_target(platform);
             let base_config = impersonate_management_sa(&**provider, platform).await?;
 
+            let external_id = self.management_external_id(deployment).await?;
             let resolver = alien_infra::RemoteAccessResolver::new(env);
             let resolved = resolver
                 .resolve(
                     base_config,
                     stack_state,
                     deployment.environment_info.as_ref(),
+                    external_id.as_ref(),
                 )
                 .await
                 .context(ErrorData::RemoteCredentialHandoffFailed {
@@ -221,12 +251,14 @@ impl CredentialResolver for ImpersonationCredentialResolver {
 
         let provider = self.provider_for_target(deployment.platform);
         let base = impersonate_management_sa(&**provider, deployment.platform).await?;
+        let external_id = self.management_external_id(deployment).await?;
         let resolved = alien_infra::RemoteAccessResolver::new(std::env::vars().collect())
             .resolve_remote_bindings(
                 base,
                 outputs,
                 deployment.environment_info.as_ref(),
                 Some(remote_bindings_session_name(&deployment.id, resource_id)),
+                external_id.as_ref(),
             )
             .await
             .context(ErrorData::RemoteCredentialHandoffFailed {
@@ -875,5 +907,155 @@ mod tests {
 
         assert!(matches!(resolved.client_config, ClientConfig::Machines));
         assert!(resolved.has_provision_capability);
+    }
+
+    const AWS_MANAGEMENT_ROLE: &str = "arn:aws:iam::123456789012:role/manager-management";
+    const AWS_TARGET_ROLE: &str = "arn:aws:iam::210987654321:role/customer-management";
+    const AWS_EXTERNAL_ID: &str = "9c1f7e2a4b6d8f0a1c3e5b7d9f1a3c5e";
+
+    struct FixedExternalId(Option<ManagementExternalId>);
+
+    #[async_trait]
+    impl ManagementExternalIdSource for FixedExternalId {
+        async fn management_external_id(
+            &self,
+            _deployment: &DeploymentRecord,
+        ) -> Result<Option<ManagementExternalId>, AlienError> {
+            Ok(self.0.clone())
+        }
+    }
+
+    fn aws_assume_role_xml(role: &str, access_key: &str) -> String {
+        format!(
+            r#"<AssumeRoleResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/">
+  <AssumeRoleResult>
+    <AssumedRoleUser><Arn>{role}/session</Arn><AssumedRoleId>AROA:session</AssumedRoleId></AssumedRoleUser>
+    <Credentials>
+      <AccessKeyId>{access_key}</AccessKeyId>
+      <SecretAccessKey>secret</SecretAccessKey>
+      <SessionToken>token</SessionToken>
+      <Expiration>2026-05-27T11:00:00Z</Expiration>
+    </Credentials>
+  </AssumeRoleResult>
+  <ResponseMetadata><RequestId>request</RequestId></ResponseMetadata>
+</AssumeRoleResponse>"#
+        )
+    }
+
+    fn aws_running_deployment() -> DeploymentRecord {
+        let mut deployment = gcp_handoff_deployment();
+        let remote_management = RemoteStackManagement::new("management".to_string()).build();
+        let mut stack_state =
+            StackState::with_resource_prefix(Platform::Aws, "test-prefix".to_string());
+        stack_state.resources.insert(
+            remote_management.id.clone(),
+            StackResourceState::builder()
+                .resource_type(RemoteStackManagement::RESOURCE_TYPE.to_string())
+                .status(ResourceStatus::Running)
+                .config(Resource::new(remote_management))
+                .outputs(ResourceOutputs::new(RemoteStackManagementOutputs {
+                    management_resource_id: AWS_TARGET_ROLE.to_string(),
+                    access_configuration: AWS_TARGET_ROLE.to_string(),
+                    legacy_remote_bindings_access: None,
+                }))
+                .lifecycle(ResourceLifecycle::Frozen)
+                .dependencies(vec![])
+                .build(),
+        );
+        deployment.platform = Platform::Aws;
+        deployment.status = "running".to_string();
+        deployment.stack_state = Some(stack_state);
+        deployment.environment_info = Some(EnvironmentInfo::Aws(AwsEnvironmentInfo {
+            account_id: "210987654321".to_string(),
+            region: "us-east-2".to_string(),
+        }));
+        deployment
+    }
+
+    fn aws_resolver(
+        sts_url: String,
+        external_ids: FixedExternalId,
+    ) -> ImpersonationCredentialResolver {
+        let base_config = ClientConfig::Aws(Box::new(AwsClientConfig {
+            account_id: "123456789012".to_string(),
+            region: "us-east-2".to_string(),
+            credentials: AwsCredentials::AccessKeys {
+                access_key_id: "AKIAMANAGER".to_string(),
+                secret_access_key: "secret".to_string(),
+                session_token: None,
+            },
+            service_overrides: Some(alien_core::AwsServiceOverrides {
+                endpoints: HashMap::from([("sts".to_string(), sts_url)]),
+            }),
+        }));
+        let bindings = HashMap::from([(
+            "management".to_string(),
+            serde_json::to_value(ServiceAccountBinding::aws_iam(
+                "manager-management",
+                AWS_MANAGEMENT_ROLE,
+            ))
+            .expect("management binding should serialize"),
+        )]);
+        let provider: Arc<dyn BindingsProviderApi> = Arc::new(
+            BindingsProvider::new(base_config, bindings)
+                .expect("AWS management bindings provider should be valid"),
+        );
+        ImpersonationCredentialResolver::new(
+            provider.clone(),
+            HashMap::from([(Platform::Aws, provider)]),
+            HashSet::from([Platform::Aws]),
+        )
+        .with_management_external_ids(Arc::new(external_ids))
+    }
+
+    /// The manager's own management role is assumed without an ExternalId;
+    /// the customer's role, the second hop, is assumed with the deployment's.
+    #[tokio::test]
+    async fn aws_handoff_sends_the_deployment_external_id_to_the_customer_role_only() {
+        let server = httpmock::MockServer::start_async().await;
+        let management = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .body_contains(format!(
+                        "RoleArn={}",
+                        urlencoding::encode(AWS_MANAGEMENT_ROLE)
+                    ))
+                    .matches(|request| {
+                        !String::from_utf8_lossy(request.body.as_deref().unwrap_or_default())
+                            .contains("ExternalId=")
+                    });
+                then.status(200)
+                    .header("content-type", "text/xml")
+                    .body(aws_assume_role_xml(AWS_MANAGEMENT_ROLE, "ASIAMANAGER"));
+            })
+            .await;
+        let customer = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .body_contains(format!("RoleArn={}", urlencoding::encode(AWS_TARGET_ROLE)))
+                    .body_contains(format!("ExternalId={AWS_EXTERNAL_ID}"));
+                then.status(200)
+                    .header("content-type", "text/xml")
+                    .body(aws_assume_role_xml(AWS_TARGET_ROLE, "ASIACUSTOMER"));
+            })
+            .await;
+        let resolver = aws_resolver(
+            server.base_url(),
+            FixedExternalId(Some(ManagementExternalId::new(AWS_EXTERNAL_ID).unwrap())),
+        );
+
+        let resolved = resolver
+            .resolve_from_env(&aws_running_deployment(), HashMap::new())
+            .await
+            .expect("the protected customer role accepts the deployment's ExternalId");
+
+        management.assert_async().await;
+        customer.assert_async().await;
+        let aws = resolved.aws_config().expect("resolved access stays AWS");
+        assert_eq!(aws.account_id, "210987654321");
+        assert!(matches!(
+            &aws.credentials,
+            AwsCredentials::SessionCredentials { access_key_id, .. } if access_key_id == "ASIACUSTOMER"
+        ));
     }
 }

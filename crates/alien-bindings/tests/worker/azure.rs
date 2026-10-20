@@ -240,9 +240,9 @@ impl AsyncTestContext for AzureProviderTestContext {
 
                 let identity = Some(ManagedServiceIdentity {
                     type_: ManagedServiceIdentityType::UserAssigned,
-                    user_assigned_identities: Some(UserAssignedIdentities(
+                    user_assigned_identities: Some(UserAssignedIdentities(Some(
                         user_assigned_identities,
-                    )),
+                    ))),
                     principal_id: None,
                     tenant_id: None,
                 });
@@ -258,6 +258,7 @@ impl AsyncTestContext for AzureProviderTestContext {
 
         // Create the Container App
         let container_app = ContainerApp {
+            kind: None,
             location: "eastus".to_string(),
             identity,
             properties: Some(ContainerAppProperties {

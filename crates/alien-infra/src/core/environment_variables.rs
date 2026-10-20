@@ -456,6 +456,17 @@ impl EnvironmentVariableBuilder {
             ENV_ALIEN_WORKER_TIMEOUT_SECONDS.to_string(),
             timeout_seconds.to_string(),
         );
+        if let Some(batch) = ctx
+            .desired_resource_config::<alien_core::Worker>()?
+            .queue_batch_environment()
+            .context(ErrorData::ResourceConfigInvalid {
+                message: "Invalid queue batch configuration".into(),
+                resource_id: Some(worker_id.to_string()),
+            })?
+        {
+            self.env_vars
+                .insert("ALIEN_QUEUE_BATCH_CONFIG".into(), batch);
+        }
         self.add_kubernetes_base_platform_env_vars(ctx, &renderer)?;
 
         Ok(self)

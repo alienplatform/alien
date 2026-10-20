@@ -205,8 +205,9 @@ pub fn resolve(
                     .filter_map(|item| resolve(item, conditions, Declined::Removed))
                     .map(|item| match item {
                         CfExpression::String(text) => text,
-                        other => placeholder(&other)
-                            .unwrap_or_else(|| panic!("Fn::Join element should be a string: {other:?}")),
+                        other => placeholder(&other).unwrap_or_else(|| {
+                            panic!("Fn::Join element should be a string: {other:?}")
+                        }),
                     })
                     .collect::<Vec<_>>();
                 return Some(CfExpression::String(parts.join(delimiter)));

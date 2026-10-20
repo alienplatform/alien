@@ -264,6 +264,28 @@ impl StackCompatibilityCheck for FrozenResourcesUnchangedCheck {
                 }
 
                 // Check if configuration changed (only check if still frozen)
+                // Queue config contains only its ID; setup also derives visibility from
+                // Live consumers. A Worker-only change must not bypass setup approval.
+                if self.platform == Platform::Aws
+                    && old_entry
+                        .config
+                        .downcast_ref::<alien_core::Queue>()
+                        .is_some()
+                    && new_stack.resources.values().any(|entry| {
+                        entry
+                            .config
+                            .downcast_ref::<alien_core::Worker>()
+                            .is_some_and(|worker| worker.queue_batch_config(id).is_some())
+                    })
+                    && new_stack.queue_visibility_timeout_seconds(id)
+                        > old_stack.queue_visibility_timeout_seconds(id)
+                {
+                    errors.push(format!(
+                        "Frozen queue '{}' requires visibility of {} seconds (previously {}). Rerun setup with the updated stack before updating its consumers.",
+                        id, new_stack.queue_visibility_timeout_seconds(id),
+                        old_stack.queue_visibility_timeout_seconds(id),
+                    ));
+                }
                 if old_entry.config != new_entry.config
                     && !runtime_managed_frozen_change(
                         self.platform,

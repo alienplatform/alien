@@ -8,8 +8,8 @@ use crate::ClientConfigExt as _;
 #[cfg(feature = "aws")]
 use alien_aws_clients::AwsImpersonationConfig;
 use alien_core::{
-    ClientConfig, EnvironmentInfo, ImpersonationConfig, Platform, RemoteBindingsOutputs,
-    RemoteStackManagement, RemoteStackManagementOutputs, StackState,
+    ClientConfig, EnvironmentInfo, ImpersonationConfig, ManagementExternalId, Platform,
+    RemoteBindingsOutputs, RemoteStackManagement, RemoteStackManagementOutputs, StackState,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 #[cfg(feature = "gcp")]
@@ -47,6 +47,10 @@ impl RemoteAccessResolver {
     /// * `target_environment` - Optional target environment info. When provided, the
     ///   impersonated config will use the target's region/account/project instead of
     ///   inheriting from the management configuration.
+    /// * `external_id` - The deployment's management ExternalId. AWS sends it as
+    ///   `sts:ExternalId`; a role whose trust has no such condition ignores it, so
+    ///   callers pass it whenever they know it. Other platforms have no equivalent
+    ///   and ignore it.
     ///
     /// # Returns
     ///
@@ -56,6 +60,7 @@ impl RemoteAccessResolver {
         base_config: ClientConfig,
         stack_state: &StackState,
         target_environment: Option<&EnvironmentInfo>,
+        external_id: Option<&ManagementExternalId>,
     ) -> Result<ClientConfig> {
         let remote_mgmt_outputs = self.find_remote_stack_management_outputs(stack_state)?;
 
@@ -66,7 +71,7 @@ impl RemoteAccessResolver {
                     base_config,
                     &remote_mgmt_outputs,
                     target_environment,
-                    None,
+                    external_id,
                     None,
                 )
                 .await
@@ -98,13 +103,15 @@ impl RemoteAccessResolver {
     }
 
     /// Resolve the dedicated Remote Bindings identity without borrowing the
-    /// management resource's output slot.
+    /// management resource's output slot. Its AWS role trusts the same
+    /// ExternalId as the management role.
     pub async fn resolve_remote_bindings(
         &self,
         base_config: ClientConfig,
         outputs: &RemoteBindingsOutputs,
         target_environment: Option<&EnvironmentInfo>,
         session_name: Option<String>,
+        external_id: Option<&ManagementExternalId>,
     ) -> Result<ClientConfig> {
         let access = RemoteStackManagementOutputs {
             management_resource_id: outputs.resource_id.clone(),
@@ -117,7 +124,7 @@ impl RemoteAccessResolver {
                     base_config,
                     &access,
                     target_environment,
-                    None,
+                    external_id,
                     session_name,
                 )
                 .await
@@ -170,11 +177,14 @@ impl RemoteAccessResolver {
         base_config: ClientConfig,
         outputs: &RemoteStackManagementOutputs,
         target_environment: Option<&EnvironmentInfo>,
-        external_id: Option<String>,
+        external_id: Option<&ManagementExternalId>,
         session_name: Option<String>,
     ) -> Result<ClientConfig> {
         let role_arn = &outputs.access_configuration;
-        info!("Resolving AWS impersonation for role: {}", role_arn);
+        info!(
+            external_id_sent = external_id.is_some(),
+            "Resolving AWS impersonation for role: {}", role_arn
+        );
 
         // Extract target region from environment info if available.
         let target_region = target_environment.and_then(|env| match env {
@@ -188,7 +198,7 @@ impl RemoteAccessResolver {
                 format!("deployment-remote-access-{}", Uuid::new_v4().simple())
             })),
             duration_seconds: Some(3600),
-            external_id,
+            external_id: external_id.map(|value| value.expose().to_string()),
             target_region,
         });
 
@@ -493,6 +503,7 @@ mod tests {
                 gcp_base_config(server.url("/v1")),
                 &gcp_stack_state(service_account_email),
                 Some(&gcp_target_environment()),
+                None,
             )
             .await
             .expect("GCP remote access should materialize a usable target token");
@@ -538,6 +549,7 @@ mod tests {
                 gcp_two_hop_base_config(server.url("/v1")),
                 &gcp_stack_state(service_account_email),
                 Some(&gcp_target_environment()),
+                None,
             )
             .await
             .expect("two-hop GCP remote access should materialize target credentials");
@@ -576,6 +588,7 @@ mod tests {
                 gcp_base_config(server.url("/v1")),
                 &gcp_stack_state(service_account_email),
                 Some(&gcp_target_environment()),
+                None,
             )
             .await
             .expect_err("GCP token exchange failure must fail credential handoff");
@@ -591,5 +604,177 @@ mod tests {
                 .contains("Failed to materialize GCP service account credentials"),
             "handoff error should identify the failed token materialization: {error}"
         );
+    }
+
+    #[cfg(feature = "aws")]
+    mod aws {
+        use super::*;
+        use alien_core::{
+            AwsClientConfig, AwsCredentials, AwsEnvironmentInfo, AwsServiceOverrides,
+        };
+
+        const TARGET_ROLE: &str = "arn:aws:iam::210987654321:role/customer-management";
+        const EXTERNAL_ID: &str = "4be1d6f0c2a94e1b8f3d7a6c5e2b1f0a";
+
+        fn base_config(sts_endpoint: String) -> ClientConfig {
+            ClientConfig::Aws(Box::new(AwsClientConfig {
+                account_id: "123456789012".to_string(),
+                region: "us-east-2".to_string(),
+                credentials: AwsCredentials::AccessKeys {
+                    access_key_id: "AKIATEST".to_string(),
+                    secret_access_key: "test-secret".to_string(),
+                    session_token: None,
+                },
+                service_overrides: Some(AwsServiceOverrides {
+                    endpoints: HashMap::from([("sts".to_string(), sts_endpoint)]),
+                }),
+            }))
+        }
+
+        fn stack_state() -> StackState {
+            let config = RemoteStackManagement::new("management".to_string()).build();
+            let mut state = StackState::new(Platform::Aws);
+            state.resources.insert(
+                config.id.clone(),
+                StackResourceState::builder()
+                    .resource_type(RemoteStackManagement::RESOURCE_TYPE.to_string())
+                    .status(ResourceStatus::Running)
+                    .config(Resource::new(config))
+                    .outputs(ResourceOutputs::new(RemoteStackManagementOutputs {
+                        management_resource_id: TARGET_ROLE.to_string(),
+                        access_configuration: TARGET_ROLE.to_string(),
+                        legacy_remote_bindings_access: None,
+                    }))
+                    .lifecycle(ResourceLifecycle::Frozen)
+                    .dependencies(vec![])
+                    .build(),
+            );
+            state
+        }
+
+        fn target() -> EnvironmentInfo {
+            EnvironmentInfo::Aws(AwsEnvironmentInfo {
+                account_id: "210987654321".to_string(),
+                region: "us-east-2".to_string(),
+            })
+        }
+
+        fn assume_role_response() -> String {
+            r#"<AssumeRoleResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/">
+  <AssumeRoleResult>
+    <AssumedRoleUser>
+      <Arn>arn:aws:sts::210987654321:assumed-role/customer-management/session</Arn>
+      <AssumedRoleId>AROA:session</AssumedRoleId>
+    </AssumedRoleUser>
+    <Credentials>
+      <AccessKeyId>ASIATARGET</AccessKeyId>
+      <SecretAccessKey>target-secret</SecretAccessKey>
+      <SessionToken>target-session-token</SessionToken>
+      <Expiration>2026-05-27T11:00:00Z</Expiration>
+    </Credentials>
+  </AssumeRoleResult>
+  <ResponseMetadata><RequestId>request-1</RequestId></ResponseMetadata>
+</AssumeRoleResponse>"#
+                .to_string()
+        }
+
+        /// The mock STS only answers an AssumeRole of the customer's role that
+        /// carries the deployment's ExternalId, the way a trust policy with an
+        /// `sts:ExternalId` condition behaves. Everything else is denied.
+        async fn sts_requiring_external_id(server: &MockServer) -> httpmock::Mock<'_> {
+            let role = urlencoding::encode(TARGET_ROLE).into_owned();
+            server
+                .mock_async(|when, then| {
+                    when.method(POST)
+                        .body_contains("Action=AssumeRole")
+                        .body_contains(format!("RoleArn={role}"))
+                        .body_contains(format!("ExternalId={EXTERNAL_ID}"));
+                    then.status(200)
+                        .header("content-type", "text/xml")
+                        .body(assume_role_response());
+                })
+                .await
+        }
+
+        async fn sts_denying_everything_else(server: &MockServer) -> httpmock::Mock<'_> {
+            server
+                .mock_async(|when, then| {
+                    when.method(POST);
+                    then.status(403).header("content-type", "text/xml").body(
+                        r#"<ErrorResponse><Error><Code>AccessDenied</Code><Message>not authorized to perform sts:AssumeRole</Message></Error></ErrorResponse>"#,
+                    );
+                })
+                .await
+        }
+
+        #[tokio::test]
+        async fn management_access_sends_the_deployment_external_id() {
+            let server = MockServer::start_async().await;
+            let protected = sts_requiring_external_id(&server).await;
+            let external_id = ManagementExternalId::new(EXTERNAL_ID).unwrap();
+
+            let resolved = RemoteAccessResolver::default()
+                .resolve(
+                    base_config(server.base_url()),
+                    &stack_state(),
+                    Some(&target()),
+                    Some(&external_id),
+                )
+                .await
+                .expect("a role that requires the ExternalId accepts the deployment's value");
+
+            protected.assert_async().await;
+            let aws = resolved.aws_config().expect("resolved access stays AWS");
+            assert_eq!(aws.account_id, "210987654321");
+            assert!(matches!(
+                &aws.credentials,
+                AwsCredentials::SessionCredentials { access_key_id, .. } if access_key_id == "ASIATARGET"
+            ));
+        }
+
+        #[tokio::test]
+        async fn management_access_without_the_external_id_is_denied_by_a_protected_role() {
+            let server = MockServer::start_async().await;
+            let protected = sts_requiring_external_id(&server).await;
+            let denied = sts_denying_everything_else(&server).await;
+
+            let error = RemoteAccessResolver::default()
+                .resolve(
+                    base_config(server.base_url()),
+                    &stack_state(),
+                    Some(&target()),
+                    None,
+                )
+                .await
+                .expect_err("a protected role must refuse a request without the ExternalId");
+
+            assert_eq!(protected.hits_async().await, 0);
+            assert!(denied.hits_async().await >= 1, "the request must reach STS");
+            assert_eq!(error.code, "AUTHENTICATION_FAILED");
+        }
+
+        #[tokio::test]
+        async fn remote_bindings_access_sends_the_same_external_id() {
+            let server = MockServer::start_async().await;
+            let protected = sts_requiring_external_id(&server).await;
+            let external_id = ManagementExternalId::new(EXTERNAL_ID).unwrap();
+            let outputs = alien_core::RemoteBindingsOutputs {
+                resource_id: TARGET_ROLE.to_string(),
+                access_configuration: TARGET_ROLE.to_string(),
+            };
+
+            RemoteAccessResolver::default()
+                .resolve_remote_bindings(
+                    base_config(server.base_url()),
+                    &outputs,
+                    Some(&target()),
+                    Some("remote-bindings-session".to_string()),
+                    Some(&external_id),
+                )
+                .await
+                .expect("the remote-bindings role trusts the same ExternalId");
+
+            protected.assert_async().await;
+        }
     }
 }

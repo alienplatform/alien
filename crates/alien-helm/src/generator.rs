@@ -283,7 +283,10 @@ fn generate_helm_chart_internal(
         registry_secret_tpl(),
     );
     files.insert("templates/configmap.yaml".to_string(), configmap_tpl());
-    files.insert("templates/deployment.yaml".to_string(), deployment_tpl());
+    files.insert(
+        "templates/deployment.yaml".to_string(),
+        deployment_tpl(analysis.sandbox_broker),
+    );
     files.insert(
         "templates/whitelabeled-log-collector-serviceaccount.yaml".to_string(),
         whitelabeled_log_collector_serviceaccount_tpl(),
@@ -305,7 +308,10 @@ fn generate_helm_chart_internal(
         whitelabeled_log_collector_daemonset_tpl(),
     );
     files.insert("templates/pvc.yaml".to_string(), pvc_tpl());
-    files.insert("templates/service.yaml".to_string(), service_tpl());
+    files.insert(
+        "templates/service.yaml".to_string(),
+        service_tpl(analysis.sandbox_broker),
+    );
     files.insert(
         "templates/runtime-cleanup-scope.yaml".to_string(),
         runtime_cleanup_scope_tpl(),
@@ -3715,6 +3721,9 @@ struct ChartAnalysis {
     infrastructure: Vec<InfrastructureValue>,
     services: Vec<ServiceValue>,
     extra_templates: IndexMap<String, String>,
+    /// The stack has a Sandbox, so application pods must reach the session broker the
+    /// operator serves: the operator needs a Service and must know its address.
+    sandbox_broker: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3780,6 +3789,9 @@ impl ChartAnalysis {
             }
             if let Some(build) = entry.config.downcast_ref::<alien_core::Build>() {
                 service_accounts.insert(build.permissions.clone());
+            }
+            if entry.config.downcast_ref::<alien_core::Sandbox>().is_some() {
+                analysis.sandbox_broker = true;
             }
             if let Some(daemon) = entry.config.downcast_ref::<Daemon>() {
                 fail_if_daemon_source_remains(resource_id, daemon)?;
@@ -6398,7 +6410,26 @@ spec:
     .to_string()
 }
 
-fn deployment_tpl() -> String {
+/// The operator Deployment. With a sandbox in the stack the operator also learns the address of
+/// its own Service, which is where application pods reach the session broker it serves.
+fn deployment_tpl(sandbox_broker: bool) -> String {
+    let template = deployment_base_tpl();
+    if !sandbox_broker {
+        return template;
+    }
+    let anchor = "            - name: OTLP_HOST\n              value: {{ .Values.runtime.api.bindHost | quote }}\n";
+    let broker = format!(
+        "            - name: {}\n              value: {{{{ printf \"http://%s.%s.svc:%d\" (include \"deployment.fullname\" .) .Release.Namespace (int .Values.runtime.api.port) | quote }}}}\n",
+        alien_core::ENV_ALIEN_SANDBOX_BROKER_URL
+    );
+    assert!(
+        template.contains(anchor),
+        "the operator Deployment template sets OTLP_HOST"
+    );
+    template.replacen(anchor, &format!("{anchor}{broker}"), 1)
+}
+
+fn deployment_base_tpl() -> String {
     r#"{{- include "deployment.validateRuntimeIdentity" . -}}
 apiVersion: apps/v1
 kind: Deployment
@@ -6716,9 +6747,19 @@ spec:
     .to_string()
 }
 
-fn service_tpl() -> String {
-    r#"{{- if or .Values.runtime.api.enabled (and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator)))) }}
-apiVersion: v1
+/// The operator Service. Rendered unconditionally when the stack has a sandbox, because
+/// application pods reach the session broker through it.
+fn service_tpl(sandbox_broker: bool) -> String {
+    let condition = if sandbox_broker {
+        "true"
+    } else {
+        r#"or .Values.runtime.api.enabled (and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator))))"#
+    };
+    format!("{{{{- if {condition} }}}}\n{}", service_body_tpl())
+}
+
+fn service_body_tpl() -> &'static str {
+    r#"apiVersion: v1
 kind: Service
 metadata:
   name: {{ include "deployment.fullname" . }}
@@ -6735,7 +6776,6 @@ spec:
       targetPort: otlp
 {{- end }}
 "#
-    .to_string()
 }
 
 fn whitelabeled_log_collector_serviceaccount_tpl() -> String {

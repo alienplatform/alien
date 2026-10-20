@@ -1,12 +1,12 @@
 use super::{batch_end, encode_batch};
 use crate::error::{ErrorData, Result};
-use crate::traits::QueueSendResult;
 use crate::traits::{
-    Binding, MessagePayload, Queue, QueueMessage, MAX_BATCH_SIZE, MAX_MESSAGE_BYTES,
+    Binding, MessagePayload, Queue, QueueAckResult, QueueMessage, QueueSendResult, MAX_BATCH_SIZE,
+    MAX_MESSAGE_BYTES,
 };
-use alien_aws_clients::sqs::SendMessageBatchEntry;
 use alien_aws_clients::sqs::{
-    DeleteMessageRequest, Message, ReceiveMessageRequest, SendMessageRequest, SqsApi, SqsClient,
+    DeleteMessageRequest, Message, ReceiveMessageRequest, SendMessageBatchEntry,
+    SendMessageRequest, SqsApi, SqsClient,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use async_trait::async_trait;
@@ -269,16 +269,84 @@ impl Queue for AwsSqsQueue {
             })
     }
 
-    async fn nack(&self, _queue: &str, _receipt_handle: &str) -> Result<()> {
-        // SQS nack is ChangeMessageVisibility(VisibilityTimeout=0). The
-        // alien-aws-clients SqsApi wrapper does not expose that call, so we
-        // fail explicitly rather than silently waiting out the lease.
-        Err(alien_error::AlienError::new(
-            ErrorData::OperationNotSupported {
-                operation: "queue.nack".to_string(),
-                reason: "AWS SQS nack requires ChangeMessageVisibility, which the SQS client does not expose".to_string(),
-            },
-        ))
+    async fn ack_batch(&self, _queue: &str, receipts: &[String]) -> Result<Vec<QueueAckResult>> {
+        let mut results = Vec::with_capacity(receipts.len());
+        for chunk in receipts.chunks(10) {
+            match self
+                .client
+                .delete_message_batch(&self.queue_url, chunk.to_vec())
+                .await
+            {
+                Ok(response) => {
+                    let response = response.delete_message_batch_result;
+                    let known_id = |id: &str| (0..chunk.len()).any(|index| id == index.to_string());
+                    let unknown = response.successful.iter().any(|entry| !known_id(&entry.id))
+                        || response.failed.iter().any(|entry| !known_id(&entry.id));
+                    for index in 0..chunk.len() {
+                        let id = index.to_string();
+                        let successes = response
+                            .successful
+                            .iter()
+                            .filter(|entry| entry.id == id)
+                            .count();
+                        let failures: Vec<_> = response
+                            .failed
+                            .iter()
+                            .filter(|entry| entry.id == id)
+                            .collect();
+                        results.push(match (unknown, successes, failures.as_slice()) {
+                            (false, 1, []) => QueueAckResult::Acknowledged,
+                            (false, 0, [failure]) => QueueAckResult::Failed {
+                                code: failure.code.clone(),
+                                message: failure
+                                    .message
+                                    .clone()
+                                    .unwrap_or_else(|| "SQS rejected completion".to_string()),
+                            },
+                            _ => QueueAckResult::Failed {
+                                code: "QUEUE_BATCH_RESPONSE_INVALID".to_string(),
+                                message: "SQS returned missing, duplicate or unknown outcomes"
+                                    .to_string(),
+                            },
+                        });
+                    }
+                }
+                Err(error) => results.extend(std::iter::repeat_n(
+                    QueueAckResult::Failed {
+                        code: error.code.clone(),
+                        message: error.to_string(),
+                    },
+                    chunk.len(),
+                )),
+            }
+        }
+        Ok(results)
+    }
+
+    async fn renew_lease(
+        &self,
+        _queue: &str,
+        receipt_handle: &str,
+        duration_seconds: u32,
+    ) -> Result<()> {
+        crate::traits::validate_lease_duration(duration_seconds)?;
+        self.client
+            .change_message_visibility(&self.queue_url, receipt_handle, duration_seconds)
+            .await
+            .context(ErrorData::BindingSetupFailed {
+                binding_type: "queue.sqs".to_string(),
+                reason: "Failed to renew delivery lease".to_string(),
+            })
+    }
+
+    async fn nack(&self, _queue: &str, receipt_handle: &str) -> Result<()> {
+        self.client
+            .change_message_visibility(&self.queue_url, receipt_handle, 0)
+            .await
+            .context(ErrorData::BindingSetupFailed {
+                binding_type: "queue.sqs".to_string(),
+                reason: "Failed to release delivery lease".to_string(),
+            })
     }
 
     async fn purge(&self, _queue: &str) -> Result<()> {
@@ -336,6 +404,62 @@ mod tests {
     };
     #[cfg(not(target_arch = "wasm32"))]
     use tokio::{net::TcpListener, runtime::Builder, sync::Barrier, task::JoinSet};
+
+    #[tokio::test]
+    async fn batch_completion_chunks_requests_and_preserves_partial_failures() {
+        let calls = Arc::new(Mutex::new(Vec::<HashMap<String, String>>::new()));
+        let app = Router::new().route("/", post(
+            |State(calls): State<Arc<Mutex<Vec<HashMap<String, String>>>>>,
+             body: String| async move {
+                let form: HashMap<String, String> = url::form_urlencoded::parse(body.as_bytes()).into_owned().collect();
+                assert_eq!(form["Action"], "DeleteMessageBatch");
+                let count = form.keys().filter(|key| key.ends_with(".ReceiptHandle")).count();
+                assert!((1..=10).contains(&count));
+                let mut entries = String::new();
+                for index in 0..count {
+                    assert_eq!(form[&format!("DeleteMessageBatchRequestEntry.{}.Id", index + 1)], index.to_string());
+                    if form[&format!("DeleteMessageBatchRequestEntry.{}.ReceiptHandle", index + 1)] == "invalid" {
+                        entries.push_str(&format!("<BatchResultErrorEntry><Id>{index}</Id><Code>ReceiptHandleIsInvalid</Code><SenderFault>true</SenderFault></BatchResultErrorEntry>"));
+                    } else {
+                        entries.push_str(&format!("<DeleteMessageBatchResultEntry><Id>{index}</Id></DeleteMessageBatchResultEntry>"));
+                    }
+                }
+                calls.lock().expect("calls").push(form);
+                format!("<DeleteMessageBatchResponse><DeleteMessageBatchResult>{entries}</DeleteMessageBatchResult></DeleteMessageBatchResponse>")
+            }
+        )).with_state(calls.clone());
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listen");
+        let endpoint = format!("http://{}", listener.local_addr().expect("address"));
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.expect("serve") });
+        let config = AwsClientConfig::mock().with_service_overrides(ServiceOverrides {
+            endpoints: HashMap::from([("sqs".to_string(), endpoint.clone())]),
+        });
+        let credentials = AwsCredentialProvider::from_config(config)
+            .await
+            .expect("credentials");
+        let queue = AwsSqsQueue::new(
+            endpoint,
+            SqsClient::new(reqwest::Client::new(), credentials),
+        );
+        let mut receipts: Vec<_> = (0..12).map(|index| format!("receipt-{index}")).collect();
+        receipts[4] = "invalid".to_string();
+        let outcomes = queue.ack_batch("q", &receipts).await.expect("batch");
+        assert_eq!(outcomes.len(), 12);
+        for (index, outcome) in outcomes.iter().enumerate() {
+            if index == 4 {
+                assert!(
+                    matches!(outcome, QueueAckResult::Failed { code, .. } if code == "ReceiptHandleIsInvalid")
+                );
+            } else {
+                assert_eq!(*outcome, QueueAckResult::Acknowledged);
+            }
+        }
+        assert_eq!(calls.lock().expect("calls").len(), 2);
+        assert!(queue.ack_batch("q", &[]).await.expect("empty").is_empty());
+        assert_eq!(calls.lock().expect("calls").len(), 2);
+        server.abort();
+        assert!(server.await.expect_err("aborted").is_cancelled());
+    }
 
     fn message(count: Option<&str>) -> Message {
         Message {

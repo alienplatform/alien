@@ -6,8 +6,15 @@
 //! - Task streaming from Worker runtime to app
 //! - Task result submission
 
-use std::{collections::HashMap, pin::Pin, sync::Arc};
-use tokio::sync::{broadcast, mpsc, watch, Mutex, RwLock};
+use std::{
+    collections::{hash_map::Entry, HashMap},
+    pin::Pin,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+};
+use tokio::sync::{broadcast, oneshot, watch, OwnedSemaphorePermit, RwLock, Semaphore};
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status};
 use tracing::{debug, info, warn};
@@ -44,6 +51,9 @@ impl Default for ControlState {
     }
 }
 
+type TaskResultSender = oneshot::Sender<Result<TaskResult, String>>;
+type PendingResults = Arc<Mutex<HashMap<String, Option<TaskResultSender>>>>;
+
 /// Control gRPC server implementation
 #[derive(Debug, Clone)]
 pub struct ControlGrpcServer {
@@ -52,7 +62,11 @@ pub struct ControlGrpcServer {
     /// Task sender - the Worker runtime sends tasks here.
     task_tx: broadcast::Sender<Task>,
     /// Result channels - keyed by task_id
-    result_channels: Arc<Mutex<HashMap<String, mpsc::Sender<Result<TaskResult, String>>>>>,
+    result_channels: PendingResults,
+    capacity: Arc<Semaphore>,
+    cancelled_tx: watch::Sender<bool>,
+    stopped_tx: watch::Sender<bool>,
+    supervised: Arc<AtomicBool>,
     /// Readiness signal for the application HTTP server.
     http_ready_tx: watch::Sender<Option<u16>>,
     /// Readiness signal for the application task stream.
@@ -66,6 +80,8 @@ pub struct TaskResult {
     pub success: bool,
     /// Response data (for successful processing)
     pub response_data: Vec<u8>,
+    /// Per-delivery outcomes, present only for batch tasks.
+    pub queue_batch: Option<crate::control::QueueBatchResult>,
     /// Error code (for failed processing)
     pub error_code: Option<String>,
     /// Error message (for failed processing)
@@ -78,6 +94,7 @@ impl TaskResult {
         Self {
             success: true,
             response_data: data,
+            queue_batch: None,
             error_code: None,
             error_message: None,
         }
@@ -88,6 +105,7 @@ impl TaskResult {
         Self {
             success: false,
             response_data: Vec::new(),
+            queue_batch: None,
             error_code: Some(code.into()),
             error_message: Some(message.into()),
         }
@@ -99,12 +117,18 @@ impl ControlGrpcServer {
         let (task_tx, _) = broadcast::channel(1024);
         let (http_ready_tx, _) = watch::channel(None);
         let (task_ready_tx, _) = watch::channel(false);
+        let (cancelled_tx, _) = watch::channel(false);
+        let (stopped_tx, _) = watch::channel(false);
         Self {
             state: Arc::new(RwLock::new(ControlState::default())),
             task_tx,
             http_ready_tx,
             task_ready_tx,
             result_channels: Arc::new(Mutex::new(HashMap::new())),
+            capacity: Arc::new(Semaphore::new(1024)),
+            cancelled_tx,
+            stopped_tx,
+            supervised: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -159,6 +183,14 @@ impl ControlGrpcServer {
         }
     }
 
+    /// Whether the application can currently receive tasks. Unlike registration,
+    /// a live subscription disappears when its transport stream is dropped.
+    pub fn task_application_ready(&self) -> bool {
+        self.task_tx.receiver_count() > 0
+            && !*self.cancelled_tx.borrow()
+            && !*self.stopped_tx.borrow()
+    }
+
     /// Send a task to the application and wait for the result.
     /// This is used for all task types - the Worker runtime must wait for the app to process
     /// before acknowledging to the platform (storage/cron/queue) or submitting responses (commands).
@@ -167,44 +199,113 @@ impl ControlGrpcServer {
         task: Task,
         timeout: std::time::Duration,
     ) -> Result<TaskResult, String> {
+        if *self.cancelled_tx.borrow() {
+            return Err("Application is stopping after a cancelled task".to_string());
+        }
+        let permit = self
+            .capacity
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| "Application task capacity exhausted".to_string())?;
         let task_id = task.task_id.clone();
-
-        // Create result channel
-        let (result_tx, mut result_rx) = mpsc::channel(1);
+        let (result_tx, result_rx) = oneshot::channel();
         {
-            let mut channels = self.result_channels.lock().await;
-            channels.insert(task_id.clone(), result_tx);
+            let mut channels = self
+                .result_channels
+                .lock()
+                .map_err(|_| "Task result registry is poisoned".to_string())?;
+            match channels.entry(task_id.clone()) {
+                Entry::Vacant(entry) => {
+                    entry.insert(Some(result_tx));
+                }
+                Entry::Occupied(_) => return Err("Duplicate task delivery identity".to_string()),
+            }
         }
-
-        let result = async {
-            let receiver_count = self.task_tx
-                .send(task)
-                .map_err(|error| format!("Failed to send task: {}", error))?;
-            debug!(task_id = %task_id, receiver_count, "Task broadcast to subscribers, waiting for result");
-            let result = tokio::time::timeout(timeout, result_rx.recv())
-                .await
-                .map_err(|_| {
-                    warn!(task_id = %task_id, timeout_secs = timeout.as_secs(), "Task result timeout — app never sent result");
-                    "Task result timeout".to_string()
-                })?
-                .ok_or_else(|| "Result channel closed".to_string())?;
-            debug!(task_id = %task_id, success = result.as_ref().map(|r| r.success).unwrap_or(false), "Received task result from app");
-            result
+        let mut pending = PendingTask {
+            server: self.clone(),
+            task_id,
+            dispatched: false,
+            completed: false,
+            _permit: permit,
+        };
+        self.task_tx
+            .send(task)
+            .map_err(|_| "No application task subscriber".to_string())?;
+        pending.dispatched = true;
+        let result = tokio::time::timeout(timeout, result_rx).await;
+        match result {
+            Ok(Ok(result)) => {
+                pending.completed = true;
+                result
+            }
+            _ => {
+                self.cancel_application().await;
+                Err("Application task was cancelled before completion".to_string())
+            }
         }
-        .await;
+    }
 
-        // Clean up channel
-        {
-            let mut channels = self.result_channels.lock().await;
-            channels.remove(&task_id);
+    /// Stop the application before returning a runtime timeout decision.
+    pub async fn cancel_application(&self) {
+        self.cancelled_tx.send_replace(true);
+        if self.supervised.load(Ordering::Acquire) {
+            let mut stopped = self.stopped_tx.subscribe();
+            while !*stopped.borrow_and_update() {
+                if stopped.changed().await.is_err() {
+                    break;
+                }
+            }
         }
+    }
 
-        result
+    /// Require the process host to stop the application before cancelled task
+    /// delivery returns. Enable this before accepting work in a process host.
+    pub fn supervise_task_cancellation(&self) {
+        self.supervised.store(true, Ordering::Release);
+    }
+
+    /// Wait for a dispatched task to time out or lose its waiting caller.
+    pub async fn wait_for_cancelled_task(&self) {
+        let mut cancelled = self.cancelled_tx.subscribe();
+        while !*cancelled.borrow_and_update() {
+            if cancelled.changed().await.is_err() {
+                return;
+            }
+        }
+    }
+
+    /// Confirm that the application process can no longer execute handlers.
+    pub fn application_stopped(&self) {
+        self.stopped_tx.send_replace(true);
     }
 
     /// Convert to tonic service
     pub fn into_service(self) -> ControlServiceServer<Self> {
         ControlServiceServer::new(self)
+    }
+}
+
+/// Remove correlation state even when an HTTP request or invocation is dropped.
+struct PendingTask {
+    server: ControlGrpcServer,
+    task_id: String,
+    dispatched: bool,
+    completed: bool,
+    _permit: OwnedSemaphorePermit,
+}
+
+impl Drop for PendingTask {
+    fn drop(&mut self) {
+        // Cleanup must also work during unwinding. No application code runs
+        // while this registry lock is held.
+        self.server
+            .result_channels
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&self.task_id);
+        if self.dispatched && !self.completed {
+            self.server.cancelled_tx.send_replace(true);
+        }
     }
 }
 
@@ -310,30 +411,132 @@ impl ControlService for ControlGrpcServer {
                     desc,
                 )
             }
+            Some(crate::control::send_task_result_request::Result::QueueBatch(batch)) => {
+                let mut result = TaskResult::success(Vec::new());
+                result.queue_batch = Some(batch);
+                (Ok(result), "queue batch".to_string())
+            }
             None => (Err("No result in response".to_string()), "none".to_string()),
         };
 
         debug!(task_id = %task_id, result = %result_desc, "Received task result from app via gRPC");
 
-        // Send to waiting channel if any
-        let channels = self.result_channels.lock().await;
-        if let Some(tx) = channels.get(&task_id) {
-            if let Err(e) = tx.send(result).await {
-                warn!(task_id = %task_id, "Failed to send result to waiting channel: {:?}", e);
-            } else {
-                debug!(task_id = %task_id, "Result forwarded to send_task caller");
-            }
-        } else {
-            warn!(task_id = %task_id, "No waiting channel found for task result (task may have already timed out)");
-        }
-
-        Ok(Response::new(SendTaskResultResponse { acknowledged: true }))
+        let sender = self
+            .result_channels
+            .lock()
+            .map_err(|_| Status::internal("Task result registry is poisoned"))?
+            .get_mut(&task_id)
+            .and_then(Option::take);
+        let acknowledged = sender.is_some_and(|sender| sender.send(result).is_ok());
+        Ok(Response::new(SendTaskResultResponse { acknowledged }))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::control::{send_task_result_request, TaskSuccess};
+    use std::time::Duration;
+    use tokio_stream::StreamExt;
+
+    #[tokio::test]
+    async fn cancellation_waits_for_process_stop_and_rejects_late_results() {
+        let server = ControlGrpcServer::new();
+        server.supervise_task_cancellation();
+        let mut stream = server
+            .wait_for_tasks(Request::new(WaitForTasksRequest {
+                application_id: "test-app".to_string(),
+            }))
+            .await
+            .expect("subscribe")
+            .into_inner();
+        let waiting = tokio::spawn({
+            let server = server.clone();
+            async move {
+                server
+                    .send_task(
+                        Task {
+                            task_id: "delivery".to_string(),
+                            payload: None,
+                        },
+                        Duration::ZERO,
+                    )
+                    .await
+            }
+        });
+        assert_eq!(
+            stream
+                .next()
+                .await
+                .expect("task")
+                .expect("delivery")
+                .task_id,
+            "delivery"
+        );
+        server.wait_for_cancelled_task().await;
+        assert!(
+            !waiting.is_finished(),
+            "retry must wait until the app cannot mutate"
+        );
+        server.application_stopped();
+        assert!(waiting.await.expect("join").is_err());
+        assert!(server.result_channels.lock().expect("registry").is_empty());
+        assert_eq!(server.capacity.available_permits(), 1024);
+        let response = server
+            .send_task_result(Request::new(SendTaskResultRequest {
+                task_id: "delivery".to_string(),
+                result: Some(send_task_result_request::Result::Success(TaskSuccess {
+                    response_data: vec![],
+                })),
+            }))
+            .await
+            .expect("late result");
+        assert!(!response.into_inner().acknowledged);
+    }
+
+    #[tokio::test]
+    async fn dropped_waiter_releases_capacity_and_requests_process_stop() {
+        let server = ControlGrpcServer::new();
+        let mut stream = server
+            .wait_for_tasks(Request::new(WaitForTasksRequest {
+                application_id: "test-app".to_string(),
+            }))
+            .await
+            .expect("subscribe")
+            .into_inner();
+        let waiting = tokio::spawn({
+            let server = server.clone();
+            async move {
+                server
+                    .send_task(
+                        Task {
+                            task_id: "delivery".to_string(),
+                            payload: None,
+                        },
+                        Duration::from_secs(3600),
+                    )
+                    .await
+            }
+        });
+        stream.next().await.expect("task").expect("delivery");
+        let duplicate = server
+            .send_task(
+                Task {
+                    task_id: "delivery".to_string(),
+                    payload: None,
+                },
+                Duration::ZERO,
+            )
+            .await
+            .expect_err("duplicate cannot replace a pending delivery");
+        assert_eq!(duplicate, "Duplicate task delivery identity");
+        assert_eq!(server.capacity.available_permits(), 1023);
+        waiting.abort();
+        assert!(waiting.await.expect_err("cancelled waiter").is_cancelled());
+        server.wait_for_cancelled_task().await;
+        assert!(server.result_channels.lock().expect("registry").is_empty());
+        assert_eq!(server.capacity.available_permits(), 1024);
+    }
 
     #[tokio::test]
     async fn test_register_http_server() {

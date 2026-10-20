@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 
-use alien_core::{ClientConfig, ManagementConfig, Platform};
+use alien_core::{ClientConfig, ManagementConfig, ManagementExternalId, Platform};
 use alien_error::AlienError;
 
 use super::deployment_store::DeploymentRecord;
@@ -91,4 +91,23 @@ pub trait CredentialResolver: Send + Sync {
     ) -> Result<Option<ManagementConfig>, AlienError> {
         Ok(None)
     }
+}
+
+/// Looks up the `sts:ExternalId` a deployment's AWS management and
+/// remote-bindings roles trust.
+///
+/// A control plane that issues ExternalIds (one per customer, put into the
+/// customer's setup template) implements this so every AssumeRole of those
+/// roles sends the value. AWS ignores an ExternalId the role trust does not
+/// check, so the value is sent whether or not the installed stack has the
+/// condition yet. Standalone managers issue none and leave this unset.
+#[async_trait]
+pub trait ManagementExternalIdSource: Send + Sync {
+    /// The deployment's ExternalId, or `None` when its control plane has not
+    /// issued one. A lookup failure is an error, never `None`: sending no
+    /// value to a protected role fails later with a misleading AccessDenied.
+    async fn management_external_id(
+        &self,
+        deployment: &DeploymentRecord,
+    ) -> Result<Option<ManagementExternalId>, AlienError>;
 }

@@ -1,0 +1,97 @@
+{
+  "id": "container/volume-backups",
+  "description": "Lets Amazon Data Lifecycle Manager snapshot and expire this stack's container volumes, and nothing else",
+  "platforms": {
+    "aws": [
+      // The execution role setup creates for the stack's DLM policies. The management identity
+      // can point a DLM policy at any target tags and add share or copy rules, and IAM can't
+      // limit either. What DLM can then do is bounded only by this set: snapshot volumes this
+      // stack owns and delete their snapshots. No CopySnapshot or ModifySnapshotAttribute, so a
+      // policy can't copy a snapshot to another Region or share it with another account.
+      {
+        "label": "snapshot-stack-volumes",
+        "grant": {
+          "actions": ["ec2:CreateSnapshot"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:volume/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      // CreateSnapshot is also authorized on the new snapshot, which carries the volume's tags:
+      // the policy copies them onto it as it is created.
+      {
+        "label": "create-stack-snapshots",
+        "grant": {
+          "actions": ["ec2:CreateSnapshot"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}::snapshot/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      {
+        "label": "tag-new-snapshots",
+        "grant": {
+          "actions": ["ec2:CreateTags"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}::snapshot/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime",
+                "ec2:CreateAction": "CreateSnapshot"
+              }
+            }
+          }
+        }
+      },
+      // Retention: DLM deletes the snapshots it took once they age out.
+      {
+        "label": "expire-stack-snapshots",
+        "grant": {
+          "actions": ["ec2:DeleteSnapshot"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}::snapshot/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      {
+        // AWS requires Resource: "*" for these read APIs.
+        "label": "find-targets",
+        "grant": {
+          "actions": ["ec2:DescribeVolumes", "ec2:DescribeSnapshots", "ec2:DescribeInstances"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"]
+          }
+        }
+      }
+    ]
+  }
+}

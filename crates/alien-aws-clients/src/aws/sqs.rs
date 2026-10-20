@@ -41,6 +41,19 @@ pub trait SqsApi: Send + Sync + std::fmt::Debug {
     async fn create_queue(&self, request: CreateQueueRequest) -> Result<CreateQueueResponse>;
     async fn delete_queue(&self, queue_url: &str) -> Result<()>;
     async fn delete_message(&self, queue_url: &str, request: DeleteMessageRequest) -> Result<()>;
+    /// Complete up to ten deliveries, inspecting per-entry outcomes.
+    async fn delete_message_batch(
+        &self,
+        queue_url: &str,
+        receipts: Vec<String>,
+    ) -> Result<DeleteMessageBatchResponse>;
+    /// Set the remaining visibility period for a current receipt (0 releases it).
+    async fn change_message_visibility(
+        &self,
+        queue_url: &str,
+        receipt: &str,
+        seconds: u32,
+    ) -> Result<()>;
     async fn send_message(
         &self,
         queue_url: &str,
@@ -144,7 +157,7 @@ impl SqsClient {
 
         // A batch may have been accepted even if the response is lost. Never
         // retry it inside the transport; callers receive an unknown outcome.
-        let result = if operation == "SendMessageBatch" {
+        let result = if matches!(operation, "SendMessageBatch" | "DeleteMessageBatch") {
             builder
                 .sign_aws_request(&self.sign_config())?
                 .send_xml()
@@ -180,9 +193,12 @@ impl SqsClient {
             .content_sha256(&form_body)
             .body(form_body.clone());
 
-        let result =
-            crate::aws::aws_request_utils::sign_send_no_response(builder, &self.sign_config())
-                .await;
+        let result = if operation == "ChangeMessageVisibility" {
+            crate::aws::aws_request_utils::sign_send_no_response_once(builder, &self.sign_config())
+                .await
+        } else {
+            crate::aws::aws_request_utils::sign_send_no_response(builder, &self.sign_config()).await
+        };
 
         Self::map_result(result, operation, resource, Some(&form_body))
     }
@@ -407,6 +423,48 @@ impl SqsApi for SqsClient {
 
         self.send_form_no_body(Method::POST, "/", form_data, "DeleteMessage", queue_url)
             .await
+    }
+
+    async fn delete_message_batch(
+        &self,
+        queue_url: &str,
+        receipts: Vec<String>,
+    ) -> Result<DeleteMessageBatchResponse> {
+        let mut form = HashMap::from([
+            ("Action".to_string(), "DeleteMessageBatch".to_string()),
+            ("Version".to_string(), "2012-11-05".to_string()),
+            ("QueueUrl".to_string(), queue_url.to_string()),
+        ]);
+        for (index, receipt) in receipts.into_iter().enumerate() {
+            let prefix = format!("DeleteMessageBatchRequestEntry.{}", index + 1);
+            form.insert(format!("{prefix}.Id"), index.to_string());
+            form.insert(format!("{prefix}.ReceiptHandle"), receipt);
+        }
+        self.send_form(Method::POST, "/", form, "DeleteMessageBatch", queue_url)
+            .await
+    }
+
+    async fn change_message_visibility(
+        &self,
+        queue_url: &str,
+        receipt: &str,
+        seconds: u32,
+    ) -> Result<()> {
+        let form = HashMap::from([
+            ("Action".to_string(), "ChangeMessageVisibility".to_string()),
+            ("Version".to_string(), "2012-11-05".to_string()),
+            ("QueueUrl".to_string(), queue_url.to_string()),
+            ("ReceiptHandle".to_string(), receipt.to_string()),
+            ("VisibilityTimeout".to_string(), seconds.to_string()),
+        ]);
+        self.send_form_no_body(
+            Method::POST,
+            "/",
+            form,
+            "ChangeMessageVisibility",
+            queue_url,
+        )
+        .await
     }
 
     async fn send_message_batch(
@@ -984,4 +1042,25 @@ pub struct SendMessageBatchFailure {
     pub code: String,
     pub message: Option<String>,
     pub sender_fault: bool,
+}
+
+/// Native SQS batch completion response.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct DeleteMessageBatchResponse {
+    pub delete_message_batch_result: DeleteMessageBatchResult,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DeleteMessageBatchResult {
+    #[serde(rename = "DeleteMessageBatchResultEntry", default)]
+    pub successful: Vec<DeleteMessageBatchSuccess>,
+    #[serde(rename = "BatchResultErrorEntry", default)]
+    pub failed: Vec<SendMessageBatchFailure>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct DeleteMessageBatchSuccess {
+    pub id: String,
 }

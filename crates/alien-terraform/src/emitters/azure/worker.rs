@@ -25,7 +25,7 @@ use crate::{
 };
 use alien_core::{
     import::EmitContext, AzureContainerAppsEnvironment, ErrorData, Result, ServiceAccount, Worker,
-    WorkerCode,
+    WorkerCode, WorkerTrigger,
 };
 use alien_error::AlienError;
 use hcl::{
@@ -107,11 +107,127 @@ impl TfEmitter for AzureWorkerEmitter {
         ];
         container_body.extend(env_blocks);
 
-        let template_body: Vec<Structure> = vec![
+        let mut template_body: Vec<Structure> = vec![
             attr("min_replicas", Expression::Number(hcl::Number::from(0i64))),
-            attr("max_replicas", Expression::Number(hcl::Number::from(10i64))),
+            attr(
+                "max_replicas",
+                Expression::Number(hcl::Number::from(function.concurrency_limit.unwrap_or(10))),
+            ),
             nested(block("container", container_body)),
         ];
+
+        let mut queue_fragment = TfFragment::default();
+        for (index, trigger) in function.triggers.iter().enumerate() {
+            let WorkerTrigger::Queue {
+                queue,
+                batch: Some(batch),
+            } = trigger
+            else {
+                continue;
+            };
+            let sa_label = service_account_label.as_deref().ok_or_else(|| {
+                AlienError::new(ErrorData::GenericError {
+                    message: format!(
+                        "queue-triggered worker '{}' requires a service account",
+                        function.id
+                    ),
+                })
+            })?;
+            let resource = ctx.stack.resources.get(&queue.id).ok_or_else(|| {
+                AlienError::new(ErrorData::GenericError {
+                    message: format!("missing queue '{}'", queue.id),
+                })
+            })?;
+            let queue_ctx = EmitContext {
+                resource,
+                resource_id: &queue.id,
+                ..*ctx
+            };
+            let binding = registry
+                .require(&queue.resource_type, ctx.platform)?
+                .emit_binding_ref(&queue_ctx)?
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::GenericError {
+                        message: format!("queue '{}' has no binding", queue.id),
+                    })
+                })?;
+            let binding_name = format!("{label}_queue_{index}");
+            queue_fragment.locals.insert(binding_name.clone(), binding);
+            let queue_name = expr::traversal(["local", &binding_name, "queueName"]);
+            let namespace = expr::traversal(["local", &binding_name, "namespace"]);
+            template_body.push(nested(block(
+                "custom_scale_rule",
+                [
+                    attr("name", Expression::String(format!("queue-{index}"))),
+                    attr(
+                        "custom_rule_type",
+                        Expression::String("azure-servicebus".into()),
+                    ),
+                    attr(
+                        "identity_id",
+                        expr::traversal(["azurerm_user_assigned_identity", sa_label, "id"]),
+                    ),
+                    attr(
+                        "metadata",
+                        expr::object([
+                            ("namespace", namespace.clone()),
+                            ("queueName", queue_name.clone()),
+                            (
+                                "messageCount",
+                                Expression::String(batch.max_messages.to_string()),
+                            ),
+                        ]),
+                    ),
+                ],
+            )));
+            let metadata = [
+                (
+                    "route",
+                    Expression::String(format!("/__alien/queue/{}", queue.id)),
+                ),
+                (
+                    "namespaceName",
+                    expr::template(format!(
+                        "${{local.{binding_name}.namespace}}.servicebus.windows.net"
+                    )),
+                ),
+                ("queueName", queue_name),
+                ("direction", Expression::String("input".into())),
+                (
+                    "azureClientId",
+                    expr::traversal(["azurerm_user_assigned_identity", sa_label, "client_id"]),
+                ),
+                ("maxActiveMessages", Expression::String("100".into())),
+                ("maxConcurrentHandlers", Expression::String("100".into())),
+                ("lockRenewalInSec", Expression::String("10".into())),
+                (
+                    "timeoutInSec",
+                    Expression::String(function.timeout_seconds.saturating_add(30).to_string()),
+                ),
+                ("maxRetriableErrorsPerSec", Expression::String("1".into())),
+            ];
+            let mut component_body = vec![
+                attr("name", expr::raw(format!("\"servicebus-${{substr(sha256(\"${{local.resource_prefix}}-{}-queue-{index}\"), 0, 40)}}\"", function.id))),
+                attr("container_app_environment_id", container_app_environment_id.clone()),
+                attr("component_type", Expression::String("bindings.azure.servicebusqueues".into())),
+                attr("version", Expression::String("v1".into())),
+                attr("scopes", Expression::Array(vec![resource_prefix_template(&function.id)])),
+            ];
+            component_body.extend(metadata.into_iter().map(|(name, value)| {
+                nested(block(
+                    "metadata",
+                    [
+                        attr("name", Expression::String(name.into())),
+                        attr("value", value),
+                    ],
+                ))
+            }));
+            queue_fragment.resource_blocks.push(resource_block(
+                "azurerm_container_app_environment_dapr_component",
+                &format!("{label}_queue_{index}"),
+                component_body,
+            ));
+        }
 
         let public = !function.public_endpoints.is_empty();
         let ingress_body: Vec<Structure> = vec![
@@ -165,11 +281,83 @@ impl TfEmitter for AzureWorkerEmitter {
             }));
         }
 
-        let mut fragment = TfFragment::default().with_data(data_block(
+        let mut fragment = queue_fragment.with_data(data_block(
             "azurerm_client_config",
             &client_config_label,
             Vec::<Structure>::new(),
         ));
+        if function.has_queue_batches() {
+            // AzureRM does not expose appHealth. Enable Dapr only with the health
+            // gate configured, through the stable ARM API, after components exist.
+            body.push(nested(block(
+                "lifecycle",
+                [attr("ignore_changes", expr::raw("[dapr]"))],
+            )));
+            let dependencies = fragment
+                .resource_blocks
+                .iter()
+                .map(|component| {
+                    format!(
+                        "azurerm_container_app_environment_dapr_component.{}",
+                        component.labels[1].as_str()
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            fragment.resource_blocks.push(resource_block(
+                "azapi_update_resource",
+                &format!("{label}_dapr"),
+                [
+                    attr(
+                        "type",
+                        Expression::String("Microsoft.App/containerApps@2025-07-01".into()),
+                    ),
+                    attr(
+                        "resource_id",
+                        expr::traversal(["azurerm_container_app", label, "id"]),
+                    ),
+                    attr("depends_on", expr::raw(format!("[{dependencies}]"))),
+                    attr(
+                        "body",
+                        expr::object([(
+                            "properties",
+                            expr::object([(
+                                "configuration",
+                                expr::object([(
+                                    "dapr",
+                                    expr::object([
+                                        ("enabled", Expression::Bool(true)),
+                                        ("appId", resource_prefix_template(&function.id)),
+                                        ("appPort", Expression::Number(8080.into())),
+                                        ("appProtocol", Expression::String("http".into())),
+                                        ("maxConcurrency", Expression::Number(100.into())),
+                                        (
+                                            "appHealth",
+                                            expr::object([
+                                                ("enabled", Expression::Bool(true)),
+                                                (
+                                                    "path",
+                                                    Expression::String("/__alien/health".into()),
+                                                ),
+                                                (
+                                                    "probeIntervalSeconds",
+                                                    Expression::Number(1.into()),
+                                                ),
+                                                (
+                                                    "probeTimeoutMilliseconds",
+                                                    Expression::Number(1000.into()),
+                                                ),
+                                                ("threshold", Expression::Number(1.into())),
+                                            ]),
+                                        ),
+                                    ]),
+                                )]),
+                            )]),
+                        )]),
+                    ),
+                ],
+            ));
+        }
         fragment
             .resource_blocks
             .push(resource_block("azurerm_container_app", label, body));

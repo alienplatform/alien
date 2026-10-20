@@ -182,7 +182,7 @@ fn collect_worker_trigger_grants(
 ) {
     for trigger in triggers {
         match trigger {
-            WorkerTrigger::Queue { queue } => {
+            WorkerTrigger::Queue { queue, .. } => {
                 grants.push(ResourcePermissionGrant {
                     profile_name: profile_name.to_string(),
                     resource_id: queue.id().to_string(),
@@ -586,7 +586,7 @@ mod tests {
             .downcast_ref::<Worker>()
             .expect("triggered resource should remain a worker");
         assert!(worker.triggers.iter().any(|trigger| {
-            matches!(trigger, WorkerTrigger::Queue { queue } if queue.id() == "messages")
+            matches!(trigger, WorkerTrigger::Queue { queue, .. } if queue.id() == "messages")
         }));
     }
 }

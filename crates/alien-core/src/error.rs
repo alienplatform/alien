@@ -384,6 +384,19 @@ pub enum ErrorData {
     )]
     TemplateSerializationFailed { format: String, reason: String },
 
+    /// A management ExternalId is not 32 to 128 ASCII letters and digits.
+    #[error(
+        code = "MANAGEMENT_EXTERNAL_ID_INVALID",
+        message = "Management ExternalId must be 32 to 128 ASCII letters and digits (got {length} characters)",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    ManagementExternalIdInvalid {
+        /// Length of the rejected value. The value itself is never echoed.
+        length: usize,
+    },
+
     /// ImportData did not match the registered typed payload.
     #[error(
         code = "IMPORT_DATA_INVALID",

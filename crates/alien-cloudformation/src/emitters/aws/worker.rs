@@ -285,10 +285,22 @@ fn worker_environment(
         registry,
         worker_id: &function.id,
     };
-    let plan = worker_runtime_environment_contract(Platform::Aws, &function.id, &function.links);
+    let plan = worker_runtime_environment_contract(
+        Platform::Aws,
+        &function.id,
+        &function.runtime_binding_links(),
+    );
     let mut env = render_runtime_environment_plan(&plan, &renderer)?
         .into_iter()
         .collect::<BTreeMap<_, _>>();
+
+    env.insert(
+        "ALIEN_WORKER_TIMEOUT_SECONDS".into(),
+        CfExpression::from(function.timeout_seconds.to_string()),
+    );
+    if let Some(batch) = function.queue_batch_environment()? {
+        env.insert("ALIEN_QUEUE_BATCH_CONFIG".into(), CfExpression::from(batch));
+    }
 
     for (key, value) in &function.environment {
         env.insert(key.clone(), CfExpression::from(value.clone()));
@@ -392,16 +404,42 @@ fn queue_trigger_resources(
     let mut resources = Vec::new();
     let mut queue_index = 0usize;
     for trigger in &function.triggers {
-        let WorkerTrigger::Queue { queue } = trigger else {
+        let WorkerTrigger::Queue { queue, batch } = trigger else {
             continue;
         };
         let queue_id = logical_id_for_ref(ctx, queue)?;
         let mapping_id = format!("{logical_id}QueueTrigger{queue_index}");
         let mut mapping =
             CfResource::new(mapping_id, "AWS::Lambda::EventSourceMapping".to_string());
-        mapping
-            .properties
-            .insert("BatchSize".to_string(), CfExpression::Integer(1));
+        mapping.properties.insert(
+            "BatchSize".to_string(),
+            CfExpression::Integer(
+                batch
+                    .as_ref()
+                    .map_or(1, |batch| i64::from(batch.max_messages)),
+            ),
+        );
+        if let Some(batch) = batch {
+            mapping.properties.insert(
+                "MaximumBatchingWindowInSeconds".to_string(),
+                CfExpression::Integer(i64::from(batch.max_window_seconds)),
+            );
+        }
+        if batch.is_some() {
+            mapping.properties.insert(
+                "FunctionResponseTypes".to_string(),
+                CfExpression::list([CfExpression::from("ReportBatchItemFailures")]),
+            );
+        }
+        if let Some(capacity) = function.queue_source_maximum_concurrency() {
+            mapping.properties.insert(
+                "ScalingConfig".to_string(),
+                CfExpression::object([(
+                    "MaximumConcurrency",
+                    CfExpression::Integer(i64::from(capacity)),
+                )]),
+            );
+        }
         mapping
             .properties
             .insert("Enabled".to_string(), CfExpression::from(true));

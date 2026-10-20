@@ -8,6 +8,7 @@
 //! ALIEN_GATEWAY_KIND_CONTEXT=kind-<name> \
 //! ALIEN_GATEWAY_KIND_NAMESPACE=alien-gateway-<suffix> \
 //! ALIEN_GATEWAY_KIND_SESSION_IMAGE=<image that keeps running> \
+//! [ALIEN_GATEWAY_KIND_APP_IMAGE=<application image, default: the session image>] \
 //! ALIEN_KUBERNETES_CLUSTER_DOMAIN=<the cluster DNS domain> \
 //!   cargo test -p alien-infra --features all-platforms --test kubernetes_sandbox_gateway_kind \
 //!   -- --ignored --nocapture
@@ -18,7 +19,9 @@
 //! controllers until the gateway Deployment, its Services and NetworkPolicy exist and the warm
 //! pool has a session pod. It leaves the namespace in place so traffic probes can run against
 //! it; the caller deletes the namespace. Outside the cluster the controller cannot read the
-//! cluster DNS domain from its resolver search path, so the test passes it in.
+//! cluster DNS domain from its resolver search path, so the test passes it in. The controllers
+//! run in this process rather than in the operator pod, so the test hands them the broker
+//! address the installed chart gave the operator, as the operator's own environment would.
 
 #![cfg(feature = "kubernetes")]
 
@@ -74,7 +77,7 @@ fn deployment_config() -> DeploymentConfig {
         .build()
 }
 
-async fn prepared_stack(session_image: &str) -> Stack {
+async fn prepared_stack(session_image: &str, app_image: &str) -> Stack {
     let sandbox = Sandbox::new("agent".to_string())
         .code(SandboxCode::Image {
             image: session_image.to_string(),
@@ -88,7 +91,7 @@ async fn prepared_stack(session_image: &str) -> Stack {
     // The workload that administers session policies, as an application would.
     let manager = Container::new("app".to_string())
         .code(ContainerCode::Image {
-            image: session_image.to_string(),
+            image: app_image.to_string(),
         })
         .cpu(ResourceSpec {
             min: "0.1".to_string(),
@@ -148,8 +151,10 @@ async fn kubernetes_installs_and_reconciles_a_replicated_sandbox_gateway() {
     let namespace = env("ALIEN_GATEWAY_KIND_NAMESPACE");
     assert!(namespace.starts_with("alien-gateway-"));
     let session_image = env("ALIEN_GATEWAY_KIND_SESSION_IMAGE");
+    let app_image =
+        std::env::var("ALIEN_GATEWAY_KIND_APP_IMAGE").unwrap_or_else(|_| session_image.clone());
 
-    let stack = prepared_stack(&session_image).await;
+    let stack = prepared_stack(&session_image, &app_image).await;
     let chart = alien_helm::generate_helm_chart(
         &stack,
         alien_helm::HelmOptions {
@@ -196,6 +201,25 @@ async fn kubernetes_installs_and_reconciles_a_replicated_sandbox_gateway() {
             "management.defaultUrl=https://manager.example.test",
         ],
     );
+
+    // The address the chart gave the operator, which must name the Service in front of it.
+    let operator = kubectl_json(&namespace, &["get", "deployment", "gateway-kind"]);
+    let broker_url = operator["spec"]["template"]["spec"]["containers"][0]["env"]
+        .as_array()
+        .expect("operator env")
+        .iter()
+        .find(|variable| variable["name"] == alien_core::ENV_ALIEN_SANDBOX_BROKER_URL)
+        .and_then(|variable| variable["value"].as_str())
+        .expect("the chart gives the operator its broker address")
+        .to_string();
+    assert_eq!(
+        broker_url,
+        format!("http://gateway-kind.{namespace}.svc:8080"),
+        "the broker address names the operator Service"
+    );
+    let operator_service = kubectl_json(&namespace, &["get", "service", "gateway-kind"]);
+    assert_eq!(operator_service["spec"]["ports"][0]["port"], 8080);
+    std::env::set_var(alien_core::ENV_ALIEN_SANDBOX_BROKER_URL, &broker_url);
 
     let client_config = ClientConfig::Kubernetes(Box::new(KubernetesClientConfig::Kubeconfig {
         kubeconfig_path: Some(env("KUBECONFIG")),
@@ -271,6 +295,35 @@ async fn kubernetes_installs_and_reconciles_a_replicated_sandbox_gateway() {
     println!(
         "GATEWAY_BINDING {}",
         serde_json::to_string(&gateway).expect("binding JSON")
+    );
+    // The linked application is given the sandbox binding in its own environment, pointing at
+    // the operator's broker, so the SDK can load the sandbox from that workload alone.
+    let app = kubectl_json(&namespace, &["get", "deployment", "app"]);
+    let app_environment = app["spec"]["template"]["spec"]["containers"][0]["env"]
+        .as_array()
+        .expect("app env")
+        .clone();
+    let app_binding = app_environment
+        .iter()
+        .find(|variable| variable["name"] == "ALIEN_AGENT_BINDING")
+        .and_then(|variable| variable["value"].as_str())
+        .unwrap_or_else(|| {
+            panic!(
+                "the linked app has no sandbox binding: {:?}",
+                app_environment
+                    .iter()
+                    .map(|variable| variable["name"].clone())
+                    .collect::<Vec<_>>()
+            )
+        });
+    let app_binding: alien_core::bindings::SandboxBinding =
+        serde_json::from_str(app_binding).expect("the app's sandbox binding parses");
+    let alien_core::bindings::SandboxBinding::Kubernetes(app_binding) = app_binding else {
+        panic!("Kubernetes sandbox binding in the app")
+    };
+    assert_eq!(
+        app_binding.broker_url,
+        alien_core::bindings::BindingValue::Value(broker_url.clone())
     );
     let environment = &pool[0]["spec"]["containers"][0]["env"];
     let gateway_service = kubectl_json(

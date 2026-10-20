@@ -3727,7 +3727,7 @@ mod tests {
         }));
         let stack = gcp_stack_with_target_identity();
         let error = alien_infra::RemoteAccessResolver::new(HashMap::new())
-            .resolve(config, &stack, None)
+            .resolve(config, &stack, None, None)
             .await
             .context(ErrorData::RemoteCredentialHandoffFailed {
                 deployment_id: "dep_test".to_string(),

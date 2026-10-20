@@ -23,7 +23,7 @@ use alien_gcp_clients::compute::{
 use alien_gcp_clients::gcs::GcsNotification;
 use alien_gcp_clients::iam::{Binding, IamPolicy};
 use alien_gcp_clients::longrunning::OperationResult;
-use alien_gcp_clients::pubsub::{OidcToken, PushConfig, Subscription, Topic};
+use alien_gcp_clients::pubsub::{OidcToken, PushConfig, Subscription, SubscriptionPatch, Topic};
 // Note: Role controller removed - workers now use ServiceAccount and permission profiles
 use alien_core::{
     CertificateStatus, DnsRecordStatus, GcpCloudRunWorkerHeartbeatData, HeartbeatBackend, Network,
@@ -1821,7 +1821,7 @@ impl GcpWorkerController {
         // Create push subscriptions for queue triggers
         let mut created_any = false;
         for trigger in &cfg.triggers {
-            if let alien_core::WorkerTrigger::Queue { queue } = trigger {
+            if let alien_core::WorkerTrigger::Queue { queue, .. } = trigger {
                 info!(worker=%cfg.id, queue=%queue.id, "Creating Pub/Sub push subscription");
                 self.create_push_subscription(ctx, gcp_config, &service_name, &cfg, queue)
                     .await?;
@@ -3214,6 +3214,41 @@ impl GcpWorkerController {
             })
         })?;
 
+        let same_sources = current_config.triggers.len() == previous_config.triggers.len()
+            && current_config
+                .triggers
+                .iter()
+                .zip(&previous_config.triggers)
+                .all(|(current, previous)| match (current, previous) {
+                    (
+                        alien_core::WorkerTrigger::Queue { queue: current, .. },
+                        alien_core::WorkerTrigger::Queue {
+                            queue: previous, ..
+                        },
+                    ) => current == previous,
+                    _ => current == previous,
+                });
+        if same_sources
+            && (current_config.has_queue_batches() || previous_config.has_queue_batches())
+        {
+            for trigger in &current_config.triggers {
+                if let alien_core::WorkerTrigger::Queue { queue, .. } = trigger {
+                    self.create_push_subscription(
+                        ctx,
+                        gcp_config,
+                        &service_name,
+                        &current_config,
+                        queue,
+                    )
+                    .await?;
+                }
+            }
+            return Ok(HandlerAction::Continue {
+                state: UpdateSettingIamPolicy,
+                suggested_delay: None,
+            });
+        }
+
         // Check if triggers have changed
         let triggers_changed = current_config.triggers != previous_config.triggers;
 
@@ -3231,7 +3266,7 @@ impl GcpWorkerController {
             // Recreate all trigger infrastructure
             for trigger in &current_config.triggers {
                 match trigger {
-                    alien_core::WorkerTrigger::Queue { queue } => {
+                    alien_core::WorkerTrigger::Queue { queue, .. } => {
                         self.create_push_subscription(
                             ctx,
                             gcp_config,
@@ -4738,7 +4773,7 @@ impl GcpWorkerController {
             .execution_environment(
                 alien_gcp_clients::cloudrun::ExecutionEnvironment::ExecutionEnvironmentGen2,
             )
-            .max_instance_request_concurrency(1000) // Cloud Run default
+            .max_instance_request_concurrency(if cfg.has_queue_batches() { 100 } else { 1000 })
             .maybe_vpc_access(vpc_access)
             .build();
 
@@ -4852,9 +4887,18 @@ impl GcpWorkerController {
         // Get the worker's own binding params (may be None during initial creation)
         let self_binding_params = self.get_binding_params()?;
 
+        let mut runtime_links = links.to_vec();
+        for link in ctx
+            .desired_resource_config::<Worker>()?
+            .runtime_binding_links()
+        {
+            if !runtime_links.contains(&link) {
+                runtime_links.push(link);
+            }
+        }
         let env_vars = EnvironmentVariableBuilder::try_new(initial_env)?
             .add_worker_runtime_env_vars(ctx, &worker_config.id, worker_config.timeout_seconds)?
-            .add_linked_resources(links, ctx, function_name_for_error_logging)
+            .add_linked_resources(&runtime_links, ctx, function_name_for_error_logging)
             .await?
             .add_self_worker_binding(&worker_config.id, self_binding_params.as_ref())?
             .build();
@@ -5195,7 +5239,11 @@ impl GcpWorkerController {
         // The push endpoint is slash-terminated, but Cloud Run validates the OIDC
         // audience against its exact canonical service URI.
         let oidc_audience = service_url.trim_end_matches('/').to_string();
-        let push_endpoint = format!("{oidc_audience}/");
+        let push_endpoint = if worker_config.queue_batch_config(&queue_ref.id).is_some() {
+            format!("{oidc_audience}/__alien/queue/{}", queue_ref.id)
+        } else {
+            format!("{oidc_audience}/")
+        };
 
         // Get service account email for OIDC authentication
         let service_account_id = format!("{}-sa", worker_config.get_permissions());
@@ -5265,16 +5313,38 @@ impl GcpWorkerController {
         );
 
         match pubsub_client
-            .create_subscription(subscription_name.clone(), subscription)
+            .create_subscription(subscription_name.clone(), subscription.clone())
             .await
         {
             Ok(_) => {}
             Err(e) if is_remote_resource_conflict(&e) => {
-                info!(
-                    worker=%worker_config.id,
-                    subscription=%subscription_name,
-                    "Pub/Sub push subscription already exists; treating as created"
-                );
+                if worker_config.queue_batch_config(&queue_ref.id).is_some()
+                    || ctx
+                        .state
+                        .resources
+                        .get(&worker_config.id)
+                        .and_then(|state| state.previous_config.as_ref())
+                        .and_then(|config| config.downcast_ref::<Worker>())
+                        .is_some_and(|previous| {
+                            previous.queue_batch_config(&queue_ref.id).is_some()
+                        })
+                {
+                    pubsub_client
+                        .patch_subscription(
+                            subscription_name.clone(),
+                            SubscriptionPatch {
+                                push_config: subscription.push_config,
+                                ack_deadline_seconds: subscription.ack_deadline_seconds,
+                                ..Default::default()
+                            },
+                            Some("pushConfig,ackDeadlineSeconds".to_string()),
+                        )
+                        .await
+                        .context(ErrorData::CloudPlatformError {
+                            message: "Failed to reconcile queue push subscription".to_string(),
+                            resource_id: Some(worker_config.id.clone()),
+                        })?;
+                }
             }
             Err(e) => {
                 return Err(e.context(ErrorData::CloudPlatformError {
@@ -5831,6 +5901,7 @@ mod tests {
         Arc,
     };
 
+    use crate::queue::gcp::{GcpQueueController, GcpQueueState};
     use alien_client_core::ErrorData as CloudClientErrorData;
     use alien_core::{
         CertificateStatus, DnsRecordStatus, DomainMetadata, Network, NetworkSettings, Platform,
@@ -5845,14 +5916,14 @@ mod tests {
     use alien_gcp_clients::iam::{IamPolicy, MockIamApi};
     use alien_gcp_clients::longrunning::Operation as LongRunningOperation;
     use alien_gcp_clients::longrunning::{OperationResult, Status};
-    use alien_gcp_clients::pubsub::MockPubSubApi;
+    use alien_gcp_clients::pubsub::{MockPubSubApi, Subscription};
     use httpmock::prelude::*;
     use rstest::rstest;
 
     use super::{
         get_cloudrun_service_name, get_gcp_worker_resource_name,
-        is_cross_project_image_pull_permission_error, CLOUD_RUN_SERVICE_NAME_MAX_LEN,
-        GCP_RESOURCE_NAME_MAX_LEN,
+        is_cross_project_image_pull_permission_error, pubsub_ack_deadline_seconds,
+        CLOUD_RUN_SERVICE_NAME_MAX_LEN, GCP_RESOURCE_NAME_MAX_LEN,
     };
     use crate::core::controller_test::SingleControllerExecutor;
     use crate::core::MockPlatformServiceProvider;
@@ -7631,9 +7702,138 @@ mod tests {
     // ─────────────── SPECIFIC VALIDATION TESTS ─────────────────
 
     #[tokio::test]
-    async fn queue_push_subscription_uses_canonical_cloud_run_oidc_audience() {
-        use crate::queue::gcp::{GcpQueueController, GcpQueueState};
+    async fn queue_rollout_preserves_legacy_requests_and_subscription_backlog() {
+        for mode in 0..3 {
+            let mut worker = function_with_queue_trigger();
+            let mut previous = worker.clone();
+            let batch = alien_core::QueueBatchConfig {
+                max_messages: 8,
+                max_window_seconds: 2,
+            };
+            if mode == 1 {
+                worker.triggers =
+                    vec![
+                        alien_core::WorkerTrigger::queue_batch(&test_queue(), batch.clone())
+                            .unwrap(),
+                    ];
+            }
+            if mode == 2 {
+                previous.triggers =
+                    vec![alien_core::WorkerTrigger::queue_batch(&test_queue(), batch).unwrap()];
+            }
+            worker.code = alien_core::WorkerCode::Image {
+                image: "registry.example.com/worker:new".into(),
+            };
+            let mut cloudrun = MockCloudRunApi::new();
+            cloudrun
+                .expect_get_service()
+                .times(1)
+                .returning(|_, name| Ok(create_successful_service_response(&name)));
+            cloudrun
+                .expect_patch_service()
+                .times(1)
+                .returning(move |_, _, service, _, _, _| {
+                    let template = service.template.as_ref().unwrap();
+                    assert_eq!(
+                        template.max_instance_request_concurrency,
+                        Some(if mode == 1 { 100 } else { 1000 })
+                    );
+                    let env: HashMap<_, _> = template.containers[0]
+                        .env
+                        .iter()
+                        .map(|entry| (entry.name.as_str(), entry.value.as_deref()))
+                        .collect();
+                    assert_eq!(env.contains_key("ALIEN_QUEUE_BATCH_CONFIG"), mode == 1);
+                    assert_eq!(env.contains_key("ALIEN_TEST_QUEUE_BINDING"), mode == 1);
+                    Ok(create_successful_operation_response("update-worker"))
+                });
+            let mut pubsub = MockPubSubApi::new();
+            pubsub
+                .expect_create_subscription()
+                .times(if mode == 0 { 0 } else { 1 })
+                .returning(|name, _| {
+                    Err(AlienError::new(
+                        CloudClientErrorData::RemoteResourceConflict {
+                            resource_type: "subscription".into(),
+                            resource_name: name,
+                            message: "Already exists".into(),
+                        },
+                    ))
+                });
+            pubsub
+                .expect_patch_subscription()
+                .times(if mode == 0 { 0 } else { 1 })
+                .returning(move |name, patch, mask| {
+                    assert_eq!(name, "test-queue-func-test-queue");
+                    assert_eq!(mask.as_deref(), Some("pushConfig,ackDeadlineSeconds"));
+                    let push = patch.push_config.as_ref().unwrap();
+                    assert_eq!(
+                        push.push_endpoint.as_deref(),
+                        Some(if mode == 1 {
+                            "https://test-queue-func-abcd1234-uc.a.run.app/__alien/queue/test-queue"
+                        } else {
+                            "https://test-queue-func-abcd1234-uc.a.run.app/"
+                        })
+                    );
+                    assert_eq!(
+                        push.oidc_token.as_ref().unwrap().audience.as_deref(),
+                        Some("https://test-queue-func-abcd1234-uc.a.run.app")
+                    );
+                    Ok(Subscription::default())
+                });
+            // No delete expectation: the subscription and pending deliveries survive opt-in/out.
+            let provider =
+                setup_mock_service_provider_with_pubsub(Arc::new(cloudrun), None, Arc::new(pubsub));
+            for state in [
+                GcpWorkerState::UpdateStart,
+                GcpWorkerState::UpdatePushSubscriptions,
+            ] {
+                let controller = GcpWorkerController {
+                    state: state.clone(),
+                    push_subscriptions: vec!["test-queue-func-test-queue".into()],
+                    ..GcpWorkerController::mock_ready("test-queue-func")
+                };
+                let restored: GcpWorkerController =
+                    serde_json::from_value(serde_json::to_value(controller).unwrap()).unwrap();
+                let mut executor = SingleControllerExecutor::builder()
+                    .resource(worker.clone())
+                    .previous_resource(previous.clone())
+                    .controller(restored)
+                    .platform(Platform::Gcp)
+                    .service_provider(provider.clone())
+                    .with_test_dependencies()
+                    .with_dependency(
+                        test_queue(),
+                        GcpQueueController {
+                            state: GcpQueueState::Ready,
+                            topic_name: Some("test-test-queue".into()),
+                            subscription_name: Some("test-test-queue-sub".into()),
+                            _internal_stay_count: None,
+                        },
+                    )
+                    .build()
+                    .await
+                    .unwrap();
+                executor.step().await.expect("resume update checkpoint");
+                let actual = executor.internal_state::<GcpWorkerController>().unwrap();
+                assert_eq!(
+                    actual.push_subscriptions,
+                    vec!["test-queue-func-test-queue"]
+                );
+                assert_eq!(
+                    actual.state,
+                    if state == GcpWorkerState::UpdateStart {
+                        GcpWorkerState::UpdatingService
+                    } else {
+                        GcpWorkerState::UpdateSettingIamPolicy
+                    }
+                );
+            }
+        }
+    }
 
+    #[tokio::test]
+    async fn queue_push_subscription_uses_canonical_cloud_run_oidc_audience() {
         let worker = function_with_queue_trigger();
         let function_name = format!("test-{}", worker.id);
         let mock_cloudrun = setup_mock_client_for_creation_and_update(&function_name, false);
@@ -7655,6 +7855,77 @@ mod tests {
             })
             .times(1)
             .returning(|_, subscription| Ok(subscription));
+
+        let mock_provider =
+            setup_mock_service_provider_with_pubsub(mock_cloudrun, None, Arc::new(mock_pubsub));
+        let queue_controller = GcpQueueController {
+            state: GcpQueueState::Ready,
+            topic_name: Some("test-test-queue".to_string()),
+            subscription_name: Some("test-test-queue-sub".to_string()),
+            _internal_stay_count: None,
+        };
+
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(worker)
+            .controller(GcpWorkerController::default())
+            .platform(Platform::Gcp)
+            .service_provider(mock_provider)
+            .with_test_dependencies()
+            .with_dependency(test_queue(), queue_controller)
+            .build()
+            .await
+            .unwrap();
+
+        executor.run_until_terminal().await.unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Running);
+    }
+
+    #[tokio::test]
+    async fn existing_queue_push_subscription_reconciles_logical_route_and_deadline() {
+        let mut worker = function_with_queue_trigger();
+        worker.triggers = vec![alien_core::WorkerTrigger::queue_batch(
+            &test_queue(),
+            alien_core::QueueBatchConfig {
+                max_messages: 8,
+                max_window_seconds: 2,
+            },
+        )
+        .unwrap()];
+        let function_name = format!("test-{}", worker.id);
+        let mock_cloudrun = setup_mock_client_for_creation_and_update(&function_name, false);
+
+        let mut mock_pubsub = MockPubSubApi::new();
+        mock_pubsub
+            .expect_create_subscription()
+            .withf(|subscription_id, subscription| {
+                let push_config = subscription.push_config.as_ref();
+                subscription_id == "test-queue-func-test-queue"
+                    && subscription.topic.as_deref()
+                        == Some("projects/test-project-123/topics/test-test-queue")
+                    && push_config.and_then(|config| config.push_endpoint.as_deref())
+                        == Some("https://test-queue-func-abcd1234-uc.a.run.app/__alien/queue/test-queue")
+                    && push_config
+                        .and_then(|config| config.oidc_token.as_ref())
+                        .and_then(|token| token.audience.as_deref())
+                        == Some("https://test-queue-func-abcd1234-uc.a.run.app")
+            })
+            .times(1)
+            .returning(|subscription_id, _| Err(AlienError::new(CloudClientErrorData::RemoteResourceConflict {
+                resource_type: "subscription".to_string(), resource_name: subscription_id,
+                message: "Already exists".to_string(),
+            })));
+        mock_pubsub.expect_patch_subscription()
+            .withf(|subscription_id, patch, mask| {
+                subscription_id == "test-queue-func-test-queue"
+                    && mask.as_deref() == Some("pushConfig,ackDeadlineSeconds")
+                    && patch.ack_deadline_seconds == Some(pubsub_ack_deadline_seconds(function_with_queue_trigger().timeout_seconds))
+                    && patch.push_config.as_ref().and_then(|config| config.push_endpoint.as_deref())
+                        == Some("https://test-queue-func-abcd1234-uc.a.run.app/__alien/queue/test-queue")
+                    && patch.push_config.as_ref().and_then(|config| config.oidc_token.as_ref()).and_then(|token| token.audience.as_deref())
+                        == Some("https://test-queue-func-abcd1234-uc.a.run.app")
+            })
+            .times(1)
+            .returning(|_, _, _| Ok(Subscription::default()));
 
         let mock_provider =
             setup_mock_service_provider_with_pubsub(mock_cloudrun, None, Arc::new(mock_pubsub));

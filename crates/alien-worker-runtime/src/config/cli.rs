@@ -46,7 +46,7 @@ pub struct Cli {
     #[arg(long, env = "PORT", default_value_t = 8080)]
     pub local_port: u16,
 
-    /// Maximum time a pushed command may execute in the Worker application.
+    /// Maximum time a command or event task may execute in the Worker application.
     #[arg(long, env = "ALIEN_WORKER_TIMEOUT_SECONDS", default_value_t = 300)]
     pub worker_timeout_seconds: u64,
 }

@@ -8,8 +8,10 @@ use crate::{
     emitter::CfEmitter,
     emitters::aws::{
         helpers::{
-            cf_from_json, chunk_managed_policy_statements, required_logical_id, resource_config,
-            tags, uniquify_iam_statement_sids, PARAM_MANAGING_ROLE_ARN,
+            cf_from_json, chunk_managed_policy_statements, managing_role_trust_statement,
+            required_logical_id, resource_config, tags, uniquify_iam_statement_sids,
+            CONDITION_HAS_MANAGEMENT_EXTERNAL_ID, PARAM_MANAGEMENT_EXTERNAL_ID,
+            PARAM_MANAGING_ROLE_ARN,
         },
         service_account::permission_context,
     },
@@ -74,37 +76,34 @@ fn role_logical_id(resource_logical_id: &str) -> String {
 
 fn remote_management_trust_policy(ctx: &EmitContext<'_>) -> CfExpression {
     if let Some(statement) = super::kubernetes_cluster::eks_pod_trust_statement(ctx, "manager") {
-        return CfExpression::sub_with(
-            r#"{"Version":"2012-10-17","Statement":[{"Sid":"AllowManagingRole","Effect":"Allow","Principal":{"AWS":"${ManagingRole}"},"Action":"sts:AssumeRole","Condition":{"StringEquals":{"aws:PrincipalArn":"${ManagingRole}"}}},${PodTrust}]}"#,
-            [
-                ("ManagingRole", CfExpression::ref_(PARAM_MANAGING_ROLE_ARN)),
-                ("PodTrust", statement),
-            ],
+        // The pod statement is JSON text built with `Fn::Sub`, so the whole
+        // document is text and the ExternalId choice selects between two
+        // documents. Only the managing-role statement takes the ExternalId; the
+        // in-cluster manager authenticates with its service-account token.
+        let document = |condition: &str| {
+            CfExpression::sub_with(
+                format!(
+                    r#"{{"Version":"2012-10-17","Statement":[{{"Sid":"AllowManagingRole","Effect":"Allow","Principal":{{"AWS":"${{ManagingRole}}"}},"Action":"sts:AssumeRole","Condition":{{"StringEquals":{{{condition}}}}}}},${{PodTrust}}]}}"#
+                ),
+                [
+                    ("ManagingRole", CfExpression::ref_(PARAM_MANAGING_ROLE_ARN)),
+                    ("PodTrust", statement.clone()),
+                ],
+            )
+        };
+        return CfExpression::if_(
+            CONDITION_HAS_MANAGEMENT_EXTERNAL_ID,
+            document(&format!(
+                r#""aws:PrincipalArn":"${{ManagingRole}}","sts:ExternalId":"${{{PARAM_MANAGEMENT_EXTERNAL_ID}}}""#
+            )),
+            document(r#""aws:PrincipalArn":"${ManagingRole}""#),
         );
     }
     CfExpression::object([
         ("Version", CfExpression::from("2012-10-17")),
         (
             "Statement",
-            CfExpression::list([CfExpression::object([
-                ("Sid", CfExpression::from("AllowManagingRole")),
-                ("Effect", CfExpression::from("Allow")),
-                (
-                    "Principal",
-                    CfExpression::object([("AWS", CfExpression::ref_(PARAM_MANAGING_ROLE_ARN))]),
-                ),
-                ("Action", CfExpression::from("sts:AssumeRole")),
-                (
-                    "Condition",
-                    CfExpression::object([(
-                        "StringEquals",
-                        CfExpression::object([(
-                            "aws:PrincipalArn",
-                            CfExpression::ref_(PARAM_MANAGING_ROLE_ARN),
-                        )]),
-                    )]),
-                ),
-            ])]),
+            CfExpression::list([managing_role_trust_statement()]),
         ),
     ])
 }

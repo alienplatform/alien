@@ -90,14 +90,15 @@ impl StsClient {
     ) -> Result<T> {
         let base_url = self.get_base_url();
         let url = format!("{}/", base_url.trim_end_matches('/'));
-        let builder = self
-            .client
-            .post(&url)
-            .content_type_form()
-            .body(body.clone());
+        let builder = self.client.post(&url).content_type_form().body(body);
 
         let sign_config = self.sign_config(operation_name).await?;
-        let result = crate::aws::aws_request_utils::sign_send_xml(builder, &sign_config).await;
+        // STS request bodies carry an AssumeRole ExternalId or a web identity
+        // token. Neither may reach an error chain, which is persisted and
+        // returned to API callers.
+        let result = alien_client_core::redact_request_body(
+            crate::aws::aws_request_utils::sign_send_xml(builder, &sign_config).await,
+        );
 
         match result {
             Ok(v) => Ok(v),
@@ -111,7 +112,7 @@ impl StsClient {
                     let status = StatusCode::from_u16(*http_status)
                         .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
                     if let Some(mapped) =
-                        Self::map_sts_error(status, text, operation_name, resource_name, &body)
+                        Self::map_sts_error(status, text, operation_name, resource_name)
                     {
                         Err(e.context(mapped))
                     } else {
@@ -130,7 +131,6 @@ impl StsClient {
         error_body: &str,
         operation: &str,
         resource_name: &str,
-        request_body: &str,
     ) -> Option<ErrorData> {
         // Attempt to parse the canonical AWS error XML.
         let parsed_error: std::result::Result<StsErrorResponse, _> =
@@ -230,7 +230,7 @@ impl StsClient {
                     url: "sts.amazonaws.com".into(),
                     http_status: status.as_u16(),
                     http_response_text: Some(error_body.into()),
-                    http_request_text: Some(request_body.into()),
+                    http_request_text: None,
                 },
             },
         })
@@ -604,6 +604,65 @@ mod tests {
             observed[1].authorization.contains("ASIATESTACCESS"),
             "GetCallerIdentity must be signed with credentials returned by AssumeRoleWithWebIdentity, got: {}",
             observed[1].authorization
+        );
+    }
+
+    fn static_key_config(sts_endpoint: String) -> AwsClientConfig {
+        AwsClientConfig {
+            account_id: "123456789012".to_string(),
+            region: "us-east-2".to_string(),
+            credentials: AwsCredentials::AccessKeys {
+                access_key_id: "AKIATEST".to_string(),
+                secret_access_key: "test-secret".to_string(),
+                session_token: None,
+            },
+            service_overrides: Some(AwsServiceOverrides {
+                endpoints: HashMap::from([("sts".to_string(), sts_endpoint)]),
+            }),
+        }
+    }
+
+    /// A failed AssumeRole must not carry its ExternalId into the error, whose
+    /// chain is persisted on the deployment and returned by status APIs. The
+    /// 400 here has an error code STS maps to the generic fallback, which is
+    /// the branch that used to copy the whole request body.
+    #[tokio::test]
+    async fn failed_assume_role_errors_never_contain_the_external_id() {
+        const EXTERNAL_ID: &str = "f3a1c0de5eed5eed5eed5eed5eed5eedf3a1c0de";
+        let server = httpmock::MockServer::start_async().await;
+        let sts = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .body_contains("Action=AssumeRole")
+                    .body_contains(format!("ExternalId={EXTERNAL_ID}"));
+                then.status(400).header("content-type", "text/xml").body(
+                    r#"<ErrorResponse><Error><Code>ValidationError</Code><Message>bad request</Message></Error></ErrorResponse>"#,
+                );
+            })
+            .await;
+
+        let error = StsClient::new(Client::new(), static_key_config(server.base_url()))
+            .assume_role(
+                AssumeRoleRequest::builder()
+                    .role_arn("arn:aws:iam::210987654321:role/customer-management".to_string())
+                    .role_session_name("test".to_string())
+                    .external_id(EXTERNAL_ID.to_string())
+                    .build(),
+            )
+            .await
+            .expect_err("the mocked STS rejects the request");
+
+        // The transport retries this response; every attempt carries the value.
+        assert!(sts.hits_async().await >= 1, "the request must reach STS");
+        let serialized = serde_json::to_string(&error).expect("error serializes");
+        assert!(
+            !serialized.contains(EXTERNAL_ID),
+            "AssumeRole error leaked the ExternalId: {serialized}"
+        );
+        assert!(!format!("{error:?}").contains(EXTERNAL_ID));
+        assert!(
+            serialized.contains("bad request"),
+            "the STS diagnostic should survive redaction: {serialized}"
         );
     }
 

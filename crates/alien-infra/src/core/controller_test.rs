@@ -262,8 +262,7 @@ use alien_error::{AlienError, Context, IntoAlienError};
 use alien_gcp_clients::{GcpClientConfig, GcpClientConfigExt as _};
 use alien_preflights::runner::PreflightRunner;
 use indexmap::IndexMap;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{collections::HashMap, sync::Arc, time::Duration};
 use tracing::{debug, info};
 
 /// Asserts that no wait suggested during one phase (create, update, delete) is shorter than
@@ -763,6 +762,7 @@ pub struct SingleControllerExecutorBuilder {
     volume_restores: Vec<alien_core::VolumeRestoreRequest>,
     public_endpoints: Option<alien_core::PublicEndpointUrls>,
     dependencies: Vec<(ResourceRef, Resource, Box<dyn ResourceController>)>,
+    dependency_lifecycles: HashMap<String, ResourceLifecycle>,
     stack_resources: Vec<(Resource, ResourceLifecycle)>,
     service_provider: Option<Arc<dyn PlatformServiceProvider>>,
     client_config: Option<ClientConfig>,
@@ -795,6 +795,7 @@ impl SingleControllerExecutorBuilder {
             volume_restores: Vec::new(),
             public_endpoints: None,
             dependencies: Vec::new(),
+            dependency_lifecycles: HashMap::new(),
             stack_resources: Vec::new(),
             service_provider: None,
             client_config: None,
@@ -939,6 +940,13 @@ impl SingleControllerExecutorBuilder {
         let resource_ref = ResourceRef::new(resource.resource_type(), resource.id());
         self.dependencies
             .push((resource_ref, resource, Box::new(controller)));
+        self
+    }
+
+    /// Sets a dependency's setup/runtime ownership in both desired and saved state.
+    pub fn dependency_lifecycle(mut self, resource_id: &str, lifecycle: ResourceLifecycle) -> Self {
+        self.dependency_lifecycles
+            .insert(resource_id.to_owned(), lifecycle);
         self
     }
 
@@ -1139,6 +1147,11 @@ impl SingleControllerExecutorBuilder {
         // Add dependencies first
         for (_dep_ref, dep_resource, dep_controller) in &self.dependencies {
             let dep_id = dep_resource.id().to_string();
+            let lifecycle = self
+                .dependency_lifecycles
+                .get(&dep_id)
+                .copied()
+                .unwrap_or(ResourceLifecycle::Live);
             let dep_status = dep_controller.get_status();
             let dep_outputs = dep_controller.get_outputs();
 
@@ -1147,7 +1160,7 @@ impl SingleControllerExecutorBuilder {
                 dep_id.clone(),
                 ResourceEntry {
                     config: dep_resource.clone(),
-                    lifecycle: ResourceLifecycle::Live,
+                    lifecycle,
                     dependencies: vec![],
                     remote_access: false,
                     enabled_when: None,
@@ -1171,7 +1184,7 @@ impl SingleControllerExecutorBuilder {
                 .config(dep_resource.clone())
                 .maybe_internal_state(internal_state)
                 .maybe_outputs(dep_outputs)
-                .lifecycle(ResourceLifecycle::Live)
+                .lifecycle(lifecycle)
                 .dependencies(vec![])
                 .build();
 

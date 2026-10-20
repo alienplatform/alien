@@ -14,6 +14,7 @@ use utoipa::OpenApi;
     CredentialRetry,
     Worker,
     WorkerCode,
+    QueueBatchConfig,
     WorkerOutputs,
     ComputeCluster,
     CapacityGroup,

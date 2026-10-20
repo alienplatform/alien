@@ -115,6 +115,12 @@ impl TfEmitter for GcpWorkerEmitter {
             ),
             nested(block("containers", container_body)),
         ];
+        if function.has_queue_batches() {
+            template_body.push(attr(
+                "max_instance_request_concurrency",
+                Expression::Number(100.into()),
+            ));
+        }
         if let Some(sa) = &service_account {
             template_body.push(attr("service_account", sa.clone()));
         }
@@ -143,12 +149,19 @@ impl TfEmitter for GcpWorkerEmitter {
 
         for (index, trigger) in function.triggers.iter().enumerate() {
             match trigger {
-                WorkerTrigger::Queue { queue } => {
+                WorkerTrigger::Queue { queue, .. } => {
                     let queue_label = label_for_ref(ctx, queue)?;
                     let sub_label = format!("{label}_queue_{index}");
                     let mut push_body: Vec<hcl::structure::Structure> = vec![attr(
                         "push_endpoint",
-                        expr::traversal(["google_cloud_run_v2_service", label, "uri"]),
+                        if function.queue_batch_config(&queue.id).is_some() {
+                            expr::template(format!(
+                                "${{google_cloud_run_v2_service.{label}.uri}}/__alien/queue/{}",
+                                queue.id
+                            ))
+                        } else {
+                            expr::traversal(["google_cloud_run_v2_service", label, "uri"])
+                        },
                     )];
                     if let Some(sa) = &service_account {
                         push_body.push(nested(block(

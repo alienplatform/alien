@@ -87,6 +87,9 @@ pub use stack_state::*;
 mod stack_settings;
 pub use stack_settings::*;
 
+mod management_external_id;
+pub use management_external_id::*;
+
 mod application_logs;
 pub use application_logs::*;
 
