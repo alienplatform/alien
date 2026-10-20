@@ -623,7 +623,6 @@ mod tests {
                     &scope,
                     &state,
                     Some(&gcp_target_environment()),
-                    None,
                 )
                 .await
                 .expect_err(
