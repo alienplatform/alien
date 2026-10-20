@@ -273,6 +273,22 @@ fn the_managing_role_must_be_one_of_the_listed_roles() {
 }
 
 #[test]
+fn a_role_under_an_iam_path_can_be_listed() {
+    // IAM paths allow any printable ASCII character; only the name is limited.
+    let pathed = "arn:aws:iam::111122223333:role/team!prod/ops+1/deployment-management";
+    let template = render(
+        &managed_stack(),
+        CloudFormationTarget::Aws,
+        custom_resource_registration(),
+        ManagementTrustOptions {
+            require_external_id: false,
+            allowed_managing_role_arns: vec![CURRENT_ROLE.to_string(), pathed.to_string()],
+        },
+    );
+    assert!(accepts(&template.parameters[ROLE_ARN], Some(pathed)));
+}
+
+#[test]
 fn a_listed_value_that_is_not_an_iam_role_arn_fails_the_render() {
     for arn in [
         "",
@@ -281,6 +297,8 @@ fn a_listed_value_that_is_not_an_iam_role_arn_fails_the_render() {
         "arn:aws:iam::111122223333:user/deployment-management",
         "arn:aws:s3:::deployment-management",
         "arn:aws:iam::111122223333:role/",
+        "arn:aws:iam::111122223333:role/team/",
+        "arn:aws:iam::111122223333:role/team prod/deployment-management",
         "arn:aws:iam::111122223333:role/deployment-management|.*",
     ] {
         let error = try_render(

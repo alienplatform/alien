@@ -2626,8 +2626,9 @@ fn apply_management_trust(template: &mut CfTemplate, trust: &ManagementTrustOpti
     Ok(())
 }
 
-/// `arn:<partition>:iam::<12-digit account>:role/<optional path/><name>`,
-/// using only the characters IAM allows in role paths and names.
+/// `arn:<partition>:iam::<12-digit account>:role/<optional path/><name>`. IAM
+/// allows any printable ASCII character in a role path and only letters,
+/// digits and `+=,.@_-` in the name.
 fn is_iam_role_arn(arn: &str) -> bool {
     let parts: Vec<&str> = arn.splitn(6, ':').collect();
     let [prefix, partition, service, region, account, resource] = parts[..] else {
@@ -2636,6 +2637,7 @@ fn is_iam_role_arn(arn: &str) -> bool {
     let Some(role) = resource.strip_prefix("role/") else {
         return false;
     };
+    let (path, name) = role.rsplit_once('/').unwrap_or(("", role));
     prefix == "arn"
         && partition.starts_with("aws")
         && partition
@@ -2645,11 +2647,12 @@ fn is_iam_role_arn(arn: &str) -> bool {
         && region.is_empty()
         && account.len() == 12
         && account.bytes().all(|byte| byte.is_ascii_digit())
-        && !role.is_empty()
-        && !role.ends_with('/')
-        && role
+        && path.bytes().all(|byte| byte.is_ascii_graphic())
+        && !name.is_empty()
+        && name.len() <= 64
+        && name
             .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || b"+=,.@_-/".contains(&byte))
+            .all(|byte| byte.is_ascii_alphanumeric() || b"+=,.@_-".contains(&byte))
 }
 
 fn add_custom_resource(
