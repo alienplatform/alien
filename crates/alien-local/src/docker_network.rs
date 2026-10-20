@@ -54,6 +54,14 @@ pub(crate) async fn bindable_docker_bridge_gateway() -> Result<Option<Ipv4Addr>>
 /// host gateway. Hosts where that gateway cannot be bound, such as Docker
 /// Desktop, retain their native `host.docker.internal` behavior.
 pub async fn start_docker_bridge_proxy(target: SocketAddr) -> Result<Option<SocketAddr>> {
+    start_docker_bridge_proxy_with_shutdown(target, std::future::pending()).await
+}
+
+/// Like `start_docker_bridge_proxy`, but releases the listener when its owner stops.
+pub async fn start_docker_bridge_proxy_with_shutdown(
+    target: SocketAddr,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) -> Result<Option<SocketAddr>> {
     let Some(gateway) = bindable_docker_bridge_gateway().await? else {
         return Ok(None);
     };
@@ -67,7 +75,12 @@ pub async fn start_docker_bridge_proxy(target: SocketAddr) -> Result<Option<Sock
             reason: format!("Failed to bind Docker host gateway {listen_addr}"),
         })?;
 
-    tokio::spawn(serve_proxy(listener, target));
+    tokio::spawn(async move {
+        tokio::select! {
+            _ = serve_proxy(listener, target) => {},
+            _ = shutdown => {},
+        }
+    });
     info!(%listen_addr, %target, "Docker bridge proxy started");
     Ok(Some(listen_addr))
 }

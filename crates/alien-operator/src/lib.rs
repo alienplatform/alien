@@ -294,11 +294,37 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
             service.register(
                 "local",
                 manager,
-                &format!("http://localhost:{}", config.otlp_server_port),
+                &format!(
+                    "http://{}",
+                    std::net::SocketAddr::new(
+                        match config.otlp_server_host {
+                            std::net::IpAddr::V4(ip) if ip.is_unspecified() =>
+                                std::net::Ipv4Addr::LOCALHOST.into(),
+                            std::net::IpAddr::V6(ip) if ip.is_unspecified() =>
+                                std::net::Ipv6Addr::LOCALHOST.into(),
+                            host => host,
+                        },
+                        config.otlp_server_port,
+                    ),
+                ),
             );
             service
         });
     let local_queues_enabled = local_queue_service.is_some();
+    if local_queues_enabled && config.otlp_server_host.is_loopback() && config.otlp_server_port != 0
+    {
+        // Match the local manager: preserve the configured listener boundary and
+        // forward only Docker's private host gateway, never the LAN interfaces.
+        alien_local::start_docker_bridge_proxy_with_shutdown(
+            std::net::SocketAddr::new(config.otlp_server_host, config.otlp_server_port),
+            cancel.clone().cancelled_owned(),
+        )
+        .await
+        .context(error::ErrorData::ConfigurationError {
+            message: "Failed to expose the local queue owner on Docker's private host gateway"
+                .into(),
+        })?;
+    }
 
     // Create shared state
     let state = Arc::new(OperatorState {
@@ -310,12 +336,8 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
     });
 
     // Start OTLP server (for local functions to send telemetry).
-    // This is best-effort — a port conflict should not take down the operator.
-    let otlp_host = if local_queues_enabled && config.otlp_server_host.is_loopback() {
-        std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)
-    } else {
-        config.otlp_server_host
-    };
+    // Telemetry alone is best-effort; a queue owner must fail if its listener fails.
+    let otlp_host = config.otlp_server_host;
     let otlp_port = config.otlp_server_port;
     let otlp_db = db.clone();
     let otlp_namespace = config.namespace.clone();
@@ -921,6 +943,11 @@ mod tests {
     use super::*;
     use std::{collections::HashMap, path::Path, sync::Mutex, time::Duration};
 
+    use alien_bindings::{
+        providers::queue::local_http::LocalHttpQueue,
+        traits::{MessagePayload, Queue},
+    };
+    use alien_core::bindings::QueueBinding;
     use alien_local::{DaemonLaunchOptions, LocalBindingsProvider};
     use axum::{
         extract::State,
@@ -928,6 +955,96 @@ mod tests {
         routing::patch,
         Json, Router,
     };
+
+    #[tokio::test]
+    async fn local_queue_listener_bind_failure_stops_operator() {
+        let occupied = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let local = LocalBindingsProvider::new(temp.path()).unwrap();
+        let provider =
+            Arc::new(alien_infra::DefaultPlatformServiceProvider::with_local_bindings(local));
+        let config = OperatorConfig::builder()
+            .platform(Platform::Local)
+            .data_dir(temp.path().to_string_lossy().to_string())
+            .encryption_key("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+            .otlp_server_port(occupied.local_addr().unwrap().port())
+            .build();
+        let error = tokio::time::timeout(
+            Duration::from_secs(10),
+            run_operator_with_cancel(config, Some(provider), CancellationToken::new()),
+        )
+        .await
+        .unwrap()
+        .expect_err("queue listener failure must be fatal");
+        assert!(
+            error.to_string().contains("Failed to bind OTLP server"),
+            "{error}"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn local_queue_uses_configured_listener_without_widening_it() {
+        // Reserving 127.0.0.1 on the same port catches both regressions: binding
+        // 0.0.0.0 would fail, and advertising localhost would hit the wrong socket.
+        let guard = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = guard.local_addr().unwrap().port();
+        let temp = tempfile::tempdir().unwrap();
+        let local = LocalBindingsProvider::new(temp.path()).unwrap();
+        let manager = local.queue_manager().clone();
+        manager.create_queue("jobs").await.unwrap();
+        let provider =
+            Arc::new(alien_infra::DefaultPlatformServiceProvider::with_local_bindings(local));
+        let config = OperatorConfig::builder()
+            .platform(Platform::Local)
+            .data_dir(temp.path().to_string_lossy().to_string())
+            .encryption_key("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+            .otlp_server_host("127.0.0.2".parse().unwrap())
+            .otlp_server_port(port)
+            .build();
+        let cancel = CancellationToken::new();
+        let task = tokio::spawn(run_operator_with_cancel(
+            config,
+            Some(provider),
+            cancel.clone(),
+        ));
+        let client = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                assert!(
+                    !task.is_finished(),
+                    "Operator exited before queue listener was ready"
+                );
+                if let Ok(QueueBinding::LocalHttp(binding)) = manager.runtime_binding("jobs") {
+                    let client = LocalHttpQueue::new(binding).unwrap();
+                    if client.stats().await.is_ok() {
+                        break client;
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("configured queue endpoint must be reachable");
+        client
+            .send("jobs", MessagePayload::Text("configured listener".into()))
+            .await
+            .unwrap();
+        let messages = client.receive("jobs", 1).await.unwrap();
+        assert!(
+            matches!(&messages[0].payload, MessagePayload::Text(text) if text == "configured listener")
+        );
+        client
+            .ack("jobs", &messages[0].receipt_handle)
+            .await
+            .unwrap();
+        assert_eq!(client.stats().await.unwrap().total, 0);
+        cancel.cancel();
+        tokio::time::timeout(Duration::from_secs(10), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+    }
 
     #[tokio::test]
     async fn readiness_bind_failure_stops_operator() {

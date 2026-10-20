@@ -16,7 +16,7 @@ use tracing::debug;
 
 /// Rewrites a binding's filesystem path from host path to container path.
 ///
-/// For containers, linked resources (Storage, KV, Queue, Vault) are mounted at different
+/// For containers, linked resources (Storage, KV, Vault) are mounted at different
 /// paths inside the container. This worker updates the binding env var to use
 /// the container-internal path.
 ///
@@ -139,8 +139,27 @@ pub(super) fn rewrite_localhost_urls_for_container(
             match &mut binding {
                 QueueBinding::LocalHttp(local) => {
                     if let BindingValue::Value(url) = &mut local.endpoint {
-                        *url = url.replace("localhost:", "host.docker.internal:")
-                            .replace("127.0.0.1:", "host.docker.internal:");
+                        let mut endpoint = reqwest::Url::parse(url).into_alien_error().context(
+                            ErrorData::ResourceControllerConfigError {
+                                resource_id: binding_key.clone(),
+                                message: "Invalid local queue endpoint".into(),
+                            },
+                        )?;
+                        if endpoint.host_str() == Some("localhost")
+                            || endpoint.host_str().is_some_and(|host| {
+                                host.trim_matches(['[', ']'])
+                                    .parse::<std::net::IpAddr>()
+                                    .is_ok_and(|ip| ip.is_loopback())
+                            })
+                        {
+                            endpoint.set_host(Some("host.docker.internal")).into_alien_error().context(
+                                ErrorData::ResourceControllerConfigError {
+                                    resource_id: binding_key.clone(),
+                                    message: "Rewrite local queue endpoint for Docker".into(),
+                                },
+                            )?;
+                        }
+                        *url = endpoint.to_string();
                     }
                     *binding_json = serde_json::to_string(&binding).into_alien_error().context(
                         ErrorData::ResourceControllerConfigError { resource_id: binding_key.clone(), message: "Serialize local queue endpoint".into() })?;
@@ -339,6 +358,36 @@ pub(super) fn rewrite_localhost_urls_for_container(
 mod tests {
     use super::*;
     use alien_core::bindings::{serialize_binding_as_env_var, PostgresBinding, QueueBinding};
+
+    #[test]
+    fn queue_network_binding_preserves_credentials_and_rewrites_only_loopback_host() {
+        for (host, expected) in [
+            ("localhost", "host.docker.internal"),
+            ("127.0.0.1", "host.docker.internal"),
+            ("127.0.0.2", "host.docker.internal"),
+            ("[::1]", "host.docker.internal"),
+            ("192.0.2.10", "192.0.2.10"),
+            ("[2001:db8::1]", "[2001:db8::1]"),
+        ] {
+            let binding = QueueBinding::LocalHttp(alien_core::bindings::LocalHttpQueueBinding {
+                endpoint: BindingValue::value(format!(
+                    "http://{host}:4318/v1/local/queues/dep/localhost:jobs"
+                )),
+                token: Some("test-credential".into()),
+            });
+            let mut env = serialize_binding_as_env_var("jobs", &binding).unwrap();
+            rewrite_localhost_urls_for_container(&mut env).unwrap();
+            let QueueBinding::LocalHttp(actual) =
+                serde_json::from_str(&env[&binding_env_var_name("jobs")]).unwrap()
+            else {
+                panic!("queue transport changed");
+            };
+            assert_eq!(actual.token.as_deref(), Some("test-credential"));
+            assert!(
+                matches!(actual.endpoint, BindingValue::Value(url) if url == format!("http://{expected}:4318/v1/local/queues/dep/localhost:jobs"))
+            );
+        }
+    }
 
     #[test]
     fn local_postgres_binding_rewritten_for_container_keeps_password() {
