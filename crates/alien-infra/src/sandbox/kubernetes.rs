@@ -42,6 +42,10 @@ pub struct KubernetesSandboxController {
     /// configuration is not read or written again.
     #[serde(default)]
     pub(crate) egress_config_digest: Option<String>,
+    /// The owner has published a configuration that names the mounted replica secret. From
+    /// then on it never embeds one again, whatever the gateway's state.
+    #[serde(default)]
+    pub(crate) egress_replica_secret_sourced: bool,
     /// Default policy supplied to newly created sessions.
     #[serde(default)]
     pub(crate) default_policy: Option<alien_core::EgressPolicy>,
@@ -137,6 +141,7 @@ impl KubernetesSandboxController {
                 &namespace,
                 &mut self.egress_public_key,
                 &mut self.egress_config_digest,
+                &mut self.egress_replica_secret_sourced,
             )
             .await?,
         );
@@ -171,6 +176,7 @@ impl KubernetesSandboxController {
                 &namespace,
                 &mut self.egress_public_key,
                 &mut self.egress_config_digest,
+                &mut self.egress_replica_secret_sourced,
             )
             .await?,
         );
@@ -243,6 +249,7 @@ impl KubernetesSandboxController {
                 &namespace,
                 &mut self.egress_public_key,
                 &mut self.egress_config_digest,
+                &mut self.egress_replica_secret_sourced,
             )
             .await?,
         );
@@ -647,6 +654,7 @@ mod tests {
             egress: None,
             egress_public_key: None,
             egress_config_digest: None,
+            egress_replica_secret_sourced: false,
             default_policy: None,
             state: KubernetesSandboxState::Ready,
             sandbox_id: Some("sbx".to_string()),

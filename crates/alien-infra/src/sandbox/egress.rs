@@ -244,6 +244,38 @@ mod tests {
         assert_eq!(changed["audiences"], serde_json::json!(["first", "second"]));
     }
 
+    /// A stored configuration that names a source is never moved back to an embedded secret:
+    /// the replicas that took the source would refuse it.
+    #[cfg(any(feature = "aws", feature = "kubernetes"))]
+    #[tokio::test]
+    async fn a_configuration_on_a_source_stays_on_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let vault = LocalVault::new("secrets".into(), directory.path().into());
+        let source = serde_json::json!({"file": {"path": "/mounted/value"}});
+        vault
+            .set_secret(
+                GATEWAY_CONFIG,
+                &serde_json::json!({"audiences": ["first"], "replicaSecretSource": source}).to_string(),
+            )
+            .await
+            .unwrap();
+        let mut published = None;
+        publish_changed_gateway_config(
+            &vault,
+            serde_json::json!({"audiences": ["first", "second"]}),
+            &mut published,
+        )
+        .await
+        .unwrap();
+        let stored: serde_json::Value =
+            serde_json::from_str(&vault.get_secret(GATEWAY_CONFIG).await.unwrap()).unwrap();
+        assert_eq!(
+            stored,
+            serde_json::json!({"audiences": ["first", "second"], "replicaSecretSource": source})
+        );
+        assert!(published.is_some());
+    }
+
     #[cfg(any(feature = "aws", feature = "kubernetes"))]
     #[tokio::test]
     async fn corrupt_replica_secret_fails_without_rotation_or_disclosure() {
@@ -1047,6 +1079,29 @@ async fn write_embedded_config(
         .map_err(|_| invalid())?;
     if stored.as_ref().is_some_and(|value| !value.is_object()) {
         return Err(invalid());
+    }
+    // A configuration that already names a source stays on it: replicas that took it accept no
+    // embedded secret again, and a new one would split them.
+    if let Some(source) = stored
+        .as_ref()
+        .and_then(|stored| stored.get("replicaSecretSource"))
+        .filter(|_| stored.as_ref().and_then(|s| s.get("replicaSecret")).is_none())
+    {
+        value
+            .as_object_mut()
+            .ok_or_else(invalid)?
+            .insert("replicaSecretSource".into(), source.clone());
+        let value = value.to_string();
+        if current.as_deref() == Some(&value) {
+            return Ok(());
+        }
+        return vault
+            .set_secret(GATEWAY_CONFIG, &value)
+            .await
+            .context(ErrorData::ResourceConfigInvalid {
+                message: "Failed to publish the sandbox gateway configuration".into(),
+                resource_id: Some(alien_core::SECRETS_VAULT_ID.into()),
+            });
     }
     let replica_secret = match stored.as_ref().and_then(|value| value.get("replicaSecret")) {
         Some(value) => {
